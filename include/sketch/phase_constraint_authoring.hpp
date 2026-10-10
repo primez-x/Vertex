@@ -18,7 +18,7 @@ struct PhaseConstraintAuthoringIntent {
     std::optional<Revision> source_saved_revision;
     nlohmann::json phase_selections;
     ConstraintAuthoringIntent intent;
-    // Dialect two only: a typed wall identity replacement and reviewed room
+    // Dialect two: a typed wall identity replacement and reviewed room
     // completion, independently replayed before publication. Null keeps the
     // version-one semantics and exact wire keys.
     nlohmann::json wall_replacement=nullptr;
@@ -89,7 +89,13 @@ struct PhaseConstraintAuthoringIntent {
     // uniform physical scale authority for actual ordinary/proposed walls.
     // Its closed intent gains exactly the wall_group_scale field; historical
     // dialects retain their sixteen fields and cannot admit this operation.
-    // There is no replacement, demolition or coordinated scale authority.
+    // Dialect nineteen separately pairs the same pure scale with a nonnull
+    // canonical wall_replacement leaf eight. It requires complete presentations
+    // and complete corner windows, with no profiles, rehosts, family changes,
+    // stacks or corner profile edits. Its exact nine outer keys match dialect
+    // two; historical dialect two retains its sixteen-field intent. Complete
+    // replacement replay derives and copies actual baseline roots before scale.
+    // Neither scale dialect grants demolition or coordinated scale authority.
 };
 
 [[nodiscard]] PhaseConstraintAuthoringIntent decode_phase_constraint_authoring_intent(
@@ -97,6 +103,7 @@ struct PhaseConstraintAuthoringIntent {
 [[nodiscard]] nlohmann::json encode_phase_constraint_authoring_intent(
     const PhaseConstraintAuthoringIntent& intent);
 // Historical identity/model guards enumerate the actual replacement leaves.
+// Standalone baseline scale retains its complete pair as one component.
 // Ordinary historical intents return themselves; coordinated ordinary lists
 // do not acquire replacement authority through this enumeration.
 [[nodiscard]] std::vector<PhaseConstraintAuthoringIntent> phase_constraint_replacement_components(

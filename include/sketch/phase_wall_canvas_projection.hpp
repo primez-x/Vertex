@@ -69,6 +69,9 @@ struct PhaseWallCanvasCoordinatedPhysicalInput {
 // Both leg controls retain source snapshot revisions and local host baselines,
 // and require complete captured source controls plus complete final depth/crop.
 // As with wall bodies, the caller applies captured Site placement exactly once.
+// Wall-group scaling can additionally admit active changed ordinary wall hosts,
+// their actual cuts/profiles and supported dimension consumers from the complete
+// stage. This opt-in does not broaden historical or coordinated admission.
 [[nodiscard]] PhaseWallCanvasProjection project_phase_wall_canvas(
     const DocumentSnapshot& source,
     const PhaseWallReplacementAuthoringPreview& physical,
@@ -77,6 +80,7 @@ struct PhaseWallCanvasCoordinatedPhysicalInput {
     const std::vector<CanvasLabel>& labels,
     bool metric_units,
     const std::optional<ArchitecturalViewContext>& view_context = std::nullopt,
-    const std::optional<PhaseWallCanvasCoordinatedPhysicalInput>& coordinated = std::nullopt);
+    const std::optional<PhaseWallCanvasCoordinatedPhysicalInput>& coordinated = std::nullopt,
+    bool include_changed_wall_dependencies = false);
 
 } // namespace sketch::desktop

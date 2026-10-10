@@ -6,6 +6,7 @@
 #include "sketch/boundary_receipt.hpp"
 #include "sketch/boundary_transform.hpp"
 #include "sketch/constraint_phase_scope.hpp"
+#include "sketch/constraint_wall_edit.hpp"
 #include "sketch/corner_window.hpp"
 #include "sketch/document_wall.hpp"
 #include "sketch/model_phases.hpp"
@@ -274,6 +275,7 @@ template<class Reference> void visit_boundary_copy_evidence(Entity& entity, cons
 Entity opaque_remainder(const Entity& entity, bool complete_presentations = false,
     bool complete_corner_windows = false) {
     auto remainder = entity;
+    wall_scale_quantity_reference_remainder(remainder);
     if (entity.type == "wall" && remainder.extensions.contains("wall_layer_stack_retirement")) {
         auto& archive = remainder.extensions.at("wall_layer_stack_retirement");
         validate_wall_layer_stack_retirement(archive);

@@ -93,6 +93,26 @@ Stage physical_stage(const Entities& source,const PhaseConstraintAuthoringIntent
     const PhaseWallReplacementAuthoring& edit) {
     if (intent.source_entities_digest!=entity_map_digest(source) ||
         intent.phase_selections!=phase_constraint_authoring_selections(source)) invalid("actual source or saved choice changed");
+    if (intent.intent.wall_group_scale) {
+        // Detached inspection must obey the same additive outer dialect as
+        // retained publication, including exclusive scale/replacement keys.
+        (void)encode_phase_constraint_authoring_intent(intent);
+        auto siblings=intent.intent;
+        siblings.wall_group_scale.reset();
+        if (!edit.complete_presentations || !edit.complete_corner_windows ||
+            !edit.wall_profiles.empty() || !edit.opening_profiles.empty() || !edit.opening_rehosts.empty() ||
+            !edit.opening_families.empty() || !edit.wall_stacks.empty() || !edit.corner_profiles.empty() ||
+            has_geometry_or_relation_intent(siblings) || !intent.intent.relation_move_connected_walls)
+            invalid("wall group scale requires exclusive leaf-eight replacement and complete presentation/corner authority");
+        // Independently rediscover the original targets and participating
+        // persisted relation closure before accepting any supplied plan/map.
+        // Physical contact, host and presentation closure is then rederived
+        // by inspect_phase_wall_replacement_plan below, from this same source.
+        const auto requests=phase_wall_replacement_requests(source,intent.intent);
+        if (requests.size()!=1 || requests.front().registry_id!=edit.registry_id ||
+            requests.front().alternative_id!=edit.alternative_id || requests.front().seed_wall_ids!=edit.seed_wall_ids)
+            invalid("wall group scale replacement roots do not match actual original owners and saved baseline membership");
+    }
     if (!edit.corner_profiles.empty()) {
         if (!edit.complete_corner_windows || !edit.wall_profiles.empty() || !edit.opening_profiles.empty() ||
             !edit.opening_rehosts.empty() || !edit.opening_families.empty() || !edit.wall_stacks.empty() ||
@@ -801,6 +821,14 @@ Entities replay_phase_wall_replacement_authoring(const Entities& source,const Ph
         for (const auto& [original,copy]:stage.replacement.original_to_proposed) {
             const auto found=source.find(original);
             if (found!=source.end() && found->second.type=="wall") copied_walls.insert(copy);
+        }
+        if (intent.intent.wall_group_scale) {
+            const auto scope=constraint_phase_scope(stage.entities);
+            for (const auto& [id,entity]:stage.entities) {
+                const auto original=source.find(id);
+                if (entity.type=="wall" && !scope.inactive_owner_ids.contains(id) &&
+                    original!=source.end() && entity!=original->second) copied_walls.insert(id);
+            }
         }
         validate_active_wall_physical_dependencies(stage.entities,copied_walls,true);
     }

@@ -6,6 +6,9 @@ namespace sketch {
 [[nodiscard]] Entity reconstruct_split_wall(const Entity& source, const Segment& baseline,
     double fraction, bool second_piece);
 void validate_wall_split_archive(const Entity& wall);
+// Qualify bounded passive scale quantity archives, then remove only historical
+// property/owner slots from a reference-inspection copy. Never pass live state.
+void wall_scale_quantity_reference_remainder(Entity& inspection_copy);
 // Reconstructs the baseline and its exact entry/derivation receipt. All
 // unrelated wall and receipt metadata remains owned by the original entity.
 // Version four first verifies the exact selected curve transform, then rebases

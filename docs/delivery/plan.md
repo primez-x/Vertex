@@ -130,9 +130,13 @@ polling timeout does not permit restarting it.
    repeated transforms. Qualify the subsequent connected wall-group canvas scale
    source, exact manufactured previews, common floor/base-plane pivot, fixed
    relations, hosted consequences, mandatory room review and retained command
-   43/44/phase intent 18 under reader 173/extraction 171. Scaling baseline walls
-   inside an active alternative still requires source-derived replacement;
-   ordinary authoring refuses it. Qualify source-derived
+   43/44/phase intent 18 under reader 173/extraction 171. Qualify subsequent
+   source-derived baseline group scaling inside an active alternative, retaining
+   originals, exact proposed previews, fixed relations, hosted/corner copies,
+   reviewed room consequences and atomic phase intent 19 under reader
+   174/extraction 172. Ordinary authoring keeps its baseline protection.
+   Unsupported dependencies and cross-registry cohorts remain visible gaps;
+   protected refusals do not certify the complete workflow. Qualify source-derived
    active-baseline owner/two-host/two-cut replacement and leaf-eight corner
    name/dimension/profile editing, Properties and canvas preview/publication,
    mandatory room review and reader 171/extraction 169 retained history.

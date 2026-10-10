@@ -25735,8 +25735,22 @@ public:
             if (intent.wall_replacement.is_null()) return std::nullopt;
             physical = inspect_phase_wall_replacement_authoring(source, intent);
         }
+        if (intent.intent.wall_group_scale) {
+            std::set<std::string,std::less<>> proposed_walls;
+            for (const auto& [original,proposed]:physical.replacement.original_to_proposed) {
+                const auto owner=source.entities().find(original);
+                if (owner!=source.entities().end() && owner->second.type=="wall") proposed_walls.insert(proposed);
+            }
+            const auto scope=constraint_phase_scope(physical.edited_entities);
+            for (const auto& [id,entity]:physical.edited_entities) {
+                const auto original=source.entities().find(id);
+                if (entity.type=="wall" && !scope.inactive_owner_ids.contains(id) &&
+                    original!=source.entities().end() && entity!=original->second) proposed_walls.insert(id);
+            }
+            validate_active_wall_physical_dependencies(physical.edited_entities,proposed_walls,true);
+        }
         auto projected = project_phase_wall_canvas(source, physical, retained, eligible, labels,
-            metric_units, view_context, coordinated);
+            metric_units, view_context, coordinated, intent.intent.wall_group_scale.has_value());
         VertexPreviewProjection result;
         result.entities = std::move(projected.entities);
         result.labels = std::move(projected.labels);
@@ -27475,6 +27489,8 @@ public:
                 ConstraintAuthoringIntent semantic;
                 semantic.wall_group_scale=std::move(scale);
                 semantic.message="Scale connected wall group";
+                if (auto proposed=prepareAlternativeWallGeometryCommand(source,semantic))
+                    return *proposed;
                 const auto preview=preview_constraint_authoring(source,semantic);
                 requireAcceptedConstraintPreview(preview);
                 return augmentAuthoredCommandForRegistry(
@@ -27568,6 +27584,11 @@ public:
                         const auto& intent=*ordinary_intent;
                         const auto command=ordinaryGeometryTransformCommand(*source,*ordinary_capture,intent);
                         if (cancellation.is_cancelled()) return RegenerationReceipt{source->revision(),{}};
+                        if (auto proposed=projectAlternativeWallCanvasCommand(*source,command,*retained,
+                                *eligible,*labels,metric_units,view_context,prepared_move.get())) {
+                            *result=std::move(proposed);
+                            *ordinary_command=command;
+                        } else {
                         const auto candidate=prepareCanvasEdit(*source,command,edit_source,*prepared_move);
                         if (!ordinary_capture->wall_ids.isEmpty() && intent.scale!=1.0)
                             validate_architectural_geometry_changes(*source,candidate);
@@ -27651,6 +27672,7 @@ public:
                                 proposed.scale=read_number(after->second.properties,"scale",1.0);
                                 proposed.rotation_degrees=read_number(after->second.properties,"rotation_degrees",0.0);
                             }
+                        }
                         }
                         if (cancellation.is_cancelled()) result->reset();
                     } else if (presentation_capture && presentation_intent && prepared_move) {
@@ -30672,7 +30694,8 @@ public:
             selected!=source->entities().end() && selected->second.type=="wall") {
             const auto prepared=preview->prepared;
             const auto edit_source=preview->edit_source;
-            const auto candidate=[&] {
+            const auto candidate=[&]() -> std::optional<DocumentSnapshot> {
+                if (prepared->alternative_wall) return std::nullopt;
                 if (edit_source->workspace) {
                     if (!edit_source->mirror || prepared->document || !prepared->workspace || !prepared->mirror)
                         throw std::invalid_argument("The wall rotation's recovery authority changed.");
@@ -30682,11 +30705,12 @@ public:
                     throw std::invalid_argument("The wall rotation's document authority changed.");
                 return prepared->document->preview();
             }();
-            if (!affectedPhysicalWallRoomGroups(*source,candidate.entities(),selected->first).empty()) {
+            if (prepared->alternative_wall || (candidate &&
+                !affectedPhysicalWallRoomGroups(*source,candidate->entities(),selected->first).empty())) {
                 const auto command=preview->command;
                 // Retain the worker's exact admitted command and complete history;
                 // the release never constructs an alternate geometric proposal.
-                if (fullSnapshotDigest(Document::preview_command(*source,command))!=fullSnapshotDigest(candidate))
+                if (candidate && fullSnapshotDigest(Document::preview_command(*source,command))!=fullSnapshotDigest(*candidate))
                     throw std::invalid_argument("The wall rotation's admitted command or history changed.");
                 const auto authority=m_entity_transform_context;
                 const auto viewport=*m_entity_transform_viewport;
@@ -30756,7 +30780,12 @@ public:
                 m_vertex_preview_references.reset(); m_vertex_preview_view_context.reset();
                 m_vertex_preview_canvas.clear(); m_vertex_preview_document.reset();
                 canvas->setEntities(canvas->entities());
-                const auto reviewed=reviewPhysicalWallRoomsAfterGeometry(*source,candidate,command,
+                if (prepared->alternative_wall) {
+                    if (!publishReviewedAlternativeWallCanvasEdit(*source,command,
+                            *prepared->alternative_wall,*authority,edit_source,rotation_fence)) return false;
+                    clearError(); refresh(); return true;
+                }
+                const auto reviewed=reviewPhysicalWallRoomsAfterGeometry(*source,*candidate,command,
                     selected->first,*authority,owner,rotation_fence);
                 if (!reviewed) { clearError(); refreshInspector(); return false; }
                 rotation_fence();

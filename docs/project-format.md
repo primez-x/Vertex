@@ -1,4 +1,37 @@
-# Vertex project formats v1 through v173
+# Vertex project formats v1 through v174
+
+## Baseline wall-group scale replacements (v174, source integration)
+
+Phase authoring dialect 19 carries one pure `WallGroupScaleIntent` and one
+canonical complete leaf-eight wall replacement. Its nine outer fields match
+the replacement envelope; its inner intent has the scale field admitted by
+dialect 18. Earlier phases 1 through 17 retain their sixteen-field intent, and
+18 remains ordinary/proposed scaling without replacement authority. Other
+geometry, relation mutations, profile edits, demolition and coordinated lanes
+cannot borrow the new scale/replacement pair.
+
+Actual source discovery derives the active registry, saved alternative and
+baseline roots. Replacement replay independently reconstructs complete wall,
+hosted/corner, analytical consumer, constraint and presentation copies. Only the
+selected scale wall IDs remap into that derived stage; the world pivot and
+physical factor retain their authored values. Connected solving preserves fixed
+relations. Original baselines and other alternatives remain unchanged. Existing
+source-derived room correspondence and explicit decisions complete publication.
+Mixed groups retain ordinary/proposed identities and project their changed
+hosts, opening profiles and dimensions alongside proposed baseline copies.
+Bounded quantity archives are passive provenance during replacement and
+retirement reference inspection; their saved payloads remain unchanged.
+
+The canvas retains exact manufactured proposed geometry without treating the
+detached stage as a new source snapshot. Release binds the admitted command,
+selection, view, recovery head and original source. Pending room review cannot
+publish through an ordinary prepared ticket. Current, nested and undone history
+require native reader 174/extraction 172. Existing asset tables are unchanged.
+
+This is source integration only. Compilation, interaction, native geometry,
+save/reopen, migration and output remain unqualified. Cross-registry replacement
+and unsupported dependency cases remain explicit refusals requiring separate
+workflows or completion under the full delivery scope.
 
 ## Connected physical wall-group scaling (v173, source integration)
 

@@ -244,8 +244,18 @@ bool supported_point(const CanvasEntity& entity,Vec2 point) {
     return intersects(entity.segments) || (entity.stroke_segments && intersects(*entity.stroke_segments)) ||
         std::any_of(entity.holes.begin(),entity.holes.end(),intersects);
 }
+bool wall_opening_type(std::string_view type) {
+    return type=="opening" || type=="door" || type=="window";
+}
+std::string wall_opening_kind(const Entity& entity) {
+    if (entity.type=="opening") return entity.properties.at("opening_kind").get<std::string>();
+    const auto kind=entity.properties.value("opening_kind",entity.type);
+    if ((entity.type!="door" && entity.type!="window") || kind!=entity.type)
+        throw std::invalid_argument("Phase wall preview opening kind differs from its actual owner type.");
+    return kind;
+}
 TopoDS_Shape opening_solid(const Entity& entity,const Wall& wall,const HostedOpening& opening) {
-    const auto kind=entity.properties.at("opening_kind").get<std::string>();
+    const auto kind=wall_opening_kind(entity);
     if (kind=="opening" && !entity.properties.contains("opening_assembly")) return make_wall(Wall{entity.id,
         hosted_opening_span(wall.baseline,opening.offset,opening.width),wall.thickness,
         opening.height,wall.elevation+opening.sill,{}});
@@ -554,7 +564,8 @@ PhaseWallCanvasProjection project_phase_wall_canvas(const DocumentSnapshot& sour
     const PhaseWallReplacementAuthoringPreview& physical,const std::vector<CanvasEntity>& retained,
     const std::vector<CanvasEntity>& eligible,const std::vector<CanvasLabel>& labels,bool metric_units,
     const std::optional<ArchitecturalViewContext>& view_context,
-    const std::optional<PhaseWallCanvasCoordinatedPhysicalInput>& coordinated) {
+    const std::optional<PhaseWallCanvasCoordinatedPhysicalInput>& coordinated,
+    bool include_changed_wall_dependencies) {
     const auto& stage=physical.edited_entities;
     auto aliases=physical.replacement.original_to_proposed;
     if (coordinated) for (const auto& [original,proposed]:coordinated->original_to_proposed) {
@@ -581,6 +592,14 @@ PhaseWallCanvasProjection project_phase_wall_canvas(const DocumentSnapshot& sour
         const auto found=aliases.find(id);return found==aliases.end() ? id : found->second;
     };
     const auto stage_scope=constraint_phase_scope(stage);
+    const auto source_scope=constraint_phase_scope(source.entities());
+    const auto typed_opening_host=[](const Entity& entity) -> std::optional<std::string> {
+        if (!entity.properties.is_object()) return std::nullopt;
+        const auto host=entity.properties.find("wall_id");
+        if (host==entity.properties.end() || !host->is_string()) return std::nullopt;
+        const auto id=host->get<std::string>();
+        return id.empty() ? std::nullopt : std::optional{id};
+    };
     std::map<std::string,Wall,std::less<>> walls;
     const auto stage_wall=[&](const std::string& id) -> const Wall& {
         if (walls.contains(id)) return walls.at(id);
@@ -589,8 +608,14 @@ PhaseWallCanvasProjection project_phase_wall_canvas(const DocumentSnapshot& sour
             throw std::invalid_argument("Phase wall canvas preview lost an actual wall host: "+id);
         std::vector<const Entity*> children;
         for (const auto& [child_id,entity]:stage) {
-            if (!stage_scope.inactive_owner_ids.contains(child_id) && entity.type=="opening" &&
-                entity.properties.value("wall_id",std::string{})==id) children.push_back(&entity);
+            if (!stage_scope.inactive_owner_ids.contains(child_id) &&
+                (entity.type=="opening" || (include_changed_wall_dependencies && wall_opening_type(entity.type))) &&
+                (include_changed_wall_dependencies ? typed_opening_host(entity)==std::optional{id} :
+                    entity.properties.value("wall_id",std::string{})==id)) {
+                if (include_changed_wall_dependencies && entity.id!=child_id)
+                    throw std::invalid_argument("Phase wall canvas preview cut identity differs from its actual map key: "+child_id);
+                children.push_back(&entity);
+            }
         }
         Wall wall;std::string error;
         if (!read_document_wall(resolve_vertical_placement(stage,owner->second),children,wall,error))
@@ -600,6 +625,59 @@ PhaseWallCanvasProjection project_phase_wall_canvas(const DocumentSnapshot& sour
     for (const auto& [original,proposed]:aliases) {
         if (source.entities().contains(original) && source.entities().at(original).type=="wall")
             (void)stage_wall(proposed);
+    }
+    const auto qualified_opening_host=[&](const std::string& id,const Entity& before) {
+        const auto host=typed_opening_host(before);
+        const auto target=proposed_id(id);
+        const auto original_host=host ? source.entities().find(*host) : source.entities().end();
+        const auto after=stage.find(target);
+        if (before.id!=id || !host || original_host==source.entities().end() ||
+            original_host->second.id!=*host || original_host->second.type!="wall" ||
+            after==stage.end() || after->second.id!=target || after->second.type!=before.type ||
+            typed_opening_host(after->second)!=std::optional{proposed_id(*host)})
+            throw std::invalid_argument("Phase wall canvas preview lost an exact scaled opening host: "+id);
+        const auto actual_host=stage.find(proposed_id(*host));
+        if (actual_host==stage.end() || actual_host->second.id!=proposed_id(*host) || actual_host->second.type!="wall")
+            throw std::invalid_argument("Phase wall canvas preview lost an actual scaled opening wall: "+id);
+        return *host;
+    };
+    std::set<std::string,std::less<>> changed_wall_hosts,changed_wall_openings;
+    if (include_changed_wall_dependencies) {
+        for (const auto& [id,before]:source.entities()) {
+            if (before.type!="wall" || aliases.contains(id) || source_scope.inactive_owner_ids.contains(id)) continue;
+            if (before.id!=id) throw std::invalid_argument("Phase wall canvas preview scaled wall source identity differs from its map key: "+id);
+            const auto after=stage.find(id);
+            if (after==stage.end() || after->second.id!=id || after->second.type!="wall")
+                throw std::invalid_argument("Phase wall canvas preview lost an actual scaled wall host: "+id);
+            if (stage_scope.inactive_owner_ids.contains(id)) continue;
+            if (after->second!=before || resolve_vertical_placement(stage,after->second)!=
+                resolve_vertical_placement(source.entities(),before)) changed_wall_hosts.insert(id);
+        }
+        // A cut/assembly change can affect its host even when that wall's own
+        // envelope is exact. Follow only the actual supported host relationship.
+        for (const auto& [id,before]:source.entities()) {
+            if (!wall_opening_type(before.type) || source_scope.inactive_owner_ids.contains(id)) continue;
+            const auto target=proposed_id(id);
+            const auto after=stage.find(target);
+            const auto reference=typed_opening_host(before);
+            const auto owner=reference ? source.entities().find(*reference) : source.entities().end();
+            const bool in_wall_closure=owner!=source.entities().end() && owner->second.type=="wall" &&
+                (aliases.contains(*reference) || changed_wall_hosts.contains(*reference));
+            // Standalone/opaque unchanged door and window records were never
+            // wall consumers. Do not require a host merely because of type.
+            if (!aliases.contains(id) && after!=stage.end() && after->second==before && !in_wall_closure) continue;
+            const auto host=qualified_opening_host(id,before);
+            if (stage_scope.inactive_owner_ids.contains(target) ||
+                stage_scope.inactive_owner_ids.contains(proposed_id(host))) continue;
+            if (after->second!=before) {
+                changed_wall_openings.insert(id);
+                if (!aliases.contains(host)) changed_wall_hosts.insert(host);
+            }
+        }
+        // The plan API raw-decodes walls without overrides. Populate actual
+        // resolved hosts first so level placement, profiles and complete active
+        // cuts agree with the solids and controls projected below.
+        for (const auto& id:changed_wall_hosts) (void)stage_wall(id);
     }
     // Phase replacement retains its originals as recovery/design evidence.
     // Only the actual saved active semantic roster participates in junctions;
@@ -625,14 +703,32 @@ PhaseWallCanvasProjection project_phase_wall_canvas(const DocumentSnapshot& sour
     std::set<std::string,std::less<>> affected;
     for (const auto& [original,proposed]:aliases)
         if (source.entities().contains(original)) affected.insert(original);
+    affected.insert(changed_wall_hosts.begin(),changed_wall_hosts.end());
+    affected.insert(changed_wall_openings.begin(),changed_wall_openings.end());
     for (const auto& [id,plan]:plans) {
         if (fresh.contains(id) || aliases.contains(id) || !source.entities().contains(id)) continue;
         const auto old=old_plans.find(id);
         if (old!=old_plans.end() && (!same_path(plan.footprint,old->second.footprint) || !same_path(plan.strokes,old->second.strokes))) affected.insert(id);
     }
+    if (include_changed_wall_dependencies) {
+        // Junction-only changes also need a host cache for wall labels and
+        // opening consumers even if no wall body prototype is present.
+        for (const auto& id:affected) if (source.entities().contains(id) && source.entities().at(id).type=="wall" &&
+            !stage_scope.inactive_owner_ids.contains(proposed_id(id))) (void)stage_wall(proposed_id(id));
+        for (const auto& [id,before]:source.entities()) {
+            if (!wall_opening_type(before.type) || source_scope.inactive_owner_ids.contains(id) ||
+                stage_scope.inactive_owner_ids.contains(proposed_id(id))) continue;
+            const auto after=stage.find(proposed_id(id));
+            const auto reference=typed_opening_host(before);
+            const auto owner=reference ? source.entities().find(*reference) : source.entities().end();
+            const bool in_wall_closure=owner!=source.entities().end() && owner->second.type=="wall" && affected.contains(*reference);
+            if (!aliases.contains(id) && after!=stage.end() && after->second==before && !in_wall_closure) continue;
+            const auto host=qualified_opening_host(id,before);
+            if (!stage_scope.inactive_owner_ids.contains(proposed_id(host)) && affected.contains(host)) affected.insert(id);
+        }
+    }
     // A common manufactured owner changes whenever either final host or cut
     // changes. Keep the captured owner spelling solely as a presentation alias.
-    const auto source_scope=constraint_phase_scope(source.entities());
     for (const auto& [id,before]:source.entities()) {
         // Parked/demolished alternatives retain their original host spelling;
         // the active edit's aliases cannot become authority for those owners.
@@ -732,6 +828,50 @@ PhaseWallCanvasProjection project_phase_wall_canvas(const DocumentSnapshot& sour
             const auto decoded=decode_boundary_dimension_entity(stage.at(id));
             if (!decoded.supported()) continue;
             if (affected.contains(decoded.dimension->boundary_id)) affected.insert(id);
+        }
+    }
+    if (include_changed_wall_dependencies) {
+        // Dimensions need a second pass after wall/cut/corner admission. An
+        // unchanged dimension envelope can still measure a changed actual
+        // source; entity-map ordering and retained presentation visibility do
+        // not determine this dependency.
+        for (const auto& [id,before]:source.entities()) {
+            if (!can_recognize_boundary_dimension_entity_type(before.type) || aliases.contains(id) ||
+                source_scope.inactive_owner_ids.contains(id)) continue;
+            if (before.id!=id) throw std::invalid_argument("Phase wall canvas preview scaled dimension source identity differs from its map key: "+id);
+            const auto after=stage.find(id);
+            if (after==stage.end() || after->second.id!=id || after->second.type!=before.type)
+                throw std::invalid_argument("Phase wall canvas preview lost an actual scaled dimension owner: "+id);
+            if (stage_scope.inactive_owner_ids.contains(id)) continue;
+            const auto old_dimension=decode_boundary_dimension_entity(before);
+            const auto new_dimension=decode_boundary_dimension_entity(after->second);
+            if (!old_dimension.supported() || !new_dimension.supported()) {
+                if (after->second!=before) throw std::invalid_argument("Phase wall canvas preview changed an unsupported dimension: "+id);
+                continue;
+            }
+            const auto& original_owner=old_dimension.dimension->boundary_id;
+            const auto& target_owner=new_dimension.dimension->boundary_id;
+            if (stage_scope.inactive_owner_ids.contains(target_owner) ||
+                source_scope.inactive_owner_ids.contains(original_owner)) continue;
+            if (target_owner!=proposed_id(original_owner))
+                throw std::invalid_argument("Phase wall canvas preview lost an exact scaled dimension target: "+id);
+            const auto old_owner=source.entities().find(original_owner),new_owner=stage.find(target_owner);
+            if (old_owner==source.entities().end() || old_owner->second.id!=original_owner ||
+                new_owner==stage.end() || new_owner->second.id!=target_owner ||
+                new_owner->second.type!=old_owner->second.type)
+                throw std::invalid_argument("Phase wall canvas preview lost an actual scaled dimension source: "+id);
+            bool changed=after->second!=before || affected.contains(original_owner);
+            // Inspect only typed analytical consumers. Physical-room facts keep
+            // their existing review/publication fence; passive provenance and
+            // arbitrary extension references confer no preview authority.
+            if (!is_physical_wall_room(new_owner->second) &&
+                (new_owner->second.type=="wall" || new_owner->second.type=="corner_window" ||
+                 new_owner->second.type=="measurement_linework" || can_recognize_boundary_entity_type(new_owner->second.type))) {
+                changed=changed || new_owner->second!=old_owner->second;
+                if (new_owner->second.type=="wall") changed=changed ||
+                    resolve_vertical_placement(stage,new_owner->second)!=resolve_vertical_placement(source.entities(),old_owner->second);
+            }
+            if (changed) affected.insert(id);
         }
     }
     std::map<std::string,std::pair<std::string,std::string>,std::less<>> embedded;
@@ -1022,7 +1162,7 @@ PhaseWallCanvasProjection project_phase_wall_canvas(const DocumentSnapshot& sour
             // common owner supplies the only manufactured canvas target.
             if (captured.contains(key)) result.entities.push_back(std::move(projected));
             continue;
-        } else if (entity.type=="opening") {
+        } else if (entity.type=="opening" || (include_changed_wall_dependencies && wall_opening_type(entity.type))) {
             const auto host=entity.properties.at("wall_id").get<std::string>();
             if (!walls.contains(host)) throw std::invalid_argument("Phase wall canvas preview opening has no qualified replacement host: "+id);
             const auto& wall=walls.at(host);
@@ -1032,7 +1172,7 @@ PhaseWallCanvasProjection project_phase_wall_canvas(const DocumentSnapshot& sour
                 projected.segments=project_solid(opening_solid(entity,wall,*opening),*view_context);world=false;
                 projected.filled=false;projected.hatch_pattern=QStringLiteral("none");
             } else {
-                const auto kind=entity.properties.at("opening_kind").get<std::string>();
+                const auto kind=wall_opening_kind(entity);
                 if (entity.properties.contains("opening_assembly")) {
                     const auto assembly=parse_opening_assembly(entity.properties.at("opening_assembly"));
                     if (opening_assembly_kind_name(assembly.kind)!=kind) throw std::invalid_argument("Phase wall preview opening assembly kind differs from its owner.");
@@ -1051,6 +1191,10 @@ PhaseWallCanvasProjection project_phase_wall_canvas(const DocumentSnapshot& sour
                 projected.hit_segments={span};
                 if (prototype.opening_width_controls) projected.opening_width_controls=CanvasOpeningWidthControls{
                     span.start,span.end,opening->width,opening->height,source.revision(),wall.baseline,opening->offset};
+                if (include_changed_wall_dependencies && prototype.resize_frame && !projected.segments.empty()) {
+                    projected.resize_frame=path_frame(projected.segments,
+                        std::atan2(span.end.y-span.start.y,span.end.x-span.start.x));
+                }
             }
         } else if (coordinated && can_recognize_building_entity_type(entity.type) && entity.type!="roof") {
             const auto effective=effective_building_entity(stage,entity);
@@ -1432,7 +1576,7 @@ PhaseWallCanvasProjection project_phase_wall_canvas(const DocumentSnapshot& sour
             const auto& owner=stage.at(target);
             if (owner.type=="wall" && walls.contains(target))
                 support=project_shape_view(make_wall(walls.at(target)),BuildingViewKind::plan,view_context->frame);
-            else if (owner.type=="opening") {
+            else if (owner.type=="opening" || (include_changed_wall_dependencies && wall_opening_type(owner.type))) {
                 const auto host=owner.properties.at("wall_id").get<std::string>();
                 if (!walls.contains(host)) throw std::invalid_argument("Phase wall preview bound view dimension lost its opening host.");
                 const auto& wall=walls.at(host);

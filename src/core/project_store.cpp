@@ -626,6 +626,7 @@ std::uint32_t required_format_version_internal(const DocumentSnapshot& snapshot,
                 return false;
             };
             const auto profile_intent=[&](const nlohmann::json& intent)->std::uint32_t {
+                if (intent.is_object() && intent.value("version",0)==19) return 174U;
                 if (intent.is_object() && intent.value("version",0)==18) return 173U;
                 if (intent.is_object() && intent.value("version",0)==17 && intent.size()==9 &&
                     intent.contains("ordinary_roof_edits") && intent.contains("source_snapshot_digest"))
@@ -2887,6 +2888,7 @@ bool verify_sqlite_schema(sqlite3* database, bool allow_recovery = false) {
          sqlite3_column_int(user_version.get(), 0) != 171 &&
          sqlite3_column_int(user_version.get(), 0) != 172 &&
          sqlite3_column_int(user_version.get(), 0) != 173 &&
+         sqlite3_column_int(user_version.get(), 0) != 174 &&
          sqlite3_column_int(user_version.get(), 0) != 169 &&
          sqlite3_column_int(user_version.get(), 0) != 163 &&
          sqlite3_column_int(user_version.get(), 0) != 143 &&
@@ -3608,6 +3610,8 @@ DocumentSnapshot read_snapshot(sqlite3* database, RecoveryLedger* recovery = nul
     // here and authenticate the manifest with its stored version below.
     const auto required_format = required_format_version_internal(snapshot, format_number < 28);
     if (required_format > format_number) {
+        if (required_format>=174)
+            storage_error(StorageErrorCode::unsupported_format,"This project requires reader 174 for source-derived baseline wall-group scaling in retained design history");
         if (required_format>=173)
             storage_error(StorageErrorCode::unsupported_format,"This project requires reader 173 for connected wall-group scaling and its retained review/design history");
         if (required_format>=172)

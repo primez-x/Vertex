@@ -75,6 +75,17 @@ std::vector<PhaseWallReplacementRequest> phase_wall_replacement_requests(
     };
     if (intent.wall_resize) owner(intent.wall_resize->wall_id, "wall");
     if (intent.wall_geometry_move) for (const auto& target : intent.wall_geometry_move->targets) owner(target.wall_id, "wall");
+    if (intent.wall_group_scale) {
+        // The scale codec owns bounded unique targets and finite physical
+        // inputs. Discovery must use those actual original owners, never a
+        // caller's replacement seed list or proposed geometry payload.
+        const auto scale = decode_wall_group_scale_intent(encode_wall_group_scale_intent(*intent.wall_group_scale));
+        for (const auto& id : scale.wall_ids) {
+            owner(id, "wall");
+            if (scope.inactive_owner_ids.contains(id))
+                reject("wall group scale cannot lend authority from an inactive wall: " + id);
+        }
+    }
     if (intent.wall_curve_construction) owner(intent.wall_curve_construction->edit.wall_id, "wall");
     if (intent.boundary_resize) edit(intent.boundary_resize->edit, false);
     if (intent.boundary_vertex_move) edit(intent.boundary_vertex_move->edit, false);

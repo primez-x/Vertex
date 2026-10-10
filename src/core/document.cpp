@@ -2704,7 +2704,8 @@ static void validate_phase_constraint_authoring_mode(const ApplyBoundaryConstrai
         command.exterior_corner_move || command.exterior_segment_resize || command.exterior_segment_arc ||
         has_joint_translation_completion(command) || has_room_review_completion(command) ||
         has_phase_room_review_completion(command) || command.wall_dimension_completion ||
-        command.curve_construction_completion || has_disto_measurement_completion(command))
+        command.curve_construction_completion || has_disto_measurement_completion(command) ||
+        has_wall_group_scale(command))
         throw std::invalid_argument("Active design authoring cannot borrow raw geometry, assets or another edit authority");
 }
 

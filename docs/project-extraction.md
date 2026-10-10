@@ -1,5 +1,11 @@
 # Portable project extraction
 
+Exchange version 172 requires native reader 174 for source-derived baseline
+wall-group scaling inside a saved active alternative. Phase intent 19 retains
+pure scale plus complete leaf-eight replacement, including reviewed, nested and
+undone history. Historical phases and asset tables retain their original forms.
+Source integration does not establish runtime or migration acceptance.
+
 Exchange version 171 requires native reader 173 for connected physical wall-group
 scaling. Direct command 43, room-review enclosure 44 and ordinary phase intent 18
 retain source-derived scale authority through nested and undone history. Original

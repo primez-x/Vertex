@@ -3299,6 +3299,24 @@ Blocked / missing until testing a candidate that contains it.
   - Result: Not tested
   - Notes: ______________________________
 
+- [ ] **WALL-GROUP-ALTERNATIVE - Resize existing walls in a remodeling alternative**
+  - Steps: Draw two adjoining existing walls with a corner window, a neighboring door, room labels and dimensions. Save an existing baseline and create a remodeling alternative. Select both existing walls and resize the group with a corner handle. Review affected rooms if prompted. Inspect the proposed walls, openings, dimensions and schedules, then switch back to the baseline and another alternative. Return to the resized alternative, undo/redo, save and reopen. Try a resize that contradicts a locked wall length, and cancel another resize during room review.
+  - Expected: The selected alternative receives editable proposed walls and complete openings while the original baseline and other alternatives keep their original geometry. Current dimensions and schedules follow the proposed geometry. Undo/redo and reopening preserve the same design choices. A locked-length conflict or cancelled review leaves the entire source unchanged. Switching design alternatives does not reuse a stale pending resize.
+  - Result: Not tested
+  - Notes: ______________________________
+
+- [ ] **WALL-GROUP-MIXED - Resize existing and proposed walls together**
+  - Steps: In a remodeling alternative, select an existing wall and a separate proposed wall on the same floor. Give the proposed wall a door or window and a dimension. Drag a group corner to resize both. Compare the preview with the result after release, then undo.
+  - Expected: Both walls, the hosted opening and its dimension update together in the preview. The released result matches that preview. The existing wall receives a proposed copy; the already proposed wall keeps its identity. Undo restores the complete group.
+  - Result: Not tested
+  - Notes: ______________________________
+
+- [ ] **WALL-GROUP-REPEAT - Resize walls before and after creating an alternative**
+  - Steps: Enter exact dimensions for two adjoining walls with material layers and a corner window. Resize the group, then save that result as the existing baseline. Create a remodeling alternative and resize the group again. Delete the proposed corner window, undo, save and reopen.
+  - Expected: Retained measurements from the first resize do not block the second resize or later window deletion. Original baseline walls keep their saved geometry. Undo and reopening retain the complete window and both cuts.
+  - Result: Not tested
+  - Notes: ______________________________
+
 ## Issue report template
 
 

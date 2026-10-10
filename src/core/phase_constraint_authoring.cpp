@@ -228,7 +228,7 @@ ConstraintAuthoringIntent decode_intent(const Json& value,bool wall_group_scale=
     ConstraintAuthoringIntent result;
     if (wall_group_scale) {
         if (value.at("wall_group_scale").is_null())
-            invalid("Version eighteen requires wall group scale intent");
+            invalid("Wall group scale dialect requires wall group scale intent");
         result.wall_group_scale=decode_wall_group_scale_intent(value.at("wall_group_scale"));
     }
     result.message=value.at("message").get<std::string>();
@@ -1213,7 +1213,10 @@ nlohmann::json encode_phase_constraint_authoring_intent(const PhaseConstraintAut
         static_cast<int>(!value.wall_demolition.is_null()) +
         static_cast<int>(!value.ordinary_roof_edits.is_null()) +
         static_cast<int>(value.intent.wall_group_scale.has_value());
-    if (exclusive_operations > 1)
+    // The standalone baseline scale lane pairs only these two authorities.
+    // Every other operation remains exclusive, including ordinary scale.
+    const bool baseline_wall_group_scale=value.intent.wall_group_scale && !value.wall_replacement.is_null();
+    if (exclusive_operations > (baseline_wall_group_scale ? 2 : 1))
         invalid("Active design operations cannot borrow another replacement or demolition authority");
     if (value.intent.wall_group_scale) {
         ConstraintAuthoringIntent only_scale;
@@ -1223,7 +1226,7 @@ nlohmann::json encode_phase_constraint_authoring_intent(const PhaseConstraintAut
             invalid("Wall group scale cannot borrow sibling geometry or relationship authority");
     }
     const auto coordinated_version=value.coordinated_replacements.is_null()?0:coordinated(value.coordinated_replacements,value).version;
-    Json result={{"version",value.intent.wall_group_scale?18:!value.ordinary_roof_edits.is_null()?17:!value.wall_demolition.is_null()?16:!value.coordinated_demolition.is_null()?15:!value.stair_demolition_retirement.is_null()?13:!value.stair_replacement.is_null()?12:!value.stair_demolition.is_null()?11:!value.structural_replacement.is_null()?9:coordinated_version==4?14:coordinated_version==3?10:coordinated_version==2?8:coordinated_version==1?7:!value.slab_demolition.is_null()?6:!value.slab_replacement.is_null()?5:!value.roof_replacement.is_null()?4:!value.opening_demolition.is_null()?3:value.wall_replacement.is_null()?1:2},{"expected_revision",value.expected_revision},
+    Json result={{"version",baseline_wall_group_scale?19:value.intent.wall_group_scale?18:!value.ordinary_roof_edits.is_null()?17:!value.wall_demolition.is_null()?16:!value.coordinated_demolition.is_null()?15:!value.stair_demolition_retirement.is_null()?13:!value.stair_replacement.is_null()?12:!value.stair_demolition.is_null()?11:!value.structural_replacement.is_null()?9:coordinated_version==4?14:coordinated_version==3?10:coordinated_version==2?8:coordinated_version==1?7:!value.slab_demolition.is_null()?6:!value.slab_replacement.is_null()?5:!value.roof_replacement.is_null()?4:!value.opening_demolition.is_null()?3:value.wall_replacement.is_null()?1:2},{"expected_revision",value.expected_revision},
         {"source_snapshot_digest",value.source_snapshot_digest},{"source_authoring_digest",value.source_authoring_digest},
         {"source_entities_digest",value.source_entities_digest},
         {"source_saved_revision",value.source_saved_revision ? Json(*value.source_saved_revision) : Json(nullptr)},
@@ -1232,6 +1235,12 @@ nlohmann::json encode_phase_constraint_authoring_intent(const PhaseConstraintAut
         const auto replacement=decode_phase_wall_replacement_authoring(value.wall_replacement);
         if (encode_phase_wall_replacement_authoring(replacement).dump()!=value.wall_replacement.dump())
             invalid("Wall replacement decisions are not canonical");
+        if (baseline_wall_group_scale && (value.wall_replacement.at("version")!=8 ||
+            !replacement.complete_presentations || !replacement.complete_corner_windows ||
+            !replacement.wall_profiles.empty() || !replacement.opening_profiles.empty() ||
+            !replacement.opening_rehosts.empty() || !replacement.opening_families.empty() ||
+            !replacement.wall_stacks.empty() || !replacement.corner_profiles.empty()))
+            invalid("Baseline wall group scale requires complete leaf eight without other wall edit authority");
         result["wall_replacement"]=value.wall_replacement;
     }
     if (!value.opening_demolition.is_null()) {
@@ -1370,7 +1379,8 @@ PhaseConstraintAuthoringIntent decode_phase_constraint_authoring_intent(const Js
     const bool wall_demolition=value.is_object() && value.contains("version") && value.at("version")==16;
     const bool ordinary_roofs=value.is_object() && value.contains("version") && value.at("version")==17;
     const bool wall_group_scale=value.is_object() && value.contains("version") && value.at("version")==18;
-    if (replacement) keys(value,{"version","expected_revision","source_snapshot_digest","source_authoring_digest",
+    const bool baseline_wall_group_scale=value.is_object() && value.contains("version") && value.at("version")==19;
+    if (replacement || baseline_wall_group_scale) keys(value,{"version","expected_revision","source_snapshot_digest","source_authoring_digest",
         "source_entities_digest","source_saved_revision","phase_selections","intent","wall_replacement"});
     else if (demolition) keys(value,{"version","expected_revision","source_snapshot_digest","source_authoring_digest",
         "source_entities_digest","source_saved_revision","phase_selections","intent","opening_demolition"});
@@ -1398,7 +1408,7 @@ PhaseConstraintAuthoringIntent decode_phase_constraint_authoring_intent(const Js
         "source_entities_digest","source_saved_revision","phase_selections","intent","ordinary_roof_edits"});
     else keys(value,{"version","expected_revision","source_snapshot_digest","source_authoring_digest",
         "source_entities_digest","source_saved_revision","phase_selections","intent"});
-    if (!value.at("version").is_number_integer() || (value.at("version")!=1 && value.at("version")!=2 && value.at("version")!=3 && value.at("version")!=4 && value.at("version")!=5 && value.at("version")!=6 && value.at("version")!=7 && value.at("version")!=8 && value.at("version")!=9 && value.at("version")!=10 && value.at("version")!=11 && value.at("version")!=12 && value.at("version")!=13 && value.at("version")!=14 && value.at("version")!=15 && value.at("version")!=16 && value.at("version")!=17 && value.at("version")!=18) ||
+    if (!value.at("version").is_number_integer() || (value.at("version")!=1 && value.at("version")!=2 && value.at("version")!=3 && value.at("version")!=4 && value.at("version")!=5 && value.at("version")!=6 && value.at("version")!=7 && value.at("version")!=8 && value.at("version")!=9 && value.at("version")!=10 && value.at("version")!=11 && value.at("version")!=12 && value.at("version")!=13 && value.at("version")!=14 && value.at("version")!=15 && value.at("version")!=16 && value.at("version")!=17 && value.at("version")!=18 && value.at("version")!=19) ||
         !value.at("expected_revision").is_number_unsigned()) invalid("Phase constraint proof version or revision is invalid");
     if (!value.at("source_saved_revision").is_null() && !value.at("source_saved_revision").is_number_unsigned())
         invalid("Phase constraint saved revision is invalid");
@@ -1406,10 +1416,10 @@ PhaseConstraintAuthoringIntent decode_phase_constraint_authoring_intent(const Js
         value.at("source_snapshot_digest").get<std::string>(),value.at("source_authoring_digest").get<std::string>(),
         value.at("source_entities_digest").get<std::string>(),
         value.at("source_saved_revision").is_null() ? std::nullopt : std::optional<Revision>{value.at("source_saved_revision").get<Revision>()},
-        value.at("phase_selections"),decode_intent(value.at("intent"),wall_group_scale)};
-    if (replacement) {
+        value.at("phase_selections"),decode_intent(value.at("intent"),wall_group_scale || baseline_wall_group_scale)};
+    if (replacement || baseline_wall_group_scale) {
         result.wall_replacement=value.at("wall_replacement");
-        if (result.wall_replacement.is_null()) invalid("Version two requires wall replacement decisions");
+        if (result.wall_replacement.is_null()) invalid("Wall replacement dialect requires wall replacement decisions");
         (void)decode_phase_wall_replacement_authoring(result.wall_replacement);
     }
     if (demolition) {
@@ -1489,6 +1499,8 @@ std::vector<PhaseConstraintAuthoringIntent> phase_constraint_replacement_compone
     }
     if (!intent.coordinated_demolition.is_null())
         return phase_coordinated_demolition_components(intent.coordinated_demolition,intent);
+    // Standalone phase nineteen returns its complete scale/replacement pair,
+    // so original-preservation guards inspect its actual replacement plan.
     if (intent.coordinated_replacements.is_null()) return {intent};
     std::vector<PhaseConstraintAuthoringIntent> result;
     const auto lanes=coordinated(intent.coordinated_replacements,intent);
@@ -1559,6 +1571,8 @@ Entities replay_phase_constraint_authoring(const Entities& source,const Json& pr
     if (!decoded.stair_demolition_retirement.is_null())
         return replay_phase_stair_demolition_retirement_entities(source,
             decode_stair_demolition_retirement_intent(decoded.stair_demolition_retirement));
+    // Phase nineteen follows complete replacement replay; ordinary phase
+    // eighteen never gains a copied stage or baseline edit authority.
     return decoded.wall_replacement.is_null() ? reconstruct_active_phase_constraint_authoring(source,decoded.intent)
         : replay_phase_wall_replacement_authoring(source,decoded);
 }

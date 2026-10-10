@@ -13,6 +13,9 @@
 #include <cmath>
 #include <stdexcept>
 #include <string>
+#include <string_view>
+#include <utility>
+#include <vector>
 
 namespace sketch {
 namespace {
@@ -1326,6 +1329,83 @@ void validate_constraint_wall_host(const std::string& wall_id, const std::map<st
         validate_wall_semantics(wall);
     } catch (const std::out_of_range&) {
         invalid("Wall or hosted opening is missing required geometry: " + wall_id);
+    }
+}
+
+// Wall scaling captures complete old properties as passive quantity provenance.
+// Only closed, bounded dialects qualify historical slots on an inspection copy.
+void wall_scale_quantity_reference_remainder(Entity& entity) {
+    const auto reject = [](const std::string& reason) {
+        invalid(reason);
+    };
+    const auto field = [](const json& value, const char* name) -> const json* {
+        if (!value.is_object()) return nullptr;
+        const auto found=value.find(name); return found==value.end() ? nullptr : &*found;
+    };
+    for (const auto* key : {"wall_scale_quantity_archive", "wall_scale_hosted_quantity_archive"}) {
+        const auto found=entity.extensions.find(key);
+        if (found==entity.extensions.end()) continue;
+        const bool hosted=std::string_view(key)=="wall_scale_hosted_quantity_archive";
+        if ((hosted && entity.type!="wall") || (!hosted && entity.type!="wall" &&
+            entity.type!="opening" && entity.type!="door" && entity.type!="window"))
+            reject("wall scale quantity archive has unsupported owner: " + entity.id);
+        auto& archive=*found;
+        const auto version=field(archive,"version"),entries=field(archive,"entries");
+        if (!archive.is_object() || archive.size()!=2 || !version || !version->is_number_integer() ||
+            *version!=1 || !entries || !entries->is_array() || entries->empty() || entries->size()>4096)
+            reject("unsupported wall scale quantity archive: " + entity.id);
+        // Keep the original retirement traversal limits before serialization:
+        // depth 64, 4 Mi nodes, 64 MiB strings/keys/binary, finite scalars.
+        constexpr std::size_t node_limit=4*1024*1024,byte_limit=64*1024*1024;
+        std::size_t nodes{},bytes{};
+        const auto text=[&](const std::string& value) {
+            if (value.size()>byte_limit-bytes) reject("source string/key budget exceeded");
+            bytes+=value.size();
+        };
+        std::vector<std::pair<const json*,std::size_t>> pending{{&archive,0}};
+        while (!pending.empty()) {
+            const auto [value,depth]=pending.back(); pending.pop_back();
+            if (depth>64 || ++nodes>node_limit) reject("source JSON node/nesting budget exceeded");
+            if (value->is_number_float() && !std::isfinite(value->get<double>())) reject("source has nonfinite scalar");
+            if (value->is_string()) text(value->get_ref<const std::string&>());
+            if (value->is_binary()) {
+                if (value->get_binary().size()>byte_limit-bytes) reject("source binary budget exceeded");
+                bytes+=value->get_binary().size();
+            }
+            if (!value->is_structured()) continue;
+            if (value->size()>node_limit-nodes || pending.size()>node_limit-nodes-value->size())
+                reject("source JSON pending-node budget exceeded");
+            if (value->is_object()) for (const auto& [name,child] : value->items()) {
+                text(name); pending.emplace_back(&child,depth+1);
+            } else for (const auto& child : *value) pending.emplace_back(&child,depth+1);
+        }
+        if (archive.dump().size()>1024*1024)
+            reject("wall scale quantity archive exceeds its byte budget: " + entity.id);
+        for (const auto& row : *entries) {
+            const auto properties=field(row,"source_properties"),pivot=field(row,"pivot"),scale=field(row,"scale");
+            const auto quantities=properties ? field(*properties,"quantity_entries") : nullptr;
+            if (!row.is_object() || row.size()!=(hosted ? 4 : 3) || !properties || !properties->is_object() ||
+                !quantities || !quantities->is_object() || !pivot || !pivot->is_array() || pivot->size()!=3 ||
+                !scale || !scale->is_number() || !std::isfinite(scale->get<double>()) ||
+                scale->get<double>()<=0 || scale->get<double>()==1)
+                reject("malformed wall scale quantity archive row: " + entity.id);
+            for (const auto& coordinate : *pivot)
+                if (!coordinate.is_number() || !std::isfinite(coordinate.get<double>()))
+                    reject("wall scale quantity archive has invalid pivot: " + entity.id);
+            if (hosted) {
+                const auto owner=field(row,"source_owner_id");
+                if (!owner || !owner->is_string()) reject("hosted wall scale archive lacks source identity: " + entity.id);
+                const auto& id=owner->get_ref<const std::string&>();
+                if (id.empty() || id.size()>128 || !std::all_of(id.begin(),id.end(),[](unsigned char c) {
+                    return (c>='a' && c<='z') || (c>='A' && c<='Z') ||
+                        (c>='0' && c<='9') || c=='-' || c=='_' || c=='.' || c==':';
+                })) reject("identity must contain 1..128 supported ASCII characters: " + id);
+            }
+        }
+        for (auto& row : archive.at("entries")) {
+            row.erase("source_properties");
+            if (hosted) row.erase("source_owner_id");
+        }
     }
 }
 

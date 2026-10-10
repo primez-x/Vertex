@@ -14,6 +14,48 @@ changed source does not acquire runtime acceptance without later qualification.
 
 ## Current delivery state
 
+### October 10 baseline wall-group scaling - source integration
+
+The ordinary connected scale batch is committed and pushed as 2d99f315, with
+exact remote HEAD verified. Current source work extends the actual-source wall
+replacement path to scaled baseline groups in active alternatives. Separate
+writers own request/remapping/replacement replay and the exclusive phase codec;
+root owns controller, history floors, source documentation and Git integration.
+Implementation owners have returned. Final bounded independent source review
+accepted the integrated corrections with no remaining concrete blocker in the
+reviewed scope. Root reviewed interfaces, compatibility and remaining limits;
+scoped commit, push and exact remote identity verification accompany this batch.
+New phase intent 19 combines pure scale with complete leaf-eight replacement;
+historical phases retain their original fields and authority. Reader 174 and
+extraction 172 carry the new semantic history. Proposed previews retain the
+captured source and use existing explicit room review before atomic publication.
+
+Independent review identified mixed baseline/proposed preview coverage and
+passive quantity-archive admission gaps. The correction includes every changed
+active noncopied host, its actual opening profiles/cuts and supported dimension
+consumers in the opted-in projection. Complete native admission includes copied
+and changed noncopied hosts. A follow-up correction limits host qualification to
+affected children; untouched unrelated legacy records retain their prior
+admission. The shared bounded archive qualifier now serves
+both retirement and replacement reference inspection on temporary copies;
+published metadata remains unchanged and unknown siblings still refuse.
+
+The manual list retains 450 original tasks plus twenty-seven focused tasks. New
+alternative, mixed-group and repeated-resize tasks remain Not tested. Static
+registry inspection retains all 277 requirements without changing acceptance or
+source bindings. No builds, tests/new tests,
+scripts/probes, native jobs, UI launches, packages or installs ran. Compilation,
+native execution, interaction, history/migration and output remain unverified.
+Installed evidence and the full production scope remain unchanged; all ten gates
+remain open. Cross-registry groups and unsupported dependencies remain visible
+workflow limitations; protected refusals are not full capability completion.
+
+Next source work includes actual roof-hosted skylight rotation. Source discovery
+confirmed the current model and cutter are axis-aligned; real rotation requires
+an oriented footprint, matching roof cut and slope-aware assembly, versioned
+intent/history/exchange and exact canvas controls. Group/3D picking and the
+remaining full plan stay open.
+
 ### October 10 connected wall-group scaling - source integration
 
 The corner exchange batch is committed and pushed as 84aef05e; exact remote

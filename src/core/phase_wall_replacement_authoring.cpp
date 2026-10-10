@@ -93,6 +93,15 @@ ConstraintAuthoringIntent remap_phase_wall_replacement_authoring_intent(
     if (result.wall_geometry_move)
         remap_targets(result.wall_geometry_move->targets, original_to_proposed,
                       &WallGeometryMoveTarget::wall_id);
+    if (result.wall_group_scale) {
+        auto& scale = *result.wall_group_scale;
+        scale = decode_wall_group_scale_intent(encode_wall_group_scale_intent(scale));
+        remap_ids(scale.wall_ids, original_to_proposed);
+        require_unique(scale.wall_ids);
+        // Fresh IDs may reverse source order. Canonical target order is part
+        // of retained replay; XYZ pivot and physical factor stay world-owned.
+        scale = decode_wall_group_scale_intent(encode_wall_group_scale_intent(scale));
+    }
     std::set<std::string, std::less<>> relations;
     for (auto& mutation : result.relation_mutations) {
         if (mutation.kind == ConstraintRelationMutationKind::upsert) {
