@@ -114,7 +114,7 @@ presentation. A later mouse release cannot commit a cancelled move.
 - Only one gesture owns the pointer at a time. Another button cannot steal or complete it.
 - The active drawing layer is selected in the project hierarchy and marked in blue.
 - Every new symbol or label stores its owning layer ID and is listed beneath that layer.
-- Selected objects receive a blue contrast outline. A compact `Selected` or `N selected` badge reports selection without opening Properties.
+- Selected objects receive a blue contrast outline. A compact `Selected: name` or `N selected` badge reports selection without opening Properties. Site Plan symbols and labels resolve their exact annotation owner and child, so the badge shows the component name or text rather than its render alias. The current owner-resolution correction is source-only and awaits interaction qualification.
 - Dragging a movable selection shows a transient preview; release creates one undoable command. An unsupported mixed group is rejected as a unit.
 - Site group movement captures each target's exact body/profile or annotation-child frame. One displayed displacement converts separately into those stored frames; numerical Transform uses one displayed group pivot. Embedded catalog roots retain world poses. Selected openings, hosted stair railings and attached dimensions follow their qualified parent once. Equal source-derived consequences merge; contradictory dependency edits refuse the whole command. Connected measured geometry retains its compatible shared local solve.
 - After the first drawing click, the pending edge follows the pointer with its live length.

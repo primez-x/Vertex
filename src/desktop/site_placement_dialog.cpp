@@ -166,7 +166,12 @@ public:
         const std::array<const char*,4> names{"sitePlacementX","sitePlacementY","sitePlacementZ","sitePlacementYaw"};
         const std::array<const char*,4> labels{"Origin X","Origin Y","Origin Z","Yaw"};
         for(std::size_t i=0;i<pose.size();++i) {pose[i]=number(owner,names[i],values[i],i==3);form->addRow(labels[i],pose[i]);}
-        datum_identifier=new QLineEdit(q(datum),owner);datum_identifier->setObjectName("sitePlacementDatumIdentifier");datum_identifier->setMaxLength(256);
+        datum_identifier=new QLineEdit(q(datum),owner);datum_identifier->setObjectName("sitePlacementDatumIdentifier");
+        // The captured contract permits 1024 UTF-8 bytes. Its UTF-16 text
+        // cannot require more code units; a shorter control limit would
+        // silently truncate a valid datum before an unchanged Preview/Save.
+        // Core validation still enforces the exact UTF-8 byte bound on edits.
+        datum_identifier->setMaxLength(1024);
         datum_identifier->setToolTip("Exact declared vertical datum identifier; height is explicitly entered, never inferred from terrain or grade.");
         form->addRow("Vertical datum identifier",datum_identifier);
         datum_height=number(owner,"sitePlacementDatumHeight",height);form->addRow("Datum height at origin",datum_height);

@@ -39270,13 +39270,20 @@ public:
             if (!record || record->model.sheets().empty())
                 throw std::invalid_argument("No typed drawing sheet is available.");
             const auto source_sheet_id=outputSheetId();
-            SheetLayoutDialog dialog(with_appraisal_schedule_registered(record->model),
-                                     source_sheet_id, owner);
+            const auto prepared = with_appraisal_schedule_registered(record->model);
+            SheetLayoutDialog dialog(prepared, source_sheet_id, owner);
             styleDialog(dialog);
             if (dialog.exec() != QDialog::Accepted || !modalContextUnchanged(context) ||
                 !dialog.acceptedModel()) return;
             const auto selected_sheet = dialog.selectedSheetId();
             const auto replacement = *dialog.acceptedModel();
+            // Built-in schedule availability is a detached editor choice.
+            // Accepting unchanged or restored fields must not register it in
+            // an older saved model or create an authoring history entry.
+            if (replacement.to_json() == prepared.to_json()) {
+                if (!selected_sheet.isEmpty()) (void)selectOutputSheet(selected_sheet);
+                return;
+            }
             // The dialog can select a newly staged page. Validate the original
             // sheet as the transaction anchor, then select the committed page.
             if (!applySheetModelMutation(QStringLiteral("Edit sheet layout"), source_sheet_id,
@@ -58385,9 +58392,13 @@ private:
         if (m_selected_ids.size() > 1)
             return QStringLiteral("%1 selected").arg(m_selected_ids.size());
 
-        const auto id = m_selected_ids.front().toStdString();
-        const auto snapshot = m_document->snapshot();
-        if (const auto binding = geometric_assembly_for_child(snapshot, id)) {
+        const auto render_id = m_selected_ids.front();
+        const auto site_target = siteCanvas(m_architecturalCanvas)
+            ? m_site_annotation_targets.find(render_id) : m_site_annotation_targets.end();
+        const bool owned_annotation = site_target != m_site_annotation_targets.end();
+        const auto id = owned_annotation ? site_target->second.child_id : render_id.toStdString();
+        const auto snapshot = authoringSnapshot();
+        if (const auto binding = owned_annotation ? std::nullopt : geometric_assembly_for_child(snapshot, id)) {
             const auto model = AssemblyModel::from_json(snapshot.entities().at(binding->assembly_catalog_id).properties.at("model"));
             const auto resolved = model.resolve(binding->instance.id);
             if (const auto name = resolved.properties.find("name"); name != resolved.properties.end() && !name->second.empty())
@@ -58395,7 +58406,7 @@ private:
             const auto type = std::find_if(model.types().begin(), model.types().end(), [&](const auto& value) { return value.id == binding->instance.type_id; });
             return QStringLiteral("Selected: %1").arg(QString::fromStdString(type->name));
         }
-        if (const auto found = snapshot.entities().find(id); found != snapshot.entities().end()) {
+        if (const auto found = snapshot.entities().find(id); !owned_annotation && found != snapshot.entities().end()) {
             if (const auto name = read_string(found->second.properties, "name");
                 name && !name->empty()) {
                 return QStringLiteral("Selected: %1").arg(QString::fromStdString(*name));
@@ -58417,8 +58428,8 @@ private:
         }
 
         for (const auto& [entity_id, entity] : snapshot.entities()) {
-            (void)entity_id;
-            if (entity.type != kAnnotationEntityType) continue;
+            if (entity.type != kAnnotationEntityType ||
+                (owned_annotation && entity_id != site_target->second.owner_entity_id)) continue;
             try {
                 const auto state = decode_annotation_entity(entity);
                 if (const auto label = std::find_if(state.labels.begin(), state.labels.end(),

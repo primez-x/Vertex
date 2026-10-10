@@ -14,6 +14,35 @@ changed source does not acquire runtime acceptance without later qualification.
 
 ## Current delivery state
 
+### October 9 sheet no-op, site datum and selected component names
+
+Older sheet models can lack the built-in appraisal schedule registry entry.
+The layout editor deliberately adds it to its detached model so the user can
+choose that schedule, but unchanged OK formerly published the injected entry.
+The controller now compares accepted output with that prepared model before
+publication. Unchanged/restored edits preserve the original saved model and
+history while still selecting the requested output page. Actual layout edits
+and new pages retain the existing atomic command path and schedule availability.
+
+Site placement's datum field formerly truncated valid captured identifiers at
+256 characters despite the core's 1024-byte UTF-8 contract. Its control capacity
+now covers every admitted identifier; changed values still pass the same core
+byte-bound validation. Untouched numeric pose/elevation retention and snapshot
+admission were already present. Extremely large finite yaw values can still
+overflow the existing degree display conversion; that separate source limit
+remains open and was not hidden by this bounded correction.
+
+The Site Plan selection caption now resolves the captured owner/child identity
+for rendered symbol and label aliases. It uses that actual annotation owner,
+avoids accidentally naming an unrelated same-ID model root, and reports the
+component name or label text through the ordinary caption path.
+
+Root integration review and the bounded sheet worker's independent review
+approved the no-op controller change. Scoped `git diff --check` passed.
+No builds, tests, new tests, probes, scripts, native jobs, launches, packages or
+installations ran. Compilation, user interaction, history, save/reopen and
+production acceptance remain unverified; the installed candidate is unchanged.
+
 ### October 9 opening-assembly native dimension retention
 
 The opening-assembly editor converted untouched rounded fields back to generated

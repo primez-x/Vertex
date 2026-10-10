@@ -4007,7 +4007,7 @@
         "binding": null
       },
       "qualification_history": [],
-      "delivery_notes": null,
+      "delivery_notes": "October 9 source-only Site Plan caption correction resolves displayed annotation aliases to the exact owning group and symbol/label child before naming the selection. Component names and label text use the ordinary caption path; unrelated same-ID roots are not interpreted as these children. No compilation, interaction or production acceptance is claimed; see docs/delivery/progress.md. Historical bindings and acceptance states remain unchanged.",
       "source_snapshot": {
         "id": "APX-EDIT-001",
         "area": "apex_parity",
@@ -7386,7 +7386,7 @@
         "binding": null
       },
       "qualification_history": [],
-      "delivery_notes": null,
+      "delivery_notes": "October 9 source-only Site placement correction removes silent datum-identifier truncation: the editor now covers the core's 1024-byte UTF-8 identifier bound rather than limiting captured text to 256 characters. Changed input retains core validation. Existing untouched numeric retention and context admission remain in use. Extreme finite yaw degree-display overflow remains an explicit source limit. No compilation, editor, storage or production acceptance is claimed; see docs/delivery/progress.md. Historical bindings and acceptance states remain unchanged.",
       "source_snapshot": {
         "id": "ARCH-MOD-007",
         "area": "architecture",
@@ -8273,7 +8273,7 @@
         "binding": null
       },
       "qualification_history": [],
-      "delivery_notes": null,
+      "delivery_notes": "October 9 source-only Sheet layout correction preserves the original saved graph and authoring history on unchanged/restored OK, even when the detached editor offers a built-in appraisal schedule absent from older saved registries. Output-page selection remains available; actual edits and new pages retain atomic publication and schedule choices. No compilation, interaction, history or output acceptance is claimed; see docs/delivery/progress.md. Historical bindings and acceptance states remain unchanged.",
       "source_snapshot": {
         "id": "ARCH-SHEET-001",
         "area": "architecture",

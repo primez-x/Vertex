@@ -18,6 +18,12 @@ placements as well as edit their bounds and scales. The detached layout dialog
 stages all changes until OK, commits them as one undoable Document command, and
 discards them on Cancel. Placement IDs remain stable through save/reopen, and a
 viewport referenced by a surviving callout is protected from removal. Sheet
+layout exposes the built-in appraisal schedule for older models without saving
+that availability merely because the dialog was opened and accepted. Unchanged
+or restored layout fields preserve the saved model and history; selecting a
+different existing output page remains a presentation choice. Actual staged
+edits publish through the same atomic command. This correction is source-only;
+its interaction and history behavior await qualification. Sheet
 revisions and cross-sheet callouts can be added, edited, and removed through
 the same revision-checked history path. Vector sheet output renders callout
 markers with target sheet/viewport references and a revision block beside the
