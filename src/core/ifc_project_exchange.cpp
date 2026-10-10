@@ -889,9 +889,13 @@ std::string window_partition_enum(const OpeningAssembly& profile) {
     switch (profile.window_layout) {
     case WindowLayoutKind::double_fixed: case WindowLayoutKind::sliding:
         return ".DOUBLE_PANEL_VERTICAL.";
+    // The horizontal partition is the meeting line between the upper/lower
+    // panes in elevation, independently of their vertical travel.
+    // https://standards.buildingsmart.org/IFC/RELEASE/IFC4/ADD2_TC1/HTML/schema/ifcsharedbldgelements/lexical/ifcwindowtypepartitioningenum.htm
+    case WindowLayoutKind::double_hung: return ".DOUBLE_PANEL_HORIZONTAL.";
     case WindowLayoutKind::triple_fixed: return ".TRIPLE_PANEL_VERTICAL.";
     case WindowLayoutKind::bay: case WindowLayoutKind::bow: return ".USERDEFINED.";
-    case WindowLayoutKind::fixed: case WindowLayoutKind::casement: return ".SINGLE_PANEL.";
+    case WindowLayoutKind::fixed: case WindowLayoutKind::casement: case WindowLayoutKind::awning: return ".SINGLE_PANEL.";
     }
     throw std::invalid_argument("Unknown window layout");
 }

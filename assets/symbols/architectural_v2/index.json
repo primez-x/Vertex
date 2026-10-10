@@ -1,7 +1,7 @@
 {
   "library": "Vertex Architectural SVG Library",
   "version": "2.0",
-  "count": 364,
+  "count": 366,
   "symbols": [
     {
       "id": "basin-oval",
@@ -1024,6 +1024,12 @@
       "file": "symbols/10_windows/skylight.svg"
     },
     {
+      "id": "window-awning",
+      "name": "Window Awning",
+      "category": "10_windows",
+      "file": "symbols/10_windows/window-awning.svg"
+    },
+    {
       "id": "window-bay",
       "name": "Window Bay",
       "category": "10_windows",
@@ -1052,6 +1058,12 @@
       "name": "Window Double",
       "category": "10_windows",
       "file": "symbols/10_windows/window-double.svg"
+    },
+    {
+      "id": "window-double-hung",
+      "name": "Window Double Hung",
+      "category": "10_windows",
+      "file": "symbols/10_windows/window-double-hung.svg"
     },
     {
       "id": "window-fixed-1200",

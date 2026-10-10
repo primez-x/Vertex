@@ -684,6 +684,134 @@ TopoDS_Shape bow_window_parts(const Wall& host, const HostedOpening& opening,
     return result;
 }
 
+TopoDS_Shape vertical_window_parts(const Wall& host, const HostedOpening& opening,
+                                  const OpeningAssembly& assembly, const OpeningFrame& frame) {
+    const bool awning = assembly.window_layout == WindowLayoutKind::awning;
+    const bool double_hung = assembly.window_layout == WindowLayoutKind::double_hung;
+    if (!awning && !double_hung)
+        throw std::invalid_argument("Vertical window mechanism is unsupported");
+    if (host.baseline.sweep_radians != 0.0)
+        throw std::invalid_argument("Awning and double-hung windows require a straight host");
+
+    constexpr double gap = 0.002;
+    const double bar = assembly.frame_width_m;
+    const double depth = assembly.frame_depth_m;
+    const double panel_depth = assembly.panel_thickness_m;
+    const double clear_width = opening.width - 2.0 * bar;
+    const double clear_height = opening.height - 2.0 * bar;
+    const double base = host.elevation + opening.sill;
+    const double side = assembly.window_open_left ? 1.0 : -1.0;
+    const double sash_start = bar + gap;
+    const double sash_width = clear_width - 2.0 * gap;
+    const double sash_height = (double_hung ? clear_height * 0.5 : clear_height) - 2.0 * gap;
+    const double sash_bar = std::min(bar * 0.6, sash_width * 0.2);
+    if (!std::isfinite(sash_width) || !std::isfinite(sash_height) ||
+        sash_bar <= tolerance || sash_width - 2.0 * sash_bar <= tolerance ||
+        sash_height - 2.0 * sash_bar <= tolerance)
+        throw std::invalid_argument("Vertical window sash leaves no clear glazing pane");
+    if (assembly.glazing_thickness_m > panel_depth)
+        throw std::invalid_argument("Vertical window glazing must fit within its sash depth");
+    if (double_hung) {
+        // Track centres are one sash depth plus 4 mm apart, leaving a real
+        // four-millimetre gap between the two finite sash depth envelopes.
+        const double track_depth = 2.0 * panel_depth + 2.0 * gap;
+        if (track_depth > depth + tolerance ||
+            std::abs(assembly.inset_m) + track_depth * 0.5 > host.thickness * 0.5 + tolerance)
+            throw std::invalid_argument("Double-hung tracks do not fit the frame and host thickness");
+    }
+
+    const auto host_shape = make_wall(host);
+    const double overlap_limit = tolerance * tolerance * std::max(1.0, opening.height);
+    const auto require_clear = [&](const TopoDS_Shape& first, const TopoDS_Shape& second,
+                                   const char* message) {
+        const double overlap = common_volume(first, second);
+        if (!std::isfinite(overlap) || overlap > overlap_limit)
+            throw std::invalid_argument(message);
+    };
+    TopoDS_Compound result;
+    BRep_Builder builder;
+    builder.MakeCompound(result);
+    std::vector<TopoDS_Shape> frame_parts;
+    const auto add_frame = [&](double along, double width, double height, double elevation) {
+        const auto part = opening_box(frame, along, assembly.inset_m - depth * 0.5,
+            width, depth, height, elevation, "Vertical window frame construction failed");
+        require_clear(part, host_shape, "Vertical window frame intersects its host wall");
+        frame_parts.push_back(part);
+        builder.Add(result, part);
+    };
+    // Jambs span the full mouth; the head and sill butt against their inner
+    // faces. These four finite bars have no shared material volume.
+    add_frame(0.0, bar, opening.height, base);
+    add_frame(opening.width - bar, bar, opening.height, base);
+    add_frame(bar, clear_width, bar, base + opening.height - bar);
+    add_frame(bar, clear_width, bar, base);
+
+    std::vector<TopoDS_Shape> sash_envelopes;
+    const int sash_count = double_hung ? 2 : 1;
+    for (int index = 0; index < sash_count; ++index) {
+        double sash_across = assembly.inset_m - panel_depth * 0.5;
+        double sash_base = base + bar + gap;
+        if (double_hung) {
+            const bool lower = index == 0;
+            const double track_side = lower ? side : -side;
+            sash_across += track_side * (panel_depth * 0.5 + gap);
+            // Travel is the full half-clear-height. At either end each sash
+            // retains a 2 mm sill/head gap; closure has a 4 mm meeting gap.
+            const double travel = clear_height * 0.5;
+            sash_base += lower ? travel * assembly.window_lower_open_fraction
+                               : travel - travel * assembly.window_upper_open_fraction;
+        }
+        const double angle = awning ? side * assembly.window_angle_degrees * std::numbers::pi / 180.0 : 0.0;
+        // The awning is attached at its actual upper outward thickness edge,
+        // rather than a remote wall-face axis. In outward-positive coordinates
+        // relative to this edge, both depth q and height z are nonpositive.
+        // Rotation gives z' = q sin(alpha) + z cos(alpha) <= 0 for 0..90
+        // degrees, keeping every corner below the hinge and frame head.
+        const auto hinge = opening_point(frame, sash_start,
+            assembly.inset_m + side * panel_depth * 0.5, sash_base + sash_height);
+        const auto pose = [&](const TopoDS_Shape& part) {
+            return angle == 0.0 ? part : rotate_opening_part(part, hinge, angle,
+                "Awning sash rotation failed", gp_Dir(frame.along.x, frame.along.y, 0.0));
+        };
+        const auto envelope = pose(opening_box(frame, sash_start, sash_across,
+            sash_width, panel_depth, sash_height, sash_base,
+            "Vertical window sash envelope construction failed"));
+        // Admit the requested pose using the full sash envelope, including
+        // its glazing cavity. This also tests each actual jamb, head and sill.
+        // It does not claim continuous swept-clearance qualification.
+        for (const auto& part : frame_parts)
+            require_clear(envelope, part, "Vertical window sash intersects its frame or sill");
+        require_clear(envelope, host_shape, "Vertical window sash intersects its host wall");
+        for (const auto& sibling : sash_envelopes)
+            require_clear(envelope, sibling, "Double-hung sashes collide at the requested pose");
+        sash_envelopes.push_back(envelope);
+
+        const auto add_sash_part = [&](double along, double across, double width,
+                                       double part_depth, double height, double elevation) {
+            builder.Add(result, pose(opening_box(frame, along, across, width, part_depth,
+                height, elevation, "Vertical window sash or glazing construction failed")));
+        };
+        // Four nonoverlapping finite sash bars surround an actual glass pane.
+        // The envelope is a clearance tool and is never added as material.
+        add_sash_part(sash_start, sash_across, sash_bar, panel_depth, sash_height, sash_base);
+        add_sash_part(sash_start + sash_width - sash_bar, sash_across,
+            sash_bar, panel_depth, sash_height, sash_base);
+        add_sash_part(sash_start + sash_bar, sash_across, sash_width - 2.0 * sash_bar,
+            panel_depth, sash_bar, sash_base);
+        add_sash_part(sash_start + sash_bar, sash_across, sash_width - 2.0 * sash_bar,
+            panel_depth, sash_bar, sash_base + sash_height - sash_bar);
+        add_sash_part(sash_start + sash_bar,
+            sash_across + (panel_depth - assembly.glazing_thickness_m) * 0.5,
+            sash_width - 2.0 * sash_bar, assembly.glazing_thickness_m,
+            sash_height - 2.0 * sash_bar, sash_base + sash_bar);
+    }
+    const double volume = solid_volume(result);
+    if (!BRepCheck_Analyzer(result).IsValid() || !std::isfinite(volume) ||
+        volume <= tolerance * tolerance * tolerance)
+        throw std::invalid_argument("Vertical window assembly did not produce valid material solids");
+    return result;
+}
+
 double endpoint_distance(const Vec2& first, const Vec2& second) {
     const auto distance = std::hypot(first.x - second.x, first.y - second.y);
     if (!std::isfinite(distance)) {
@@ -1119,6 +1247,14 @@ OpeningAssemblyGeometry make_opening_assembly_geometry(const Wall& wall, const H
             return {bow_window_parts(checked, opening, assembly, frame), std::nullopt, {}};
         } catch (const Standard_Failure& error) {
             throw std::invalid_argument(std::string("Bow geometry failed: ") + error.what());
+        }
+    }
+    if (window && (assembly.window_layout == WindowLayoutKind::awning ||
+                   assembly.window_layout == WindowLayoutKind::double_hung)) {
+        try {
+            return {vertical_window_parts(checked, opening, assembly, frame), std::nullopt, {}};
+        } catch (const Standard_Failure& error) {
+            throw std::invalid_argument(std::string("Vertical window geometry failed: ") + error.what());
         }
     }
     const double base_elevation = wall.elevation + opening.sill;

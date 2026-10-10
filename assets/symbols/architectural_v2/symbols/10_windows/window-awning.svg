@@ -1,0 +1,23 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1080" height="230" viewBox="-40 -40 1080 230" role="img" aria-labelledby="window-awning--title window-awning--desc" data-vertex-style="white-outline-2">
+<title id="window-awning--title">Window · awning (top-hinged)</title>
+<desc id="window-awning--desc">Original shaded orthographic plan. Nominal design footprint 1000 by 150 millimetres. The vertical awning sash is closed; fine dashed straight guides show outward travel from the +Y side. Transparent background. Conceptual design only; not certified for construction.</desc>
+<defs>
+<linearGradient id="window-awning--frame" x1="0" y1="0" x2="0.9" y2="1"><stop stop-color="#ffffff"/><stop offset="0.58" stop-color="#ffffff"/><stop offset="1" stop-color="#f0f0f0"/></linearGradient>
+<linearGradient id="window-awning--glass" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#ffffff" stop-opacity="0.92"/><stop offset="0.55" stop-color="#ffffff" stop-opacity="0.72"/><stop offset="1" stop-color="#f1f1f1" stop-opacity="0.88"/></linearGradient>
+<marker id="window-awning--travel-arrow" viewBox="0 0 6 6" markerWidth="6" markerHeight="6" refX="5" refY="3" orient="auto" markerUnits="userSpaceOnUse"><path d="M0,0 L6,3 L0,6" fill="none" stroke="#777777" stroke-width="1.1" stroke-linecap="round" stroke-linejoin="round"/></marker>
+</defs>
+<g id="window-awning--artwork" stroke-linejoin="round" stroke-linecap="round">
+<rect x="0" y="0" width="1000" height="150" rx="2" fill="url(#window-awning--frame)" stroke="#111111" stroke-width="8"/>
+<rect x="13" y="13" width="974" height="124" rx="1" fill="#ffffff" stroke="#222222" stroke-width="4"/>
+<path d="M21,21 H979 M21,129 H979" fill="none" stroke="#b8b8b8" stroke-width="2.5"/>
+<rect x="29" y="28" width="942" height="94" rx="1" fill="url(#window-awning--frame)" stroke="#111111" stroke-width="6"/>
+<rect x="41" y="40" width="918" height="70" rx="1" fill="url(#window-awning--glass)" stroke="#222222" stroke-width="4"/>
+<path d="M48,54 H952 M48,96 H952" fill="none" stroke="#b8b8b8" stroke-width="2.5"/>
+<path d="M34,31 H966" fill="none" stroke="#454545" stroke-width="3"/>
+<rect x="180" y="25" width="22" height="12" rx="2" fill="#f2f2f2" stroke="#222222" stroke-width="3"/>
+<rect x="489" y="25" width="22" height="12" rx="2" fill="#f2f2f2" stroke="#222222" stroke-width="3"/>
+<rect x="798" y="25" width="22" height="12" rx="2" fill="#f2f2f2" stroke="#222222" stroke-width="3"/>
+<path d="M120,124 V183 M880,124 V183" fill="none" stroke="#858585" stroke-width="2" stroke-dasharray="5 6" marker-end="url(#window-awning--travel-arrow)"/>
+<path d="M120,183 H880" fill="none" stroke="#858585" stroke-width="2" stroke-dasharray="8 7"/>
+</g>
+</svg>

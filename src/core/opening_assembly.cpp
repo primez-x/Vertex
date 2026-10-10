@@ -27,7 +27,8 @@ bool canonical_window_descriptor(const OpeningAssembly& value) {
            !value.window_hinge_at_end && value.window_open_left &&
            value.window_angle_degrees == 90.0 && value.window_slide_fraction == 0.0 &&
            value.window_bay_projection_m == 0.0 && value.window_bay_front_fraction == 0.5 &&
-           value.window_bow_projection_m == 0.0;
+           value.window_bow_projection_m == 0.0 &&
+           value.window_lower_open_fraction == 0.0 && value.window_upper_open_fraction == 0.0;
 }
 }  // namespace
 
@@ -70,6 +71,14 @@ void validate_opening_assembly(const OpeningAssembly& value) {
     if (!std::isfinite(value.window_slide_fraction) || value.window_slide_fraction < 0.0 ||
         value.window_slide_fraction > 1.0)
         reject("Window slide fraction must be finite and between 0 and 1");
+    if (!std::isfinite(value.window_lower_open_fraction) || value.window_lower_open_fraction < 0.0 ||
+        value.window_lower_open_fraction > 1.0 ||
+        !std::isfinite(value.window_upper_open_fraction) || value.window_upper_open_fraction < 0.0 ||
+        value.window_upper_open_fraction > 1.0)
+        reject("Double-hung window opening fractions must be finite and between 0 and 1");
+    if (value.window_layout != WindowLayoutKind::double_hung &&
+        (value.window_lower_open_fraction != 0.0 || value.window_upper_open_fraction != 0.0))
+        reject("Non-double-hung window cannot carry dormant sash travel");
     if (value.kind == OpeningAssemblyKind::door && !canonical_window_descriptor(value))
         reject("Door assembly cannot carry a window descriptor");
     if (value.window_layout == WindowLayoutKind::bay) {
@@ -111,6 +120,16 @@ void validate_opening_assembly(const OpeningAssembly& value) {
             value.window_slide_fraction != 0.0)
             reject("Bow window cannot carry dormant movement fields");
         break;
+    case WindowLayoutKind::awning:
+        if (value.window_hinge_at_end || value.window_angle_degrees > 90.0 ||
+            value.window_slide_fraction != 0.0)
+            reject("Awning window requires a top hinge, an angle between 0 and 90 degrees, and no sliding travel");
+        break;
+    case WindowLayoutKind::double_hung:
+        if (value.window_hinge_at_end || value.window_angle_degrees != 90.0 ||
+            value.window_slide_fraction != 0.0)
+            reject("Double-hung window cannot carry dormant hinge or sliding fields");
+        break;
     }
 }
 
@@ -123,6 +142,8 @@ std::string_view window_layout_kind_name(WindowLayoutKind kind) noexcept {
     case WindowLayoutKind::sliding: return "sliding";
     case WindowLayoutKind::bay: return "bay";
     case WindowLayoutKind::bow: return "bow";
+    case WindowLayoutKind::awning: return "awning";
+    case WindowLayoutKind::double_hung: return "double_hung";
     }
     return "invalid";
 }
@@ -135,6 +156,8 @@ std::optional<WindowLayoutKind> parse_window_layout_kind(std::string_view value)
     if (value == "sliding") return WindowLayoutKind::sliding;
     if (value == "bay") return WindowLayoutKind::bay;
     if (value == "bow") return WindowLayoutKind::bow;
+    if (value == "awning") return WindowLayoutKind::awning;
+    if (value == "double_hung") return WindowLayoutKind::double_hung;
     return std::nullopt;
 }
 
@@ -179,14 +202,16 @@ OpeningAssembly parse_opening_assembly(const nlohmann::json& value) {
     }
     const auto& version = value.at("version");
     if ((!version.is_number_integer() && !version.is_number_unsigned()) ||
-        (version != 1 && version != 2 && version != 3 && version != 4 && version != 5)) {
-        reject("Opening assembly version must be 1, 2, 3, 4 or 5");
+        (version != 1 && version != 2 && version != 3 && version != 4 && version != 5 &&
+         version != 6)) {
+        reject("Opening assembly version must be 1, 2, 3, 4, 5 or 6");
     }
     const bool passage = version == 4;
     const bool bay_descriptor = version == 3;
     const bool bow_descriptor = version == 5;
+    const bool vertical_descriptor = version == 6;
     const bool descriptor = version == 2 || bay_descriptor;
-    if ((!descriptor && !bow_descriptor && value.size() != 7) ||
+    if ((!descriptor && !bow_descriptor && !vertical_descriptor && value.size() != 7) ||
         (descriptor && (value.size() != (bay_descriptor ? 14 : 12) || !value.contains("window_layout") ||
          !value.contains("window_hinge_at_end") || !value.contains("window_open_left") ||
          !value.contains("window_angle_degrees") || !value.contains("window_slide_fraction"))) ||
@@ -194,7 +219,9 @@ OpeningAssembly parse_opening_assembly(const nlohmann::json& value) {
                             !value.contains("window_bay_front_fraction"))) ||
         (bow_descriptor && (value.size() != 10 || !value.contains("window_layout") ||
                             !value.contains("window_open_left") ||
-                            !value.contains("window_bow_projection_m"))))
+                            !value.contains("window_bow_projection_m"))) ||
+        (vertical_descriptor && (!value.contains("window_layout") ||
+                                 !value.contains("window_open_left"))))
         reject("Opening assembly properties must match the exact versioned schema");
     const auto& kind = value.at("kind");
     if (!kind.is_string()) reject("Opening assembly kind must be a string");
@@ -204,7 +231,8 @@ OpeningAssembly parse_opening_assembly(const nlohmann::json& value) {
     const auto parsed_kind = passage ? std::optional{OpeningAssemblyKind::passage}
                                     : parse_opening_assembly_kind(kind_text);
     if (!parsed_kind.has_value()) reject("Opening assembly kind is unsupported");
-    if ((descriptor || bow_descriptor) && *parsed_kind != OpeningAssemblyKind::window)
+    if ((descriptor || bow_descriptor || vertical_descriptor) &&
+        *parsed_kind != OpeningAssemblyKind::window)
         reject("Versioned opening assembly descriptors require a window");
     OpeningAssembly result;
     result.kind = *parsed_kind;
@@ -219,12 +247,21 @@ OpeningAssembly parse_opening_assembly(const nlohmann::json& value) {
     read_number("panel_thickness_m", result.panel_thickness_m);
     read_number("glazing_thickness_m", result.glazing_thickness_m);
     read_number("inset_m", result.inset_m);
-    if (descriptor || bow_descriptor) {
+    if (descriptor || bow_descriptor || vertical_descriptor) {
         const auto& layout = value.at("window_layout");
         if (!layout.is_string()) reject("Window assembly layout must be a string");
         const auto parsed = parse_window_layout_kind(layout.get<std::string>());
         if (!parsed) reject("Window assembly layout is unsupported");
         result.window_layout = *parsed;
+        const bool awning = result.window_layout == WindowLayoutKind::awning;
+        const bool double_hung = result.window_layout == WindowLayoutKind::double_hung;
+        if (vertical_descriptor != (awning || double_hung))
+            reject("Awning and double-hung windows require v6; v6 requires one of those layouts");
+        if (vertical_descriptor &&
+            ((awning && (value.size() != 10 || !value.contains("window_angle_degrees"))) ||
+             (double_hung && (value.size() != 11 || !value.contains("window_lower_open_fraction") ||
+                             !value.contains("window_upper_open_fraction")))))
+            reject("Opening assembly properties must match the exact versioned schema");
         if (bow_descriptor != (result.window_layout == WindowLayoutKind::bow))
             reject("Bow windows require v5; v5 requires a bow window");
         if (bay_descriptor != (result.window_layout == WindowLayoutKind::bay))
@@ -244,6 +281,12 @@ OpeningAssembly parse_opening_assembly(const nlohmann::json& value) {
         }
         if (bow_descriptor)
             read_number("window_bow_projection_m", result.window_bow_projection_m);
+        if (vertical_descriptor && awning)
+            read_number("window_angle_degrees", result.window_angle_degrees);
+        if (vertical_descriptor && double_hung) {
+            read_number("window_lower_open_fraction", result.window_lower_open_fraction);
+            read_number("window_upper_open_fraction", result.window_upper_open_fraction);
+        }
     }
     validate_opening_assembly(result);
     return result;
@@ -258,7 +301,18 @@ nlohmann::json opening_assembly_json(const OpeningAssembly& value) {
             {"panel_thickness_m", value.panel_thickness_m},
             {"glazing_thickness_m", value.glazing_thickness_m},
             {"inset_m", value.inset_m}};
-    if (value.window_layout == WindowLayoutKind::bow) {
+    if (value.window_layout == WindowLayoutKind::awning ||
+        value.window_layout == WindowLayoutKind::double_hung) {
+        result["version"] = 6;
+        result["window_layout"] = window_layout_kind_name(value.window_layout);
+        result["window_open_left"] = value.window_open_left;
+        if (value.window_layout == WindowLayoutKind::awning) {
+            result["window_angle_degrees"] = value.window_angle_degrees;
+        } else {
+            result["window_lower_open_fraction"] = value.window_lower_open_fraction;
+            result["window_upper_open_fraction"] = value.window_upper_open_fraction;
+        }
+    } else if (value.window_layout == WindowLayoutKind::bow) {
         result["version"] = 5;
         result["window_layout"] = window_layout_kind_name(value.window_layout);
         result["window_open_left"] = value.window_open_left;

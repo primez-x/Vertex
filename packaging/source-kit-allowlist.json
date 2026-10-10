@@ -743,6 +743,10 @@
     },
     {
       "category": "fixtures",
+      "path": "assets/symbols/architectural_v2/symbols/10_windows/window-awning.svg"
+    },
+    {
+      "category": "fixtures",
       "path": "assets/symbols/architectural_v2/symbols/10_windows/window-bay.svg"
     },
     {
@@ -760,6 +764,10 @@
     {
       "category": "fixtures",
       "path": "assets/symbols/architectural_v2/symbols/10_windows/window-double.svg"
+    },
+    {
+      "category": "fixtures",
+      "path": "assets/symbols/architectural_v2/symbols/10_windows/window-double-hung.svg"
     },
     {
       "category": "fixtures",

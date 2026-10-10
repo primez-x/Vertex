@@ -116,8 +116,12 @@ polling timeout does not permit restarting it.
    is not completion of those families; source integration is not acceptance.
    Qualify the separate five-pane projecting bow-window source profile and its
    actual assembly, placement/editing, reflected/scaled host, schedules and
-   output. Corner windows still require coordinated multi-host semantics;
-   awning and double-hung catalog families need distinct physical operations.
+   output. Qualify the separate awning and double-hung source operations,
+   including their angle/independent sash controls, complete physical assemblies,
+   normal-side handing, visible SVG entries, schedules, history and export.
+   Corner windows still require coordinated multi-host semantics. The skylight
+   catalog entry still routes through a wall opening and needs roof-hosted
+   geometry/placement; the roof-opening model already provides a cut foundation.
 10. Implement observed native/vendor/device adapters through existing workers;
     complete declared IFC/DXF/Pinc fidelity and independently consumed output.
     Add offline OCR text regions/confidence feeding reviewed proposals. New

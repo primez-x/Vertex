@@ -2724,6 +2724,11 @@ OpeningAssembly catalog_opening_assembly(const QString& kind, const QString& sym
         } else if (symbol_id == QStringLiteral("svg-v2-10_windows-window-bow")) {
             profile.window_layout = WindowLayoutKind::bow;
             profile.window_bow_projection_m = 0.6;
+        } else if (symbol_id == QStringLiteral("svg-v2-10_windows-window-awning")) {
+            profile.window_layout = WindowLayoutKind::awning;
+            profile.window_angle_degrees = 0.0;
+        } else if (symbol_id == QStringLiteral("svg-v2-10_windows-window-double-hung")) {
+            profile.window_layout = WindowLayoutKind::double_hung;
         }
     }
     return profile;
@@ -7853,7 +7858,9 @@ public:
                     if (assembly.window_layout == WindowLayoutKind::casement ||
                         assembly.window_layout == WindowLayoutKind::sliding ||
                         assembly.window_layout == WindowLayoutKind::bay ||
-                        assembly.window_layout == WindowLayoutKind::bow)
+                        assembly.window_layout == WindowLayoutKind::bow ||
+                        assembly.window_layout == WindowLayoutKind::awning ||
+                        assembly.window_layout == WindowLayoutKind::double_hung)
                         assembly.window_open_left = !assembly.window_open_left;
                     entity.properties["opening_assembly"] = opening_assembly_json(assembly);
                 }
@@ -42021,6 +42028,8 @@ public:
         const bool fractional = m_pending_opening_door_operation &&
             uses_door_opening_fraction(m_pending_opening_door_operation->kind);
         const bool casement = window && m_pending_opening_profile->window_layout == WindowLayoutKind::casement;
+        const bool awning = window && m_pending_opening_profile->window_layout == WindowLayoutKind::awning;
+        const bool hung = window && m_pending_opening_profile->window_layout == WindowLayoutKind::double_hung;
         const bool bay = window && m_pending_opening_profile->window_layout == WindowLayoutKind::bay;
         const bool bow = window && m_pending_opening_profile->window_layout == WindowLayoutKind::bow;
         const bool projecting = bay || bow;
@@ -42035,24 +42044,43 @@ public:
         }
         m_opening_draw_bay_projection->setVisible(projecting);
         m_opening_draw_bay_projection_label->setVisible(projecting);
-        m_opening_draw_bay_side->setVisible(projecting);
-        m_opening_draw_bay_side_label->setVisible(projecting);
+        const bool side_editable = projecting || casement || awning || hung ||
+            (window && m_pending_opening_profile->window_layout == WindowLayoutKind::sliding);
+        m_opening_draw_bay_side->setVisible(side_editable);
+        m_opening_draw_bay_side_label->setVisible(side_editable);
+        m_opening_draw_bay_side_label->setText(hung ? QStringLiteral("Lower track side")
+            : projecting ? QStringLiteral("Projection side") : QStringLiteral("Opening side"));
+        m_opening_draw_bay_side->setToolTip(hung
+            ? QStringLiteral("Choose the lower sash track relative to the host wall's drawing direction; the upper sash uses the other track.")
+            : QStringLiteral("Choose the side relative to the host wall's drawing direction."));
         {
             const QSignalBlocker blocker(m_opening_draw_travel);
             m_opening_draw_travel->setValue(0.0);
         }
-        m_opening_draw_travel->setVisible(sliding || fractional);
-        m_opening_draw_travel_label->setVisible(sliding || fractional);
+        m_opening_draw_travel->setVisible(sliding || fractional || hung);
+        m_opening_draw_travel_label->setVisible(sliding || fractional || hung);
+        m_opening_draw_travel_label->setText(hung ? QStringLiteral("Lower open") : QStringLiteral("Open"));
         m_opening_draw_travel->setToolTip(overhead
             ? QStringLiteral("Overhead tilt-up opening: 0% closes the panel; 100% raises it horizontally at the header.")
             : fractional ? QStringLiteral("0% closes the door; 100% retracts or folds the complete panel assembly.")
+            : hung ? QStringLiteral("Lower sash rises on its own track; 100% raises it by half the clear opening height.")
             : QStringLiteral("Travel of the movable sliding panel; 100% stacks it behind the fixed panel."));
         {
+            const QSignalBlocker blocker(m_opening_draw_upper_travel);
+            m_opening_draw_upper_travel->setValue(0.0);
+        }
+        m_opening_draw_upper_travel->setVisible(hung);
+        m_opening_draw_upper_travel_label->setVisible(hung);
+        {
             const QSignalBlocker blocker(m_opening_draw_angle);
+            m_opening_draw_angle->setRange(0.0, awning ? 90.0 : 180.0);
             m_opening_draw_angle->setValue(m_pending_opening_profile->window_angle_degrees);
         }
-        m_opening_draw_angle->setVisible(casement);
-        m_opening_draw_angle_label->setVisible(casement);
+        m_opening_draw_angle->setVisible(casement || awning);
+        m_opening_draw_angle_label->setVisible(casement || awning);
+        m_opening_draw_angle->setToolTip(awning
+            ? QStringLiteral("Top-hinged sash: 0 degrees closes it; 90 degrees raises it horizontally toward the opening side.")
+            : QStringLiteral("Casement swing angle around its jamb."));
         m_opening_draw_width->setText(QString::fromStdString(json(width).dump()) + QStringLiteral(" m"));
         m_opening_draw_height->setText(window ? QStringLiteral("1.2 m") : QStringLiteral("2.1 m"));
         m_opening_draw_sill->setText(window ? QStringLiteral("0.9 m") : QStringLiteral("0 m"));
@@ -50453,8 +50481,14 @@ private:
                     m_pending_opening_kind = kind == QStringLiteral("Doorway") ? QStringLiteral("opening") : kind.toLower();
                     m_opening_draw_travel->hide();
                     m_opening_draw_travel_label->hide();
+                    m_opening_draw_upper_travel->hide();
+                    m_opening_draw_upper_travel_label->hide();
                     m_opening_draw_angle->hide();
                     m_opening_draw_angle_label->hide();
+                    m_opening_draw_bay_projection->hide();
+                    m_opening_draw_bay_projection_label->hide();
+                    m_opening_draw_bay_side->hide();
+                    m_opening_draw_bay_side_label->hide();
                     m_pending_opening_profile.reset();
                     const bool window = kind == QStringLiteral("Window");
                     m_opening_draw_width->setText(window ? QStringLiteral("1.2 m") : QStringLiteral("0.9 m"));
@@ -50532,7 +50566,26 @@ private:
                 m_pending_opening_door_operation->opening_fraction = value / 100.0;
             else if (m_pending_opening_profile && m_pending_opening_profile->window_layout == WindowLayoutKind::sliding)
                 m_pending_opening_profile->window_slide_fraction = value / 100.0;
+            else if (m_pending_opening_profile && m_pending_opening_profile->window_layout == WindowLayoutKind::double_hung)
+                m_pending_opening_profile->window_lower_open_fraction = value / 100.0;
             else return;
+            resetOpeningPlacementHover();
+        });
+        m_opening_draw_upper_travel = new QDoubleSpinBox(m_opening_draw_fields);
+        m_opening_draw_upper_travel->setObjectName(QStringLiteral("openingDrawUpperTravel"));
+        m_opening_draw_upper_travel->setAccessibleName(QStringLiteral("Upper sash open percentage"));
+        m_opening_draw_upper_travel->setRange(0.0, 100.0);
+        m_opening_draw_upper_travel->setDecimals(2);
+        m_opening_draw_upper_travel->setSingleStep(5.0);
+        m_opening_draw_upper_travel->setSuffix(QStringLiteral("%"));
+        m_opening_draw_upper_travel->setToolTip(QStringLiteral("Upper sash lowers on its own track; 100% lowers it by half the clear opening height."));
+        m_opening_draw_upper_travel_label = new QLabel(QStringLiteral("Upper open"), m_opening_draw_fields);
+        opening_form->addRow(m_opening_draw_upper_travel_label, m_opening_draw_upper_travel);
+        m_opening_draw_upper_travel->hide();
+        m_opening_draw_upper_travel_label->hide();
+        QObject::connect(m_opening_draw_upper_travel, &QDoubleSpinBox::valueChanged, owner, [this](double value) {
+            if (!m_pending_opening_profile || m_pending_opening_profile->window_layout != WindowLayoutKind::double_hung) return;
+            m_pending_opening_profile->window_upper_open_fraction = value / 100.0;
             resetOpeningPlacementHover();
         });
         m_opening_draw_angle = new QDoubleSpinBox(m_opening_draw_fields);
@@ -50546,7 +50599,8 @@ private:
         m_opening_draw_angle->hide();
         m_opening_draw_angle_label->hide();
         QObject::connect(m_opening_draw_angle, &QDoubleSpinBox::valueChanged, owner, [this](double value) {
-            if (!m_pending_opening_profile || m_pending_opening_profile->window_layout != WindowLayoutKind::casement) return;
+            if (!m_pending_opening_profile || (m_pending_opening_profile->window_layout != WindowLayoutKind::casement &&
+                m_pending_opening_profile->window_layout != WindowLayoutKind::awning)) return;
             m_pending_opening_profile->window_angle_degrees = value;
             resetOpeningPlacementHover();
         });
@@ -50572,7 +50626,11 @@ private:
         m_opening_draw_bay_side_label->hide();
         QObject::connect(m_opening_draw_bay_side, &QComboBox::currentIndexChanged, owner, [this](int index) {
             if (!m_pending_opening_profile || (m_pending_opening_profile->window_layout != WindowLayoutKind::bay &&
-                m_pending_opening_profile->window_layout != WindowLayoutKind::bow)) return;
+                m_pending_opening_profile->window_layout != WindowLayoutKind::bow &&
+                m_pending_opening_profile->window_layout != WindowLayoutKind::casement &&
+                m_pending_opening_profile->window_layout != WindowLayoutKind::sliding &&
+                m_pending_opening_profile->window_layout != WindowLayoutKind::awning &&
+                m_pending_opening_profile->window_layout != WindowLayoutKind::double_hung)) return;
             m_pending_opening_profile->window_open_left = index == 0;
             resetOpeningPlacementHover();
         });
@@ -65274,17 +65332,22 @@ private:
             QComboBox* window_side = nullptr;
             QDoubleSpinBox* window_angle = nullptr;
             QDoubleSpinBox* window_travel = nullptr;
+            QDoubleSpinBox* window_lower_travel = nullptr;
+            QDoubleSpinBox* window_upper_travel = nullptr;
             QLineEdit* bay_projection = nullptr;
             QDoubleSpinBox* bay_front = nullptr;
             double displayed_window_angle = assembly.window_angle_degrees;
             double displayed_window_travel = assembly.window_slide_fraction * 100.0;
+            double displayed_window_lower_travel = assembly.window_lower_open_fraction * 100.0;
+            double displayed_window_upper_travel = assembly.window_upper_open_fraction * 100.0;
             double displayed_bay_front = assembly.window_bay_front_fraction * 100.0;
             if (assembly.kind == OpeningAssemblyKind::window) {
                 window_layout = new QComboBox(&dialog);
                 window_layout->setObjectName(QStringLiteral("openingWindowLayout"));
                 window_layout->addItems({QStringLiteral("Fixed single pane"), QStringLiteral("Fixed double pane"),
                     QStringLiteral("Fixed triple pane"), QStringLiteral("Casement"), QStringLiteral("Sliding"),
-                    QStringLiteral("Bay"), QStringLiteral("Bow - five panes")});
+                    QStringLiteral("Bay"), QStringLiteral("Bow - five panes"), QStringLiteral("Awning - top hinged"),
+                    QStringLiteral("Double hung")});
                 window_layout->setCurrentIndex(static_cast<int>(assembly.window_layout));
                 window_jamb = new QComboBox(&dialog);
                 window_jamb->setObjectName(QStringLiteral("openingWindowJamb"));
@@ -65309,6 +65372,23 @@ private:
                 window_travel->setSuffix(QStringLiteral("%"));
                 window_travel->setValue(assembly.window_slide_fraction * 100.0);
                 displayed_window_travel = window_travel->value();
+                const auto sash_travel = [&](const QString& name, double value, const QString& hint) {
+                    auto* field = new QDoubleSpinBox(&dialog);
+                    field->setObjectName(name);
+                    field->setRange(0.0, 100.0);
+                    field->setDecimals(2);
+                    field->setSingleStep(5.0);
+                    field->setSuffix(QStringLiteral("%"));
+                    field->setToolTip(hint);
+                    field->setValue(value);
+                    return field;
+                };
+                window_lower_travel = sash_travel(QStringLiteral("openingWindowLowerTravel"), displayed_window_lower_travel,
+                    QStringLiteral("Lower sash rises independently. 100% is half the clear opening height."));
+                window_upper_travel = sash_travel(QStringLiteral("openingWindowUpperTravel"), displayed_window_upper_travel,
+                    QStringLiteral("Upper sash lowers independently. 100% is half the clear opening height."));
+                displayed_window_lower_travel = window_lower_travel->value();
+                displayed_window_upper_travel = window_upper_travel->value();
                 bay_projection = new QLineEdit(format_length(assembly.window_layout == WindowLayoutKind::bay
                     ? assembly.window_bay_projection_m : assembly.window_layout == WindowLayoutKind::bow
                         ? assembly.window_bow_projection_m : 0.65, m_metric_units), &dialog);
@@ -65327,6 +65407,8 @@ private:
                 form->addRow(QStringLiteral("Side of wall"), window_side);
                 form->addRow(QStringLiteral("Angle"), window_angle);
                 form->addRow(QStringLiteral("Open"), window_travel);
+                form->addRow(QStringLiteral("Lower open"), window_lower_travel);
+                form->addRow(QStringLiteral("Upper open"), window_upper_travel);
                 form->addRow(QStringLiteral("Projection"), bay_projection);
                 form->addRow(QStringLiteral("Front width"), bay_front);
                 const auto sync_window_fields = [=] {
@@ -65335,11 +65417,23 @@ private:
                     const bool sliding = choice == WindowLayoutKind::sliding;
                     const bool bay = choice == WindowLayoutKind::bay;
                     const bool bow = choice == WindowLayoutKind::bow;
+                    const bool awning = choice == WindowLayoutKind::awning;
+                    const bool hung = choice == WindowLayoutKind::double_hung;
+                    window_angle->setRange(0.0, awning ? 90.0 : 180.0);
+                    if (awning && assembly.window_layout != WindowLayoutKind::awning) window_angle->setValue(0.0);
                     form->setRowVisible(panel, !bay && !bow);
                     form->setRowVisible(window_jamb, casement || sliding);
-                    form->setRowVisible(window_side, casement || sliding || bay || bow);
-                    form->setRowVisible(window_angle, casement);
+                    form->setRowVisible(window_side, casement || sliding || bay || bow || awning || hung);
+                    window_side->setToolTip(hung
+                        ? QStringLiteral("Choose the lower sash track relative to the wall direction; the upper uses the opposite track.")
+                        : QStringLiteral("Opening or projecting side relative to the wall direction."));
+                    form->setRowVisible(window_angle, casement || awning);
+                    window_angle->setToolTip(awning
+                        ? QStringLiteral("Top hinge: 0 degrees is closed; 90 degrees is horizontal.")
+                        : QStringLiteral("Casement angle around its jamb."));
                     form->setRowVisible(window_travel, sliding);
+                    form->setRowVisible(window_lower_travel, hung);
+                    form->setRowVisible(window_upper_travel, hung);
                     form->setRowVisible(bay_projection, bay || bow);
                     form->setRowVisible(bay_front, bay);
                 };
@@ -65380,10 +65474,13 @@ private:
                     const bool sliding = edited.window_layout == WindowLayoutKind::sliding;
                     const bool bay = edited.window_layout == WindowLayoutKind::bay;
                     const bool bow = edited.window_layout == WindowLayoutKind::bow;
+                    const bool awning = edited.window_layout == WindowLayoutKind::awning;
+                    const bool hung = edited.window_layout == WindowLayoutKind::double_hung;
                     edited.window_hinge_at_end = (casement || sliding) && window_jamb->currentIndex() == 1;
-                    edited.window_open_left = !(casement || sliding || bay || bow) || window_side->currentIndex() == 0;
-                    edited.window_angle_degrees = casement
-                        ? window_angle->value() == displayed_window_angle ? assembly.window_angle_degrees : window_angle->value()
+                    edited.window_open_left = !(casement || sliding || bay || bow || awning || hung) || window_side->currentIndex() == 0;
+                    edited.window_angle_degrees = casement || awning
+                        ? edited.window_layout == assembly.window_layout && window_angle->value() == displayed_window_angle
+                            ? assembly.window_angle_degrees : window_angle->value()
                         : 90.0;
                     edited.window_slide_fraction = sliding
                         ? window_travel->value() == displayed_window_travel ? assembly.window_slide_fraction : window_travel->value() / 100.0
@@ -65395,6 +65492,12 @@ private:
                         : 0.5;
                     edited.window_bow_projection_m = bow ? read_dimension(bay_projection,
                         assembly.window_layout == WindowLayoutKind::bow ? assembly.window_bow_projection_m : 0.65) : 0.0;
+                    edited.window_lower_open_fraction = hung
+                        ? window_lower_travel->value() == displayed_window_lower_travel
+                            ? assembly.window_lower_open_fraction : window_lower_travel->value() / 100.0 : 0.0;
+                    edited.window_upper_open_fraction = hung
+                        ? window_upper_travel->value() == displayed_window_upper_travel
+                            ? assembly.window_upper_open_fraction : window_upper_travel->value() / 100.0 : 0.0;
                 }
                 edited.frame_width_m = read_dimension(frame_width, assembly.frame_width_m);
                 edited.frame_depth_m = read_dimension(frame_depth, assembly.frame_depth_m);
@@ -66062,6 +66165,8 @@ private:
     QComboBox* m_opening_style{};
     QDoubleSpinBox* m_opening_draw_travel{};
     QLabel* m_opening_draw_travel_label{};
+    QDoubleSpinBox* m_opening_draw_upper_travel{};
+    QLabel* m_opening_draw_upper_travel_label{};
     QDoubleSpinBox* m_opening_draw_angle{};
     QLabel* m_opening_draw_angle_label{};
     QLineEdit* m_opening_draw_bay_projection{};

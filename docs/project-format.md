@@ -1,4 +1,38 @@
-# Vertex project formats v1 through v166
+# Vertex project formats v1 through v167
+
+## Awning and double-hung windows (v167, source integration)
+
+Native reader 167 and JSON/assets extraction 165 retain opening-assembly v6.
+Both new layouts require `kind:window` and the seven base profile keys.
+`awning` has exactly ten keys: the base keys plus `window_layout`, Boolean
+`window_open_left`, and finite `window_angle_degrees` in [0,90]. Its hinge is
+the actual upper outward sash edge. Zero is closed and 90 is horizontal;
+handing chooses the outward host normal, not a vertical-jamb hinge.
+
+`double_hung` has exactly eleven keys: the base keys plus `window_layout`,
+Boolean `window_open_left`, and independent finite
+`window_lower_open_fraction`/`window_upper_open_fraction` in [0,1]. Each sash
+travels half the clear opening height; the lower rises and the upper lowers.
+Handing chooses the lower sash's normal-side track; the upper uses the opposite
+track. Finite sash envelopes retain 2 mm mouth gaps and a 4 mm separation
+between tracks. Dormant angle, jamb hinge, horizontal travel, bay and bow
+parameters do not persist. Historical v1-v5 reject these layouts and keep
+their original encodings.
+
+Straight hosts are required. Frame, finite sash bars and real glazing share the
+manufactured-opening geometry path. Requested poses are checked against the
+cut host, frame and sibling sash; this is not swept-clearance certification.
+Reflection changes normal-side handing and uniform scaling keeps the travel
+fractions/angle while scaling physical dimensions. Schedules preserve top
+hinge/angle or upper/lower travel and track side with source provenance. IFC
+uses a single-panel awning partition or a horizontally divided double-panel
+partition, independently of movement, with native profile/mesh reconstruction.
+The partition follows the [IFC4 window partition definition](https://standards.buildingsmart.org/IFC/RELEASE/IFC4/ADD2_TC1/HTML/schema/ifcsharedbldgelements/lexical/ifcwindowtypepartitioningenum.htm).
+
+Reader floors scan retained revisions and nested proofs, including undone
+changes. V167 retains the v161 payload tables. Compilation, kernel behavior,
+actual interaction/appearance, history/migration and independently consumed
+output remain unqualified during source-only execution.
 
 ## Five-pane projecting bow windows (v166, source integration)
 

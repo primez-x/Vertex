@@ -235,7 +235,9 @@ public:
     // v165 throughout retained entities and nested/undone command proofs.
     // v166 carries five-pane projecting bow-window profiles, including retained
     // entities and nested/undone command proofs.
-    static constexpr std::uint32_t format_version = 166;
+    // v167 adds top-hinged awning and independent upper/lower double-hung
+    // opening profiles throughout retained and nested/undone history.
+    static constexpr std::uint32_t format_version = 167;
     static constexpr std::uint32_t recovery_format_version = 4;
     [[nodiscard]] static std::uint32_t required_format_version(const DocumentSnapshot& snapshot);
     static constexpr std::uint64_t maximum_file_bytes = 4ULL * 1024ULL * 1024ULL * 1024ULL;

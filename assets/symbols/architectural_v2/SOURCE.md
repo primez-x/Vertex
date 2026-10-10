@@ -60,3 +60,14 @@ design defaults, not manufacturer specifications, required clearances or
 certified medical/food-service layouts. These new original project assets are
 distributed under GPL-3.0-or-later. Desktop appearance, placement and output
 remain unqualified under the current source-only instruction.
+
+On 2026-10-10, two independently authored plan SVGs add visible awning and
+double-hung window families. The awning graphic shows a closed sash with
+straight outward travel guides for its top hinge; the double-hung graphic
+shows full-width sash sections on separate depth tracks, rather than two
+side-by-side fixed panes. Their 1000 x 150 mm footprints are adjustable design
+defaults, not manufacturer specifications or construction details. Both are
+original GPL-3.0-or-later project assets. The current index has 366 SVGs in
+26 categories, with 254 nominal and 112 editable-default entries. Their source
+placement routes use distinct hosted mechanisms; appearance, interaction and
+output remain unqualified under the current source-only instruction.

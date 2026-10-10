@@ -169,11 +169,13 @@ door-pocket,Door Pocket,09_doors,symbols/09_doors/door-pocket.svg
 door-sliding,Door Sliding,09_doors,symbols/09_doors/door-sliding.svg
 door-sliding-glass,Door Sliding Glass,09_doors,symbols/09_doors/door-sliding-glass.svg
 skylight,Skylight,10_windows,symbols/10_windows/skylight.svg
+window-awning,Window Awning,10_windows,symbols/10_windows/window-awning.svg
 window-bay,Window Bay,10_windows,symbols/10_windows/window-bay.svg
 window-bow,Window Bow,10_windows,symbols/10_windows/window-bow.svg
 window-casement,Window Casement,10_windows,symbols/10_windows/window-casement.svg
 window-corner,Window Corner,10_windows,symbols/10_windows/window-corner.svg
 window-double,Window Double,10_windows,symbols/10_windows/window-double.svg
+window-double-hung,Window Double Hung,10_windows,symbols/10_windows/window-double-hung.svg
 window-fixed-1200,Window Fixed 1200,10_windows,symbols/10_windows/window-fixed-1200.svg
 window-fixed-600,Window Fixed 600,10_windows,symbols/10_windows/window-fixed-600.svg
 window-sliding,Window Sliding,10_windows,symbols/10_windows/window-sliding.svg

@@ -13,7 +13,10 @@ namespace sketch {
 // `panel_thickness_m` is the door leaf thickness or window sash depth; positive glazing
 // thickness adds a real pane to a door or window. A passage has only a frame.
 enum class OpeningAssemblyKind { door, window, passage };
-enum class WindowLayoutKind { fixed, double_fixed, triple_fixed, casement, sliding, bay, bow };
+enum class WindowLayoutKind {
+    fixed, double_fixed, triple_fixed, casement, sliding, bay, bow,
+    awning = 7, double_hung = 8
+};
 
 struct OpeningAssembly {
     OpeningAssemblyKind kind{OpeningAssemblyKind::door};
@@ -38,6 +41,13 @@ struct OpeningAssembly {
     // Bow-only: five fixed panes project beyond the selected wall face.
     // open_left selects the projecting side of the host.
     double window_bow_projection_m{0.0};
+    // Double-hung-only: independent lower sash upward travel and upper sash
+    // downward travel, each as a fraction of its full opening travel.
+    // open_left selects the lower sash's positive-normal track; the upper
+    // sash uses the other track. An awning uses the existing angle for its
+    // top hinge, with open_left selecting its outward normal.
+    double window_lower_open_fraction{0.0};
+    double window_upper_open_fraction{0.0};
 
     bool operator==(const OpeningAssembly&) const = default;
 };

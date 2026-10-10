@@ -184,10 +184,13 @@ void add_opening(const Entity& entity, std::vector<ScheduleRecord>& records,
                 record.properties.emplace("mechanism", std::string(assembly.window_layout == WindowLayoutKind::casement
                     ? "Casement" : assembly.window_layout == WindowLayoutKind::sliding ? "Sliding"
                     : assembly.window_layout == WindowLayoutKind::bow ? "Five-pane bow"
+                    : assembly.window_layout == WindowLayoutKind::awning ? "Awning"
+                    : assembly.window_layout == WindowLayoutKind::double_hung ? "Double hung"
                     : assembly.window_layout == WindowLayoutKind::bay ? "Bay" : "Fixed"));
                 record.properties.emplace("panel_count", std::int64_t{assembly.window_layout == WindowLayoutKind::bow ? 5
                     : assembly.window_layout == WindowLayoutKind::triple_fixed || assembly.window_layout == WindowLayoutKind::bay
-                    ? 3 : assembly.window_layout == WindowLayoutKind::double_fixed || assembly.window_layout == WindowLayoutKind::sliding ? 2 : 1});
+                    ? 3 : assembly.window_layout == WindowLayoutKind::double_fixed || assembly.window_layout == WindowLayoutKind::sliding ||
+                        assembly.window_layout == WindowLayoutKind::double_hung ? 2 : 1});
                 if (assembly.window_layout == WindowLayoutKind::bay) {
                     record.properties.emplace("bay_projection", ScheduleQuantity{assembly.window_bay_projection_m, ScheduleUnit::metre});
                     record.properties.emplace("bay_front_fraction", assembly.window_bay_front_fraction);
@@ -201,6 +204,14 @@ void add_opening(const Entity& entity, std::vector<ScheduleRecord>& records,
                     record.properties.emplace("swing_angle_degrees", assembly.window_angle_degrees);
                 } else if (assembly.window_layout == WindowLayoutKind::sliding) {
                     record.properties.emplace("open_percent", assembly.window_slide_fraction * 100.0);
+                } else if (assembly.window_layout == WindowLayoutKind::awning) {
+                    record.properties.emplace("hinge", std::string{"top"});
+                    record.properties.emplace("swing_side", std::string(assembly.window_open_left ? "left" : "right"));
+                    record.properties.emplace("swing_angle_degrees", assembly.window_angle_degrees);
+                } else if (assembly.window_layout == WindowLayoutKind::double_hung) {
+                    record.properties.emplace("lower_open_percent", assembly.window_lower_open_fraction * 100.0);
+                    record.properties.emplace("upper_open_percent", assembly.window_upper_open_fraction * 100.0);
+                    record.properties.emplace("lower_track_side", std::string(assembly.window_open_left ? "left" : "right"));
                 }
             }
         } catch (const std::exception& error) {
@@ -467,7 +478,8 @@ DocumentScheduleProjection project_schedules(
                 }
             }
             if (row.kind == ScheduleRowKind::window) {
-                for (const auto* key : {"mechanism", "hinge", "swing_side", "swing_angle_degrees", "open_percent"}) {
+                for (const auto* key : {"mechanism", "hinge", "swing_side", "swing_angle_degrees", "open_percent",
+                                       "lower_open_percent", "upper_open_percent", "lower_track_side"}) {
                     const auto cell = row.cells.find(key);
                     if (cell == row.cells.end()) continue;
                     cell->second.editable = false;

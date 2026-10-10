@@ -377,6 +377,16 @@ std::uint32_t required_format_version_internal(const DocumentSnapshot& snapshot,
             const auto& value=*pending.back(); pending.pop_back();
             if (++nodes>ProjectStore::maximum_json_values)
                 storage_error(StorageErrorCode::resource_limit,"Typed edit reader-floor scan exceeds its JSON budget");
+            if (value.is_object() && value.value("version",nlohmann::json())==6 &&
+                value.value("kind",nlohmann::json())=="window" &&
+                ((value.size()==10 && value.value("window_layout",nlohmann::json())=="awning" &&
+                  value.contains("window_angle_degrees")) ||
+                 (value.size()==11 && value.value("window_layout",nlohmann::json())=="double_hung" &&
+                  value.contains("window_lower_open_fraction") && value.contains("window_upper_open_fraction"))) &&
+                value.contains("window_open_left") && value.contains("frame_width_m") &&
+                value.contains("frame_depth_m") && value.contains("panel_thickness_m") &&
+                value.contains("glazing_thickness_m") && value.contains("inset_m"))
+                floor=std::max(floor,167U);
             if (value.is_object() && value.value("version",nlohmann::json())==5 &&
                 value.size()==10 && value.value("kind",nlohmann::json())=="window" &&
                 value.value("window_layout",nlohmann::json())=="bow" &&
@@ -489,9 +499,9 @@ std::uint32_t required_format_version_internal(const DocumentSnapshot& snapshot,
     };
     for (const auto& revision : snapshot.history()) {
         if (revision.phase_entity_import) required=std::max(required,160U);
-        if (required<166 && revision.boundary_geometry_edit)
+        if (required<167 && revision.boundary_geometry_edit)
             required=std::max(required,typed_edit_reader_floor(encode_boundary_geometry_edit(*revision.boundary_geometry_edit)));
-        if (required<166 && revision.boundary_constraint_changes)
+        if (required<167 && revision.boundary_constraint_changes)
             required=std::max(required,typed_edit_reader_floor(command_to_json(Command{*revision.boundary_constraint_changes})));
         if (required<122 && revision.boundary_geometry_edit)
             required=std::max(required,quantity_reader_floor(encode_boundary_geometry_edit(*revision.boundary_geometry_edit)));
@@ -941,6 +951,9 @@ std::uint32_t required_format_version_internal(const DocumentSnapshot& snapshot,
                 if (assembly != entity.properties.end() && assembly->is_object() &&
                     assembly->value("version", nlohmann::json()) == 5)
                     required = std::max(required, 166U);
+                if (assembly != entity.properties.end() && assembly->is_object() &&
+                    assembly->value("version", nlohmann::json()) == 6)
+                    required = std::max(required, 167U);
                 const auto operation = entity.properties.find("door_operation");
                 if (operation != entity.properties.end() && operation->is_object() &&
                     operation->value("version", nlohmann::json()) == 3)
@@ -2819,6 +2832,7 @@ bool verify_sqlite_schema(sqlite3* database, bool allow_recovery = false) {
          sqlite3_column_int(user_version.get(), 0) != 164 &&
          sqlite3_column_int(user_version.get(), 0) != 165 &&
          sqlite3_column_int(user_version.get(), 0) != 166 &&
+         sqlite3_column_int(user_version.get(), 0) != 167 &&
          sqlite3_column_int(user_version.get(), 0) != 163 &&
          sqlite3_column_int(user_version.get(), 0) != 143 &&
          sqlite3_column_int(user_version.get(), 0) != 142 &&
@@ -3539,6 +3553,8 @@ DocumentSnapshot read_snapshot(sqlite3* database, RecoveryLedger* recovery = nul
     // here and authenticate the manifest with its stored version below.
     const auto required_format = required_format_version_internal(snapshot, format_number < 28);
     if (required_format > format_number) {
+        if (required_format>=167)
+            storage_error(StorageErrorCode::unsupported_format,"This project requires reader 167 for awning and double-hung window profiles");
         if (required_format>=166)
             storage_error(StorageErrorCode::unsupported_format,"This project requires reader 166 for five-pane projecting bow-window profiles");
         if (required_format>=165)

@@ -1,6 +1,6 @@
 # Vertex user testing checklist
 
-450 practical tasks, grouped by how you use the app (U001–U449 plus U100a), plus five focused door/window checks below. This replaces the earlier engineering-oriented checklist. The old 130-item list is preserved separately as engineering-requirements-checklist.md.
+450 practical tasks, grouped by how you use the app (U001–U449 plus U100a), plus seven focused door/window checks below. This replaces the earlier engineering-oriented checklist. The old 130-item list is preserved separately as engineering-requirements-checklist.md.
 
 This is a user acceptance list for the intended app, not a claim that every listed action is implemented or working in the current preview. If you cannot find a control, or a feature is absent, mark **Blocked / missing** and describe it. Specialized sections can be skipped if you do not use them or lack the device or sample files.
 
@@ -3167,6 +3167,23 @@ Blocked / missing until testing a candidate that contains it.
 - [ ] **WINDOW-BOW - Place and edit a five-pane bow window**
   - Steps: Draw a straight wall, choose Window - Bow in Library and drag it onto the wall. Inspect the plan and 3D. Double-click it and change its width, sill, height, projection and wall side. Change layout to Fixed and back to Bow. Scale and mirror the host wall, undo, redo, save/reopen and inspect the window schedule and IFC export. Try a projection too large for the opening.
   - Expected: Five separate glazed facets project beyond the selected wall face, with a frame, head and sill. The displayed projection matches the farthest actual facet. Mirroring reverses its side; uniform scaling changes all bow dimensions together. The schedule names Five-pane bow and records five panes, projection and side. It never becomes a single flat pane without an explicit layout change. Impossible dimensions are refused without changing the project.
+  - Result: Not tested
+  - Notes: ______________________________
+
+## Additional awning and double-hung window checks
+
+These source additions are not yet included in the installed candidate. Mark
+them Blocked / missing until testing a candidate that contains them.
+
+- [ ] **WINDOW-AWNING - Open a top-hinged awning window**
+  - Steps: Draw a straight wall and drag Window Awning from Library onto it. Set Angle to 0, 45 and 90 degrees in placement or double-click Properties. Reverse the opening side, change width/height/sill and frame dimensions, then mirror and scale the host. Inspect plan, 3D, elevation and the window schedule. Undo/redo, save/reopen and export IFC.
+  - Expected: One finite glazed sash stays attached along its top edge. Zero is closed; opening raises the bottom outward, and 90 degrees is horizontal. The frame stays fixed and the schedule identifies Awning, top hinge, side and angle. Refused dimensions or a colliding pose leave the project unchanged. Reopening and output preserve the selected operation.
+  - Result: Not tested
+  - Notes: ______________________________
+
+- [ ] **WINDOW-DOUBLE-HUNG - Move each sash independently**
+  - Steps: Draw a straight wall and drag Window Double Hung onto it. Try Lower open at 0, 50 and 100 percent while Upper open stays zero, then reverse the roles and try both at 50 percent. Double-click Properties, reverse the lower track side, edit dimensions, and change layout to Fixed and back. Inspect plan/3D/elevation, the window schedule, undo/redo, save/reopen and IFC output.
+  - Expected: Two full-width glazed sashes use separate depth tracks. The lower rises and the upper lowers independently, each by half the clear height at 100 percent. They can pass behind one another without sharing material. The schedule identifies Double hung, two panes, both open percentages and lower track side. Layout changes clear irrelevant movement fields and invalid track/frame dimensions are refused without mutation.
   - Result: Not tested
   - Notes: ______________________________
 

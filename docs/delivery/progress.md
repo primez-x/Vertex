@@ -14,6 +14,41 @@ changed source does not acquire runtime acceptance without later qualification.
 
 ## Current delivery state
 
+### October 10 awning and double-hung windows - source integration
+
+Named awning and double-hung entries now select distinct physical mechanisms
+instead of a fixed-window fallback. Strict opening-assembly v6 preserves earlier
+contracts; native reader 167/extraction 165 follows retained revisions and
+nested/undone command proofs. Existing payload tables remain unchanged.
+
+Awning sashes rotate about their actual top thickness edge with a 0-90 degree
+control. Double-hung assemblies have separate finite tracks and independent
+lower/upper travel controls. Frame, glazing, host and sibling checks evaluate
+the requested pose; they do not certify continuous swept clearance. Placement,
+Properties, reflected hosts, schedule provenance and IFC reconstruction consume
+the actual profile. Conversion retains raw angle precision only within the same
+layout, correcting an independently identified rejection at the awning limit.
+
+Two original white-primary, black-outline SVG entries bring the visible index
+to 366 records in 26 categories: 254 nominal and 112 editable-default entries.
+Catalog metadata, hashes and source-kit entries agree. The checklist retains
+450 original scenarios plus seven focused door/window checks, all new checks
+Not tested and outside the installed candidate.
+
+Root reviewed the integrated interfaces. Final independent source review found
+no remaining concrete P1/P2 after the angle-conversion correction. Static
+JSON/XML/inventory inspection and scoped diff checks supply source evidence
+only. No builds, tests, new tests, scripts/probes, native jobs, UI launches,
+packages or installations ran. Compilation, Qt interaction, OCCT reliability
+and performance, rendered appearance, history/migration and independently
+consumed IFC remain unqualified. The installed candidate is unchanged and all
+ten production gates remain open.
+
+Next concrete source gaps are coordinated multi-host corner windows and actual
+roof-hosted skylight geometry/placement. The complete remaining plan and external
+prerequisites remain binding. This batch does not establish an overall
+completion percentage or ETA.
+
 ### October 10 five-pane bow windows - source integration
 
 The supplied bow-window SVG/Pinc counterpart previously fell through to a flat
@@ -48,10 +83,11 @@ or installations ran. Compilation, OCCT booleans, actual appearance/interaction,
 storage/history/migration and independently consumed output remain unqualified.
 The installed candidate is unchanged and all ten production gates remain open.
 
-Next source gaps: distinct awning and double-hung operations for those named
-catalog families, and coordinated multi-host corner windows. Existing catalog
-labels/fixed fallbacks do not supply these semantics. Preserve the full plan and
-external prerequisites; this batch does not support an overall percentage/ETA.
+At this checkpoint the next source gaps included distinct awning and double-hung
+operations; the newer source batch above implements those mechanisms and still
+requires qualification. Coordinated multi-host corner windows remain open.
+Preserve the full plan and external prerequisites; this batch does not support
+an overall percentage/ETA.
 
 ### October 10 hosted sliding/folding doors - source integration
 
