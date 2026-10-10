@@ -92,7 +92,7 @@ Entity opaque_remainder(Entity entity, bool include_hosted_instances = false) {
     auto& p = entity.properties;
     if (entity.type == "roof") {
         const bool known_schema = p.contains("version") && p.at("version").is_number_integer() &&
-            (p.at("version") == 1 || p.at("version") == 2 || p.at("version") == 3);
+            (p.at("version") == 1 || p.at("version") == 2 || p.at("version") == 3 || p.at("version") == 4);
         const bool known_form = p.contains("form") && (p.at("form") == "sloped_roof_panel" ||
             p.at("form") == "gable_roof" || p.at("form") == "hip_roof");
         if (!known_schema || !known_form) return entity;
@@ -387,7 +387,7 @@ PhaseRoofReplacementPlan inspect_phase_roof_replacement_plan(
                 // admitted below when the roof belongs to this replacement.
                 const auto& p = entity.properties;
                 const bool known_schema = p.contains("version") && p.at("version").is_number_integer() &&
-                    (p.at("version") == 1 || p.at("version") == 2 || p.at("version") == 3);
+                    (p.at("version") == 1 || p.at("version") == 2 || p.at("version") == 3 || p.at("version") == 4);
                 if (known_schema && p.contains("roof_openings")) {
                     const auto& roster = p.at("roof_openings");
                     if (!roster.is_array() || roster.size() > 256) reject("retained roof opening roster is unsupported");
@@ -852,6 +852,17 @@ PhaseRoofGeometryEditPartition partition_phase_roof_geometry_edits(
 
 nlohmann::json encode_phase_roof_replacement_authoring(const PhaseRoofReplacementAuthoring& authoring) {
     identity(authoring.registry_id); identity(authoring.alternative_id);
+    const auto rotation_edits = [](const auto& edits) {
+        return std::any_of(edits.begin(), edits.end(), [](const auto& edit) {
+            return encode_roof_edit_intent(edit).at("version") == 9;
+        });
+    };
+    const bool rotations = rotation_edits(authoring.roof_edits) || rotation_edits(authoring.ordinary_roof_edits);
+    if (rotations && !authoring.include_hosted_instances)
+        reject("rotation replacement requires the complete version-ten hosted authority");
+    if (std::any_of(authoring.roof_opening_edits.begin(), authoring.roof_opening_edits.end(), [](const auto& edit) {
+        return encode_roof_opening_edit_intent(edit).at("version") == 4;
+    })) reject("rotation replacement requires a version-ten composite edit");
     if (authoring.include_hosted_instances && (!authoring.phase_qualified_joins || authoring.demolition || authoring.roof_edits.empty()))
         reject("hosted replacement requires phase-qualified combined edits without demolition");
     if (!authoring.include_hosted_instances && !authoring.hosted_instance_identities.empty())
@@ -903,7 +914,7 @@ nlohmann::json encode_phase_roof_replacement_authoring(const PhaseRoofReplacemen
             if (old_id == new_id || !fresh.insert(new_id).second) reject("authoring identities must be fresh and injective");
         }
         for (const auto& id : seeds) if (!authoring.identities.contains(id)) reject("authoring seed has no proposed identity");
-        Json result{{"version", authoring.include_hosted_instances ? 9 : authoring.phase_qualified_joins ? 6 : mixed ? 5 : 3}, {"registry_id", authoring.registry_id}, {"alternative_id", authoring.alternative_id},
+        Json result{{"version", rotations ? 10 : authoring.include_hosted_instances ? 9 : authoring.phase_qualified_joins ? 6 : mixed ? 5 : 3}, {"registry_id", authoring.registry_id}, {"alternative_id", authoring.alternative_id},
             {"seed_roof_ids", authoring.seed_roof_ids}, {"identities", authoring.identities},
             {"roof_profiles", Json::array()}, {"roof_opening_edits", Json::array()}, {"roof_edits", Json::array()}};
         if (ordinary_field) result["ordinary_roof_edits"] = Json::array();
@@ -1010,8 +1021,9 @@ nlohmann::json encode_phase_roof_replacement_authoring(const PhaseRoofReplacemen
 PhaseRoofReplacementAuthoring decode_phase_roof_replacement_authoring(const nlohmann::json& value) {
     try {
         if (value.is_object() && value.contains("version") && value.at("version").is_number_integer() &&
-            (value.at("version") == 5 || value.at("version") == 6 || value.at("version") == 9)) {
-            const bool hosted = value.at("version") == 9;
+            (value.at("version") == 5 || value.at("version") == 6 || value.at("version") == 9 || value.at("version") == 10)) {
+            const bool rotations = value.at("version") == 10;
+            const bool hosted = rotations || value.at("version") == 9;
             const bool qualified = hosted || value.at("version") == 6;
             if (value.size() != (hosted ? 12 : qualified ? 10 : 9) || !value.contains("registry_id") || !value.contains("alternative_id") ||
                 !value.contains("seed_roof_ids") || !value.contains("identities") || !value.contains("roof_profiles") ||
@@ -1026,7 +1038,7 @@ PhaseRoofReplacementAuthoring decode_phase_roof_replacement_authoring(const nloh
                 !value.at("roof_opening_edits").is_array() || !value.at("roof_opening_edits").empty() ||
                 !value.at("roof_edits").is_array() || value.at("roof_edits").empty() ||
                 !value.at("ordinary_roof_edits").is_array() || (!qualified && value.at("ordinary_roof_edits").empty()))
-                reject("combined authoring must contain its exact version-five/six/nine fields and required edit lists");
+                reject("combined authoring must contain its exact version-five/six/nine/ten fields and required edit lists");
             Strings budget; budget.node_limit = maximum_authoring_bytes; budget.byte_limit = maximum_authoring_bytes;
             budget.read(value);
             if (value.at("seed_roof_ids").size() > maximum_replacements || value.at("identities").size() > maximum_replacements ||
@@ -1051,8 +1063,16 @@ PhaseRoofReplacementAuthoring decode_phase_roof_replacement_authoring(const nloh
                 if (!result.hosted_instance_identities.emplace(key, row.at("proposed_instance_id").get<std::string>()).second)
                     reject("duplicate qualified hosted identity mapping");
             }
-            for (const auto& edit : value.at("roof_edits")) result.roof_edits.push_back(decode_roof_edit_intent(edit));
-            for (const auto& edit : value.at("ordinary_roof_edits")) result.ordinary_roof_edits.push_back(decode_roof_edit_intent(edit));
+            for (const auto& edit : value.at("roof_edits")) {
+                if (!rotations && edit.is_object() && edit.contains("version") && edit.at("version") == 9)
+                    reject("historical replacement cannot borrow rotation composite authority");
+                result.roof_edits.push_back(decode_roof_edit_intent(edit));
+            }
+            for (const auto& edit : value.at("ordinary_roof_edits")) {
+                if (!rotations && edit.is_object() && edit.contains("version") && edit.at("version") == 9)
+                    reject("historical replacement cannot borrow ordinary rotation authority");
+                result.ordinary_roof_edits.push_back(decode_roof_edit_intent(edit));
+            }
             const auto canonical = encode_phase_roof_replacement_authoring(result);
             if (canonical != value || canonical.dump() != value.dump()) reject("mixed authoring differs from its canonical typed encoding");
             return result;
@@ -1095,7 +1115,11 @@ PhaseRoofReplacementAuthoring decode_phase_roof_replacement_authoring(const nloh
             result.alternative_id = value.at("alternative_id").get<std::string>();
             result.seed_roof_ids = value.at("seed_roof_ids").get<std::vector<std::string>>();
             result.identities = value.at("identities").get<PhaseRoofReplacementIdentityMap>();
-            for (const auto& edit : value.at("roof_edits")) result.roof_edits.push_back(decode_roof_edit_intent(edit));
+            for (const auto& edit : value.at("roof_edits")) {
+                if (edit.is_object() && edit.contains("version") && edit.at("version") == 9)
+                    reject("historical replacement cannot borrow rotation composite authority");
+                result.roof_edits.push_back(decode_roof_edit_intent(edit));
+            }
             (void)encode_phase_roof_replacement_authoring(result);
             return result;
         }
@@ -1115,7 +1139,11 @@ PhaseRoofReplacementAuthoring decode_phase_roof_replacement_authoring(const nloh
             result.alternative_id = value.at("alternative_id").get<std::string>();
             result.seed_roof_ids = value.at("seed_roof_ids").get<std::vector<std::string>>();
             result.identities = value.at("identities").get<PhaseRoofReplacementIdentityMap>();
-            for (const auto& edit : value.at("roof_opening_edits")) result.roof_opening_edits.push_back(decode_roof_opening_edit_intent(edit));
+            for (const auto& edit : value.at("roof_opening_edits")) {
+                if (edit.is_object() && edit.contains("version") && edit.at("version") == 4)
+                    reject("historical replacement cannot borrow opening rotation authority");
+                result.roof_opening_edits.push_back(decode_roof_opening_edit_intent(edit));
+            }
             (void)encode_phase_roof_replacement_authoring(result);
             return result;
         }

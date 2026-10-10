@@ -1,4 +1,35 @@
-# Vertex project formats v1 through v174
+# Vertex project formats v1 through v175
+
+## Roof-face skylight rotation (v175, source integration)
+
+Roof schema four owns optional `rotation_rad` on a skylight row. It is a finite
+angle in [-pi, pi], counterclockwise in the host facet's tangent plane. Reference
+`x_m`, `y_m`, `width_m` and `depth_m` retain their historical horizontal basis;
+rotation fixes `(x + width/2, y + depth/2)`. Physical width/depth are those
+reference dimensions multiplied by their unrotated facet slope factors. The
+rotated mouth and frame remain rectangular on the face, while their horizontal
+projection can be a parallelogram. Roof cuts use that actual projected polygon.
+Ridge/hip crossing, eave clearance and sibling contact use actual mouth geometry.
+Canvas movement between valid hip faces recalculates reference dimensions from
+the destination slope factors to keep the requested physical size. Resize pins
+the opposite side/corner in that destination basis. Only the fully admitted
+candidate frame can complete a pending gesture or waiting release.
+
+The existing vertical curb/member extrusion and normal-distance scaling remain
+unchanged. Rotation applies to the on-face mouth/frame/glazing domains; it does
+not introduce a normal-extruded solid convention. Zero-angle branches preserve
+the earlier expressions, cutter and member construction. Canonical encoding
+omits a zero angle; a retained schema-four edit keeps its schema after reset or
+removal. Earlier schemas ignore angle-like opaque extensions. Promotion cannot
+silently activate a conflicting old key on any retained sibling.
+
+Opening edit dialect four adds `rotation_rad` to the closed upsert shape while
+retaining explicit profile and clone fields. Null retains; a finite number
+authors the angle and zero removes its owned row field. Composite roof edit nine
+requires this new opening authority. Ordinary phase twenty and baseline leaf
+ten/phase twenty-one carry it without extending the authority of older dialects.
+Reader 175/extraction 173 applies throughout retained, nested and undone history,
+including passive source envelopes. Source integration remains unqualified.
 
 ## Baseline wall-group scale replacements (v174, source integration)
 

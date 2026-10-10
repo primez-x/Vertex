@@ -22,10 +22,12 @@
 #include <TopoDS_Shape.hxx>
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <numbers>
 #include <stdexcept>
 #include <string>
+#include <utility>
 #include <vector>
 #include <set>
 
@@ -233,6 +235,122 @@ struct RoofPlane {
     double y_slope;
 };
 
+void validate_opening_rotation(const RoofOpening& opening) {
+    if (!std::isfinite(opening.rotation_radians) ||
+        std::abs(opening.rotation_radians) > std::numbers::pi)
+        throw std::invalid_argument("Roof opening rotation must be finite and canonical in [-pi, pi]");
+    if (opening.rotation_radians != 0.0 && !opening.skylight)
+        throw std::invalid_argument("Only skylights support roof opening rotation");
+}
+
+RoofOpeningPlanFrame opening_plan_frame(const RoofPlane& plane, const RoofOpening& opening) {
+    validate_opening_rotation(opening);
+    finite_derived(opening.x, "Roof opening X must be finite");
+    finite_derived(opening.y, "Roof opening Y must be finite");
+    positive_dimension(opening.width, "Roof opening width must be positive");
+    positive_dimension(opening.depth, "Roof opening depth must be positive");
+    const auto sx = std::hypot(1.0, plane.x_slope);
+    const auto sy = std::hypot(1.0, plane.y_slope);
+    RoofOpeningPlanFrame result{{opening.x + opening.width * 0.5,
+        opening.y + opening.depth * 0.5}, {1.0, 0.0}, {0.0, 1.0}, sx, sy};
+    finite_derived(result.center.x, "Roof opening centre exceeds the supported range");
+    finite_derived(result.center.y, "Roof opening centre exceeds the supported range");
+    // Do not apply the authored dimension ceiling to derived physical lengths.
+    if (!std::isfinite(sx) || !std::isfinite(sy) ||
+        !std::isfinite(opening.width * sx) || !std::isfinite(opening.depth * sy))
+        throw std::invalid_argument("Roof opening surface dimensions must be finite");
+    if (opening.rotation_radians != 0.0) {
+        const auto c = std::cos(opening.rotation_radians);
+        const auto s = std::sin(opening.rotation_radians);
+        // Supported facets have one nonzero slope. These are the XY parts of
+        // Sx*(c*U+s*V) and Sy*(-s*U+c*V), with U,V orthonormal on the facet.
+        result.along = {c, (sx / sy) * s};
+        result.across = {-(sy / sx) * s, c};
+    }
+    return result;
+}
+
+Vec2 opening_plan_offset(const RoofOpeningPlanFrame& frame, double dx, double dy) {
+    const Vec2 result{frame.center.x + frame.along.x * dx + frame.across.x * dy,
+        frame.center.y + frame.along.y * dx + frame.across.y * dy};
+    finite_derived(result.x, "Rotated roof opening X exceeds the supported range");
+    finite_derived(result.y, "Rotated roof opening Y exceeds the supported range");
+    return result;
+}
+
+using OpeningCorners = std::array<Vec2, 4>;
+
+OpeningCorners opening_corners(const RoofOpening& opening, const RoofOpeningPlanFrame& frame) {
+    // Preserve the historical expressions exactly at zero; deriving these
+    // through the centre would introduce cancellation in existing roofs.
+    const auto right = opening.x + opening.width;
+    const auto top = opening.y + opening.depth;
+    OpeningCorners result{{{opening.x, opening.y}, {right, opening.y},
+        {right, top}, {opening.x, top}}};
+    if (opening.rotation_radians != 0.0) {
+        const auto half_width = opening.width * 0.5;
+        const auto half_depth = opening.depth * 0.5;
+        result = {{opening_plan_offset(frame, -half_width, -half_depth),
+            opening_plan_offset(frame, half_width, -half_depth),
+            opening_plan_offset(frame, half_width, half_depth),
+            opening_plan_offset(frame, -half_width, half_depth)}};
+    }
+    for (const auto& corner : result) {
+        finite_derived(corner.x, "Roof opening corner X exceeds the supported range");
+        finite_derived(corner.y, "Roof opening corner Y exceeds the supported range");
+    }
+    return result;
+}
+
+RoofPlane reference_plane(const SlopedRoofPanel& roof, Vec2) {
+    return {0.0, checked_pitch_rise(roof.run, roof.rise, roof.pitch_radians,
+        "Skylight host pitch and rise must agree", true), 0.0};
+}
+
+RoofPlane reference_plane(const GableRoof& roof, Vec2 reference_center) {
+    const auto slope = checked_pitch_rise(roof.span * 0.5, roof.rise,
+        roof.pitch_radians, "Skylight host pitch and rise must agree");
+    return {roof.rise, 0.0, reference_center.y <= 0.0 ? slope : -slope};
+}
+
+std::array<RoofPlane, 4> hip_planes(const HipRoof& roof) {
+    const auto slope = checked_pitch_rise(roof.span * 0.5, roof.rise,
+        roof.pitch_radians, "Skylight host pitch and rise must agree");
+    return {{{roof.rise, 0.0, slope}, {roof.rise, 0.0, -slope},
+        {slope * roof.length * 0.5, slope, 0.0},
+        {slope * roof.length * 0.5, -slope, 0.0}}};
+}
+
+RoofPlane reference_plane(const HipRoof& roof, Vec2 reference_center) {
+    positive_dimension(roof.length, "Hip roof length must be positive");
+    if (roof.length < roof.span)
+        throw std::invalid_argument("Hip roof length must be at least its span");
+    const auto planes = hip_planes(roof);
+    const auto x = reference_center.x;
+    const auto y = reference_center.y;
+    return *std::min_element(planes.begin(), planes.end(), [&](const auto& a, const auto& b) {
+        return a.elevation + a.x_slope * x + a.y_slope * y <
+            b.elevation + b.x_slope * x + b.y_slope * y;
+    });
+}
+
+template<class Roof>
+RoofPlane reference_plane(const Roof& roof, const RoofOpening& opening) {
+    return reference_plane(roof, Vec2{opening.x + opening.width * 0.5,
+        opening.y + opening.depth * 0.5});
+}
+
+template<class Roof>
+Vec2 reference_surface_scales(const Roof& roof, Vec2 reference_center) {
+    finite_derived(reference_center.x, "Roof opening reference centre X must be finite and bounded");
+    finite_derived(reference_center.y, "Roof opening reference centre Y must be finite and bounded");
+    const auto plane = reference_plane(roof, reference_center);
+    const Vec2 scales{std::hypot(1.0, plane.x_slope), std::hypot(1.0, plane.y_slope)};
+    if (!std::isfinite(scales.x) || !std::isfinite(scales.y))
+        throw std::invalid_argument("Roof opening reference surface scales must be finite");
+    return scales;
+}
+
 RoofPlane skylight_plane(const SlopedRoofPanel& roof, const RoofOpening&) {
     return {0.0, checked_pitch_rise(roof.run, roof.rise, roof.pitch_radians,
         "Skylight host pitch and rise must agree", true), 0.0};
@@ -241,6 +359,14 @@ RoofPlane skylight_plane(const SlopedRoofPanel& roof, const RoofOpening&) {
 RoofPlane skylight_plane(const GableRoof& roof, const RoofOpening& opening) {
     const auto slope = checked_pitch_rise(roof.span * 0.5, roof.rise,
         roof.pitch_radians, "Skylight host pitch and rise must agree");
+    if (opening.rotation_radians != 0.0) {
+        const auto plane = reference_plane(roof, opening);
+        const auto corners = opening_corners(opening, opening_plan_frame(plane, opening));
+        for (const auto& corner : corners)
+            if (!(plane.y_slope > 0.0 ? corner.y < -tolerance : corner.y > tolerance))
+                throw std::invalid_argument("A skylight must fit one gable face without touching or crossing the ridge");
+        return plane;
+    }
     if (opening.y + opening.depth < -tolerance) return {roof.rise, 0.0, slope};
     if (opening.y > tolerance) return {roof.rise, 0.0, -slope};
     throw std::invalid_argument("A skylight must fit one gable face without touching or crossing the ridge");
@@ -253,6 +379,20 @@ RoofPlane skylight_plane(const HipRoof& roof, const RoofOpening& opening) {
         {slope * roof.length * 0.5, slope, 0.0},
         {slope * roof.length * 0.5, -slope, 0.0}};
     const auto clearance = tolerance * std::hypot(1.0, slope);
+    if (opening.rotation_radians != 0.0) {
+        const auto plane = reference_plane(roof, opening);
+        const auto corners = opening_corners(opening, opening_plan_frame(plane, opening));
+        for (const auto& corner : corners) {
+            const auto height = plane.elevation + plane.x_slope * corner.x + plane.y_slope * corner.y;
+            for (const auto& adjacent : planes) {
+                if (plane.x_slope == adjacent.x_slope && plane.y_slope == adjacent.y_slope) continue;
+                if (!(height + clearance < adjacent.elevation + adjacent.x_slope * corner.x +
+                    adjacent.y_slope * corner.y))
+                    throw std::invalid_argument("A skylight must fit one hip face without touching or crossing hips or ridge");
+            }
+        }
+        return plane;
+    }
     // Each hip face is the domain where its plane is strictly the lowest.
     // Affine inequalities checked at all four corners cover the entire mouth.
     for (std::size_t candidate = 0; candidate < 4; ++candidate) {
@@ -318,11 +458,22 @@ SkylightDimensions skylight_dimensions(const Roof& roof, const RoofOpening& open
 
 template<class Roof>
 void validate_skylights(const Roof& roof) {
-    for (const auto& opening : roof.openings)
+    for (const auto& opening : roof.openings) {
+        validate_opening_rotation(opening);
         if (opening.skylight) {
             const auto plane = skylight_plane(roof, opening);
             (void)skylight_dimensions(roof, opening, plane);
         }
+    }
+}
+
+template<class Roof>
+RoofOpeningPlanFrame opening_frame_for_roof(const Roof& roof, const RoofOpening& opening) {
+    validate_opening_rotation(opening);
+    const auto plane = opening.skylight ? skylight_plane(roof, opening) : reference_plane(roof, opening);
+    const auto frame = opening_plan_frame(plane, opening);
+    (void)opening_corners(opening, frame);
+    return frame;
 }
 
 template<class Roof>
@@ -330,10 +481,22 @@ TopoDS_Shape build_skylight(const Roof& roof, const RoofOpening& opening) {
     const auto plane = skylight_plane(roof, opening);
     const auto dimensions = skylight_dimensions(roof, opening, plane);
     const auto frame = horizontal_frame(roof.orientation_radians, "Skylight host orientation is invalid");
-    const auto x0 = opening.x + dimensions.clearance;
-    const auto y0 = opening.y + dimensions.clearance;
-    const auto x1 = opening.x + opening.width - dimensions.clearance;
-    const auto y1 = opening.y + opening.depth - dimensions.clearance;
+    const auto plan_frame = opening_plan_frame(plane, opening);
+    const auto projected_area_scale = opening.rotation_radians == 0.0 ? 1.0 :
+        plan_frame.along.x * plan_frame.across.y - plan_frame.along.y * plan_frame.across.x;
+    if (!std::isfinite(projected_area_scale) || projected_area_scale <= 0.0)
+        throw std::invalid_argument("Skylight projected basis is invalid");
+    // Rotated members use centre-relative logical dimensions so the mouth
+    // and assembly share exactly the public basis without subtracting a large
+    // reference origin. Keep every historical expression on the zero path.
+    const auto x0 = opening.rotation_radians == 0.0 ? opening.x + dimensions.clearance :
+        -opening.width * 0.5 + dimensions.clearance;
+    const auto y0 = opening.rotation_radians == 0.0 ? opening.y + dimensions.clearance :
+        -opening.depth * 0.5 + dimensions.clearance;
+    const auto x1 = opening.rotation_radians == 0.0 ? opening.x + opening.width - dimensions.clearance :
+        opening.width * 0.5 - dimensions.clearance;
+    const auto y1 = opening.rotation_radians == 0.0 ? opening.y + opening.depth - dimensions.clearance :
+        opening.depth * 0.5 - dimensions.clearance;
     const auto ix0 = x0 + dimensions.x_frame;
     const auto iy0 = y0 + dimensions.y_frame;
     const auto ix1 = x1 - dimensions.x_frame;
@@ -349,13 +512,21 @@ TopoDS_Shape build_skylight(const Roof& roof, const RoofOpening& opening) {
             positive_dimension(top - bottom, "Skylight member depth is invalid");
             positive_dimension(height, "Skylight member height is invalid");
             const auto p = [&](double x, double y) {
+                if (opening.rotation_radians != 0.0) {
+                    const auto projected = opening_plan_offset(plan_frame, x, y);
+                    return local_point(point(roof.base_position), frame.along, projected.x,
+                        frame.across, projected.y, plane.elevation + plane.x_slope * projected.x +
+                        plane.y_slope * projected.y + offset);
+                }
                 return local_point(point(roof.base_position), frame.along, x, frame.across, y,
                     plane.elevation + plane.x_slope * x + plane.y_slope * y + offset);
             };
             const auto member = make_prism({p(left, bottom), p(right, bottom),
                 p(right, top), p(left, top)}, gp_Vec(0.0, 0.0, height),
                 "Skylight member construction failed");
-            const auto volume = (right - left) * (top - bottom) * height;
+            const auto reference_volume = (right - left) * (top - bottom) * height;
+            const auto volume = opening.rotation_radians == 0.0 ? reference_volume :
+                reference_volume * projected_area_scale;
             const auto actual_volume = solid_volume(member);
             if (!std::isfinite(volume) || !std::isfinite(actual_volume) ||
                 volume <= tolerance * tolerance * tolerance ||
@@ -384,13 +555,53 @@ TopoDS_Shape build_skylight(const Roof& roof, const RoofOpening& opening) {
     }, "Skylight assembly construction failed");
 }
 
-TopoDS_Shape cut_roof_openings(TopoDS_Shape shape, const std::vector<RoofOpening>& openings,
+bool opening_polygons_overlap(const OpeningCorners& first, const OpeningCorners& second) {
+    // A separating axis of either convex polygon proves disjoint mouths. The
+    // tolerance is a distance, so near-contact is refused regardless of angle.
+    for (const auto* polygon : {&first, &second}) {
+        for (std::size_t i = 0; i < polygon->size(); ++i) {
+            const auto& a = (*polygon)[i];
+            const auto& b = (*polygon)[(i + 1) % polygon->size()];
+            const auto length = std::hypot(b.x - a.x, b.y - a.y);
+            if (!std::isfinite(length) || length <= tolerance)
+                throw std::invalid_argument("Roof opening projected edge is invalid");
+            const Vec2 axis{-(b.y - a.y) / length, (b.x - a.x) / length};
+            // Match CPU admission: each polygon's axes use that polygon's
+            // first corner as their common origin for both mouth intervals.
+            // Subtraction before projection avoids large-origin cancellation.
+            const auto& origin = (*polygon)[0];
+            const auto project = [&](const Vec2& corner) {
+                return (corner.x - origin.x) * axis.x + (corner.y - origin.y) * axis.y;
+            };
+            const auto interval = [&](const OpeningCorners& corners) {
+                double low = project(corners[0]);
+                double high = low;
+                for (const auto& corner : corners) {
+                    const auto projected = project(corner);
+                    low = std::min(low, projected);
+                    high = std::max(high, projected);
+                }
+                return std::pair{low, high};
+            };
+            const auto [low1, high1] = interval(first);
+            const auto [low2, high2] = interval(second);
+            if (low1 > high2 + tolerance || low2 > high1 + tolerance) return false;
+        }
+    }
+    return true;
+}
+
+template<class Roof>
+TopoDS_Shape cut_roof_openings(TopoDS_Shape shape, const Roof& roof,
                                const Vec3& base, double orientation, double xmin, double ymin,
                                double xmax, double ymax, double thickness) {
+    const auto& openings = roof.openings;
     if (openings.empty()) return shape;
     if (openings.size() > 256) throw std::invalid_argument("A roof supports at most 256 openings");
     const auto frame = horizontal_frame(orientation, "Roof opening orientation is invalid");
     std::set<std::string> identities;
+    std::vector<OpeningCorners> mouth_polygons;
+    mouth_polygons.reserve(openings.size());
     Bnd_Box box;
     BRepBndLib::Add(shape, box);
     double bx0, by0, z0, bx1, by1, z1;
@@ -405,21 +616,42 @@ TopoDS_Shape cut_roof_openings(TopoDS_Shape shape, const std::vector<RoofOpening
         finite_derived(opening.y, "Roof opening Y must be finite");
         positive_dimension(opening.width, "Roof opening width must be positive");
         positive_dimension(opening.depth, "Roof opening depth must be positive");
+        validate_opening_rotation(opening);
         const auto right = opening.x + opening.width;
         const auto top = opening.y + opening.depth;
-        if (opening.x < xmin + clearance || opening.y < ymin + clearance ||
-            right > xmax - clearance || top > ymax - clearance)
-            throw std::invalid_argument("Roof openings must remain inside the footprint with thickness clearance");
+        const auto plan_frame = opening.rotation_radians == 0.0 ?
+            RoofOpeningPlanFrame{{opening.x + opening.width * 0.5, opening.y + opening.depth * 0.5},
+                {1.0, 0.0}, {0.0, 1.0}, 1.0, 1.0} : opening_frame_for_roof(roof, opening);
+        const auto corners = opening_corners(opening, plan_frame);
+        for (const auto& corner : corners)
+            if (corner.x < xmin + clearance || corner.y < ymin + clearance ||
+                corner.x > xmax - clearance || corner.y > ymax - clearance)
+                throw std::invalid_argument("Roof openings must remain inside the footprint with thickness clearance");
         for (std::size_t j = 0; j < i; ++j) {
             const auto& prior = openings[j];
-            if (opening.x <= prior.x + prior.width + tolerance && right >= prior.x - tolerance &&
-                opening.y <= prior.y + prior.depth + tolerance && top >= prior.y - tolerance)
+            const auto overlaps = opening.rotation_radians == 0.0 && prior.rotation_radians == 0.0 ?
+                (opening.x <= prior.x + prior.width + tolerance && right >= prior.x - tolerance &&
+                 opening.y <= prior.y + prior.depth + tolerance && top >= prior.y - tolerance) :
+                opening_polygons_overlap(corners, mouth_polygons[j]);
+            if (overlaps)
                 throw std::invalid_argument("Roof openings must not overlap or touch");
         }
-        const auto corner = local_point(point(base), frame.along, opening.x, frame.across,
-                                         opening.y, z0 - base.z - 1.0);
-        const auto tool = make_box(gp_Ax2(corner, gp_Dir(0, 0, 1), gp_Dir(frame.along)),
-            opening.width, opening.depth, z1 - z0 + 2.0, "Roof opening cutter failed");
+        mouth_polygons.push_back(corners);
+        const auto tool = [&] {
+            if (opening.rotation_radians == 0.0) {
+                const auto corner = local_point(point(base), frame.along, opening.x, frame.across,
+                    opening.y, z0 - base.z - 1.0);
+                return make_box(gp_Ax2(corner, gp_Dir(0, 0, 1), gp_Dir(frame.along)),
+                    opening.width, opening.depth, z1 - z0 + 2.0, "Roof opening cutter failed");
+            }
+            std::vector<gp_Pnt> polygon;
+            polygon.reserve(corners.size());
+            for (const auto& corner : corners)
+                polygon.push_back(local_point(point(base), frame.along, corner.x, frame.across,
+                    corner.y, z0 - base.z - 1.0));
+            return make_prism(polygon, gp_Vec(0.0, 0.0, z1 - z0 + 2.0),
+                "Roof opening cutter failed");
+        }();
         const auto previous_volume = solid_volume(shape);
         shape = build_solid([&] {
             BRepAlgoAPI_Cut operation(shape, tool);
@@ -732,7 +964,7 @@ TopoDS_Shape make_sloped_roof_panel(const SlopedRoofPanel& panel) {
     finite_derived(normal_scale, "Roof panel slope is outside the supported range");
     const gp_Vec normal = (gp_Vec(0.0, 0.0, 1.0) - frame.along * slope) / normal_scale;
     return cut_roof_openings(make_prism(top, normal * (-panel.thickness),
-                      "Roof panel construction failed"), panel.openings, panel.base_position,
+                      "Roof panel construction failed"), panel, panel.base_position,
                       panel.orientation_radians, 0, 0, panel.run, panel.span, panel.thickness);
 }
 
@@ -807,7 +1039,7 @@ TopoDS_Shape make_gable_roof(const GableRoof& roof) {
     const auto right_panel = make_prism(right_profile, frame.along * ridge_length,
                                         "Right gable roof panel construction failed");
     return cut_roof_openings(make_compound(left_panel, right_panel, "Gable roof construction failed"),
-        roof.openings, roof.base_position, roof.orientation_radians,
+        roof, roof.base_position, roof.orientation_radians,
         -roof.length * 0.5, -half_span, roof.length * 0.5, half_span, roof.thickness);
 }
 
@@ -860,12 +1092,36 @@ TopoDS_Shape make_hip_roof(const HipRoof& roof) {
         "East hip panel construction failed");
     return cut_roof_openings(make_compound(make_compound(south_panel, north_panel, "Hip side construction failed"),
         make_compound(west_panel, east_panel, "Hip end construction failed"),
-        "Hip roof construction failed"), roof.openings, roof.base_position, roof.orientation_radians,
+        "Hip roof construction failed"), roof, roof.base_position, roof.orientation_radians,
         -roof.length * 0.5, -roof.span * 0.5, roof.length * 0.5, roof.span * 0.5, roof.thickness);
 }
 
 TopoDS_Shape make_roof_skylight(const SlopedRoofPanel& roof, const RoofOpening& opening) {
     return build_skylight(roof, opening);
+}
+
+RoofOpeningPlanFrame roof_opening_plan_frame(const SlopedRoofPanel& roof, const RoofOpening& opening) {
+    return opening_frame_for_roof(roof, opening);
+}
+
+RoofOpeningPlanFrame roof_opening_plan_frame(const GableRoof& roof, const RoofOpening& opening) {
+    return opening_frame_for_roof(roof, opening);
+}
+
+RoofOpeningPlanFrame roof_opening_plan_frame(const HipRoof& roof, const RoofOpening& opening) {
+    return opening_frame_for_roof(roof, opening);
+}
+
+Vec2 roof_opening_reference_surface_scales(const SlopedRoofPanel& roof, Vec2 reference_center) {
+    return reference_surface_scales(roof, reference_center);
+}
+
+Vec2 roof_opening_reference_surface_scales(const GableRoof& roof, Vec2 reference_center) {
+    return reference_surface_scales(roof, reference_center);
+}
+
+Vec2 roof_opening_reference_surface_scales(const HipRoof& roof, Vec2 reference_center) {
+    return reference_surface_scales(roof, reference_center);
 }
 
 TopoDS_Shape make_roof_skylight(const GableRoof& roof, const RoofOpening& opening) {

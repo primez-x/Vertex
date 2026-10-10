@@ -251,7 +251,9 @@ public:
     // review enclosure and ordinary active-design scale intent in retained history.
     // v174 adds source-derived baseline wall-group scale replacements within
     // active alternatives, including reviewed and undone phase intent v19.
-    static constexpr std::uint32_t format_version = 174;
+    // v175 adds roof-face skylight rotation and its explicit retained edit,
+    // replacement and transform dialects without activating legacy row fields.
+    static constexpr std::uint32_t format_version = 175;
     static constexpr std::uint32_t recovery_format_version = 4;
     [[nodiscard]] static std::uint32_t required_format_version(const DocumentSnapshot& snapshot);
     static constexpr std::uint64_t maximum_file_bytes = 4ULL * 1024ULL * 1024ULL * 1024ULL;

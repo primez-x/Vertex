@@ -3348,6 +3348,11 @@ void PlanCanvas::pointerPress(QPointF position, Qt::MouseButton button,
                 m_roof_opening_capture=*child;
                 m_roof_opening_handle=grip.value_or(Vec2{});
                 m_roof_opening_press_local=roofOpeningLocalPoint(position,child->frame);
+                const auto physical=roofOpeningPhysicalPoint(position,child->frame);
+                if (grip && grip->x==2.0 && grip->y==2.0 &&
+                    (!std::isfinite(physical.x) || !std::isfinite(physical.y) ||
+                     std::hypot(physical.x,physical.y)<=1e-12)) { resetGesture(); return; }
+                m_roof_opening_press_angle=std::atan2(physical.y,physical.x);
                 m_roof_opening_edit_started=true;
                 const auto serial=m_roof_opening_preview_serial;
                 const auto callback=m_roof_opening_edit_started_callback;
@@ -3355,7 +3360,8 @@ void PlanCanvas::pointerPress(QPointF position, Qt::MouseButton button,
                 try { if (callback) callback(child->target); }
                 catch (...) { if (guard) resetGesture(); return; }
                 if (!guard || serial!=m_roof_opening_preview_serial || !m_roof_opening_capture) return;
-                setCursor(grip ? Qt::SizeFDiagCursor : Qt::SizeAllCursor);
+                setCursor(grip && grip->x==2.0 && grip->y==2.0 ? Qt::CrossCursor :
+                    grip ? Qt::SizeFDiagCursor : Qt::SizeAllCursor);
             } else {
                 m_pressed_roof_opening=child->target;
                 m_left_gesture=LeftGesture::canvas_pan;
@@ -3835,7 +3841,8 @@ void PlanCanvas::pointerRelease(QPointF position, Qt::MouseButton button,
         if (m_left_gesture==LeftGesture::roof_opening_edit) {
             const QPointer<PlanCanvas> guard(this);
             if (!m_roof_opening_preview_pointer || *m_roof_opening_preview_pointer!=position ||
-                m_roof_opening_preview_fine!=(modifiers.testFlag(Qt::ShiftModifier) || !m_snap_enabled)) pointerMove(position,modifiers);
+                m_roof_opening_preview_fine!=(modifiers.testFlag(Qt::ShiftModifier) ||
+                    (!(m_roof_opening_handle.x==2.0 && m_roof_opening_handle.y==2.0) && !m_snap_enabled))) pointerMove(position,modifiers);
             if (!guard || m_left_gesture!=LeftGesture::roof_opening_edit || !m_roof_opening_capture) return;
             if (!m_left_dragging) { resetGesture(); return; }
             m_roof_opening_release_pending=true;
@@ -5399,10 +5406,51 @@ std::optional<PlanCanvas::OpeningWidthHandleHit> PlanCanvas::openingWidthHandleA
 }
 
 namespace {
-bool valid_roof_opening_frame(const CanvasSelectionFrame& frame) {
-    return std::isfinite(frame.center.x) && std::isfinite(frame.center.y) &&
-        std::isfinite(frame.rotation_radians) && std::isfinite(frame.width_metres) &&
-        std::isfinite(frame.depth_metres) && frame.width_metres > 1e-6 && frame.depth_metres > 1e-6;
+std::pair<Vec2,Vec2> roof_opening_basis(const CanvasRoofOpeningFrame& frame) {
+    // Preserve the historical unrotated roof basis exactly.
+    if (frame.rotation_radians==0.0) return {frame.reference_along,frame.reference_across};
+    const auto c=std::cos(frame.rotation_radians), s=std::sin(frame.rotation_radians);
+    const auto along_across=s*(frame.width_surface_scale/frame.depth_surface_scale);
+    const auto across_along=-s*(frame.depth_surface_scale/frame.width_surface_scale);
+    return {{c*frame.reference_along.x+along_across*frame.reference_across.x,
+             c*frame.reference_along.y+along_across*frame.reference_across.y},
+            {across_along*frame.reference_along.x+c*frame.reference_across.x,
+             across_along*frame.reference_along.y+c*frame.reference_across.y}};
+}
+
+bool roof_opening_rotation_handle(Vec2 handle) {
+    return handle.x==2.0 && handle.y==2.0;
+}
+
+double canonical_roof_opening_angle(double angle) {
+    return std::remainder(angle,2.0*pi);
+}
+
+bool valid_roof_opening_frame(const CanvasRoofOpeningFrame& frame) {
+    const auto finite=[](Vec2 value) { return std::isfinite(value.x) && std::isfinite(value.y); };
+    if (!finite(frame.center) || !finite(frame.reference_along) || !finite(frame.reference_across) ||
+        !std::isfinite(frame.rotation_radians) || frame.rotation_radians < -pi || frame.rotation_radians > pi ||
+        !std::isfinite(frame.width_metres) || !std::isfinite(frame.depth_metres) ||
+        frame.width_metres<=1e-6 || frame.depth_metres<=1e-6 ||
+        !std::isfinite(frame.width_surface_scale) || frame.width_surface_scale<=0.0 ||
+        !std::isfinite(frame.depth_surface_scale) || frame.depth_surface_scale<=0.0 ||
+        !std::isfinite(frame.width_metres*frame.width_surface_scale) ||
+        !std::isfinite(frame.depth_metres*frame.depth_surface_scale)) return false;
+    constexpr double axes_tolerance=1e-8;
+    if (std::abs(std::hypot(frame.reference_along.x,frame.reference_along.y)-1.0)>axes_tolerance ||
+        std::abs(std::hypot(frame.reference_across.x,frame.reference_across.y)-1.0)>axes_tolerance ||
+        std::abs(frame.reference_along.x*frame.reference_across.x+
+                 frame.reference_along.y*frame.reference_across.y)>axes_tolerance) return false;
+    const auto [along,across]=roof_opening_basis(frame);
+    const auto determinant=along.x*across.y-along.y*across.x;
+    if (!finite(along) || !finite(across) || !std::isfinite(determinant) ||
+        std::abs(determinant)<=1e-12) return false;
+    for (const auto signs : {Vec2{-1,-1},Vec2{1,-1},Vec2{1,1},Vec2{-1,1}}) {
+        const auto x=signs.x*frame.width_metres*.5, y=signs.y*frame.depth_metres*.5;
+        if (!finite({frame.center.x+along.x*x+across.x*y,
+                     frame.center.y+along.y*x+across.y*y})) return false;
+    }
+    return true;
 }
 }
 
@@ -5467,23 +5515,50 @@ const CanvasRoofOpeningControls* PlanCanvas::selectedRoofOpeningControls() const
     return found == m_roof_opening_controls.end() ? nullptr : &*found;
 }
 
-Vec2 PlanCanvas::roofOpeningLocalPoint(QPointF point, const CanvasSelectionFrame& frame) const {
+Vec2 PlanCanvas::roofOpeningLocalPoint(QPointF point, const CanvasRoofOpeningFrame& frame) const {
     const auto model = toModel(point, rect());
     const auto x = model.x - frame.center.x, y = model.y - frame.center.y;
-    const auto c = std::cos(frame.rotation_radians), s = std::sin(frame.rotation_radians);
-    return {c*x+s*y, -s*x+c*y};
+    const auto [along,across]=roof_opening_basis(frame);
+    const auto determinant=along.x*across.y-along.y*across.x;
+    return {(x*across.y-y*across.x)/determinant,
+            (along.x*y-along.y*x)/determinant};
 }
 
-QPolygonF PlanCanvas::roofOpeningFramePolygon(const CanvasSelectionFrame& frame,
+Vec2 PlanCanvas::roofOpeningPhysicalPoint(QPointF point, const CanvasRoofOpeningFrame& frame) const {
+    const auto model=toModel(point,rect());
+    const auto x=model.x-frame.center.x, y=model.y-frame.center.y;
+    const auto determinant=frame.reference_along.x*frame.reference_across.y-
+                           frame.reference_along.y*frame.reference_across.x;
+    return {frame.width_surface_scale*((x*frame.reference_across.y-y*frame.reference_across.x)/determinant),
+            frame.depth_surface_scale*((frame.reference_along.x*y-frame.reference_along.y*x)/determinant)};
+}
+
+QPolygonF PlanCanvas::roofOpeningFramePolygon(const CanvasRoofOpeningFrame& frame,
                                              const QRectF& viewport) const {
     QPolygonF polygon;
-    const auto c = std::cos(frame.rotation_radians), s = std::sin(frame.rotation_radians);
+    const auto [along,across]=roof_opening_basis(frame);
     for (const auto local : {Vec2{-1,-1}, Vec2{1,-1}, Vec2{1,1}, Vec2{-1,1}}) {
         const auto x = local.x * frame.width_metres * .5;
         const auto y = local.y * frame.depth_metres * .5;
-        polygon << toScreen({frame.center.x+c*x-s*y, frame.center.y+s*x+c*y}, viewport);
+        polygon << toScreen({frame.center.x+along.x*x+across.x*y,
+                             frame.center.y+along.y*x+across.y*y}, viewport);
     }
     return polygon;
+}
+
+QPointF PlanCanvas::roofOpeningRotationHandle(const CanvasRoofOpeningFrame& frame,
+                                             const QRectF& viewport) const {
+    const auto polygon=roofOpeningFramePolygon(frame,viewport);
+    const auto edge_center=(polygon[2]+polygon[3])*.5;
+    const auto edge=polygon[3]-polygon[2];
+    auto outward=QPointF(edge.y(),-edge.x());
+    const auto from_center=edge_center-toScreen(frame.center,viewport);
+    if (outward.x()*from_center.x()+outward.y()*from_center.y()<0.0) outward=-outward;
+    const auto length=std::hypot(outward.x(),outward.y());
+    // Fixed screen clearance stays attached to the opening's local top edge,
+    // including when the roof axes are reflected or the opening is rotated.
+    // Use the edge normal so steep-facet skew cannot collapse grip clearance.
+    return edge_center+(length>0.0 ? outward*(28.0/length) : QPointF(0,-28));
 }
 
 std::optional<CanvasRoofOpeningControls> PlanCanvas::roofOpeningAt(QPointF point) const {
@@ -5519,6 +5594,8 @@ std::optional<Vec2> PlanCanvas::roofOpeningHandleAt(QPointF point) const {
         const auto d = std::hypot(point.x()-center.x(),point.y()-center.y());
         if (d<=nearest) { nearest=d; hit=signs[i]; }
     }
+    const auto rotation=roofOpeningRotationHandle(selected->frame,rect());
+    if (std::hypot(point.x()-rotation.x(),point.y()-rotation.y())<=nearest) return Vec2{2,2};
     return hit;
 }
 
@@ -5526,7 +5603,8 @@ void PlanCanvas::updateRoofOpeningPreview(QPointF point, Qt::KeyboardModifiers m
     if (!m_roof_opening_capture || !m_roof_opening_edit_started) return;
     const auto serial = ++m_roof_opening_preview_serial;
     m_roof_opening_preview_pointer = point;
-    m_roof_opening_preview_fine = modifiers.testFlag(Qt::ShiftModifier) || !m_snap_enabled;
+    const bool rotating=roof_opening_rotation_handle(m_roof_opening_handle);
+    m_roof_opening_preview_fine = modifiers.testFlag(Qt::ShiftModifier) || (!rotating && !m_snap_enabled);
     m_roof_opening_preview_valid = false;
     m_roof_opening_preview_pending = false;
     m_roof_opening_preview_request_in_progress = false;
@@ -5540,7 +5618,22 @@ void PlanCanvas::updateRoofOpeningPreview(QPointF point, Qt::KeyboardModifiers m
         return step>0.0 && std::isfinite(value) ? std::round(value/step)*step : value;
     };
     Vec2 shift{};
-    if (m_roof_opening_handle.x==0.0 && m_roof_opening_handle.y==0.0) {
+    if (rotating) {
+        const auto physical=roofOpeningPhysicalPoint(point,source.frame);
+        if (!std::isfinite(physical.x) || !std::isfinite(physical.y) ||
+            std::hypot(physical.x,physical.y)<=1e-12) {
+            m_roof_opening_edit_preview.reset();
+            update();
+            return;
+        }
+        auto angle=source.frame.rotation_radians+canonical_roof_opening_angle(
+            std::atan2(physical.y,physical.x)-m_roof_opening_press_angle);
+        if (!modifiers.testFlag(Qt::ShiftModifier)) {
+            constexpr double angle_step=pi/4.0;
+            angle=std::round(angle/angle_step)*angle_step;
+        }
+        frame.rotation_radians=canonical_roof_opening_angle(angle);
+    } else if (m_roof_opening_handle.x==0.0 && m_roof_opening_handle.y==0.0) {
         shift = {snap(delta.x),snap(delta.y)};
     } else {
         if (m_roof_opening_handle.x!=0.0 && std::abs(delta.x)>1e-12) {
@@ -5552,10 +5645,11 @@ void PlanCanvas::updateRoofOpeningPreview(QPointF point, Qt::KeyboardModifiers m
             shift.y = m_roof_opening_handle.y*(frame.depth_metres-source.frame.depth_metres)*.5;
         }
     }
-    const auto c=std::cos(frame.rotation_radians), s=std::sin(frame.rotation_radians);
-    frame.center = {source.frame.center.x+c*shift.x-s*shift.y,
-                    source.frame.center.y+s*shift.x+c*shift.y};
-    m_roof_opening_edit_preview = CanvasRoofOpeningEdit{source.target,frame};
+    const auto [along,across]=roof_opening_basis(source.frame);
+    frame.center = {source.frame.center.x+along.x*shift.x+across.x*shift.y,
+                    source.frame.center.y+along.y*shift.x+across.y*shift.y};
+    m_roof_opening_edit_preview = CanvasRoofOpeningEdit{source.target,frame,
+        rotating ? Vec2{} : m_roof_opening_handle};
     if (!valid_roof_opening_frame(frame) || !m_roof_opening_preview_requested) { update(); return; }
     const QPointer<PlanCanvas> guard(this);
     const auto callback = m_roof_opening_preview_requested;
@@ -5581,8 +5675,19 @@ bool PlanCanvas::markRoofOpeningPreviewPending(std::uint64_t serial) {
     return true;
 }
 
-bool PlanCanvas::completeRoofOpeningPreview(std::uint64_t serial, std::optional<Boundary> result) {
-    if (!m_roof_opening_preview_pending) return false;
+bool PlanCanvas::completeRoofOpeningPreview(std::uint64_t serial, std::optional<Boundary> result,
+    std::optional<CanvasRoofOpeningFrame> admitted_frame) {
+    if (!m_roof_opening_preview_pending || serial!=m_roof_opening_preview_serial ||
+        !m_roof_opening_capture || !m_roof_opening_edit_preview ||
+        m_left_gesture!=LeftGesture::roof_opening_edit) return false;
+    if (admitted_frame) {
+        // A stale serial cannot alter the proposal. An invalid exact frame
+        // consumes this completion as a refusal, clearing geometry and any
+        // waiting release rather than pairing it with the old proposal frame.
+        if (!valid_roof_opening_frame(*admitted_frame))
+            return applyRoofOpeningPreview(serial,std::nullopt);
+        m_roof_opening_edit_preview->frame=*admitted_frame;
+    }
     return applyRoofOpeningPreview(serial,std::move(result));
 }
 
@@ -5632,7 +5737,10 @@ void PlanCanvas::finishRoofOpeningPreview(std::uint64_t serial) {
     const auto callback=m_roof_opening_edit_requested;
     const auto source=m_roof_opening_capture->frame;
     const bool changed=edit && (edit->frame.center.x!=source.center.x || edit->frame.center.y!=source.center.y ||
-        edit->frame.width_metres!=source.width_metres || edit->frame.depth_metres!=source.depth_metres);
+        edit->frame.width_metres!=source.width_metres || edit->frame.depth_metres!=source.depth_metres ||
+        edit->frame.rotation_radians!=source.rotation_radians ||
+        edit->frame.width_surface_scale!=source.width_surface_scale ||
+        edit->frame.depth_surface_scale!=source.depth_surface_scale);
     const bool admitted=m_roof_opening_preview_valid && changed && callback;
     const QPointer<PlanCanvas> guard(this);
     m_roof_opening_release_pending=false;
@@ -5684,10 +5792,16 @@ void PlanCanvas::drawRoofOpeningControls(QPainter& painter, const QRectF& viewpo
             for (const auto center : {polygon[i],(polygon[i]+polygon[(i+1)%4])*.5})
                 painter.drawRect(QRectF(center-QPointF(4,4),QSizeF(8,8)));
         }
+        const auto rotation=roofOpeningRotationHandle(frame,viewport);
+        painter.drawLine((polygon[2]+polygon[3])*.5,rotation);
+        painter.drawEllipse(rotation,5.0,5.0);
     }
     auto readout_font=font(); readout_font.setPixelSize(11); painter.setFont(readout_font);
-    QString text=QStringLiteral("Skylight  ·  W %1  ×  D %2").arg(drawingLengthText(frame.width_metres,m_metric_units),
-                                                     drawingLengthText(frame.depth_metres,m_metric_units));
+    QString text=QStringLiteral("Skylight  ·  W %1  ×  D %2").arg(
+        drawingLengthText(frame.width_metres*frame.width_surface_scale,m_metric_units),
+        drawingLengthText(frame.depth_metres*frame.depth_surface_scale,m_metric_units));
+    if (m_roof_opening_capture && roof_opening_rotation_handle(m_roof_opening_handle))
+        text+=QStringLiteral("  ·  %1°").arg(frame.rotation_radians*180.0/pi,0,'f',1);
     if (invalid) text+=QStringLiteral("  ·  Invalid");
     else if (m_roof_opening_preview_pending) text+=QStringLiteral("  ·  Previewing");
     const auto bounds=polygon.boundingRect();
@@ -8534,6 +8648,7 @@ void PlanCanvas::updatePointerCursor(QPointF point) {
         setCursor(Qt::ForbiddenCursor);
     } else if (m_roof_opening_capture && m_left_dragging) {
         setCursor(!m_roof_opening_preview_valid && !m_roof_opening_preview_pending ? Qt::ForbiddenCursor :
+            roof_opening_rotation_handle(m_roof_opening_handle) ? Qt::CrossCursor :
             m_roof_opening_handle.x==0.0 && m_roof_opening_handle.y==0.0 ? Qt::ClosedHandCursor : Qt::SizeFDiagCursor);
     } else if (m_panning ||
         ((m_left_gesture == LeftGesture::object_move ||
@@ -8542,7 +8657,10 @@ void PlanCanvas::updatePointerCursor(QPointF point) {
     } else if (m_space_pan_armed && m_gesture_button == Qt::NoButton) {
         setCursor(Qt::OpenHandCursor);
     } else if (selectionInteractionEnabled() && m_gesture_button == Qt::NoButton) {
-        if (roofOpeningHandleAt(point)) { setCursor(Qt::SizeFDiagCursor); return; }
+        if (const auto grip=roofOpeningHandleAt(point)) {
+            setCursor(roof_opening_rotation_handle(*grip) ? Qt::CrossCursor : Qt::SizeFDiagCursor);
+            return;
+        }
         if (const auto child=roofOpeningAt(point)) {
             setCursor(m_selected_roof_opening && child->target==*m_selected_roof_opening
                 ? Qt::SizeAllCursor : Qt::ArrowCursor);

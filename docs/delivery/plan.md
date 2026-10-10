@@ -162,7 +162,13 @@ polling timeout does not permit restarting it.
    exact retained quantities/metadata, destination host/phase validation and
    fresh identity reservation through undone history. Future/ambiguous receipt
    bindings and deletion with unresolved annotation remnants remain explicit
-   refusals; rotation, grouped child selection and 3D child picking remain gaps.
+   refusals. Qualify the subsequent actual roof-face rotation source, oriented
+   mouth/cut/assembly, affine canvas grips, physical-angle snapping, Properties,
+   clipboard/alternative transport and schedule dimensions. Roof schema four,
+   opening intent four, composite nine and phase twenty/twenty-one retain their
+   explicit authority under reader 175/extraction 173. The historical vertical
+   curb/member construction remains unchanged. Grouped child selection and 3D
+   child picking remain implementation gaps.
 10. Implement observed native/vendor/device adapters through existing workers;
     complete declared IFC/DXF/Pinc fidelity and independently consumed output.
     Add offline OCR text regions/confidence feeding reviewed proposals. New

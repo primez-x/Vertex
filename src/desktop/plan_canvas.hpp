@@ -99,7 +99,6 @@ struct CanvasSelectionFrame {
 };
 
 // Nested roof children keep their owner identity and captured document revision.
-// The horizontal mouth frame uses the roof yaw; these controls never rotate it.
 struct CanvasRoofOpeningTarget {
     QString roof_id;
     QString opening_id;
@@ -107,14 +106,33 @@ struct CanvasRoofOpeningTarget {
     bool operator==(const CanvasRoofOpeningTarget&) const = default;
 };
 
+// The reference axes are the presented roof's orthonormal horizontal axes,
+// including any reflection, independent of the opening's physical facet angle.
+// Width/depth are logical roof spans; multiplying by the corresponding surface
+// scale gives the actual in-facet physical dimensions. Rotation therefore
+// projects to a parallelogram rather than a generic orthogonal selection frame.
+struct CanvasRoofOpeningFrame {
+    Vec2 center{};
+    Vec2 reference_along{1,0};
+    Vec2 reference_across{0,1};
+    double width_metres{};
+    double depth_metres{};
+    double rotation_radians{};
+    double width_surface_scale{1.0};
+    double depth_surface_scale{1.0};
+};
+
 struct CanvasRoofOpeningControls {
     CanvasRoofOpeningTarget target;
-    CanvasSelectionFrame frame;
+    CanvasRoofOpeningFrame frame;
 };
 
 struct CanvasRoofOpeningEdit {
     CanvasRoofOpeningTarget target;
-    CanvasSelectionFrame frame;
+    CanvasRoofOpeningFrame frame;
+    // Signed resized axes; zero preserves the axis. The opposite side/corner
+    // stays anchored when the destination facet changes its projected basis.
+    Vec2 resize_axes{};
 };
 
 // Semantic, screen-only opening controls. The jamb points lie on the host
@@ -745,7 +763,11 @@ public:
         return m_roof_opening_edit_preview;
     }
     bool markRoofOpeningPreviewPending(std::uint64_t serial);
-    bool completeRoofOpeningPreview(std::uint64_t serial, std::optional<Boundary> result);
+    // The exact host-admitted candidate may resolve onto a different roof
+    // facet. Its frame replaces the proposal before any waiting release;
+    // invalid supplied frames reject the entire preview.
+    bool completeRoofOpeningPreview(std::uint64_t serial, std::optional<Boundary> result,
+        std::optional<CanvasRoofOpeningFrame> admitted_frame = std::nullopt);
     // Exact document projection for a selected stable boundary vertex. The
     // returned entities override screen geometry only, including related owners.
     // nullopt rejects unless the callback marks its current serial pending.
@@ -964,11 +986,15 @@ private:
     void drawOpeningWidthHandles(QPainter& painter, const QRectF& viewport) const;
     [[nodiscard]] const CanvasRoofOpeningControls* selectedRoofOpeningControls() const;
     [[nodiscard]] std::optional<CanvasRoofOpeningControls> roofOpeningAt(QPointF point) const;
-    // Local-axis signs: zero is an unchanged axis; {0,0} moves the body.
+    // Local-axis signs in {-1,0,1}: zero leaves an axis unchanged; {0,0}
+    // moves the body. The exclusive {2,2} sentinel rotates without resizing.
     [[nodiscard]] std::optional<Vec2> roofOpeningHandleAt(QPointF point) const;
-    [[nodiscard]] Vec2 roofOpeningLocalPoint(QPointF point, const CanvasSelectionFrame& frame) const;
-    [[nodiscard]] QPolygonF roofOpeningFramePolygon(const CanvasSelectionFrame& frame,
+    [[nodiscard]] Vec2 roofOpeningLocalPoint(QPointF point, const CanvasRoofOpeningFrame& frame) const;
+    [[nodiscard]] Vec2 roofOpeningPhysicalPoint(QPointF point, const CanvasRoofOpeningFrame& frame) const;
+    [[nodiscard]] QPolygonF roofOpeningFramePolygon(const CanvasRoofOpeningFrame& frame,
                                                   const QRectF& viewport) const;
+    [[nodiscard]] QPointF roofOpeningRotationHandle(const CanvasRoofOpeningFrame& frame,
+                                                    const QRectF& viewport) const;
     void updateRoofOpeningPreview(QPointF point, Qt::KeyboardModifiers modifiers);
     bool applyRoofOpeningPreview(std::uint64_t serial, std::optional<Boundary> result);
     void finishRoofOpeningPreview(std::uint64_t serial);
@@ -1246,6 +1272,7 @@ private:
     std::optional<CanvasRoofOpeningTarget> m_pressed_roof_opening;
     Vec2 m_roof_opening_handle{};
     Vec2 m_roof_opening_press_local{};
+    double m_roof_opening_press_angle{};
     std::optional<CanvasRoofOpeningEdit> m_roof_opening_edit_preview;
     std::optional<Boundary> m_roof_opening_boundary_preview;
     std::optional<QPointF> m_roof_opening_preview_pointer;

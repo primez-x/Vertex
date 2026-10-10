@@ -1038,7 +1038,7 @@ Json export_roof_skylights(const Entity& roof, int product, ExportContext& conte
     std::vector<IfcProjectDiagnostic>& diagnostics) {
     Json manifest = Json::array();
     if (!roof_has_skylights(roof.properties)) return manifest;
-    require(roof.properties.at("version") == 3);
+    require(roof.properties.at("version") == 3 || roof.properties.at("version") == 4);
     const auto& openings = roof.properties.at("roof_openings");
     require(openings.size() <= 256);
     // Bound complete child construction before repeated decoding/booleans.

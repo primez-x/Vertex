@@ -377,6 +377,26 @@ std::uint32_t required_format_version_internal(const DocumentSnapshot& snapshot,
             const auto& value=*pending.back(); pending.pop_back();
             if (++nodes>ProjectStore::maximum_json_values)
                 storage_error(StorageErrorCode::resource_limit,"Typed edit reader-floor scan exceeds its JSON budget");
+            if (value.is_object() && value.value("version",nlohmann::json()) == 4 &&
+                (value.value("form",nlohmann::json()) == "sloped_roof_panel" ||
+                 value.value("form",nlohmann::json()) == "gable_roof" || value.value("form",nlohmann::json()) == "hip_roof") &&
+                value.contains("roof_openings") && value.contains("base_position_m"))
+                floor=std::max(floor,175U);
+            if (value.is_object() && value.value("version",nlohmann::json()) == 4 && value.size() == 4 &&
+                value.contains("roof_id") && value.contains("upserts") && value.contains("removed_opening_ids"))
+                floor=std::max(floor,175U);
+            if (value.is_object() && value.value("version",nlohmann::json()) == 9 && value.size() == 10 &&
+                value.contains("roof_id") && value.contains("coordinate_world_hosted_geometry") && value.contains("openings"))
+                floor=std::max(floor,175U);
+            if (value.is_object() && (value.value("version",nlohmann::json()) == 20 || value.value("version",nlohmann::json()) == 21) &&
+                value.contains("source_snapshot_digest") && value.contains("intent"))
+                floor=std::max(floor,175U);
+            if (value.is_object() && value.value("roof_schema",nlohmann::json()) == 4 &&
+                value.contains("cuts") && value.contains("form"))
+                floor=std::max(floor,175U);
+            if (value.is_object() && value.value("version",nlohmann::json()) == 10 &&
+                value.contains("seed_roof_ids") && value.contains("roof_edits") && value.contains("identities"))
+                floor=std::max(floor,175U);
             if (value.is_object() && value.value("version",nlohmann::json()) == 8 && value.size() == 4 &&
                 value.contains("complete_presentations") && value.contains("authoring") && value.contains("corner_profiles"))
                 floor=std::max(floor,171U);
@@ -626,6 +646,7 @@ std::uint32_t required_format_version_internal(const DocumentSnapshot& snapshot,
                 return false;
             };
             const auto profile_intent=[&](const nlohmann::json& intent)->std::uint32_t {
+                if (intent.is_object() && (intent.value("version",0)==20 || intent.value("version",0)==21)) return 175U;
                 if (intent.is_object() && intent.value("version",0)==19) return 174U;
                 if (intent.is_object() && intent.value("version",0)==18) return 173U;
                 if (intent.is_object() && intent.value("version",0)==17 && intent.size()==9 &&
@@ -977,11 +998,20 @@ std::uint32_t required_format_version_internal(const DocumentSnapshot& snapshot,
                 required = std::max(required, 170U);
             if (entity.type == "roof" && entity.properties.is_object() && entity.properties.value("version", nlohmann::json()) == 3)
                 required = std::max(required, 168U);
+            if (entity.type == "roof" && entity.properties.is_object() && entity.properties.value("version", nlohmann::json()) == 4)
+                required = std::max(required, 175U);
+            if (entity.type == "roof" && entity.extensions.is_object()) {
+                const auto archive=entity.extensions.find("roof_rigid_transform_derivations");
+                if (archive!=entity.extensions.end() && archive->is_object() && archive->value("version",nlohmann::json())==2)
+                    required=std::max(required,175U);
+            }
             if (entity.type == "roof" && entity.extensions.is_object())
                 for (const auto* key : {"roof_uniform_transform_derivations", "roof_plan_resize_derivations"}) {
                     const auto archive = entity.extensions.find(key);
                     if (archive != entity.extensions.end() && archive->is_object() && archive->value("version", nlohmann::json()) == 2)
                         required = std::max(required, 168U);
+                    if (archive != entity.extensions.end() && archive->is_object() && archive->value("version", nlohmann::json()) == 3)
+                        required = std::max(required, 175U);
                 }
             if (entity.type == "dxf_source" && entity.properties.is_object() &&
                 (entity.properties.contains("source_receipt") ||
@@ -2888,6 +2918,7 @@ bool verify_sqlite_schema(sqlite3* database, bool allow_recovery = false) {
          sqlite3_column_int(user_version.get(), 0) != 171 &&
          sqlite3_column_int(user_version.get(), 0) != 172 &&
          sqlite3_column_int(user_version.get(), 0) != 173 &&
+         sqlite3_column_int(user_version.get(), 0) != 175 &&
          sqlite3_column_int(user_version.get(), 0) != 174 &&
          sqlite3_column_int(user_version.get(), 0) != 169 &&
          sqlite3_column_int(user_version.get(), 0) != 163 &&
@@ -3610,6 +3641,8 @@ DocumentSnapshot read_snapshot(sqlite3* database, RecoveryLedger* recovery = nul
     // here and authenticate the manifest with its stored version below.
     const auto required_format = required_format_version_internal(snapshot, format_number < 28);
     if (required_format > format_number) {
+        if (required_format>=175)
+            storage_error(StorageErrorCode::unsupported_format,"This project requires reader 175 for roof-face skylight rotation and its retained edit history");
         if (required_format>=174)
             storage_error(StorageErrorCode::unsupported_format,"This project requires reader 174 for source-derived baseline wall-group scaling in retained design history");
         if (required_format>=173)

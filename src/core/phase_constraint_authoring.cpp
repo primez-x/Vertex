@@ -124,12 +124,19 @@ PlanarTransform transform(const std::string& owner, const Json& value) {
 void bounded_array(const Json& value) {
     if (!value.is_array() || value.size()>4096) invalid("Phase constraint target budget exceeded");
 }
-std::vector<RoofEditIntent> ordinary_roof_edits(const Json& value) {
+bool has_rotated_roof_edits(const Json& value) {
+    return value.is_array() && std::any_of(value.begin(), value.end(), [](const auto& row) {
+        return row.is_object() && row.contains("version") && row.at("version") == 9;
+    });
+}
+std::vector<RoofEditIntent> ordinary_roof_edits(const Json& value, bool allow_rotation = false) {
     bounded_array(value);
     if (value.empty()) invalid("Ordinary roof authoring requires a nonempty typed edit list");
     std::vector<RoofEditIntent> result;
     std::set<std::string,std::less<>> targets;
     for (const auto& row:value) {
+        if (!allow_rotation && row.is_object() && row.contains("version") && row.at("version") == 9)
+            invalid("Historical ordinary roof authoring cannot borrow rotation authority");
         auto edit=decode_roof_edit_intent(row);
         if (encode_roof_edit_intent(edit).dump()!=row.dump() || !targets.insert(edit.roof_id).second)
             invalid("Ordinary roof authoring requires unique canonical typed edits");
@@ -385,6 +392,8 @@ CoordinatedReplacements coordinated(const Json& value,const PhaseConstraintAutho
     }
     if (!value.at("roof_replacement").is_null()) {
         const auto& leaf=value.at("roof_replacement");
+        if (leaf.is_object() && leaf.contains("version") && leaf.at("version") == 10)
+            invalid("Historical coordinated authoring cannot borrow roof rotation replacement authority");
         result.roof=decode_phase_roof_replacement_authoring(leaf);
         if (result.roof->demolition || encode_phase_roof_replacement_authoring(*result.roof).dump()!=leaf.dump())
             invalid("Coordinated roof replacement requires canonical replacement authority without demolition");
@@ -416,6 +425,8 @@ CoordinatedReplacements coordinated(const Json& value,const PhaseConstraintAutho
     }
     std::set<std::string,std::less<>> roof_targets, slab_targets;
     for (const auto& row:value.at("ordinary_roof_edits")) {
+        if (row.is_object() && row.contains("version") && row.at("version") == 9)
+            invalid("Historical coordinated authoring cannot borrow roof rotation authority");
         auto edit=decode_roof_edit_intent(row);
         if (encode_roof_edit_intent(edit).dump()!=row.dump() || !roof_targets.insert(edit.roof_id).second)
             invalid("Coordinated ordinary roofs require unique canonical typed edits");
@@ -1262,6 +1273,7 @@ nlohmann::json encode_phase_constraint_authoring_intent(const PhaseConstraintAut
         if (encode_intent(value.intent) != encode_intent(empty))
             invalid("Roof replacement cannot borrow geometry or relationship authority");
         result["roof_replacement"] = value.roof_replacement;
+        if (value.roof_replacement.at("version") == 10) result["version"] = 21;
     }
     if (!value.slab_replacement.is_null()) {
         const auto replacement = decode_phase_slab_replacement_authoring(value.slab_replacement);
@@ -1348,7 +1360,8 @@ nlohmann::json encode_phase_constraint_authoring_intent(const PhaseConstraintAut
             invalid("Wall demolition decisions are not canonical");
     }
     if (!value.ordinary_roof_edits.is_null()) {
-        (void)ordinary_roof_edits(value.ordinary_roof_edits);
+        (void)ordinary_roof_edits(value.ordinary_roof_edits, true);
+        if (has_rotated_roof_edits(value.ordinary_roof_edits)) result["version"] = 20;
         ConstraintAuthoringIntent empty;
         empty.message=value.intent.message;
         if (encode_intent(value.intent)!=encode_intent(empty))
@@ -1366,7 +1379,8 @@ PhaseConstraintAuthoringIntent decode_phase_constraint_authoring_intent(const Js
     if (value.dump().size()>proof_budget) invalid("Phase constraint proof exceeds its byte budget");
     const bool replacement=value.is_object() && value.contains("version") && value.at("version")==2;
     const bool demolition=value.is_object() && value.contains("version") && value.at("version")==3;
-    const bool roof=value.is_object() && value.contains("version") && value.at("version")==4;
+    const bool roof_rotation=value.is_object() && value.contains("version") && value.at("version")==21;
+    const bool roof=roof_rotation || (value.is_object() && value.contains("version") && value.at("version")==4);
     const bool slab=value.is_object() && value.contains("version") && value.at("version")==5;
     const bool slab_demolition=value.is_object() && value.contains("version") && value.at("version")==6;
     const bool coordinated_replacements=value.is_object() && value.contains("version") &&
@@ -1377,7 +1391,8 @@ PhaseConstraintAuthoringIntent decode_phase_constraint_authoring_intent(const Js
     const bool stair_retirement=value.is_object() && value.contains("version") && value.at("version")==13;
     const bool coordinated_demolition=value.is_object() && value.contains("version") && value.at("version")==15;
     const bool wall_demolition=value.is_object() && value.contains("version") && value.at("version")==16;
-    const bool ordinary_roofs=value.is_object() && value.contains("version") && value.at("version")==17;
+    const bool ordinary_roof_rotations=value.is_object() && value.contains("version") && value.at("version")==20;
+    const bool ordinary_roofs=ordinary_roof_rotations || (value.is_object() && value.contains("version") && value.at("version")==17);
     const bool wall_group_scale=value.is_object() && value.contains("version") && value.at("version")==18;
     const bool baseline_wall_group_scale=value.is_object() && value.contains("version") && value.at("version")==19;
     if (replacement || baseline_wall_group_scale) keys(value,{"version","expected_revision","source_snapshot_digest","source_authoring_digest",
@@ -1408,7 +1423,7 @@ PhaseConstraintAuthoringIntent decode_phase_constraint_authoring_intent(const Js
         "source_entities_digest","source_saved_revision","phase_selections","intent","ordinary_roof_edits"});
     else keys(value,{"version","expected_revision","source_snapshot_digest","source_authoring_digest",
         "source_entities_digest","source_saved_revision","phase_selections","intent"});
-    if (!value.at("version").is_number_integer() || (value.at("version")!=1 && value.at("version")!=2 && value.at("version")!=3 && value.at("version")!=4 && value.at("version")!=5 && value.at("version")!=6 && value.at("version")!=7 && value.at("version")!=8 && value.at("version")!=9 && value.at("version")!=10 && value.at("version")!=11 && value.at("version")!=12 && value.at("version")!=13 && value.at("version")!=14 && value.at("version")!=15 && value.at("version")!=16 && value.at("version")!=17 && value.at("version")!=18 && value.at("version")!=19) ||
+    if (!value.at("version").is_number_integer() || (value.at("version")!=1 && value.at("version")!=2 && value.at("version")!=3 && value.at("version")!=4 && value.at("version")!=5 && value.at("version")!=6 && value.at("version")!=7 && value.at("version")!=8 && value.at("version")!=9 && value.at("version")!=10 && value.at("version")!=11 && value.at("version")!=12 && value.at("version")!=13 && value.at("version")!=14 && value.at("version")!=15 && value.at("version")!=16 && value.at("version")!=17 && value.at("version")!=18 && value.at("version")!=19 && value.at("version")!=20 && value.at("version")!=21) ||
         !value.at("expected_revision").is_number_unsigned()) invalid("Phase constraint proof version or revision is invalid");
     if (!value.at("source_saved_revision").is_null() && !value.at("source_saved_revision").is_number_unsigned())
         invalid("Phase constraint saved revision is invalid");
@@ -1429,8 +1444,10 @@ PhaseConstraintAuthoringIntent decode_phase_constraint_authoring_intent(const Js
     }
     if (roof) {
         result.roof_replacement = value.at("roof_replacement");
-        if (result.roof_replacement.is_null()) invalid("Version four requires roof replacement decisions");
+        if (result.roof_replacement.is_null()) invalid("Roof replacement dialect requires replacement decisions");
         (void)decode_phase_roof_replacement_authoring(result.roof_replacement);
+        if ((result.roof_replacement.at("version") == 10) != roof_rotation)
+            invalid("Roof replacement outer and rotation leaf versions do not match");
     }
     if (slab) {
         result.slab_replacement = value.at("slab_replacement");
@@ -1482,7 +1499,9 @@ PhaseConstraintAuthoringIntent decode_phase_constraint_authoring_intent(const Js
     }
     if (ordinary_roofs) {
         result.ordinary_roof_edits=value.at("ordinary_roof_edits");
-        (void)ordinary_roof_edits(result.ordinary_roof_edits);
+        (void)ordinary_roof_edits(result.ordinary_roof_edits, ordinary_roof_rotations);
+        if (has_rotated_roof_edits(result.ordinary_roof_edits) != ordinary_roof_rotations)
+            invalid("Ordinary roof outer and rotation versions do not match");
     }
     if (encode_phase_constraint_authoring_intent(result)!=value) invalid("Phase constraint proof is not canonical");
     return result;
@@ -1535,7 +1554,7 @@ Entities replay_phase_constraint_authoring(const Entities& source,const Json& pr
         decoded.phase_selections!=phase_constraint_authoring_selections(source))
         invalid("Phase constraint proof does not describe the actual source entities and saved choices");
     if (!decoded.ordinary_roof_edits.is_null()) {
-        const auto edits=ordinary_roof_edits(decoded.ordinary_roof_edits);
+        const auto edits=ordinary_roof_edits(decoded.ordinary_roof_edits, true);
         const auto partition=partition_phase_roof_geometry_edits(source,edits);
         if (partition.replacement || !partition.baseline_roof_edits.empty())
             invalid("Ordinary roof authoring requires actual ordinary/proposed membership");

@@ -13,8 +13,9 @@ struct RoofJoin;
 using RoofObject = std::variant<SlopedRoofPanel, GableRoof, HipRoof>;
 
 // Document-independent authoring codec. Unknown properties are ignored;
-// schema 1 forbids openings; schemas 2/3 require the retained opening roster.
-// Only schema 3 permits the strictly owned, versioned skylight object on a row.
+// schema 1 forbids openings; schemas 2/3/4 require the retained opening roster.
+// Schemas 3/4 permit the strictly owned version-1 skylight object on a row.
+// Only schema 4 owns optional rotation_rad; older schemas keep it opaque.
 // Entity creation and placement/context resolution belong to the caller.
 [[nodiscard]] RoofObject decode_roof_entity(const Entity& entity);
 [[nodiscard]] nlohmann::json encode_roof_properties(const RoofObject& object);

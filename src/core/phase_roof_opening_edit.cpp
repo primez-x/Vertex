@@ -12,6 +12,7 @@
 #include <charconv>
 #include <cmath>
 #include <initializer_list>
+#include <numbers>
 #include <set>
 #include <stdexcept>
 #include <string_view>
@@ -63,6 +64,25 @@ double number(const Json& value) {
     if (!value.is_number() || !std::isfinite(value.get<double>())) invalid("Roof opening scalar must be finite");
     return value.get<double>();
 }
+double rotation(const Json& value) {
+    const auto result = number(value);
+    if (result < -std::numbers::pi || result > std::numbers::pi)
+        invalid("Roof opening rotation must be canonical in [-pi,pi]");
+    return result;
+}
+double row_rotation(const Json& row, bool admitted) {
+    const auto value = admitted ? field(row, "rotation_rad") : nullptr;
+    return value ? rotation(*value) : 0.0;
+}
+bool rotation_schema(const RoofOpeningEditIntent& intent) {
+    return intent.uses_rotation_schema || std::any_of(intent.upserts.begin(), intent.upserts.end(),
+        [](const auto& upsert) { return upsert.rotation_radians.has_value(); });
+}
+bool same_except_rotation(Json before, Json after) {
+    before.erase("rotation_rad");
+    after.erase("rotation_rad");
+    return exact(before, after);
+}
 void skylight_profile(const Json& value) {
     keys(value, {"version", "frame_width_m", "curb_height_m", "glazing_thickness_m"});
     if (!version_one(value.at("version"))) invalid("Roof skylight profile version is unsupported");
@@ -80,11 +100,11 @@ bool same_skylight(const Json* before, const Json* after) {
     return true;
 }
 bool skylight_schema(const RoofOpeningEditIntent& intent) {
-    return intent.uses_skylight_schema || intent.uses_clone_schema || std::any_of(intent.upserts.begin(), intent.upserts.end(),
+    return rotation_schema(intent) || intent.uses_skylight_schema || intent.uses_clone_schema || std::any_of(intent.upserts.begin(), intent.upserts.end(),
         [](const auto& upsert) { return upsert.skylight.has_value() || upsert.clone_source.has_value(); });
 }
 bool clone_schema(const RoofOpeningEditIntent& intent) {
-    return intent.uses_clone_schema || std::any_of(intent.upserts.begin(), intent.upserts.end(),
+    return rotation_schema(intent) || intent.uses_clone_schema || std::any_of(intent.upserts.begin(), intent.upserts.end(),
         [](const auto& upsert) { return upsert.clone_source.has_value(); });
 }
 const char* unit_name(Unit value) {
@@ -160,7 +180,7 @@ constexpr std::array dimensions{
     Dimension{"width", "width_m", true, &RoofOpeningUpsertIntent::width},
     Dimension{"depth", "depth_m", true, &RoofOpeningUpsertIntent::depth}};
 bool any(const RoofOpeningUpsertIntent& value) {
-    return value.skylight || value.clone_source || std::any_of(dimensions.begin(), dimensions.end(), [&](const auto& d) { return (value.*(d.member)).has_value(); });
+    return value.skylight || value.clone_source || value.rotation_radians || std::any_of(dimensions.begin(), dimensions.end(), [&](const auto& d) { return (value.*(d.member)).has_value(); });
 }
 bool all(const RoofOpeningUpsertIntent& value) {
     return std::all_of(dimensions.begin(), dimensions.end(), [&](const auto& d) { return (value.*(d.member)).has_value(); });
@@ -339,6 +359,20 @@ const Json* child_receipts(const Entity& entity, const std::string& id) {
     const auto result = entries ? field(*entries, id) : nullptr;
     return result && known_raw(*result) ? result : nullptr;
 }
+void admit_rotation_receipts(const Entity& source, const std::string& id) {
+    const auto extension = field(source.extensions, "roof_opening_input");
+    if (!extension) return;
+    if (!known_extension(*extension))
+        invalid("Roof opening rotation affects an opaque input envelope");
+    const auto entries = field(*extension, "entries");
+    if (!entries || !entries->is_object() || entries->size() > collection_limit)
+        invalid("Roof opening rotation input entries must be a bounded object");
+    const auto child = field(*entries, id);
+    if (child && !known_raw(*child))
+        invalid("Roof opening rotation affects an opaque child input envelope");
+    if (child && child->contains("rotation_rad"))
+        invalid("Roof opening rotation affects an unsupported angle input binding");
+}
 void write_child_receipt(Entity& entity, const std::string& id, const Dimension& dimension,
     const RoofOpeningQuantityInput& value) {
     auto extension = entity.extensions.find("roof_opening_input");
@@ -491,10 +525,15 @@ void indexed_receipts(const Entity& source, Entity& result, const RoofOpeningEdi
     if (!values) return;
     if (!values->is_object() || values->size() > collection_limit) invalid("Roof opening quantity_entries budget exceeded");
     const auto remaining = positions(after);
+    // The v4 roster can also add/remove an angled child. Root/roster bindings
+    // are affected by every actual roster delta, not just a retained scalar.
+    const bool affects_roster = rotation_schema(intent) && !exact(before, after);
     auto rebuilt = Json::object();
     constexpr std::string_view prefix = "/roof_openings/";
     for (const auto& [pointer, receipt] : values->items()) {
         const std::string_view path(pointer);
+        if (affects_roster && (path.empty() || path == "/roof_openings"))
+            invalid("Roof opening rotation affects an opaque ancestor input binding");
         if (!path.starts_with(prefix)) { rebuilt[pointer] = receipt; continue; }
         const auto tail = path.substr(prefix.size());
         const auto slash = tail.find('/');
@@ -513,7 +552,11 @@ void indexed_receipts(const Entity& source, Entity& result, const RoofOpeningEdi
         const auto profile_dimension = std::find_if(skylight_dimensions.begin(), skylight_dimensions.end(),
             [&](const auto& d) { return suffix == std::string("skylight/") + d.scalar; });
         if (dimension == dimensions.end() && profile_dimension == skylight_dimensions.end()) {
-            if (retained == remaining.end() || retained->second != index || !exact(before.at(index), after.at(retained->second)))
+            if (retained == remaining.end() || retained->second != index ||
+                (!exact(before.at(index), after.at(retained->second)) &&
+                    !(rotation_schema(intent) && !suffix.empty() && suffix != "rotation_rad" &&
+                        !suffix.starts_with("rotation_rad/") &&
+                        same_except_rotation(before.at(index), after.at(retained->second)))))
                 invalid("Roof opening edit cannot affect an opaque indexed row pointer");
             rebuilt[pointer] = receipt; continue;
         }
@@ -601,6 +644,12 @@ CloneContent clone_content(const RoofOpeningUpsertIntent& upsert) {
     if (!profile || !exact(*profile, *upsert.skylight))
         invalid("Roof opening clone must retain its actual source skylight profile");
     skylight_profile(*profile);
+    const bool rotation_source = source.roof.properties.at("version") == 4;
+    const auto actual_rotation = row_rotation(result.row, rotation_source);
+    if (rotation_source && (!upsert.rotation_radians || *upsert.rotation_radians != actual_rotation))
+        invalid("Roof opening clone must explicitly retain its actual source rotation");
+    if (upsert.rotation_radians && rotation(Json(*upsert.rotation_radians)) != actual_rotation)
+        invalid("Roof opening clone cannot alter its passive source rotation");
     if (const auto extension = field(source.roof.extensions, "roof_opening_input")) {
         if (!known_extension(*extension)) invalid("Roof opening clone cannot bind a future input envelope");
         const auto& entries = extension->at("entries");
@@ -702,7 +751,8 @@ nlohmann::json encode_roof_opening_edit_intent(const RoofOpeningEditIntent& inte
         (intent.upserts.empty() && intent.removed_opening_ids.empty())) invalid("Roof opening edit roster budget is invalid");
     const bool profiles = skylight_schema(intent);
     const bool clones = clone_schema(intent);
-    Json result{{"version", clones ? 3 : profiles ? 2 : 1}, {"roof_id", intent.roof_id}, {"upserts", Json::array()}, {"removed_opening_ids", Json::array()}};
+    const bool rotations = rotation_schema(intent);
+    Json result{{"version", rotations ? 4 : clones ? 3 : profiles ? 2 : 1}, {"roof_id", intent.roof_id}, {"upserts", Json::array()}, {"removed_opening_ids", Json::array()}};
     Ids children;
     for (const auto& upsert : intent.upserts) {
         (void)identity(upsert.opening_id);
@@ -727,6 +777,8 @@ nlohmann::json encode_roof_opening_edit_intent(const RoofOpeningEditIntent& inte
                     {"opening_id", upsert.clone_source->opening_id}};
             }
         }
+        if (rotations) entry["rotation_rad"] = upsert.rotation_radians
+            ? Json(rotation(Json(*upsert.rotation_radians))) : Json(nullptr);
         result["upserts"].push_back(std::move(entry));
     }
     for (const auto& id : intent.removed_opening_ids) {
@@ -740,8 +792,10 @@ nlohmann::json encode_roof_opening_edit_intent(const RoofOpeningEditIntent& inte
 RoofOpeningEditIntent decode_roof_opening_edit_intent(const nlohmann::json& value) {
     if (value.dump().size() > proof_limit) invalid("Roof opening edit proof byte budget exceeded");
     keys(value, {"version", "roof_id", "upserts", "removed_opening_ids"});
-    const bool clones = (value.at("version").is_number_integer() || value.at("version").is_number_unsigned()) &&
-        value.at("version") == 3;
+    const bool rotations = (value.at("version").is_number_integer() || value.at("version").is_number_unsigned()) &&
+        value.at("version") == 4;
+    const bool clones = rotations || ((value.at("version").is_number_integer() || value.at("version").is_number_unsigned()) &&
+        value.at("version") == 3);
     const bool profiles = clones || ((value.at("version").is_number_integer() || value.at("version").is_number_unsigned()) &&
         value.at("version") == 2);
     if (!profiles && !version_one(value.at("version"))) invalid("Roof opening edit version is unsupported");
@@ -753,12 +807,15 @@ RoofOpeningEditIntent decode_roof_opening_edit_intent(const nlohmann::json& valu
     result.roof_id = identity(value.at("roof_id"));
     result.uses_skylight_schema = profiles;
     result.uses_clone_schema = clones;
+    result.uses_rotation_schema = rotations;
     for (const auto& entry : upserts) {
-        if (clones) keys(entry, {"opening_id", "x", "y", "width", "depth", "skylight_edit", "clone_source"});
+        if (rotations) keys(entry, {"opening_id", "x", "y", "width", "depth", "skylight_edit", "clone_source", "rotation_rad"});
+        else if (clones) keys(entry, {"opening_id", "x", "y", "width", "depth", "skylight_edit", "clone_source"});
         else if (profiles) keys(entry, {"opening_id", "x", "y", "width", "depth", "skylight_edit"});
         else keys(entry, {"opening_id", "x", "y", "width", "depth"});
         RoofOpeningUpsertIntent upsert;
         upsert.opening_id = identity(entry.at("opening_id"));
+        if (rotations && !entry.at("rotation_rad").is_null()) upsert.rotation_radians = rotation(entry.at("rotation_rad"));
         for (const auto& d : dimensions)
             if (!entry.at(d.wire).is_null()) upsert.*(d.member) = input(entry.at(d.wire), d.positive);
         if (profiles && !entry.at("skylight_edit").is_null()) {
@@ -784,6 +841,8 @@ Entity stage_roof_opening_entity(const Entity& source, const RoofOpeningEditInte
     admit(source);
     if (source.properties.at("version") == 3 && !skylight_schema(intent))
         invalid("Schema-three roof opening edits require version-two proof authority");
+    if (source.properties.at("version") == 4 && !rotation_schema(intent))
+        invalid("Schema-four roof opening edits require version-four proof authority");
     const auto before = roster(source);
     const auto children = positions(before);
     Ids removed(intent.removed_opening_ids.begin(), intent.removed_opening_ids.end());
@@ -799,6 +858,7 @@ Entity stage_roof_opening_entity(const Entity& source, const RoofOpeningEditInte
     auto final_positions = positions(after);
     std::vector<std::pair<std::string, CloneContent>> clones;
     bool changed = !removed.empty();
+    bool authored_rotation = false;
     for (const auto& upsert : intent.upserts) {
         const auto existing = final_positions.find(upsert.opening_id);
         if (upsert.clone_source && children.contains(upsert.opening_id))
@@ -809,6 +869,9 @@ Entity stage_roof_opening_entity(const Entity& source, const RoofOpeningEditInte
             if (after.size() >= opening_limit) invalid("Roof opening result exceeds the roster budget");
             if (upsert.clone_source) {
                 auto content = clone_content(upsert);
+                if (source.properties.at("version") == 4 &&
+                    upsert.clone_source->roof.properties.at("version") != 4 && content.row.contains("rotation_rad"))
+                    invalid("Schema-four clone cannot activate a passive historical opaque angle");
                 auto row = content.row;
                 row["id"] = upsert.opening_id;
                 after.push_back(std::move(row));
@@ -821,6 +884,9 @@ Entity stage_roof_opening_entity(const Entity& source, const RoofOpeningEditInte
         }
         auto& row = after.at(final_positions.at(upsert.opening_id));
         const bool fresh = !children.contains(upsert.opening_id);
+        if (upsert.rotation_radians && source.properties.at("version") != 4 && row.contains("rotation_rad") &&
+            (!upsert.clone_source || upsert.clone_source->roof.properties.at("version") != 4))
+            invalid("Roof opening rotation cannot overwrite a historical opaque angle");
         for (const auto& d : dimensions) {
             const auto& value = upsert.*(d.member);
             if (!value || ((!fresh || upsert.clone_source) &&
@@ -843,13 +909,42 @@ Entity stage_roof_opening_entity(const Entity& source, const RoofOpeningEditInte
                 changed = true;
             }
         }
+        if (upsert.rotation_radians) {
+            const auto angle = rotation(Json(*upsert.rotation_radians));
+            if (angle != 0.0 && !row.contains("skylight"))
+                invalid("Only an actual skylight can carry a nonzero rotation");
+            const bool admitted_rotation = source.properties.at("version") == 4 ||
+                (upsert.clone_source && upsert.clone_source->roof.properties.at("version") == 4);
+            if (row_rotation(row, admitted_rotation) != angle) {
+                admit_rotation_receipts(source, upsert.opening_id);
+                if (angle == 0.0) row.erase("rotation_rad");
+                else row["rotation_rad"] = angle;
+                changed = true;
+                authored_rotation = true;
+            }
+            if (fresh && upsert.clone_source && admitted_rotation) authored_rotation = true;
+        }
     }
     if (!changed) return source;
     for (const auto& id : removed) remove_child_receipt(result, id);
-    // Retain schema three even after the last profile/removal. Older schemas
-    // promote only when an actual child/profile was authored, never for a no-op.
+    // Retain admitted schemas after zero/profile/removal. Older schemas promote
+    // only for actual authored content, never for a no-op.
     const bool has_profile = std::any_of(after.begin(), after.end(), [](const auto& row) { return row.contains("skylight"); });
-    result.properties["version"] = source.properties.at("version") == 3 || has_profile ? 3 : 2;
+    const bool rotation_result = source.properties.at("version") == 4 || authored_rotation;
+    if (rotation_result && source.properties.at("version") != 4) {
+        for (const auto& row : after) {
+            const auto id = row.at("id").get<std::string>();
+            const auto old = children.find(id);
+            if (old != children.end() && before.at(old->second).contains("rotation_rad"))
+                invalid("Schema-four promotion cannot activate a historical opaque angle");
+            const auto clone = std::find_if(intent.upserts.begin(), intent.upserts.end(), [&](const auto& upsert) {
+                return upsert.opening_id == id && upsert.clone_source.has_value();
+            });
+            if (clone != intent.upserts.end() && clone->clone_source->roof.properties.at("version") != 4 && row.contains("rotation_rad"))
+                invalid("Schema-four promotion cannot activate a passive historical opaque angle");
+        }
+    }
+    result.properties["version"] = rotation_result ? 4 : source.properties.at("version") == 3 || has_profile ? 3 : 2;
     result.properties["roof_openings"] = after;
     indexed_receipts(source, result, intent, before, after);
     clone_indexed_receipts(result, clones, after);
@@ -883,6 +978,8 @@ std::vector<std::string> new_roof_opening_identity_ids(const Entities& source,
         admit(found->second);
         if (found->second.properties.at("version") == 3 && !skylight_schema(intent))
             invalid("Schema-three roof opening edits require version-two proof authority");
+        if (found->second.properties.at("version") == 4 && !rotation_schema(intent))
+            invalid("Schema-four roof opening edits require version-four proof authority");
         const auto children = positions(roster(found->second));
         for (const auto& id : intent.removed_opening_ids)
             if (!children.contains(id)) invalid("Roof opening removal requires an actual existing child");
@@ -926,6 +1023,12 @@ Entity normalize_equivalent_roof_opening_inputs(const Entity& original, const En
         const auto id=after.at(index).at("id").get<std::string>();
         const auto old=old_positions.find(id);
         if (old==old_positions.end()) continue;
+        if (original.properties.at("version") == 4 && candidate.properties.at("version") == 4 &&
+            row_rotation(before.at(old->second), true) == row_rotation(after.at(index), true)) {
+            auto& row = normalized.properties["roof_openings"][index];
+            if (const auto angle = field(before.at(old->second), "rotation_rad")) row["rotation_rad"] = *angle;
+            else row.erase("rotation_rad");
+        }
         for (const auto& d:dimensions) {
             const double metres=number(after.at(index).at(d.scalar));
             if (number(before.at(old->second).at(d.scalar))!=metres) continue;
@@ -955,6 +1058,7 @@ std::optional<RoofOpeningEditIntent> infer_roof_opening_edit(const Entity& origi
     RoofOpeningEditIntent intent;
     intent.roof_id = original.id;
     intent.uses_skylight_schema = original.properties.at("version") == 3 || candidate.properties.at("version") == 3;
+    intent.uses_rotation_schema = original.properties.at("version") == 4 || candidate.properties.at("version") == 4;
     for (const auto& row : before) {
         const auto id = row.at("id").get<std::string>();
         if (!new_positions.contains(id)) intent.removed_opening_ids.push_back(id);
@@ -965,6 +1069,12 @@ std::optional<RoofOpeningEditIntent> infer_roof_opening_edit(const Entity& origi
         const auto old = old_positions.find(id);
         RoofOpeningUpsertIntent upsert;
         upsert.opening_id = id;
+        const auto after_rotation = row_rotation(row, candidate.properties.at("version") == 4);
+        if (old == old_positions.end()) {
+            if (after_rotation != 0.0) upsert.rotation_radians = after_rotation;
+        } else if (row_rotation(before.at(old->second), original.properties.at("version") == 4) != after_rotation) {
+            upsert.rotation_radians = after_rotation;
+        }
         for (const auto& d : dimensions) {
             const double metres = number(row.at(d.scalar));
             if (old != old_positions.end() && number(before.at(old->second).at(d.scalar)) == metres) {
@@ -977,9 +1087,9 @@ std::optional<RoofOpeningEditIntent> infer_roof_opening_edit(const Entity& origi
         if (!same_skylight(before_profile, after_profile))
             upsert.skylight = after_profile ? *after_profile : Json(nullptr);
         if (old == old_positions.end()) {
-            // Ordinary inference has only dimension/profile authority. A new
+            // Ordinary inference has only dimension/profile/angle authority. A new
             // row carrying passive source metadata must name that source in a
-            // typed v3 intent rather than have its content silently omitted.
+            // typed v3/v4 intent rather than have its content silently omitted.
             Json ordinary_row{{"id", id}}, ordinary_receipts = Json::object();
             for (const auto& d : dimensions) {
                 const auto& entered = *(upsert.*(d.member));
@@ -988,6 +1098,8 @@ std::optional<RoofOpeningEditIntent> infer_roof_opening_edit(const Entity& origi
                 write_raw_core(ordinary_receipts[d.scalar], entered);
             }
             if (after_profile) ordinary_row["skylight"] = *after_profile;
+            if (upsert.rotation_radians && *upsert.rotation_radians != 0.0)
+                ordinary_row["rotation_rad"] = *upsert.rotation_radians;
             const auto receipts = child_receipts(candidate, id);
             if (!exact(row, ordinary_row) || !receipts || !exact(*receipts, ordinary_receipts))
                 invalid("Roof opening transfer metadata requires an explicit version-three clone source intent");

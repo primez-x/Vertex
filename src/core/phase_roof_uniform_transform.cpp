@@ -144,7 +144,8 @@ Json frame(const Entity& source, double datum) {
         for (const auto& row : p.at("roof_openings")) {
             Json cut{{"id", row.at("id")}};
             for (const auto* key : opening_scalars) cut[key] = row.at(key);
-            if (p.at("version") == 3 && row.contains("skylight")) cut["skylight"] = row.at("skylight");
+            if (p.at("version") >= 3 && row.contains("skylight")) cut["skylight"] = row.at("skylight");
+            if (p.at("version") == 4 && row.contains("rotation_rad")) cut["rotation_rad"] = row.at("rotation_rad");
             result.at("roof_openings").push_back(std::move(cut));
         }
     }
@@ -158,7 +159,7 @@ Entity physical_entity(const Json& value, const std::string& id) {
     result.properties.erase("vertical_datum_m");
     return result;
 }
-void admit_frame(const Json& value, const std::string& id, bool skylights = true) {
+void admit_frame(const Json& value, const std::string& id, bool skylights = true, bool rotations = true) {
     (void)budget(value);
     if (!value.is_object() || !value.contains("form") || !value.at("form").is_string())
         invalid("Roof uniform transform proof form is missing");
@@ -167,7 +168,7 @@ void admit_frame(const Json& value, const std::string& id, bool skylights = true
         invalid("Roof uniform transform proof form is unsupported");
     const auto schema = field(value, "version");
     if (!schema || (!schema->is_number_integer() && !schema->is_number_unsigned()) ||
-        (*schema != 1 && *schema != 2 && (!skylights || *schema != 3)))
+        (*schema != 1 && *schema != 2 && (!skylights || *schema != 3) && (!rotations || *schema != 4)))
         invalid("Roof uniform transform proof schema is unsupported");
     const bool openings = *schema != 1;
     if (panel && openings)
@@ -191,8 +192,15 @@ void admit_frame(const Json& value, const std::string& id, bool skylights = true
         if (!rows.is_array() || rows.size() > opening_limit) invalid("Roof uniform transform proof cut budget exceeded");
         Ids ids;
         for (const auto& cut : rows) {
-            if (*schema == 3 && cut.contains("skylight")) {
-                keys(cut, {"id", "x_m", "y_m", "width_m", "depth_m", "skylight"});
+            auto core = cut;
+            if (*schema == 4 && core.contains("rotation_rad")) {
+                const double angle = scalar(core.at("rotation_rad"));
+                if (std::abs(angle) > std::acos(-1.0) || (angle != 0.0 && !core.contains("skylight")))
+                    invalid("Roof uniform transform opening rotation is invalid");
+                core.erase("rotation_rad");
+            }
+            if (*schema >= 3 && cut.contains("skylight")) {
+                keys(core, {"id", "x_m", "y_m", "width_m", "depth_m", "skylight"});
                 const auto& profile = cut.at("skylight");
                 keys(profile, {"version", "frame_width_m", "curb_height_m", "glazing_thickness_m"});
                 if (!version_one(profile.at("version"))) invalid("Roof uniform transform skylight profile is unsupported");
@@ -200,7 +208,7 @@ void admit_frame(const Json& value, const std::string& id, bool skylights = true
                     if (scalar(profile.at(key)) < 0.0 ||
                         (std::string_view(key) != "curb_height_m" && scalar(profile.at(key)) == 0.0))
                         invalid("Roof uniform transform skylight dimensions are invalid");
-            } else keys(cut, {"id", "x_m", "y_m", "width_m", "depth_m"});
+            } else keys(core, {"id", "x_m", "y_m", "width_m", "depth_m"});
             if (!ids.insert(identity(cut.at("id"))).second) invalid("Roof uniform transform proof has duplicate cut IDs");
             for (const auto* key : opening_scalars) (void)scalar(cut.at(key));
         }
@@ -215,8 +223,8 @@ void assign_if_changed(Json& target, double value) {
     (void)scalar(value);
     if (scalar(target) != value) target = value;
 }
-Json derive(const Json& before, const RoofUniformTransformIntent& intent, bool skylights = true) {
-    admit_frame(before, intent.roof_id, skylights);
+Json derive(const Json& before, const RoofUniformTransformIntent& intent, bool skylights = true, bool rotations = true) {
+    admit_frame(before, intent.roof_id, skylights, rotations);
     const auto t = normalize(intent.transform);
     auto result = before;
     const auto p = point(before.at("base_position_m"));
@@ -250,6 +258,8 @@ Json derive(const Json& before, const RoofUniformTransformIntent& intent, bool s
             if (reflected) assign_if_changed(cut.at("y_m"), (before.at("form") == "sloped_roof_panel"
                 ? scalar(before.at("span_m")) - scalar(old_cut.at("y_m")) - scalar(old_cut.at("depth_m"))
                 : -scalar(old_cut.at("y_m")) - scalar(old_cut.at("depth_m"))) * t.scale);
+            if (reflected && old_cut.contains("rotation_rad") && scalar(old_cut.at("rotation_rad")) != 0.0)
+                assign_if_changed(cut.at("rotation_rad"), -scalar(old_cut.at("rotation_rad")));
         }
     auto& position = result.at("base_position_m");
     assign_if_changed(position.at(0), x);
@@ -258,7 +268,7 @@ Json derive(const Json& before, const RoofUniformTransformIntent& intent, bool s
     assign_if_changed(position.at(2), t.scale * p.z + g.offset.z + (1.0 - t.scale) * g.pivot.z +
         (t.scale - 1.0) * scalar(before.at("vertical_datum_m")));
     assign_if_changed(result.at("orientation_rad"), heading);
-    admit_frame(result, intent.roof_id, skylights);
+    admit_frame(result, intent.roof_id, skylights, rotations);
     return result;
 }
 Changes changes(const Json& before, const Json& after) {
@@ -275,6 +285,9 @@ Changes changes(const Json& before, const Json& after) {
             for (const auto* key : opening_scalars)
                 add("/roof_openings/" + std::to_string(i) + "/" + key,
                     before.at("roof_openings").at(i).at(key), after.at("roof_openings").at(i).at(key));
+            if (before.at("roof_openings").at(i).contains("rotation_rad"))
+                add("/roof_openings/" + std::to_string(i) + "/rotation_rad",
+                    before.at("roof_openings").at(i).at("rotation_rad"), after.at("roof_openings").at(i).at("rotation_rad"));
             if (before.at("roof_openings").at(i).contains("skylight"))
                 for (const auto* key : skylight_scalars)
                     add("/roof_openings/" + std::to_string(i) + "/skylight/" + key,
@@ -349,7 +362,7 @@ Json archive_receipts(const Entity& source, Entity& result, const Json& before, 
         for (const auto& [pointer, receipt] : entries->items())
             for (const auto& [changed, values] : affected) {
                 if (pointer != changed && !descendant(pointer, changed) && !descendant(changed, pointer)) continue;
-                if (pointer != changed || changed == "/orientation_rad")
+                if (pointer != changed || changed == "/orientation_rad" || changed.ends_with("/rotation_rad"))
                     invalid("Roof uniform transform affects an unsupported quantity binding");
                 const bool skylight = changed.starts_with("/roof_openings/") &&
                     std::any_of(skylight_scalars.begin(), skylight_scalars.end(), [&](const auto* key) {
@@ -364,6 +377,19 @@ Json archive_receipts(const Entity& source, Entity& result, const Json& before, 
     const auto extension = field(source.extensions, "roof_opening_input");
     if (before.contains("roof_openings"))
         for (std::size_t i = 0; i < before.at("roof_openings").size(); ++i) {
+            if (extension && affected.contains("/roof_openings/" + std::to_string(i) + "/rotation_rad")) {
+                const auto version = field(*extension,"version");
+                if (!extension->is_object() || !version || !version_one(*version))
+                    invalid("Roof uniform transform affects an opaque opening input envelope");
+                const auto entries = field(*extension,"entries");
+                if (!entries || !entries->is_object() || entries->size() > collection_limit)
+                    invalid("Roof uniform transform opening input entries budget exceeded");
+                const auto child = field(*entries,identity(before.at("roof_openings").at(i).at("id")));
+                if (child && !known_raw(*child))
+                    invalid("Roof uniform transform affects an opaque child input envelope");
+                if (child && child->contains("rotation_rad"))
+                    invalid("Roof uniform transform affects an unsupported opening angle binding");
+            }
             const auto archive = [&](const char* key, bool skylight) {
                 const auto path = "/roof_openings/" + std::to_string(i) + "/" + (skylight ? "skylight/" : "") + key;
                 const auto changed = affected.find(path);
@@ -401,11 +427,11 @@ Json archive_receipts(const Entity& source, Entity& result, const Json& before, 
         }
     return {{"quantity_entries", std::move(indexed)}, {"roof_opening_input", std::move(children)}};
 }
-void admit_record(const Json& record, bool skylights) {
+void admit_record(const Json& record, bool skylights, bool rotations) {
     keys(record, {"operation", "source", "result", "receipts"});
     const auto intent = decode_roof_uniform_transform_intent(record.at("operation"));
     const auto& before = record.at("source"), after = record.at("result");
-    if (!exact(derive(before, intent, skylights), after) || exact(before, after))
+    if (!exact(derive(before, intent, skylights, rotations), after) || exact(before, after))
         invalid("Roof uniform transform derivation does not reproduce its result");
     const auto affected = changes(before, after);
     const auto& receipts = record.at("receipts");
@@ -415,7 +441,7 @@ void admit_record(const Json& record, bool skylights) {
         invalid("Roof uniform transform archived receipt budget exceeded");
     for (const auto& [pointer, receipt] : indexed.items()) {
         const auto changed = affected.find(pointer);
-        if (changed == affected.end() || pointer == "/orientation_rad")
+        if (changed == affected.end() || pointer == "/orientation_rad" || pointer.ends_with("/rotation_rad"))
             invalid("Roof uniform transform archive contains an unaffected or unsupported binding");
         admit_quantity_receipt(receipt, changed->second.first);
     }
@@ -536,14 +562,15 @@ void validate_roof_uniform_transform_derivations(const Entity& source) {
     if (!extension) return;
     (void)budget(*extension);
     keys(*extension, {"version", "operations"});
-    const bool skylights = version_two(extension->at("version"));
+    const bool rotations = extension->at("version").is_number_integer() && extension->at("version") == 3;
+    const bool skylights = version_two(extension->at("version")) || rotations;
     if (!version_one(extension->at("version")) && !skylights)
         invalid("Roof uniform transform derivation namespace collision");
     const auto& operations = extension->at("operations");
     if (!operations.is_array() || operations.empty() || operations.size() > operation_limit)
         invalid("Roof uniform transform derivation operation budget exceeded");
-    validate_roof_derivation_cached(skylights ? "roof-uniform-transform-v2" : "roof-uniform-transform-v1", extension->dump(), [&] {
-        for (const auto& record : operations) admit_record(record, skylights);
+    validate_roof_derivation_cached(rotations ? "roof-uniform-transform-v3" : skylights ? "roof-uniform-transform-v2" : "roof-uniform-transform-v1", extension->dump(), [&] {
+        for (const auto& record : operations) admit_record(record, skylights, rotations);
     });
 }
 nlohmann::json roof_uniform_transform_opaque_remainder(const Entity& source) {
@@ -603,6 +630,8 @@ Entity stage_roof_uniform_transform_entity(const Entities& actual_source, const 
         for (std::size_t i = 0; i < before.at("roof_openings").size(); ++i) {
             for (const auto* key : opening_scalars)
                 result.properties.at("roof_openings").at(i).at(key) = after.at("roof_openings").at(i).at(key);
+            if (before.at("roof_openings").at(i).contains("rotation_rad"))
+                result.properties.at("roof_openings").at(i).at("rotation_rad") = after.at("roof_openings").at(i).at("rotation_rad");
             if (before.at("roof_openings").at(i).contains("skylight"))
                 for (const auto* key : skylight_scalars)
                     result.properties.at("roof_openings").at(i).at("skylight").at(key) =
@@ -611,8 +640,10 @@ Entity stage_roof_uniform_transform_entity(const Entities& actual_source, const 
     const auto receipts = archive_receipts(source, result, before, changes(before, after));
     const auto key = std::string(roof_uniform_transform_derivations_key);
     if (!result.extensions.contains(key))
-        result.extensions[key] = {{"version", before.at("version") == 3 ? 2 : 1}, {"operations", Json::array()}};
-    else if (before.at("version") == 3) result.extensions.at(key).at("version") = 2;
+        result.extensions[key] = {{"version", before.at("version") == 4 ? 3 : before.at("version") == 3 ? 2 : 1}, {"operations", Json::array()}};
+    else if (before.at("version") == 4) result.extensions.at(key).at("version") = 3;
+    else if (before.at("version") == 3 && result.extensions.at(key).at("version") == 1)
+        result.extensions.at(key).at("version") = 2;
     auto& operations = result.extensions.at(key).at("operations");
     if (operations.size() == operation_limit) invalid("Roof uniform transform derivation operation budget exceeded");
     operations.push_back({{"operation", operation}, {"source", before}, {"result", after}, {"receipts", receipts}});

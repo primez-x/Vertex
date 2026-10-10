@@ -430,6 +430,8 @@ BuildingObject transform_building_object(BuildingObject object,
                 value.overhang *= transform.scale;
                 value.thickness *= transform.scale;
                 for (auto& opening : value.openings) {
+                    if (reflected && opening.rotation_radians != 0.0)
+                        opening.rotation_radians = -opening.rotation_radians;
                     opening.x *= transform.scale;
                     opening.y *= transform.scale;
                     opening.width *= transform.scale;
@@ -454,6 +456,8 @@ BuildingObject transform_building_object(BuildingObject object,
                 value.overhang *= transform.scale;
                 value.thickness *= transform.scale;
                 for (auto& opening : value.openings) {
+                    if (reflected && opening.rotation_radians != 0.0)
+                        opening.rotation_radians = -opening.rotation_radians;
                     opening.x *= transform.scale;
                     opening.y *= transform.scale;
                     opening.width *= transform.scale;

@@ -119,13 +119,23 @@ Json frame(const Entity& source) {
     const auto& p = source.properties;
     Json cuts = Json::array();
     if (const auto rows = field(p, "roof_openings"))
-        for (const auto& row : *rows)
-            cuts.push_back({{"id", row.at("id")}, {"y_m", row.at("y_m")}, {"depth_m", row.at("depth_m")}});
-    return {{"form", p.at("form")}, {"base_position_m", p.at("base_position_m")},
+        for (const auto& row : *rows) {
+            Json cut{{"id", row.at("id")}, {"y_m", row.at("y_m")}, {"depth_m", row.at("depth_m")}};
+            if (p.at("version") == 4 && row.contains("rotation_rad")) cut["rotation_rad"] = row.at("rotation_rad");
+            cuts.push_back(std::move(cut));
+        }
+    Json result{{"form", p.at("form")}, {"base_position_m", p.at("base_position_m")},
         {"orientation_rad", p.at("orientation_rad")}, {"span_m", p.at("span_m")}, {"cuts", std::move(cuts)}};
+    if (p.at("version") == 4) result["roof_schema"] = 4;
+    return result;
 }
-void admit_frame(const Json& value) {
-    keys(value, {"form", "base_position_m", "orientation_rad", "span_m", "cuts"});
+void admit_frame(const Json& value, bool rotations = true) {
+    const bool oriented = rotations && value.contains("roof_schema");
+    if (oriented) {
+        keys(value, {"form", "base_position_m", "orientation_rad", "span_m", "cuts", "roof_schema"});
+        if (!value.at("roof_schema").is_number_integer() || value.at("roof_schema") != 4)
+            invalid("Roof rigid transform proof schema is unsupported");
+    } else keys(value, {"form", "base_position_m", "orientation_rad", "span_m", "cuts"});
     if (!value.at("form").is_string() || (value.at("form") != "sloped_roof_panel" &&
         value.at("form") != "gable_roof" && value.at("form") != "hip_roof"))
         invalid("Roof rigid transform proof form is unsupported");
@@ -136,7 +146,11 @@ void admit_frame(const Json& value) {
     if (!cuts.is_array() || cuts.size() > opening_limit) invalid("Roof rigid transform proof cut budget exceeded");
     Ids ids;
     for (const auto& cut : cuts) {
-        keys(cut, {"id", "y_m", "depth_m"});
+        if (oriented && cut.contains("rotation_rad")) {
+            keys(cut, {"id", "y_m", "depth_m", "rotation_rad"});
+            if (std::abs(scalar(cut.at("rotation_rad"))) > std::acos(-1.0))
+                invalid("Roof rigid transform cut rotation is invalid");
+        } else keys(cut, {"id", "y_m", "depth_m"});
         if (!ids.insert(identity(cut.at("id"))).second) invalid("Roof rigid transform proof has duplicate cut IDs");
         (void)scalar(cut.at("y_m"));
         if (!(scalar(cut.at("depth_m")) > 0.0)) invalid("Roof rigid transform cut depth must be positive");
@@ -146,8 +160,8 @@ void assign_if_changed(Json& target, double value) {
     (void)scalar(value);
     if (scalar(target) != value) target = value;
 }
-Json derive(const Json& before, const ArchitecturalGroupTransform& transform) {
-    admit_frame(before);
+Json derive(const Json& before, const ArchitecturalGroupTransform& transform, bool rotations = true) {
+    admit_frame(before, rotations);
     const auto t = normalize(transform);
     if (t.identity) return before;
     auto result = before;
@@ -171,6 +185,8 @@ Json derive(const Json& before, const ArchitecturalGroupTransform& transform) {
             const double old_y = scalar(cut.at("y_m")), depth = scalar(cut.at("depth_m"));
             assign_if_changed(cut.at("y_m"), before.at("form") == "sloped_roof_panel"
                 ? scalar(before.at("span_m")) - old_y - depth : -old_y - depth);
+            if (cut.contains("rotation_rad") && scalar(cut.at("rotation_rad")) != 0.0)
+                assign_if_changed(cut.at("rotation_rad"), -scalar(cut.at("rotation_rad")));
         }
     }
     auto& position = result.at("base_position_m");
@@ -178,7 +194,7 @@ Json derive(const Json& before, const ArchitecturalGroupTransform& transform) {
     assign_if_changed(position.at(1), y);
     assign_if_changed(position.at(2), p.z + t.z);
     assign_if_changed(result.at("orientation_rad"), heading);
-    admit_frame(result);
+    admit_frame(result, rotations);
     return result;
 }
 using Changes = std::map<std::string, std::pair<double, double>, std::less<>>;
@@ -190,8 +206,11 @@ Changes changes(const Json& before, const Json& after) {
     for (std::size_t i = 0; i < 3; ++i)
         add("/base_position_m/" + std::to_string(i), before.at("base_position_m").at(i), after.at("base_position_m").at(i));
     add("/orientation_rad", before.at("orientation_rad"), after.at("orientation_rad"));
-    for (std::size_t i = 0; i < before.at("cuts").size(); ++i)
+    for (std::size_t i = 0; i < before.at("cuts").size(); ++i) {
         add("/roof_openings/" + std::to_string(i) + "/y_m", before.at("cuts").at(i).at("y_m"), after.at("cuts").at(i).at("y_m"));
+        if (before.at("cuts").at(i).contains("rotation_rad"))
+            add("/roof_openings/" + std::to_string(i) + "/rotation_rad", before.at("cuts").at(i).at("rotation_rad"), after.at("cuts").at(i).at("rotation_rad"));
+    }
     return result;
 }
 bool descendant(std::string_view path, std::string_view parent) {
@@ -253,7 +272,7 @@ Json archive_receipts(const Entity& source, Entity& result, const Json& before, 
         for (const auto& [pointer, receipt] : entries->items())
             for (const auto& [changed, values] : affected) {
                 if (pointer != changed && !descendant(pointer, changed) && !descendant(changed, pointer)) continue;
-                if (pointer != changed || changed == "/orientation_rad")
+                if (pointer != changed || changed == "/orientation_rad" || changed.ends_with("/rotation_rad"))
                     invalid("Roof rigid transform affects an unsupported quantity binding");
                 admit_quantity_receipt(receipt, values.first);
                 indexed[pointer] = receipt;
@@ -262,6 +281,19 @@ Json archive_receipts(const Entity& source, Entity& result, const Json& before, 
     }
     const auto extension = field(source.extensions, "roof_opening_input");
     for (std::size_t i = 0; i < before.at("cuts").size(); ++i) {
+        if (extension && affected.contains("/roof_openings/" + std::to_string(i) + "/rotation_rad")) {
+            const auto version = field(*extension,"version");
+            if (!extension->is_object() || !version || !version_one(*version))
+                invalid("Roof rigid transform affects an opaque opening input envelope");
+            const auto entries = field(*extension,"entries");
+            if (!entries || !entries->is_object() || entries->size() > collection_limit)
+                invalid("Roof rigid transform opening input entries budget exceeded");
+            const auto child = field(*entries,identity(before.at("cuts").at(i).at("id")));
+            if (child && !known_raw(*child))
+                invalid("Roof rigid transform affects an opaque child input envelope");
+            if (child && child->contains("rotation_rad"))
+                invalid("Roof rigid transform affects an unsupported opening angle binding");
+        }
         if (!affected.contains("/roof_openings/" + std::to_string(i) + "/y_m") || !extension) continue;
         const auto version = field(*extension, "version");
         if (!extension->is_object() || !version || !version_one(*version))
@@ -282,11 +314,11 @@ Json archive_receipts(const Entity& source, Entity& result, const Json& before, 
     }
     return {{"quantity_entries", std::move(indexed)}, {"roof_opening_input", std::move(children)}};
 }
-void admit_record(const Json& record) {
+void admit_record(const Json& record, bool rotations) {
     keys(record, {"operation", "source", "result", "receipts"});
     const auto intent = decode_roof_rigid_transform_intent(record.at("operation"));
     const auto& before = record.at("source"), after = record.at("result");
-    if (!exact(derive(before, intent.transform), after) || exact(before, after))
+    if (!exact(derive(before, intent.transform, rotations), after) || exact(before, after))
         invalid("Roof rigid transform derivation does not reproduce its result");
     const auto affected = changes(before, after);
     const auto& receipts = record.at("receipts");
@@ -296,7 +328,7 @@ void admit_record(const Json& record) {
         invalid("Roof rigid transform archived receipt budget exceeded");
     for (const auto& [pointer, receipt] : indexed.items()) {
         const auto changed = affected.find(pointer);
-        if (changed == affected.end() || pointer == "/orientation_rad")
+        if (changed == affected.end() || pointer == "/orientation_rad" || pointer.ends_with("/rotation_rad"))
             invalid("Roof rigid transform archive contains an unaffected or unsupported binding");
         admit_quantity_receipt(receipt, changed->second.first);
     }
@@ -402,12 +434,13 @@ void validate_roof_rigid_transform_derivations(const Entity& source) {
     if (!extension) return;
     (void)budget(*extension);
     keys(*extension, {"version", "operations"});
-    if (!version_one(extension->at("version"))) invalid("Roof rigid transform derivation namespace collision");
+    const bool rotations = extension->at("version").is_number_integer() && extension->at("version") == 2;
+    if (!version_one(extension->at("version")) && !rotations) invalid("Roof rigid transform derivation namespace collision");
     const auto& operations = extension->at("operations");
     if (!operations.is_array() || operations.empty() || operations.size() > operation_limit)
         invalid("Roof rigid transform derivation operation budget exceeded");
-    validate_roof_derivation_cached("roof-rigid-transform-v1", extension->dump(), [&] {
-        for (const auto& record : operations) admit_record(record);
+    validate_roof_derivation_cached(rotations ? "roof-rigid-transform-v2" : "roof-rigid-transform-v1", extension->dump(), [&] {
+        for (const auto& record : operations) admit_record(record, rotations);
     });
 }
 nlohmann::json roof_rigid_transform_opaque_remainder(const Entity& source) {
@@ -449,11 +482,15 @@ Entity stage_roof_rigid_transform_entity(const Entity& source, const RoofRigidTr
     result.properties.at("base_position_m") = after.at("base_position_m");
     result.properties.at("orientation_rad") = after.at("orientation_rad");
     if (result.properties.contains("roof_openings"))
-        for (std::size_t i = 0; i < after.at("cuts").size(); ++i)
+        for (std::size_t i = 0; i < after.at("cuts").size(); ++i) {
             result.properties.at("roof_openings").at(i).at("y_m") = after.at("cuts").at(i).at("y_m");
+            if (before.at("cuts").at(i).contains("rotation_rad"))
+                result.properties.at("roof_openings").at(i).at("rotation_rad") = after.at("cuts").at(i).at("rotation_rad");
+        }
     const auto receipts = archive_receipts(source, result, before, changes(before, after));
     const auto key = std::string(roof_rigid_transform_derivations_key);
-    if (!result.extensions.contains(key)) result.extensions[key] = {{"version", 1}, {"operations", Json::array()}};
+    if (!result.extensions.contains(key)) result.extensions[key] = {{"version", before.contains("roof_schema") ? 2 : 1}, {"operations", Json::array()}};
+    else if (before.contains("roof_schema")) result.extensions.at(key).at("version") = 2;
     auto& operations = result.extensions.at(key).at("operations");
     if (operations.size() == operation_limit) invalid("Roof rigid transform derivation operation budget exceeded");
     operations.push_back({{"operation", operation}, {"source", before}, {"result", after}, {"receipts", receipts}});

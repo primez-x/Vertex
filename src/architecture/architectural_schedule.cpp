@@ -18,6 +18,7 @@
 #include <cctype>
 #include <map>
 #include <limits>
+#include <numbers>
 #include <iterator>
 #include <span>
 #include <stdexcept>
@@ -992,8 +993,12 @@ void append_building_rows(const DocumentSnapshot& document,
                         add("type", std::string("roof_skylight"), "Fixed skylight assembly owned by the actual roof opening");
                         add("host_roof_id", id, "Authoritative roof host identity");
                         add("opening_id", opening.id, "Authoritative roof-opening child identity");
-                        add("width", ScheduleQuantity{opening.width, ScheduleUnit::metre}, "Horizontal roof-opening mouth width");
-                        add("depth", ScheduleQuantity{opening.depth, ScheduleUnit::metre}, "Horizontal roof-opening mouth depth");
+                        add("width", ScheduleQuantity{opening.width, ScheduleUnit::metre}, "Unrotated roof-reference horizontal mouth width");
+                        add("depth", ScheduleQuantity{opening.depth, ScheduleUnit::metre}, "Unrotated roof-reference horizontal mouth depth");
+                        const auto mouth=roof_opening_plan_frame(host,opening);
+                        add("surface_width", ScheduleQuantity{opening.width*mouth.width_surface_scale, ScheduleUnit::metre}, "Skylight mouth width measured on the actual roof face");
+                        add("surface_depth", ScheduleQuantity{opening.depth*mouth.depth_surface_scale, ScheduleUnit::metre}, "Skylight mouth depth measured on the actual roof face");
+                        add("rotation_degrees", opening.rotation_radians*180.0/std::numbers::pi, "Counterclockwise skylight angle on the actual roof face");
                         add("frame_width", ScheduleQuantity{opening.skylight->frame_width, ScheduleUnit::metre}, "Authored finite skylight frame width");
                         add("curb_height", ScheduleQuantity{opening.skylight->curb_height, ScheduleUnit::metre}, "Authored skylight curb height above the roof surface");
                         add("glazing_thickness", ScheduleQuantity{opening.skylight->glazing_thickness, ScheduleUnit::metre}, "Authored finite skylight glazing thickness");

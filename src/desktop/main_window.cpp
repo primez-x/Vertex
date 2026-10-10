@@ -6102,7 +6102,7 @@ class MainWindow::Impl {
         TransformViewportCapture viewport;
         std::optional<ArchitecturalViewContext> view;
         CanvasRoofOpeningTarget target;
-        CanvasSelectionFrame initial_frame;
+        CanvasRoofOpeningFrame initial_frame;
         std::string configuration;
         double station_increment{};
         bool placement{};
@@ -6111,6 +6111,7 @@ class MainWindow::Impl {
         Boundary boundary;
         std::shared_ptr<PreparedCanvasEdit> prepared;
         CanvasRoofOpeningTarget target;
+        std::optional<CanvasRoofOpeningFrame> frame;
         bool no_op{};
     };
     struct PendingRoofOpeningCanvasPreview {
@@ -32327,6 +32328,7 @@ public:
             }
             auto* kind = new QComboBox(table);
             kind->addItems({QStringLiteral("Cut only"), QStringLiteral("Skylight")});
+            kind->setItemData(0,QStringLiteral("Cut-only openings use the roof axes; converting a skylight resets its face rotation."),Qt::ToolTipRole);
             const bool skylight = entry.contains("skylight");
             kind->setCurrentIndex(skylight ? 1 : 0);
             table->setCellWidget(row, 4, kind);
@@ -32379,6 +32381,7 @@ public:
                 RoofOpeningEditIntent intent;
                 intent.roof_id=original->id;
                 intent.uses_skylight_schema = original->properties.at("version") == 3;
+                intent.uses_rotation_schema = original->properties.at("version") == 4;
                 const auto before=original->properties.value("roof_openings",json::array());
                 std::map<std::string,const json*,std::less<>> original_rows;
                 for (const auto& row:before) original_rows.emplace(row.at("id").get<std::string>(),&row);
@@ -32431,7 +32434,11 @@ public:
                                 ? existing->second->at("skylight").at(key) : json(value);
                         }
                         if (!was_skylight || profile != existing->second->at("skylight")) upsert.skylight = std::move(profile);
-                    } else if (was_skylight) upsert.skylight = json(nullptr);
+                    } else if (was_skylight) {
+                        upsert.skylight = json(nullptr);
+                        if (intent.uses_rotation_schema && existing->second->value("rotation_rad",0.0)!=0.0)
+                            upsert.rotation_radians=0.0;
+                    }
                     if (upsert.skylight || std::any_of(members.begin(),members.end(),[&](const auto member) { return (upsert.*member).has_value(); }))
                         intent.upserts.push_back(std::move(upsert));
                 }
@@ -47008,9 +47015,9 @@ private:
             if (physical.size()!=source.entities().size() || physical!=expected)
                 throw std::invalid_argument("The roof edit differs from its actual source replay.");
             const bool transfer=std::any_of(edits.begin(),edits.end(),[](const auto& edit) {
-                return edit.openings && (edit.openings->uses_clone_schema ||
+                return edit.openings && (edit.openings->uses_clone_schema || edit.openings->uses_rotation_schema ||
                     std::any_of(edit.openings->upserts.begin(),edit.openings->upserts.end(),
-                        [](const auto& row) { return row.clone_source.has_value(); }));
+                        [](const auto& row) { return row.clone_source.has_value() || row.rotation_radians.has_value(); }));
             });
             if (transfer) {
                 ConstraintAuthoringIntent semantic; semantic.message=message;
@@ -47023,7 +47030,7 @@ private:
                 typed.phase_constraint_authoring_intent=encode_phase_constraint_authoring_intent(intent);
                 const auto candidate=Document::preview_command(source,Command{typed});
                 if (candidate.entities()!=physical)
-                    throw std::invalid_argument("The skylight transfer differs from its typed source replay.");
+                    throw std::invalid_argument("The skylight edit differs from its typed source replay.");
                 return typed;
             }
             for (const auto& [id,after]:expected) {
@@ -62011,11 +62018,39 @@ private:
     static const json& roofCanvasChild(const DocumentSnapshot& source, const CanvasRoofOpeningTarget& target) {
         if (source.revision()!=target.source_revision) throw std::invalid_argument("The skylight source changed. Select it again.");
         const auto owner=source.entities().find(target.roof_id.toStdString());
-        if (owner==source.entities().end() || owner->second.type!="roof" || owner->second.properties.at("version")!=3)
+        if (owner==source.entities().end() || owner->second.type!="roof" ||
+            (owner->second.properties.at("version")!=3 && owner->second.properties.at("version")!=4))
             throw std::invalid_argument("The skylight roof is unavailable.");
         for (const auto& row:owner->second.properties.at("roof_openings"))
             if (row.at("id")==target.opening_id.toStdString() && row.contains("skylight")) return row;
         throw std::invalid_argument("The selected skylight is no longer on this roof.");
+    }
+
+    static CanvasRoofOpeningFrame roofOpeningCanvasFrame(const RoofObject& object,
+        const std::string& opening_id,const std::optional<ArchitecturalViewContext>& view) {
+        return std::visit([&](const auto& roof) {
+            const auto child=std::find_if(roof.openings.begin(),roof.openings.end(),[&](const auto& opening) {
+                return opening.id==opening_id;
+            });
+            if (child==roof.openings.end() || !child->skylight) throw std::invalid_argument("The skylight mouth is missing.");
+            const auto mouth=roof_opening_plan_frame(roof,*child);
+            const auto c=std::cos(roof.orientation_radians),s=std::sin(roof.orientation_radians);
+            Vec2 center{roof.base_position.x+c*mouth.center.x-s*mouth.center.y,
+                roof.base_position.y+s*mouth.center.x+c*mouth.center.y};
+            Vec2 along{c,s},across{-s,c};
+            if (view) {
+                center=project_plan_point(center,view->frame);
+                const auto right=plan_view_right(view->frame),up=plan_view_up(view->frame);
+                // Project directions without translated points: far origins
+                // must not destroy orthonormality through cancellation.
+                const auto project_direction=[&](Vec2 vector) {
+                    return Vec2{vector.x*right.x+vector.y*right.y,vector.x*up.x+vector.y*up.y};
+                };
+                along=project_direction(along); across=project_direction(across);
+            }
+            return CanvasRoofOpeningFrame{center,along,across,child->width,child->depth,
+                child->rotation_radians,mouth.width_surface_scale,mouth.depth_surface_scale};
+        },object);
     }
 
     void cancelRoofOpeningCanvasPreview() {
@@ -62051,12 +62086,13 @@ private:
                     for (const auto& id:roofs) {
                         if (!seen.insert(id).second) continue;
                         const auto& roof=source.entities().at(id);
-                        if (roof.type!="roof" || roof.properties.at("version")!=3 || !context ||
+                        if (roof.type!="roof" || (roof.properties.at("version")!=3 && roof.properties.at("version")!=4) || !context ||
                             read_string(roof.properties,"layer_id")!=std::optional{context->layer_id} ||
                             read_string(roof.properties,"floor_id")!=std::optional{context->floor_id}) continue;
                         const auto& p=roof.properties;
                         const auto yaw=p.at("orientation_rad").get<double>();
                         const auto& base=p.at("base_position_m");
+                        const auto roof_object=decode_roof_entity(roof);
                         const auto world=[&](double x,double y) {
                             Vec2 point{base.at(0).get<double>()+x*std::cos(yaw)-y*std::sin(yaw),
                                        base.at(1).get<double>()+x*std::sin(yaw)+y*std::cos(yaw)};
@@ -62064,19 +62100,26 @@ private:
                         };
                         for (const auto& row:p.at("roof_openings")) {
                             if (!row.contains("skylight")) continue;
-                            const auto x=row.at("x_m").get<double>(),y=row.at("y_m").get<double>();
                             const auto width=row.at("width_m").get<double>(),depth=row.at("depth_m").get<double>();
-                            const auto center=world(x+width*.5,y+depth*.5);
-                            const auto axis=world(x+width*.5+1,y+depth*.5);
+                            const auto mouth=std::visit([&](const auto& object) {
+                                const auto child=std::find_if(object.openings.begin(),object.openings.end(),[&](const auto& item) {
+                                    return item.id==row.at("id").get<std::string>();
+                                });
+                                if (child==object.openings.end()) throw std::invalid_argument("The skylight mouth is missing.");
+                                return roof_opening_plan_frame(object,*child);
+                            },roof_object);
                             if (view && view->crop) {
                                 const auto& crop=*view->crop;
                                 bool complete=true;
-                                for (const auto corner:{world(x,y),world(x+width,y),world(x+width,y+depth),world(x,y+depth)})
+                                for (const auto signs:{Vec2{-1,-1},Vec2{1,-1},Vec2{1,1},Vec2{-1,1}}) {
+                                    const auto corner=world(mouth.center.x+mouth.along.x*signs.x*width*.5+mouth.across.x*signs.y*depth*.5,
+                                        mouth.center.y+mouth.along.y*signs.x*width*.5+mouth.across.y*signs.y*depth*.5);
                                     complete=complete && corner.x>=crop.min_horizontal_m && corner.x<=crop.max_horizontal_m &&
                                         corner.y>=crop.min_vertical_m && corner.y<=crop.max_vertical_m;
+                                }
                                 if (!complete) continue;
                             }
-                            CanvasSelectionFrame frame{center,std::atan2(axis.y-center.y,axis.x-center.x),width,depth};
+                            const auto frame=roofOpeningCanvasFrame(roof_object,row.at("id").get<std::string>(),view);
                             controls.push_back({{id_from(id),QString::fromStdString(row.at("id").get<std::string>()),source.revision()},frame});
                         }
                     }
@@ -62158,6 +62201,7 @@ private:
                 }
                 if (cancellation.is_cancelled()) return RegenerationReceipt{capture.source->revision(),{}};
                 const auto roof=decode_roof_entity(resolve_vertical_placement(actual,actual.at(target.roof_id.toStdString())));
+                if (!capture.placement) request.result->frame=roofOpeningCanvasFrame(roof,target.opening_id.toStdString(),capture.view);
                 const auto shape=make_roof_skylight_shape(roof,target.opening_id.toStdString());
                 auto path=capture.view ? project_architectural_view_shape(shape,BuildingViewKind::plan,*capture.view).value_or(Boundary{})
                                        : project_building_shape_plan(shape);
@@ -62190,7 +62234,8 @@ private:
             if (!m_running_roof_opening_preview || completion.sequence!=m_roof_opening_preview_sequence) continue;
             auto request=std::move(*m_running_roof_opening_preview); m_running_roof_opening_preview.reset();
             if (!roofOpeningRequestCurrent(request)) continue;
-            const bool admitted=completion.succeeded() && completion.receipt->source_revision==request.capture->source->revision() && !request.result->boundary.empty();
+            const bool admitted=completion.succeeded() && completion.receipt->source_revision==request.capture->source->revision() &&
+                !request.result->boundary.empty() && (request.capture->placement || request.result->frame.has_value());
             QString message;
             if (!admitted) {
                 message=QStringLiteral("The skylight does not fit here.");
@@ -62210,8 +62255,12 @@ private:
             } else {
                 // Publish the ready command before completing the canvas serial:
                 // completion can finish a release waiting for this exact result.
-                if (admitted) m_ready_roof_opening_preview=request;
-                if (!canvas->completeRoofOpeningPreview(request.serial,admitted ? std::optional{request.result->boundary} : std::nullopt))
+                if (admitted && request.gesture && request.result->frame) {
+                    request.gesture->frame=*request.result->frame;
+                    m_ready_roof_opening_preview=request;
+                }
+                if (!canvas->completeRoofOpeningPreview(request.serial,admitted ? std::optional{request.result->boundary} : std::nullopt,
+                    admitted ? request.result->frame : std::nullopt))
                     m_ready_roof_opening_preview.reset();
                 if (!admitted) setError(message);
             }
@@ -62248,21 +62297,73 @@ private:
             const auto& original=roofCanvasChild(*capture->source,gesture.target);
             const auto& p=capture->source->entities().at(gesture.target.roof_id.toStdString()).properties;
             const auto yaw=p.at("orientation_rad").get<double>();
-            const auto width=gesture.frame.width_metres,depth=gesture.frame.depth_metres;
+            auto width=gesture.frame.width_metres,depth=gesture.frame.depth_metres;
             if (!std::isfinite(width) || !std::isfinite(depth) || width<=0 || depth<=0 ||
                 !std::isfinite(gesture.frame.center.x) || !std::isfinite(gesture.frame.center.y) ||
-                gesture.frame.rotation_radians!=capture->initial_frame.rotation_radians)
-                throw std::invalid_argument("Skylight grips retain the roof's axes and need positive finite dimensions.");
+                !std::isfinite(gesture.frame.rotation_radians) || std::abs(gesture.frame.rotation_radians)>std::numbers::pi ||
+                gesture.frame.reference_along.x!=capture->initial_frame.reference_along.x ||
+                gesture.frame.reference_along.y!=capture->initial_frame.reference_along.y ||
+                gesture.frame.reference_across.x!=capture->initial_frame.reference_across.x ||
+                gesture.frame.reference_across.y!=capture->initial_frame.reference_across.y ||
+                gesture.frame.width_surface_scale!=capture->initial_frame.width_surface_scale ||
+                gesture.frame.depth_surface_scale!=capture->initial_frame.depth_surface_scale)
+                throw std::invalid_argument("Skylight grips need the captured roof face and positive finite dimensions.");
+            const auto valid_resize_axis=[](double axis) { return axis==0.0 || axis==-1.0 || axis==1.0; };
+            if (!valid_resize_axis(gesture.resize_axes.x) || !valid_resize_axis(gesture.resize_axes.y) ||
+                ((gesture.resize_axes.x!=0.0 || gesture.resize_axes.y!=0.0) &&
+                 gesture.frame.rotation_radians!=capture->initial_frame.rotation_radians))
+                throw std::invalid_argument("Skylight resizing needs the captured opposite-side anchor.");
             Vec2 delta{gesture.frame.center.x-capture->initial_frame.center.x,gesture.frame.center.y-capture->initial_frame.center.y};
             if (capture->view) {
                 const auto right=plan_view_right(capture->view->frame),up=plan_view_up(capture->view->frame);
                 delta={delta.x*right.x+delta.y*up.x,delta.x*right.y+delta.y*up.y};
             }
+            Vec2 local_delta{delta.x*std::cos(yaw)+delta.y*std::sin(yaw),
+                -delta.x*std::sin(yaw)+delta.y*std::cos(yaw)};
+            const auto original_width=original.at("width_m").get<double>(),original_depth=original.at("depth_m").get<double>();
+            const Vec2 original_center{original.at("x_m").get<double>()+original_width*.5,
+                original.at("y_m").get<double>()+original_depth*.5};
+            const auto roof_object=decode_roof_entity(capture->source->entities().at(gesture.target.roof_id.toStdString()));
+            const auto scales_at=[&](Vec2 center) {
+                return std::visit([&](const auto& roof) { return roof_opening_reference_surface_scales(roof,center); },roof_object);
+            };
+            const auto basis=[](double angle,double sx,double sy) {
+                if (angle==0.0) return std::pair{Vec2{1,0},Vec2{0,1}};
+                const auto c=std::cos(angle),s=std::sin(angle);
+                return std::pair{Vec2{c,s*sx/sy},Vec2{-s*sy/sx,c}};
+            };
+            const auto source_sx=capture->initial_frame.width_surface_scale,source_sy=capture->initial_frame.depth_surface_scale;
+            const auto [source_along,source_across]=basis(capture->initial_frame.rotation_radians,source_sx,source_sy);
+            auto scales=scales_at({original_center.x+local_delta.x,original_center.y+local_delta.y});
+            bool stable=false;
+            for (int attempt=0;attempt<4;++attempt) {
+                // Keep requested physical dimensions when moving between a
+                // hip end facet and a side facet with swapped slope factors.
+                width=scales.x==source_sx ? gesture.frame.width_metres : gesture.frame.width_metres*source_sx/scales.x;
+                depth=scales.y==source_sy ? gesture.frame.depth_metres : gesture.frame.depth_metres*source_sy/scales.y;
+                if ((gesture.resize_axes.x!=0.0 || gesture.resize_axes.y!=0.0) &&
+                    (scales.x!=source_sx || scales.y!=source_sy || attempt>0)) {
+                    const auto [along,across]=basis(gesture.frame.rotation_radians,scales.x,scales.y);
+                    const auto x=gesture.resize_axes.x,y=gesture.resize_axes.y;
+                    local_delta={
+                        -source_along.x*x*original_width*.5-source_across.x*y*original_depth*.5+along.x*x*width*.5+across.x*y*depth*.5,
+                        -source_along.y*x*original_width*.5-source_across.y*y*original_depth*.5+along.y*x*width*.5+across.y*y*depth*.5};
+                }
+                const auto next=scales_at({original_center.x+local_delta.x,original_center.y+local_delta.y});
+                if (next.x==scales.x && next.y==scales.y) { stable=true; break; }
+                scales=next;
+            }
+            if (!stable || !std::isfinite(width) || !std::isfinite(depth) || width<=0.0 || depth<=0.0)
+                throw std::invalid_argument("The resized skylight cannot keep its opposite side on one roof face.");
             RoofOpeningEditIntent intent; intent.roof_id=gesture.target.roof_id.toStdString(); intent.uses_skylight_schema=true;
+            intent.uses_rotation_schema=p.at("version")==4 ||
+                gesture.frame.rotation_radians!=capture->initial_frame.rotation_radians;
             RoofOpeningUpsertIntent row; row.opening_id=gesture.target.opening_id.toStdString();
-            const auto x=original.at("x_m").get<double>()+delta.x*std::cos(yaw)+delta.y*std::sin(yaw)-
+            if (gesture.frame.rotation_radians!=capture->initial_frame.rotation_radians)
+                row.rotation_radians=gesture.frame.rotation_radians;
+            const auto x=original.at("x_m").get<double>()+local_delta.x-
                 (width-original.at("width_m").get<double>())*.5;
-            const auto y=original.at("y_m").get<double>()-delta.x*std::sin(yaw)+delta.y*std::cos(yaw)-
+            const auto y=original.at("y_m").get<double>()+local_delta.y-
                 (depth-original.at("depth_m").get<double>())*.5;
             if (x!=original.at("x_m").get<double>()) row.x=roofCanvasQuantity(x);
             if (y!=original.at("y_m").get<double>()) row.y=roofCanvasQuantity(y);
@@ -62282,7 +62383,14 @@ private:
             if (!ready || ready->serial!=serial || !ready->gesture || !roofOpeningCaptureCurrent(ready->capture) || ready->capture->canvas!=canvas ||
                 gesture.target!=ready->gesture->target || gesture.frame.center.x!=ready->gesture->frame.center.x ||
                 gesture.frame.center.y!=ready->gesture->frame.center.y || gesture.frame.rotation_radians!=ready->gesture->frame.rotation_radians ||
-                gesture.frame.width_metres!=ready->gesture->frame.width_metres || gesture.frame.depth_metres!=ready->gesture->frame.depth_metres)
+                gesture.frame.width_metres!=ready->gesture->frame.width_metres || gesture.frame.depth_metres!=ready->gesture->frame.depth_metres ||
+                gesture.frame.reference_along.x!=ready->gesture->frame.reference_along.x ||
+                gesture.frame.reference_along.y!=ready->gesture->frame.reference_along.y ||
+                gesture.frame.reference_across.x!=ready->gesture->frame.reference_across.x ||
+                gesture.frame.reference_across.y!=ready->gesture->frame.reference_across.y ||
+                gesture.frame.width_surface_scale!=ready->gesture->frame.width_surface_scale ||
+                gesture.frame.depth_surface_scale!=ready->gesture->frame.depth_surface_scale ||
+                gesture.resize_axes.x!=ready->gesture->resize_axes.x || gesture.resize_axes.y!=ready->gesture->resize_axes.y)
                 throw std::invalid_argument("The exact skylight preview changed. Start the drag again.");
             if (!ready->result->no_op) publishPreparedCanvasEdit(ready->result->prepared,ready->capture->edit_source);
             auto target=ready->result->target; target.source_revision=authoringSnapshot().revision();
@@ -62314,7 +62422,10 @@ private:
         row.width=roofCanvasQuantity(selected->at("width_m").get<double>());
         row.depth=roofCanvasQuantity(selected->at("depth_m").get<double>());
         row.skylight=selected->at("skylight");
+        if (clone.roof.properties.at("version")==4)
+            row.rotation_radians=selected->value("rotation_rad",0.0);
         RoofOpeningEditIntent probe; probe.roof_id=clone.roof.id;
+        probe.uses_rotation_schema=clone.roof.properties.at("version")==4;
         probe.uses_skylight_schema=true; probe.upserts={std::move(row)};
         (void)encode_roof_opening_edit_intent(probe);
         return *selected;
@@ -62408,6 +62519,7 @@ private:
             const auto target=*m_selected_roof_opening;
             const auto source=captureCanvasGeometrySource(canvas,target.source_revision);
             RoofOpeningEditIntent intent; intent.roof_id=target.roof_id.toStdString(); intent.uses_skylight_schema=true;
+            intent.uses_rotation_schema=source->entities().at(target.roof_id.toStdString()).properties.at("version")==4;
             intent.removed_opening_ids={target.opening_id.toStdString()};
             return applyRoofOpeningCanvasIntent(source,target,intent,true);
         } catch (const std::exception& error) { setError(QString::fromUtf8(error.what())); return false; }
@@ -62426,13 +62538,36 @@ private:
             layout->addLayout(form);
             std::map<std::string,QLineEdit*,std::less<>> fields;
             for (const auto& [key,label]:std::array{
-                std::pair{"x_m","Roof X"},std::pair{"y_m","Roof Y"},std::pair{"width_m","Width"},std::pair{"depth_m","Depth"},
+                std::pair{"x_m","Roof X"},std::pair{"y_m","Roof Y"},std::pair{"width_m","Plan-reference width"},std::pair{"depth_m","Plan-reference depth"},
                 std::pair{"frame_width_m","Frame"},std::pair{"curb_height_m","Curb height"},std::pair{"glazing_thickness_m","Glazing"}}) {
                 const auto value=original.contains(key) ? original.at(key) : original.at("skylight").at(key);
                 auto* field=new QLineEdit(QString::fromStdString(value.dump())+QStringLiteral(" m"),&dialog);
                 field->setObjectName(QStringLiteral("roofSkylight_")+QString::fromLatin1(key));
                 form->addRow(QString::fromLatin1(label),field); fields[key]=field;
             }
+            const auto rotation_schema=source->entities().at(target.roof_id.toStdString()).properties.at("version")==4;
+            const auto original_rotation=rotation_schema ? original.value("rotation_rad",0.0) : 0.0;
+            auto* rotation=new QDoubleSpinBox(&dialog);
+            rotation->setObjectName(QStringLiteral("roofSkylightRotation"));
+            rotation->setRange(-180.0,180.0); rotation->setDecimals(2); rotation->setSingleStep(15.0);
+            rotation->setSuffix(QStringLiteral(" deg"));
+            rotation->setValue(original_rotation*180.0/std::numbers::pi);
+            form->addRow(QStringLiteral("Rotation on roof face"),rotation);
+            const auto roof_object=decode_roof_entity(source->entities().at(target.roof_id.toStdString()));
+            const auto mouth=std::visit([&](const auto& roof) {
+                const auto child=std::find_if(roof.openings.begin(),roof.openings.end(),[&](const auto& opening) {
+                    return opening.id==target.opening_id.toStdString();
+                });
+                if (child==roof.openings.end()) throw std::invalid_argument("The skylight mouth is missing.");
+                return roof_opening_plan_frame(roof,*child);
+            },roof_object);
+            auto* surface_size=new QLabel(QStringLiteral("%1 × %2").arg(
+                format_length(original.at("width_m").get<double>()*mouth.width_surface_scale,m_metric_units),
+                format_length(original.at("depth_m").get<double>()*mouth.depth_surface_scale,m_metric_units)),&dialog);
+            form->addRow(QStringLiteral("Current size on roof face"),surface_size);
+            // Display rounding must not author a new angle on an unrelated edit.
+            bool rotation_changed=false;
+            QObject::connect(rotation,qOverload<double>(&QDoubleSpinBox::valueChanged),&dialog,[&](double) { rotation_changed=true; });
             auto* error=new QLabel(&dialog); error->setWordWrap(true); layout->addWidget(error);
             auto* buttons=new QDialogButtonBox(QDialogButtonBox::Apply|QDialogButtonBox::Close,&dialog); layout->addWidget(buttons);
             QObject::connect(buttons->button(QDialogButtonBox::Close),&QPushButton::clicked,&dialog,&QDialog::reject);
@@ -62442,7 +62577,9 @@ private:
                         throw std::invalid_argument("The project or selected skylight changed. Reopen Properties.");
                     const auto unit=m_metric_units ? Unit::metre : Unit::foot;
                     RoofOpeningEditIntent intent; intent.roof_id=target.roof_id.toStdString(); intent.uses_skylight_schema=true;
+                    intent.uses_rotation_schema=rotation_schema || rotation_changed;
                     RoofOpeningUpsertIntent row; row.opening_id=target.opening_id.toStdString();
+                    if (rotation_changed) row.rotation_radians=rotation->value()*std::numbers::pi/180.0;
                     for (const auto& [key,member]:std::array{
                         std::pair{"x_m",&RoofOpeningUpsertIntent::x},std::pair{"y_m",&RoofOpeningUpsertIntent::y},
                         std::pair{"width_m",&RoofOpeningUpsertIntent::width},std::pair{"depth_m",&RoofOpeningUpsertIntent::depth}}) {
@@ -62530,6 +62667,7 @@ private:
             if (!host) throw std::invalid_argument("Choose a visible roof face on the active layer with room for the skylight.");
             RoofOpeningEditIntent intent;
             intent.roof_id=host->id; intent.uses_skylight_schema=true;
+            intent.uses_rotation_schema=host->properties.at("version")==4;
             RoofOpeningUpsertIntent row;
             const bool retained=!commit && roofOpeningCaptureCurrent(m_roof_opening_capture) &&
                 m_roof_opening_capture->placement && m_roof_opening_capture->target.roof_id==id_from(host->id);
@@ -62541,6 +62679,10 @@ private:
                     throw std::invalid_argument("The copied skylight placement state changed. Paste again.");
                 row.clone_source=m_pending_roof_opening_clone;
                 row.skylight=m_pending_roof_opening_clone_row->at("skylight");
+                if (m_pending_roof_opening_clone->roof.properties.at("version")==4) {
+                    row.rotation_radians=m_pending_roof_opening_clone_row->value("rotation_rad",0.0);
+                    intent.uses_rotation_schema=true;
+                }
             }
             intent.upserts.push_back(row);
             if (commit) {

@@ -345,6 +345,9 @@ Entity resize_building(const Entity& original, const Resize& resize) {
                     value.pitch_radians = std::atan2(value.rise,value.span*.5);
             }
             for (auto& opening : value.openings) {
+                // Resize the historical roof-local reference rectangle. Its
+                // actual surface rotation stays authored; native facet and
+                // overlap admission checks the resulting oriented mouth.
                 opening.x *= along_core_factor; opening.y *= value.span/old_span;
                 opening.width *= along_core_factor; opening.depth *= value.span/old_span;
             }

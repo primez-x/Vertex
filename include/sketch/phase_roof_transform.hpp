@@ -24,6 +24,8 @@ inline constexpr std::string_view roof_rigid_transform_derivations_key =
 // refuse. Historical owner/cut IDs remain historical through proposed copies;
 // callers must retain these records exactly, never remap archived receipts.
 // This checks retained evidence only, not native geometry or live ownership.
+// Archive v1 retains its original closed frame. V2 additionally admits
+// roof_schema:4 frames with optional canonical rotation_rad on each cut.
 void validate_roof_rigid_transform_derivations(const Entity& source);
 // Read-only reference qualification after full envelope validation. Omit only
 // understood historical identifiers/frame fields and archived receipt cores.
@@ -35,7 +37,7 @@ void validate_roof_rigid_transform_source_entity(const Entity& source);
 
 // Reads the actual original only. Rigid reflection follows the shared adapter's
 // panel corner / gable-and-hip centered semantics. Only pose and reflected cut
-// Y change. Affected understood receipts move verbatim to the owned archive;
+// Y and schema-4 surface-angle sign change. Affected understood receipts move verbatim to the owned archive;
 // all other metadata and receipt bindings remain exact. No Quantity is made
 // from a computed coordinate. Opaque affected bindings refuse.
 [[nodiscard]] Entity stage_roof_rigid_transform_entity(

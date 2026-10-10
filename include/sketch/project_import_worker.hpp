@@ -408,7 +408,7 @@ inline void validate_roof(const Entity& entity, GeometryBudget& budget) {
     validate_native_context(entity);
     const auto& p = entity.properties;
     if (!p.contains("version") || !p.at("version").is_number_integer() ||
-        (p.at("version") != 1 && p.at("version") != 2 && p.at("version") != 3) || !p.contains("form")) reject();
+        (p.at("version") != 1 && p.at("version") != 2 && p.at("version") != 3 && p.at("version") != 4) || !p.contains("form")) reject();
     const auto form = text(p.at("form"), false);
     const bool panel = form == "sloped_roof_panel";
     if (!panel && form != "gable_roof" && form != "hip_roof") reject();
@@ -460,8 +460,31 @@ inline void validate_roof(const Entity& entity, GeometryBudget& budget) {
     const auto& cuts = p.at("roof_openings");
     budget.charge_cross(cuts.size());
     std::set<std::string> ids;
-    struct Cut { double x, y, right, top; };
+    struct Point { double x, y; };
+    using Polygon = std::array<Point, 4>;
+    struct Plane { double elevation, x_slope, y_slope; };
+    struct Cut { Polygon polygon; double x, y, right, top; bool rotated; };
     std::vector<Cut> previous;
+    const auto separated = [&](const Polygon& first, const Polygon& second) {
+        for (std::size_t edge = 0; edge < first.size(); ++edge) {
+            const auto dx = first[(edge + 1) % first.size()].x - first[edge].x;
+            const auto dy = first[(edge + 1) % first.size()].y - first[edge].y;
+            const auto axis_length = std::hypot(dx, dy);
+            if (!std::isfinite(axis_length) || axis_length <= tolerance) reject();
+            const auto nx = -dy / axis_length, ny = dx / axis_length;
+            // Normalize the SAT axis so clearance is measured in plan metres.
+            // Project relative to one corner to avoid large-origin cancellation.
+            const auto project = [&](Point point) {
+                return (point.x - first[0].x) * nx + (point.y - first[0].y) * ny;
+            };
+            auto amin = project(first[0]), amax = amin;
+            auto bmin = project(second[0]), bmax = bmin;
+            for (const auto point : first) { const auto n = project(point); amin = std::min(amin,n); amax = std::max(amax,n); }
+            for (const auto point : second) { const auto n = project(point); bmin = std::min(bmin,n); bmax = std::max(bmax,n); }
+            if (amax + tolerance < bmin || bmax + tolerance < amin) return true;
+        }
+        return false;
+    };
     for (const auto& cut : cuts) {
         if (!cut.is_object() || !cut.contains("id")) reject();
         const auto id = text(cut.at("id"), false, 128);
@@ -472,14 +495,40 @@ inline void validate_roof(const Entity& entity, GeometryBudget& budget) {
         const auto x = number(cut, "x_m"), y = number(cut, "y_m");
         const auto width = number(cut, "width_m", true), depth = number(cut, "depth_m", true);
         if (width > 1e6 || depth > 1e6) reject();
+        // Pre-4 rotation_rad is opaque historical payload, never active geometry.
+        const auto angle = p.at("version") == 4 && cut.contains("rotation_rad")
+            ? number(cut, "rotation_rad") : 0.0;
+        if (std::abs(angle) > std::acos(-1.0) || (angle != 0.0 && !cut.contains("skylight"))) reject();
         const auto right = x + width, top = y + depth;
+        const auto center_x = x + width * .5, center_y = y + depth * .5;
+        Plane plane{0, slope, 0};
+        const std::array<Plane, 4> planes{{{rise, 0, slope}, {rise, 0, -slope},
+            {slope * length * .5, slope, 0}, {slope * length * .5, -slope, 0}}};
+        if (form == "gable_roof") plane = {rise, 0, center_y <= 0.0 ? slope : -slope};
+        else if (form == "hip_roof")
+            plane = *std::min_element(planes.begin(),planes.end(),[&](const auto& a,const auto& b) {
+                return a.elevation + a.x_slope * center_x + a.y_slope * center_y <
+                    b.elevation + b.x_slope * center_x + b.y_slope * center_y;
+            });
+        const auto sx = std::hypot(1.0,plane.x_slope), sy = std::hypot(1.0,plane.y_slope);
+        const auto cosine_angle = std::cos(angle), sine_angle = std::sin(angle);
+        const Point along{cosine_angle,(sx / sy) * sine_angle};
+        const Point across{-(sy / sx) * sine_angle,cosine_angle};
+        const auto offset = [&](double dx,double dy) -> Point {
+            return {center_x + along.x * dx + across.x * dy, center_y + along.y * dx + across.y * dy};
+        };
+        Polygon corners{{{x,y},{right,y},{right,top},{x,top}}};
+        if (angle != 0.0) corners = {{offset(-width*.5,-depth*.5),offset(width*.5,-depth*.5),
+            offset(width*.5,depth*.5),offset(-width*.5,depth*.5)}};
         const auto xmin = panel ? 0 : -length * .5, ymin = panel ? 0 : -span * .5;
         const auto xmax = panel ? length : length * .5, ymax = panel ? span : span * .5;
         const auto clearance = thickness + tolerance;
-        if (!std::isfinite(right) || !std::isfinite(top) || x < xmin + clearance || y < ymin + clearance ||
-            right > xmax - clearance || top > ymax - clearance) reject();
+        for (const auto corner : corners)
+            if (!std::isfinite(corner.x) || !std::isfinite(corner.y) || std::abs(corner.x) > 1e9 ||
+                std::abs(corner.y) > 1e9 || corner.x < xmin + clearance || corner.y < ymin + clearance ||
+                corner.x > xmax - clearance || corner.y > ymax - clearance) reject();
         if (cut.contains("skylight")) {
-            if (p.at("version") != 3) reject();
+            if (p.at("version") != 3 && p.at("version") != 4) reject();
             const auto& profile = cut.at("skylight");
             fields(profile, {"version", "frame_width_m", "curb_height_m", "glazing_thickness_m"});
             if (!profile.at("version").is_number_integer() || profile.at("version") != 1) reject();
@@ -491,34 +540,33 @@ inline void validate_roof(const Entity& entity, GeometryBudget& budget) {
             // and one glazing prism. Charge all nine four-edge profiles before
             // face fitting or any downstream native solid reconstruction.
             budget.charge(9 * 4);
-            struct Plane { double elevation, x_slope, y_slope; };
-            Plane plane{0, slope, 0};
             if (form == "gable_roof") {
-                if (top < -tolerance) plane = {rise, 0, slope};
-                else if (y > tolerance) plane = {rise, 0, -slope};
-                else reject();
+                for (const auto corner : corners)
+                    if (!(plane.y_slope > 0.0 ? corner.y < -tolerance : corner.y > tolerance)) reject();
             } else if (form == "hip_roof") {
-                const std::array<Plane, 4> planes{{{rise, 0, slope}, {rise, 0, -slope},
-                    {slope * length * .5, slope, 0}, {slope * length * .5, -slope, 0}}};
                 const auto face_clearance = tolerance * std::hypot(1.0, slope);
                 bool found = false;
                 // A hip face is strictly the lowest of four affine planes.
                 // All mouth corners must belong to the same plane; these
                 // inequalities cover the entire rectangular mouth.
                 for (std::size_t candidate = 0; candidate < planes.size(); ++candidate) {
+                    // A rotated mouth uses the same centre-selected physical
+                    // facet as the native API. Zero retains historical fitting.
+                    if (angle != 0.0 && (plane.x_slope != planes[candidate].x_slope ||
+                        plane.y_slope != planes[candidate].y_slope)) continue;
                     bool fits = true;
-                    for (const auto corner_x : {x, right})
-                        for (const auto corner_y : {y, top}) {
-                            const auto& face = planes[candidate];
-                            const auto height = face.elevation + face.x_slope * corner_x + face.y_slope * corner_y;
-                            for (std::size_t other = 0; other < planes.size(); ++other) {
-                                if (candidate == other) continue;
-                                const auto& adjacent = planes[other];
-                                const auto adjacent_height = adjacent.elevation + adjacent.x_slope * corner_x +
-                                    adjacent.y_slope * corner_y;
-                                if (!(height + face_clearance < adjacent_height)) fits = false;
-                            }
+                    for (const auto corner : corners) {
+                        const auto corner_x = corner.x, corner_y = corner.y;
+                        const auto& face = planes[candidate];
+                        const auto height = face.elevation + face.x_slope * corner_x + face.y_slope * corner_y;
+                        for (std::size_t other = 0; other < planes.size(); ++other) {
+                            if (candidate == other) continue;
+                            const auto& adjacent = planes[other];
+                            const auto adjacent_height = adjacent.elevation + adjacent.x_slope * corner_x +
+                                adjacent.y_slope * corner_y;
+                            if (!(height + face_clearance < adjacent_height)) fits = false;
                         }
+                    }
                     if (fits) { plane = planes[candidate]; found = true; break; }
                 }
                 if (!found) reject();
@@ -546,21 +594,32 @@ inline void validate_roof(const Entity& entity, GeometryBudget& budget) {
             const auto orientation = number(p, "orientation_rad");
             const auto cosine = std::cos(orientation), sine = std::sin(orientation);
             const auto& base = p.at("base_position_m");
-            for (const auto corner_x : {x + fill_clearance, right - fill_clearance})
-                for (const auto corner_y : {y + fill_clearance, top - fill_clearance}) {
-                    const auto world_x = base[0].get<double>() + cosine * corner_x - sine * corner_y;
-                    const auto world_y = base[1].get<double>() + sine * corner_x + cosine * corner_y;
-                    const auto surface_z = base[2].get<double>() + plane.elevation +
-                        plane.x_slope * corner_x + plane.y_slope * corner_y;
-                    for (const auto coordinate : {world_x, world_y, surface_z - roof_drop,
-                        surface_z + curb_height + glazing_thickness})
-                        if (!std::isfinite(coordinate) || std::abs(coordinate) > 1e9) reject();
-                }
+            Polygon fill_corners{{{x + fill_clearance,y + fill_clearance},{right - fill_clearance,y + fill_clearance},
+                {right - fill_clearance,top - fill_clearance},{x + fill_clearance,top - fill_clearance}}};
+            if (angle != 0.0) fill_corners = {{offset(-width*.5 + fill_clearance,-depth*.5 + fill_clearance),
+                offset(width*.5 - fill_clearance,-depth*.5 + fill_clearance),
+                offset(width*.5 - fill_clearance,depth*.5 - fill_clearance),
+                offset(-width*.5 + fill_clearance,depth*.5 - fill_clearance)}};
+            for (const auto corner : fill_corners) {
+                const auto corner_x = corner.x, corner_y = corner.y;
+                const auto world_x = base[0].get<double>() + cosine * corner_x - sine * corner_y;
+                const auto world_y = base[1].get<double>() + sine * corner_x + cosine * corner_y;
+                const auto surface_z = base[2].get<double>() + plane.elevation +
+                    plane.x_slope * corner_x + plane.y_slope * corner_y;
+                for (const auto coordinate : {world_x, world_y, surface_z - roof_drop,
+                    surface_z + curb_height + glazing_thickness})
+                    if (!std::isfinite(coordinate) || std::abs(coordinate) > 1e9) reject();
+            }
         }
-        for (const auto& prior : previous)
-            if (x <= prior.right + tolerance && right >= prior.x - tolerance &&
-                y <= prior.top + tolerance && top >= prior.y - tolerance) reject();
-        previous.push_back({x, y, right, top});
+        for (const auto& prior : previous) {
+            // Retain historical zero-angle bounds arithmetic and admission.
+            const bool overlap = angle == 0.0 && !prior.rotated
+                ? x <= prior.right + tolerance && right >= prior.x - tolerance &&
+                    y <= prior.top + tolerance && top >= prior.y - tolerance
+                : !separated(corners,prior.polygon) && !separated(prior.polygon,corners);
+            if (overlap) reject();
+        }
+        previous.push_back({corners,x,y,right,top,angle != 0.0});
     }
 }
 inline void validate_ifc_reference(const Entity& entity) {

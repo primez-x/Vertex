@@ -122,7 +122,8 @@ Json frame(const Entity& source) {
         for (const auto& row : p.at("roof_openings")) {
             Json cut{{"id", row.at("id")}};
             for (const auto* key : opening_scalars) cut[key] = row.at(key);
-            if (p.at("version") == 3 && row.contains("skylight")) cut["skylight"] = row.at("skylight");
+            if (p.at("version") >= 3 && row.contains("skylight")) cut["skylight"] = row.at("skylight");
+            if (p.at("version") == 4 && row.contains("rotation_rad")) cut["rotation_rad"] = row.at("rotation_rad");
             result.at("roof_openings").push_back(std::move(cut));
         }
     }
@@ -135,7 +136,7 @@ Entity physical_entity(const Json& value, const std::string& id) {
     result.properties = value;
     return result;
 }
-void admit_frame(const Json& value, const std::string& id, bool skylights = true) {
+void admit_frame(const Json& value, const std::string& id, bool skylights = true, bool rotations = true) {
     (void)budget(value);
     if (!value.is_object() || !value.contains("form") || !value.at("form").is_string())
         invalid("Roof plan resize proof form is missing");
@@ -144,7 +145,7 @@ void admit_frame(const Json& value, const std::string& id, bool skylights = true
         invalid("Roof plan resize proof form is unsupported");
     const auto schema = field(value, "version");
     if (!schema || (!schema->is_number_integer() && !schema->is_number_unsigned()) ||
-        (*schema != 1 && *schema != 2 && (!skylights || *schema != 3)))
+        (*schema != 1 && *schema != 2 && (!skylights || *schema != 3) && (!rotations || *schema != 4)))
         invalid("Roof plan resize proof schema is unsupported");
     const bool openings = *schema != 1;
     if (panel && openings)
@@ -170,8 +171,15 @@ void admit_frame(const Json& value, const std::string& id, bool skylights = true
         if (!rows.is_array() || rows.size() > opening_limit) invalid("Roof plan resize proof cut budget exceeded");
         Ids ids;
         for (const auto& cut : rows) {
-            if (*schema == 3 && cut.contains("skylight")) {
-                keys(cut, {"id", "x_m", "y_m", "width_m", "depth_m", "skylight"});
+            auto core = cut;
+            if (*schema == 4 && core.contains("rotation_rad")) {
+                const double angle = scalar(core.at("rotation_rad"));
+                if (std::abs(angle) > std::acos(-1.0) || (angle != 0.0 && !core.contains("skylight")))
+                    invalid("Roof plan resize opening rotation is invalid");
+                core.erase("rotation_rad");
+            }
+            if (*schema >= 3 && cut.contains("skylight")) {
+                keys(core, {"id", "x_m", "y_m", "width_m", "depth_m", "skylight"});
                 const auto& profile = cut.at("skylight");
                 keys(profile, {"version", "frame_width_m", "curb_height_m", "glazing_thickness_m"});
                 if (!version_one(profile.at("version"))) invalid("Roof plan resize skylight profile is unsupported");
@@ -179,19 +187,19 @@ void admit_frame(const Json& value, const std::string& id, bool skylights = true
                     if (scalar(profile.at(key)) < 0.0 ||
                         (std::string_view(key) != "curb_height_m" && scalar(profile.at(key)) == 0.0))
                         invalid("Roof plan resize skylight dimensions are invalid");
-            } else keys(cut, {"id", "x_m", "y_m", "width_m", "depth_m"});
+            } else keys(core, {"id", "x_m", "y_m", "width_m", "depth_m"});
             if (!ids.insert(identity(cut.at("id"))).second) invalid("Roof plan resize proof has duplicate cut IDs");
             for (const auto* key : opening_scalars) (void)scalar(cut.at(key));
         }
     }
     (void)make_roof_shape(decode_roof_entity(physical_entity(value, id)));
 }
-Json derive(const Json& before, const RoofPlanResizeIntent& intent, bool skylights = true) {
+Json derive(const Json& before, const RoofPlanResizeIntent& intent, bool skylights = true, bool rotations = true) {
     admit_intent(intent);
-    admit_frame(before, intent.roof_id, skylights);
+    admit_frame(before, intent.roof_id, skylights, rotations);
     const auto result = frame(stage_roof_plan_axis_resize_entity(physical_entity(before, intent.roof_id),
         intent.scale_x, intent.scale_y, intent.anchor, intent.frame_rotation_radians));
-    admit_frame(result, intent.roof_id, skylights);
+    admit_frame(result, intent.roof_id, skylights, rotations);
     return result;
 }
 Changes changes(const Json& before, const Json& after) {
@@ -302,11 +310,11 @@ Json archive_receipts(const Entity& source, Entity& result, const Json& before, 
         }
     return {{"quantity_entries", std::move(indexed)}, {"roof_opening_input", std::move(children)}};
 }
-void admit_record(const Json& record, bool skylights) {
+void admit_record(const Json& record, bool skylights, bool rotations) {
     keys(record, {"operation", "source", "result", "receipts"});
     const auto intent = decode_roof_plan_resize_intent(record.at("operation"));
     const auto& before = record.at("source"), after = record.at("result");
-    if (!exact(derive(before, intent, skylights), after) || exact(before, after))
+    if (!exact(derive(before, intent, skylights, rotations), after) || exact(before, after))
         invalid("Roof plan resize derivation does not reproduce its result");
     const auto affected = changes(before, after);
     const auto& receipts = record.at("receipts");
@@ -418,14 +426,15 @@ void validate_roof_plan_resize_derivations(const Entity& source) {
     if (!extension) return;
     (void)budget(*extension);
     keys(*extension, {"version", "operations"});
-    const bool skylights = version_two(extension->at("version"));
+    const bool rotations = extension->at("version").is_number_integer() && extension->at("version") == 3;
+    const bool skylights = version_two(extension->at("version")) || rotations;
     if (!version_one(extension->at("version")) && !skylights)
         invalid("Roof plan resize derivation namespace collision");
     const auto& operations = extension->at("operations");
     if (!operations.is_array() || operations.empty() || operations.size() > operation_limit)
         invalid("Roof plan resize derivation operation budget exceeded");
-    validate_roof_derivation_cached(skylights ? "roof-plan-resize-v2" : "roof-plan-resize-v1", extension->dump(), [&] {
-        for (const auto& record : operations) admit_record(record, skylights);
+    validate_roof_derivation_cached(rotations ? "roof-plan-resize-v3" : skylights ? "roof-plan-resize-v2" : "roof-plan-resize-v1", extension->dump(), [&] {
+        for (const auto& record : operations) admit_record(record, skylights, rotations);
     });
 }
 nlohmann::json roof_plan_resize_opaque_remainder(const Entity& source) {
@@ -487,8 +496,10 @@ Entity stage_roof_plan_resize_entity(const Entity& source, const RoofPlanResizeI
     const auto receipts = archive_receipts(source, result, before, changes(before, after));
     const auto key = std::string(roof_plan_resize_derivations_key);
     if (!result.extensions.contains(key))
-        result.extensions[key] = {{"version", before.at("version") == 3 ? 2 : 1}, {"operations", Json::array()}};
-    else if (before.at("version") == 3) result.extensions.at(key).at("version") = 2;
+        result.extensions[key] = {{"version", before.at("version") == 4 ? 3 : before.at("version") == 3 ? 2 : 1}, {"operations", Json::array()}};
+    else if (before.at("version") == 4) result.extensions.at(key).at("version") = 3;
+    else if (before.at("version") == 3 && result.extensions.at(key).at("version") == 1)
+        result.extensions.at(key).at("version") = 2;
     auto& operations = result.extensions.at(key).at("operations");
     if (operations.size() == operation_limit) invalid("Roof plan resize derivation operation budget exceeded");
     operations.push_back({{"operation", operation}, {"source", before}, {"result", after}, {"receipts", receipts}});

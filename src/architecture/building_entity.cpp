@@ -107,8 +107,8 @@ void require_schema_version(const Json& properties, bool roof) {
     }
     try {
         const bool supported = value.is_number_unsigned()
-            ? (value.get<std::uint64_t>() == 1 || (roof && (value.get<std::uint64_t>() == 2 || value.get<std::uint64_t>() == 3)))
-            : (value.get<std::int64_t>() == 1 || (roof && (value.get<std::int64_t>() == 2 || value.get<std::int64_t>() == 3)));
+            ? (value.get<std::uint64_t>() == 1 || (roof && (value.get<std::uint64_t>() == 2 || value.get<std::uint64_t>() == 3 || value.get<std::uint64_t>() == 4)))
+            : (value.get<std::int64_t>() == 1 || (roof && (value.get<std::int64_t>() == 2 || value.get<std::int64_t>() == 3 || value.get<std::int64_t>() == 4)));
         if (!supported) {
             invalid("Unsupported building entity schema version");
         }

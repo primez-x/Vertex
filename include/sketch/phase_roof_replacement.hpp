@@ -121,6 +121,10 @@ struct PhaseRoofReplacementAuthoring {
 // Version 9 adds include_hosted_instances:true and hosted_instance_identities
 // to version 6. Qualified rows are {catalog_id, instance_id, proposed_instance_id}.
 // The exact roster is discovered from actual copied baseline roof hosts.
+// Version 10 retains exactly version nine's twelve fields and requires at
+// least one composite v9 / opening v4 across the baseline and ordinary lists.
+// Historical leaves cannot borrow those nested versions. The complete source
+// replacement path preserves original owners and remaps admitted child IDs.
 [[nodiscard]] nlohmann::json encode_phase_roof_replacement_authoring(
     const PhaseRoofReplacementAuthoring& authoring);
 [[nodiscard]] PhaseRoofReplacementAuthoring decode_phase_roof_replacement_authoring(

@@ -1,6 +1,6 @@
 # Vertex user testing checklist
 
-450 practical tasks, grouped by how you use the app (U001–U449 plus U100a), plus sixteen focused door/window checks below. This replaces the earlier engineering-oriented checklist. The old 130-item list is preserved separately as engineering-requirements-checklist.md.
+450 practical tasks, grouped by how you use the app (U001–U449 plus U100a), plus thirty focused drawing and architectural checks below (480 total). This replaces the earlier engineering-oriented checklist. The old 130-item list is preserved separately as engineering-requirements-checklist.md.
 
 This is a user acceptance list for the intended app, not a claim that every listed action is implemented or working in the current preview. If you cannot find a control, or a feature is absent, mark **Blocked / missing** and describe it. Specialized sections can be skipped if you do not use them or lack the device or sample files.
 
@@ -3314,6 +3314,24 @@ Blocked / missing until testing a candidate that contains it.
 - [ ] **WALL-GROUP-REPEAT - Resize walls before and after creating an alternative**
   - Steps: Enter exact dimensions for two adjoining walls with material layers and a corner window. Resize the group, then save that result as the existing baseline. Create a remodeling alternative and resize the group again. Delete the proposed corner window, undo, save and reopen.
   - Expected: Retained measurements from the first resize do not block the second resize or later window deletion. Original baseline walls keep their saved geometry. Undo and reopening retain the complete window and both cuts.
+  - Result: Not tested
+  - Notes: ______________________________
+
+- [ ] **SKYLIGHT-ROTATE - Rotate a skylight and reset its angle**
+  - Steps: Place a skylight on a shed roof and select it. Drag its rotation grip to 45, 90 and 180 degrees. Hold Shift and try an intermediate angle. Double-click it, enter zero in Rotation on roof face and apply. Repeat on one face of a gable roof and a hip roof. Inspect each result in plan and 3D, then undo/redo, save and reopen.
+  - Expected: The rotation grip follows the selected skylight after release. Its centre and size on the roof face stay fixed. The roof cut, curb, frame and glazing follow the same angle. The angle appears while dragging; Shift permits fine adjustment. Zero returns it to the roof axes. History and reopening retain the same result.
+  - Result: Not tested
+  - Notes: ______________________________
+
+- [ ] **SKYLIGHT-ROTATE-RESIZE - Resize and move a rotated skylight**
+  - Steps: Rotate a skylight to 45 degrees on a sloping roof. Drag each side grip, then a corner grip, then drag its body. On a hip roof, move a small skylight from an end face to a side face with enough clear space. Compare its on-face size with the schedule's surface width/depth. Try rotating or resizing it across a ridge, hip, roof edge or neighboring opening. Cancel a pending edit with Esc.
+  - Expected: Handles stay on the visible footprint. Side/corner resizing pins the opposite side/corner; body movement between valid roof faces preserves size and angle. The preview frame, manufactured outline and committed result agree. On-face sizes agree with the schedule. A conflicting placement shows an invalid preview and cannot change the project. Cancellation leaves the original skylight intact.
+  - Result: Not tested
+  - Notes: ______________________________
+
+- [ ] **SKYLIGHT-ROTATE-TRANSFER - Keep a skylight's angle through copying and alternatives**
+  - Steps: Rotate a skylight, copy it and paste it onto a compatible roof face. Duplicate it. Edit the original roof's opening width through roof Properties. Create a remodeling alternative from the existing roof and rotate its skylight there. Switch back to the baseline. Export IFC and DXF, reopen the exported files, then undo/redo and save/reopen the native project.
+  - Expected: Copy, duplicate and opening-size edits keep the authored angle and construction profile. The proposed roof and skylight change together while the baseline retains its original geometry. Native history and exported geometry retain the rotated mouth, roof cut and fill. A refused transfer leaves all source objects unchanged.
   - Result: Not tested
   - Notes: ______________________________
 

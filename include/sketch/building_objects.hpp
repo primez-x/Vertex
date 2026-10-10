@@ -83,7 +83,8 @@ struct Beam {
 // the panel by that horizontal distance on all four footprint edges.  The
 // returned prism thickness is measured normal to the sloped panel.
 // A vertical through-opening defined in the roof's horizontal local frame.
-// X/Y locate its lower-left corner; width/depth are horizontal projections.
+// X/Y and width/depth retain the unrotated reference rectangle. Skylights may
+// rotate that physical rectangle on one host facet about its reference centre.
 struct RoofSkylight {
     double frame_width{0.06};
     double curb_height{0.15};
@@ -97,6 +98,18 @@ struct RoofOpening {
     double width{};
     double depth{};
     std::optional<RoofSkylight> skylight;
+    // Canonical finite [-pi, pi]; only skylights permit a nonzero angle.
+    double rotation_radians{};
+};
+
+// Roof-local projected basis per unit reference width/depth. Surface scales
+// convert the retained reference dimensions to physical facet dimensions.
+struct RoofOpeningPlanFrame {
+    Vec2 center;
+    Vec2 along;
+    Vec2 across;
+    double width_surface_scale;
+    double depth_surface_scale;
 };
 
 struct SlopedRoofPanel {
@@ -153,6 +166,27 @@ struct HipRoof {
 };
 
 [[nodiscard]] TopoDS_Shape make_hip_roof(const HipRoof& roof);
+
+// Skylights must fit one facet including all outer mouth corners. Bare holes
+// retain their zero-angle frame even when their historical mouth crosses a
+// ridge or hip. Zero uses the exact identity basis without trigonometry.
+[[nodiscard]] RoofOpeningPlanFrame roof_opening_plan_frame(const SlopedRoofPanel& roof,
+                                                          const RoofOpening& opening);
+[[nodiscard]] RoofOpeningPlanFrame roof_opening_plan_frame(const GableRoof& roof,
+                                                          const RoofOpening& opening);
+[[nodiscard]] RoofOpeningPlanFrame roof_opening_plan_frame(const HipRoof& roof,
+                                                          const RoofOpening& opening);
+
+// Pure facet-metric query at a roof-local centre; returns {Sx, Sy}. This does
+// not admit an opening, prove mouth fit, or resolve structure intersections.
+// Facet-boundary ties select a deterministic plane; whole-mouth admission is
+// still required by the native roof builders after rebasing dimensions.
+[[nodiscard]] Vec2 roof_opening_reference_surface_scales(const SlopedRoofPanel& roof,
+                                                        Vec2 reference_center);
+[[nodiscard]] Vec2 roof_opening_reference_surface_scales(const GableRoof& roof,
+                                                        Vec2 reference_center);
+[[nodiscard]] Vec2 roof_opening_reference_surface_scales(const HipRoof& roof,
+                                                        Vec2 reference_center);
 
 // Primitive roof builders above return only the cut roof material. These
 // builders return a fixed skylight's curb, frame and glazing, with normal

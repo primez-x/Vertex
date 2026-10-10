@@ -396,7 +396,7 @@ nlohmann::json encode_roof_edit_intent(const RoofEditIntent& intent) {
     // Skylight roster authority is explicit at both proof boundaries. Earlier
     // composite versions cannot silently borrow the newer nested contract.
     if (intent.openings && result.at("openings").at("version") >= 2) {
-        result["version"] = result.at("openings").at("version") == 3 ? 8 : 7;
+        result["version"] = result.at("openings").at("version") == 4 ? 9 : result.at("openings").at("version") == 3 ? 8 : 7;
         for (const auto* key : {"form", "transform", "resize", "uniform_transform"})
             if (!result.contains(key)) result[key] = nullptr;
         result["coordinate_world_hosted_geometry"] = intent.coordinate_world_hosted_geometry;
@@ -409,7 +409,8 @@ RoofEditIntent decode_roof_edit_intent(const nlohmann::json& value) {
         !value.at("version").is_number_integer() ||
         !value.contains("roof_id") || !value.contains("profile") || !value.contains("openings") || !value.contains("pose") ||
         value.dump().size() > proof_limit) invalid("Roof edit fields or proof budget are invalid");
-    const bool transfers = value.at("version") == 8;
+    const bool rotations = value.at("version") == 9;
+    const bool transfers = value.at("version") == 8 || rotations;
     const bool skylights = value.at("version") == 7 || transfers;
     const bool extended = value.at("version") == 6 || skylights;
     const bool coordinated = extended && value.contains("coordinate_world_hosted_geometry") &&
@@ -432,7 +433,7 @@ RoofEditIntent decode_roof_edit_intent(const nlohmann::json& value) {
             invalid("Roof extended edit requires exactly ten fields and an admitted coordination flag");
         if (skylights && (value.at("openings").is_null() ||
             !value.at("openings").is_object() || !value.at("openings").contains("version") ||
-            value.at("openings").at("version") != (transfers ? 3 : 2)))
+            value.at("openings").at("version") != (rotations ? 4 : transfers ? 3 : 2)))
             invalid("Roof extended edit requires its matching opening authority");
     } else if (uniform_transform) {
         if (value.size() != 9 || !value.contains("form") || !value.at("form").is_null() ||

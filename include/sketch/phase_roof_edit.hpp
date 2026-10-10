@@ -48,6 +48,8 @@ struct RoofEditIntent {
 // version two; historical composite versions cannot admit that new authority.
 // Opening transfer uses strict version eight with those same ten fields and a
 // version-three openings component. Earlier composites cannot admit transfers.
+// Rotation uses strict version nine with the same ten fields and a required
+// version-four openings component. Earlier composites cannot borrow angles.
 [[nodiscard]] nlohmann::json encode_roof_edit_intent(const RoofEditIntent& intent);
 [[nodiscard]] RoofEditIntent decode_roof_edit_intent(const nlohmann::json& value);
 

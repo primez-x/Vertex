@@ -1,5 +1,12 @@
 # Portable project extraction
 
+Exchange version 173 requires native reader 175 for roof-face skylight rotation.
+Schema-four roofs, opening intent four, composite nine and phase twenty/twenty-one
+retain the reference dimensions, actual face angle and explicit new authority.
+Historical, passive-source and undone forms retain their original meanings;
+asset tables are unchanged. This source addition does not establish migration,
+runtime or output acceptance.
+
 Exchange version 172 requires native reader 174 for source-derived baseline
 wall-group scaling inside a saved active alternative. Phase intent 19 retains
 pure scale plus complete leaf-eight replacement, including reviewed, nested and

@@ -85,6 +85,10 @@ struct PhaseConstraintAuthoringIntent {
     // cannot recover. No sibling geometry, relationship, replacement or
     // demolition authority accompanies it. Null preserves historical codecs.
     nlohmann::json ordinary_roof_edits=nullptr;
+    // Dialect twenty uses the same nine keys as seventeen and requires at least
+    // one RoofEditIntent v9 / opening v4. Seventeen cannot borrow that authority.
+    // Dialect twenty-one uses four's exact keys with rotation replacement leaf
+    // ten. Historical four/coordinated dialects cannot admit the new leaf.
     // Dialect eighteen: intent.wall_group_scale alone carries canonical
     // uniform physical scale authority for actual ordinary/proposed walls.
     // Its closed intent gains exactly the wall_group_scale field; historical

@@ -27,6 +27,8 @@ struct RoofOpeningUpsertIntent {
     // engaged object authors the strict version-one skylight profile.
     std::optional<nlohmann::json> skylight;
     std::optional<RoofOpeningCloneSource> clone_source;
+    // Separate canonical angle authority; disengaged retains the actual angle.
+    std::optional<double> rotation_radians;
 };
 
 struct RoofOpeningEditIntent {
@@ -37,6 +39,8 @@ struct RoofOpeningEditIntent {
     bool uses_skylight_schema{false};
     // Retain an explicitly decoded v3 proof even when no transfer is authored.
     bool uses_clone_schema{false};
+    // Explicit v4 authority survives zero angles and removals.
+    bool uses_rotation_schema{false};
 };
 
 // Strict version 1: exactly version, roof_id, upserts, removed_opening_ids.
@@ -53,6 +57,11 @@ struct RoofOpeningEditIntent {
 // named actual skylight child to a fresh identity with all four inputs and its
 // exact nonnull profile. Known child/indexed receipt ownership is retargeted;
 // row and receipt opaque siblings remain exact. Future/ambiguous bindings refuse.
+// Strict v4 adds rotation_rad to every v3 upsert: null retains, a finite number
+// in [-pi,pi] authors. Schema-four hosts require v4 even for zero/removal.
+// Passive schema-four clones explicitly retain their actual angle. Angles
+// carry no dimensional receipt authority; historical opaque angle keys refuse
+// when a schema-four promotion would activate them.
 [[nodiscard]] nlohmann::json encode_roof_opening_edit_intent(const RoofOpeningEditIntent& intent);
 [[nodiscard]] RoofOpeningEditIntent decode_roof_opening_edit_intent(const nlohmann::json& value);
 
@@ -78,7 +87,7 @@ struct RoofOpeningEditIntent {
 // Captures actual roster changes only. Changed/new fields require exact child
 // input receipts, including their actual parsing default unit. The complete
 // candidate must equal independent replay after equal scalar normalization.
-// Clone transfers require an explicit v3 intent; candidate inference cannot
+// Clone transfers require an explicit v3/v4 intent; candidate inference cannot
 // reconstruct their captured passive source authority.
 [[nodiscard]] std::optional<RoofOpeningEditIntent> capture_roof_opening_edit(
     const Entity& original, const Entity& candidate);

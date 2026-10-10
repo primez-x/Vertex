@@ -24,7 +24,9 @@ inline constexpr std::string_view roof_plan_resize_derivations_key =
 [[nodiscard]] nlohmann::json encode_roof_plan_resize_intent(const RoofPlanResizeIntent& intent);
 [[nodiscard]] RoofPlanResizeIntent decode_roof_plan_resize_intent(const nlohmann::json& value);
 
-// The owned archive is closed v1 {version,operations}. Each operation has
+// The owned archive is closed {version,operations}: v1 admits roof schemas
+// 1/2, v2 adds schema 3 skylight profiles, and v3 adds schema 4 surface angles.
+// Older archive versions keep their original closed frame fences. Each operation has
 // exactly operation, source, result and receipts. Physical source/result
 // frames are closed canonical roof properties with closed opening rows;
 // receipt maps retain the original complete raw receipts. Historical owner
@@ -39,7 +41,8 @@ void validate_roof_plan_resize_source_entity(const Entity& source);
 // Calls the shared native geometry stage on the actual source. Changed known
 // quantity_entries/opening input scalars move verbatim to the archive; future
 // or unsupported affected bindings refuse. XY, profile, pitch and opening
-// rectangles follow genuine math; schema/roster/opaque metadata, Z, rise,
+// reference rectangles follow genuine math and retain their surface angle;
+// schema/roster/opaque metadata, Z, rise,
 // thickness, overhang and existing rigid-transform history remain exact.
 [[nodiscard]] Entity stage_roof_plan_resize_entity(
     const Entity& actual_source, const RoofPlanResizeIntent& intent);

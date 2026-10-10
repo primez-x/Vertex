@@ -16,6 +16,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
+#include <numbers>
 #include <stdexcept>
 #include <string_view>
 #include <type_traits>
@@ -61,7 +62,7 @@ Vec3 position(const Json& value) {
 unsigned version(const Json& value) {
     const auto& raw = field(value, "version");
     if ((!raw.is_number_integer() && !raw.is_number_unsigned()) ||
-        (raw != 1 && raw != 2 && raw != 3))
+        (raw != 1 && raw != 2 && raw != 3 && raw != 4))
         invalid("Unsupported roof schema version");
     return raw.get<unsigned>();
 }
@@ -81,7 +82,7 @@ std::vector<RoofOpening> openings(const Json& value, unsigned schema) {
         RoofOpening opening{id, number(entry, "x_m"), number(entry, "y_m"),
             number(entry, "width_m"), number(entry, "depth_m"), std::nullopt};
         if (entry.contains("skylight")) {
-            if (schema != 3) invalid("Roof skylights require building schema version 3");
+            if (schema < 3) invalid("Roof skylights require building schema version 3");
             const auto& skylight = entry.at("skylight");
             if (!skylight.is_object() || skylight.size() != 4 ||
                 !skylight.contains("version") || !skylight.contains("frame_width_m") ||
@@ -95,6 +96,15 @@ std::vector<RoofOpening> openings(const Json& value, unsigned schema) {
             if (opening.skylight->frame_width <= 0.0 || opening.skylight->curb_height < 0.0 ||
                 opening.skylight->glazing_thickness <= 0.0)
                 invalid("Roof skylight dimensions must be positive with nonnegative curb height");
+        }
+        // Before schema 4 this name was an opaque extension sibling. Retain
+        // historical geometry by activating it only in its owning schema.
+        if (schema == 4 && entry.contains("rotation_rad")) {
+            opening.rotation_radians = number(entry, "rotation_rad");
+            if (std::abs(opening.rotation_radians) > std::numbers::pi)
+                invalid("Roof opening rotation must be canonical in [-pi, pi]");
+            if (opening.rotation_radians != 0.0 && !opening.skylight)
+                invalid("Only skylights support roof opening rotation");
         }
         result.push_back(std::move(opening));
     }
@@ -228,13 +238,22 @@ nlohmann::json encode_roof_properties(const RoofObject& object) {
         }
         for (const auto& opening : roof.openings) {
             identity(opening.id);
+            if (!std::isfinite(opening.rotation_radians) ||
+                std::abs(opening.rotation_radians) > std::numbers::pi)
+                invalid("Roof opening rotation must be finite and canonical in [-pi, pi]");
+            if (opening.rotation_radians != 0.0 && !opening.skylight)
+                invalid("Only skylights support roof opening rotation");
             Json row{{"id", opening.id}, {"x_m", opening.x}, {"y_m", opening.y},
                 {"width_m", opening.width}, {"depth_m", opening.depth}};
             if (opening.skylight) {
-                p["version"] = 3;
+                p["version"] = std::max(p["version"].template get<unsigned>(), 3u);
                 row["skylight"] = {{"version", 1}, {"frame_width_m", opening.skylight->frame_width},
                     {"curb_height_m", opening.skylight->curb_height},
                     {"glazing_thickness_m", opening.skylight->glazing_thickness}};
+            }
+            if (opening.rotation_radians != 0.0) {
+                p["version"] = 4;
+                row["rotation_rad"] = opening.rotation_radians;
             }
             p["roof_openings"].push_back(std::move(row));
         }

@@ -14,6 +14,60 @@ changed source does not acquire runtime acceptance without later qualification.
 
 ## Current delivery state
 
+### October 10 roof-face skylight rotation - source integration
+
+The baseline wall-group alternative batch is committed and pushed as c00a0aab;
+the local and remote commit identities match. Current work closes the individual
+skylight rotation gap with actual on-face geometry, not a decorative canvas
+rotation. Separate owners implement native geometry/codec, semantic replay,
+transform/import transport and roof-specific canvas controls. Root owns the
+controller, reader floors, documentation, integration review and Git backup.
+
+The retained X/Y and width/depth describe the unrotated roof-local reference
+rectangle. Rotation keeps its centre and physical facet dimensions; the actual
+plan mouth is generally a parallelogram. Curb, frame, glazing and the roof cut
+share that footprint. The established vertical curb/member extrusion convention
+remains in force; this is rotation of their on-face domains, not a new rigid
+normal-extruded assembly convention. Explicit zero-angle paths retain historical
+geometry. Pre-version-four angle-like row extensions remain opaque, and a
+conflicting promotion refuses without overwriting or activating them.
+
+Roof schema four, opening intent four, composite roof edit nine, ordinary phase
+twenty and baseline replacement leaf ten/phase twenty-one carry explicit new
+authority. Reader 175 and extraction 173 retain it through saved and undone
+history. Side/corner grips use the actual projected basis; a persistent rotation
+grip snaps the physical angle to 45 degrees and Shift permits fine rotation.
+Quick Properties, source-bound previews and clipboard placement retain the
+same authored angle. Full native/import geometry admission remains required.
+
+Independent review identified roster authority, affected opaque angle receipts,
+cross-facet physical size/frame agreement and far-origin control admission gaps.
+Corrections retain version-four roster authority, refuse affected opaque angle
+bindings while preserving unrelated receipts, preserve physical size using
+destination facet factors, pin resized sides in the destination basis and publish
+the actual admitted frame before a waiting release. Reference axes project as
+directions without translated-point subtraction. The manual list retains all 450
+original tasks plus thirty focused tasks (480 total), each with steps and an
+expected result. Static registry inspection retains all 277 requirements and
+changes only the two relevant delivery notes, not acceptance or source bindings.
+
+All implementation owners returned. The final focused independent source review
+accepted all four corrections with no remaining concrete P1/P2 in the reviewed
+scope. Root reviewed the integrated interfaces, compatibility, remaining limits
+and evidence. Scoped commit, push and exact remote identity verification
+accompany this batch. No builds, tests/new
+tests, probes, native jobs, UI launches, packages or installations run in this
+source-only batch. The installed candidate remains unchanged. Grouped skylight
+selection, 3D child picking and the full remaining delivery plan remain open;
+this increment does not close any production acceptance gate.
+
+Next source work uses actual child identity: the 3D renderer currently paints
+skylight regions within a roof presentation, but its picker returns only the
+owner roof ID. Plan selection likewise stores one roof child. Complete nested
+child picking and shared selection/edit commands across plan and 3D; do not
+replace a skylight edit with an owner-roof transform. Broader delivery remains
+governed by the full plan and all ten open acceptance gates.
+
 ### October 10 baseline wall-group scaling - source integration
 
 The ordinary connected scale batch is committed and pushed as 2d99f315, with
