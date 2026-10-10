@@ -18,6 +18,11 @@ using NativeGeometryVisibleIds = std::set<std::string, std::less<>>;
 // Fresh, worker-owned topology. No AIS handles or live-view shapes are shared
 // with preparation. Ownership transfers to the owner thread on completion;
 // with triangulation already prepared for presentation.
+struct PreparedNativeRoofOpeningTarget {
+    std::string roof_id;
+    std::string opening_id;
+    bool operator==(const PreparedNativeRoofOpeningTarget&) const = default;
+};
 struct PreparedNativeMaterialRegion {
     std::string source_id;
     TopoDS_Shape shape; // empty for a fully occluded member; never mesh/display it
@@ -29,6 +34,9 @@ struct PreparedNativeMaterialRegion {
     double net_volume{};
     // Versioned assembly profile key; empty for other native material regions.
     std::string presentation_key;
+    // Explicit semantic provenance for an actual skylight fill. source_id is
+    // also used by material/assembly regions and grants no child-pick authority.
+    std::optional<PreparedNativeRoofOpeningTarget> roof_opening;
 };
 struct PreparedNativeSolid {
     std::string content;

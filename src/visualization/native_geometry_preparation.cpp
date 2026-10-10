@@ -724,16 +724,19 @@ std::optional<PreparedNativeGeometry> prepare_native_geometry(
         std::vector<PreparedNativeMaterialRegion> material_regions;
         std::string appearance_content;
         try {
-            const auto append_skylights = [&](const RoofObject& roof, TopoDS_Compound& compound, BRep_Builder& builder) {
+            const auto append_skylights = [&](const RoofObject& roof, const std::string& source_roof_id,
+                                             TopoDS_Compound& compound, BRep_Builder& builder) {
                 std::visit([&](const auto& value) {
                     for (const auto& opening : value.openings) {
                         if (!opening.skylight) continue;
                         if (cancelled && cancelled()) throw std::runtime_error("Skylight preparation cancelled");
                         PreparedNativeMaterialRegion fill;
                         fill.source_id = opening.id;
+                        fill.roof_opening = PreparedNativeRoofOpeningTarget{source_roof_id, opening.id};
                         fill.shape = make_roof_skylight_shape(roof, opening.id);
                         fill.color = Quantity_Color(.95, .95, .95, Quantity_TOC_RGB);
                         fill.gross_volume = fill.net_volume = solid_volume(fill.shape);
+                        appearance_content.append(source_roof_id).push_back('\0');
                         appearance_content.append(fill.source_id).append(":skylight-white").push_back('\0');
                         builder.Add(compound, fill.shape);
                         material_regions.push_back(std::move(fill));
@@ -829,7 +832,8 @@ std::optional<PreparedNativeGeometry> prepare_native_geometry(
                 BRep_Builder builder;
                 builder.MakeCompound(complete);
                 builder.Add(complete, shape);
-                for (const auto& roof : roof_objects) append_skylights(roof, complete, builder);
+                for (std::size_t index=0; index<roof_objects.size(); ++index)
+                    append_skylights(roof_objects[index],join.roof_ids[index],complete,builder);
                 shape = complete;
             } else if (geometry_entity.type == "slab") {
                 Slab slab;
@@ -868,7 +872,7 @@ std::optional<PreparedNativeGeometry> prepare_native_geometry(
                     BRep_Builder builder;
                     builder.MakeCompound(complete);
                     builder.Add(complete, material_regions.front().shape);
-                    append_skylights(roof, complete, builder);
+                    append_skylights(roof,id,complete,builder);
                     shape = complete;
                 }
             } else {

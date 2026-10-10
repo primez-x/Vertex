@@ -4497,6 +4497,9 @@ std::optional<QRectF> PlanCanvas::computeSelectionBounds(const QRectF& viewport)
 }
 
 std::optional<QRectF> PlanCanvas::selectionFrame(const QRectF& viewport) const {
+    // Child controls own the selected skylight. Its containing roof remains a
+    // logical owner, never a second editable selection frame.
+    if (m_selected_roof_opening) return std::nullopt;
     if (hasInteractivePresentation()) return computeSelectionFrame(viewport);
     const auto key = retainedSelectionKey(viewport);
     if (m_selection_frame_cache.key != key) {
@@ -5478,7 +5481,9 @@ void PlanCanvas::setSelectedRoofOpening(std::optional<CanvasRoofOpeningTarget> t
     if (target == m_selected_roof_opening) return;
     if (m_roof_opening_capture || m_pressed_roof_opening) resetGesture();
     m_selected_roof_opening = std::move(target);
-    if (m_selected_roof_opening && !selectedRoofOpeningControls()) m_selected_roof_opening.reset();
+    // A valid logical child can be selected in 3D while this plan is cropped,
+    // vertical or read-only. Absence of complete mouth controls disables grips
+    // rather than exposing the owner's generic transform frame.
     if (m_last_mouse_position) updatePointerCursor(*m_last_mouse_position);
     update();
 }

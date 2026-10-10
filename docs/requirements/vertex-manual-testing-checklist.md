@@ -1,6 +1,6 @@
 # Vertex user testing checklist
 
-450 practical tasks, grouped by how you use the app (U001–U449 plus U100a), plus thirty focused drawing and architectural checks below (480 total). This replaces the earlier engineering-oriented checklist. The old 130-item list is preserved separately as engineering-requirements-checklist.md.
+450 practical tasks, grouped by how you use the app (U001–U449 plus U100a), plus thirty-three focused drawing and architectural checks below (483 total). This replaces the earlier engineering-oriented checklist. The old 130-item list is preserved separately as engineering-requirements-checklist.md.
 
 This is a user acceptance list for the intended app, not a claim that every listed action is implemented or working in the current preview. If you cannot find a control, or a feature is absent, mark **Blocked / missing** and describe it. Specialized sections can be skipped if you do not use them or lack the device or sample files.
 
@@ -3332,6 +3332,24 @@ Blocked / missing until testing a candidate that contains it.
 - [ ] **SKYLIGHT-ROTATE-TRANSFER - Keep a skylight's angle through copying and alternatives**
   - Steps: Rotate a skylight, copy it and paste it onto a compatible roof face. Duplicate it. Edit the original roof's opening width through roof Properties. Create a remodeling alternative from the existing roof and rotate its skylight there. Switch back to the baseline. Export IFC and DXF, reopen the exported files, then undo/redo and save/reopen the native project.
   - Expected: Copy, duplicate and opening-size edits keep the authored angle and construction profile. The proposed roof and skylight change together while the baseline retains its original geometry. Native history and exported geometry retain the rotated mouth, roof cut and fill. A refused transfer leaves all source objects unchanged.
+  - Result: Not tested
+  - Notes: ______________________________
+
+- [ ] **SKYLIGHT-3D-SELECT - Select the skylight itself in 3D**
+  - Steps: Place two skylights on a roof. Open 3D and click each skylight, then click the surrounding roof. Select a skylight in plan and click it again in 3D. Try Ctrl-click to deselect the selected skylight, then select it again. Use Alt-click where the skylight and roof overlap to cycle the available objects.
+  - Expected: A skylight click highlights that skylight, not the entire roof. Clicking the roof selects the roof instead. The selected skylight does not expose a whole-roof move or transform handle. Ctrl-click deselects the same skylight. Alt-click cycles the real selectable objects without changing their geometry.
+  - Result: Not tested
+  - Notes: ______________________________
+
+- [ ] **SKYLIGHT-3D-ACTIONS - Edit, copy and delete a skylight from 3D**
+  - Steps: Double-click a skylight in 3D and change its width or angle. Right-click it and use Properties, Copy, Cut, Delete and Select roof in turn, undoing destructive actions. Paste a copied skylight onto a compatible roof face in plan. Save and reopen the project.
+  - Expected: Properties and context actions address the clicked skylight. Other skylights and the roof's dimensions stay unchanged. The cut and fill update together; undo restores both. Copy/paste retains the angle and construction profile. Reopening retains the authored result.
+  - Result: Not tested
+  - Notes: ______________________________
+
+- [ ] **SKYLIGHT-3D-JOINED - Select skylights on joined roofs and placed buildings**
+  - Steps: Join compatible roof objects containing skylights, then click each skylight in 3D and change one through Properties. Repeat with a building placed in the site using a translated or rotated placement. Hide and show its layer, then switch floors or design alternatives. Try reopening a context menu after the project or view changes.
+  - Expected: Each clicked skylight remains attached to its actual source roof and edits only that child. Joined roofs retain their complete visible geometry. Site placement affects the display without changing the roof-local measurements in Properties. Hidden objects are not pickable. A menu from an outdated project or view cannot apply its action to another object.
   - Result: Not tested
   - Notes: ______________________________
 

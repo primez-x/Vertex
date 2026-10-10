@@ -162,6 +162,7 @@ occ::handle<AIS_Shape> prepared_presentation(const PreparedNativeSolid& solid) {
         builder.MakeCompound(compound);
         bool has_region = false;
         for (const auto& region : solid.material_regions) {
+            if (region.roof_opening) continue; // Rendered and picked separately.
             if (region.shape.IsNull()) continue; // Fully occluded roof member.
             builder.Add(compound, region.shape);
             has_region = true;
@@ -169,7 +170,7 @@ occ::handle<AIS_Shape> prepared_presentation(const PreparedNativeSolid& solid) {
         if (!has_region) throw std::invalid_argument("native material presentation has no visible regions");
         auto colored = occ::handle<AIS_ColoredShape>(new AIS_ColoredShape(compound));
         for (const auto& region : solid.material_regions)
-            if (!region.shape.IsNull()) colored->SetCustomColor(region.shape, region.color);
+            if (!region.roof_opening && !region.shape.IsNull()) colored->SetCustomColor(region.shape, region.color);
         result = colored;
     }
     result->SetColor(solid.color);
@@ -181,6 +182,10 @@ occ::handle<AIS_Shape> prepared_presentation(const PreparedNativeSolid& solid) {
 
 class NativeModelView::Impl {
 public:
+    struct RoofOpeningPresentation {
+        NativeRoofOpeningTarget target;
+        occ::handle<AIS_Shape> presentation;
+    };
     struct CachedSolid {
         // Exact equality avoids reusing stale geometry after a hash collision.
         std::string content;
@@ -188,6 +193,7 @@ public:
         TopoDS_Shape shape;
         occ::handle<AIS_Shape> presentation;
         Quantity_Color color;
+        std::vector<RoofOpeningPresentation> roof_openings;
     };
 
     NativeModelView* owner{};
@@ -244,6 +250,7 @@ public:
     std::map<std::string, CachedSolid, std::less<>> solids;
     QStringList selected_entity_ids;
     std::optional<std::string> selected_entity_id;
+    std::optional<NativeRoofOpeningTarget> selected_roof_opening;
     std::optional<std::string> manipulator_entity_id;
     std::optional<gp_Trsf> manipulation_transform;
     std::uint64_t navigation_generation{};
@@ -255,6 +262,7 @@ public:
         QSize native_size;
         qreal pixel_ratio{};
         QStringList selection;
+        std::optional<NativeRoofOpeningTarget> roof_opening;
         std::uint64_t navigation_generation{};
     };
     std::optional<SelectionCapture> selection_capture;
@@ -539,24 +547,43 @@ public:
                     auto retained = cached->second;
                     retained.color = solid.color;
                     replacement.emplace(id, std::move(retained));
-                    ++metrics.reused;
+                    metrics.reused += 1 + cached->second.roof_openings.size();
                     continue;
                 }
                 auto presentation = prepared_presentation(solid);
+                std::vector<RoofOpeningPresentation> roof_openings;
+                for (const auto& region : solid.material_regions) {
+                    if (!region.roof_opening) continue;
+                    if (region.shape.IsNull() || region.roof_opening->roof_id.empty() ||
+                        region.roof_opening->opening_id.empty())
+                        throw std::invalid_argument("native roof opening presentation lacks topology or provenance");
+                    NativeRoofOpeningTarget target{QString::fromStdString(region.roof_opening->roof_id),
+                                                   QString::fromStdString(region.roof_opening->opening_id)};
+                    if (std::any_of(roof_openings.begin(),roof_openings.end(),[&](const auto& child) {
+                            return child.target == target;
+                        })) throw std::invalid_argument("native roof opening presentation has duplicate provenance");
+                    auto fill = occ::handle<AIS_Shape>(new AIS_Shape(region.shape));
+                    fill->SetColor(region.color);
+                    fill->SetDisplayMode(AIS_Shaded);
+                    roof_openings.push_back({std::move(target),std::move(fill)});
+                }
+                metrics.created += 1 + roof_openings.size();
                 // Appearance-only publication consumes fresh region topology,
                 // while the retained fused/assembly shape remains authoritative.
                 auto geometry_shape = same_geometry ? cached->second.shape : std::move(solid.shape);
                 replacement.emplace(id, CachedSolid{std::move(solid.content), std::move(solid.appearance_content),
                                                    std::move(geometry_shape),
-                                                   presentation, solid.color});
-                ++metrics.created;
+                                                   presentation, solid.color, std::move(roof_openings)});
             }
             std::map<std::string, bool, std::less<>> previous_visibility;
+            std::map<std::pair<std::string,std::size_t>,bool> previous_child_visibility;
             for (const auto& [id, solid] : solids) {
                 previous_visibility.emplace(id, context->IsDisplayed(solid.presentation));
+                for (std::size_t index=0; index<solid.roof_openings.size(); ++index)
+                    previous_child_visibility.emplace(std::pair{id,index},context->IsDisplayed(solid.roof_openings[index].presentation));
                 const auto next = replacement.find(id);
                 if (next == replacement.end() || next->second.presentation != solid.presentation)
-                    ++metrics.removed;
+                    metrics.removed += 1 + solid.roof_openings.size();
             }
             auto published_source = std::make_shared<const DocumentSnapshot>(*snapshot);
             const bool had_solids = !solids.empty();
@@ -581,22 +608,25 @@ public:
                         if (visible) context->Display(solid.presentation, false);
                         else context->Erase(solid.presentation, false);
                     }
+                    for (const auto& child : solid.roof_openings) {
+                        if (visible != context->IsDisplayed(child.presentation)) {
+                            if (visible) context->Display(child.presentation,false);
+                            else context->Erase(child.presentation,false);
+                        }
+                    }
                 }
                 // All candidates have been displayed successfully before any
                 // obsolete object is detached. Unchanged handles stay registered.
                 for (const auto& [id, solid] : solids) {
                     const auto next = replacement.find(id);
-                    if (next == replacement.end() || next->second.presentation != solid.presentation)
+                    if (next == replacement.end() || next->second.presentation != solid.presentation) {
                         context->Remove(solid.presentation, false);
+                        for (const auto& child : solid.roof_openings) context->Remove(child.presentation,false);
+                    }
                 }
                 // A changed regional appearance replaces its AIS handle; keep
                 // the semantic selection attached to the new root presentation.
-                context->ClearSelected(false);
-                for (const auto& id : selected_entity_ids) {
-                    const auto selected = replacement.find(id.toStdString());
-                    if (selected != replacement.end() && context->IsDisplayed(selected->second.presentation))
-                        context->AddOrRemoveSelected(selected->second.presentation, false);
-                }
+                restore_selection_highlights(replacement);
                 const bool has_visible_solids = std::any_of(prepared->solids.begin(), prepared->solids.end(),
                     [](const auto& entry) { return entry.second.visible; });
                 if (has_visible_solids && fit_requested) {
@@ -618,6 +648,8 @@ public:
                     const auto old = solids.find(id);
                     if (old == solids.end() || old->second.presentation != solid.presentation) {
                         try { context->Remove(solid.presentation, false); } catch (...) {}
+                        for (const auto& child : solid.roof_openings)
+                            try { context->Remove(child.presentation,false); } catch (...) {}
                     }
                 }
                 for (const auto& [id, solid] : solids) {
@@ -629,16 +661,18 @@ public:
                         if (previous_visibility.at(id)) context->Display(solid.presentation, false);
                         else context->Erase(solid.presentation, false);
                     } catch (...) {}
+                    for (std::size_t index=0; index<solid.roof_openings.size(); ++index) {
+                        try {
+                            if (previous_child_visibility.at(std::pair{id,index}))
+                                context->Display(solid.roof_openings[index].presentation,false);
+                            else context->Erase(solid.roof_openings[index].presentation,false);
+                        } catch (...) {}
+                    }
                 }
                 has_fit = previously_fit;
                 initial_fit_pending = previously_pending_fit;
                 try {
-                    context->ClearSelected(false);
-                    for (const auto& id : selected_entity_ids) {
-                        const auto selected = solids.find(id.toStdString());
-                        if (selected != solids.end() && previous_visibility.at(selected->first))
-                            context->AddOrRemoveSelected(selected->second.presentation, false);
-                    }
+                    restore_selection_highlights();
                 } catch (...) {}
                 try { attach_manipulator(); } catch (...) {}
                 try { viewer->Redraw(); } catch (...) {}
@@ -756,14 +790,22 @@ public:
         }
     }
 
+    struct PickTarget {
+        QString entity_id;
+        std::optional<NativeRoofOpeningTarget> roof_opening;
+        bool operator==(const PickTarget&) const = default;
+        bool empty() const { return entity_id.isEmpty() && !roof_opening; }
+    };
+
     template <typename PresentationHandle>
-    QString entity_id_for_presentation(const PresentationHandle& selected) const {
-        if (selected.IsNull()) {
-            return {};
-        }
+    PickTarget target_for_presentation(const PresentationHandle& selected) const {
+        if (selected.IsNull() || context.IsNull()) return {};
         for (const auto& [id, solid] : solids) {
+            for (const auto& child : solid.roof_openings)
+                if (child.presentation == selected && context->IsDisplayed(child.presentation))
+                    return {{},child.target};
             if (solid.presentation == selected && !context.IsNull() && context->IsDisplayed(solid.presentation)) {
-                return QString::fromStdString(id);
+                return {QString::fromStdString(id),std::nullopt};
             }
         }
         return {};
@@ -847,7 +889,7 @@ public:
     }
 
     void attach_manipulator() {
-        if (selected_entity_ids.size() != 1 || !selected_entity_id.has_value() || !supports_direct_transform(*selected_entity_id) ||
+        if (selected_roof_opening || selected_entity_ids.size() != 1 || !selected_entity_id.has_value() || !supports_direct_transform(*selected_entity_id) ||
             !native_ready || !geometry_prepared || regenerator.is_pending() || prepared_geometry ||
             !geometry_status.isEmpty() || context.IsNull() || viewer.IsNull()) {
             detach_manipulator();
@@ -882,12 +924,13 @@ public:
         options.SetAdjustPosition(true).SetAdjustSize(false).SetEnableModes(true);
         auto group = occ::handle<NCollection_HSequence<occ::handle<AIS_InteractiveObject>>>(
             new NCollection_HSequence<occ::handle<AIS_InteractiveObject>>());
-        for (const auto& id : transform_presentation_ids(*selected_entity_id))
+        for (const auto& id : transform_presentation_ids(*selected_entity_id)) {
             group->Append(solids.at(id).presentation);
+            for (const auto& child : solids.at(id).roof_openings) group->Append(child.presentation);
+        }
         manipulator->Attach(group, options);
         manipulator_entity_id = selected_entity_id;
-        context->ClearSelected(false);
-        context->AddOrRemoveSelected(found->second.presentation, false);
+        restore_selection_highlights();
         viewer->Redraw();
     }
 
@@ -958,6 +1001,10 @@ public:
                 if (native_ready && !context.IsNull()) {
                     context->Redisplay(found->second.presentation, false);
                 }
+                for (const auto& child : found->second.roof_openings) {
+                    child.presentation->ResetTransformation();
+                    if (native_ready && !context.IsNull()) context->Redisplay(child.presentation,false);
+                }
             }
         }
         translation_preview_ids.clear();
@@ -985,6 +1032,10 @@ public:
             member->second.presentation->SetLocalTransformation(transform);
             if (native_ready && !context.IsNull()) {
                 context->Redisplay(member->second.presentation, false);
+            }
+            for (const auto& child : member->second.roof_openings) {
+                child.presentation->SetLocalTransformation(transform);
+                if (native_ready && !context.IsNull()) context->Redisplay(child.presentation,false);
             }
         }
         if (native_ready && !viewer.IsNull()) {
@@ -1051,7 +1102,7 @@ public:
         int width=0, height=0;
         if (!window.IsNull()) window->Size(width,height);
         return {published_snapshot,view->Camera()->WorldViewProjState(),owner->size(),
-                QSize(width,height),input_scale(),selected_entity_ids,navigation_generation};
+                QSize(width,height),input_scale(),selected_entity_ids,selected_roof_opening,navigation_generation};
     }
 
     bool selection_current(const SelectionCapture& capture) const {
@@ -1060,23 +1111,36 @@ public:
             navigation_generation == std::numeric_limits<std::uint64_t>::max() ||
             view.IsNull() || view->Camera().IsNull() || owner->size() != capture.logical_size ||
             input_scale() != capture.pixel_ratio || selected_entity_ids != capture.selection ||
+            selected_roof_opening != capture.roof_opening ||
             view->Camera()->WorldViewProjState() != capture.camera) return false;
         int width=0, height=0;
         if (!window.IsNull()) window->Size(width,height);
         return QSize(width,height)==capture.native_size;
     }
 
+    occ::handle<AIS_Shape> roof_opening_presentation(const NativeRoofOpeningTarget& target) const {
+        if (context.IsNull()) return {};
+        for (const auto& [id,solid] : solids)
+            for (const auto& child : solid.roof_openings)
+                if (child.target == target && context->IsDisplayed(child.presentation)) return child.presentation;
+        return {};
+    }
+
     QPoint keyboard_context_anchor(const SelectionCapture& capture, const QRect& visible) const {
         const auto fallback=visible.center();
-        if (capture.selection.isEmpty() || capture.native_size.isEmpty()) return fallback;
-        const auto found=solids.find(capture.selection.back().toStdString());
-        if (found==solids.end() || found->second.presentation.IsNull() ||
-            found->second.presentation->Shape().IsNull() ||
-            !context->IsDisplayed(found->second.presentation)) return fallback;
+        if (capture.native_size.isEmpty()) return fallback;
+        occ::handle<AIS_Shape> presentation;
+        if (capture.roof_opening) presentation=roof_opening_presentation(*capture.roof_opening);
+        else if (!capture.selection.isEmpty()) {
+            const auto found=solids.find(capture.selection.back().toStdString());
+            if (found!=solids.end()) presentation=found->second.presentation;
+        }
+        if (presentation.IsNull() || presentation->Shape().IsNull() ||
+            !context->IsDisplayed(presentation)) return fallback;
         // Use the displayed shape (including material-region compounds), not
         // document coordinates or a newly prepared solid. AIS shape bounds are
         // local; apply the presentation's complete parent/local transformation.
-        const auto& bounds=found->second.presentation->BoundingBox();
+        const auto& bounds=presentation->BoundingBox();
         if (bounds.IsVoid() || bounds.IsOpen()) return fallback;
         const auto low=bounds.CornerMin();
         const auto high=bounds.CornerMax();
@@ -1088,7 +1152,7 @@ public:
             auto world=gp_Pnt((corner&1) ? high.X() : low.X(),
                               (corner&2) ? high.Y() : low.Y(),
                               (corner&4) ? high.Z() : low.Z());
-            world.Transform(found->second.presentation->Transformation());
+            world.Transform(presentation->Transformation());
             if (!std::isfinite(world.X()) || !std::isfinite(world.Y()) || !std::isfinite(world.Z()))
                 return fallback;
             const auto projected=view->Camera()->Project(world);
@@ -1117,48 +1181,83 @@ public:
                       qBound(visible.top(),qRound(top+(bottom-top)*0.5),visible.bottom()));
     }
 
-    void restore_selection_highlights() {
+    void restore_selection_highlights(const std::map<std::string,CachedSolid,std::less<>>& scene) {
         if (context.IsNull()) return;
         context->ClearSelected(false);
+        if (selected_roof_opening) {
+            for (const auto& [id,solid] : scene)
+                for (const auto& child : solid.roof_openings)
+                    if (child.target == *selected_roof_opening && context->IsDisplayed(child.presentation))
+                        context->AddOrRemoveSelected(child.presentation,false);
+            return;
+        }
         for (const auto& id : selected_entity_ids) {
-            const auto found=solids.find(id.toStdString());
-            if (found!=solids.end() && !found->second.presentation.IsNull() &&
-                context->IsDisplayed(found->second.presentation))
+            const auto found=scene.find(id.toStdString());
+            if (found!=scene.end() && !found->second.presentation.IsNull() &&
+                context->IsDisplayed(found->second.presentation)) {
                 context->AddOrRemoveSelected(found->second.presentation,false);
+                for (const auto& child : found->second.roof_openings)
+                    if (context->IsDisplayed(child.presentation)) context->AddOrRemoveSelected(child.presentation,false);
+            }
         }
     }
+    void restore_selection_highlights() { restore_selection_highlights(solids); }
 
-    std::optional<QString> select_at(const NativeInputPoint point, const SelectionCapture& capture,
+    std::optional<PickTarget> select_at(const NativeInputPoint point, const SelectionCapture& capture,
                                       bool editing=false, bool toggle=false, bool cycle=false) {
         const QPointer<NativeModelView> guard(owner);
         try {
             if (!selection_current(capture) || !owner->admitSceneInput(false) || !guard ||
                 !selection_current(capture)) return std::nullopt;
             context->MoveTo(point.x,point.y,view,false);
-            QString id;
+            PickTarget target;
             if (cycle && !toggle) {
                 // OCCT's detected sequence is ordered by the actual pick. A
                 // material/face owner may repeat the same semantic object.
-                QStringList targets;
-                std::set<QString> seen;
+                std::vector<PickTarget> targets;
                 for (context->InitDetected();context->MoreDetected();context->NextDetected()) {
                     const auto detected=context->DetectedCurrentOwner();
                     if (detected.IsNull() || !detected->HasSelectable()) continue;
-                    const auto target=entity_id_for_presentation(
+                    const auto hit=target_for_presentation(
                         occ::handle<AIS_InteractiveObject>::DownCast(detected->Selectable()));
-                    if (!target.isEmpty() && seen.insert(target).second) targets.append(target);
+                    if (!hit.empty() && std::find(targets.begin(),targets.end(),hit)==targets.end()) targets.push_back(hit);
                 }
-                if (!targets.isEmpty()) {
-                    const auto primary=capture.selection.isEmpty() ? QString{} : capture.selection.back();
-                    id=targets.at((targets.indexOf(primary)+1)%targets.size());
+                if (!targets.empty()) {
+                    const PickTarget primary{capture.roof_opening || capture.selection.isEmpty() ? QString{} : capture.selection.back(),capture.roof_opening};
+                    const auto current=std::find(targets.begin(),targets.end(),primary);
+                    target=current==targets.end() || std::next(current)==targets.end() ? targets.front() : *std::next(current);
                 }
-            } else if (context->HasDetected()) id=entity_id_for_presentation(context->DetectedInteractive());
-            if ((editing || toggle || cycle) && id.isEmpty()) return QString{};
+            } else if (context->HasDetected()) target=target_for_presentation(context->DetectedInteractive());
+            if ((editing || toggle || cycle) && target.empty()) return target;
             if (!selection_current(capture)) return std::nullopt;
+            if (target.roof_opening) {
+                const auto child=*target.roof_opening;
+                const bool retained=!toggle && !cycle && selected_roof_opening==target.roof_opening;
+                const auto clicked=owner->onRoofOpeningSelectionClicked;
+                if (!retained) {
+                    const auto next=toggle && selected_roof_opening==target.roof_opening
+                        ? std::optional<NativeRoofOpeningTarget>{} : target.roof_opening;
+                    owner->setSelectedRoofOpening(next);
+                    if (!guard) return target;
+                }
+                if (clicked) clicked(child,toggle);
+                if (!guard) return target;
+                auto continuation=capture;
+                continuation.selection=selected_entity_ids;
+                continuation.roof_opening=selected_roof_opening;
+                if (!selection_current(continuation)) return std::nullopt;
+                if (editing &&
+                    selected_roof_opening==target.roof_opening && !roof_opening_presentation(child).IsNull()) {
+                    const auto callback=owner->onRoofOpeningEditRequested;
+                    if (callback) callback(child);
+                }
+                return target;
+            }
+            const auto& id=target.entity_id;
             // Preserve selected groups on their first plain click, as Qt sends
             // that release before a possible double-click. Context uses this
             // same policy; its selected member never replaces the group.
-            const bool retained=!toggle && !cycle && !id.isEmpty() && selected_entity_ids.contains(id);
+            const bool retained=!selected_roof_opening && !toggle && !cycle && !id.isEmpty() && selected_entity_ids.contains(id);
             if (!retained) {
                 auto next=toggle ? selected_entity_ids : QStringList{};
                 if (toggle && next.contains(id)) next.removeAll(id);
@@ -1166,15 +1265,20 @@ public:
                 const auto clicked=owner->onEntitySelectionClicked;
                 const auto legacy=owner->onEntitySelected;
                 owner->setSelectedEntities(next);
-                if (!guard) return id;
+                if (!guard) return target;
                 if (clicked) clicked(id,toggle);
                 else if (legacy) legacy(toggle && !next.contains(id) ? QString{} : id);
             }
-            if (guard && editing && !id.isEmpty()) {
+            if (!guard) return target;
+            auto continuation=capture;
+            continuation.selection=selected_entity_ids;
+            continuation.roof_opening=selected_roof_opening;
+            if (!selection_current(continuation)) return std::nullopt;
+            if (editing && !id.isEmpty() && !selected_roof_opening && selected_entity_ids.contains(id)) {
                 const auto callback=owner->onEntityEditRequested;
                 if (callback) callback(id);
             }
-            return id;
+            return target;
         } catch (const Standard_Failure& error) {
             if (guard) show_input_error(QStringLiteral("3D selection failed: ")+exception_text(error));
         } catch (const std::exception& error) {
@@ -1202,9 +1306,13 @@ public:
             context->SelectRectangle(NCollection_Vec2<int>(std::min(first.x,last.x),std::min(first.y,last.y)),
                 NCollection_Vec2<int>(std::max(first.x,last.x),std::max(first.y,last.y)),view,AIS_SelectionScheme_Replace);
             std::set<QString> selected;
+            std::vector<NativeRoofOpeningTarget> children;
             for (context->InitSelected();context->MoreSelected();context->NextSelected()) {
-                const auto id=entity_id_for_presentation(context->SelectedInteractive());
-                if (!id.isEmpty()) selected.insert(id);
+                const auto target=target_for_presentation(context->SelectedInteractive());
+                if (target.roof_opening) {
+                    if (std::find(children.begin(),children.end(),*target.roof_opening)==children.end())
+                        children.push_back(*target.roof_opening);
+                } else if (!target.entity_id.isEmpty()) selected.insert(target.entity_id);
             }
             restore_selection_highlights();
             if (!selection_current(capture)) return;
@@ -1213,6 +1321,20 @@ public:
             for (const auto& id : selected) {
                 hits.append(id);
                 if (!next.contains(id)) next.append(id);
+            }
+            std::sort(children.begin(),children.end(),[](const auto& left,const auto& right) {
+                return left.roof_id==right.roof_id ? left.opening_id<right.opening_id : left.roof_id<right.roof_id;
+            });
+            const auto combined=owner->onSelectionMarqueeRequested;
+            if (combined) {
+                // The shell owns grouped/mixed child policy. Dispatch once and
+                // retain selection until it atomically accepts the complete set.
+                combined(hits,children,true);
+                return;
+            }
+            if (!children.empty()) {
+                show_input_error(QStringLiteral("3D skylight marquee selection requires a semantic selection handler"));
+                return;
             }
             const auto callback=owner->onEntitiesSelected;
             const auto legacy=owner->onEntitySelected;
@@ -1439,17 +1561,27 @@ void NativeModelView::setSelectedEntity(const QString& entity_id) {
 }
 
 void NativeModelView::setSelectedEntities(const QStringList& entity_ids) {
+    setSemanticSelection(entity_ids,std::nullopt);
+}
+
+void NativeModelView::setSemanticSelection(const QStringList& entity_ids,
+    std::optional<NativeRoofOpeningTarget> target) {
     QStringList normalized;
     for (const auto& raw : entity_ids) {
         const auto id=raw.trimmed();
         if (!id.isEmpty() && !normalized.contains(id)) normalized.append(id);
     }
-    if (normalized!=m_impl->selected_entity_ids) cancelInteraction();
+    if (target && (target->roof_id.isEmpty() || target->opening_id.isEmpty())) target.reset();
+    const bool changed=normalized!=m_impl->selected_entity_ids || m_impl->selected_roof_opening!=target;
+    m_impl->selected_roof_opening=std::move(target);
     m_impl->selected_entity_ids=normalized;
     m_impl->selected_entity_id=normalized.isEmpty() ? std::nullopt
         : std::optional<std::string>{normalized.back().toStdString()};
     const QPointer<NativeModelView> guard(this);
     try {
+        // Publish logical intent even if restoring a derived driver preview
+        // fails. The failure is contained below and retires input readiness.
+        if (changed) cancelInteraction();
         m_impl->restore_selection_highlights();
         m_impl->attach_manipulator();
         if (m_impl->native_ready && !m_impl->viewer.IsNull()) m_impl->viewer->Redraw();
@@ -1471,8 +1603,12 @@ void NativeModelView::setSelectedEntities(const QStringList& entity_ids) {
     }
 }
 
+void NativeModelView::setSelectedRoofOpening(std::optional<NativeRoofOpeningTarget> target) {
+    setSemanticSelection(m_impl->selected_entity_ids,std::move(target));
+}
+
 bool NativeModelView::transformControlsVisible() const noexcept {
-    return m_impl->selected_entity_ids.size() == 1 && m_impl->selected_entity_id.has_value() &&
+    return !m_impl->selected_roof_opening && m_impl->selected_entity_ids.size() == 1 && m_impl->selected_entity_id.has_value() &&
            m_impl->manipulator_entity_id == m_impl->selected_entity_id &&
            !m_impl->manipulator.IsNull() && m_impl->manipulator->IsAttached();
 }
@@ -1565,7 +1701,7 @@ void NativeModelView::setGeometryStatusChangedCallback(std::function<void(QStrin
 
 bool NativeModelView::beginMove(const QString& entity_id) {
     cancelInteraction();
-    if (m_impl->selected_entity_ids.size()>1 || !isReady() || !m_impl->supports_direct_translation(entity_id)) return false;
+    if (m_impl->selected_roof_opening || m_impl->selected_entity_ids.size()>1 || !isReady() || !m_impl->supports_direct_translation(entity_id)) return false;
     const auto found = m_impl->solids.find(entity_id.toStdString());
     if (found == m_impl->solids.end() ||
         !m_impl->context->IsDisplayed(found->second.presentation)) return false;
@@ -1753,9 +1889,11 @@ void NativeModelView::contextMenuEvent(QContextMenuEvent* event) {
     try {
         if (!idle()) return;
         const auto callback=onContextMenuRequested;
-        if (!callback) return;
+        const auto child_callback=onRoofOpeningContextMenuRequested;
+        if (m_impl->selected_roof_opening ? !child_callback : !callback) return;
         const auto capture=m_impl->capture_selection();
         if (!m_impl->selection_current(capture)) return;
+        if (capture.roof_opening && m_impl->roof_opening_presentation(*capture.roof_opening).IsNull()) return;
         if (!admitSceneInput(true) || !guard || !idle() || !m_impl->selection_current(capture)) return;
         const auto visible=visibleRegion().boundingRect().intersected(rect());
         if (visible.isEmpty()) return;
@@ -1763,7 +1901,8 @@ void NativeModelView::contextMenuEvent(QContextMenuEvent* event) {
         if (!m_impl->selection_current(capture)) return;
         const auto primary=capture.selection.isEmpty() ? QString{} : capture.selection.back();
         m_impl->commit_snapshot=capture.source;
-        callback(primary,anchor);
+        if (capture.roof_opening) child_callback(*capture.roof_opening,anchor);
+        else callback(primary,anchor);
     } catch (const Standard_Failure& error) {
         source_scope.restore();
         if (guard) m_impl->show_input_error(QStringLiteral("3D keyboard context failed: ")+exception_text(error));
@@ -2479,6 +2618,7 @@ void NativeModelView::pointerRelease(QSinglePointEvent* event) {
         resetCompletedPointerInteraction(!context_click);
         if (!owner_guard) { event->accept(); return; }
         const auto callback = onContextMenuRequested;
+        const auto child_callback = onRoofOpeningContextMenuRequested;
         event->accept();
         if (context_click) {
             if (!capture || !m_impl->selection_current(*capture)) { cancelInteraction(); return; }
@@ -2489,7 +2629,13 @@ void NativeModelView::pointerRelease(QSinglePointEvent* event) {
             if (owner_guard) {
                 try { m_impl->attach_manipulator(); } catch (...) { m_impl->detach_manipulator(); }
             }
-            if (owner_guard && target && callback) callback(*target, global_position);
+            if (owner_guard && target && isReady() && m_impl->published_snapshot==capture->source) {
+                if (target->roof_opening) {
+                    if (child_callback && m_impl->selected_roof_opening==target->roof_opening &&
+                        !m_impl->roof_opening_presentation(*target->roof_opening).IsNull())
+                        child_callback(*target->roof_opening,global_position);
+                } else if (callback) callback(target->entity_id,global_position);
+            }
         }
         return;
     }

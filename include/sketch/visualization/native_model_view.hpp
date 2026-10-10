@@ -12,6 +12,7 @@
 #include <optional>
 #include <set>
 #include <string>
+#include <vector>
 
 QT_BEGIN_NAMESPACE
 class QContextMenuEvent;
@@ -24,6 +25,12 @@ namespace sketch {
 class DocumentSnapshot;
 
 namespace visualization {
+
+struct NativeRoofOpeningTarget {
+    QString roof_id;
+    QString opening_id;
+    bool operator==(const NativeRoofOpeningTarget&) const = default;
+};
 
 // A native Open CASCADE viewport for the architectural solids that have a
 // semantic representation in the document. The widget owns only derived AIS
@@ -66,9 +73,17 @@ public:
     // still count toward multi-selection. The last supplied ID is primary.
     // Highlights cover valid visible semantic presentations only. Manipulators
     // require exactly one logical member; this API never emits a callback.
+    // Replaces a typed child selection.
     void setSelectedEntities(const QStringList& entity_ids);
     // Backward-compatible replacement with one ID (empty clears selection).
     void setSelectedEntity(const QString& entity_id);
+    // Synchronize a single semantic skylight child after its logical owners.
+    // This emits no callback and disables whole-owner transform controls.
+    void setSelectedRoofOpening(std::optional<NativeRoofOpeningTarget> target);
+    // Publish owner and child intent together, without an intermediate owner
+    // manipulator or highlight. This emits no selection callback.
+    void setSemanticSelection(const QStringList& entity_ids,
+                              std::optional<NativeRoofOpeningTarget> target);
     [[nodiscard]] bool transformControlsVisible() const noexcept;
     // Export the OCCT framebuffer directly. This deliberately does not use
     // QWidget::grab(), which cannot capture the native OCCT child surface.
@@ -88,6 +103,7 @@ public:
 
     struct PublicationMetrics {
         // New AIS handles, retained live handles, and detached old handles.
+        // Counts a solid's body and separately selectable skylight fills.
         // Replacing one solid contributes to both created and removed.
         std::size_t created{};
         std::size_t reused{};
@@ -125,6 +141,13 @@ public:
     // A plain background click supplies an empty ID. Selected group members
     // retain the group for subsequent double-click/context editing.
     std::function<void(QString, bool)> onEntitySelectionClicked;
+    std::function<void(NativeRoofOpeningTarget, bool)> onRoofOpeningSelectionClicked;
+    std::function<void(NativeRoofOpeningTarget)> onRoofOpeningEditRequested;
+    std::function<void(NativeRoofOpeningTarget, QPoint)> onRoofOpeningContextMenuRequested;
+    // One atomic marquee notification, including distinct typed children. If
+    // installed, this supersedes onEntitiesSelected for that gesture.
+    std::function<void(QStringList, std::vector<NativeRoofOpeningTarget>, bool)>
+        onSelectionMarqueeRequested;
     // Directional Ctrl marquee supplies displayed semantic hits, in stable ID
     // order, with additive=true. The shell owns its full logical selection.
     std::function<void(QStringList, bool)> onEntitiesSelected;

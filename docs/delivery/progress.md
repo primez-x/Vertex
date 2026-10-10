@@ -14,6 +14,65 @@ changed source does not acquire runtime acceptance without later qualification.
 
 ## Current delivery state
 
+### October 10 native skylight child selection - source integration
+
+The roof-face rotation batch is committed and pushed as 067af112; exact local
+and remote commit identities match. The next source batch addresses the observed
+3D picking gap. Native geometry preparation now gives actual skylight fills
+explicit source-roof and opening identities. Separate selectable presentations
+retain the complete cached geometry for output and follow the roof's visibility,
+publication, rollback and preview lifecycle. Native selection, hit cycling,
+double-click and context callbacks carry the typed child identity. A selected
+child does not attach an owner-roof manipulator or begin a whole-roof Move.
+Owner and child state now publish together through one atomic native selection
+setter. Fresh child adoption defers intermediate native owner synchronization;
+the backward-compatible ordinary setters retain their deliberate replacement
+semantics. Native cancellation/redraw failures are contained and retire readiness.
+
+The desktop integrates those identities with existing source-derived skylight
+properties, copy/cut, deletion and context actions. Source authority includes the
+specific child and its plan/native origin; native operations require the current
+successful published scene, not merely a matching object ID. Plan grip visibility
+does not erase a valid logical child selected in 3D. Ordinary roof selection
+clears child identity. Failed selection restores the prior logical child.
+Review corrections preserve valid logical children without available plan grips,
+renew only child state in an otherwise-current Site publication after history
+changes, and transfer read-only selection to the actual plan source when 3D is
+hidden. Generic transform commands cannot substitute the containing roof.
+
+Grouped/mixed child selection and shared group transformations remain explicit
+implementation gaps. The native marquee returns typed child hits, but the shell
+currently admits one child; unsupported cohorts preserve the previous selection
+and report the missing capability instead of selecting containing roofs. These
+refusals do not complete the grouped workflow or any production gate. Next source
+work must implement real cohorts and atomic commands across plan and 3D.
+Direct 3D child movement/rotation/scale controls remain to implement; the current
+3D child route uses Properties and the source-bound plan grips. Owner-transform
+refusals protect the model but do not fulfill that direct 3D workflow.
+Bounded next-gap discovery confirms existing core multi-upsert/removal and the
+source-derived command factory accept batches grouped into exactly one roof edit
+per actual roof. Use that complete replay and alternative replacement path once,
+with fresh identities and explicit passive copy authority; do not issue one
+command per child. PlanCanvas still needs a typed child-selection cohort and
+Ctrl/marquee callbacks. Generic selection currently represents owners and must
+never turn a child cohort into a roof movement. Group clipboard/paste and shared
+manufactured previews still need implementation; existing single-child copy and
+placement are not a batch transfer.
+
+All implementation ownership returned. Final bounded independent review accepted
+the integrated corrections with no remaining concrete P1/P2 in the reviewed
+scope. Root reviewed interfaces, source authority, maintainability and evidence;
+scoped commit, push and exact remote identity verification accompany this batch.
+No document format or reader floor changes are introduced by transient selection
+and derived presentation metadata. The manual list retains the
+450 original tasks plus thirty-three focused tasks (483 total). Three added tasks
+cover direct 3D selection, child actions, and joined/Site-placed source identity;
+all remain Not tested. No builds, tests/new tests, probes, native jobs, UI launches,
+packages or installations run in this source-only batch. Compilation, native
+picking/highlighting, camera interaction, migration/history and rendered output
+remain unverified. The installed candidate remains unchanged; all ten production
+acceptance gates remain open.
+
 ### October 10 roof-face skylight rotation - source integration
 
 The baseline wall-group alternative batch is committed and pushed as c00a0aab;

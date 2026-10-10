@@ -167,8 +167,16 @@ polling timeout does not permit restarting it.
    clipboard/alternative transport and schedule dimensions. Roof schema four,
    opening intent four, composite nine and phase twenty/twenty-one retain their
    explicit authority under reader 175/extraction 173. The historical vertical
-   curb/member construction remains unchanged. Grouped child selection and 3D
-   child picking remain implementation gaps.
+   curb/member construction remains unchanged. Qualify the subsequent actual 3D
+   skylight child picking source: separately selectable fills carry source roof
+   and opening identities through native publication, visibility and rollback.
+   Plan/3D logical selection, double-click Properties, copy/cut/delete and context
+   actions share the exact child source; a child cannot invoke a roof transform.
+   Joined and Site-placed roof selection need actual native qualification.
+   Grouped/mixed child selection, shared group commands and direct 3D child
+   movement/rotation/scale controls remain implementation gaps; Properties,
+   plan grips and safe cohort/owner-transform refusals are not completion of
+   those workflows.
 10. Implement observed native/vendor/device adapters through existing workers;
     complete declared IFC/DXF/Pinc fidelity and independently consumed output.
     Add offline OCR text regions/confidence feeding reviewed proposals. New

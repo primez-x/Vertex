@@ -8444,6 +8444,8 @@ public:
             return false;
         }
         try {
+            if (m_selected_roof_opening)
+                throw std::invalid_argument("Use the selected skylight's Properties or plan grips. This command transforms whole architectural objects.");
             if (m_boundary_session) {
                 throw std::runtime_error(
                     "Finish or cancel the active boundary before transforming an architectural object.");
@@ -13023,6 +13025,7 @@ public:
     }
 
     void showArchitecturalObjectTransformEditor() {
+        if (m_selected_roof_opening) { showRoofOpeningQuickProperties(); return; }
         const auto context = captureModalContext();
         const auto source = authoringSnapshot();
         const auto authority = captureSourceEditAuthority(source);
@@ -13233,6 +13236,7 @@ public:
     }
 
     void showBoundaryTransformEditor() {
+        if (m_selected_roof_opening) { showRoofOpeningQuickProperties(); return; }
         const auto selection = m_selected_ids;
         const auto primary_render_id = m_selected_id;
         auto* selection_canvas = m_workspace == Workspace::measurement ? m_measurementCanvas : m_architecturalCanvas;
@@ -24831,12 +24835,14 @@ public:
     }
 
     bool selectEntity(const QString& entity_id, bool toggle = false) {
-        clearRoofOpeningSelection();
+        const auto previous_child=m_selected_roof_opening;
+        const auto previous_native_child=m_roof_opening_native_selection;
         const auto previous_id=m_selected_id;
         const auto previous_ids=m_selected_ids;
         const auto previous_labels=m_selected_generated_labels;
         const auto previous_layer=m_active_layer_id;
         try {
+            clearRoofOpeningSelection();
             // Resolve every identity/layer against one authoritative source
             // before publishing selection; source failure keeps prior state.
             const auto snapshot = authoringSnapshot();
@@ -24890,8 +24896,7 @@ public:
                 }
             }
             if (!snapshot.entities().contains(selection_id.toStdString()) && !annotation_child && !assembly_catalog) {
-                setError(QStringLiteral("No entity named %1 exists in this document.").arg(entity_id));
-                return false;
+                throw std::invalid_argument("No entity named "+entity_id.toStdString()+" exists in this document.");
             }
             m_selected_generated_labels.clear();
             if (!toggle) m_selected_ids.clear();
@@ -24943,18 +24948,25 @@ public:
             m_selected_ids=previous_ids;
             m_selected_generated_labels=previous_labels;
             m_active_layer_id=previous_layer;
+            m_selected_roof_opening=previous_child;
+            m_roof_opening_native_selection=previous_native_child;
+            if (m_measurementCanvas) m_measurementCanvas->setSelectedRoofOpening(previous_child);
+            if (m_architecturalCanvas) m_architecturalCanvas->setSelectedRoofOpening(previous_child);
+            synchronizeNativeSelection();
             setError(QStringLiteral("Selection: %1").arg(QString::fromUtf8(error.what())));
             return false;
         }
     }
 
     bool selectEntities(const QStringList& ids, bool additive) {
-        clearRoofOpeningSelection();
+        const auto previous_child=m_selected_roof_opening;
+        const auto previous_native_child=m_roof_opening_native_selection;
         const auto previous_id=m_selected_id;
         const auto previous_ids=m_selected_ids;
         const auto previous_labels=m_selected_generated_labels;
         const auto previous_layer=m_active_layer_id;
         try {
+            clearRoofOpeningSelection();
             const auto snapshot=authoringSnapshot();
             const auto publication=captureRetainedSelectionPublication(snapshot);
             m_selected_generated_labels.clear();
@@ -24980,6 +24992,11 @@ public:
             m_selected_ids=previous_ids;
             m_selected_generated_labels=previous_labels;
             m_active_layer_id=previous_layer;
+            m_selected_roof_opening=previous_child;
+            m_roof_opening_native_selection=previous_native_child;
+            if (m_measurementCanvas) m_measurementCanvas->setSelectedRoofOpening(previous_child);
+            if (m_architecturalCanvas) m_architecturalCanvas->setSelectedRoofOpening(previous_child);
+            synchronizeNativeSelection();
             setError(QStringLiteral("Selection: %1").arg(QString::fromUtf8(error.what())));
             return false;
         }
@@ -24990,7 +25007,7 @@ public:
         if (!source || !published || fullSnapshotDigest(*source)!=fullSnapshotDigest(*published) ||
             fullSnapshotDigest(*source)!=fullSnapshotDigest(authoringSnapshot())) {
             m_native_input_authority.reset();
-            m_nativeModelView->setSelectedEntities(m_selected_ids);
+            synchronizeNativeSelection();
             throw std::invalid_argument("The displayed 3D source changed during selection. Start again in the current view.");
         }
         // Selection and its owning layer intentionally changed in this admitted
@@ -25025,6 +25042,8 @@ public:
     SelectionTranslationParts prepareSelectionTranslation(const DocumentSnapshot& source,
         const QStringList& ids, Vec2 delta, PlanCanvas* canvas,
         const std::optional<BuildingViewFrame>* captured_frame = nullptr) {
+        if (m_selected_roof_opening)
+            throw std::invalid_argument("Move the selected skylight using its plan grips or Properties, not the containing roof.");
         auto model_delta=delta;
         const auto frame = captured_frame ? *captured_frame :
             (selectionNeedsModelPlanFrame(source,ids) ? canvasTransformPlanFrame(source) : std::nullopt);
@@ -30590,6 +30609,8 @@ public:
     bool resizeSelectionAxesFromCanvas(const QString& requested_id, double scale_x,
                                        double scale_y, Vec2 anchor) {
         try {
+            if (m_selected_roof_opening)
+                throw std::invalid_argument("Use the selected skylight's own size grips.");
             if (m_presentation_transform_capture)
                 return commitPresentationTransformFromCanvas(requested_id,1.0,0.0,std::pair{scale_x,scale_y},anchor);
             if (m_boundary_session || m_pending_wall_start || !m_pending_symbol_id.isEmpty())
@@ -30800,6 +30821,10 @@ public:
 
     bool transformSelectionFromCanvas(const QString& requested_id, double relative_scale,
                                       double rotation_radians) {
+        if (m_selected_roof_opening) {
+            setError(QStringLiteral("Use the selected skylight's own rotation or size grips."));
+            return false;
+        }
         if (m_ordinary_transform_capture) {
             try { return commitOrdinaryGeometryTransformFromCanvas(requested_id,relative_scale,rotation_radians); }
             catch (const std::exception& error) {
@@ -38419,6 +38444,13 @@ public:
             return;
         }
         m_nativeModelView->setVisible(visible);
+        if (!visible && m_selected_roof_opening && m_roof_opening_native_selection) {
+            const auto target=*m_selected_roof_opening;
+            auto* canvas=m_workspace==Workspace::measurement ? m_measurementCanvas : m_architecturalCanvas;
+            // Renew through the real plan publication. A hidden native pane
+            // cannot remain the authority for subsequent plan child actions.
+            (void)selectRoofOpening(canvas,target);
+        }
         if (m_architectural_splitter == nullptr) {
             return;
         }
@@ -51854,8 +51886,13 @@ private:
             m_nativeModelView->setEntitySelectionClickedCallback(
                 [this](QString id, bool toggle) {
                     const auto source=m_nativeModelView->gestureSourceSnapshot();
+                    if (toggle && m_selected_roof_opening) {
+                        synchronizeNativeSelection();
+                        setError(QStringLiteral("Mixed skylight and object selection is not yet available. Click the object without Ctrl to select it."));
+                        return;
+                    }
                     if (!admitNativeSceneInput(false) || !selectEntity(id,toggle)) {
-                        m_nativeModelView->setSelectedEntities(m_selected_ids);
+                        synchronizeNativeSelection();
                         return;
                     }
                     completeNativeSelectionAuthority(source);
@@ -51863,8 +51900,13 @@ private:
             m_nativeModelView->setEntitiesSelectedCallback(
                 [this](QStringList ids, bool additive) {
                     const auto source=m_nativeModelView->gestureSourceSnapshot();
+                    if (additive && m_selected_roof_opening) {
+                        synchronizeNativeSelection();
+                        if (!ids.isEmpty()) setError(QStringLiteral("Mixed skylight and object selection is not yet available."));
+                        return;
+                    }
                     if (!admitNativeSceneInput(false) || !selectEntities(ids,additive)) {
-                        m_nativeModelView->setSelectedEntities(m_selected_ids);
+                        synchronizeNativeSelection();
                         return;
                     }
                     completeNativeSelectionAuthority(source);
@@ -51881,11 +51923,47 @@ private:
                 }
                 positionContextEditor(true);
             });
+            m_nativeModelView->onRoofOpeningSelectionClicked=[this](visualization::NativeRoofOpeningTarget target,bool toggle) {
+                (void)selectNativeRoofOpening(std::move(target),toggle);
+            };
+            m_nativeModelView->onRoofOpeningEditRequested=[this](visualization::NativeRoofOpeningTarget target) {
+                if (!admitNativeSceneInput(false) || !m_selected_roof_opening ||
+                    m_selected_roof_opening->roof_id!=target.roof_id ||
+                    m_selected_roof_opening->opening_id!=target.opening_id) return;
+                if (!m_roof_opening_native_selection && !selectNativeRoofOpening(target,false)) return;
+                showRoofOpeningQuickProperties();
+            };
+            m_nativeModelView->onRoofOpeningContextMenuRequested=[this](visualization::NativeRoofOpeningTarget target,QPoint position) {
+                if (!admitNativeSceneInput(false) || !m_selected_roof_opening ||
+                    m_selected_roof_opening->roof_id!=target.roof_id ||
+                    m_selected_roof_opening->opening_id!=target.opening_id) return;
+                if (!m_roof_opening_native_selection && !selectNativeRoofOpening(target,false)) return;
+                showRoofOpeningContextMenu(position);
+            };
+            m_nativeModelView->onSelectionMarqueeRequested=[this](QStringList ids,
+                std::vector<visualization::NativeRoofOpeningTarget> children,bool additive) {
+                const auto source=m_nativeModelView->gestureSourceSnapshot();
+                if (!admitNativeSceneInput(false)) { synchronizeNativeSelection(); return; }
+                if (children.empty()) {
+                    if (additive && m_selected_roof_opening) {
+                        synchronizeNativeSelection();
+                        if (!ids.isEmpty()) setError(QStringLiteral("Mixed skylight and object selection is not yet available."));
+                        return;
+                    }
+                    if (!selectEntities(ids,additive)) { synchronizeNativeSelection(); return; }
+                    completeNativeSelectionAuthority(source);
+                } else if (children.size()==1 && ids.isEmpty() && (!additive || m_selected_ids.isEmpty())) {
+                    (void)selectNativeRoofOpening(children.front(),false);
+                } else {
+                    synchronizeNativeSelection();
+                    setError(QStringLiteral("Grouped skylight selection is not yet available. Click one skylight to edit it."));
+                }
+            };
             m_nativeModelView->onTransformGestureStarted = [this](QString id) {
                 m_native_gesture_authority.reset();
                 const auto source=m_nativeModelView->gestureSourceSnapshot();
                 if (!m_document->is_editable() || !source || !admitNativeSceneInput(false) ||
-                    id != m_selected_id || m_selected_ids.size() != 1 ||
+                    id != m_selected_id || m_selected_ids.size() != 1 || m_selected_roof_opening ||
                     fullSnapshotDigest(*source) != fullSnapshotDigest(authoringSnapshot()))
                     throw std::invalid_argument("The displayed 3D source or editing context changed before the gesture.");
                 m_native_gesture_authority = captureSourceEditAuthority(*source);
@@ -53691,28 +53769,7 @@ private:
                 const auto label=label_hit ? canvas->labelPresentation(*label_hit) : std::nullopt;
                 if (m_selected_roof_opening &&
                     (keyboard || (!label_hit && target==m_selected_roof_opening->roof_id))) {
-                    const auto captured=*m_selected_roof_opening;
-                    const auto source=captureCanvasGeometrySource(canvas,captured.source_revision);
-                    const auto authority=captureSourceEditAuthority(*source);
-                    QMenu menu(owner);
-                    auto* label=menu.addAction(QStringLiteral("Skylight")); label->setEnabled(false);
-                    auto* properties=menu.addAction(QStringLiteral("Properties…"));
-                    auto* copy=menu.addAction(QStringLiteral("Copy skylight"));
-                    auto* cut=menu.addAction(QStringLiteral("Cut skylight"));
-                    auto* duplicate=menu.addAction(QStringLiteral("Duplicate skylight…"));
-                    auto* remove=menu.addAction(QStringLiteral("Delete skylight"));
-                    auto* roof=menu.addAction(QStringLiteral("Select roof"));
-                    const auto action=menu.exec(global_position);
-                    if (!sourceEditAuthorityCurrent(authority) || m_selected_roof_opening!=std::optional{captured}) {
-                        setError(QStringLiteral("The skylight source changed. Reopen its menu.")); return;
-                    }
-                    if (action==properties) showRoofOpeningQuickProperties();
-                    else if (action==copy) (void)copyRoofOpeningSelection(false);
-                    else if (action==cut) (void)copyRoofOpeningSelection(true);
-                    else if (action==duplicate) (void)beginRoofOpeningClone({source->entities().at(captured.roof_id.toStdString()),
-                        captured.opening_id.toStdString()});
-                    else if (action==remove) (void)deleteRoofOpeningSelection();
-                    else if (action==roof) (void)selectEntity(captured.roof_id,false);
+                    showRoofOpeningContextMenu(global_position);
                     return;
                 }
                 if ((label && label->avoid_components &&
@@ -58538,15 +58595,25 @@ private:
             native_visible_ids.insert(visible_ids.begin(), visible_ids.end());
             m_native_visible_ids = native_visible_ids;
             m_nativeModelView->setSnapshot(snapshot, native_visible_ids);
-            m_nativeModelView->setSelectedEntities(m_selected_ids);
+            synchronizeNativeSelection();
             m_native_geometry_document = m_document;
             m_native_geometry_revision = snapshot.revision();
         }
         // Projection handles and native input now share the exact authoring
         // snapshot, including its saved marker and complete recovery history.
         m_plan_publication_source=std::make_shared<DocumentSnapshot>(snapshot);
-        m_plan_publication_authority=std::make_shared<SourceEditAuthority>(captureSourceEditAuthority(snapshot));
         refreshRoofOpeningControls(snapshot);
+        m_plan_publication_authority=std::make_shared<SourceEditAuthority>(captureSourceEditAuthority(snapshot));
+        if (m_site_publication_authority && m_site_publication_source &&
+            fullSnapshotDigest(*m_site_publication_source)==fullSnapshotDigest(snapshot)) {
+            // Controls may renew or retire the logical child's revision after
+            // Site ink was published. Renew only that transient selection; an
+            // old frame/filter/source must never acquire fresh edit authority.
+            auto authority=*m_site_publication_authority;
+            authority.roof_opening_selection=m_selected_roof_opening;
+            authority.native_roof_opening_selection=m_roof_opening_native_selection;
+            if (sourceEditAuthorityCurrent(authority,false)) m_site_publication_authority=std::move(authority);
+        }
     }
 
     void refreshFloorGhostProjection(const DocumentSnapshot& snapshot) {
@@ -62064,8 +62131,79 @@ private:
     void clearRoofOpeningSelection() {
         cancelRoofOpeningCanvasPreview();
         m_selected_roof_opening.reset();
+        m_roof_opening_native_selection=false;
         if (m_measurementCanvas) m_measurementCanvas->setSelectedRoofOpening(std::nullopt);
         if (m_architecturalCanvas) m_architecturalCanvas->setSelectedRoofOpening(std::nullopt);
+        if (m_nativeModelView && !m_native_selection_sync_deferred) m_nativeModelView->setSelectedRoofOpening(std::nullopt);
+    }
+
+    void synchronizeNativeSelection() {
+        if (!m_nativeModelView || m_native_selection_sync_deferred) return;
+        std::optional<visualization::NativeRoofOpeningTarget> child;
+        if (m_selected_roof_opening && m_selected_ids.size()==1 &&
+            m_selected_id==m_selected_roof_opening->roof_id)
+            child=visualization::NativeRoofOpeningTarget{m_selected_roof_opening->roof_id,m_selected_roof_opening->opening_id};
+        m_nativeModelView->setSemanticSelection(m_selected_ids,std::move(child));
+    }
+
+    std::shared_ptr<const DocumentSnapshot> selectedRoofOpeningSource(bool require_editable=true) {
+        if (!m_selected_roof_opening) throw std::invalid_argument("Select a skylight first.");
+        const auto target=*m_selected_roof_opening;
+        if (!m_roof_opening_native_selection) {
+            auto* canvas=m_workspace==Workspace::measurement ? m_measurementCanvas : m_architecturalCanvas;
+            return captureCanvasGeometrySource(canvas,target.source_revision,require_editable);
+        }
+        const auto source=m_nativeModelView ? m_nativeModelView->publishedSnapshot() : nullptr;
+        if (!m_nativeModelView || !m_nativeModelView->isVisible() || !m_nativeModelView->isReady() ||
+            !source || source->revision()!=target.source_revision ||
+            fullSnapshotDigest(*source)!=fullSnapshotDigest(authoringSnapshot()) ||
+            (require_editable && !source->is_editable()))
+            throw std::invalid_argument("The displayed skylight source changed. Select it again in the current view.");
+        (void)roofCanvasChild(*source,target);
+        return source;
+    }
+
+    bool selectNativeRoofOpening(visualization::NativeRoofOpeningTarget child,bool toggle) {
+        try {
+            const auto source=m_nativeModelView->gestureSourceSnapshot();
+            if (!source || !admitNativeSceneInput(false)) return false;
+            const CanvasRoofOpeningTarget target{child.roof_id,child.opening_id,source->revision()};
+            (void)roofCanvasChild(*source,target);
+            if (!toggle && m_selected_roof_opening==std::optional{target}) {
+                if (!m_roof_opening_native_selection) {
+                    const auto publication=captureRetainedSelectionPublication(*source);
+                    m_roof_opening_native_selection=true;
+                    if (!refreshRetainedSelection(publication)) refresh();
+                }
+                completeNativeSelectionAuthority(source);
+                return true;
+            }
+            if (toggle && m_selected_roof_opening==std::optional{target}) {
+                if (!selectEntity({},false)) return false;
+            } else {
+                // Grouped child commands are still an explicit implementation
+                // gap. Never convert the child into a containing-roof cohort.
+                if (toggle && (!m_selected_ids.isEmpty() || m_selected_roof_opening))
+                    throw std::invalid_argument("Grouped skylight selection is not yet available. Click the skylight without Ctrl to edit it.");
+                {
+                    const QScopedValueRollback<bool> defer_native(m_native_selection_sync_deferred,true);
+                    if (!selectEntity(target.roof_id,false)) throw std::invalid_argument(lastError().toStdString());
+                    const auto publication=captureRetainedSelectionPublication(*source);
+                    m_selected_roof_opening=target;
+                    m_roof_opening_native_selection=true;
+                    if (m_inspector) m_inspector->hide();
+                    refreshRoofOpeningControls(*source);
+                    if (!refreshRetainedSelection(publication)) refresh();
+                }
+                synchronizeNativeSelection();
+            }
+            completeNativeSelectionAuthority(source);
+            return true;
+        } catch (const std::exception& error) {
+            synchronizeNativeSelection();
+            setError(QStringLiteral("Skylight selection: %1").arg(QString::fromUtf8(error.what())));
+            return false;
+        }
     }
 
     void refreshRoofOpeningControls(const DocumentSnapshot& source) {
@@ -62129,26 +62267,50 @@ private:
             auto selected=m_selected_roof_opening;
             if (selected) {
                 selected->source_revision=source.revision();
-                const auto& available=canvas->roofOpeningControls();
-                if (m_selected_ids.size()!=1 || m_selected_id!=selected->roof_id ||
-                    std::none_of(available.begin(),available.end(),[&](const auto& item){return item.target==*selected;})) selected.reset();
+                try {
+                    if (m_selected_ids.size()!=1 || m_selected_id!=selected->roof_id)
+                        throw std::invalid_argument("The skylight owner is no longer selected.");
+                    (void)roofCanvasChild(source,*selected);
+                } catch (const std::exception&) { selected.reset(); }
             }
             canvas->setSelectedRoofOpening(selected);
         }
-        const auto* active=m_workspace==Workspace::measurement ? m_measurementCanvas : m_architecturalCanvas;
-        m_selected_roof_opening=active->selectedRoofOpening();
+        // Logical child identity is independent of whether this plan exposes a
+        // complete mouth for grips. In 3D, a cropped/vertical plan must not turn
+        // a selected skylight into its roof. Only real source retirement clears it.
+        if (m_selected_roof_opening) {
+            try {
+                if (m_selected_ids.size()!=1 || m_selected_id!=m_selected_roof_opening->roof_id)
+                    throw std::invalid_argument("The skylight owner is no longer selected.");
+                auto current=*m_selected_roof_opening;
+                current.source_revision=source.revision();
+                (void)roofCanvasChild(source,current);
+                m_selected_roof_opening=current;
+            } catch (const std::exception&) { clearRoofOpeningSelection(); }
+        }
+        synchronizeNativeSelection();
     }
 
     bool selectRoofOpening(PlanCanvas* canvas, CanvasRoofOpeningTarget target) {
         try {
-            const auto source=captureCanvasGeometrySource(canvas,target.source_revision);
+            const auto source=captureCanvasGeometrySource(canvas,target.source_revision,false);
             (void)roofCanvasChild(*source,target);
-            if (!selectEntity(target.roof_id,false)) return false;
-            m_selected_roof_opening=target;
-            if (m_inspector) m_inspector->hide();
-            refreshRoofOpeningControls(*source);
+            {
+                const QScopedValueRollback<bool> defer_native(m_native_selection_sync_deferred,true);
+                if (!selectEntity(target.roof_id,false)) throw std::invalid_argument(lastError().toStdString());
+                const auto publication=captureRetainedSelectionPublication(*source);
+                m_selected_roof_opening=target;
+                m_roof_opening_native_selection=false;
+                if (m_inspector) m_inspector->hide();
+                refreshRoofOpeningControls(*source);
+                if (!refreshRetainedSelection(publication)) refresh();
+            }
+            synchronizeNativeSelection();
             return m_selected_roof_opening==std::optional{target};
-        } catch (const std::exception& error) { setError(QString::fromUtf8(error.what())); return false; }
+        } catch (const std::exception& error) {
+            synchronizeNativeSelection();
+            setError(QString::fromUtf8(error.what())); return false;
+        }
     }
 
     bool roofOpeningCaptureCurrent(const std::shared_ptr<const RoofOpeningCanvasCapture>& capture) const noexcept {
@@ -62435,8 +62597,7 @@ private:
         try {
             if (!m_selected_roof_opening) return false;
             const auto target=*m_selected_roof_opening;
-            auto* canvas=m_workspace==Workspace::measurement ? m_measurementCanvas : m_architecturalCanvas;
-            const auto source=captureCanvasGeometrySource(canvas,target.source_revision,cut);
+            const auto source=selectedRoofOpeningSource(cut);
             const auto authority=captureSourceEditAuthority(*source);
             (void)roofCanvasChild(*source,target);
             const RoofOpeningCloneSource clone{source->entities().at(target.roof_id.toStdString()),target.opening_id.toStdString()};
@@ -62449,6 +62610,9 @@ private:
             if (!clipboard) throw std::runtime_error("The system clipboard is unavailable.");
             if (!sourceEditAuthorityCurrent(authority,cut) || m_selected_roof_opening!=std::optional{target})
                 throw std::invalid_argument("The skylight source or selection changed. Select it again.");
+            if (m_roof_opening_native_selection &&
+                fullSnapshotDigest(*selectedRoofOpeningSource(cut))!=fullSnapshotDigest(*source))
+                throw std::invalid_argument("The displayed skylight changed. Select it again.");
             if (cut && !deleteRoofOpeningSelection()) return false;
             clipboard->setText(QString::fromUtf8(payload.data(),static_cast<int>(payload.size())),QClipboard::Clipboard);
             clearError(); return true;
@@ -62493,6 +62657,9 @@ private:
 
     bool applyRoofOpeningCanvasIntent(const std::shared_ptr<const DocumentSnapshot>& source,
         const CanvasRoofOpeningTarget& target,const RoofOpeningEditIntent& opening,bool removed) {
+        if (m_roof_opening_native_selection &&
+            fullSnapshotDigest(*selectedRoofOpeningSource())!=fullSnapshotDigest(*source))
+            throw std::invalid_argument("The displayed skylight changed. Reopen its editor.");
         const auto authority=captureSourceEditAuthority(*source);
         (void)roofCanvasChild(*source,target);
         RoofEditIntent edit; edit.roof_id=opening.roof_id; edit.openings=opening; edit.coordinate_world_hosted_geometry=true;
@@ -62515,9 +62682,8 @@ private:
     bool deleteRoofOpeningSelection() {
         try {
             if (!m_selected_roof_opening) return false;
-            auto* canvas=m_workspace==Workspace::measurement ? m_measurementCanvas : m_architecturalCanvas;
             const auto target=*m_selected_roof_opening;
-            const auto source=captureCanvasGeometrySource(canvas,target.source_revision);
+            const auto source=selectedRoofOpeningSource();
             RoofOpeningEditIntent intent; intent.roof_id=target.roof_id.toStdString(); intent.uses_skylight_schema=true;
             intent.uses_rotation_schema=source->entities().at(target.roof_id.toStdString()).properties.at("version")==4;
             intent.removed_opening_ids={target.opening_id.toStdString()};
@@ -62525,12 +62691,47 @@ private:
         } catch (const std::exception& error) { setError(QString::fromUtf8(error.what())); return false; }
     }
 
+    void showRoofOpeningContextMenu(QPoint global_position) {
+        try {
+            if (!m_selected_roof_opening) return;
+            const auto captured=*m_selected_roof_opening;
+            const auto source=selectedRoofOpeningSource(false);
+            const auto authority=captureSourceEditAuthority(*source);
+            QMenu menu(owner);
+            auto* heading=menu.addAction(QStringLiteral("Skylight")); heading->setEnabled(false);
+            auto* properties=menu.addAction(QStringLiteral("Properties…"));
+            auto* copy=menu.addAction(QStringLiteral("Copy skylight"));
+            auto* cut=menu.addAction(QStringLiteral("Cut skylight"));
+            auto* duplicate=menu.addAction(QStringLiteral("Duplicate skylight…"));
+            auto* remove=menu.addAction(QStringLiteral("Delete skylight"));
+            auto* roof=menu.addAction(QStringLiteral("Select roof"));
+            for (auto* action:{properties,cut,duplicate,remove}) action->setEnabled(source->is_editable());
+            const auto action=menu.exec(global_position);
+            if (!sourceEditAuthorityCurrent(authority,false) || m_selected_roof_opening!=std::optional{captured}) {
+                setError(QStringLiteral("The skylight source or selection changed. Reopen its menu.")); return;
+            }
+            // A native publication can become pending without changing the
+            // authoring digest. Require the same successful displayed source.
+            if (m_roof_opening_native_selection &&
+                fullSnapshotDigest(*selectedRoofOpeningSource(false))!=fullSnapshotDigest(*source))
+                throw std::invalid_argument("The displayed skylight changed. Reopen its menu.");
+            if (action==properties) showRoofOpeningQuickProperties();
+            else if (action==copy) (void)copyRoofOpeningSelection(false);
+            else if (action==cut) (void)copyRoofOpeningSelection(true);
+            else if (action==duplicate) (void)beginRoofOpeningClone({source->entities().at(captured.roof_id.toStdString()),
+                captured.opening_id.toStdString()});
+            else if (action==remove) (void)deleteRoofOpeningSelection();
+            else if (action==roof) (void)selectEntity(captured.roof_id,false);
+        } catch (const std::exception& error) {
+            setError(QStringLiteral("Skylight actions: %1").arg(QString::fromUtf8(error.what())));
+        }
+    }
+
     void showRoofOpeningQuickProperties() {
         try {
             if (!m_selected_roof_opening) return;
-            auto* canvas=m_workspace==Workspace::measurement ? m_measurementCanvas : m_architecturalCanvas;
             const auto target=*m_selected_roof_opening;
-            const auto source=captureCanvasGeometrySource(canvas,target.source_revision);
+            const auto source=selectedRoofOpeningSource();
             const auto authority=captureSourceEditAuthority(*source);
             const auto original=roofCanvasChild(*source,target);
             QDialog dialog(owner); dialog.setWindowTitle(QStringLiteral("Skylight"));
@@ -64437,6 +64638,8 @@ private:
         std::string source_digest;
         std::optional<WorkspaceAuthorityToken> workspace_token;
         bool recovery_authority;
+        std::optional<CanvasRoofOpeningTarget> roof_opening_selection;
+        bool native_roof_opening_selection;
     };
 
     struct RetainedSelectionPublication {
@@ -64483,7 +64686,8 @@ private:
     SourceEditAuthority captureSourceEditAuthority(const DocumentSnapshot& source) const {
         return {captureModalContext(), m_workspace, m_selected_ids, m_view_filter,
                 m_architectural_view_kind, m_active_named_view, m_active_named_view_owner,
-                fullSnapshotDigest(source), workspaceAuthorityToken(), !m_recovery_ledger.empty()};
+                fullSnapshotDigest(source), workspaceAuthorityToken(), !m_recovery_ledger.empty(),
+                m_selected_roof_opening,m_roof_opening_native_selection};
     }
 
     bool sourceEditAuthorityContextCurrent(const SourceEditAuthority& authority, bool require_editable=true) const {
@@ -64497,6 +64701,8 @@ private:
             authority.visibility==m_view_filter && authority.view_kind==m_architectural_view_kind &&
             authority.named_view==m_active_named_view && authority.named_view_owner==m_active_named_view_owner &&
             authority.workspace_token==workspaceAuthorityToken() &&
+            authority.roof_opening_selection==m_selected_roof_opening &&
+            authority.native_roof_opening_selection==m_roof_opening_native_selection &&
             authority.recovery_authority==!m_recovery_ledger.empty();
     }
 
@@ -64558,6 +64764,8 @@ private:
         authority.context.selected_id=m_selected_id;
         authority.context.generated_label_selection=m_selected_generated_labels;
         authority.selection=m_selected_ids;
+        authority.roof_opening_selection=m_selected_roof_opening;
+        authority.native_roof_opening_selection=m_roof_opening_native_selection;
         if (!publication_current() || !sourceEditAuthorityCurrent(authority,false)) return false;
         const auto renewed=std::make_shared<const SourceEditAuthority>(authority);
         const QScopedValueRollback<bool> refreshing(m_refreshing,true);
@@ -64591,7 +64799,7 @@ private:
                 if (selected) selected->setSelected(true);
                 m_navigator_primary_selection=m_selected_id;
             }
-            if (m_nativeModelView) m_nativeModelView->setSelectedEntities(m_selected_ids);
+            synchronizeNativeSelection();
             refreshInspector();
             refreshActions();
             refreshTitle();
@@ -64681,7 +64889,7 @@ private:
             const auto gesture_source = m_nativeModelView->gestureSourceSnapshot();
             // Check the actual press capture before selectEntity/refresh can
             // publish a different source or replace the gesture's scene.
-            if (!authority || !gesture_source || id != authority->context.selected_id ||
+            if (!authority || !gesture_source || m_selected_roof_opening || id != authority->context.selected_id ||
                 !sourceEditAuthorityUnchanged(*authority) || hasPendingPlacementEdit() ||
                 fullSnapshotDigest(*gesture_source) != fullSnapshotDigest(authoringSnapshot())) {
                 throw std::invalid_argument("The displayed 3D source or editing context changed. Select the current object and begin the gesture again.");
@@ -68117,6 +68325,8 @@ private:
     std::optional<PendingOpeningPlacementPreview> m_running_opening_placement_preview;
     std::optional<PendingOpeningPlacementPreview> m_pending_opening_placement_preview;
     std::optional<CanvasRoofOpeningTarget> m_selected_roof_opening;
+    bool m_roof_opening_native_selection{};
+    bool m_native_selection_sync_deferred{};
     std::optional<RoofOpeningCloneSource> m_pending_roof_opening_clone;
     std::optional<CornerWindowTransfer> m_pending_corner_window_clone;
     std::vector<Entity> m_pending_corner_window_catalogs;
