@@ -100,6 +100,13 @@ Surviving call rows keep their vertex and edge identities when their original
 ownership can be established. Changes to leg count or a reordered boundary
 cycle allocate new child identities. Dependent dimensions and constraints must
 still resolve; conflicts block the update without changing the document.
+Ownership is established from the current uninterrupted report/closure
+authoring ancestry.
+Returning to an earlier set of calls after a leg-count change retains the newer
+identities on subsequent same-count corrections; an earlier occurrence of those
+calls does not replace the current ownership. Undo/Redo inherits the ownership
+of its restored source revision; navigation does not erase an earlier reorder.
+Reordering within the current ancestry still prevents row reuse.
 Receipt-backed and derived boundaries require a receipt-preserving workflow
 and are rejected here. Changing the project while the dialog is open also
 blocks the update until the dialog is reopened.
@@ -123,13 +130,21 @@ its `leg_id`, one-based `line_number`, `original_expression`, and normalized
 without replacing the calculated metre values. Consumers must validate and
 recompute input before using it as geometry.
 
-**Open report** accepts desktop reports with version-1 input provenance, up to
-4 MiB. It restores the source, original leg text, tolerance, and default units
-and recalculates through the survey engine. Stored vertices, totals, and exact
-receipts are ignored when recalculating. Unsupported versions and malformed
-input metadata leave current entries intact; invalid entered measurements are
-shown for correction with report export disabled. The default-unit selector
+**Open report** accepts desktop reports with version-1 or version-2 input
+provenance, up to 4 MiB. It restores the source, original leg text, tolerance, and default units
+and reconstructs geometry through the survey engine. Stored vertices and totals
+never establish geometry; known receipt fields must match the reconstructed
+calls. Validated opaque input and receipt extensions survive reopening,
+unchanged recalculation, export and boundary insertion/correction. Editing an
+input invalidates the report and requires fresh reconstruction. Unchanged
+recalculation also retains an explicitly selected, still-valid endpoint
+adjustment. Unsupported versions, malformed receipts and invalid entered measurements leave current
+entries intact and display an error. The default-unit selector
 is explicit and independent of project display units. This is native report
 reopening, not Apex interchange or a signed survey attestation.
+
+The current row-ownership and desktop extension-preservation changes have only
+source review. Compilation, interaction and save/reopen qualification for these
+changes remain outstanding; historical runtime evidence does not cover them.
 
 Apex survey exchange and production survey qualification remain incomplete.

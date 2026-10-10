@@ -45,28 +45,48 @@ bool has_original_row_ownership(const DocumentSnapshot& source, const Identified
                                 const Json& survey_source, std::size_t expected_count) {
     if (current.segments.size() != expected_count) return false;
     // Current geometry can be translated, rotated, or edited since creation.
-    // The earliest retained state of these calls establishes row ownership;
-    // a reordered or rebuilt cycle must not relabel old dependent targets.
-    for (const auto& revision : source.history()) {
+    // The earliest state in the current uninterrupted authoring ancestry establishes
+    // row ownership. Returning to older calls after a leg-count correction can
+    // legitimately give those calls new identities; an earlier occurrence must
+    // not invalidate them. Reordering within this history still refuses reuse.
+    // Undo/redo restores an existing ownership state; follow its validated
+    // source revision rather than treating navigation as a fresh set of calls.
+    const Entity* first = nullptr;
+    const auto& history = source.history();
+    auto cursor = source.revision();
+    if (cursor >= history.size()) return false;
+    for (;;) {
+        const auto& revision = history.at(static_cast<std::size_t>(cursor));
+        if (revision.revision != cursor) return false;
         const auto found = revision.entities.find(current.id);
-        if (found == revision.entities.end() || !found->second.extensions.contains("survey_source")) continue;
+        if (found == revision.entities.end() || !found->second.extensions.contains("survey_source")) break;
         const auto& previous_source = found->second.extensions.at("survey_source");
         if (!previous_source.is_object() || !previous_source.contains("report") ||
             previous_source.at("report") != survey_source.at("report") ||
             previous_source.value("added_closing_segment", Json()) != survey_source.at("added_closing_segment") ||
-            previous_source.value("adjusted_final_endpoint", Json()) != survey_source.at("adjusted_final_endpoint")) continue;
-        if (inspect_boundary_entity_version(found->second).format != BoundaryEntityFormat::identified_v1) return false;
-        const auto previous = decode_identified_boundary_entity(found->second);
-        if (previous.segments.size() != current.segments.size()) return false;
-        for (std::size_t i = 0; i < current.segments.size(); ++i) {
-            const auto& a = current.segments[i];
-            const auto& b = previous.segments[i];
-            if (a.segment_id != b.segment_id || a.start_vertex_id != b.start_vertex_id || a.end_vertex_id != b.end_vertex_id)
-                return false;
+            previous_source.value("adjusted_final_endpoint", Json()) != survey_source.at("adjusted_final_endpoint")) break;
+        first = &found->second;
+        if (revision.source_revision) {
+            if ((revision.action != "undo" && revision.action != "redo") ||
+                *revision.source_revision >= cursor) return false;
+            cursor = *revision.source_revision;
+        } else {
+            if (revision.action == "undo" || revision.action == "redo") return false;
+            if (cursor == 0) break;
+            if (revision.parent_revision != cursor - 1) return false;
+            cursor = *revision.parent_revision;
         }
-        return true;
     }
-    return false;
+    if (!first || inspect_boundary_entity_version(*first).format != BoundaryEntityFormat::identified_v1) return false;
+    const auto previous = decode_identified_boundary_entity(*first);
+    if (previous.segments.size() != current.segments.size()) return false;
+    for (std::size_t i = 0; i < current.segments.size(); ++i) {
+        const auto& a = current.segments[i];
+        const auto& b = previous.segments[i];
+        if (a.segment_id != b.segment_id || a.start_vertex_id != b.start_vertex_id || a.end_vertex_id != b.end_vertex_id)
+            return false;
+    }
+    return true;
 }
 } // namespace
 

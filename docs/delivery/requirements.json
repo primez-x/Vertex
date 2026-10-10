@@ -6143,7 +6143,7 @@
         "binding": null
       },
       "qualification_history": [],
-      "delivery_notes": null,
+      "delivery_notes": "October 9 source-only survey correction overlay: call-row ownership now uses the current uninterrupted matching report/closure authoring ancestry, following validated Undo/Redo source revisions. This preserves legitimate new identities when returning to earlier calls after a leg-count change and still refuses reorder within the restored ancestry. The desktop stages core-rebuilt reports directly on reopen and retains validated opaque input/receipt extensions and eligible explicit closure choices through unchanged calculation and export/insertion/correction. Input edits still invalidate the report. Compilation, interaction, history and production qualification remain unverified; historical source/runtime bindings and acceptance flags are unchanged.",
       "source_snapshot": {
         "id": "APX-SPEC-001",
         "area": "specialized_modules",

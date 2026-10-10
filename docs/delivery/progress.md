@@ -14,6 +14,37 @@ changed source does not acquire runtime acceptance without later qualification.
 
 ## Current delivery state
 
+### October 9 survey correction history and reopened report metadata
+
+Survey corrections formerly compared the current call identities with the first
+matching report anywhere in retained history. Returning from four calls to
+five and then back to the original four can legitimately allocate new identities.
+A later same-count correction then unnecessarily replaced those identities and
+could refuse attached dimensions. Row ownership now uses the earliest state in
+the current uninterrupted report/closure authoring ancestry. Independent source
+review found that merely scanning consecutive events treated Undo/Redo as new
+ownership. The walk now follows their validated source revisions, with strictly
+earlier targets and action/parent guards. Reordering within the restored ancestry
+still prevents unsafe reuse; changed leg counts still allocate new identities.
+
+The desktop also reopened a core-validated report by passing its visible text
+through a fresh calculation, discarding opaque input and receipt extensions
+that the core explicitly preserved. Reopening now stages the rebuilt report
+directly. Unchanged Calculate reuses that validated input; edits still invalidate
+the report and rebuild receipts. Independent source review identified that
+Calculate also cleared an explicitly selected endpoint-adjustment choice. It now
+restores that choice after rebuilding eligibility when the input was unchanged.
+Geometry and diagnostics remain reconstructed from entered calls, and known
+receipt fields remain validated rather than trusted as calculation inputs.
+
+Root integration review and independent source review approved the bounded
+changes after the closure-choice and navigation corrections. Scoped
+`git diff --check` passed. These are source changes, not observed editor or
+production acceptance. No builds,
+tests, new tests, probes, scripts, native jobs, launches, packages or installations
+ran. Compilation, actual dimension retention, report export/reopen and correction
+history remain unverified; the installed candidate is unchanged.
+
 ### October 9 certified interior arc-contact fallback
 
 The remaining nonshared contact gap now has a private bounded rational fallback

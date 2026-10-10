@@ -31393,26 +31393,37 @@ public:
         QObject::connect(provenance, &QLineEdit::textChanged, &dialog, invalidate);
         QObject::connect(tolerance, &QLineEdit::textChanged, &dialog, invalidate);
         QObject::connect(input_units, &QComboBox::currentIndexChanged, &dialog, invalidate);
+        const auto stage_report = [&](const RebuiltSurveyReport& rebuilt) {
+            const auto& d = rebuilt.report().at("diagnostics");
+            const bool has_area = !d.at("area_m2").is_null();
+            auto summary = QStringLiteral("%1\nClosure error: %2 m (east %3 m; north %4 m)\nPerimeter: %5 m")
+                .arg(d.at("closed").get<bool>() ? QStringLiteral("Within closure tolerance") : QStringLiteral("Open traverse"))
+                .arg(d.at("linear_error_m").get<double>(), 0, 'g', 10).arg(d.at("east_error_m").get<double>(), 0, 'g', 10)
+                .arg(d.at("north_error_m").get<double>(), 0, 'g', 10).arg(d.at("perimeter_m").get<double>(), 0, 'g', 10);
+            if (has_area) summary += QStringLiteral("\nArea: %1 m² · %2 acres")
+                .arg(d.at("area_m2").get<double>(), 0, 'f', 4).arg(d.at("acres").get<double>(), 0, 'f', 6);
+            else summary += QStringLiteral("\nArea unavailable for this traverse.");
+            measured_summary = std::move(summary);
+            report = QString::fromStdString(rebuilt.report().dump(2));
+            export_report->setEnabled(true);
+            refresh_preview();
+        };
         QObject::connect(calculate, &QPushButton::clicked, &dialog, [&] {
+            // A current report already matches the fields: every input edit
+            // invalidates it. Recalculation must retain validated opaque input
+            // and receipt extensions rather than replace them with fresh ones.
+            const auto current_report = report;
+            const bool current_adjustment = current_report && close_endpoint->isEnabled() && close_endpoint->isChecked();
             invalidate();
             try {
                 const auto unit = input_units->currentData().toString() == QStringLiteral("m") ? Unit::metre : Unit::foot;
-                const auto report_json = build_survey_report({input->toPlainText().toStdString(),
-                    provenance->text().toStdString(), tolerance->text().toStdString(), unit});
+                const auto report_json = current_report ? json::parse(current_report->toStdString()) :
+                    build_survey_report({input->toPlainText().toStdString(),
+                        provenance->text().toStdString(), tolerance->text().toStdString(), unit});
                 const auto rebuilt = rebuild_survey_report(report_json);
-                const auto& d = rebuilt.report().at("diagnostics");
-                const bool has_area = !d.at("area_m2").is_null();
-                auto summary = QStringLiteral("%1\nClosure error: %2 m (east %3 m; north %4 m)\nPerimeter: %5 m")
-                    .arg(d.at("closed").get<bool>() ? QStringLiteral("Within closure tolerance") : QStringLiteral("Open traverse"))
-                    .arg(d.at("linear_error_m").get<double>(), 0, 'g', 10).arg(d.at("east_error_m").get<double>(), 0, 'g', 10)
-                    .arg(d.at("north_error_m").get<double>(), 0, 'g', 10).arg(d.at("perimeter_m").get<double>(), 0, 'g', 10);
-                if (has_area) summary += QStringLiteral("\nArea: %1 m² · %2 acres")
-                    .arg(d.at("area_m2").get<double>(), 0, 'f', 4).arg(d.at("acres").get<double>(), 0, 'f', 6);
-                else summary += QStringLiteral("\nArea unavailable for this traverse.");
-                measured_summary = std::move(summary);
-                report = QString::fromStdString(rebuilt.report().dump(2));
-                export_report->setEnabled(true);
-                refresh_preview();
+                stage_report(rebuilt);
+                if (current_adjustment && close_endpoint->isEnabled())
+                    close_endpoint->setChecked(true);
             } catch (const std::exception& error) {
                 invalidate();
                 result->setText(QString::fromUtf8(error.what()));
@@ -31467,13 +31478,14 @@ public:
                 const auto source_text = entry.at("source_text").get<std::string>();
                 const auto tolerance_text = entry.at("closure_tolerance_expression").get<std::string>();
                 const auto default_unit = entry.at("default_unit").get<std::string>();
-                // Stored vertices, diagnostics, and receipts are never trusted as
-                // calculation inputs. Rebuild everything from the entered text.
+                // The core has rebuilt geometry and diagnostics from the text
+                // and validated known receipts. Stage that result directly so
+                // its preserved opaque input extensions survive reopening.
                 input->setPlainText(QString::fromStdString(legs_text));
                 provenance->setText(QString::fromStdString(source_text));
                 tolerance->setText(QString::fromStdString(tolerance_text));
                 input_units->setCurrentIndex(default_unit == "m" ? 1 : 0);
-                calculate->click();
+                stage_report(rebuilt);
         };
         QObject::connect(open_report, &QPushButton::clicked, &dialog, [&] {
             const auto path = QFileDialog::getOpenFileName(&dialog, QStringLiteral("Open survey report"),
