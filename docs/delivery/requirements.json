@@ -6932,7 +6932,7 @@
         "binding": null
       },
       "qualification_history": [],
-      "delivery_notes": null,
+      "delivery_notes": "October 9 source-only opening-assembly editor correction: untouched/restored frame, panel, glazing, inset and bay-projection fields retain actual native values rather than reparsing generated text. Changed fields still parse through the exact quantity path and the shared typed assembly publication validates family, dimensions and full host/source authority. The explicit expression API retains its parsing contract and unchanged legacy profiles retain no-op representation. Compilation, editor interaction, history and output remain unverified; historical bindings and acceptance flags are unchanged.",
       "source_snapshot": {
         "id": "ARCH-MOD-002",
         "area": "architecture",

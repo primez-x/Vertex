@@ -34779,6 +34779,45 @@ public:
                             "edit classification");
     }
 
+    bool applySelectedOpeningAssembly(const OpeningAssembly& assembly,
+                                      std::optional<Revision> expected_revision = std::nullopt) {
+        const auto entity = selectedEntity();
+        if (!entity || entity->type != "opening") {
+            setError(QStringLiteral("Select a hosted door, window or framed opening to edit its assembly."));
+            return false;
+        }
+        if (!m_document->is_editable()) {
+            setError(QStringLiteral("This document is read-only."));
+            return false;
+        }
+        if (expected_revision.value_or(m_document->revision()) != m_document->revision()) {
+            setError(QStringLiteral("The project changed while the opening assembly was being edited. Start again."));
+            return false;
+        }
+        try {
+            const auto kind_text = read_string(entity->properties, "opening_kind")
+                .value_or(read_string(entity->properties, "classification").value_or("door"));
+            const auto kind = entity->properties.contains("opening_assembly")
+                ? std::optional<OpeningAssemblyKind>{parse_opening_assembly(entity->properties.at("opening_assembly")).kind}
+                : parse_opening_assembly_kind(kind_text);
+            if (!kind)
+                throw std::invalid_argument("A bare opening has no frame. Change its type to Cased opening first.");
+            if (opening_assembly_kind_name(*kind) != kind_text || assembly.kind != *kind)
+                throw std::invalid_argument("Opening assembly does not match its kind.");
+            validate_opening_assembly(assembly);
+            auto properties = entity->properties;
+            properties["opening_assembly"] = opening_assembly_json(assembly);
+            HostedOpeningProfileEditIntent authored;
+            authored.opening_id = entity->id;
+            authored.wall_id = entity->properties.at("wall_id").get<std::string>();
+            authored.assembly = assembly;
+            return editSelectedProperties(std::move(properties), "edit opening assembly", std::nullopt, authored);
+        } catch (const std::exception& error) {
+            setError(QStringLiteral("Opening assembly: %1").arg(QString::fromUtf8(error.what())));
+            return false;
+        }
+    }
+
     bool editSelectedOpeningAssembly(const QString& frame_width_expression,
                                      const QString& frame_depth_expression,
                                      const QString& panel_thickness_expression,
@@ -34847,14 +34886,7 @@ public:
             if (!std::isfinite(assembly.inset_m)) {
                 throw std::invalid_argument("Inset must be finite.");
             }
-            validate_opening_assembly(assembly);
-            auto properties = entity->properties;
-            properties["opening_assembly"] = opening_assembly_json(assembly);
-            HostedOpeningProfileEditIntent authored;
-            authored.opening_id = entity->id;
-            authored.wall_id = entity->properties.at("wall_id").get<std::string>();
-            authored.assembly = assembly;
-            return editSelectedProperties(std::move(properties), "edit opening assembly", std::nullopt, authored);
+            return applySelectedOpeningAssembly(assembly, revision);
         } catch (const std::exception& error) {
             setError(QStringLiteral("Opening assembly: %1").arg(QString::fromUtf8(error.what())));
             return false;
@@ -63717,10 +63749,14 @@ private:
                     status->show();
                     return;
                 }
+                try {
                 auto edited = assembly;
-                const auto exact_if_unchanged = [&](QLineEdit* field, double original) {
-                    return field->text() == format_length(original, m_metric_units)
-                        ? QString::fromStdString(json(original).dump()) + QStringLiteral(" m") : field->text();
+                const auto read_dimension = [&](QLineEdit* field, double original) {
+                    // Generated display text is not an authored measurement.
+                    // Untouched or restored fields retain the actual native value,
+                    // including values outside the exact quantity parser's range.
+                    return field->text() == format_length(original, m_metric_units) ? original :
+                        parse_quantity(field->text().toStdString(), m_metric_units ? Unit::metre : Unit::foot).metres;
                 };
                 if (window_layout) {
                     edited.window_layout = static_cast<WindowLayoutKind>(window_layout->currentIndex());
@@ -63735,30 +63771,29 @@ private:
                     edited.window_slide_fraction = sliding
                         ? window_travel->value() == displayed_window_travel ? assembly.window_slide_fraction : window_travel->value() / 100.0
                         : 0.0;
-                    try {
-                        edited.window_bay_projection_m = bay ? parse_quantity(exact_if_unchanged(bay_projection,
-                            assembly.window_layout == WindowLayoutKind::bay ? assembly.window_bay_projection_m : 0.65)
-                            .toStdString(), m_metric_units ? Unit::metre : Unit::foot).metres : 0.0;
-                    } catch (const std::exception& error) {
-                        status->setText(QString::fromUtf8(error.what()));
-                        status->show();
-                        return;
-                    }
+                    edited.window_bay_projection_m = bay ? read_dimension(bay_projection,
+                        assembly.window_layout == WindowLayoutKind::bay ? assembly.window_bay_projection_m : 0.65) : 0.0;
                     edited.window_bay_front_fraction = bay
                         ? bay_front->value() == displayed_bay_front ? assembly.window_bay_front_fraction : bay_front->value() / 100.0
                         : 0.5;
                 }
-                if (editSelectedOpeningAssembly(exact_if_unchanged(frame_width, assembly.frame_width_m),
-                                                 exact_if_unchanged(frame_depth, assembly.frame_depth_m),
-                                                 exact_if_unchanged(panel, assembly.panel_thickness_m),
-                                                 exact_if_unchanged(glazing, assembly.glazing_thickness_m),
-                                                 exact_if_unchanged(inset, assembly.inset_m),
-                                                 context.revision, edited)) {
+                edited.frame_width_m = read_dimension(frame_width, assembly.frame_width_m);
+                edited.frame_depth_m = read_dimension(frame_depth, assembly.frame_depth_m);
+                edited.panel_thickness_m = assembly.kind == OpeningAssemblyKind::passage ? 0.0 :
+                    read_dimension(panel, assembly.panel_thickness_m);
+                edited.glazing_thickness_m = assembly.kind == OpeningAssemblyKind::passage ? 0.0 :
+                    read_dimension(glazing, assembly.glazing_thickness_m);
+                edited.inset_m = read_dimension(inset, assembly.inset_m);
+                if (applySelectedOpeningAssembly(edited, context.revision)) {
                     dialog.accept();
                     return;
                 }
                 status->setText(lastError());
                 status->show();
+                } catch (const std::exception& error) {
+                    status->setText(QString::fromUtf8(error.what()));
+                    status->show();
+                }
             });
             dialog.exec();
         } catch (const std::exception& error) {

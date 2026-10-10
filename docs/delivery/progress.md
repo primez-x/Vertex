@@ -14,6 +14,31 @@ changed source does not acquire runtime acceptance without later qualification.
 
 ## Current delivery state
 
+### October 9 opening-assembly native dimension retention
+
+The opening-assembly editor converted untouched rounded fields back to generated
+native JSON decimal expressions and reparsed them. The profile schema permits
+an inset of `1e-20 m`, which cannot fit the exact quantity parser's signed-64-bit denominator, so
+an unchanged Save or unrelated frame/layout edit could fail. The editor now
+retains actual native dimensions for untouched/restored fields and parses only
+changed input. Bay projection follows the same rule. A shared typed publication
+helper preserves family, revision, document and full-host validation; the explicit
+programmatic expression API still parses its supplied dimensions. Existing
+typed capture/replay retains unchanged implicit profiles without a history event.
+
+The bounded new-opening dialog audit found no confirmed creation-path defect;
+it is creation-only, and its controller repeats source/context admission before
+mutation. The wall-profile/layer forms already retain untouched source dimensions.
+This audit does not certify those complete workflows or revise historical evidence.
+
+Root integration review and independent source review approved the bounded
+retention change. Scoped `git diff --check` passed. Existing family/host,
+source-authority and no-op publication paths remain in use.
+
+No builds, tests, new tests, probes, scripts, native jobs, launches, packages or
+installations ran. Compilation, actual editor behavior, history, save/reopen and
+coordinated output remain unverified; the installed candidate is unchanged.
+
 ### October 9 selected-arc separation without a resolved center axis
 
 The earlier analytical clearance path rejected selected arcs when the supporting

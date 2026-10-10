@@ -150,6 +150,16 @@ and supports undo/redo. A door may keep zero glazing; a window requires a
 positive glazing depth. Malformed or stale edits remain visible in the dialog
 and leave the document unchanged.
 
+Untouched or restored dimension text in the assembly editor retains the stored
+native value directly, including frame/panel/glazing dimensions, signed inset
+and bay projection. Only changed expressions enter the exact quantity parser;
+the resulting profile still passes shared family, dimension and complete-host
+validation through the existing typed edit path. The programmatic expression
+API continues to parse explicitly supplied inputs. An unchanged Save does not
+invent a new measurement or materialize an unchanged legacy default profile.
+The current native-value retention correction has source review only;
+compilation, editor interaction, history and output qualification remain open.
+
 Architecture-enabled IFC export now derives wall cuts and manufactured door/window
 parts from the same native solid kernel. Fill occurrences use IFC door/window
 products linked to their opening void with IfcRelFillsElement. Curved wall,
