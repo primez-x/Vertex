@@ -51,13 +51,22 @@ struct DxfProjectImportResult {
 // measured quantity as a named text callout with an explicit fidelity diagnostic.
 // Angles retain their admitted vertex tangents as three-point angular DIMENSION;
 // area quantities retain named callouts with their association loss diagnosed.
+// Inline boundary/slab holes retain their analytical loops as ordinary curves;
+// native hole ownership is not represented. Boundary edge/vertex topology,
+// native boundary types and declared area classifications report their loss.
+// Polyline vertices require exact authored joins. Distinct consecutive endpoints
+// retain independent primitives with a connection-loss diagnostic; a merely
+// tolerance-close final endpoint remains an open polyline without snapping.
 [[nodiscard]] DxfProjectExportResult export_project_dxf(
     const DocumentSnapshot& document,
     const DxfExchangeLimits& limits = {});
 
 // Parses a bounded DXF R2013 drawing and reconstructs editable native
-// boundary/annotation entities and validated native wall/opening graphs. Native
-// VERTEX_ENTITY_V1 block metadata requires matching plan primitives and metre
+// boundary/annotation entities and validated native wall/opening graphs. The
+// boundary candidates carry primitive classifications, not the source's native
+// area classifications, stable edge/vertex identities or outer/hole ownership.
+// Separate exported hole curves therefore reconstruct as independent candidates.
+// Native VERTEX_ENTITY_V1 block metadata requires matching plan primitives and metre
 // units with identity INSERTs. Manufactured opening blocks additionally require
 // depiction MANUFACTURED_PLAN_V1 and an architecture-enabled mapper that admits
 // the host/assembly solids and regenerates their exact horizontal plan section.

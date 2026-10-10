@@ -14,6 +14,50 @@ changed source does not acquire runtime acceptance without later qualification.
 
 ## Current delivery state
 
+### October 9 analytical DXF holes, IFC opening hosts and site yaw display
+
+Ordinary boundary export previously returned after its outer outline, omitting
+admitted inline holes. DXF now exports supported hole loops through the same
+analytical helper as slabs and diagnoses unreconstructed hole ownership.
+Malformed collections, lost native topology/type and area classifications are
+visible fidelity gaps. Matching primitive classifications avoid false reports.
+Polyline construction also formerly discarded distinct intermediate endpoints
+and treated tolerance-close closure as exact. Only exact authored joins now
+share vertices; otherwise independent primitives retain both coordinates.
+Tolerance-close final closure stays open, and unsupported sweeps are diagnosed.
+Independent review identified an overly broad near-full-turn guard that could
+drop a supported bulge. Admission now rejects actual full/overfull turns and
+retains the existing finite bulge ceiling. Review also found that physical
+rooms returned before the new reporters. Their checked loops now share native
+topology/type/classification reporting and explicit hole-association diagnostics.
+
+IFC's proved curved void path previously reset a legacy door/window to a bare
+opening. It now uses the existing swept-path classification rule, preserving
+the separate assembly/fill proof. Host ambiguity previously discarded non-wall
+parents before counting: one wall plus one slab relationship could incorrectly
+activate a wall opening. Every actual void parent now participates in admission.
+Native wall/void/fill activation also uses the actual linked IFCPROJECT metre
+assignment proof already required for roof/room/stair carriers. Orphan unit
+declarations cannot authorize it. Legacy swept/axis unit policy is unchanged.
+
+Site yaw display now avoids an overflowing intermediate degree conversion and
+uses explicit radians when the finite native angle cannot fit in degrees.
+Fields and preview cells share the formatter, retaining ordinary degree editing
+and existing unchanged-value/changed-input validation. This closes the display
+limit recorded immediately below without normalizing saved angles.
+
+The existing upgraded-circle DXF empty-diagnostics expectation at
+`tests/dxf_project_exchange_tests.cpp:122` conflicts with the newly explicit
+topology/classification loss report; qualification must reconcile it. Tests
+remain unchanged. Lossless native boundary-hole topology, actual IFC consumer
+round trips and broader conformance remain open. Root integration review and
+independent source review approved the revised exchange change after the
+near-full-sweep and physical-room reporting corrections. Scoped
+`git diff --check` passed. Compilation, interaction,
+history, storage and numerical behavior remain unverified; the installed
+candidate is unchanged. No builds, tests, new tests, probes, scripts, native
+jobs, launches, packages or installations ran.
+
 ### October 9 sheet no-op, site datum and selected component names
 
 Older sheet models can lack the built-in appraisal schedule registry entry.

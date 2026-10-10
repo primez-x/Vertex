@@ -132,6 +132,43 @@ work.
 
 ## Native project mapping
 
+### Source fidelity corrections (2026-10-09)
+
+Ordinary native boundaries with inline holes now export every supported hole
+loop as analytical DXF curves, using the same helper as slab footprints. The
+loops import as independent candidates; native outer/hole ownership remains
+unrepresented and is explicitly diagnosed. Malformed hole collections report
+their loss instead of silently disappearing. Export also reports lost stable
+edge/vertex topology, native boundary types and area classifications. A CAD
+primitive classification already reproduced by the selected output primitive
+does not receive a false classification-loss report.
+
+A DXF polyline shares one coordinate at each joined vertex. Export now requires
+exact authored joins before combining edges: distinct adjacent endpoints remain
+independent primitives with a connection-loss diagnostic. A merely
+tolerance-close final endpoint remains open with its original coordinate;
+export does not silently snap it to the first point. Full-turn or otherwise
+unsupported sweeps remain explicit representability failures. Near-full turns
+remain supported when their finite bulge fits the transport ceiling. Current
+source-bound physical rooms use the same semantics-loss reporter and diagnose
+hole association for their checked inner loops.
+
+Native IFC mesh activation for wall, void and fill carriers now requires the
+same actual linked-project metre proof as roofs/rooms/stairs. An orphan metre
+declaration cannot activate those native carriers. Every actual void relation
+participates in host ambiguity, including a slab or other parent outside the
+editable wall subset. A proved curved legacy void now follows the same retained
+door/window classification rule as a proved swept void. Manufactured assembly
+and operation metadata still require the separate fill proof. The earlier
+legacy swept/axis unit policy is unchanged by this bounded correction.
+
+These are source changes only. Compilation, runtime round trips, geometry and
+external consumers remain unverified. The existing upgraded-circle export
+expectation at `tests/dxf_project_exchange_tests.cpp:122` requires reconciliation
+with the new truthful topology/classification diagnostics when qualification
+resumes; it was neither changed nor run here. Lossless native boundary-hole
+reconstruction and full Reference View conformance are not established.
+
 `sketch/dxf_project_exchange.hpp` adds the first transactional-project mapping
 layer on top of the transport codec. `export_project_dxf` reads one immutable
 `DocumentSnapshot` and maps identified or legacy boundaries, wall baselines,

@@ -7386,7 +7386,7 @@
         "binding": null
       },
       "qualification_history": [],
-      "delivery_notes": "October 9 source-only Site placement correction removes silent datum-identifier truncation: the editor now covers the core's 1024-byte UTF-8 identifier bound rather than limiting captured text to 256 characters. Changed input retains core validation. Existing untouched numeric retention and context admission remain in use. Extreme finite yaw degree-display overflow remains an explicit source limit. No compilation, editor, storage or production acceptance is claimed; see docs/delivery/progress.md. Historical bindings and acceptance states remain unchanged.",
+      "delivery_notes": "October 9 source-only Site placement corrections remove silent datum-identifier truncation and finite-yaw display failure: the editor covers the core's 1024-byte UTF-8 identifier bound, retains ordinary degrees and uses explicit radians when a finite native angle cannot fit in degrees. Fields and preview cells share this formatter. Changed input retains core validation; untouched native values and context admission remain in use. No compilation, editor, numeric, storage or production acceptance is claimed; see docs/delivery/progress.md. Historical bindings and acceptance states remain unchanged.",
       "source_snapshot": {
         "id": "ARCH-MOD-007",
         "area": "architecture",
@@ -9848,7 +9848,7 @@
         "binding": null
       },
       "qualification_history": [],
-      "delivery_notes": null,
+      "delivery_notes": "October 9 source-only IFC corrections preserve proved legacy curved door/window classification using the existing swept-void rule, count every actual void parent before admitting a unique wall host, and require the actual linked-project metre unit proof for native wall/void/fill activation. Orphan declarations cannot authorize native mesh carriers; assembly/operation metadata still requires independent fill proof. The earlier legacy swept/axis unit policy is unchanged. No compilation, runtime round trips, external consumer or Reference View conformance acceptance is claimed; see docs/delivery/progress.md and docs/interchange-profiles.md. Historical bindings and acceptance states remain unchanged.",
       "source_snapshot": {
         "id": "IO-IFC-001",
         "area": "interchange",
@@ -9943,7 +9943,7 @@
         "binding": null
       },
       "qualification_history": [],
-      "delivery_notes": null,
+      "delivery_notes": "October 9 source-only DXF correction retains ordinary inline hole loops as analytical curves and explicitly reports lost outer/hole association, native topology/type and area classifications. Exact authored joins alone share polyline vertices; distinct joins retain independent primitives, tolerance-close final closure stays open, and unsupported sweeps are diagnosed. Matching reconstructed CAD primitive classifications avoid false loss reports. Hole candidates remain independent after import; lossless native topology is not established. The existing upgraded-circle empty-diagnostics expectation requires reconciliation when qualification resumes; tests were neither changed nor run. No compilation, runtime, consumer round-trip or full fidelity acceptance is claimed; see docs/delivery/progress.md and docs/interchange-profiles.md. Historical bindings and acceptance states remain unchanged.",
       "source_snapshot": {
         "id": "IO-DXF-001",
         "area": "interchange",

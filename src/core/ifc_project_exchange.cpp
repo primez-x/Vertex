@@ -2409,7 +2409,7 @@ std::optional<Segment> reconstructed_wall_axis(const GeometryResult& geometry, c
 }
 
 // Retain the earlier declaration policy for legacy wall/slab/axis exchange.
-// Roof/room native activation uses the actual project assignment below.
+// Native mesh activation uses the actual project assignment below.
 bool declared_metre_units(const ParsedStep& parsed, std::size_t& count, const IfcExchangeLimits& limits) {
     bool found = false;
     for (const auto& record : parsed.records) {
@@ -2811,6 +2811,21 @@ bool same_native_opening(const Entity& opening, const Json& metadata) {
     return true;
 }
 
+std::string reconstructed_opening_kind(const Entity& opening) {
+    const auto type = opening.properties.value("ifc_type", std::string{});
+    const auto kind = type == "IFCDOOR" ? "door" : type == "IFCWINDOW" ? "window" : "opening";
+    if (opening.extensions.contains("ifc_vertex_properties")) {
+        const auto& metadata = opening.extensions.at("ifc_vertex_properties");
+        // Legacy classification does not authorize a manufactured assembly.
+        // An assembly's kind activates only after the separate void/fill proof.
+        if (!metadata.contains("opening_assembly") &&
+            metadata.contains("opening_kind") && metadata.at("opening_kind").is_string() &&
+            (metadata.at("opening_kind") == "door" || metadata.at("opening_kind") == "window"))
+            return metadata.at("opening_kind").get<std::string>();
+    }
+    return kind;
+}
+
 } // namespace
 
 IfcProjectExportResult export_project_ifc(const DocumentSnapshot& document,
@@ -3076,6 +3091,15 @@ IfcProjectImportResult import_project_ifc(std::string_view bytes,
     std::size_t mesh_vertices = 0, mesh_triangles = 0;
     for (const auto& record : parsed.records) {
         if (!is_product(record.type)) continue;
+#ifdef SKETCH_IFC_NATIVE_GEOMETRY
+        if (!native_project_units && metadata_by_id.contains(record.id)) {
+            const auto& metadata = metadata_by_id.at(record.id);
+            if (native_mesh_role(metadata, "wall") || native_mesh_role(metadata, "void") ||
+                native_mesh_role(metadata, "fill"))
+                add_diagnostic(result.diagnostics, "#" + std::to_string(record.id), record.type,
+                    "native_project_length_units_not_reconstructed");
+        }
+#endif
         if (auto mesh = product_meshes(parsed, record, argument_count, limits, mesh_vertices, mesh_triangles))
             meshes_by_id.emplace(record.id, std::move(*mesh));
     }
@@ -3196,7 +3220,7 @@ IfcProjectImportResult import_project_ifc(std::string_view bytes,
                     add_diagnostic(result.diagnostics, "#" + std::to_string(record.id), record.type,
                         "native_roof_or_room_geometry_metadata_inconsistent");
             }
-            if (supported_units && record.type == "IFCWALL" && meshes_by_id.contains(record.id) &&
+            if (native_project_units && record.type == "IFCWALL" && meshes_by_id.contains(record.id) &&
                 metadata_by_id.contains(record.id) && native_mesh_role(metadata_by_id.at(record.id), "wall")) {
                 const auto& metadata = metadata_by_id.at(record.id);
                 try {
@@ -3375,6 +3399,9 @@ IfcProjectImportResult import_project_ifc(std::string_view bytes,
         require(host && opening && find_record(parsed, *host) && find_record(parsed, *opening));
         require(find_record(parsed, *opening)->type == "IFCOPENINGELEMENT");
         const auto host_type = find_record(parsed, *host)->type;
+        // Every actual parent participates in ambiguity admission, including
+        // parents outside the editable wall subset.
+        hosts["ifc-" + std::to_string(*opening)].push_back({"ifc-" + std::to_string(*host), record.id});
         if (host_type != "IFCWALL" && host_type != "IFCWALLSTANDARDCASE") {
             // IFC voids may legally cut slabs and other elements. Retain that
             // relation for the foreign geometry path without inventing a
@@ -3383,7 +3410,6 @@ IfcProjectImportResult import_project_ifc(std::string_view bytes,
                            "non_wall_void_relation_retained");
             continue;
         }
-        hosts["ifc-" + std::to_string(*opening)].push_back({"ifc-" + std::to_string(*host), record.id});
     }
     std::set<int> reconstructed_relations;
     for (auto& opening : result.entities) {
@@ -3406,7 +3432,7 @@ IfcProjectImportResult import_project_ifc(std::string_view bytes,
         });
         bool recovered = false;
 #ifdef SKETCH_IFC_NATIVE_GEOMETRY
-        if (host && opening.properties.value("ifc_type", "") == "IFCOPENINGELEMENT" &&
+        if (native_project_units && host && opening.properties.value("ifc_type", "") == "IFCOPENINGELEMENT" &&
             opening.extensions.contains("ifc_vertex_properties")) {
             const auto& metadata = opening.extensions.at("ifc_vertex_properties");
             const auto source_id = opening.extensions.at("ifc_source").at("record_id").get<int>();
@@ -3426,7 +3452,7 @@ IfcProjectImportResult import_project_ifc(std::string_view bytes,
                         opening.properties["width_m"] = cut.width;
                         opening.properties["sill_m"] = cut.sill;
                         opening.properties["height_m"] = cut.height;
-                        opening.properties["opening_kind"] = "opening";
+                        opening.properties["opening_kind"] = reconstructed_opening_kind(opening);
                         reconstructed_relations.insert(relation->second.front().second);
                         recovered = true;
                     }
@@ -3478,15 +3504,7 @@ IfcProjectImportResult import_project_ifc(std::string_view bytes,
                 opening.properties["width_m"] = high - low;
                 opening.properties["sill_m"] = std::max(0.0, sill);
                 opening.properties["height_m"] = opening.properties["ifc_extrusion_depth_m"];
-                const auto kind = opening.properties["ifc_type"].get<std::string>();
-                opening.properties["opening_kind"] = kind == "IFCDOOR" ? "door" : kind == "IFCWINDOW" ? "window" : "opening";
-                if (opening.extensions.contains("ifc_vertex_properties")) {
-                    const auto& metadata = opening.extensions["ifc_vertex_properties"];
-                    if (!metadata.contains("opening_assembly") &&
-                        metadata.contains("opening_kind") && metadata["opening_kind"].is_string() &&
-                        (metadata["opening_kind"] == "door" || metadata["opening_kind"] == "window"))
-                        opening.properties["opening_kind"] = metadata["opening_kind"];
-                }
+                opening.properties["opening_kind"] = reconstructed_opening_kind(opening);
                 reconstructed_relations.insert(relation->second.front().second);
                 recovered = true;
             }
@@ -3518,7 +3536,7 @@ IfcProjectImportResult import_project_ifc(std::string_view bytes,
     std::set<int> reconstructed_fill_relations;
 #ifdef SKETCH_IFC_NATIVE_GEOMETRY
     for (auto& opening : result.entities) {
-        if (opening.type != "opening") continue;
+        if (!native_project_units || opening.type != "opening") continue;
         const auto void_id = opening.extensions.at("ifc_source").at("record_id").get<int>();
         const auto links = fills.find(void_id);
         if (links == fills.end() || links->second.size() != 1) continue;

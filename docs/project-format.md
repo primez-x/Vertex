@@ -3402,6 +3402,14 @@ assembly geometry remains in its existing world frame unless its
 presentation after local hosts, joins, assembly expansion and vertical
 placement; the saved source remains local and unchanged.
 
+The Site placement editor displays ordinary yaw in degrees. A finite saved yaw
+whose degree conversion overflows displays in radians instead; each preview
+cell states its actual unit. Untouched/restored fields retain the saved native
+value through unrelated edits, and changed angle input keeps the existing
+degree/radian parser and core validation. This source-only display correction
+does not change the format or geometry contract; interaction and numeric
+qualification remain open.
+
 The reader floor scans every retained revision, including undone, deleted and
 abandoned owners. Unknown or malformed future markers raise the conservative
 reader floor but gain no typed authority. Container entities cannot override

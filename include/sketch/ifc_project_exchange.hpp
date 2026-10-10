@@ -88,8 +88,13 @@ struct IfcProjectImportResult {
 // source retention.
 // With the optional native bridge, native curved hosts and exact fill profiles
 // activate only after their regenerated geometry, dimensions, contexts, and
-// host/void/fill relationships agree. Foreign tessellations remain diagnosed
+// host/void/fill relationships agree, and the actual project's linked length
+// unit assignment proves metres. Orphan declarations cannot authorize native
+// host/void/fill activation. Foreign tessellations remain diagnosed
 // source data; metadata alone never activates native manufacturing semantics.
+// Hosted voids require one actual wall parent across all void relationships.
+// Proved swept and native voids retain legacy door/window classification without
+// activating an unproved assembly or operation from retained metadata.
 // Fill placements compose bounded proper rigid Z-up frames and must agree with
 // the opening and handing; unsupported placement bases remain inactive.
 // Roof/room activation additionally requires exact regenerated native meshes,

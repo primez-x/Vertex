@@ -53,7 +53,9 @@ void diagnostic(std::vector<DxfProjectDiagnostic>& output, std::string id,
 }
 
 bool same_point(Vec2 left, Vec2 right) noexcept {
-    return std::hypot(left.x - right.x, left.y - right.y) <= kGeometryTolerance;
+    // A polyline has one coordinate per shared vertex. Tolerance-only joins
+    // cannot be represented without changing an authored endpoint.
+    return left.x == right.x && left.y == right.y;
 }
 
 Json point_json(Vec2 point) {
@@ -263,7 +265,13 @@ std::optional<DxfPolyline> dxf_polyline_from_boundary(const Boundary& boundary,
     result.layer = std::move(layer);
     result.closed = force_closed && same_point(boundary.back().end, boundary.front().start);
     result.vertices.reserve(boundary.size());
-    for (const auto& segment : boundary) {
+    for (std::size_t index = 0; index < boundary.size(); ++index) {
+        const auto& segment = boundary[index];
+        if ((index + 1 < boundary.size() &&
+             !same_point(segment.end, boundary[index + 1].start)) ||
+            !std::isfinite(segment.sweep_radians) ||
+            std::abs(segment.sweep_radians) >= kFullTurn)
+            return std::nullopt;
         const auto bulge = std::tan(segment.sweep_radians * 0.25);
         if (!std::isfinite(bulge) || std::abs(bulge) > 1e12) return std::nullopt;
         result.vertices.push_back({{segment.start.x, segment.start.y},
@@ -278,7 +286,7 @@ void add_segment_as_dxf(DxfDrawing& drawing, const Segment& segment, std::string
                         std::vector<DxfProjectDiagnostic>& diagnostics,
                         const std::string& source_id, std::string_view source_kind) {
     if (!std::isfinite(segment.sweep_radians) ||
-        std::abs(segment.sweep_radians) >= kFullTurn - 1e-10) {
+        std::abs(segment.sweep_radians) >= kFullTurn) {
         diagnostic(diagnostics, source_id, std::string(source_kind), "arc_sweep_not_representable");
         return;
     }
@@ -308,6 +316,16 @@ void add_boundary_as_dxf(DxfDrawing& drawing, const Boundary& boundary, std::str
                          std::vector<DxfProjectDiagnostic>& diagnostics,
                          const std::string& source_id, std::string_view source_kind) {
     if (boundary.size() >= 2) {
+        for (std::size_t index = 0; index + 1 < boundary.size(); ++index) {
+            if (same_point(boundary[index].end, boundary[index + 1].start)) continue;
+            // Independent primitives retain both coordinates; the importer
+            // cannot infer an exact shared-vertex topology from this chain.
+            diagnostic(diagnostics, source_id, std::string(source_kind),
+                       "boundary_endpoint_connections_not_representable");
+            for (const auto& segment : boundary)
+                add_segment_as_dxf(drawing, segment, layer, diagnostics, source_id, source_kind);
+            return;
+        }
         const auto closed = same_point(boundary.back().end, boundary.front().start);
         if (const auto polyline = dxf_polyline_from_boundary(boundary, closed, layer); polyline) {
             drawing.polylines.push_back(*polyline);
@@ -325,8 +343,32 @@ void add_boundary_as_dxf(DxfDrawing& drawing, const Boundary& boundary, std::str
     diagnostic(diagnostics, source_id, std::string(source_kind), "empty_boundary");
 }
 
-std::optional<Boundary> native_slab_hole(const Json& value) {
-    return read_boundary_value(value);
+void add_entity_holes_as_dxf(DxfDrawing& drawing, const Entity& entity, const std::string& layer,
+                             std::vector<DxfProjectDiagnostic>& diagnostics) {
+    const auto holes = entity.properties.find("holes");
+    if (holes == entity.properties.end()) return;
+    const bool slab = entity.type == "slab";
+    const auto invalid_code = slab ? "slab_hole_not_representable" : "boundary_hole_not_representable";
+    if (!holes->is_array()) {
+        diagnostic(diagnostics, entity.id, entity.type, invalid_code);
+        return;
+    }
+    if (holes->empty()) return;
+    // Ordinary curves retain each loop's analytical geometry, but neither
+    // transport nor import mapping can bind it as a native hole of its owner.
+    diagnostic(diagnostics, entity.id, entity.type, "boundary_hole_association_not_representable");
+    std::size_t index = 0;
+    for (const auto& value : *holes) {
+        const auto hole = read_boundary_value(value);
+        if (!hole) {
+            diagnostic(diagnostics, entity.id, entity.type, invalid_code);
+        } else {
+            add_boundary_as_dxf(drawing, *hole, layer, diagnostics,
+                               entity.id + ":hole:" + std::to_string(index),
+                               slab ? "slab_hole" : "boundary_hole");
+        }
+        ++index;
+    }
 }
 
 std::vector<const Entity*> host_openings(const DocumentSnapshot& document, std::string_view id,
@@ -519,6 +561,25 @@ bool annotation_has_inactive_owner(const Entity& entity, const ConstraintPhaseSc
     return false;
 }
 
+void report_boundary_semantics_loss(const Entity& entity, std::string_view imported_classification,
+                                    std::vector<DxfProjectDiagnostic>& diagnostics) {
+    // Detached import IDs are ordinary policy, but analytical curve records
+    // cannot preserve native topology, boundary roles or appraisal facts.
+    if (inspect_boundary_entity_version(entity).format == BoundaryEntityFormat::identified_v1)
+        diagnostic(diagnostics, entity.id, entity.type, "boundary_topology_not_representable");
+    if (entity.type != "boundary")
+        diagnostic(diagnostics, entity.id, entity.type, "boundary_type_not_representable");
+    for (const auto* key : {"classification", "measurement_classification", "appraisal_category", "appraisal_facts"}) {
+        if (!entity.properties.contains(key)) continue;
+        if (std::string_view(key) == "classification" && !imported_classification.empty() &&
+            entity.properties.at(key).is_string() &&
+            entity.properties.at(key).get_ref<const std::string&>() == imported_classification)
+            continue;
+        diagnostic(diagnostics, entity.id, entity.type, "boundary_classification_not_representable");
+        break;
+    }
+}
+
 void export_native_entity(const DocumentSnapshot& document, const Entity& entity,
                           DxfProjectExportResult& result, const ConstraintPhaseScope& scope) {
     if (entity.type == "wall" || entity.type == "opening") {
@@ -565,8 +626,26 @@ void export_native_entity(const DocumentSnapshot& document, const Entity& entity
             diagnostic(result.diagnostics, entity.id, entity.type, "boundary_not_representable");
             return;
         }
+        const auto line_count = result.drawing.lines.size();
+        const auto arc_count = result.drawing.arcs.size();
+        const auto polyline_count = result.drawing.polylines.size();
         add_boundary_as_dxf(result.drawing, *boundary, layer, result.diagnostics,
                             entity.id, entity.type);
+        // A source CAD primitive classification can survive when the same
+        // single primitive is emitted. Native area classifications cannot.
+        std::string_view imported_classification;
+        const auto lines_added = result.drawing.lines.size() - line_count;
+        const auto arcs_added = result.drawing.arcs.size() - arc_count;
+        const auto polylines_added = result.drawing.polylines.size() - polyline_count;
+        if (lines_added == 1 && arcs_added == 0 && polylines_added == 0)
+            imported_classification = "dxf_line";
+        else if (lines_added == 0 && arcs_added == 1 && polylines_added == 0)
+            imported_classification = "dxf_arc";
+        else if (lines_added == 0 && arcs_added == 0 && polylines_added == 1)
+            imported_classification = result.drawing.polylines.back().closed
+                ? "dxf_polyline_closed" : "dxf_polyline_open";
+        add_entity_holes_as_dxf(result.drawing, entity, layer, result.diagnostics);
+        report_boundary_semantics_loss(entity, imported_classification, result.diagnostics);
         return;
     }
     if (entity.type == "slab") {
@@ -589,19 +668,7 @@ void export_native_entity(const DocumentSnapshot& document, const Entity& entity
         }
         add_boundary_as_dxf(result.drawing, *boundary, layer, result.diagnostics,
                             entity.id, entity.type);
-        if (entity.properties.contains("holes") && entity.properties.at("holes").is_array()) {
-            std::size_t index = 0;
-            for (const auto& value : entity.properties.at("holes")) {
-                const auto hole = native_slab_hole(value);
-                if (!hole) {
-                    diagnostic(result.diagnostics, entity.id, entity.type, "slab_hole_not_representable");
-                } else {
-                    add_boundary_as_dxf(result.drawing, *hole, layer, result.diagnostics,
-                                        entity.id + ":hole:" + std::to_string(index), "slab_hole");
-                }
-                ++index;
-            }
-        }
+        add_entity_holes_as_dxf(result.drawing, entity, layer, result.diagnostics);
         return;
     }
     if (entity.type == kAnnotationEntityType) {
@@ -1556,6 +1623,9 @@ DxfProjectExportResult export_project_dxf(const DocumentSnapshot& document,
             add_boundary_as_dxf(result.drawing, found->second.boundary, layer, result.diagnostics, id, entity.type);
             for (const auto& hole : found->second.holes)
                 add_boundary_as_dxf(result.drawing, hole, layer, result.diagnostics, id, entity.type);
+            if (!found->second.holes.empty())
+                diagnostic(result.diagnostics, id, entity.type, "boundary_hole_association_not_representable");
+            report_boundary_semantics_loss(entity, {}, result.diagnostics);
             diagnostic(result.diagnostics, id, entity.type, "physical_room_source_evidence_not_representable");
 #else
             diagnostic(result.diagnostics, id, entity.type, "physical_room_runtime_unavailable");

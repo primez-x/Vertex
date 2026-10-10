@@ -36,6 +36,14 @@ QString exact(double value) {
     require(result.ec==std::errc{},"Cannot display placement number");
     return QString::fromLatin1(buffer.data(),static_cast<qsizetype>(result.ptr-buffer.data()));
 }
+QString yaw_text(double radians) {
+    require(std::isfinite(radians),"Placement requires finite numbers");
+    // Keep degrees for ordinary editing, without an overflowing multiply
+    // before division. Valid stored radians need not fit in degrees; their
+    // explicit native unit also preserves unchanged-value retention.
+    const auto degrees=radians*(180.0/std::numbers::pi);
+    return std::isfinite(degrees) ? exact(degrees)+" deg" : exact(radians)+" rad";
+}
 QString readable(const Entity& entity,std::size_t ordinal) {
     const auto found=entity.properties.find("name");
     if(found!=entity.properties.end() && found->is_string()) {
@@ -45,9 +53,9 @@ QString readable(const Entity& entity,std::size_t ordinal) {
     return QString("%1 %2").arg(type).arg(static_cast<qulonglong>(ordinal));
 }
 QLineEdit* number(QWidget* owner,const char* name,double value,bool angle=false) {
-    auto* result=new QLineEdit(exact(angle?value*180/std::numbers::pi:value)+(angle?" deg":" m"),owner);
+    auto* result=new QLineEdit(angle?yaw_text(value):exact(value)+" m",owner);
     result->setObjectName(name);result->setProperty("initialText",result->text());result->setProperty("initialValue",value);
-    result->setMaxLength(768);result->setToolTip(angle?"Yaw in degrees. deg and rad suffixes are supported.":"Length in metres or feet and inches. A bare number uses the current drawing units.");
+    result->setMaxLength(768);result->setToolTip(angle?"Yaw accepts deg or rad suffixes. A bare number uses degrees.":"Length in metres or feet and inches. A bare number uses the current drawing units.");
     return result;
 }
 double read(QLineEdit* field,bool metric,bool angle=false) {
@@ -177,7 +185,7 @@ public:
         datum_height=number(owner,"sitePlacementDatumHeight",height);form->addRow("Datum height at origin",datum_height);
         auto* preview_button=new QPushButton("Preview placement",owner);preview_button->setObjectName("sitePlacementPreview");layout->addWidget(preview_button);
         table=new QTableWidget(0,7,owner);table->setObjectName("sitePlacementPreviewTable");
-        table->setHorizontalHeaderLabels({"Owner","Before XYZ (m)","Before yaw (deg)","After XYZ (m)","After yaw (deg)","Before frame","After frame"});
+        table->setHorizontalHeaderLabels({"Owner","Before XYZ (m)","Before yaw","After XYZ (m)","After yaw","Before frame","After frame"});
         table->setEditTriggers(QAbstractItemView::NoEditTriggers);table->setSelectionBehavior(QAbstractItemView::SelectRows);
         table->horizontalHeader()->setSectionResizeMode(QHeaderView::ResizeToContents);table->horizontalHeader()->setStretchLastSection(true);
         table->verticalHeader()->hide();layout->addWidget(table,1);
@@ -282,8 +290,8 @@ public:
         table->setRowCount(static_cast<int>(draft.impacts.size()));
         for(std::size_t row=0;row<draft.impacts.size();++row) {
             const auto& impact=draft.impacts[row];
-            const std::array<QString,7> cells{q(impact.display_name),xyz(impact.before.forward),exact(impact.before.forward.rotation_radians*180/std::numbers::pi),
-                xyz(impact.after.forward),exact(impact.after.forward.rotation_radians*180/std::numbers::pi),frame(impact.before,source.entities()),frame(impact.after,source.entities())};
+            const std::array<QString,7> cells{q(impact.display_name),xyz(impact.before.forward),yaw_text(impact.before.forward.rotation_radians),
+                xyz(impact.after.forward),yaw_text(impact.after.forward.rotation_radians),frame(impact.before,source.entities()),frame(impact.after,source.entities())};
             for(std::size_t col=0;col<cells.size();++col) {
                 auto* item=new QTableWidgetItem(cells[col]);item->setToolTip(cells[col]);table->setItem(static_cast<int>(row),static_cast<int>(col),item);
             }
