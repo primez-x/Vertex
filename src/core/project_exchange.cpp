@@ -619,6 +619,10 @@ void extract_project_impl(const DocumentSnapshot &snapshot,
         result["exchange_version"] = std::max(result["exchange_version"].get<int>(), 16);
         row["boundary_transforms"] = command_to_json(*revision.boundary_transforms);
       }
+      if (revision.phase_entity_import) {
+        result["exchange_version"] = std::max(result["exchange_version"].get<int>(), 158);
+        row["phase_entity_import"] = phase_entity_import_proof_to_json(*revision.phase_entity_import);
+      }
       for (const auto &[id, entity] : revision.entities) {
         (void)id;
         row["entities"].push_back(entity_json(entity));

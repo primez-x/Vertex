@@ -1,4 +1,34 @@
-# Vertex project formats v1 through v159
+# Vertex project formats v1 through v160
+
+## Fresh design-set imports (v160, source integration)
+
+Native reader 160 and JSON/assets extraction 158 retain the explicit
+`ImportPhaseEntities` command. The compact `phase_entity_import` revision proof
+uses version one and kind `import_phase_entities`, with the expected source
+revision, message, imported registry IDs, exact fresh entity/asset inventories
+and explicit reviewed existing hierarchy IDs. Reusing an existing building or
+floor requires an unchanged, currently unowned source owner and exact inclusion
+in that list and the imported registry roster. Import cannot enroll old physical
+geometry or overwrite existing hierarchy.
+Payloads remain in the retained revision state rather than being duplicated in
+the proof. Replay must reconstruct only those fresh additions, preserve every
+source owner/asset, and validate the complete combined active-phase state before
+the policy is accepted. Undo restores the prior policy; redo restores the
+accepted import policy. Ordinary and historical create commands retain their
+legacy constraint rules. The private `create_phase_import` entry point starts
+empty and applies this same retained command instead of bypassing create/history
+admission. Projects without this proof retain their existing reader floor.
+
+The V9 DXF authoring graph now accepts version two with a nonempty `support_ids`
+inventory for annotation states, dimensions and constraints; support-free graphs
+continue using version one. Annotation child placement IDs can be freshened
+independently of document-owner and catalog IDs. `PHASE_SUPPORT_PLAN_V1` CAD
+blocks authenticate each support owner's retained depiction separately from
+architectural body blocks. Output-view presentation overrides still require
+companion sheet/view transport and are not silently discarded.
+
+These are source contracts under integration. Compilation, storage round trips,
+history/recovery replay and external CAD interoperability remain unverified.
 
 ## Material catalog DXF transfer (V8 source implementation)
 

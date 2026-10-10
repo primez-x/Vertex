@@ -99,9 +99,12 @@ double practical_resize_scale(double factor, double extent, double step) noexcep
     factor = std::clamp(factor, .05, 20.0);
     if (factor > .05 && factor < 20.0 && std::abs(factor - 1.0) > 1e-12 &&
         std::isfinite(extent) && extent > 1e-9 &&
-        std::isfinite(step) && step > 0.0) {
+        std::isfinite(step) && step > 0.0 && step < extent) {
         const auto snapped = std::round(extent * factor / step) * step / extent;
-        if (std::isfinite(snapped)) factor = snapped;
+        // A coarse zoom magnet must not turn an ordinary drag into a zero
+        // dimension, a hard-minimum collapse or an out-of-range size jump.
+        // Keep the proportional drag when no valid snapped size is available.
+        if (std::isfinite(snapped) && snapped >= .05 && snapped <= 20.0) factor = snapped;
     }
     return std::clamp(factor, .05, 20.0);
 }

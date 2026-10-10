@@ -448,6 +448,7 @@ std::uint32_t required_format_version_internal(const DocumentSnapshot& snapshot,
         return false;
     };
     for (const auto& revision : snapshot.history()) {
+        if (revision.phase_entity_import) required=std::max(required,160U);
         if (required<159 && revision.boundary_geometry_edit)
             required=std::max(required,typed_edit_reader_floor(encode_boundary_geometry_edit(*revision.boundary_geometry_edit)));
         if (required<159 && revision.boundary_constraint_changes)
@@ -2083,6 +2084,9 @@ LoadCounts enforce_preallocation_budgets(sqlite3* database, bool recovery = fals
     const auto rigid_group_bytes = format >= 18 ? scalar_nonnegative(database,
         "SELECT COALESCE(sum(length(CAST(boundary_transforms_json AS BLOB))),0) FROM revisions",
         "boundary transform group JSON bytes") : 0;
+    const auto phase_import_bytes = format >= 160 ? scalar_nonnegative(database,
+        "SELECT COALESCE(sum(length(CAST(phase_entity_import_json AS BLOB))),0) FROM revisions",
+        "phase entity import JSON bytes") : 0;
     const auto recovery_bytes = recovery ? scalar_nonnegative(database,
         "SELECT COALESCE(sum(length(CAST(envelope_json AS BLOB))+64+6*length(CAST(record_id AS BLOB))+"
         "6*length(CAST(record_kind AS BLOB))),0) FROM project_recovery_records", "recovery JSON bytes") : 0;
@@ -2101,7 +2105,8 @@ LoadCounts enforce_preallocation_budgets(sqlite3* database, bool recovery = fals
         constraint_bytes > ProjectStore::maximum_encoded_json_bytes - json_bytes - translation_bytes - transform_bytes - edit_bytes ||
         batch_bytes > ProjectStore::maximum_encoded_json_bytes - json_bytes - translation_bytes - transform_bytes - edit_bytes - constraint_bytes ||
         rigid_group_bytes > ProjectStore::maximum_encoded_json_bytes - json_bytes - translation_bytes - transform_bytes - edit_bytes - constraint_bytes - batch_bytes ||
-        recovery_bytes > ProjectStore::maximum_encoded_json_bytes - json_bytes - translation_bytes - transform_bytes - edit_bytes - constraint_bytes - batch_bytes - rigid_group_bytes) {
+        phase_import_bytes > ProjectStore::maximum_encoded_json_bytes - json_bytes - translation_bytes - transform_bytes - edit_bytes - constraint_bytes - batch_bytes - rigid_group_bytes ||
+        recovery_bytes > ProjectStore::maximum_encoded_json_bytes - json_bytes - translation_bytes - transform_bytes - edit_bytes - constraint_bytes - batch_bytes - rigid_group_bytes - phase_import_bytes) {
         storage_error(StorageErrorCode::resource_limit,
                       "project encoded JSON bytes exceed the format v1 resource limit");
     }
@@ -2173,6 +2178,8 @@ void enforce_snapshot_budget(const DocumentSnapshot& snapshot) {
             add_json(command_to_json(*revision.boundary_translations));
         if (revision.boundary_transforms)
             add_json(command_to_json(*revision.boundary_transforms));
+        if (revision.phase_entity_import)
+            add_json(phase_entity_import_proof_to_json(*revision.phase_entity_import));
         for (const auto& [id, entity] : revision.entities) {
             (void)id;
             if (++entity_rows > ProjectStore::maximum_entity_rows) {
@@ -2252,6 +2259,8 @@ nlohmann::json logical_manifest(const DocumentSnapshot& snapshot, std::uint32_t 
             encoded_revision["boundary_translations"] = command_to_json(*revision.boundary_translations);
         if (revision.boundary_transforms)
             encoded_revision["boundary_transforms"] = command_to_json(*revision.boundary_transforms);
+        if (revision.phase_entity_import)
+            encoded_revision["phase_entity_import"] = phase_entity_import_proof_to_json(*revision.phase_entity_import);
         for (const auto& [id, entity] : revision.entities) {
             encoded_revision["entities"].push_back({
                 {"id", id},
@@ -2322,6 +2331,7 @@ std::string write_database(const std::filesystem::path& path, const DocumentSnap
                 std::string(format >= 8 ? "boundary_constraint_changes_json TEXT, " : "") +
                 std::string(format >= 9 ? "boundary_translations_json TEXT, " : "") +
                 std::string(format >= 18 ? "boundary_transforms_json TEXT, " : "") +
+                std::string(format >= 160 ? "phase_entity_import_json TEXT, " : "") +
                 "FOREIGN KEY(parent_revision) REFERENCES revisions(revision), "
                 "FOREIGN KEY(source_revision) REFERENCES revisions(revision)) STRICT;";
         execute(database.get(), revision_schema.c_str());
@@ -2366,7 +2376,10 @@ std::string write_database(const std::filesystem::path& path, const DocumentSnap
 
         Statement revision_statement(
             database.get(),
-            format >= 18
+            format >= 160
+                ? "INSERT INTO revisions(revision,parent_revision,source_revision,action,name,"
+                  "undo_stack_json,redo_stack_json,boundary_translation_json,boundary_transform_json,boundary_edit_json,boundary_constraint_changes_json,boundary_translations_json,boundary_transforms_json,phase_entity_import_json) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14)"
+                : format >= 18
                 ? "INSERT INTO revisions(revision,parent_revision,source_revision,action,name,"
                   "undo_stack_json,redo_stack_json,boundary_translation_json,boundary_transform_json,boundary_edit_json,boundary_constraint_changes_json,boundary_translations_json,boundary_transforms_json) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13)"
                 : format >= 9
@@ -2451,6 +2464,13 @@ std::string write_database(const std::filesystem::path& path, const DocumentSnap
                               command_to_json(*revision.boundary_transforms).dump());
                 else if (sqlite3_bind_null(revision_statement.get(),13)!=SQLITE_OK)
                     sqlite_error(database.get(),"cannot bind absent boundary transform group");
+            }
+            if (format >= 160) {
+                if (revision.phase_entity_import)
+                    bind_text(database.get(),revision_statement.get(),14,
+                        phase_entity_import_proof_to_json(*revision.phase_entity_import).dump());
+                else if (sqlite3_bind_null(revision_statement.get(),14)!=SQLITE_OK)
+                    sqlite_error(database.get(),"cannot bind absent phase entity import");
             }
             revision_statement.done();
             revision_statement.reset();
@@ -2604,6 +2624,7 @@ bool verify_sqlite_schema(sqlite3* database, bool allow_recovery = false) {
          sqlite3_column_int(user_version.get(), 0) != 157 &&
          sqlite3_column_int(user_version.get(), 0) != 158 &&
          sqlite3_column_int(user_version.get(), 0) != 159 &&
+         sqlite3_column_int(user_version.get(), 0) != 160 &&
          sqlite3_column_int(user_version.get(), 0) != 143 &&
          sqlite3_column_int(user_version.get(), 0) != 142 &&
          sqlite3_column_int(user_version.get(), 0) != 141 &&
@@ -2713,6 +2734,7 @@ bool verify_sqlite_schema(sqlite3* database, bool allow_recovery = false) {
     const bool constraint_changes = sqlite3_column_int(user_version.get(), 0) >= 8;
     const bool translation_groups = sqlite3_column_int(user_version.get(), 0) >= 9;
     const bool transform_groups = sqlite3_column_int(user_version.get(), 0) >= 18;
+    const bool phase_imports = sqlite3_column_int(user_version.get(), 0) >= 160;
     const bool recovery = sqlite3_column_int(user_version.get(), 0) == 4 ||
         (translations && scalar_nonnegative(database,
             "SELECT count(*) FROM sqlite_schema WHERE name='project_recovery_records'",
@@ -2791,6 +2813,7 @@ bool verify_sqlite_schema(sqlite3* database, bool allow_recovery = false) {
     if (constraint_changes) expected_columns.at("revisions").push_back({"boundary_constraint_changes_json", "TEXT", 0, 0});
     if (translation_groups) expected_columns.at("revisions").push_back({"boundary_translations_json", "TEXT", 0, 0});
     if (transform_groups) expected_columns.at("revisions").push_back({"boundary_transforms_json", "TEXT", 0, 0});
+    if (phase_imports) expected_columns.at("revisions").push_back({"phase_entity_import_json", "TEXT", 0, 0});
     if (recovery) expected_columns.emplace("project_recovery_records", std::vector<ColumnSpec>{
         {"record_id", "TEXT", 1, 1}, {"record_kind", "TEXT", 1, 0}, {"envelope_json", "TEXT", 1, 0}});
     for (const auto& [table, columns] : expected_columns) {
@@ -2945,7 +2968,10 @@ DocumentSnapshot read_snapshot(sqlite3* database, RecoveryLedger* recovery = nul
     DecodeBudget decode_budget(recovery != nullptr || format_number >= 5);
 
     Statement revisions(database,
-        format_number >= 18
+        format_number >= 160
+            ? "SELECT revision,parent_revision,source_revision,action,name,"
+              "undo_stack_json,redo_stack_json,boundary_translation_json,boundary_transform_json,boundary_edit_json,boundary_constraint_changes_json,boundary_translations_json,boundary_transforms_json,phase_entity_import_json FROM revisions ORDER BY revision"
+            : format_number >= 18
             ? "SELECT revision,parent_revision,source_revision,action,name,"
               "undo_stack_json,redo_stack_json,boundary_translation_json,boundary_transform_json,boundary_edit_json,boundary_constraint_changes_json,boundary_translations_json,boundary_transforms_json FROM revisions ORDER BY revision"
             : format_number >= 9
@@ -3089,6 +3115,13 @@ DocumentSnapshot read_snapshot(sqlite3* database, RecoveryLedger* recovery = nul
                 storage_error(StorageErrorCode::integrity_failure, error.what());
             }
         }
+        if (format_number>=160 && sqlite3_column_type(revisions.get(),13)!=SQLITE_NULL) {
+            const auto proof=parse_budgeted_json(
+                column_text(revisions.get(),13,kMaximumJsonBytes,"phase_entity_import_json"),
+                true,"phase_entity_import_json",decode_budget);
+            try { record.phase_entity_import=phase_entity_import_proof_from_json(proof); }
+            catch (const std::exception& error) { storage_error(StorageErrorCode::integrity_failure,error.what()); }
+        }
         history.push_back(std::move(record));
     }
     if (history.empty() ||
@@ -3202,6 +3235,8 @@ DocumentSnapshot read_snapshot(sqlite3* database, RecoveryLedger* recovery = nul
     ProjectStoreAccess::publish_history(snapshot, std::move(history));
     const auto required_format = required_format_version_internal(snapshot, format_number < 28);
     if (required_format > format_number) {
+        if (required_format>=160)
+            storage_error(StorageErrorCode::unsupported_format,"This project requires reader 160 for retained design-set imports and reviewed hierarchy enrollment");
         if (required_format>=159)
             storage_error(StorageErrorCode::unsupported_format,"This project requires reader 159 for physical-room review with complete mixed selection geometry");
         if (required_format>=158)

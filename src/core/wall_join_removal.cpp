@@ -122,6 +122,11 @@ struct LifetimeReservations {
     }
     void read(const EntityChange& value) { text(value.entity_id); read(value.entity); }
     void read(const AssetChange& value) { text(value.asset_id); read(value.asset); }
+    void read(const PhaseEntityImportProof& value) {
+        for (const auto* name : {"phase_entity_import", "import_phase_entities", "registry_ids", "entity_ids", "asset_ids", "reviewed_existing_hierarchy_ids"}) text(name);
+        text(value.message); sequence(value.registry_ids); sequence(value.entity_ids); sequence(value.asset_ids);
+        sequence(value.reviewed_existing_hierarchy_ids);
+    }
     void read(const Quantity& value) { text(value.original_expression); }
     void read(const AngleInput& value) { text(value.original_expression); text(value.normalized_expression); }
     void read(const ConstructionReceipt& value) {
@@ -350,6 +355,7 @@ void reserve_join_history(LifetimeReservations& reservations, const PhysicalWall
         reservations.optional(record.boundary_translation); reservations.optional(record.boundary_transform);
         reservations.optional(record.boundary_geometry_edit); reservations.optional(record.boundary_constraint_changes);
         reservations.optional(record.boundary_translations); reservations.optional(record.boundary_transforms);
+        reservations.optional(record.phase_entity_import);
     }
     // Every raw JSON/proof token across the prefix is bounded before invoking
     // the namespace helper. Reserve raw aliases as well as escaped actual ones.

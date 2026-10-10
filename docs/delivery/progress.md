@@ -14,6 +14,80 @@ changed source does not acquire runtime acceptance without later qualification.
 
 ## Current delivery state
 
+### October 10 furnished design-set transfer — source integration
+
+The V9 graph now has a separate support inventory for saved annotation states,
+dimensions and constraints. Graph version two adds that inventory; support-free
+graphs retain version one. Typed remappers preserve raw styles, pinned artwork,
+catalog identities and boundary-local segment/vertex names. Desktop allocation
+freshens placed label/symbol IDs within each annotation owner and rejects
+collisions with actual destination components. Scoped annotation envelopes must
+match actual layer ancestry and floor-level bindings; child layers may remain
+independent. Saved output-view overrides still require companion sheet/view
+transport and explicitly refuse until that implementation exists.
+
+The carrier includes one authenticated support block per retained owner. Visible
+labels and saved symbol previews use their real placement; dimensions reuse the
+existing target resolver and CAD pictures. Constraints and hidden/inactive
+presentation retain authenticated empty pictures. Import verifies complete
+support inventory, primitives, labels, layers, contexts and identity INSERTs
+before suppressing fallback import, avoiding duplicate annotation geometry.
+Raw artwork/styles remain complete in the graph; external CAD depiction uses
+the declared vector-preview/text subset and reports fidelity limitations.
+
+Independent source review identified two ordinary-workflow defects: SVG billing
+multiplied all artwork bytes by path delimiters, and private/document publication
+used legacy constraint satisfaction for retained inactive alternatives. SVG
+admission now bills actual parsing, CSS matching and resource traversal with a
+shared callback, reserving later codec replay. The new explicit fresh phase
+import command and compact retained proof are integrated through private
+state admission, desktop publication, undo/redo, storage, extraction, history
+digests and recovery/resource consumers. Existing ordinary/legacy history must
+retain its prior policy; source presence is not proof that this works at runtime.
+
+Reviewed existing buildings/floors now travel as an exact persisted import
+inventory. Admission requires those owners to be unchanged and currently unowned
+by any source registry; old physical geometry cannot be enrolled. Desktop
+publication and retained resource consumers now carry that inventory. The native
+reader floor is 160 and extraction floor 158. The dimension carrier resolves
+measured-owner and explicit dimension frames together, checks compatibility and
+places the completed local CAD picture once. Active body pictures use the same
+resolved Site frame, including lines, arcs, circles, polylines and text. Frame
+admission follows actual cached host/join/hierarchy dependencies, with each
+annotation child's own layer; unrelated SVG decoding is not charged there or
+by physical-room checks. Private Document creation remains separately admitted.
+
+Integrated review also found and corrected two desktop publication blockers:
+existing labels were incorrectly staged through a fresh-only command, and the
+intermediate hierarchy preview used legacy constraint admission. V9 now keeps
+existing annotations untouched, gives ordinary fallback labels a fresh owner
+and uses the typed import for both preview and final publication. The legacy
+import route keeps its merge behavior. A separate canvas source correction
+prevents coarse size magnets from collapsing small-object side/corner resizes
+to the hard 5-percent minimum; invalid/coarser-than-object snapping keeps the
+proportional drag. Runtime usability resolution is not claimed.
+
+Root and independent integrated source review closed the concrete import,
+policy, frame-placement and resource-admission findings. The independent verdict
+approves this bounded source increment, not production acceptance. Scoped diff
+checks and requirements JSON parsing passed; the source-kit allowlist contains
+exactly the 1,895 tracked/new source paths with no extras or duplicates.
+No build, test, new test,
+probe, script, native job, launch, package or installation ran. The installed
+candidate remains unchanged. Compilation, full furnished-project capacity,
+save/reopen, interaction and external CAD fidelity remain unqualified. The full
+delivery plan is still active; this transfer work is not product completion.
+
+The next source gap is companion sheet/view transfer for saved `output_view`
+overrides. Discovery located the strict sheet-view entity/model codecs and the
+actual global object/appearance/dimension-host references; view/sheet/viewport
+and callout identities belong to their companion's local namespace. Transport
+must preserve those models, remap exact global hosts and scoped view targets,
+retain cross-sheet links and validate a unique fresh companion. There is no
+existing view-snapshot digest to invent or reuse as publication authority.
+Unsupported canonical catalog owner references and asset closure remain open
+alongside all wider delivery packages and deferred production qualification.
+
 ### October 10 V9 carrier and destination binding — source integration
 
 The actual DXF mapper now exports complete design-set source graphs through a

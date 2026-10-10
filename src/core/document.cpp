@@ -1619,6 +1619,183 @@ bool same_state(const RevisionRecord& left, const RevisionRecord& right) {
     return true;
 }
 
+void validate_phase_entity_import_transition(const RevisionRecord& source,
+    const RevisionRecord& candidate, const PhaseEntityImportProof& proof,
+    std::span<const RevisionRecord> retained) {
+    (void)phase_entity_import_proof_to_json(proof);
+    if (proof.expected_revision!=source.revision)
+        document_error(DocumentErrorCode::stale_revision,"Phase import source revision changed");
+    const std::set<std::string,std::less<>> imported(proof.entity_ids.begin(),proof.entity_ids.end());
+    const std::set<std::string,std::less<>> assets(proof.asset_ids.begin(),proof.asset_ids.end());
+    const std::set<std::string,std::less<>> registries(proof.registry_ids.begin(),proof.registry_ids.end());
+    const std::set<std::string,std::less<>> reviewed_hierarchy(
+        proof.reviewed_existing_hierarchy_ids.begin(),proof.reviewed_existing_hierarchy_ids.end());
+    if (candidate.entities.size()!=source.entities.size()+imported.size() ||
+        candidate.assets.size()!=source.assets.size()+assets.size())
+        document_error(DocumentErrorCode::invalid_entity,"Phase import must retain exactly its listed fresh additions");
+    for (const auto& [id,entity]:source.entities) {
+        if (entity.required && !is_known_entity_type(entity.type))
+            document_error(DocumentErrorCode::read_only,"Phase import source contains an unsupported required entity: "+id);
+        const auto after=candidate.entities.find(id);
+        if (after==candidate.entities.end() || entity!=after->second ||
+            entity.properties.dump()!=after->second.properties.dump() ||
+            entity.extensions.dump()!=after->second.extensions.dump())
+            document_error(DocumentErrorCode::invalid_entity,"Phase import cannot change an existing entity: "+id);
+    }
+    for (const auto& [id,asset]:source.assets) {
+        const auto after=candidate.assets.find(id);
+        if (after==candidate.assets.end() || asset!=after->second ||
+            asset.metadata.dump()!=after->second.metadata.dump())
+            document_error(DocumentErrorCode::invalid_asset,"Phase import cannot change an existing asset: "+id);
+    }
+    for (const auto& record:retained) {
+        for (const auto& [id,entity]:record.entities) {
+            (void)entity;
+            if (imported.contains(id) || assets.contains(id))
+                document_error(DocumentErrorCode::invalid_entity,"Phase import identity was already retained: "+id);
+        }
+        for (const auto& [id,asset]:record.assets) {
+            (void)asset;
+            if (imported.contains(id) || assets.contains(id))
+                document_error(DocumentErrorCode::invalid_asset,"Phase import identity was already retained: "+id);
+        }
+    }
+    for (const auto& id:assets)
+        if (!candidate.assets.contains(id) || imported.contains(id))
+            document_error(DocumentErrorCode::invalid_asset,"Phase import asset inventory is invalid: "+id);
+    if (!reviewed_hierarchy.empty()) {
+        for (const auto& id:reviewed_hierarchy) {
+            const auto existing=source.entities.find(id);
+            if (existing==source.entities.end() ||
+                (existing->second.type!="building" && existing->second.type!="floor") ||
+                imported.contains(id) || assets.contains(id))
+                document_error(DocumentErrorCode::invalid_entity,"Reviewed phase import enrollment requires an existing building or floor: "+id);
+        }
+        for (const auto& [id,entity]:source.entities) {
+            (void)id;
+            if (entity.type!="model_phases") continue;
+            const auto model=ModelPhases::from_json(entity.properties.at("model"));
+            for (const auto& owner:model.entity_ids())
+                if (reviewed_hierarchy.contains(owner))
+                    document_error(DocumentErrorCode::invalid_entity,"Reviewed phase import hierarchy is already owned by a source registry: "+owner);
+        }
+    }
+    std::set<std::string,std::less<>> actual_registries;
+    std::set<std::string,std::less<>> actual_reviewed_hierarchy;
+    std::optional<ProjectOrganization> annotation_organization;
+    std::optional<std::map<std::string,std::size_t,std::less<>>> imported_view_ids;
+    for (const auto& id:imported) {
+        const auto found=candidate.entities.find(id);
+        if (found==candidate.entities.end())
+            document_error(DocumentErrorCode::invalid_entity,"Phase import entity inventory is absent: "+id);
+        const auto& entity=found->second;
+        if (entity.type=="model_phases") {
+            actual_registries.insert(id);
+            const auto model=ModelPhases::from_json(entity.properties.at("model"));
+            for (const auto& owner:model.entity_ids()) {
+                if (imported.contains(owner)) continue;
+                if (!reviewed_hierarchy.contains(owner))
+                    document_error(DocumentErrorCode::invalid_entity,"Phase import registry requires a fresh owner or explicitly reviewed existing hierarchy: "+owner);
+                actual_reviewed_hierarchy.insert(owner);
+            }
+        }
+        // Equivalent destination hierarchy/levels may be bound by the caller.
+        // Semantic hosts, catalogs and analytical targets travel in this import.
+        std::vector<EntityReference> references;
+        collect_references(entity,references);
+        for (const auto& reference:references) {
+            if (reference.target==EntityReference::Target::asset) {
+                if (!assets.contains(reference.id))
+                    document_error(DocumentErrorCode::invalid_asset,"Phase import requires its fresh referenced asset: "+reference.id);
+                continue;
+            }
+            if (imported.contains(reference.id)) continue;
+            const auto destination=source.entities.find(reference.id);
+            if (destination==source.entities.end() ||
+                (destination->second.type!="property" && destination->second.type!="building" &&
+                 destination->second.type!="floor" && destination->second.type!="layer" &&
+                 destination->second.type!="vertical_levels"))
+                document_error(DocumentErrorCode::invalid_entity,"Phase import semantic dependencies must be fresh: "+reference.id);
+        }
+        if (entity.type=="constraint") {
+            const auto decoded=decode_constraint_entity(entity);
+            if (!decoded.supported())
+                document_error(DocumentErrorCode::invalid_entity,"Phase import requires supported constraint bindings: "+id);
+            for (const auto& binding:decoded.constraint->bindings)
+                if (!imported.contains(binding.owner_id))
+                    document_error(DocumentErrorCode::invalid_entity,"Phase import constraint owner must be fresh: "+binding.owner_id);
+        } else if (can_recognize_boundary_dimension_entity_type(entity.type)) {
+            const auto decoded=decode_boundary_dimension_entity(entity);
+            if (!decoded.supported() || !imported.contains(decoded.dimension->boundary_id))
+                document_error(DocumentErrorCode::invalid_entity,"Phase import dimension must bind a supported fresh owner: "+id);
+        } else if (entity.type==kAnnotationEntityType) {
+            const auto state=decode_annotation_entity(entity);
+            if (!annotation_organization) annotation_organization=organize_project(candidate.entities);
+            const auto& organization=*annotation_organization;
+            const auto layer_context=[&](const std::string& layer_id) -> DrawingContext {
+                const auto layer=candidate.entities.find(layer_id);
+                const auto node=organization.nodes.find(layer_id);
+                if (layer==candidate.entities.end() || layer->second.type!="layer" ||
+                    node==organization.nodes.end() || !node->second.issues.empty() || !node->second.context.complete())
+                    document_error(DocumentErrorCode::invalid_entity,"Phase import annotation layer hierarchy is unresolved: "+layer_id);
+                return node->second.context;
+            };
+            if (entity.properties.contains("layer_id")) {
+                const auto context=layer_context(entity.properties.at("layer_id").get<std::string>());
+                for (const auto& [slot,expected]:{
+                    std::pair{"property_id",&context.property_id},std::pair{"building_id",&context.building_id},
+                    std::pair{"floor_id",&context.floor_id}})
+                    if (entity.properties.at(slot).get<std::string>()!=*expected)
+                        document_error(DocumentErrorCode::invalid_entity,"Phase import annotation owner hierarchy conflicts: "+id);
+                if (entity.properties.contains("level_id") && entity.properties.at("level_id").get<std::string>()!=context.level_id)
+                    document_error(DocumentErrorCode::invalid_entity,"Phase import annotation owner level conflicts: "+id);
+            }
+            std::set<std::string,std::less<>> children;
+            const auto child=[&](const auto& value) {
+                if (!children.insert(value.id).second)
+                    document_error(DocumentErrorCode::invalid_entity,"Phase import annotation child identities overlap: "+id);
+                if (!value.placement.layer_id.empty()) (void)layer_context(value.placement.layer_id);
+            };
+            for (const auto& label:state.labels) child(label);
+            for (const auto& symbol:state.symbols) child(symbol);
+            const auto appearance_owner=[](std::string_view type) {
+                return type=="wall" || type=="opening" || type=="slab" || type=="room" ||
+                    type=="assembly_instance" || type=="roof_join" || type=="column" || type=="beam" ||
+                    type=="stair" || type=="railing" || type=="roof";
+            };
+            for (const auto& row:state.overrides) {
+                const auto owner=candidate.entities.find(row.target_id);
+                if (row.target_kind=="object" && children.contains(row.target_id) &&
+                    (owner==candidate.entities.end() || !appearance_owner(owner->second.type))) continue;
+                if (row.target_kind=="output_view") {
+                    // View IDs live in their typed companion's local namespace.
+                    // Require an unambiguous freshly imported companion.
+                    if (!imported_view_ids) {
+                        imported_view_ids.emplace();
+                        for (const auto& companion_id:imported) {
+                            const auto& companion=candidate.entities.at(companion_id);
+                            if (companion.type!=kSheetViewEntityType) continue;
+                            const auto model=decode_sheet_view_entity(companion);
+                            for (const auto& view:model.views()) ++(*imported_view_ids)[view.id];
+                        }
+                    }
+                    const auto view=imported_view_ids->find(row.target_id);
+                    if (view==imported_view_ids->end() || view->second!=1)
+                        document_error(DocumentErrorCode::invalid_entity,"Phase import output view requires one fresh sheet/view companion: "+id);
+                } else if (!imported.contains(row.target_id))
+                    document_error(DocumentErrorCode::invalid_entity,"Phase import annotation target must be fresh: "+id);
+            }
+        }
+    }
+    if (actual_registries!=registries)
+        document_error(DocumentErrorCode::invalid_entity,"Phase import registry inventory must match all fresh registries");
+    if (actual_reviewed_hierarchy!=reviewed_hierarchy)
+        document_error(DocumentErrorCode::invalid_entity,"Reviewed phase import hierarchy inventory must match every reused roster owner");
+    // This resolves all saved alternatives, exclusive rosters and actual
+    // physical host participation. Metadata alone cannot grant the policy.
+    (void)constraint_phase_scope(candidate.entities);
+}
+
 std::vector<Revision> appended(std::vector<Revision> revisions, Revision revision) {
     revisions.push_back(revision);
     return revisions;
@@ -2834,17 +3011,22 @@ static std::vector<bool> active_constraint_history_policies(const std::vector<Re
         if (record.revision!=index)
             document_error(DocumentErrorCode::invalid_history,"Constraint policy history is not contiguous");
         if (index==0) {
-            if (record.source_revision || record.boundary_constraint_changes)
+            if (record.source_revision || record.boundary_constraint_changes || record.phase_entity_import)
                 document_error(DocumentErrorCode::invalid_history,"Create record cannot supply constraint policy");
             continue;
         }
         if (record.source_revision) {
-            if (*record.source_revision>=index || record.boundary_constraint_changes ||
+            if (*record.source_revision>=index || record.boundary_constraint_changes || record.phase_entity_import ||
                 (record.action!="undo" && record.action!="redo"))
                 document_error(DocumentErrorCode::invalid_history,"Constraint policy navigation is invalid");
             result[index]=result[static_cast<std::size_t>(*record.source_revision)];
         } else {
             result[index]=result[index-1];
+            if (record.phase_entity_import) {
+                if (record.name || record.phase_entity_import->expected_revision!=index-1)
+                    document_error(DocumentErrorCode::invalid_history,"Phase import constraint policy source is invalid");
+                result[index]=true;
+            }
             if (record.boundary_constraint_changes) {
                 try {
                     result[index]=result[index] || !phase_constraint_authoring_proofs(*record.boundary_constraint_changes).empty();
@@ -4172,7 +4354,7 @@ static const std::map<std::string,Entity,std::less<>>* room_dimension_original_s
             const auto& record=records.at(index);
             if (record.revision!=index || record.parent_revision!=Revision{index-1} || record.source_revision ||
                 record.name || record.assets!=origin.assets || record.boundary_translation || record.boundary_transform ||
-                record.boundary_geometry_edit || record.boundary_translations || record.boundary_transforms)
+                record.boundary_geometry_edit || record.boundary_translations || record.boundary_transforms || record.phase_entity_import)
                 throw std::invalid_argument("Room callout stage contains navigation, naming or unrelated authoring");
             if (index==origin_index+1) {
                 if (record.boundary_constraint_changes) {
@@ -6991,6 +7173,49 @@ void complete_joint_rigid_consequences_active_phase(const std::map<std::string, 
     complete_joint_rigid_consequences_impl(source,candidate,intent,complete_area_callouts,&scope);
 }
 
+nlohmann::json phase_entity_import_proof_to_json(const PhaseEntityImportProof& proof) {
+    if (proof.message.size()>1024 || !is_valid_utf8_without_nul(proof.message))
+        document_error(DocumentErrorCode::invalid_entity,"Phase import proof message is invalid");
+    const auto validate_ids=[](const std::vector<std::string>& ids,bool required) {
+        std::set<std::string,std::less<>> unique;
+        if (required && ids.empty())
+            document_error(DocumentErrorCode::invalid_entity,"Phase import proof requires a nonempty identity inventory");
+        for (const auto& id:ids)
+            if (!is_valid_identifier(id) || !unique.insert(id).second)
+                document_error(DocumentErrorCode::invalid_entity,"Phase import proof identity inventory is invalid");
+    };
+    validate_ids(proof.registry_ids,true);validate_ids(proof.entity_ids,true);validate_ids(proof.asset_ids,false);
+    validate_ids(proof.reviewed_existing_hierarchy_ids,false);
+    nlohmann::json result{{"version",1},{"kind","import_phase_entities"},
+        {"expected_revision",proof.expected_revision},{"message",proof.message},
+        {"registry_ids",proof.registry_ids},{"entity_ids",proof.entity_ids},{"asset_ids",proof.asset_ids},
+        {"reviewed_existing_hierarchy_ids",proof.reviewed_existing_hierarchy_ids}};
+    validate_json_object(result,DocumentErrorCode::invalid_entity,"Phase import proof");
+    return result;
+}
+
+PhaseEntityImportProof phase_entity_import_proof_from_json(const nlohmann::json& value) {
+    command_exact_fields(value,{"version","kind","expected_revision","message","registry_ids","entity_ids","asset_ids","reviewed_existing_hierarchy_ids"},
+        DocumentErrorCode::invalid_entity,"Phase import proof");
+    if (!value.at("version").is_number_integer() || value.at("version")!=1 ||
+        value.at("kind")!="import_phase_entities" || !value.at("message").is_string())
+        document_error(DocumentErrorCode::invalid_entity,"Phase import proof envelope is invalid");
+    PhaseEntityImportProof result;
+    result.expected_revision=command_revision(value.at("expected_revision"),"Phase import proof revision");
+    result.message=value.at("message").get<std::string>();
+    const auto ids=[&](std::string_view field) {
+        const auto& records=value.at(std::string(field));
+        if (!records.is_array()) document_error(DocumentErrorCode::invalid_entity,"Phase import inventory must be an array");
+        std::vector<std::string> output;
+        for (const auto& item:records) output.push_back(command_string(item,field,kMaximumIdBytes));
+        return output;
+    };
+    result.registry_ids=ids("registry_ids");result.entity_ids=ids("entity_ids");result.asset_ids=ids("asset_ids");
+    result.reviewed_existing_hierarchy_ids=ids("reviewed_existing_hierarchy_ids");
+    (void)phase_entity_import_proof_to_json(result);
+    return result;
+}
+
 nlohmann::json command_to_json(const Command& command) {
     return std::visit([](const auto& typed) -> nlohmann::json {
         using T = std::decay_t<decltype(typed)>;
@@ -7020,6 +7245,25 @@ nlohmann::json command_to_json(const Command& command) {
             return nlohmann::json{{"version", 1}, {"kind", "apply_entity_changes"},
                                   {"expected_revision", typed.expected_revision}, {"message", typed.message},
                                   {"entity_changes", std::move(entities)}, {"asset_changes", std::move(assets)}};
+        } else if constexpr (std::is_same_v<T, ImportPhaseEntities>) {
+            PhaseEntityImportProof proof{typed.expected_revision,typed.message,typed.registry_ids,{},{},typed.reviewed_existing_hierarchy_ids};
+            for (const auto& change:typed.entity_changes) {
+                if (change.kind!=EntityChangeKind::upsert)
+                    document_error(DocumentErrorCode::invalid_entity,"Phase import cannot erase entities");
+                proof.entity_ids.push_back(change.entity.id);
+            }
+            for (const auto& change:typed.asset_changes) {
+                if (change.kind!=AssetChangeKind::upsert)
+                    document_error(DocumentErrorCode::invalid_asset,"Phase import cannot erase assets");
+                proof.asset_ids.push_back(change.asset.id);
+            }
+            (void)phase_entity_import_proof_to_json(proof);
+            auto encoded=command_to_json(ApplyEntityChanges{typed.expected_revision,typed.entity_changes,{},typed.message});
+            encoded["kind"]="import_phase_entities";
+            encoded["registry_ids"]=typed.registry_ids;
+            encoded["reviewed_existing_hierarchy_ids"]=typed.reviewed_existing_hierarchy_ids;
+            encoded["asset_changes"]=command_asset_references_to_json(typed.asset_changes);
+            return encoded;
         } else if constexpr (std::is_same_v<T, TransformBoundaries>) {
             auto encoded = command_to_json(ApplyEntityChanges{
                 typed.expected_revision, typed.entity_changes, {}, typed.message});
@@ -7546,6 +7790,24 @@ Command command_from_json(const nlohmann::json& value,
         if (value.at("version") != 1 && kind != "apply_boundary_constraint_changes" &&
             !(kind == "transform_boundaries" && (value.at("version") == 2 || value.at("version") == 3)))
             document_error(DocumentErrorCode::invalid_entity,"Unsupported command envelope version");
+        if (kind=="import_phase_entities") {
+            command_exact_fields(value,{"version","kind","expected_revision","message","registry_ids","entity_changes","asset_changes","reviewed_existing_hierarchy_ids"},
+                DocumentErrorCode::invalid_entity,"serialized phase import");
+            if (!value.at("registry_ids").is_array() || !value.at("reviewed_existing_hierarchy_ids").is_array())
+                document_error(DocumentErrorCode::invalid_entity,"Phase import registry and reviewed hierarchy inventories must be arrays");
+            auto ordinary=value;ordinary["kind"]="apply_entity_changes";ordinary.erase("registry_ids");
+            ordinary.erase("reviewed_existing_hierarchy_ids");
+            ordinary["asset_changes"]=nlohmann::json::array();
+            const auto decoded=std::get<ApplyEntityChanges>(command_from_json(ordinary));
+            ImportPhaseEntities result{decoded.expected_revision,decoded.entity_changes,
+                command_asset_references_from_json(value.at("asset_changes"),asset_resolver),decoded.message,{},{}};
+            for (const auto& id:value.at("registry_ids"))
+                result.registry_ids.push_back(command_string(id,"Phase import registry",kMaximumIdBytes));
+            for (const auto& id:value.at("reviewed_existing_hierarchy_ids"))
+                result.reviewed_existing_hierarchy_ids.push_back(command_string(id,"Phase import reviewed hierarchy",kMaximumIdBytes));
+            (void)command_to_json(result);
+            return result;
+        }
         if (kind == "transform_boundaries") {
             const bool per_owner = value.at("version") == 3;
             const bool qualified_group = per_owner || value.at("version") == 2;
@@ -8411,6 +8673,18 @@ Document Document::create(std::vector<Entity> initial_entities, std::vector<Asse
     return document;
 }
 
+Document Document::create_phase_import(std::vector<Entity> initial_entities, std::vector<Asset> initial_assets) {
+    ImportPhaseEntities command;
+    for (auto& entity:initial_entities) {
+        if (entity.type=="model_phases") command.registry_ids.push_back(entity.id);
+        command.entity_changes.push_back(EntityChange::upsert(std::move(entity)));
+    }
+    for (auto& asset:initial_assets) command.asset_changes.push_back(AssetChange::upsert(std::move(asset)));
+    auto document=create();
+    document.apply(command);
+    return document;
+}
+
 const std::string& Document::document_id() const noexcept { return document_id_; }
 Revision Document::revision() const noexcept { return head_revision_; }
 std::optional<Revision> Document::saved_revision_optional() const noexcept { return saved_revision_; }
@@ -8618,8 +8892,10 @@ Revision Document::apply(const Command& command) {
             auto next_identity_history = boundary_identity_history_;
 
             using CommandType = std::decay_t<decltype(typed_command)>;
-            if constexpr (std::is_same_v<CommandType, ApplyEntityChanges>) {
-                next.action = command_message(typed_command);
+            if constexpr (std::is_same_v<CommandType, ApplyEntityChanges> || std::is_same_v<CommandType, ImportPhaseEntities>) {
+                if constexpr (std::is_same_v<CommandType, ImportPhaseEntities>)
+                    next.action=typed_command.message.empty() ? "Import phase entities" : typed_command.message;
+                else next.action = command_message(typed_command);
                 validate_action(next.action);
                 next.entities = ordinary_entity_changes(current.entities, typed_command.entity_changes);
                 std::unordered_set<std::string> touched_assets;
@@ -8641,7 +8917,29 @@ Revision Document::apply(const Command& command) {
                         next.assets.erase(change.asset_id);
                     }
                 }
+                if constexpr (std::is_same_v<CommandType, ImportPhaseEntities>) {
+                    PhaseEntityImportProof proof{typed_command.expected_revision,typed_command.message,typed_command.registry_ids,{},{},
+                        typed_command.reviewed_existing_hierarchy_ids};
+                    for (const auto& change:typed_command.entity_changes) {
+                        if (change.kind!=EntityChangeKind::upsert)
+                            document_error(DocumentErrorCode::invalid_entity,"Phase import cannot erase entities");
+                        proof.entity_ids.push_back(change.entity.id);
+                    }
+                    for (const auto& change:typed_command.asset_changes) {
+                        if (change.kind!=AssetChangeKind::upsert)
+                            document_error(DocumentErrorCode::invalid_asset,"Phase import cannot erase assets");
+                        proof.asset_ids.push_back(change.asset.id);
+                    }
+                    try { validate_phase_entity_import_transition(current,next,proof,history_); }
+                    catch (const DocumentError&) { throw; }
+                    catch (const std::exception& error) { document_error(DocumentErrorCode::invalid_entity,error.what()); }
+                    next.phase_entity_import=std::move(proof);
+                    next_active_policy=true;
+                }
                 next_unsupported_constraints = validate_state(next.entities, next.assets,next_active_policy);
+                if constexpr (std::is_same_v<CommandType, ImportPhaseEntities>)
+                    if (next_unsupported_constraints)
+                        document_error(DocumentErrorCode::invalid_entity,"Phase import requires supported source semantics: "+*next_unsupported_constraints);
                 validate_constraint_change(current.entities, next.entities);
                 validate_boundary_change(boundary_identity_history_, current.entities, next.entities,
                                          next.action == "Propagate room relationships");
@@ -8961,6 +9259,7 @@ Document Document::restore(DocumentSnapshot snapshot) {
             if (record.parent_revision.has_value() || record.source_revision.has_value() || record.boundary_translation.has_value() ||
                 record.boundary_transform.has_value() || record.boundary_geometry_edit.has_value() ||
                 record.boundary_constraint_changes.has_value() || record.boundary_translations.has_value() || record.boundary_transforms.has_value() ||
+                record.phase_entity_import.has_value() ||
                 record.name.has_value() || record.action != "create" ||
                 !record.undo_stack.empty() || !record.redo_stack.empty()) {
                 document_error(DocumentErrorCode::invalid_history,
@@ -8978,7 +9277,8 @@ Document Document::restore(DocumentSnapshot snapshot) {
             static_cast<unsigned>(record.boundary_geometry_edit.has_value()) +
             static_cast<unsigned>(record.boundary_constraint_changes.has_value()) +
             static_cast<unsigned>(record.boundary_translations.has_value()) +
-            static_cast<unsigned>(record.boundary_transforms.has_value());
+            static_cast<unsigned>(record.boundary_transforms.has_value()) +
+            static_cast<unsigned>(record.phase_entity_import.has_value());
         if (boundary_proof_count > 1)
             document_error(DocumentErrorCode::invalid_history, "Boundary derivation proofs are mutually exclusive");
         if (record.boundary_transform && (record.name || record.source_revision))
@@ -8998,6 +9298,17 @@ Document Document::restore(DocumentSnapshot snapshot) {
                            "Boundary group translation proof is not valid on history navigation or named revisions");
         if (record.boundary_transforms && (record.name || record.source_revision))
             document_error(DocumentErrorCode::invalid_history,"Boundary group transform proof is not valid on history navigation or named revisions");
+        if (record.phase_entity_import) {
+            if (record.name || record.source_revision ||
+                record.action!=(record.phase_entity_import->message.empty() ? "Import phase entities" : record.phase_entity_import->message))
+                document_error(DocumentErrorCode::invalid_history,"Phase import proof does not match its command event");
+            try {
+                validate_phase_entity_import_transition(previous,record,*record.phase_entity_import,
+                    std::span<const RevisionRecord>(snapshot.history().data(),index));
+            } catch (const std::exception& error) { document_error(DocumentErrorCode::invalid_history,error.what()); }
+            if (unsupported_constraint_history)
+                document_error(DocumentErrorCode::invalid_history,"Phase import cannot descend from unsupported source semantics");
+        }
         // Unknown locks retain the read-only latch, but must not suppress
         // stable-endpoint checks for known relations in the same history.
         // Undo/redo restores an exact retained state and its provenance. The

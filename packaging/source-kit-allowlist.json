@@ -3447,7 +3447,15 @@
     },
     {
       "category": "source",
+      "path": "include/sketch/dxf_annotation_source.hpp"
+    },
+    {
+      "category": "source",
       "path": "include/sketch/dxf_architectural_source.hpp"
+    },
+    {
+      "category": "source",
+      "path": "include/sketch/dxf_constraint_source.hpp"
     },
     {
       "category": "source",
@@ -4707,7 +4715,15 @@
     },
     {
       "category": "source",
+      "path": "src/core/dxf_annotation_source.cpp"
+    },
+    {
+      "category": "source",
       "path": "src/core/dxf_architectural_source.cpp"
+    },
+    {
+      "category": "source",
+      "path": "src/core/dxf_constraint_source.cpp"
     },
     {
       "category": "source",

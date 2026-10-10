@@ -3,11 +3,13 @@
 #include "sketch/document.hpp"
 
 #include <map>
+#include <span>
 #include <string>
 #include <vector>
 
 namespace sketch {
 struct NativeDxfWallSourceWorkBudget;
+struct SiteAnnotationTarget;
 
 inline constexpr std::size_t native_dxf_phase_source_owner_limit = 16'384;
 inline constexpr std::size_t native_dxf_phase_source_byte_limit = 16 * 1024 * 1024;
@@ -29,6 +31,9 @@ struct NativeDxfPhaseSourceGraph {
     std::vector<std::string> catalog_ids;
     std::vector<std::string> registry_ids;
     std::vector<std::string> context_ids;
+    // Constraints and placed presentation owners are retained support, not
+    // architectural bodies and not registry enrollment inferred by transfer.
+    std::vector<std::string> support_ids;
     std::vector<std::string> enrolled_hierarchy_ids;
     std::vector<std::string> depicted_body_ids;
     bool operator==(const NativeDxfPhaseSourceGraph&) const = default;
@@ -43,8 +48,10 @@ struct NativeDxfPhaseSourceGraph {
     NativeDxfWallSourceWorkBudget* work_budget = nullptr);
 
 // Version 1 has an exact sorted entities array of raw five-field Entity rows
-// and six explicit sorted unique role/subset arrays. No canonical entity/model
-// encoder is used. Admission precedes semantic decoders and the organizer;
+// and six explicit sorted unique role/subset arrays. Version 2 adds a nonempty
+// support_ids array for annotations, dimensions and constraints; support-free
+// graphs retain version 1. No canonical entity/model encoder is used.
+// Admission precedes semantic decoders and the organizer;
 // failed attempts remain charged to the shared catalog/architectural ledger.
 [[nodiscard]] nlohmann::json encode_native_dxf_phase_source_graph(
     const NativeDxfPhaseSourceGraph& graph, NativeDxfWallSourceWorkBudget* work_budget = nullptr);
@@ -64,11 +71,15 @@ struct NativeDxfPhaseDestinationMaps {
     NativeDxfPhaseOwnerMap catalog_owner_ids;
     NativeDxfPhaseOwnerMap registry_owner_ids;
     NativeDxfPhaseOwnerMap reviewed_context_owner_ids;
+    NativeDxfPhaseOwnerMap support_owner_ids;
     NativeDxfPhaseOwnerMap stair_child_ids;
+    // Child IDs are scoped by their actual source annotation owner. They are
+    // freshened for desktop selection without changing catalog/template IDs.
+    std::map<std::string, NativeDxfPhaseOwnerMap, std::less<>> annotation_child_ids;
 };
 struct NativeDxfPhaseDestinationBinding {
     NativeDxfPhaseSourceGraph mapped_graph;
-    // Fresh bodies/catalogs/registries and explicitly reviewed new contexts
+    // Fresh bodies/catalogs/registries/support and explicitly reviewed new contexts
     // only. Existing reviewed hierarchy is never copied into publication.
     std::vector<Entity> staged_entities;
 };
@@ -78,10 +89,30 @@ struct NativeDxfPhaseDestinationBinding {
 void admit_native_dxf_phase_document_entities(
     const std::map<std::string, Entity, std::less<>>& owners,
     NativeDxfWallSourceWorkBudget* work_budget = nullptr);
+// Reserve saved registry/organization scope reads without speculatively
+// decoding SVG/presentation or constraint consumers. This is not complete
+// document admission and cannot authorize a private Document creation.
+void admit_native_dxf_phase_scope_work(
+    const std::map<std::string, Entity, std::less<>>& owners,
+    NativeDxfWallSourceWorkBudget* work_budget = nullptr);
+// Reserve one batched annotation Site-frame resolver: actual decoded owners,
+// shared hierarchy indexing and cached dependency receipts before consumption.
+void admit_native_dxf_phase_annotation_frame_work(
+    const std::map<std::string, Entity, std::less<>>& owners,
+    std::span<const SiteAnnotationTarget> targets,
+    NativeDxfWallSourceWorkBudget* work_budget = nullptr);
+// Reserve one batched owner Site-frame resolver, including actual physical
+// hosts/joins, container ancestry and shared dependency receipts. No geometry,
+// annotation artwork codec or complete Document admission is performed.
+void admit_native_dxf_phase_owner_frame_work(
+    const std::map<std::string, Entity, std::less<>>& owners,
+    std::span<const std::string> owner_ids,
+    NativeDxfWallSourceWorkBudget* work_budget = nullptr);
 // Reserve full current-design physical-room detection immediately before an
 // explicit checks call. Inert/inactive descriptors and ordinary retained wall
 // snapshots pay intrinsic admission only. Uses the 64 Mi shared typed-work
-// ledger, never the legacy V5-V8 250,000 source-work lane.
+// ledger, never the legacy V5-V8 250,000 source-work lane. This does not reserve
+// private Document/SVG/constraint consumers; admit those before creating one.
 void admit_native_dxf_phase_physical_room_checks(
     const std::map<std::string, Entity, std::less<>>& owners,
     NativeDxfWallSourceWorkBudget* work_budget = nullptr);

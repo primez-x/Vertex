@@ -76,6 +76,10 @@ struct Budget {
     }
     void read(const EntityChange& v) { text(v.entity_id); read(v.entity); }
     void read(const AssetChange& v) { text(v.asset_id); read(v.asset); }
+    void read(const PhaseEntityImportProof& v) {
+        reserve(256); text(v.message); sequence(v.registry_ids); sequence(v.entity_ids); sequence(v.asset_ids);
+        sequence(v.reviewed_existing_hierarchy_ids);
+    }
     void read(const Quantity& v) { text(v.original_expression); }
     void read(const AngleInput& v) { text(v.original_expression); text(v.normalized_expression); }
     void read(const ConstructionReceipt& v) {
@@ -176,6 +180,7 @@ void snapshot_bound(const DocumentSnapshot& source) {
         budget.reserve(32 * (r.undo_stack.size() + r.redo_stack.size()));
         budget.optional(r.boundary_translation); budget.optional(r.boundary_transform); budget.optional(r.boundary_geometry_edit);
         budget.optional(r.boundary_constraint_changes); budget.optional(r.boundary_translations); budget.optional(r.boundary_transforms);
+        budget.optional(r.phase_entity_import);
     }
     if (source.saved_revision_optional() && (*source.saved_revision_optional() > source.revision() ||
         *source.saved_revision_optional() >= history.size())) reject("captured saved revision is invalid");

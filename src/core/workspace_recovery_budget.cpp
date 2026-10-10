@@ -135,6 +135,9 @@ WorkspaceRecoveryUsage preflight_workspace_recovery(const DocumentSnapshot& docu
         if (record.boundary_transforms)
             wire(detail::measure_authoring_recovery_json(
                 command_to_json(Command{*record.boundary_transforms}), json_policy));
+        if (record.phase_entity_import)
+            wire(detail::measure_authoring_recovery_json(
+                phase_entity_import_proof_to_json(*record.phase_entity_import), json_policy));
         add(u.encoded_bytes, multiply(record.undo_stack.size(), 21), limits.max_encoded_bytes);
         add(u.encoded_bytes, multiply(record.redo_stack.size(), 21), limits.max_encoded_bytes);
         add(u.json_values, record.undo_stack.size(), limits.max_json_values);

@@ -135,12 +135,16 @@ work.
 ### Phase authoring transfer (V9, source integration; qualification incomplete)
 
 V1-V8 phase observations remain private source evidence. Complete editable
-phase transfer requires a separate V9 authoring inventory and PSIP0004 worker
+phase transfer uses a separate V9 authoring inventory and PSIP0004 worker
 contract: all baseline, demolition and inactive proposal owners must accompany
 the registries, independently of the active CAD depiction. Full catalogs,
 wall joins, terrain, actual reviewed hierarchy members and typed host/level
 relationships participate in that closure. Bodies, catalogs, registries,
-reviewed contexts and stair children require separate owner mappings.
+reviewed contexts, support owners and stair children require separate owner
+mappings. Support-free graph version one remains unchanged; graph version two
+adds saved annotation states, dimensions and constraints in `support_ids`.
+Placed label/symbol IDs have separate annotation-owner-scoped maps; catalog,
+template, alternative and boundary-local identities retain their own namespaces.
 
 The shared ModelPhases source codec now preserves surviving saved array order
 for ordinary edits and provides complete injective owner remapping. It patches
@@ -160,6 +164,20 @@ separate active CAD body blocks authenticate native geometry, hierarchy, layer
 and identity placement. Empty active depiction is valid. Import rejects missing,
 duplicate, orphaned or malformed carrier records and overlapping legacy source
 ownership. PSIP0004 repeats the ownership checks at the worker trust boundary.
+Individual `PHASE_SUPPORT_PLAN_V1` blocks authenticate the complete support
+inventory, exact vector primitives/text and child placement/layer assignments.
+Hidden/inactive presentation and constraints have authenticated empty pictures.
+Saved symbol previews and the existing native dimension pictures provide CAD
+depiction; original styles and pinned SVG remain in the editable source graph.
+CAD style/artwork limitations produce fidelity diagnostics. Authenticated support
+blocks do not enter plain fallback import and duplicate the retained annotations.
+Active architectural body pictures, annotation children and dimension pictures
+share resolved Site placement. Dimension witnesses and saved text use the
+measured owner's basis; an explicit dimension frame must match it. Rigid
+placement preserves physical sizes and is applied once to CAD primitives,
+with identity INSERTs. Frame work follows actual cached dependencies rather
+than unrelated artwork; physical-room checks admit geometry separately from
+private Document consumers.
 
 Destination mapping requires complete, injective body/catalog/registry/context
 maps and separate stair-child identities. Typed owner references change while
@@ -168,6 +186,11 @@ context owners must be actual destination records with equivalent mapped source
 semantics; they cannot be overwritten by retained evidence. An explicit import
 defaults to creating source hierarchy copies. The interactive review can instead
 choose existing equivalent contexts; no existing hierarchy merge is inferred.
+Enrolled existing buildings/floors require an exact persisted reviewed-ID list,
+unchanged payloads and no prior registry ownership. Existing physical owners
+cannot be enrolled by import. V9 intermediate preview and final publication
+use the same explicit import command; fallback annotations are fresh owners,
+while existing destination annotations remain unchanged.
 The pure binder receives those caller-authorized new contexts separately from
 the retained source graph, validates the combined actual destination, and returns
 only proposed new owners. Desktop publication combines them, legacy drawing
@@ -181,8 +204,12 @@ each registry retaining its saved active alternative. Enrollment, deletion,
 hosted ownership, annotation filtering and automatic wall measurements evaluate
 the actual registry graph. V1-V8 retain their prior contracts and are not
 retrospectively treated as complete phase authoring inventories. V9 still
-refuses unsupported incoming annotation/constraint dependencies and canonical
-catalog references. Whole-history admission has explicit finite capacity;
+refuses saved output-view overrides until companion sheet/view transport exists,
+and unsupported canonical catalog references. Scoped annotation owner contexts
+must match actual layer ancestry, while children may use independent layers.
+Fresh phase import uses an explicit retained command policy rather than legacy
+constraint satisfaction for inactive alternatives. Existing legacy commands
+retain their prior policy. Whole-history admission has explicit finite capacity;
 otherwise valid large projects may refuse. This increment has source inspection
 only. Compilation, runtime round trips, history/storage replay, usability,
 capacity and independent CAD interoperability remain unqualified.

@@ -1,6 +1,7 @@
 #pragma once
 
 #include <algorithm>
+#include <functional>
 #include <map>
 #include <set>
 #include <utility>
@@ -22,6 +23,10 @@ inline constexpr std::size_t svg_element_depth_limit = 64;
 // Maximum conservative expanded draw-tree node visits per instance. This
 // includes definition containment, inherited resources and marker multiplicity.
 inline constexpr std::size_t svg_resource_expansion_limit = 65536;
+// Optional operation-owned billing. The callback runs before counted work and
+// may refuse it; failed attempts never roll back charges. Existing callers
+// retain the same SVG semantics and limits when no callback is supplied.
+using SvgAdmissionWork = std::function<void(std::size_t)>;
 
 namespace svg_admission_detail {
 inline void require(bool value, const char* message) {
@@ -276,13 +281,15 @@ inline bool selector_matches(std::string_view selector,const ResourceNode& node)
     }
     return matches;
 }
-inline void bounded_resources(std::vector<ResourceNode>& nodes) {
+inline void bounded_resources(std::vector<ResourceNode>& nodes, const SvgAdmissionWork& bill = {}) {
     std::size_t work=0;
     const auto charge=[&] {
         require(++work<=svg_resource_expansion_limit,"SVG resource admission exceeds its work budget; simplify styles or resource references");
     };
     for (std::size_t owner=0; owner<nodes.size(); ++owner) {
+        if (bill) bill(1);
         if (nodes[owner].stylesheet.empty()) continue;
+        if (bill) bill(nodes[owner].stylesheet.size()*64);
         const auto css=css_text(nodes[owner].stylesheet);
         if (resource_uses(css,"").empty()) continue;
         require(nodes[owner].stylesheet.find("/*")==std::string::npos && css.find("/*")==std::string::npos,
@@ -301,8 +308,22 @@ inline void bounded_resources(std::vector<ResourceNode>& nodes) {
                     const auto selector=selectors.substr(start,end==std::string_view::npos ? selectors.size()-start : end-start);
                     for (auto& node:nodes) {
                         charge();
+                        if (bill) {
+                            // Match the consumer's actual repeated scans. Path
+                            // coordinate commas are outside this stylesheet
+                            // loop and never multiply complete artwork bytes.
+                            bill(selector.size()*16+16);
+                            const auto classes=static_cast<std::size_t>(std::count(selector.begin(),selector.end(),'.'));
+                            const auto compounds=classes+static_cast<std::size_t>(std::count(selector.begin(),selector.end(),'#'))+1;
+                            bill(classes*(node.classes.size()+1)*16);
+                            bill(compounds*(node.id.size()+node.element.size()+1)*16);
+                        }
                         if (selector_matches(selector,node))
-                            for (const auto& use:uses) { charge(); node.resources.push_back(use); }
+                            for (const auto& use:uses) {
+                                charge();
+                                if (bill) bill(use.id.size()+use.property.size()+8);
+                                node.resources.push_back(use);
+                            }
                     }
                     if (end==std::string_view::npos) break;
                     start=end+1;
@@ -313,12 +334,15 @@ inline void bounded_resources(std::vector<ResourceNode>& nodes) {
         }
     }
     std::map<std::string,std::size_t,std::less<>> ids;
-    for (std::size_t i=0;i<nodes.size();++i)
+    for (std::size_t i=0;i<nodes.size();++i) {
+        if (bill) bill(nodes[i].id.size()*16+8);
         if (!nodes[i].id.empty()) require(ids.emplace(nodes[i].id,i).second,"SVG contains duplicate resource IDs");
+    }
     struct Edge {std::size_t owner,weight;};
     std::vector<std::vector<Edge>> incoming(nodes.size());
     std::vector<std::size_t> pending(nodes.size()),cost(nodes.size(),1),ready;
     const auto edge=[&](std::size_t owner,std::size_t target,std::size_t weight) {
+        if (bill) bill(8);
         charge(); ++pending[owner]; incoming[target].push_back({owner,weight});
     };
     for (std::size_t i=0;i<nodes.size();++i) {
@@ -327,13 +351,16 @@ inline void bounded_resources(std::vector<ResourceNode>& nodes) {
         // Overcount ancestor resources rather than assuming a CSS inheritance
         // subset. Nonpainting definitions do not acquire inherited paint.
         for (auto ancestor=i; ancestor<nodes.size(); ancestor=nodes[ancestor].parent) {
+            if (bill) bill(1);
             for (const auto& use:nodes[ancestor].resources) {
+                if (bill) bill(use.id.size()*16+use.property.size()+8);
                 const auto target=ids.find(use.id);
                 // Never interpret an unresolved graph edge as zero work: XML,
                 // CSS and native URL parsing can otherwise disagree on its ID.
                 require(target!=ids.end(),"SVG references an unresolved internal fragment; repair the resource ID");
                 std::size_t weight=1;
                 if (use.property.starts_with("marker")) {
+                    if (bill) bill(nodes[i].geometry.size()*2+1);
                     if (use.property=="marker-end")
                         weight=std::max<std::size_t>(1,static_cast<std::size_t>(std::count(nodes[i].geometry.begin(),nodes[i].geometry.end(),'M')+
                             std::count(nodes[i].geometry.begin(),nodes[i].geometry.end(),'m')));
@@ -346,11 +373,16 @@ inline void bounded_resources(std::vector<ResourceNode>& nodes) {
             }
         }
     }
-    for (std::size_t i=0;i<nodes.size();++i) if (!pending[i]) ready.push_back(i);
+    for (std::size_t i=0;i<nodes.size();++i) {
+        if (bill) bill(1);
+        if (!pending[i]) ready.push_back(i);
+    }
     std::size_t completed=0;
     while (!ready.empty()) {
         const auto node=ready.back();ready.pop_back();++completed;
+        if (bill) bill(1);
         for (const auto& dependency:incoming[node]) {
+            if (bill) bill(8);
             require(cost[node]<=(svg_resource_expansion_limit-cost[dependency.owner])/dependency.weight,
                 "SVG resource expansion exceeds 65536 node visits; simplify markers, masks or patterns");
             cost[dependency.owner]+=cost[node]*dependency.weight;
@@ -365,9 +397,13 @@ inline void bounded_resources(std::vector<ResourceNode>& nodes) {
 // Bounded, nonrecursive lexical structure/resource preflight for headless
 // import/save/reopen. This is deliberately not a general XML parser. Every
 // renderer additionally runs a conforming streaming XML reader before load.
-inline void validate_svg_structure(std::string_view source) {
+inline void validate_svg_structure(std::string_view source, const SvgAdmissionWork& bill = {}) {
     using namespace svg_admission_detail;
+    if (bill) bill(1);
     require(!source.empty() && source.size() <= svg_document_byte_limit, "SVG is empty or exceeds the per-instance limit");
+    // Covers lexical parsing, reference decoding and per-attribute text scans.
+    // Nonlinear stylesheet/resource work is billed where it actually occurs.
+    if (bill) bill(source.size()*64);
     require(source.find('\0') == std::string_view::npos, "SVG contains a NUL byte");
     resource_text(source);
     std::vector<std::string_view> stack;
@@ -460,6 +496,6 @@ inline void validate_svg_structure(std::string_view source) {
         if (!self_closing) { stack.push_back(element); node_stack.push_back(node_index); }
     }
     require(root_seen && stack.empty(), "Malformed or incomplete SVG structure");
-    bounded_resources(nodes);
+    bounded_resources(nodes,bill);
 }
 } // namespace sketch

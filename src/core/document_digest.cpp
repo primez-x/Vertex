@@ -96,6 +96,8 @@ ordered_json snapshot_json(const DocumentSnapshot& snapshot,
             item["boundary_translations"] = command_to_json(*record.boundary_translations);
         if (record.boundary_transforms)
             item["boundary_transforms"] = command_to_json(*record.boundary_transforms);
+        if (record.phase_entity_import)
+            item["phase_entity_import"] = phase_entity_import_proof_to_json(*record.phase_entity_import);
         history.push_back(std::move(item));
     }
     auto names = ordered_json::array();

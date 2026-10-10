@@ -1,6 +1,9 @@
 #include "sketch/dxf_project_exchange.hpp"
 #include "sketch/dxf_phase_source.hpp"
+#include "sketch/dxf_annotation_source.hpp"
+#include "sketch/dxf_constraint_source.hpp"
 #include "sketch/model_phases.hpp"
+#include "sketch/site_frame.hpp"
 
 #include "sketch/annotation_catalog.hpp"
 #include "sketch/annotation_entity_codec.hpp"
@@ -64,6 +67,7 @@ constexpr const char* kCatalogTableIdentity = "vertex.catalog.sources";
 constexpr const char* kPhaseGraphIdentity = "vertex.phase.sources";
 constexpr const char* kPhaseGraphChunk = "PHASE_SOURCE_GRAPH_CHUNK_V1";
 constexpr const char* kPhaseBodyPlan = "PHASE_BODY_PLAN_V1";
+constexpr const char* kPhaseSupportPlan = "PHASE_SUPPORT_PLAN_V1";
 Entity read_catalog_source(const std::string& id, const Json& record);
 std::vector<std::string> catalog_identity_list(const Json& values);
 AssemblyDocumentEntities merged_catalog_source_graph(const NativeDxfPhysicalSourceGraphs& proofs,
@@ -2804,12 +2808,14 @@ NativeCandidate decode_native_candidate(const DxfBlock& block, std::size_t inser
     return candidate;
 }
 
-bool same_block_geometry(const DxfBlock& a, const DxfBlock& b, bool exact = false) {
+bool same_block_geometry(const DxfBlock& a, const DxfBlock& b, bool exact = false,
+                         bool compare_labels = false) {
     const auto near = [exact](double x, double y) {
         return exact ? x == y : std::abs(x - y) <= kGeometryTolerance;
     };
     const auto point = [&](DxfPoint x, DxfPoint y) { return near(x.x, y.x) && near(x.y, y.y); };
-    if (!a.labels.empty() || !b.labels.empty() || a.lines.size() != b.lines.size() ||
+    if ((!compare_labels && (!a.labels.empty() || !b.labels.empty())) ||
+        (compare_labels && a.labels.size() != b.labels.size()) || a.lines.size() != b.lines.size() ||
         a.arcs.size() != b.arcs.size() || a.polylines.size() != b.polylines.size() ||
         a.circles.size() != b.circles.size()) return false;
     for (std::size_t i = 0; i < a.lines.size(); ++i)
@@ -2828,6 +2834,12 @@ bool same_block_geometry(const DxfBlock& a, const DxfBlock& b, bool exact = fals
         for (std::size_t j = 0; j < x.vertices.size(); ++j)
             if (!point(x.vertices[j].point, y.vertices[j].point) || !near(x.vertices[j].bulge, y.vertices[j].bulge)) return false;
     }
+    if (compare_labels) for (std::size_t i = 0; i < a.labels.size(); ++i) {
+        const auto& x = a.labels[i]; const auto& y = b.labels[i];
+        if (!point(x.position, y.position) || !near(x.height, y.height) ||
+            !near(x.rotation_degrees, y.rotation_degrees) || x.text != y.text || x.layer != y.layer)
+            return false;
+    }
     return true;
 }
 
@@ -2842,7 +2854,258 @@ struct PhasePlans {
     std::map<std::string, DxfBlock, std::less<>> blocks;
     std::map<std::string, Json, std::less<>> contexts;
     std::map<std::string, std::string, std::less<>> layers;
+    std::vector<DxfProjectDiagnostic> diagnostics;
 };
+
+void place_phase_picture(DxfBlock& block, const SiteRigidTransform& frame,
+    NativeDxfWallSourceWorkBudget& budget) {
+    if (frame.rotation_radians == 0.0 && frame.translation_m.x == 0.0 && frame.translation_m.y == 0.0)
+        return;
+    const auto reserve_points = [&](std::size_t count) {
+        auto& ledger = budget.catalog_transfer;
+        if (ledger.consumed_validation_work > ledger.max_validation_work ||
+            count > (ledger.max_validation_work - ledger.consumed_validation_work) / 96)
+            throw std::invalid_argument("V9 cumulative picture placement work limit");
+        ledger.consumed_validation_work += count * 96;
+    };
+    reserve_points(block.lines.size()); reserve_points(block.lines.size());
+    reserve_points(block.arcs.size()); reserve_points(block.circles.size()); reserve_points(block.labels.size());
+    for (const auto& polyline : block.polylines) reserve_points(polyline.vertices.size());
+    const auto point = [&](DxfPoint& value) {
+        const auto placed = site_transform_point({value.x, value.y, 0.0}, frame);
+        value = {placed.x, placed.y};
+    };
+    const auto angle = [&](double degrees) {
+        return normalized_degrees(radians_from_degrees(degrees) + frame.rotation_radians);
+    };
+    // Carrier INSERTs stay at the origin with unit scale. Only the primitive
+    // coordinates move; radii, bulges, text sizes and the block base stay intact.
+    for (auto& line : block.lines) { point(line.start); point(line.end); }
+    for (auto& arc : block.arcs) {
+        point(arc.center); arc.start_degrees = angle(arc.start_degrees); arc.end_degrees = angle(arc.end_degrees);
+    }
+    for (auto& circle : block.circles) point(circle.center);
+    for (auto& polyline : block.polylines)
+        for (auto& vertex : polyline.vertices) point(vertex.point);
+    for (auto& label : block.labels) { point(label.position); label.rotation_degrees = angle(label.rotation_degrees); }
+}
+
+PhasePlans phase_support_plans(const NativeDxfPhaseSourceGraph& graph,
+    NativeDxfWallSourceWorkBudget& budget) {
+    PhasePlans result;
+    if (graph.support_ids.empty()) return result;
+    // Raw admission owns every codec/catalog/retained-target call. Projection
+    // work is additionally bounded before any decoding or private Document.
+    for (const auto& id : graph.support_ids) {
+        const auto& owner = graph.entities.at(id);
+        if (native_dxf_annotation_source_type(owner.type))
+            admit_native_dxf_annotation_source_work(owner, graph.entities, budget);
+        else if (!native_dxf_constraint_source_type(owner.type))
+            throw std::invalid_argument("V9 unsupported support depiction owner");
+    }
+    std::size_t primitive_bound = 0;
+    const auto reserve_primitives = [&](std::size_t count) {
+        if (primitive_bound > 50'000 || count > 50'000 - primitive_bound)
+            throw std::invalid_argument("V9 cumulative support depiction primitive limit");
+        primitive_bound += count;
+        auto& ledger = budget.catalog_transfer;
+        if (ledger.consumed_validation_work > ledger.max_validation_work ||
+            count > (ledger.max_validation_work - ledger.consumed_validation_work) / 32)
+            throw std::invalid_argument("V9 cumulative support depiction work limit");
+        ledger.consumed_validation_work += count * 32;
+    };
+    // The catalog's construction was reserved by raw annotation admission.
+    // Missing snapshots use its actual preview upper bound, never SVG parsing.
+    std::size_t catalog_preview_bound = 0;
+    const bool has_annotations = std::any_of(graph.support_ids.begin(), graph.support_ids.end(), [&](const auto& id) {
+        return graph.entities.at(id).type == kAnnotationEntityType;
+    });
+    std::vector<SymbolDefinition> catalog;
+    if (has_annotations) {
+        catalog = default_symbol_catalog();
+        for (const auto& definition : catalog) catalog_preview_bound = std::max(catalog_preview_bound, definition.preview.size());
+    }
+    for (const auto& id : graph.support_ids) {
+        const auto& owner = graph.entities.at(id);
+        if (owner.type == kAnnotationEntityType) {
+            const auto& state = owner.properties.at("state");
+            reserve_primitives(state.at("labels").size());
+            for (const auto& symbol : state.at("symbols"))
+                reserve_primitives(symbol.contains("definition") ? symbol.at("definition").at("preview").size() : catalog_preview_bound);
+        } else if (owner.type == "dimension") reserve_primitives(8);
+    }
+    // The phase selector itself decodes complete saved registry models. Admit
+    // that ambient replay before it as well as any later Document creation.
+    admit_native_dxf_phase_scope_work(graph.entities, &budget);
+    const auto scope = constraint_phase_scope(graph.entities);
+    // Capture all framed children together: each child's own layer determines
+    // its frame, and the resolver shares one organization and dependency cache.
+    std::vector<SiteAnnotationTarget> framed_children;
+    for (const auto& id : graph.support_ids) {
+        const auto& owner = graph.entities.at(id);
+        if (owner.type != kAnnotationEntityType || !owner.properties.contains("presentation_frame")) continue;
+        const auto& state = owner.properties.at("state");
+        for (const auto* key : {"labels", "symbols"})
+            for (const auto& child : state.at(key))
+                framed_children.push_back({id, child.at("id").get<std::string>()});
+    }
+    std::map<SiteAnnotationTarget, SitePresentationPlacement> child_presentations;
+    if (!framed_children.empty()) {
+        admit_native_dxf_phase_annotation_frame_work(graph.entities, framed_children, &budget);
+        child_presentations = resolve_site_annotation_presentations(graph.entities, framed_children);
+    }
+    std::map<std::string, BoundaryDimension, std::less<>> support_dimensions;
+    std::set<std::string, std::less<>> dimension_frame_ids;
+    for (const auto& id : graph.support_ids) {
+        const auto& owner = graph.entities.at(id);
+        if (owner.type != "dimension") continue;
+        const auto decoded = decode_boundary_dimension_entity(owner);
+        if (!decoded.supported()) throw std::invalid_argument("V9 support dimension unsupported");
+        support_dimensions.emplace(id, *decoded.dimension);
+        if (scope.inactive_owner_ids.contains(id) || annotation_has_inactive_owner(owner, scope) ||
+            scope.inactive_owner_ids.contains(decoded.dimension->boundary_id) ||
+            (decoded.dimension->presentation && !decoded.dimension->presentation->visible)) continue;
+        dimension_frame_ids.insert(decoded.dimension->boundary_id);
+        if (owner.properties.contains("presentation_frame")) dimension_frame_ids.insert(id);
+    }
+    std::map<std::string, SitePresentationPlacement, std::less<>> dimension_presentations;
+    if (!dimension_frame_ids.empty()) {
+        const std::vector<std::string> frame_ids(dimension_frame_ids.begin(), dimension_frame_ids.end());
+        admit_native_dxf_phase_owner_frame_work(graph.entities, frame_ids, &budget);
+        dimension_presentations = resolve_site_presentations(graph.entities, frame_ids);
+    }
+    std::optional<DocumentSnapshot> snapshot;
+    if (std::any_of(graph.support_ids.begin(), graph.support_ids.end(), [&](const auto& id) {
+        return graph.entities.at(id).type == "dimension";
+    })) {
+        admit_native_dxf_phase_document_entities(graph.entities, &budget);
+        std::vector<Entity> values;
+        values.reserve(graph.entities.size());
+        for (const auto& [id, owner] : graph.entities) { (void)id; values.push_back(owner); }
+        snapshot = Document::create_phase_import(std::move(values)).snapshot();
+    }
+    const auto append_picture = [](DxfBlock& block, DxfBlock picture, const std::string& layer) {
+        for (auto& line : picture.lines) line.layer = layer;
+        for (auto& arc : picture.arcs) arc.layer = layer;
+        for (auto& label : picture.labels) label.layer = layer;
+        block.lines.insert(block.lines.end(), std::make_move_iterator(picture.lines.begin()), std::make_move_iterator(picture.lines.end()));
+        block.arcs.insert(block.arcs.end(), std::make_move_iterator(picture.arcs.begin()), std::make_move_iterator(picture.arcs.end()));
+        block.labels.insert(block.labels.end(), std::make_move_iterator(picture.labels.begin()), std::make_move_iterator(picture.labels.end()));
+    };
+    for (const auto& id : graph.support_ids) {
+        const auto& owner = graph.entities.at(id);
+        auto context = direct_source_context(owner);
+        if (owner.properties.contains("level_id")) context["level_id"] = owner.properties.at("level_id");
+        std::vector<DxfProjectDiagnostic> layer_diagnostics;
+        const auto layer = layer_for(graph.entities, owner, layer_diagnostics);
+        if (!layer_diagnostics.empty()) throw std::invalid_argument("V9 support CAD layer unavailable");
+        DxfBlock block;
+        if (owner.type == kAnnotationEntityType && !scope.inactive_owner_ids.contains(id) &&
+            !annotation_has_inactive_owner(owner, scope)) {
+            const auto state = decode_annotation_entity(owner);
+            const auto child_layer = [&](const AnnotationPlacement& placement, const std::string& child, const char* fallback) {
+                if (placement.layer_id.empty()) return std::string(fallback);
+                const auto name = layer_name(graph.entities, placement.layer_id);
+                if (!name) throw std::invalid_argument("V9 support child CAD layer missing");
+                auto result = valid_layer(*name, layer_diagnostics, child, owner.type);
+                if (!layer_diagnostics.empty()) throw std::invalid_argument("V9 support child CAD layer unavailable");
+                return result;
+            };
+            const auto inactive_child = [&](const AnnotationPlacement& placement) {
+                if (placement.layer_id.empty()) return false;
+                return scope.inactive_owner_ids.contains(placement.layer_id) ||
+                    annotation_has_inactive_owner(graph.entities.at(placement.layer_id), scope);
+            };
+            const auto world_placement = [&](const AnnotationPlacement& local, const std::string& child) {
+                auto placed = local;
+                const auto frame = child_presentations.find({id, child});
+                if (frame != child_presentations.end()) {
+                    const auto world = site_transform_point({local.position.x, local.position.y, 0.0}, frame->second.forward);
+                    placed.position = {world.x, world.y};
+                    placed.rotation_radians += frame->second.forward.rotation_radians;
+                }
+                return placed;
+            };
+            for (const auto& label : state.labels) {
+                if (!label.visible || inactive_child(label.placement)) continue;
+                const auto placement = world_placement(label.placement, label.id);
+                block.labels.push_back({{placement.position.x, placement.position.y},
+                    label.style.text_height_metres * placement.scale,
+                    normalized_degrees(placement.rotation_radians), label.content,
+                    child_layer(label.placement, label.id, "Annotations")});
+            }
+            for (const auto& symbol : state.symbols) {
+                if (!symbol.visible || inactive_child(symbol.placement)) continue;
+                const auto definition = resolved_symbol_definition(symbol, catalog);
+                const auto symbol_layer = child_layer(symbol.placement, symbol.id, "Symbols");
+                const auto frame = child_presentations.find({id, symbol.id});
+                for (auto stroke : transformed_symbol_preview(definition, symbol)) {
+                    // The preview already includes physical scale, dimensions
+                    // and flips. Apply only the rigid frame to its endpoints.
+                    if (frame != child_presentations.end()) {
+                        const auto start = site_transform_point({stroke.start.x, stroke.start.y, 0.0}, frame->second.forward);
+                        const auto end = site_transform_point({stroke.end.x, stroke.end.y, 0.0}, frame->second.forward);
+                        stroke.start = {start.x, start.y}; stroke.end = {end.x, end.y};
+                    }
+                    block.lines.push_back({{stroke.start.x, stroke.start.y}, {stroke.end.x, stroke.end.y}, symbol_layer});
+                }
+                if (definition.svg_asset || !symbol.pinned_svg.empty())
+                    diagnostic(result.diagnostics, id, owner.type, symbol.definition
+                        ? "symbol_svg_exported_as_saved_vector_preview" : "symbol_svg_exported_as_catalog_vector_preview");
+            }
+            if (!block.labels.empty() || !block.lines.empty())
+                diagnostic(result.diagnostics, id, owner.type, "annotation_cad_style_subset_original_retained");
+            if (!state.overrides.empty())
+                diagnostic(result.diagnostics, id, owner.type, "annotation_presentation_overrides_retained_source_only");
+        } else if (owner.type == "dimension") {
+            // Reuse current native target resolution and the existing linear,
+            // arc/angular/callout policy. Its shared CAD pictures supply actual
+            // witnesses, drafting ticks and measured text without a new solver.
+            const auto& dimension = support_dimensions.at(id);
+            if (!scope.inactive_owner_ids.contains(id) && !annotation_has_inactive_owner(owner, scope) &&
+                !scope.inactive_owner_ids.contains(dimension.boundary_id) &&
+                (!dimension.presentation || dimension.presentation->visible)) {
+                const auto& frame = dimension_presentations.at(dimension.boundary_id);
+                // Site rendering authors both witnesses and text in the measured
+                // owner's basis. An explicit dimension frame must agree with it;
+                // the dimension's layer cannot introduce a second spatial basis.
+                if (owner.properties.contains("presentation_frame")) {
+                    const auto& declared = dimension_presentations.at(id);
+                    if (declared.source_frame != frame.source_frame ||
+                        declared.forward.rotation_radians != frame.forward.rotation_radians ||
+                        declared.forward.translation_m.x != frame.forward.translation_m.x ||
+                        declared.forward.translation_m.y != frame.forward.translation_m.y ||
+                        declared.forward.translation_m.z != frame.forward.translation_m.z)
+                        throw std::invalid_argument("V9 dimension presentation frame conflicts with measured owner: " + id);
+                }
+                if (graph.entities.at(dimension.boundary_id).extensions.contains("physical_wall_room"))
+                    admit_native_dxf_phase_physical_room_checks(graph.entities, &budget);
+                DxfProjectExportResult projected;
+                export_native_entity(*snapshot, owner, projected, scope);
+                for (const auto& item : projected.diagnostics)
+                    if (item.code != "dimension_area_exported_as_quantity_callout" && item.code != "dimension_chain_exported_as_total_callout")
+                        throw std::invalid_argument("V9 support dimension CAD projection unavailable: " + item.code);
+                block.lines = std::move(projected.drawing.lines); block.arcs = std::move(projected.drawing.arcs);
+                block.polylines = std::move(projected.drawing.polylines); block.labels = std::move(projected.drawing.labels);
+                block.circles = std::move(projected.drawing.circles);
+                for (const auto& value : projected.drawing.dimensions) append_picture(block, dxf_dimension_plan(value), value.layer);
+                for (const auto& value : projected.drawing.arc_dimensions) append_picture(block, dxf_dimension_plan(value), value.layer);
+                for (const auto& value : projected.drawing.angular_dimensions) append_picture(block, dxf_dimension_plan(value), value.layer);
+                // Quantity resolution and drafting happen locally. Place the
+                // complete picture once, preserving lengths, bulges and text size.
+                place_phase_picture(block, frame.forward, budget);
+                result.diagnostics.insert(result.diagnostics.end(), projected.diagnostics.begin(), projected.diagnostics.end());
+                diagnostic(result.diagnostics, id, owner.type, "dimension_cad_picture_native_semantics_retained");
+            }
+        }
+        // Constraints and hidden/inactive presentation owners intentionally
+        // authenticate an empty picture. Their raw source remains complete;
+        // this is not a current-geometry claim for an inactive target.
+        result.blocks.emplace(id, std::move(block)); result.contexts.emplace(id, std::move(context));
+        result.layers.emplace(id, layer);
+    }
+    return result;
+}
 
 PhasePlans phase_source_plans(const NativeDxfPhaseSourceGraph& graph,
     NativeDxfWallSourceWorkBudget& budget) {
@@ -2853,6 +3116,8 @@ PhasePlans phase_source_plans(const NativeDxfPhaseSourceGraph& graph,
     admit_physical_support_work(graph.entities, budget, 2, graph.depicted_body_ids.size(), 0, 2);
     const auto scope = constraint_phase_scope(graph.entities);
     const auto organization = organize_project(graph.entities);
+    admit_native_dxf_phase_owner_frame_work(graph.entities, graph.depicted_body_ids, &budget);
+    const auto presentations = resolve_site_presentations(graph.entities, graph.depicted_body_ids);
     auto active = graph.entities;
     for (const auto& id : graph.body_ids)
         if (!std::binary_search(graph.depicted_body_ids.begin(), graph.depicted_body_ids.end(), id)) active.erase(id);
@@ -2897,9 +3162,10 @@ PhasePlans phase_source_plans(const NativeDxfPhaseSourceGraph& graph,
         return graph.entities.at(id).extensions.contains("physical_wall_room");
     })) {
         admit_native_dxf_phase_physical_room_checks(graph.entities, &budget);
+        admit_native_dxf_phase_document_entities(graph.entities, &budget);
         std::vector<Entity> values;
         for (const auto& [id, owner] : graph.entities) { (void)id; values.push_back(owner); }
-        physical_checks = physical_wall_room_checks(Document::create(std::move(values)).snapshot());
+        physical_checks = physical_wall_room_checks(Document::create_phase_import(std::move(values)).snapshot());
     }
 #endif
     PhasePlans result;
@@ -2945,6 +3211,7 @@ PhasePlans phase_source_plans(const NativeDxfPhaseSourceGraph& graph,
             block = source_plan_block(active, owner, "", layer, diagnostics);
         }
         if (!diagnostics.empty()) throw std::invalid_argument("V9 active source plan unavailable");
+        place_phase_picture(block, presentations.at(id).forward, budget);
         result.blocks.emplace(id, std::move(block));
         result.contexts.emplace(id, phase_context_json(*context)); result.layers.emplace(id, std::move(layer));
     }
@@ -2975,11 +3242,12 @@ Json bounded_phase_carrier_json(std::string_view bytes, NativeDxfWallSourceWorkB
 }
 
 void export_phase_carrier(const NativeDxfPhaseSourceGraph& graph, DxfDrawing& drawing,
-    NativeDxfWallSourceWorkBudget& budget) {
+    NativeDxfWallSourceWorkBudget& budget, std::vector<DxfProjectDiagnostic>& diagnostics) {
     const auto encoded = encode_native_dxf_phase_source_graph(graph, &budget).dump(-1, ' ', true);
     // Charge actual encoded framing as well as raw source admission.
     (void)bounded_phase_carrier_json(encoded, budget);
     auto plans = phase_source_plans(graph, budget);
+    auto support = phase_support_plans(graph, budget);
     constexpr std::size_t chunk_bytes = 6000;
     const auto count = (encoded.size() + chunk_bytes - 1) / chunk_bytes;
     if (!count || count > 4096) throw std::invalid_argument("V9 graph chunk count limit");
@@ -3001,8 +3269,17 @@ void export_phase_carrier(const NativeDxfPhaseSourceGraph& graph, DxfDrawing& dr
         (void)bounded_phase_carrier_json(block.vertex_entity_json, budget, true);
         staged.inserts.push_back({block.name, {}, 1, 1, 0, plans.layers.at(id)}); staged.blocks.push_back(std::move(block));
     }
+    for (auto& [id, block] : support.blocks) {
+        block.name = "VERTEX_PHASE_SUPPORT_" + std::to_string(++ordinal);
+        block.vertex_entity_json = Json{{"version", 9}, {"depiction", kPhaseSupportPlan},
+            {"graph_id", kPhaseGraphIdentity}, {"id", id}, {"type", graph.entities.at(id).type},
+            {"source_context", support.contexts.at(id)}, {"cad_layer", support.layers.at(id)}}.dump(-1, ' ', true);
+        (void)bounded_phase_carrier_json(block.vertex_entity_json, budget, true);
+        staged.inserts.push_back({block.name, {}, 1, 1, 0, support.layers.at(id)}); staged.blocks.push_back(std::move(block));
+    }
     drawing.blocks.insert(drawing.blocks.end(), std::make_move_iterator(staged.blocks.begin()), std::make_move_iterator(staged.blocks.end()));
     drawing.inserts.insert(drawing.inserts.end(), std::make_move_iterator(staged.inserts.begin()), std::make_move_iterator(staged.inserts.end()));
+    diagnostics.insert(diagnostics.end(), support.diagnostics.begin(), support.diagnostics.end());
 }
 
 // Bindings to absent project scaffolding remain inert source evidence. Only
@@ -3095,7 +3372,8 @@ std::set<std::size_t> import_phase_carrier(const DxfDrawing& drawing, bool sourc
             auto payload = bounded_phase_carrier_json(block.vertex_entity_json, discovery_budget, true);
             const bool phase = payload.is_object() &&
                 ((payload.contains("version") && payload.at("version") == 9) ||
-                 (payload.contains("depiction") && (payload.at("depiction") == kPhaseGraphChunk || payload.at("depiction") == kPhaseBodyPlan)));
+                 (payload.contains("depiction") && (payload.at("depiction") == kPhaseGraphChunk || payload.at("depiction") == kPhaseBodyPlan ||
+                    payload.at("depiction") == kPhaseSupportPlan)));
             const auto name = block_identity(block.name);
             if (phase) phase_blocks.insert(name);
             if (!payloads.emplace(name, std::move(payload)).second) throw std::invalid_argument("duplicate native block identity");
@@ -3115,6 +3393,7 @@ std::set<std::size_t> import_phase_carrier(const DxfDrawing& drawing, bool sourc
     std::set<std::size_t> activated;
     std::map<std::size_t, std::string> chunks;
     std::map<std::string, const DxfBlock*, std::less<>> bodies;
+    std::map<std::string, const DxfBlock*, std::less<>> support;
     std::size_t chunk_count = 0, encoded_bytes = 0;
     for (const auto& block : drawing.blocks) {
         const auto name = block_identity(block.name);
@@ -3151,6 +3430,13 @@ std::set<std::size_t> import_phase_carrier(const DxfDrawing& drawing, bool sourc
             const auto id = payload.at("id").get<std::string>();
             if (id.empty() || id.size() > 255 || !bodies.emplace(id, &block).second)
                 throw std::invalid_argument("V9 duplicate/invalid depicted owner");
+        } else if (payload.at("depiction") == kPhaseSupportPlan) {
+            if (payload.size() != 7 || !payload.at("id").is_string() || !payload.at("type").is_string() ||
+                !payload.at("cad_layer").is_string() || !payload.at("source_context").is_object())
+                throw std::invalid_argument("V9 support carrier schema differs");
+            const auto id = payload.at("id").get<std::string>();
+            if (id.empty() || id.size() > 255 || !support.emplace(id, &block).second)
+                throw std::invalid_argument("V9 duplicate/invalid support depiction owner");
         } else throw std::invalid_argument("V9 unsupported carrier depiction");
     }
     if (!chunk_count || chunks.size() != chunk_count) throw std::invalid_argument("V9 source graph incomplete");
@@ -3158,7 +3444,7 @@ std::set<std::size_t> import_phase_carrier(const DxfDrawing& drawing, bool sourc
     for (std::size_t part = 0; part < chunk_count; ++part) encoded += chunks.at(part);
     auto value = bounded_phase_carrier_json(encoded, budget);
     const auto graph = decode_native_dxf_phase_source_graph(value, &budget);
-    if (graph.registry_ids.empty() || bodies.size() != graph.depicted_body_ids.size())
+    if (graph.registry_ids.empty() || bodies.size() != graph.depicted_body_ids.size() || support.size() != graph.support_ids.size())
         throw std::invalid_argument("V9 registry/depicted inventory differs");
     // Legacy and V9 owners have one source identity namespace, including failed
     // legacy declarations. A rejected competing body may not disappear and
@@ -3184,6 +3470,18 @@ std::set<std::size_t> import_phase_carrier(const DxfDrawing& drawing, bool sourc
             !same_block_geometry(block, plans.blocks.at(id), true))
             throw std::invalid_argument("V9 active CAD geometry/context parity differs");
     }
+    const auto support_plans = phase_support_plans(graph, budget);
+    for (const auto& id : graph.support_ids) {
+        const auto found = support.find(id);
+        if (found == support.end()) throw std::invalid_argument("V9 support CAD block missing");
+        const auto& block = *found->second; const auto name = block_identity(block.name);
+        const auto& payload = payloads.at(name); const auto& insert = drawing.inserts[uses.at(name).front()];
+        if (payload.at("type") != graph.entities.at(id).type || payload.at("source_context") != support_plans.contexts.at(id) ||
+            payload.at("cad_layer") != support_plans.layers.at(id) || insert.layer != support_plans.layers.at(id) ||
+            !same_block_geometry(block, support_plans.blocks.at(id), true, true))
+            throw std::invalid_argument("V9 support CAD geometry/placement parity differs");
+    }
+    result.diagnostics.insert(result.diagnostics.end(), support_plans.diagnostics.begin(), support_plans.diagnostics.end());
     result.phase_source_graph = std::move(value);
     return activated;
 }
@@ -5475,10 +5773,11 @@ DxfProjectExportResult export_project_dxf(const DocumentSnapshot& document,
             // inventory. Include unregistered supported bodies/catalogs too,
             // so a legacy proof cannot take ownership of shared source context.
             for (const auto& [id, owner] : document.entities())
-                if (owner.type == "model_phases" || (is_model_phase_entity_type(owner.type) && owner.type != "building" && owner.type != "floor"))
+                if (owner.type == "model_phases" || native_dxf_annotation_source_type(owner.type) || native_dxf_constraint_source_type(owner.type) ||
+                    (is_model_phase_entity_type(owner.type) && owner.type != "building" && owner.type != "floor"))
                     seeds.push_back(id);
             const auto graph = capture_native_dxf_phase_source_graph(document, seeds, &wall_source_budget);
-            export_phase_carrier(graph, result.drawing, wall_source_budget);
+            export_phase_carrier(graph, result.drawing, wall_source_budget, result.diagnostics);
             for (const auto& [id, owner] : graph.entities) { (void)owner; phase_owned.insert(id); }
         } catch (const std::exception& error) {
             // Complete phase retention is atomic. Never emit an active-only

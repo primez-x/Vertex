@@ -651,6 +651,19 @@ private:
 };
 } // namespace
 
+DxfBlock dxf_dimension_plan(const DxfDimension& dimension, const DxfExchangeLimits& limits) {
+    validate_limits(limits);
+    return dimension_picture(dimension, limits);
+}
+DxfBlock dxf_dimension_plan(const DxfArcDimension& dimension, const DxfExchangeLimits& limits) {
+    validate_limits(limits);
+    return dimension_picture(dimension, limits);
+}
+DxfBlock dxf_dimension_plan(const DxfAngularDimension& dimension, const DxfExchangeLimits& limits) {
+    validate_limits(limits);
+    return dimension_picture(dimension, limits);
+}
+
 DxfImportResult parse_dxf_ascii(std::string_view bytes, const DxfExchangeLimits& l) {
     validate_limits(l); require(!bytes.empty() && bytes.size() <= l.max_bytes);
     std::vector<Pair> pairs;

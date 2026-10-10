@@ -71,6 +71,10 @@ struct Budget {
         reserve(values.size()*32);for (const auto& value:values) read(value);
     }
     void read(const Entity& value) {text(value.id);text(value.type);read(value.properties);read(value.extensions);}
+    void read(const PhaseEntityImportProof& value) {
+        reserve(256);text(value.message);sequence(value.registry_ids);sequence(value.entity_ids);sequence(value.asset_ids);
+        sequence(value.reviewed_existing_hierarchy_ids);
+    }
     void read(const Asset& value) {
         text(value.id);text(value.media_type);text(value.sha256);read(value.metadata);
         if (value.bytes.size()>(limit-bytes)/2) invalid("asset hex expansion budget exceeded");
@@ -180,6 +184,7 @@ void snapshot_bound(const DocumentSnapshot& source) {
         budget.reserve(32*(row.undo_stack.size()+row.redo_stack.size()));
         budget.optional(row.boundary_translation);budget.optional(row.boundary_transform);budget.optional(row.boundary_geometry_edit);
         budget.optional(row.boundary_constraint_changes);budget.optional(row.boundary_translations);budget.optional(row.boundary_transforms);
+        budget.optional(row.phase_entity_import);
     }
     if (source.named_revisions().size()>4096) invalid("named revision budget exceeded");
     for (const auto& [name,revision]:source.named_revisions()) {

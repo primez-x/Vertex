@@ -91,6 +91,34 @@ struct ApplyEntityChanges {
     std::string message;
 };
 
+// Complete design-set source admission. This cannot erase or replace existing
+// payloads. Explicit reviewed enrollment is limited to unchanged buildings and
+// floors currently unowned by any registry; all physical owners remain fresh.
+// Saved registry choices govern constraints only after complete validation.
+struct ImportPhaseEntities {
+    Revision expected_revision = 0;
+    std::vector<EntityChange> entity_changes;
+    std::vector<AssetChange> asset_changes;
+    std::string message;
+    std::vector<std::string> registry_ids;
+    std::vector<std::string> reviewed_existing_hierarchy_ids;
+};
+
+// Imported payloads already reside in the retained state. The compact proof
+// names their exact additions and reviewed hierarchy enrollment, so replay
+// checks source preservation and fresh lifetime without duplicating asset bytes.
+struct PhaseEntityImportProof {
+    Revision expected_revision = 0;
+    std::string message;
+    std::vector<std::string> registry_ids;
+    std::vector<std::string> entity_ids;
+    std::vector<std::string> asset_ids;
+    std::vector<std::string> reviewed_existing_hierarchy_ids;
+};
+
+[[nodiscard]] nlohmann::json phase_entity_import_proof_to_json(const PhaseEntityImportProof& proof);
+[[nodiscard]] PhaseEntityImportProof phase_entity_import_proof_from_json(const nlohmann::json& value);
+
 struct NameRevision {
     Revision expected_revision = 0;
     std::string name;
@@ -438,7 +466,7 @@ struct ApplyBoundaryConstraintChanges {
     bool independent_drawing_removal_completion{};
 };
 
-using Command = std::variant<ApplyEntityChanges, NameRevision, TranslateBoundary,
+using Command = std::variant<ApplyEntityChanges, ImportPhaseEntities, NameRevision, TranslateBoundary,
                              TransformBoundary, EditBoundaryGeometry, ApplyBoundaryConstraintChanges,
                              TranslateBoundaries, TransformBoundaries>;
 
@@ -490,6 +518,7 @@ struct RevisionRecord {
     std::optional<ApplyBoundaryConstraintChanges> boundary_constraint_changes;
     std::optional<TranslateBoundaries> boundary_translations;
     std::optional<TransformBoundaries> boundary_transforms;
+    std::optional<PhaseEntityImportProof> phase_entity_import;
 };
 
 namespace test { class DetachedDocumentSnapshotFixture; }
@@ -569,6 +598,11 @@ public:
     static Document create();
     static Document create(std::vector<Entity> initial_entities,
                            std::vector<Asset> initial_assets = {});
+    // Independent fresh source state, admitted through the same typed import
+    // as live publication. Revision zero stays an empty legacy create; the
+    // retained revision-one import establishes the durable active-phase policy.
+    static Document create_phase_import(std::vector<Entity> initial_entities,
+                                        std::vector<Asset> initial_assets = {});
 
     Document(Document&&) noexcept = default;
     Document& operator=(Document&&) noexcept = default;

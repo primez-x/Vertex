@@ -131,6 +131,16 @@ struct DxfExchangeLimits {
     std::size_t max_string_bytes{255};
 };
 
+// The same dimension witnesses, ticks, arcs and quantity text used by ASCII
+// export, without creating an anonymous block or serializing a second drawing.
+// Callers retain the authoritative dimension separately from this CAD picture.
+[[nodiscard]] DxfBlock dxf_dimension_plan(const DxfDimension& dimension,
+    const DxfExchangeLimits& limits = {});
+[[nodiscard]] DxfBlock dxf_dimension_plan(const DxfArcDimension& dimension,
+    const DxfExchangeLimits& limits = {});
+[[nodiscard]] DxfBlock dxf_dimension_plan(const DxfAngularDimension& dimension,
+    const DxfExchangeLimits& limits = {});
+
 // Strict AC1027 ASCII subset. Malformed data/limits throw std::invalid_argument.
 // Unsupported entities/features are omitted with stable diagnostics, never executed.
 [[nodiscard]] DxfImportResult parse_dxf_ascii(
