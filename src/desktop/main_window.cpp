@@ -218,6 +218,7 @@
 #include <QRegularExpression>
 #include <QPainter>
 #include <QPainterPath>
+#include <QPainterStateGuard>
 #include <QPdfDocument>
 #include <QPdfWriter>
 #include <QPrintDialog>
@@ -3292,7 +3293,7 @@ bool render_sheet_schedule(QPainter& painter, const QRectF& bounds, double paper
         return result;
     };
 
-    painter.save();
+    QPainterStateGuard schedule_state(&painter);
     painter.setClipRect(bounds);
     painter.fillRect(bounds, Qt::white);
     const auto font = sheet_text_font(8.0, paper_scale);
@@ -3340,7 +3341,6 @@ bool render_sheet_schedule(QPainter& painter, const QRectF& bounds, double paper
         const auto shown = notice(QStringLiteral("%1 columns need at least %2 mm width - widen schedule")
             .arg(static_cast<qulonglong>(column_count))
             .arg(minimum_width * static_cast<double>(column_count) / paper_scale, 0, 'f', 1));
-        painter.restore();
         return shown;
     }
     std::vector<double> preferred(column_count, minimum_width);
@@ -3396,12 +3396,10 @@ bool render_sheet_schedule(QPainter& painter, const QRectF& bounds, double paper
         }
         if (body_top + footer_height > bounds.bottom()) {
             const auto shown = notice(overflow_message(rows.size()));
-            painter.restore();
             return shown;
         }
     } else if (rows.empty() && body_top + metrics.height() + 2.0 * padding > bounds.bottom()) {
         const auto shown = notice(QStringLiteral("No rows"));
-        painter.restore();
         return shown;
     }
     const auto draw_cells = [&](double top, double height, const QStringList& texts, bool header) {
@@ -3443,7 +3441,6 @@ bool render_sheet_schedule(QPainter& painter, const QRectF& bounds, double paper
     }
     painter.setPen(border);
     painter.drawRect(bounds);
-    painter.restore();
     return true;
 }
 
@@ -15835,10 +15832,12 @@ public:
             const auto& views = record->model.views();
             constexpr double margin = 10.0;
             constexpr double gap = 5.0;
+            constexpr double title_band = 26.0;
             const auto columns = std::min<std::size_t>(2, std::max<std::size_t>(1, views.size()));
             const auto rows = views.empty() ? 0U : (views.size() + columns - 1) / columns;
             const auto usable_width = width - margin * 2.0 - gap * static_cast<double>(columns - 1);
-            const auto usable_height = height - margin * 2.0 - gap * static_cast<double>(rows > 0 ? rows - 1 : 0);
+            const auto usable_height = height - margin * 2.0 - title_band -
+                                       gap * static_cast<double>(rows > 0 ? rows - 1 : 0);
             const auto cell_width = columns > 0 ? usable_width / static_cast<double>(columns) : 0.0;
             const auto cell_height = rows > 0 ? usable_height / static_cast<double>(rows) : 0.0;
             if (cell_width > 0.0 && cell_height > 0.0) {
@@ -36000,7 +35999,7 @@ public:
             const QRectF page(target.center().x() - sheet.width_mm * paper_scale * 0.5,
                               target.center().y() - sheet.height_mm * paper_scale * 0.5,
                               sheet.width_mm * paper_scale, sheet.height_mm * paper_scale);
-            painter.save();
+            QPainterStateGuard sheet_state(&painter);
             painter.fillRect(target, background);
             painter.fillRect(page, Qt::white);
             painter.setPen(QPen(QColor(45, 52, 60), std::max(1.0, paper_scale)));
@@ -36034,7 +36033,7 @@ public:
                     page.top() + viewport.bounds.y_mm * paper_scale,
                     viewport.bounds.width_mm * paper_scale,
                     viewport.bounds.height_mm * paper_scale);
-                painter.save();
+                QPainterStateGuard viewport_state(&painter);
                 painter.setClipRect(viewport_rect);
                 auto output_denominator=viewport.scale_denominator;
                 auto model_scale = paper_scale * 1000.0 / output_denominator;
@@ -36084,7 +36083,7 @@ public:
                 }
                 viewport_canvas->renderSceneAt(painter, content_rect, model_scale,
                                                viewport_center, Qt::white, paper_scale);
-                painter.restore();
+                viewport_state.restore();
                 painter.setPen(QPen(QColor(115, 125, 138), std::max(1.0, paper_scale * 0.6)));
                 painter.drawRect(viewport_rect);
                 const auto view_caption = QString::fromStdString(view->name).trimmed().isEmpty()
@@ -36135,13 +36134,19 @@ public:
                     }
                 }
                 if(kind==ScheduleRowKind::appraisal) {
-                    render_appraisal_summary_schedule(painter,schedule_rect,paper_scale,rows,m_metric_units);
+                    QString capacity_error;
+                    if (!render_appraisal_summary_schedule(painter, schedule_rect, paper_scale,
+                                                          rows, m_metric_units, &capacity_error)) {
+                        setError(QStringLiteral("Sheet output blocked: appraisal schedule %1 on sheet %2: %3")
+                            .arg(QString::fromStdString(placement.id),
+                                 QString::fromStdString(sheet.number), capacity_error));
+                        return false;
+                    }
                     continue;
                 }
                 QString capacity_error;
                 if (!render_sheet_schedule(painter, schedule_rect, paper_scale, heading, rows,
                                            capacity_error)) {
-                    painter.restore();
                     setError(QStringLiteral("Sheet output blocked: schedule %1 on sheet %2: %3")
                         .arg(QString::fromStdString(placement.id),
                              QString::fromStdString(sheet.number), capacity_error));
@@ -36167,7 +36172,7 @@ public:
                 const auto text = (label.isEmpty() ? target_ref
                                                    : label + QStringLiteral("  →  ") + target_ref);
                 const auto radius = std::max(5.0, 7.0 * paper_scale);
-                painter.save();
+                QPainterStateGuard callout_state(&painter);
                 painter.setPen(QPen(QColor(27, 103, 153), std::max(1.0, paper_scale * 0.7)));
                 painter.setBrush(QColor(224, 242, 254));
                 painter.drawEllipse(anchor, radius, radius);
@@ -36178,29 +36183,117 @@ public:
                                        std::max(40.0, 170.0 * paper_scale),
                                        2.0 * radius),
                                  Qt::AlignLeft | Qt::AlignVCenter, text);
-                painter.restore();
             }
 
-            const auto title_height = std::max(24.0, 26.0 * paper_scale);
             // A4 portrait is narrower than the large-sheet title block.
             // Keep both the title and revision table inside the actual page.
             const auto title_width = std::min(220.0 * paper_scale, page.width());
+            const auto ensure_footer_clear = [&](const QRectF& footer, const QString& name) {
+                const auto check = [&](const QRectF& placement, const QString& kind,
+                                       const std::string& id) {
+                    // Ignore sub-micron paper-space rounding at touching borders.
+                    // Preserve the complete saved placement envelope; do not
+                    // silently crop it to make a footer fit.
+                    const auto overlap = footer.intersected(placement);
+                    const auto tolerance = 1e-7 * paper_scale;
+                    if (overlap.width() > tolerance && overlap.height() > tolerance)
+                        throw std::invalid_argument((QStringLiteral(
+                            "Sheet %1: %2 overlaps %3 %4. Move or resize the placement "
+                            "in Sheet layout, or increase the sheet size.")
+                            .arg(QString::fromStdString(sheet.number), name, kind,
+                                 QString::fromStdString(id))).toStdString());
+                };
+                const auto rect = [&](const SheetRect& bounds) {
+                    return QRectF(page.left() + bounds.x_mm * paper_scale,
+                                  page.top() + bounds.y_mm * paper_scale,
+                                  bounds.width_mm * paper_scale, bounds.height_mm * paper_scale);
+                };
+                for (const auto& viewport : sheet.viewports) {
+                    const auto* view = find_view(viewport.view_id);
+                    if (view && view->presentation.appearance &&
+                        !view->presentation.appearance->visible) continue;
+                    check(rect(viewport.bounds), QStringLiteral("viewport"), viewport.id);
+                }
+                for (const auto& placement : sheet.schedules)
+                    check(rect(placement.bounds), QStringLiteral("schedule placement"), placement.id);
+                for (const auto& callout : sheet.callouts) {
+                    const QPointF anchor(page.left() + callout.x_mm * paper_scale,
+                                         page.top() + callout.y_mm * paper_scale);
+                    const auto radius = std::max(5.0, 7.0 * paper_scale);
+                    const QRectF marker(anchor.x() - radius, anchor.y() - radius,
+                                        2.0 * radius, 2.0 * radius);
+                    const QRectF label(anchor.x() + radius + 3.0 * paper_scale,
+                                       anchor.y() - radius, std::max(40.0, 170.0 * paper_scale),
+                                       2.0 * radius);
+                    check(marker.united(label), QStringLiteral("callout"), callout.id);
+                }
+            };
+            const int wrap_flags = Qt::AlignLeft | Qt::AlignVCenter |
+                                   Qt::TextWordWrap | Qt::TextWrapAnywhere;
+            const auto& title = sheet.title_block;
+            const auto title_text = QStringLiteral("%1  %2\n%3  %4  %5")
+                .arg(QString::fromStdString(sheet.number),
+                     QString::fromStdString(title.title),
+                     QString::fromStdString(title.project),
+                     QString::fromStdString(title.author),
+                     QString::fromStdString(title.issue_date));
+            const auto title_font = sheet_text_font(9.0, paper_scale);
+            const QFontMetricsF title_metrics(title_font, painter.device());
+            const auto title_text_width = title_width - 16.0 * paper_scale;
+            if (title_text_width < title_metrics.maxWidth())
+                throw std::invalid_argument("sheet title block is too narrow; increase the sheet width");
+            const auto title_measured = title_metrics.boundingRect(
+                QRectF(0, 0, title_text_width, 1e9), wrap_flags, title_text);
+            const auto title_height = std::max(26.0 * paper_scale,
+                std::max(title_metrics.height(), title_measured.height()) + 8.0 * paper_scale);
+            if (title_measured.width() > title_text_width || title_height > page.height())
+                throw std::invalid_argument("complete title block does not fit; increase the sheet size");
+            const QRectF title_rect(page.right() - title_width,
+                                    page.bottom() - title_height, title_width, title_height);
+            ensure_footer_clear(title_rect, QStringLiteral("title block"));
             if (!sheet.revisions.empty()) {
-                const auto header_height = std::max(12.0, 15.0 * paper_scale);
-                const auto row_height = std::max(10.0, 13.0 * paper_scale);
+                const auto revision_font = sheet_text_font(7.5, paper_scale);
+                const QFontMetricsF revision_metrics(revision_font, painter.device());
+                const auto revision_text_width = title_width - 8.0 * paper_scale;
+                if (revision_text_width < revision_metrics.maxWidth())
+                    throw std::invalid_argument("sheet revision table is too narrow; increase the sheet width");
+                const auto revision_heading = QStringLiteral("REV   DATE   DESCRIPTION");
+                const auto measured_height = [&](const QString& text) {
+                    const auto measured = revision_metrics.boundingRect(
+                        QRectF(0, 0, revision_text_width, 1e9), wrap_flags, text);
+                    if (measured.width() > revision_text_width)
+                        throw std::invalid_argument("complete revision text does not fit; increase the sheet width");
+                    return std::max(revision_metrics.height(), measured.height()) + 2.0 * paper_scale;
+                };
+                const auto header_height = std::max(15.0 * paper_scale, measured_height(revision_heading));
+                struct RevisionRow { QString text; double height; };
+                std::vector<RevisionRow> revision_rows;
+                double revision_height = header_height;
+                for (const auto& revision : sheet.revisions) {
+                    auto text = QStringLiteral("%1  %2  %3")
+                        .arg(QString::fromStdString(revision.id),
+                             QString::fromStdString(revision.date),
+                             QString::fromStdString(revision.description));
+                    const auto height = std::max(13.0 * paper_scale, measured_height(text));
+                    revision_height += height;
+                    revision_rows.push_back({std::move(text), height});
+                }
                 const auto available_height = std::max(0.0,
                     page.height() - title_height - 8.0 * paper_scale);
-                const auto max_rows = std::min<std::size_t>(sheet.revisions.size(),
-                    static_cast<std::size_t>(std::floor(
-                        std::max(0.0, available_height - header_height) / row_height)));
-                if (max_rows > 0) {
+                if (revision_height > available_height)
+                    throw std::invalid_argument((QStringLiteral(
+                        "Sheet %1: all %2 revisions require %3 mm above the title block; "
+                        "increase the sheet height. No revisions were omitted.")
+                        .arg(QString::fromStdString(sheet.number))
+                        .arg(static_cast<qulonglong>(revision_rows.size()))
+                        .arg(revision_height / paper_scale, 0, 'f', 1)).toStdString());
+                {
                     const QRectF revision_rect(
                         page.right() - title_width,
-                        page.bottom() - title_height - header_height -
-                            static_cast<double>(max_rows) * row_height,
-                        title_width,
-                        header_height + static_cast<double>(max_rows) * row_height);
-                    painter.save();
+                        page.bottom() - title_height - revision_height,
+                        title_width, revision_height);
+                    ensure_footer_clear(revision_rect, QStringLiteral("revision history"));
+                    QPainterStateGuard revision_state(&painter);
                     painter.fillRect(revision_rect, Qt::white);
                     painter.setPen(QPen(QColor(45, 52, 60), std::max(1.0, paper_scale * 0.6)));
                     painter.drawRect(revision_rect);
@@ -36208,51 +36301,33 @@ public:
                                             revision_rect.width(), header_height),
                                      QColor(229, 235, 241));
                     painter.setPen(QColor(35, 41, 48));
-                    painter.setFont(sheet_text_font(7.5, paper_scale));
-                    painter.drawText(revision_rect.adjusted(4.0 * paper_scale, 0.0,
-                                                            -4.0 * paper_scale,
-                                                            -static_cast<double>(max_rows) * row_height),
-                                     Qt::AlignLeft | Qt::AlignVCenter,
-                                     QStringLiteral("REV   DATE   DESCRIPTION"));
-                    for (std::size_t index = 0; index < max_rows; ++index) {
-                        const auto& revision = sheet.revisions[index];
+                    painter.setFont(revision_font);
+                    painter.drawText(QRectF(revision_rect.left() + 4.0 * paper_scale,
+                                           revision_rect.top() + paper_scale,
+                                           revision_text_width, header_height - 2.0 * paper_scale),
+                                     wrap_flags, revision_heading);
+                    auto row_top = revision_rect.top() + header_height;
+                    for (const auto& revision : revision_rows) {
                         const QRectF row_rect(revision_rect.left(),
-                                              revision_rect.top() + header_height +
-                                                  static_cast<double>(index) * row_height,
-                                              revision_rect.width(), row_height);
+                                              row_top, revision_rect.width(), revision.height);
                         painter.setPen(QPen(QColor(196, 203, 211),
                                             std::max(1.0, paper_scale * 0.35)));
                         painter.drawLine(row_rect.bottomLeft(), row_rect.bottomRight());
                         painter.setPen(QColor(50, 57, 65));
-                        const auto row_text = QStringLiteral("%1  %2  %3")
-                            .arg(QString::fromStdString(revision.id),
-                                 QString::fromStdString(revision.date),
-                                 QString::fromStdString(revision.description));
-                        painter.drawText(row_rect.adjusted(4.0 * paper_scale, 0.0,
-                                                           -4.0 * paper_scale, 0.0),
-                                         Qt::AlignLeft | Qt::AlignVCenter, row_text);
+                        painter.drawText(row_rect.adjusted(4.0 * paper_scale, paper_scale,
+                                                           -4.0 * paper_scale, -paper_scale),
+                                         wrap_flags, revision.text);
+                        row_top += revision.height;
                     }
-                    painter.restore();
                 }
             }
-            const QRectF title_rect(page.right() - title_width,
-                                    page.bottom() - title_height,
-                                    title_width, title_height);
             painter.setPen(QPen(QColor(45, 52, 60), std::max(1.0, paper_scale * 0.6)));
             painter.drawRect(title_rect);
             painter.setPen(QColor(35, 41, 48));
-            painter.setFont(sheet_text_font(9.0, paper_scale));
-            const auto& title = sheet.title_block;
+            painter.setFont(title_font);
             painter.drawText(title_rect.adjusted(8.0 * paper_scale, 4.0 * paper_scale,
                                                  -8.0 * paper_scale, -4.0 * paper_scale),
-                             Qt::AlignLeft | Qt::AlignVCenter,
-                             QStringLiteral("%1  %2\n%3  %4  %5")
-                                 .arg(QString::fromStdString(sheet.number),
-                                      QString::fromStdString(title.title),
-                                      QString::fromStdString(title.project),
-                                      QString::fromStdString(title.author),
-                                      QString::fromStdString(title.issue_date)));
-            painter.restore();
+                             wrap_flags, title_text);
             return true;
         } catch (const std::exception& error) {
             setError(QStringLiteral("Sheet output blocked: %1").arg(QString::fromUtf8(error.what())));

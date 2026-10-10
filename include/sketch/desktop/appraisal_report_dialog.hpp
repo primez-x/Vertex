@@ -44,8 +44,10 @@ private:
     const AppraisalDocumentReport& report, bool metric, bool compact = false);
 
 // Readable bounded summary placement; overflow points to the complete report.
-void render_appraisal_summary_schedule(QPainter& painter,const QRectF& bounds,
-    double pixels_per_mm,const std::vector<const ScheduleRow*>& rows,bool metric);
+// Refuses output when the complete capacity/empty notice cannot fit.
+bool render_appraisal_summary_schedule(QPainter& painter,const QRectF& bounds,
+    double pixels_per_mm,const std::vector<const ScheduleRow*>& rows,bool metric,
+    QString* error = nullptr);
 
 // All displayed and exported rows belong to one immutable document revision.
 [[nodiscard]] QString appraisal_report_html(const DocumentSnapshot& source,

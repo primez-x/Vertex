@@ -24,6 +24,7 @@
 #include <QKeySequence>
 #include <QMouseEvent>
 #include <QPainter>
+#include <QPainterStateGuard>
 #include <QPainterPath>
 #include <QPair>
 #include <QSvgRenderer>
@@ -1671,7 +1672,7 @@ void PlanCanvas::renderSceneWithTransform(QPainter& painter, const QRectF& viewp
             scale = std::clamp(scale, output_minimum_scale, maximum_scale);
         }
     }
-    painter.save();
+    QPainterStateGuard scene_state(&painter);
     painter.setRenderHint(QPainter::Antialiasing, true);
     if (!content_only && !floor_ghost) painter.fillRect(viewport, background);
     const auto canvas_transform = painter.worldTransform();
@@ -1720,13 +1721,13 @@ void PlanCanvas::renderSceneWithTransform(QPainter& painter, const QRectF& viewp
         // Trace over raster underlays but beneath active ink and furniture.
         // Preserve the caller's transform/clip rather than resetting to device
         // coordinates. Only paintEvent opts into this nonprinting lane.
-        painter.save();
+        QPainterStateGuard ghost_state(&painter);
         painter.setWorldTransform(canvas_transform);
         painter.setOpacity(painter.opacity() * m_floor_ghost_opacity);
         renderSceneWithTransform(painter, viewport, false, background,
                                  std::nullopt, std::nullopt, paper_pixels_per_mm,
                                  false, SceneLayer::floor_ghost);
-        painter.restore();
+        ghost_state.restore();
     }
 
     if (m_grid_enabled && interactive) {
@@ -1849,14 +1850,14 @@ void PlanCanvas::renderSceneWithTransform(QPainter& painter, const QRectF& viewp
             }
             drawEntity(painter, preview, output, background, paper_pixels_per_mm);
         } else if (!output && m_move_preview_delta && !m_move_preview_exact && m_move_ids.contains(entity.id)) {
-            painter.save();
+            QPainterStateGuard preview_state(&painter);
             painter.translate(m_move_preview_delta->x, m_move_preview_delta->y);
             drawEntity(painter, entity, output, background, paper_pixels_per_mm,
                        painted_entity.geometry);
-            painter.restore();
+            preview_state.restore();
         } else if (!output && entity.selected && m_transform_frame_start && !m_transform_preview_exact &&
                    m_left_gesture == LeftGesture::selection_axis_resize) {
-            painter.save();
+            QPainterStateGuard preview_state(&painter);
             painter.translate(m_axis_anchor.x, m_axis_anchor.y);
             painter.rotate(m_axis_rotation * 180.0 / pi);
             painter.scale(m_axis_scale_x_preview, m_axis_scale_y_preview);
@@ -1864,20 +1865,20 @@ void PlanCanvas::renderSceneWithTransform(QPainter& painter, const QRectF& viewp
             painter.translate(-m_axis_anchor.x, -m_axis_anchor.y);
             drawEntity(painter, entity, output, background, paper_pixels_per_mm,
                        painted_entity.geometry);
-            painter.restore();
+            preview_state.restore();
         } else if (!output && entity.selected && m_transform_frame_start && !m_transform_preview_exact &&
                    (m_left_gesture == LeftGesture::selection_resize ||
                     m_left_gesture == LeftGesture::selection_rotate)) {
             const Vec2 center{view_center.x + (m_transform_center.x() - viewport.center().x()) / scale,
                               view_center.y - (m_transform_center.y() - viewport.center().y()) / scale};
-            painter.save();
+            QPainterStateGuard preview_state(&painter);
             painter.translate(center.x, center.y);
             painter.rotate(m_transform_rotation_preview * 180.0 / pi);
             painter.scale(m_transform_scale_preview, m_transform_scale_preview);
             painter.translate(-center.x, -center.y);
             drawEntity(painter, entity, output, background, paper_pixels_per_mm,
                        painted_entity.geometry);
-            painter.restore();
+            preview_state.restore();
         } else {
             // Resolve every exact and local preview branch before consulting
             // committed bounds. Culling affects presentation alone.
@@ -1893,11 +1894,11 @@ void PlanCanvas::renderSceneWithTransform(QPainter& painter, const QRectF& viewp
         const auto& placement_preview = m_symbol_drag_active
             ? m_symbol_drag_preview : m_component_placement_preview;
         if (placement_preview) {
-            painter.save();
+            QPainterStateGuard placement_state(&painter);
             painter.setOpacity(painter.opacity() * 0.6);
             drawEntity(painter, *placement_preview, false, background,
                        paper_pixels_per_mm);
-            painter.restore();
+            placement_state.restore();
         }
         if (m_boundary_preview.size() >= 2) {
             QPen pen(QColor(255, 220, 126), 0.0, Qt::DashLine);
@@ -2025,7 +2026,7 @@ void PlanCanvas::renderSceneWithTransform(QPainter& painter, const QRectF& viewp
             draw_marker(draft.pen_position, QColor(103, 202, 255));
         }
     }
-    painter.restore();
+    scene_state.restore();
 
     if (interactive && m_wall_preview && !m_wall_preview->dimension_text.isEmpty()) {
         const auto center = QPointF(
@@ -8846,7 +8847,7 @@ void PlanCanvas::drawEntity(QPainter& painter, const CanvasEntity& entity, bool 
         if (renderer && renderer->isValid() && footprint.width() > 0.0 &&
             footprint.height() > 0.0 && symbol.width_metres > 0.0 &&
             symbol.depth_metres > 0.0) {
-            painter.save();
+            QPainterStateGuard svg_state(&painter);
             painter.translate(symbol.position.x, symbol.position.y);
             painter.rotate(symbol.rotation_radians * 180.0 / pi);
             // SVG coordinates grow downward. Mirror the local Y axis so the
@@ -8856,7 +8857,7 @@ void PlanCanvas::drawEntity(QPainter& painter, const CanvasEntity& entity, bool 
                           (symbol.flip_vertical ? 1.0 : -1.0) * symbol.depth_metres / footprint.height());
             painter.translate(-footprint.center());
             renderer->render(&painter, symbol.view_box);
-            painter.restore();
+            svg_state.restore();
             if (!entity.dashed_stroke) return;
             // A derived comparison mark outlines the actual retained
             // footprint without replacing or tinting the pinned artwork.

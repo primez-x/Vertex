@@ -14,6 +14,47 @@ changed source does not acquire runtime acceptance without later qualification.
 
 ## Current delivery state
 
+### October 9 coordinated output capacity and failure-state correction
+
+Source inspection found that a positive but very narrow or short appraisal
+summary placement could hide all values or its omitted-row notice and still
+report success. The dedicated renderer now measures complete rows and actual
+wrapped notices, retains existing qualification and unit rules, and refuses
+unreadable output through the shared sheet caller.
+
+Title blocks and complete revision histories now use measured wrapped text.
+The old revision table printed only an early prefix without indicating that
+later revisions were missing. The corrected source retains every stored row
+in order or refuses output with an instruction to increase the sheet size.
+Measured footers also refuse positive-area overlap with visible viewport,
+schedule and callout envelopes, naming the placement to adjust in Sheet layout.
+Touching borders pass; blank viewport corners are conservatively protected.
+New sheet viewport grids reserve the normal 26 mm title band. Existing saved
+placements are not silently repositioned or cropped.
+
+The sheet, viewport, schedule, callout and revision rendering scopes now use
+the pinned Qt 6.11.2 painter-state guard. Early dimension refusals and exceptions
+restore the states established by these scopes. Previously, manual restores
+were skipped on several failure paths. No project format changes are needed.
+The canvas scene, output-reachable nested entity/ghost previews and SVG render
+transform now use matching scoped guards, so an SVG rejection unwinds those
+states before the sheet guard. Successful restores retain their original
+positions before upright labels and overlays.
+
+Root integration review and independent source review approved the corrected
+batch. Scoped `git diff --check` passed. No builds, tests, probes, scripts,
+native jobs, launches, packages or installations ran. Compilation and actual
+rendered output remain unverified; the installed candidate is unchanged.
+Production acceptance remains open.
+
+The bounded schedule-export audit found no separate CSV route; no explicit CSV
+schedule deliverable was found in the approved scope. Required schedules in
+sheet output remain the current delivery contract. The portable project-package
+audit confirmed its documented stable, saved database precondition: metadata
+and asset closure are derived from the copied database. Concurrent writes and
+uncheckpointed WAL are still an explicit qualification boundary; this audit did
+not establish a transactional live-database snapshot or runtime acceptance.
+
 ### October 9 complete coordinated schedule-field source implementation
 
 Ordinary coordinated-sheet schedules now render the full live projected schema

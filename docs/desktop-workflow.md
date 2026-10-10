@@ -910,6 +910,18 @@ stops with the sheet and placement identity and an instruction to enlarge the
 schedule. The shared selected-sheet and drawing-set output paths use this same
 layout.
 
+The title block and revision history wrap long text using measured paper-size
+typography. Every saved revision prints in its stored order. If the complete
+history or title block cannot fit, output stops with an instruction to increase
+the sheet size instead of silently dropping entries or clipping their text.
+If the measured footer intersects a visible viewport, schedule or callout
+envelope, output identifies the placement to move or resize in **Sheet layout**.
+Touching borders are permitted. The check conservatively uses the complete
+placement envelope, including blank space inside a viewport; saved content is
+never cropped or repositioned automatically. New sheets reserve the normal
+26 mm title band when placing their initial viewport grid. Longer titles or
+revision histories may require additional layout space.
+
 The registered **Appraisal area summary** schedule is read-only and recalculates
 from stored appraisal declarations, deductions and measurement-boundary geometry
 for the current document revision. Add it from **Sheet layout...** like any other
@@ -920,6 +932,11 @@ sheet says that automatic totals are withheld and prints no area values. Hiding
 objects with workspace presentation filters cannot alter this report; an active
 design phase can, because it changes the semantic project state used for the
 calculation.
+
+The appraisal summary also measures complete rows and its actual wrapped
+omitted-row notice. A small placement can point to the complete report only
+when that notice is readable. If the header, empty-workflow status or capacity
+notice cannot fit, output stops and identifies the sheet and placement to enlarge.
 
 The executable supports:
 

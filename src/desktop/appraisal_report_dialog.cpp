@@ -18,6 +18,7 @@
 #include <QLabel>
 #include <QPageLayout>
 #include <QPainter>
+#include <QPainterStateGuard>
 #include <QPdfWriter>
 #include <QPushButton>
 #include <QSaveFile>
@@ -37,6 +38,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <limits>
 #include <map>
 #include <stdexcept>
 #include <utility>
@@ -447,35 +449,124 @@ QString appraisal_schedule_area_text(const ScheduleRow& row, bool metric) {
     return displayed;
 }
 
-void render_appraisal_summary_schedule(QPainter& painter,const QRectF& bounds,
-    double pixels_per_mm,const std::vector<const ScheduleRow*>& rows,bool metric) {
-    if(!(pixels_per_mm>0) || bounds.width()<=0 || bounds.height()<=0)return;
-    painter.save();painter.setClipRect(bounds);painter.fillRect(bounds,Qt::white);
-    const auto padding=3*pixels_per_mm;const auto header=9*pixels_per_mm;
-    auto font=report_font(8);font.setPixelSize(std::max(1,static_cast<int>(std::lround(8*25.4/72*pixels_per_mm))));painter.setFont(font);
-    painter.fillRect(QRectF(bounds.left(),bounds.top(),bounds.width(),header),QColor(237,241,245));
-    painter.setPen(QColor(23,33,43));painter.drawText(QRectF(bounds.left()+padding,bounds.top(),bounds.width()-2*padding,header),Qt::AlignLeft|Qt::AlignVCenter,QStringLiteral("APPRAISAL AREA SUMMARY"));
-    const QFontMetricsF metrics(font,painter.device());const auto width=std::max(1.0,bounds.width()-2*padding);
-    auto y=bounds.top()+header;std::size_t drawn=0;
+bool render_appraisal_summary_schedule(QPainter& painter,const QRectF& bounds,
+    double pixels_per_mm,const std::vector<const ScheduleRow*>& rows,bool metric,
+    QString* error) {
+    if(error) error->clear();
+    const auto refuse=[&](const QString& reason) {
+        if(error) *error=reason;
+        return false;
+    };
+    if(!painter.isActive() || !std::isfinite(pixels_per_mm) || !(pixels_per_mm>0) ||
+        !std::isfinite(bounds.left()) || !std::isfinite(bounds.top()) ||
+        !std::isfinite(bounds.width()) || !std::isfinite(bounds.height()) ||
+        bounds.width()<=0 || bounds.height()<=0)
+        return refuse(QStringLiteral("Appraisal summary needs an active painter and finite positive placement dimensions."));
+
+    QPainterStateGuard painter_state(&painter);
+    auto font=report_font(8);
+    const auto font_pixels=8*25.4/72*pixels_per_mm;
+    if(!std::isfinite(font_pixels) || font_pixels>std::numeric_limits<int>::max())
+        return refuse(QStringLiteral("Appraisal summary scale is too large to render. Reduce the output resolution."));
+    font.setPixelSize(std::max(1,static_cast<int>(std::lround(font_pixels))));
+    painter.setFont(font);
+    const QFontMetricsF metrics(font,painter.device());
+    const auto padding=3*pixels_per_mm;
+    const auto row_padding=pixels_per_mm;
+    const auto width=bounds.width()-2*padding;
+    const int flags=Qt::TextWordWrap|Qt::TextWrapAnywhere|Qt::AlignLeft|Qt::AlignTop;
+    const auto capacity_failure=QStringLiteral(
+        "Appraisal placement is too small to display its complete summary or capacity notice. "
+        "Enlarge the schedule; see the complete Appraisal area report.");
+    if(width<=0) return refuse(capacity_failure);
+    const auto measure=[&](const QString& content) {
+        return metrics.boundingRect(QRectF(0,0,width,1e9),flags,content);
+    };
+    const auto fits_width=[&](const QRectF& measured) {
+        return std::isfinite(measured.width()) && std::isfinite(measured.height()) &&
+            measured.width()<=width;
+    };
+    const auto text_height=[&](const QRectF& measured) {
+        return std::max(metrics.height(),measured.height());
+    };
+    const auto heading=QStringLiteral("APPRAISAL AREA SUMMARY");
+    const auto measured_header=measure(heading);
+    if(!fits_width(measured_header)) return refuse(capacity_failure);
+    const auto header=std::max(9*pixels_per_mm,text_height(measured_header)+2*row_padding);
+    const auto available=bounds.height()-header-row_padding;
+    if(available<=0) return refuse(capacity_failure);
+
+    struct SummaryRow {QString content; double height;};
+    std::vector<SummaryRow> layout;
+    layout.reserve(rows.size());
+    std::vector<double> prefix_heights{0.0};
+    prefix_heights.reserve(rows.size()+1);
     for(const auto* row_value:rows) {
+        if(!row_value) return refuse(QStringLiteral("Appraisal summary contains an unavailable row. Refresh the report before output."));
         QString content;
-        const auto label=row_value->cells.find("label");if(label!=row_value->cells.end() && std::holds_alternative<std::string>(label->second.value))content=text(std::get<std::string>(label->second.value));
-        const auto amount=row_value->cells.find("area");const auto status=row_value->cells.find("status");
-        if(amount!=row_value->cells.end() && std::holds_alternative<ScheduleQuantity>(amount->second.value)) {
+        const auto label=row_value->cells.find("label");
+        if(label!=row_value->cells.end() && std::holds_alternative<std::string>(label->second.value))
+            content=text(std::get<std::string>(label->second.value));
+        const auto amount=row_value->cells.find("area");
+        const auto status=row_value->cells.find("status");
+        if(amount!=row_value->cells.end() && std::holds_alternative<ScheduleQuantity>(amount->second.value))
             content+=QStringLiteral("  ")+appraisal_schedule_area_text(*row_value,metric);
-        } else if(status!=row_value->cells.end() && std::holds_alternative<std::string>(status->second.value))content+=QStringLiteral("  ")+text(std::get<std::string>(status->second.value));
-        const auto measured=metrics.boundingRect(QRectF(0,0,width,100000),Qt::TextWordWrap|Qt::AlignLeft,content);
-        const auto height=std::max(6*pixels_per_mm,measured.height()+2*pixels_per_mm);
-        const auto reserve=drawn+1<rows.size() ? 9*pixels_per_mm : 0.0;
-        if(y+height+reserve>bounds.bottom())break;
-        painter.drawText(QRectF(bounds.left()+padding,y+pixels_per_mm,width,height-2*pixels_per_mm),Qt::TextWordWrap|Qt::AlignLeft|Qt::AlignVCenter,content);
-        y+=height;painter.setPen(QPen(QColor(210,217,225),.2*pixels_per_mm));painter.drawLine(QPointF(bounds.left(),y),QPointF(bounds.right(),y));painter.setPen(QColor(23,33,43));++drawn;
+        else if(status!=row_value->cells.end() && std::holds_alternative<std::string>(status->second.value))
+            content+=QStringLiteral("  ")+text(std::get<std::string>(status->second.value));
+        const auto measured=measure(content);
+        if(!fits_width(measured)) break;
+        const auto height=std::max(6*pixels_per_mm,text_height(measured)+2*row_padding);
+        layout.push_back({std::move(content),height});
+        prefix_heights.push_back(prefix_heights.back()+height);
+        if(prefix_heights.back()>available) break;
     }
-    if(drawn<rows.size()) {
-        painter.setPen(QColor(151,94,18));painter.drawText(QRectF(bounds.left()+padding,y,width,bounds.bottom()-y),Qt::TextWordWrap|Qt::AlignLeft|Qt::AlignTop,
-            QStringLiteral("%1 more rows — see the complete Appraisal area report.").arg(rows.size()-drawn));
-    } else if(rows.empty())painter.drawText(QRectF(bounds.left()+padding,y,width,bounds.bottom()-y),Qt::TextWordWrap|Qt::AlignLeft|Qt::AlignTop,QStringLiteral("No configured appraisal workflow."));
-    painter.setPen(QPen(QColor(115,125,138),.3*pixels_per_mm));painter.drawRect(bounds);painter.restore();
+
+    std::size_t drawn=layout.size();
+    QString footer;
+    double footer_height=0.0;
+    if(rows.empty()) {
+        footer=QStringLiteral("No configured appraisal workflow.");
+        const auto measured=measure(footer);
+        footer_height=text_height(measured)+2*row_padding;
+        if(!fits_width(measured) || footer_height>available) return refuse(capacity_failure);
+    } else if(drawn<rows.size() || prefix_heights.back()>available) {
+        bool notice_fits=false;
+        for(std::size_t count=layout.size()+1;count>0;--count) {
+            const auto candidate=count-1;
+            if(candidate==rows.size()) continue;
+            auto notice=QStringLiteral("%1 more rows — see the complete Appraisal area report.")
+                .arg(static_cast<qulonglong>(rows.size()-candidate));
+            const auto measured=measure(notice);
+            const auto height=text_height(measured)+2*row_padding;
+            if(fits_width(measured) && prefix_heights[candidate]+height<=available) {
+                drawn=candidate;footer=std::move(notice);footer_height=height;
+                notice_fits=true;break;
+            }
+        }
+        if(!notice_fits) return refuse(capacity_failure);
+    }
+
+    painter.setClipRect(bounds,Qt::IntersectClip);
+    painter.fillRect(bounds,Qt::white);
+    painter.fillRect(QRectF(bounds.left(),bounds.top(),bounds.width(),header),QColor(237,241,245));
+    painter.setPen(QColor(23,33,43));
+    painter.drawText(QRectF(bounds.left()+padding,bounds.top()+row_padding,width,header-2*row_padding),flags,heading);
+    auto y=bounds.top()+header;
+    for(std::size_t index=0;index<drawn;++index) {
+        const auto& row=layout[index];
+        painter.drawText(QRectF(bounds.left()+padding,y+row_padding,width,row.height-2*row_padding),flags,row.content);
+        y+=row.height;
+        painter.setPen(QPen(QColor(210,217,225),.2*pixels_per_mm));
+        painter.drawLine(QPointF(bounds.left(),y),QPointF(bounds.right(),y));
+        painter.setPen(QColor(23,33,43));
+    }
+    if(!footer.isEmpty()) {
+        if(!rows.empty()) painter.setPen(QColor(151,94,18));
+        painter.drawText(QRectF(bounds.left()+padding,y+row_padding,width,footer_height-2*row_padding),flags,footer);
+    }
+    painter.setPen(QPen(QColor(115,125,138),.3*pixels_per_mm));
+    painter.drawRect(bounds);
+    return true;
 }
 
 QString appraisal_report_html(const DocumentSnapshot& source,const AppraisalDocumentReport& report,bool metric,bool include_details) {
