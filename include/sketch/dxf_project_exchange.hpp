@@ -43,26 +43,39 @@ struct DxfProjectImportResult {
     bool complete() const noexcept { return diagnostics.empty(); }
 };
 
-// V5 carries complete exterior WALL-source components. Pending members retain
-// exact direct source context in vertex_dxf_wall_source_context_binding; no
-// destination organization is active until the complete reviewed graph binds.
+// V5 carries complete exterior WALL-source components. V6 shares the same
+// engine and adds measured strokes, retained area lineage and full applicable
+// source-owner inventories. V6 wire contexts are captured from organize_project;
+// pending version-2 context bindings retain direct and resolved observations.
+// Destination organization activates only after complete reviewed graph binding.
 [[nodiscard]] nlohmann::json native_dxf_wall_source_dependency_graph(const Entity& entity);
 [[nodiscard]] std::vector<std::string> native_dxf_wall_source_dependency_ids(const Entity& entity);
 // A mapper processing components separately shares this ledger across the
 // complete operation. Work remains charged if a later source proof fails.
+// preflight_only performs bounded structural/work admission without replay or
+// nonlinear source/containment checks; it still charges this shared ledger.
+// V6 uses the complete provided measured inventory and captured contexts,
+// including observation copies outside a component. Original source inventory
+// must be supplied before remapping; destination separation cannot prove it.
 struct NativeDxfWallSourceWorkBudget {
     std::size_t segments{};
     std::size_t source_work{};
+    // Applies V6 topology admission to every component/fallback in an operation
+    // that also contains measured sources. V5-only callers keep their contract.
+    bool measured_operation{};
 };
 void validate_native_dxf_wall_source_groups(const std::vector<Entity>& entities,
-    NativeDxfWallSourceWorkBudget* work_budget = nullptr);
+    NativeDxfWallSourceWorkBudget* work_budget = nullptr, bool preflight_only = false);
 void validate_native_dxf_wall_source_member(const Entity& entity);
 // Owner identity is changed separately with the boundary owner codec where
 // applicable. Only graph-owned references and membership change here.
 void remap_native_dxf_wall_source_dependency_ids(Entity& entity,
     const std::map<std::string, std::string, std::less<>>& ids);
 // Contexts must come from the caller's actual staged destination hierarchy and
-// cover every V5 member. This changes the vector atomically on successful proof.
+// cover every V5/V6 member. For V6, include active destination measured stroke
+// outsiders and their actual contexts, with old DXF admission markers removed
+// from private observation copies. Changed shared-layer inventory refuses.
+// This changes the vector atomically on successful proof.
 // Phase references are dropped; retained observations/report digests are inert.
 void bind_native_dxf_wall_source_destinations(std::vector<Entity>& entities,
     const std::map<std::string, DrawingContext, std::less<>>& actual_contexts);
@@ -249,7 +262,7 @@ inline void remap_native_dxf_boundary_dependency_ids(Entity& entity,
     const std::map<std::string, std::string, std::less<>>& ids) {
     const auto source_marker = entity.extensions.find("vertex_dxf_boundary");
     if (source_marker != entity.extensions.end() && source_marker->is_object() &&
-        source_marker->value("version", 0) == 5) {
+        (source_marker->value("version", 0) == 5 || source_marker->value("version", 0) == 6)) {
         remap_native_dxf_wall_source_dependency_ids(entity, ids);
         return;
     }
@@ -396,8 +409,10 @@ inline void validate_native_dxf_boundary_groups(const std::vector<Entity>& entit
 // all active source-wall openings, with matching typed dependency declarations.
 // Ordinary outer/hole curves accompany bounded source
 // properties, classifications and topology. Missing, inactive, cyclic or invalid
-// groups fall back together. Physical-room and linework graphs remain
-// unavailable. Imported sloped observations require source reconfirmation.
+// groups fall back together. V6 additionally carries native measured linework
+// with LINEWORK_PLAN_V1 and complete measured-source graphs, including mixed
+// wall/measured appraisal components. Physical-room/level/material/assembly
+// graphs remain unavailable. Imported sloped observations require reconfirmation.
 // Deduction containment uses the actual area engine in native-geometry builds;
 // core-only builds retain ordinary geometry when that proof is unavailable.
 // Organizational bindings detach on import; unavailable dependent source graphs
@@ -422,6 +437,10 @@ inline void validate_native_dxf_boundary_groups(const std::vector<Entity>& entit
 // pending per-member direct context evidence stays detached until the shared
 // destination binder receives actual reviewed hierarchy contexts. Phase registry
 // bindings are withheld and diagnosed; numeric source lineage stays unchanged.
+// V6 retains raw measured stroke models and typed source-use references, with
+// captured resolved contexts and full shared-layer/isolated-cohort inventories.
+// Exact source/fresh plans and current complete graphs precede activation;
+// source local identities, intervals, reversal and observation hashes persist.
 // Every member is remapped and validated together; original observation hashes
 // remain unchanged and copied sloped ceiling anchors/confirmation are withheld.
 // V2 requires

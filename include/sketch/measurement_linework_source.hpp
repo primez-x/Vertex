@@ -2,6 +2,7 @@
 
 #include "sketch/document.hpp"
 #include "sketch/geometry.hpp"
+#include "sketch/project_organization.hpp"
 
 #include <map>
 #include <optional>
@@ -32,6 +33,11 @@ struct MeasurementLineworkSourceCheck {
 // No lineage returns empty. Present lineage requires a supported measurement
 // boundary and the existing strict outer/member schemas and budgets.
 [[nodiscard]] std::vector<std::string> measurement_linework_source_ids(const Entity& entity);
+// Structural dependency admission only: supported identified version, raw
+// segment count and bounded typed lineage schemas, without geometry decoding,
+// topology validation or replay. Callers must admit cumulative geometry/work
+// before the separate complete source/geometry proof. No lineage returns empty.
+[[nodiscard]] std::vector<std::string> measurement_linework_source_ids_for_admission(const Entity& entity);
 // Remap only typed retained source-use references, preserving the entity owner,
 // local boundary IDs, receipts, use order and raw interval/reversal JSON.
 // Every referenced owner needs a nonempty mapping; distinct owners cannot share
@@ -55,6 +61,17 @@ struct MeasurementLineworkSourceCheck {
 // Ordinary boundaries without measured lineage are omitted. No inputs change.
 [[nodiscard]] std::map<std::string,MeasurementLineworkSourceCheck,std::less<>>
 measurement_linework_source_checks(const std::map<std::string,Entity,std::less<>>& entities,
+    const std::set<std::string,std::less<>>* semantic_visible=nullptr);
+// Same geometry/topology proof with complete contexts captured from a real
+// source or reviewed final hierarchy. Participating areas and source owners
+// require valid supplied contexts consistent with their explicit placement
+// properties; there is no organization fallback or fabricated container.
+// This proof does not authorize destination containers. Extra unused entries
+// are ignored. Canonical layer graphs still include all eligible source owners.
+[[nodiscard]] std::map<std::string,MeasurementLineworkSourceCheck,std::less<>>
+measurement_linework_source_checks_with_contexts(
+    const std::map<std::string,Entity,std::less<>>& entities,
+    const std::map<std::string,DrawingContext,std::less<>>& contexts,
     const std::set<std::string,std::less<>>* semantic_visible=nullptr);
 // Reconstruct only previously current, unambiguous, unauthored consumers
 // from the final source geometry. Preserves area IDs, facts and topology.

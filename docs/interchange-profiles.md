@@ -257,6 +257,34 @@ source graphs remain open, including mixed components that require them. V5 is
 uncompiled and runtime unverified; external consumer fidelity and production
 acceptance remain open.
 
+### Measured-line source groups (2026-10-09, source implementation)
+
+V6 adds receipt-backed measured strokes with `LINEWORK_PLAN_V1`, including
+standalone open strokes, and complete source-derived area groups. The wire adds
+each member's resolved source context and both retained source owners and full
+applicable measured-graph inventory. Unmarked areas retain the complete active
+unisolated layer graph; isolated copies retain their referenced-owner cohort.
+Import does not introduce an isolation marker merely to force admission.
+
+Raw models retain authored measurements, local topology, receipts and ordered
+history. Typed fresh-owner and source-reference remapping changes ownership
+without re-encoding those records. Pending direct and resolved context bindings
+remain separate from reviewed actual hierarchy destinations. Complete graph
+inventory, source currentness, exact analytical plans and cumulative replay/work
+preflight are required before native activation. Existing destination strokes
+must not silently change an imported unmarked area graph.
+
+Original inventory is checked across components before remapping, including
+recoverable rejected stroke carriers. Dependency admission avoids topology
+decoding; strict proof follows cumulative work limits. Analytical fallback
+shares the export replay/topology allowance. Existing destination stroke
+observations participate only in the final actual-context inventory proof.
+
+V1/V2/V3/V4/V5 contracts remain unchanged. Integrated and independent source
+review approved the corrected scope; compilation/runtime and external consumer
+behavior are unverified.
+Physical-room and level/material/assembly graph transport remain open.
+
 IFC now uses one actual project's linked length-unit assignment for every core
 editable reconstruction, including legacy axes and swept solids. Orphan metre
 declarations cannot authorize a wall, slab or opening. Recognized nonlength

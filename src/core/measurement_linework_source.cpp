@@ -122,18 +122,26 @@ struct RetainedSourceLineage {
     Uses outer;
     std::vector<Uses> members;
 };
-RetainedSourceLineage read_retained_source_lineage(const Entity& entity) {
+RetainedSourceLineage read_retained_source_lineage(const Entity& entity,bool validate_geometry=true) {
     RetainedSourceLineage result;
     const bool grouped=entity.extensions.contains("measurement_linework_group");
     result.present=grouped || entity.extensions.contains("measurement_linework_sources");
     if(!result.present)return result;
     if(entity.type!="measurement_boundary")
         throw std::invalid_argument("Measured linework lineage requires a measurement boundary.");
-    const auto count=decode_identified_boundary_entity(entity).segments.size();
+    std::size_t count{};
+    if(validate_geometry)count=decode_identified_boundary_entity(entity).segments.size();
+    else {
+        if(inspect_boundary_entity_version(entity).format!=BoundaryEntityFormat::identified_v1 ||
+           !entity.properties.contains("segments") || !entity.properties.at("segments").is_array() ||
+           entity.properties.at("segments").empty() || entity.properties.at("segments").size()>16384)
+            throw std::invalid_argument("Measured area dependency admission requires bounded identified segments.");
+        count=entity.properties.at("segments").size();
+    }
     if(grouped)result.members=read_group(entity.extensions.at("measurement_linework_group"));
     if(!entity.extensions.contains("measurement_linework_sources"))
         throw std::invalid_argument("Measured area group requires retained outer source lineage.");
-    result.outer=grouped ? read_group_outer(entity.extensions.at("measurement_linework_sources"),count) :
+    result.outer=(grouped || !validate_geometry) ? read_group_outer(entity.extensions.at("measurement_linework_sources"),count) :
         read_uses(entity.extensions.at("measurement_linework_sources"),count);
     return result;
 }
@@ -230,6 +238,15 @@ std::vector<std::string> measurement_linework_source_ids(const Entity& entity) {
     }
     return result;
 }
+std::vector<std::string> measurement_linework_source_ids_for_admission(const Entity& entity) {
+    const auto pairs=retained_source_pairs(read_retained_source_lineage(entity,false));
+    std::vector<std::string> result;
+    for(const auto& [owner_id,segment_id]:pairs) {
+        (void)segment_id;
+        if(result.empty() || result.back()!=owner_id)result.push_back(owner_id);
+    }
+    return result;
+}
 Entity remap_measurement_linework_source_references(const Entity& entity,
     const std::map<std::string,std::string,std::less<>>& owner_ids,
     const std::map<std::pair<std::string,std::string>,std::string>& segment_ids) {
@@ -272,12 +289,44 @@ Entity remap_measurement_linework_source_references(const Entity& entity,
 }
 static std::map<std::string,MeasurementLineworkSourceCheck,std::less<>>
 measurement_linework_source_checks_impl(const std::map<std::string,Entity,std::less<>>& entities,
-    const std::set<std::string,std::less<>>* semantic_visible,const ConstraintPhaseScope* scope) {
+    const std::set<std::string,std::less<>>* semantic_visible,const ConstraintPhaseScope* scope,
+    const std::map<std::string,DrawingContext,std::less<>>* contexts=nullptr) {
     std::map<std::string,MeasurementLineworkSourceCheck,std::less<>> result;
     if(std::none_of(entities.begin(),entities.end(),[](const auto& item){return has_source(item.second);}))return result;
     std::optional<ProjectOrganization> organization;
     std::string organization_error;
-    try{organization=organize_project(entities);}catch(const std::exception& error){organization_error=error.what();}
+    if(!contexts)try{organization=organize_project(entities);}catch(const std::exception& error){organization_error=error.what();}
+    std::map<std::string,DrawingContext,std::less<>> resolved_layers;
+    const auto drawing_context=[&](const std::string& id)->std::optional<DrawingContext> {
+        if(!contexts)return organization->drawing_context(id);
+        const auto found=contexts->find(id);
+        if(found==contexts->end() || !found->second.complete())
+            throw std::invalid_argument("Measured source context is missing or incomplete: "+id);
+        const auto valid_id=[](const std::string& value) {
+            // Same 128-byte ASCII identifier grammar as document admission.
+            return !value.empty() && value.size()<=128 && std::all_of(value.begin(),value.end(),[](unsigned char c) {
+                return (c>='a' && c<='z') || (c>='A' && c<='Z') || (c>='0' && c<='9') ||
+                    c=='-' || c=='_' || c=='.' || c==':';
+            });
+        };
+        const auto& context=found->second;
+        if(!valid_id(id) || !valid_id(context.property_id) || !valid_id(context.building_id) ||
+           !valid_id(context.floor_id) || !valid_id(context.layer_id) ||
+           (!context.level_id.empty() && !valid_id(context.level_id)))
+            throw std::invalid_argument("Measured source context identifier is invalid: "+id);
+        const auto& entity=entities.at(id);
+        for(const auto& [key,value]:{std::pair{"property_id",&context.property_id},
+            std::pair{"building_id",&context.building_id},std::pair{"floor_id",&context.floor_id},
+            std::pair{"layer_id",&context.layer_id}}) {
+            if(entity.properties.contains(key) && (!entity.properties.at(key).is_string() ||
+                entity.properties.at(key).get_ref<const std::string&>()!=*value))
+                throw std::invalid_argument("Measured source context contradicts explicit placement: "+id+"/"+key);
+        }
+        const auto [layer,inserted]=resolved_layers.emplace(context.layer_id,context);
+        if(!inserted && layer->second!=context)
+            throw std::invalid_argument("Measured source contexts disagree within one drawing layer.");
+        return context;
+    };
     SourceOwners copy_owners;
     std::string copy_scope_error;
     try {
@@ -294,10 +343,10 @@ measurement_linework_source_checks_impl(const std::map<std::string,Entity,std::l
         if(scope && scope->inactive_owner_ids.contains(id))continue;
         auto& check=result[id];
         try {
-            if(!organization)throw std::invalid_argument(organization_error);
+            if(!contexts && !organization)throw std::invalid_argument(organization_error);
             if(!copy_scope_error.empty())throw std::invalid_argument(copy_scope_error);
             if(area.type!="measurement_boundary")throw std::invalid_argument("Measured linework lineage requires a measurement boundary.");
-            const auto context=organization->drawing_context(id);
+            const auto context=drawing_context(id);
             if(!context)throw std::invalid_argument("Measured area has no resolved drawing context.");
             const auto saved=boundary_geometry(decode_identified_boundary_entity(area));
             const bool grouped=area.type=="measurement_boundary" && area.extensions.contains("measurement_linework_group");
@@ -324,7 +373,7 @@ measurement_linework_source_checks_impl(const std::map<std::string,Entity,std::l
                 }
                 const auto owner=entities.find(use.owner_id);
                 if(owner==entities.end() || owner->second.type!="measurement_linework")throw std::invalid_argument("A measured area source was deleted or replaced: "+use.owner_id);
-                if(organization->drawing_context(use.owner_id)!=context)throw std::invalid_argument("A measured area source moved to a different drawing context.");
+                if(drawing_context(use.owner_id)!=context)throw std::invalid_argument("A measured area source moved to a different drawing context.");
                 if(semantic_visible && !semantic_visible->contains(use.owner_id))throw std::invalid_argument("A measured area source is unavailable in the active design phase.");
                 const auto decoded=decode_measurement_linework_model(owner->second.properties.at("model"));
                 if(!decoded.supported())throw std::invalid_argument("A measured area source has an unsupported model.");
@@ -378,8 +427,13 @@ measurement_linework_source_checks_impl(const std::map<std::string,Entity,std::l
                     try {
                         std::vector<MeasurementGraphSource> sources;
                         for(const auto& [owner_id,owner]:entities) {
-                            if(owner.type!="measurement_linework" || organization->drawing_context(owner_id)!=context ||
-                                (semantic_visible && !semantic_visible->contains(owner_id)))continue;
+                            if(owner.type!="measurement_linework")continue;
+                            // Preserve legacy evaluation order; explicit mode needs no
+                            // context for phase-unavailable or isolated nonparticipants.
+                            if(contexts && ((semantic_visible && !semantic_visible->contains(owner_id)) ||
+                                copy_owners.contains(owner_id)))continue;
+                            const auto owner_context=drawing_context(owner_id);
+                            if(owner_context!=context || (semantic_visible && !semantic_visible->contains(owner_id)))continue;
                             if(copy_owners.contains(owner_id))continue;
                             const auto decoded=decode_measurement_linework_model(owner.properties.at("model"));
                             if(!decoded.supported())throw std::invalid_argument("The source layer contains unsupported measured geometry.");
@@ -486,6 +540,12 @@ std::map<std::string,MeasurementLineworkSourceCheck,std::less<>>
 measurement_linework_source_checks(const std::map<std::string,Entity,std::less<>>& entities,
     const std::set<std::string,std::less<>>* semantic_visible) {
     return measurement_linework_source_checks_impl(entities,semantic_visible,nullptr);
+}
+std::map<std::string,MeasurementLineworkSourceCheck,std::less<>>
+measurement_linework_source_checks_with_contexts(const std::map<std::string,Entity,std::less<>>& entities,
+    const std::map<std::string,DrawingContext,std::less<>>& contexts,
+    const std::set<std::string,std::less<>>* semantic_visible) {
+    return measurement_linework_source_checks_impl(entities,semantic_visible,nullptr,&contexts);
 }
 bool measurement_linework_sources_visible(const Entity& area,const std::set<std::string,std::less<>>* semantic_visible) {
     if(!has_source(area))return true;

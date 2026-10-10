@@ -14,6 +14,49 @@ changed source does not acquire runtime acceptance without later qualification.
 
 ## Current delivery state
 
+### October 9 measured-line DXF transfer
+
+V6 source implementation adds native measured strokes and complete
+source-derived area graphs, including standalone strokes and mixed supported
+wall/deduction dependencies. Raw stroke-owner remapping preserves local IDs,
+receipts, numeric input and ordered edit/transform history. Source declarations
+retain both referenced owners and the full applicable graph inventory: ordinary
+areas use all active unisolated strokes in their context, while copied isolated
+areas retain their existing referenced-cohort semantics.
+
+The shared measured-source checker now accepts explicit complete contexts
+captured from the real source hierarchy or reviewed destination hierarchy. It
+uses the existing matching engine and budgets without manufacturing containers.
+Native transfer retains direct and resolved context observations separately;
+destination review binds actual hierarchy contexts. Desktop admission now
+allocates fresh measured-stroke owners through the raw codec, checks source
+layer assignment, and supplies observations of active destination strokes to
+detect layer-global graph conflicts. Existing authoritative objects are not
+changed merely to supply that inventory.
+
+Independent source review found two admission defects: retained source-owner
+lookup decoded boundary topology before work limits, and per-component proofs
+could omit a stroke from another component in the same original drawing
+context. A structural typed-lineage lookup now separates dependency parsing
+from geometry proof, and broker member checks follow raw geometry charges.
+Complete original source inventories, including recoverable rejected carriers,
+are now checked before identity remapping or destination layer assignment.
+Shared structural admission reads raw boundary geometry without topology
+decoding. Ordinary measured-stroke and boundary export fallback share the
+operation's replay/topology allowance and report refusal before expensive work.
+Existing destination strokes enter only the final actual-context proof; they
+are excluded from pending original-source proof and receive actual resolved
+contexts in private observations. No copy-scope marker is manufactured.
+Integrated root review and independent source review approved the corrected
+scope. Scoped `git diff --check` passed and requirements JSON parsed; only the
+DXF delivery note changed, with historical acceptance states preserved.
+No compilation, test, probe, script, native job, launch, package or installation
+has run. The installed candidate and acceptance bindings remain unchanged.
+Physical-room graph transport and level/material/assembly dependencies remain
+open; this batch does not establish full-project DXF or external fidelity.
+Large or conflicting source scopes can conservatively fall back under the
+cumulative work limits. Full production qualification remains open.
+
 ### October 9 exterior wall-source DXF transfer
 
 The current source batch adds V5 connected exterior measurement groups with

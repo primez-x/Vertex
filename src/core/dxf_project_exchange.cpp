@@ -7,6 +7,7 @@
 #include "sketch/boundary_integrity.hpp"
 #include "sketch/constraint_phase_scope.hpp"
 #include "sketch/measurement_linework.hpp"
+#include "sketch/measurement_linework_source.hpp"
 #include "sketch/document_wall.hpp"
 #include "sketch/document_digest.hpp"
 #include "sketch/hosted_opening_geometry.hpp"
@@ -46,10 +47,94 @@ constexpr const char* kManufacturedDepiction = "MANUFACTURED_PLAN_V1";
 constexpr const char* kBoundaryDepiction = "BOUNDARY_PLAN_V1";
 constexpr const char* kWallSourceContextBinding = "vertex_dxf_wall_source_context_binding";
 constexpr const char* kWallSourceHostedOpenings = "vertex_dxf_wall_source_hosted_openings";
+constexpr const char* kLineworkDepiction = "LINEWORK_PLAN_V1";
+constexpr const char* kMeasuredGraph = "vertex_dxf_measured_graph";
+constexpr const char* kResolvedContext = "vertex_dxf_resolved_context";
+
+bool measured_source_member(const Entity& entity) {
+    const auto marker = entity.extensions.find("vertex_dxf_boundary");
+    return marker != entity.extensions.end() && marker->is_object() && marker->value("version", 0) == 6;
+}
 
 bool wall_source_member(const Entity& entity) {
     const auto marker = entity.extensions.find("vertex_dxf_boundary");
-    return marker != entity.extensions.end() && marker->is_object() && marker->value("version", 0) == 5;
+    return marker != entity.extensions.end() && marker->is_object() &&
+        (marker->value("version", 0) == 5 || marker->value("version", 0) == 6);
+}
+
+Json resolved_context_json(const DrawingContext& context) {
+    if (!context.complete()) throw std::invalid_argument("native resolved context incomplete");
+    return {{"property_id", context.property_id}, {"building_id", context.building_id},
+        {"floor_id", context.floor_id}, {"layer_id", context.layer_id}, {"level_id", context.level_id}};
+}
+
+DrawingContext read_resolved_context(const Json& context) {
+    if (!context.is_object() || context.size() != 5)
+        throw std::invalid_argument("invalid native resolved context");
+    DrawingContext result;
+    for (const auto& [key, destination] : {std::pair{"property_id", &result.property_id},
+        std::pair{"building_id", &result.building_id}, std::pair{"floor_id", &result.floor_id},
+        std::pair{"layer_id", &result.layer_id}, std::pair{"level_id", &result.level_id}}) {
+        const auto value = context.find(key);
+        if (value == context.end() || !value->is_string()) throw std::invalid_argument("invalid native resolved context ID");
+        *destination = value->get<std::string>();
+        if (destination->size() > 128 || (destination->empty() && std::string_view(key) != "level_id") ||
+            !std::all_of(destination->begin(), destination->end(), [](unsigned char c) {
+                return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') ||
+                    c == '-' || c == '_' || c == '.' || c == ':';
+            })) throw std::invalid_argument("invalid native resolved context ID");
+    }
+    if (!result.complete()) throw std::invalid_argument("native resolved context incomplete");
+    return result;
+}
+
+DrawingContext member_resolved_context(const Entity& entity) {
+    const auto binding = entity.extensions.find(kWallSourceContextBinding);
+    if (binding != entity.extensions.end())
+        return read_resolved_context(binding->at(binding->at("destination_context").is_null() ?
+            "source_resolved_context" : "destination_resolved_context"));
+    const auto& observation = entity.extensions.at(kResolvedContext);
+    if (!observation.is_object() || observation.size() != 2 || !observation.at("version").is_number_integer() ||
+        observation.at("version") != 1) throw std::invalid_argument("invalid native resolved context observation");
+    return read_resolved_context(observation.at("context"));
+}
+
+std::vector<std::string> measured_graph_ids(const Entity& area,
+    const std::map<std::string, Entity, std::less<>>& graph,
+    const std::map<std::string, DrawingContext, std::less<>>& contexts,
+    const std::set<std::string, std::less<>>* visible = nullptr) {
+    const auto referenced = measurement_linework_source_ids_for_admission(area);
+    if (referenced.empty()) return {};
+    const bool isolated = std::any_of(referenced.begin(), referenced.end(), [&](const auto& id) {
+        return graph.contains(id) && measurement_linework_copy_isolated(graph.at(id));
+    });
+    if (isolated) return referenced;
+    std::vector<std::string> ids;
+    for (const auto& [id, owner] : graph)
+        if (owner.type == "measurement_linework" && (!visible || visible->contains(id)) &&
+            !measurement_linework_copy_isolated(owner) && contexts.at(id) == contexts.at(area.id)) ids.push_back(id);
+    return ids;
+}
+
+// Recover only the typed retained lineage locations, even when another field
+// makes the source record inadmissible. Arbitrary JSON is never an owner link.
+std::vector<std::string> recover_measured_source_ids(const Json& extensions) {
+    std::set<std::string> ids;
+    const auto remember = [&](const Json& uses) {
+        if (!uses.is_array()) return;
+        for (const auto& edge : uses) if (edge.is_array())
+            for (const auto& use : edge) if (use.is_object()) {
+                const auto owner = use.find("owner_id");
+                if (owner != use.end() && owner->is_string() && !owner->get_ref<const std::string&>().empty() &&
+                    owner->get_ref<const std::string&>().size() <= 255) ids.insert(owner->get<std::string>());
+            }
+    };
+    if (!extensions.is_object()) return {};
+    if (extensions.contains("measurement_linework_sources")) remember(extensions.at("measurement_linework_sources"));
+    const auto group = extensions.find("measurement_linework_group");
+    if (group != extensions.end() && group->is_object() && group->contains("members") && group->at("members").is_array())
+        for (const auto& member : group->at("members")) remember(member);
+    return {ids.begin(), ids.end()};
 }
 
 Json direct_source_context(const Entity& entity) {
@@ -183,6 +268,66 @@ std::optional<Boundary> read_entity_boundary(const Entity& entity) {
         return std::nullopt;
     }
     return std::nullopt;
+}
+
+// Admission only reads raw segment values. Identified decoding validates
+// topology quadratically and belongs after the complete operation work charge.
+std::optional<Boundary> read_entity_boundary_for_admission(const Entity& entity) {
+    if (can_recognize_boundary_entity_type(entity.type)) {
+        const auto version = inspect_boundary_entity_version(entity);
+        if (version.format == BoundaryEntityFormat::unsupported_version) return std::nullopt;
+        if (version.format == BoundaryEntityFormat::identified_v1)
+            return read_boundary_value(entity.properties.at("segments"));
+    }
+    if (entity.properties.contains("boundary")) return read_boundary_value(entity.properties.at("boundary"));
+    if (entity.properties.contains("segments")) return read_boundary_value(entity.properties.at("segments"));
+    return std::nullopt;
+}
+
+std::size_t raw_boundary_segment_count(const Entity& entity) {
+    const auto version = inspect_boundary_entity_version(entity);
+    const auto key = version.format == BoundaryEntityFormat::identified_v1 ? "segments" :
+        entity.properties.contains("boundary") ? "boundary" : "segments";
+    const auto& values = entity.properties.at(key);
+    if (!values.is_array() || values.empty() || values.size() > 512)
+        throw std::invalid_argument("V6 raw boundary segment limit");
+    std::size_t count = values.size();
+    if (const auto holes = entity.properties.find("holes"); holes != entity.properties.end()) {
+        if (!holes->is_array()) throw std::invalid_argument("V6 raw holes must be an array");
+        for (const auto& hole : *holes) {
+            if (!hole.is_array() || hole.empty() || hole.size() > 512 - count)
+                throw std::invalid_argument("V6 raw boundary segment limit");
+            count += hole.size();
+        }
+    }
+    return count;
+}
+
+std::pair<std::size_t, std::size_t> raw_measured_stroke_work(const Entity& entity) {
+    const auto& model = entity.properties.at("model");
+    if (!model.is_object() || !model.contains("segments") || !model.at("segments").is_array() ||
+        model.at("segments").empty() || model.at("segments").size() > 512 ||
+        !model.contains("stroke_id") || model.at("stroke_id") != entity.id)
+        throw std::invalid_argument("V6 raw stroke schema or owner differs");
+    const auto count = model.at("segments").size();
+    std::size_t passes = 1;
+    for (const auto* key : {"transforms", "operations"}) if (model.contains(key)) {
+        const auto& operations = model.at(key);
+        if (!operations.is_array()) throw std::invalid_argument("V6 stroke history must be an array");
+        for (const auto& operation : operations) {
+            std::size_t cost = 1;
+            if (operation.is_object() && operation.value("type", std::string{}) == "vertex_batch") {
+                const auto& edits = operation.at("edits");
+                if (!edits.is_array() || edits.size() >= 250'000)
+                    throw std::invalid_argument("V6 vertex batch work limit");
+                cost += edits.size();
+            }
+            if (cost > 250'000 || passes > 250'000 - cost)
+                throw std::invalid_argument("V6 stroke history work limit");
+            passes += cost;
+        }
+    }
+    return {count, count * passes};
 }
 
 std::string valid_layer(std::string value, std::vector<DxfProjectDiagnostic>& diagnostics,
@@ -553,6 +698,13 @@ Json native_payload(const DocumentSnapshot& document, const Entity& entity,
             {"hosted_opening_ids", std::move(ids)}};
     if (entity.type == "opening" && entity.properties.contains("opening_assembly"))
         result["depiction"] = kManufacturedDepiction;
+    if (measured_source_member(entity)) {
+        // V6 admission state belongs to this transfer, never to a later V1
+        // architectural carrier after its former consumers were removed.
+        for (const auto* key : {"vertex_dxf_boundary", "vertex_dxf_stair_floor_binding",
+            kWallSourceContextBinding, kWallSourceHostedOpenings, kMeasuredGraph, kResolvedContext})
+            result["extensions"].erase(key);
+    }
     return result;
 }
 
@@ -604,6 +756,35 @@ DxfBlock boundary_plan_block(const Entity& entity, std::string name, const std::
     if (!diagnostics.empty()) throw std::invalid_argument("native boundary plan is not representable");
     return {std::move(name), {}, std::move(plan.lines), std::move(plan.arcs),
             std::move(plan.polylines), {}, {}};
+}
+
+DxfBlock linework_plan_block(const Entity& entity, std::string name, const std::string& layer) {
+    const auto decoded = decode_measurement_linework_model(entity.properties.at("model"));
+    if (!decoded.supported() || decoded.model->stroke_id != entity.id)
+        throw std::invalid_argument("native linework model unsupported or owner differs");
+    const auto replay = replay_measurement_linework(*decoded.model);
+    DxfDrawing plan;
+    std::vector<DxfProjectDiagnostic> diagnostics;
+    // Independent primitives preserve open strokes, crossings and retracing.
+    for (const auto& edge : replay.edges)
+        add_segment_as_dxf(plan, edge.segment, layer, diagnostics, entity.id, entity.type);
+    if (!diagnostics.empty()) throw std::invalid_argument("native linework plan unavailable");
+    return {std::move(name), {}, std::move(plan.lines), std::move(plan.arcs), {}, {}, {}};
+}
+
+DxfBlock source_plan_block(const std::map<std::string, Entity, std::less<>>& graph,
+    const Entity& entity, std::string name, const std::string& layer,
+    std::vector<DxfProjectDiagnostic>& diagnostics) {
+    if (entity.type == "measurement_linework") return linework_plan_block(entity, std::move(name), layer);
+    if (can_recognize_boundary_entity_type(entity.type)) return boundary_plan_block(entity, std::move(name), layer, true);
+    return architectural_block(graph, entity, std::move(name), layer, diagnostics);
+}
+
+const char* source_depiction(const Entity& entity) {
+    if (entity.type == "measurement_linework") return kLineworkDepiction;
+    if (can_recognize_boundary_entity_type(entity.type)) return kBoundaryDepiction;
+    if (entity.type == "wall") return "WALL_PLAN_V1";
+    return entity.properties.contains("opening_assembly") ? kManufacturedDepiction : "OPENING_PLAN_V1";
 }
 
 Entity detached_native_entity(const Entity& source, const std::map<std::string, std::string>& ids,
@@ -669,7 +850,7 @@ void validate_boundary_group_source_contexts(const std::vector<Entity>& members,
     // validation through boundary_plan_block; deductions are inclusive areas.
     for (const auto& entity : members) {
         owners.emplace(entity.id, &entity);
-        auto outer = read_entity_boundary(entity);
+        auto outer = preflight_only ? read_entity_boundary_for_admission(entity) : read_entity_boundary(entity);
         if (!outer) throw std::invalid_argument("source appraisal geometry unavailable");
         std::size_t count = outer->size();
         if (const auto holes = entity.properties.find("holes"); holes != entity.properties.end()) {
@@ -777,22 +958,43 @@ void validate_boundary_group_ceiling_sources(const std::vector<Entity>& members)
 
 bool export_boundary_group(const DocumentSnapshot& document, const std::vector<std::string>& ids,
                            const ConstraintPhaseScope& scope, DxfProjectExportResult& result,
-                           NativeDxfWallSourceWorkBudget& wall_source_budget) {
+                           NativeDxfWallSourceWorkBudget& wall_source_budget, bool preflight_only = false) {
     try {
         std::vector<Entity> source, detached;
         std::map<std::string, std::string> unchanged;
         int version = 3;
         for (const auto& id : ids) {
             const auto found = document.entities().find(id);
-            if (found != document.entities().end() && found->second.properties.contains("wall_measurement_source")) version = 5;
-            else if (version != 5 && found != document.entities().end() && boundary_has_stair_declaration(found->second)) version = 4;
+            if (found != document.entities().end() && (found->second.type == "measurement_linework" ||
+                found->second.extensions.contains("measurement_linework_sources") ||
+                found->second.extensions.contains("measurement_linework_group"))) version = 6;
+            else if (version != 6 && found != document.entities().end() && found->second.properties.contains("wall_measurement_source")) version = 5;
+            else if (version < 5 && found != document.entities().end() && boundary_has_stair_declaration(found->second)) version = 4;
+        }
+        std::map<std::string, DrawingContext, std::less<>> captured_contexts;
+        std::set<std::string, std::less<>> visible;
+        if (version == 6) {
+            const auto organization = organize_project(document);
+            for (const auto& [id, entity] : document.entities()) {
+                if (scope.inactive_owner_ids.contains(id)) continue;
+                visible.insert(id);
+                if (entity.type == "measurement_linework" || std::binary_search(ids.begin(), ids.end(), id)) {
+                    const auto context = organization.drawing_context(id);
+                    if (!context) {
+                        if (std::binary_search(ids.begin(), ids.end(), id)) throw std::invalid_argument("source measured context unavailable");
+                        continue;
+                    }
+                    captured_contexts.emplace(id, *context);
+                }
+            }
         }
         const auto marker = boundary_group_marker(ids, version);
         for (const auto& id : ids) {
             const auto found = document.entities().find(id);
             if (found == document.entities().end() || scope.inactive_owner_ids.contains(id) ||
-                (version == 5 ? found->second.type != "boundary" && found->second.type != "measurement_boundary" &&
-                    found->second.type != "wall" && found->second.type != "opening" :
+                (version >= 5 ? found->second.type != "boundary" && found->second.type != "measurement_boundary" &&
+                    found->second.type != "wall" && found->second.type != "opening" &&
+                    !(version == 6 && found->second.type == "measurement_linework") :
                     !can_recognize_boundary_entity_type(found->second.type)))
                 throw std::invalid_argument("inactive or unavailable boundary dependency");
             auto entity = found->second;
@@ -800,15 +1002,22 @@ bool export_boundary_group(const DocumentSnapshot& document, const std::vector<s
             // destination admission state never becomes a new source binding.
             entity.extensions.erase("vertex_dxf_stair_floor_binding");
             entity.extensions.erase(kWallSourceContextBinding);
+            entity.extensions.erase(kResolvedContext);
+            entity.extensions.erase(kMeasuredGraph);
             entity.extensions["vertex_dxf_boundary"] = marker;
-            if (version == 5 && entity.type == "wall") {
+            if (version == 6) {
+                entity.extensions[kResolvedContext] = {{"version", 1}, {"context", resolved_context_json(captured_contexts.at(id))}};
+                entity.extensions[kMeasuredGraph] = {{"version", 1}, {"source_ids",
+                    measured_graph_ids(entity, document.entities(), captured_contexts, &visible)}};
+            }
+            if (version >= 5 && entity.type == "wall") {
                 std::vector<std::string> hosted;
                 for (const auto* opening : host_openings(document, entity.id, scope)) hosted.push_back(opening->id);
                 std::sort(hosted.begin(), hosted.end());
                 entity.extensions[kWallSourceHostedOpenings] = {{"version", 1}, {"opening_ids", hosted}};
             }
             if (version >= 4) {
-                const auto floor_id = version == 5 ? wall_source_stair_floor(entity) : native_dxf_boundary_stair_floor_source(entity);
+                const auto floor_id = version >= 5 ? wall_source_stair_floor(entity) : native_dxf_boundary_stair_floor_source(entity);
                 if (!floor_id.empty()) {
                     const auto floor = document.entities().find(floor_id);
                     if (floor == document.entities().end() || floor->second.type != "floor")
@@ -825,26 +1034,31 @@ bool export_boundary_group(const DocumentSnapshot& document, const std::vector<s
             metadata["extensions"].erase("vertex_dxf_stair_floor_binding");
             metadata["extensions"].erase(kWallSourceContextBinding);
             metadata["extensions"].erase(kWallSourceHostedOpenings);
+            metadata["extensions"].erase(kMeasuredGraph);
+            metadata["extensions"].erase(kResolvedContext);
             metadata["version"] = version;
-            metadata["depiction"] = version != 5 || can_recognize_boundary_entity_type(entity.type) ? kBoundaryDepiction :
-                entity.type == "wall" ? "WALL_PLAN_V1" : entity.properties.contains("opening_assembly") ?
-                kManufacturedDepiction : "OPENING_PLAN_V1";
+            metadata["depiction"] = source_depiction(entity);
             metadata["member_ids"] = ids;
-            metadata["dependency_graph"] = version == 5 ? native_dxf_wall_source_dependency_graph(entity) :
+            metadata["dependency_graph"] = version >= 5 ? native_dxf_wall_source_dependency_graph(entity) :
                 native_dxf_boundary_dependency_graph(entity);
+            if (version == 6) metadata["resolved_context"] = resolved_context_json(captured_contexts.at(entity.id));
             const auto payload = metadata.dump();
             if (payload.size() > 16 * 1024) throw std::invalid_argument("native payload byte limit");
             (void)bounded_native_json(payload);
         }
-        if (version == 5) validate_native_dxf_wall_source_groups(source, &wall_source_budget);
+        if (preflight_only) {
+            if (version >= 5) validate_native_dxf_wall_source_groups(source, &wall_source_budget, true);
+            return true;
+        }
+        if (version >= 5) validate_native_dxf_wall_source_groups(source, &wall_source_budget);
         else validate_native_dxf_boundary_groups(source);
         std::vector<Entity> source_boundaries;
         for (const auto& entity : source)
             if (can_recognize_boundary_entity_type(entity.type)) source_boundaries.push_back(entity);
-        if (version != 5) validate_boundary_group_source_contexts(source_boundaries);
+        if (version < 5) validate_boundary_group_source_contexts(source_boundaries);
         validate_boundary_group_ceiling_sources(source_boundaries);
         for (const auto& entity : source) detached.push_back(detached_native_entity(entity, unchanged, version >= 4));
-        if (version == 5) validate_native_dxf_wall_source_groups(detached, &wall_source_budget);
+        if (version >= 5) validate_native_dxf_wall_source_groups(detached, &wall_source_budget);
         else validate_native_dxf_boundary_groups(detached);
         const auto detached_document = Document::create(detached).snapshot();
         if (!detached_document.is_editable())
@@ -858,26 +1072,26 @@ bool export_boundary_group(const DocumentSnapshot& document, const std::vector<s
             metadata["extensions"].erase("vertex_dxf_stair_floor_binding");
             metadata["extensions"].erase(kWallSourceContextBinding);
             metadata["extensions"].erase(kWallSourceHostedOpenings);
+            metadata["extensions"].erase(kMeasuredGraph);
+            metadata["extensions"].erase(kResolvedContext);
             metadata["version"] = version;
-            metadata["depiction"] = version != 5 || can_recognize_boundary_entity_type(entity.type) ? kBoundaryDepiction :
-                entity.type == "wall" ? "WALL_PLAN_V1" : entity.properties.contains("opening_assembly") ?
-                kManufacturedDepiction : "OPENING_PLAN_V1";
+            metadata["depiction"] = source_depiction(entity);
             metadata["member_ids"] = ids;
-            metadata["dependency_graph"] = version == 5 ? native_dxf_wall_source_dependency_graph(entity) :
+            metadata["dependency_graph"] = version >= 5 ? native_dxf_wall_source_dependency_graph(entity) :
                 native_dxf_boundary_dependency_graph(entity);
+            if (version == 6) metadata["resolved_context"] = resolved_context_json(captured_contexts.at(entity.id));
             const auto payload = metadata.dump();
             if (payload.size() > 16 * 1024) throw std::invalid_argument("native payload byte limit");
             (void)bounded_native_json(payload);
             const auto layer = layer_for(document, entity, result.diagnostics);
             const auto name = "VERTEX_BOUNDARY_" + std::to_string(result.drawing.blocks.size() + pending.blocks.size() + 1);
-            auto block = can_recognize_boundary_entity_type(entity.type) ? boundary_plan_block(entity, name, layer, true) :
+            auto block = entity.type == "measurement_linework" ? linework_plan_block(entity, name, layer) :
+                can_recognize_boundary_entity_type(entity.type) ? boundary_plan_block(entity, name, layer, true) :
                 architectural_block(document, entity, name, layer, result.diagnostics, scope);
-            if (version == 5) {
+            if (version >= 5) {
                 const auto& fresh = detached_document.entities().at(entity.id);
                 std::vector<DxfProjectDiagnostic> geometry_diagnostics;
-                const auto regenerated = can_recognize_boundary_entity_type(fresh.type) ?
-                    boundary_plan_block(fresh, name, layer, true) :
-                    architectural_block(detached_document, fresh, name, layer, geometry_diagnostics);
+                const auto regenerated = source_plan_block(detached_document.entities(), fresh, name, layer, geometry_diagnostics);
                 // Exact parity is checked below by the same native comparison
                 // used for input carriers; source and detached plans share order.
                 if (!geometry_diagnostics.empty() || !same_block_geometry(block, regenerated, true))
@@ -906,13 +1120,34 @@ bool export_boundary_group(const DocumentSnapshot& document, const std::vector<s
 // unrelated inactive incoming owner is retained evidence, not emitted output.
 // Failed components keep every active member on ordinary fallback.
 std::pair<std::set<std::string>, std::set<std::string>> export_boundary_groups(
-    const DocumentSnapshot& document, const ConstraintPhaseScope& scope, DxfProjectExportResult& result) {
+    const DocumentSnapshot& document, const ConstraintPhaseScope& scope, DxfProjectExportResult& result,
+    NativeDxfWallSourceWorkBudget& wall_source_budget) {
     std::map<std::string, std::set<std::string>> adjacency;
     std::set<std::string> linked;
+    std::map<std::string, DrawingContext, std::less<>> contexts;
+    std::set<std::string, std::less<>> visible;
+    const bool measured_operation = std::any_of(document.entities().begin(), document.entities().end(), [&](const auto& owner) {
+        return !scope.inactive_owner_ids.contains(owner.first) && (owner.second.type == "measurement_linework" ||
+            owner.second.extensions.contains("measurement_linework_sources") || owner.second.extensions.contains("measurement_linework_group"));
+    });
+    wall_source_budget.measured_operation = measured_operation;
+    std::optional<ProjectOrganization> organization;
+    if (measured_operation) organization = organize_project(document);
+    for (const auto& [id, entity] : document.entities()) {
+        (void)entity;
+        if (scope.inactive_owner_ids.contains(id)) continue;
+        visible.insert(id);
+        if (organization) if (const auto context = organization->drawing_context(id)) contexts.emplace(id, *context);
+    }
     for (const auto& [id, entity] : document.entities()) {
         if (scope.inactive_owner_ids.contains(id) ||
-            (!can_recognize_boundary_entity_type(entity.type) && entity.type != "wall" && entity.type != "opening")) continue;
+            (!can_recognize_boundary_entity_type(entity.type) && entity.type != "wall" && entity.type != "opening" &&
+             entity.type != "measurement_linework")) continue;
         adjacency.try_emplace(id);
+        if (entity.type == "measurement_linework") linked.insert(id);
+        for (const auto& target : recover_measured_source_ids(entity.extensions)) {
+            linked.insert(id); adjacency[id].insert(target); adjacency[target].insert(id);
+        }
         try {
             const auto dependencies = native_dxf_wall_source_dependency_ids(entity);
             if (can_recognize_boundary_entity_type(entity.type) &&
@@ -920,12 +1155,15 @@ std::pair<std::set<std::string>, std::set<std::string>> export_boundary_groups(
             for (const auto& target : dependencies) {
                 adjacency[id].insert(target); adjacency[target].insert(id);
             }
+            for (const auto& target : measured_graph_ids(entity, document.entities(), contexts, &visible)) {
+                linked.insert(id); adjacency[id].insert(target); adjacency[target].insert(id);
+            }
         } catch (const std::exception&) {
             if (can_recognize_boundary_entity_type(entity.type)) linked.insert(id);
         }
     }
     std::set<std::string> processed, activated, fallback;
-    NativeDxfWallSourceWorkBudget wall_source_budget;
+    std::vector<std::vector<std::string>> components;
     for (const auto& root : linked) {
         if (processed.contains(root)) continue;
         std::set<std::string> members{root};
@@ -933,9 +1171,17 @@ std::pair<std::set<std::string>, std::set<std::string>> export_boundary_groups(
         for (std::size_t i = 0; i < pending.size(); ++i)
             for (const auto& child : adjacency[pending[i]]) if (members.insert(child).second) pending.push_back(child);
         processed.insert(members.begin(), members.end());
-        const std::vector<std::string> ids(members.begin(), members.end());
+        components.emplace_back(members.begin(), members.end());
+    }
+    // V6 operation admission preflights every component before any nonlinear
+    // proof. V1..V5-only operations retain their prior work/schema contract.
+    if (measured_operation) for (const auto& ids : components)
+        if (!export_boundary_group(document, ids, scope, result, wall_source_budget, true))
+            fallback.insert(ids.begin(), ids.end());
+    for (const auto& ids : components) {
+        if (std::any_of(ids.begin(), ids.end(), [&](const auto& id) { return fallback.contains(id); })) continue;
         auto& destination = export_boundary_group(document, ids, scope, result, wall_source_budget) ? activated : fallback;
-        destination.insert(members.begin(), members.end());
+        destination.insert(ids.begin(), ids.end());
     }
     return {std::move(activated), std::move(fallback)};
 }
@@ -1025,7 +1271,8 @@ void report_boundary_semantics_loss(const Entity& entity, std::string_view impor
 
 void export_native_entity(const DocumentSnapshot& document, const Entity& entity,
                           DxfProjectExportResult& result, const ConstraintPhaseScope& scope,
-                          bool allow_boundary_native = true) {
+                          bool allow_boundary_native = true,
+                          NativeDxfWallSourceWorkBudget* source_budget = nullptr) {
     if (entity.type == "wall" || entity.type == "opening") {
         export_architectural_entity(document, entity, result, scope, allow_boundary_native);
         return;
@@ -1038,6 +1285,14 @@ void export_native_entity(const DocumentSnapshot& document, const Entity& entity
     const auto layer = layer_for(document, entity, result.diagnostics);
     if (entity.type == "measurement_linework") {
         try {
+            if (source_budget) {
+                const auto [count, replay_work] = raw_measured_stroke_work(entity);
+                if (source_budget->segments > 50'000 - count || source_budget->source_work > 250'000 ||
+                    replay_work > (250'000 - source_budget->source_work) / 16)
+                    throw std::invalid_argument("V6 fallback replay work limit");
+                source_budget->segments += count;
+                source_budget->source_work += replay_work * 16;
+            }
             const auto decoded = decode_measurement_linework_model(entity.properties.at("model"));
             if (!decoded.supported()) {
                 diagnostic(result.diagnostics, entity.id, entity.type, "measurement_linework_model_unsupported");
@@ -1065,6 +1320,20 @@ void export_native_entity(const DocumentSnapshot& document, const Entity& entity
         return;
     }
     if (can_recognize_boundary_entity_type(entity.type)) {
+        if (source_budget) {
+            try {
+                const auto count = raw_boundary_segment_count(entity);
+                const auto work = count * count * 16;
+                if (source_budget->segments > 50'000 - count || source_budget->source_work > 250'000 ||
+                    work > 250'000 - source_budget->source_work)
+                    throw std::invalid_argument("V6 fallback topology work limit");
+                source_budget->segments += count;
+                source_budget->source_work += work;
+            } catch (const std::exception&) {
+                diagnostic(result.diagnostics, entity.id, entity.type, "boundary_not_representable");
+                return;
+            }
+        }
         const auto boundary = read_entity_boundary(entity);
         if (!boundary) {
             diagnostic(result.diagnostics, entity.id, entity.type, "boundary_not_representable");
@@ -1737,7 +2006,11 @@ NativeCandidate decode_native_candidate(const DxfBlock& block, std::size_t inser
     std::set<std::string> expected{"version", "id", "type", "properties", "extensions", "hosted_opening_ids"};
     std::set<std::string> actual;
     if (!payload.is_object()) throw std::invalid_argument("native payload must be object");
-    const bool wall_source = payload.contains("version") && payload.at("version").is_number_integer() && payload.at("version") == 5;
+    const bool measured_source = payload.contains("version") && payload.at("version").is_number_integer() && payload.at("version") == 6;
+    const bool wall_source = payload.contains("version") && payload.at("version").is_number_integer() &&
+        (payload.at("version") == 5 || measured_source);
+    const bool linework = measured_source && payload.value("type", std::string{}) == "measurement_linework";
+    if (measured_source) expected.insert("resolved_context");
     const bool boundary = (payload.contains("version") && payload.at("version").is_number_integer() &&
         (payload.at("version") == 2 || payload.at("version") == 3 || payload.at("version") == 4)) ||
         (wall_source && payload.contains("type") && (payload.at("type") == "boundary" || payload.at("type") == "measurement_boundary"));
@@ -1760,7 +2033,7 @@ NativeCandidate decode_native_candidate(const DxfBlock& block, std::size_t inser
     }
     if (wall_source && !boundary && !manufactured) {
         expected.insert("depiction");
-        const auto depiction = payload.value("type", std::string{}) == "wall" ? "WALL_PLAN_V1" : "OPENING_PLAN_V1";
+        const auto depiction = linework ? kLineworkDepiction : payload.value("type", std::string{}) == "wall" ? "WALL_PLAN_V1" : "OPENING_PLAN_V1";
         if (!payload.contains("depiction") || payload.at("depiction") != depiction)
             throw std::invalid_argument("V5 architecture depiction contract missing");
     }
@@ -1774,7 +2047,7 @@ NativeCandidate decode_native_candidate(const DxfBlock& block, std::size_t inser
                                payload.at("properties"), false, payload.at("extensions")}, {}, insert_index, &block};
     if (candidate.entity.id.empty() || candidate.entity.id.size() > 255 ||
         (boundary ? !can_recognize_boundary_entity_type(candidate.entity.type) :
-         candidate.entity.type != "wall" && candidate.entity.type != "opening") ||
+         candidate.entity.type != "wall" && candidate.entity.type != "opening" && !linework) ||
         (manufactured && candidate.entity.type != "opening"))
         throw std::invalid_argument("native entity type/id not allowed");
     std::set<std::string> hosted;
@@ -1783,11 +2056,13 @@ NativeCandidate decode_native_candidate(const DxfBlock& block, std::size_t inser
             !hosted.insert(id.get<std::string>()).second) throw std::invalid_argument("invalid hosted ID list");
         candidate.hosted_ids.push_back(id.get<std::string>());
     }
-    if ((candidate.entity.type == "opening" || boundary) && !candidate.hosted_ids.empty())
+    if ((candidate.entity.type == "opening" || boundary || linework) && !candidate.hosted_ids.empty())
         throw std::invalid_argument("native entity cannot host children");
     if (boundary && candidate.entity.extensions.contains("physical_wall_room"))
         throw std::invalid_argument("physical room source graph unavailable");
     candidate.version = payload.at("version").get<int>();
+    if (candidate.entity.extensions.contains(kMeasuredGraph) || candidate.entity.extensions.contains(kResolvedContext))
+        throw std::invalid_argument("native source cannot carry measured admission state");
     if ((candidate.version == 4 || wall_source) && candidate.entity.extensions.contains("vertex_dxf_stair_floor_binding"))
         throw std::invalid_argument("native source cannot carry destination floor binding");
     if (wall_source && candidate.entity.extensions.contains(kWallSourceContextBinding))
@@ -1798,6 +2073,14 @@ NativeCandidate decode_native_candidate(const DxfBlock& block, std::size_t inser
         auto ids = candidate.hosted_ids;
         std::sort(ids.begin(), ids.end());
         candidate.entity.extensions[kWallSourceHostedOpenings] = {{"version", 1}, {"opening_ids", ids}};
+    }
+    if (measured_source) {
+        (void)read_resolved_context(payload.at("resolved_context"));
+        candidate.entity.extensions[kResolvedContext] = {{"version", 1}, {"context", payload.at("resolved_context")}};
+        candidate.entity.extensions[kMeasuredGraph] = {{"version", 1},
+            {"source_ids", payload.at("dependency_graph").at("measurement_graph_ids")}};
+        // The exact graph codec selects V6 by its admission marker.
+        candidate.entity.extensions["vertex_dxf_boundary"] = boundary_group_marker({}, 6);
     }
     if (group) {
         if (!payload.at("member_ids").is_array() ||
@@ -1854,12 +2137,21 @@ Entity detached_native_entity(const Entity& source, const std::map<std::string, 
     Entity result = can_recognize_boundary_entity_type(source.type) && ids.at(source.id) != source.id
         ? remap_boundary_owner_identity(source, ids.at(source.id)) : source;
     result.id = ids.at(source.id);
+    if (source.type == "measurement_linework" && result.id != source.id)
+        result.properties["model"] = remap_measurement_linework_owner_identity(source.properties.at("model"), result.id);
     if (!result.extensions.contains("vertex_dxf_source"))
         result.extensions["vertex_dxf_source"] = {{"version", 1}, {"id", source.id},
             {"properties", source.properties}, {"extensions", source.extensions}};
     if (wall_source) {
         result.extensions[kWallSourceContextBinding] = {{"version", 1},
             {"source_context", direct_source_context(source)}, {"destination_context", nullptr}};
+        if (measured_source_member(source)) {
+            auto& binding = result.extensions[kWallSourceContextBinding];
+            binding["version"] = 2;
+            binding["source_resolved_context"] = resolved_context_json(member_resolved_context(source));
+            binding["destination_resolved_context"] = nullptr;
+            result.extensions.erase(kResolvedContext);
+        }
         result.properties.erase("phase_id");
         result.properties.erase("layer");
         result.properties.erase("layer_name");
@@ -1914,6 +2206,8 @@ std::set<std::size_t> import_native_graphs(const DxfDrawing& drawing, bool sourc
     std::set<std::string> declared_ids;
     std::set<std::string> rejected_boundary_group_ids;
     std::set<std::size_t> activated;
+    std::vector<Entity> original_measured_inventory;
+    bool original_measured_context_incomplete = false;
     for (std::size_t i = 0; i < drawing.inserts.size(); ++i) {
         const auto& insert = drawing.inserts[i];
         const auto block = std::find_if(drawing.blocks.begin(), drawing.blocks.end(),
@@ -1927,11 +2221,33 @@ std::set<std::size_t> import_native_graphs(const DxfDrawing& drawing, bool sourc
             if (payload.is_object() && payload.contains("version") &&
                 payload.at("version").is_number_integer() &&
                 (payload.at("version") == 1 || payload.at("version") == 2 || payload.at("version") == 3 ||
-                 payload.at("version") == 4 || payload.at("version") == 5) &&
+                 payload.at("version") == 4 || payload.at("version") == 5 || payload.at("version") == 6) &&
                 payload.contains("id") && payload.at("id").is_string()) {
                 const auto id = payload.at("id").get<std::string>();
                 if (!id.empty() && id.size() <= 255 && !declared_ids.insert(id).second)
                     duplicate_ids.insert(id);
+            }
+            // Recover the original source scope before full carrier admission.
+            // A refused standalone stroke still participates in an unisolated
+            // area's layer inventory; destination CAD-layer choices cannot
+            // remove it from the source proof.
+            if (payload.is_object() && ((payload.contains("version") && payload.at("version") == 6) ||
+                (payload.contains("type") && payload.at("type") == "measurement_linework"))) {
+                try {
+                    Entity observation{payload.at("id").get<std::string>(), payload.at("type").get<std::string>(),
+                        payload.at("properties"), false, payload.at("extensions")};
+                    if (observation.id.empty() || observation.id.size() > 255 ||
+                        !observation.properties.is_object() || !observation.extensions.is_object())
+                        throw std::invalid_argument("incomplete original V6 inventory");
+                    (void)read_resolved_context(payload.at("resolved_context"));
+                    observation.extensions.erase("vertex_dxf_boundary");
+                    observation.extensions.erase(kWallSourceContextBinding);
+                    observation.extensions.erase(kMeasuredGraph);
+                    observation.extensions[kResolvedContext] = {{"version", 1}, {"context", payload.at("resolved_context")}};
+                    original_measured_inventory.push_back(std::move(observation));
+                } catch (const std::exception&) {
+                    original_measured_context_incomplete = true;
+                }
             }
             auto candidate = decode_native_candidate(*block, i, payload);
             const auto source_id = candidate.entity.id;
@@ -1948,9 +2264,12 @@ std::set<std::size_t> import_native_graphs(const DxfDrawing& drawing, bool sourc
                 throw std::invalid_argument("native placement/units differs");
             if (!candidates.emplace(source_id, std::move(candidate)).second) duplicate_ids.insert(source_id);
         } catch (const std::exception& error) {
+            // Unreadable native metadata cannot certify a complete measured
+            // source inventory. V1..V5-only imports retain their prior path.
+            if (payload.is_null()) original_measured_context_incomplete = true;
             if (payload.is_object() && payload.contains("version") &&
                 payload.at("version").is_number_integer() &&
-                (payload.at("version") == 1 || payload.at("version") == 2 || payload.at("version") == 3 || payload.at("version") == 4 || payload.at("version") == 5)) {
+                (payload.at("version") == 1 || payload.at("version") == 2 || payload.at("version") == 3 || payload.at("version") == 4 || payload.at("version") == 5 || payload.at("version") == 6)) {
                 const auto remember = [&](const Json& value) {
                     if (value.is_string()) {
                         const auto& id = value.get_ref<const std::string&>();
@@ -1962,10 +2281,13 @@ std::set<std::size_t> import_native_graphs(const DxfDrawing& drawing, bool sourc
                         for (const auto& id : object.at(key)) remember(id);
                 };
                 if (payload.contains("id")) remember(payload.at("id"));
+                if (payload.contains("extensions"))
+                    for (const auto& id : recover_measured_source_ids(payload.at("extensions"))) rejected_boundary_group_ids.insert(id);
                 array(payload, "member_ids");
                 const auto references = [&](const Json& graph) {
                     array(graph, "deduction_ids"); array(graph, "below_5ft_deduction_ids");
                     array(graph, "wall_source_ids"); array(graph, "hosted_opening_ids");
+                    array(graph, "measurement_source_ids"); array(graph, "measurement_graph_ids");
                     if (graph.is_object() && graph.contains("room_boundary_id")) remember(graph.at("room_boundary_id"));
                     if (graph.is_object() && graph.contains("wall_id")) remember(graph.at("wall_id"));
                 };
@@ -1996,12 +2318,48 @@ std::set<std::size_t> import_native_graphs(const DxfDrawing& drawing, bool sourc
     for (const auto& [id, candidate] : candidates) { (void)candidate; allocated_ids.insert(id); }
     std::set<std::string> processed_groups;
     NativeDxfWallSourceWorkBudget wall_source_budget;
+    std::set<std::string> preflight_refused;
+    wall_source_budget.measured_operation = std::any_of(candidates.begin(), candidates.end(),
+        [](const auto& entry) { return entry.second.version == 6; });
+    const auto with_original_inventory = [&](std::vector<Entity> source) {
+        std::set<std::string> members;
+        for (const auto& member : source) members.insert(member.id);
+        if (original_measured_context_incomplete)
+            throw std::invalid_argument("original V6 source context inventory incomplete");
+        for (const auto& observation : original_measured_inventory)
+            if (!members.contains(observation.id)) source.push_back(observation);
+        return source;
+    };
+    if (wall_source_budget.measured_operation) {
+        std::set<std::string> preflight_seen;
+        for (const auto& [id, candidate] : candidates) {
+            if (candidate.version < 5 || preflight_seen.contains(id)) continue;
+            preflight_seen.insert(candidate.member_ids.begin(), candidate.member_ids.end());
+            try {
+                std::vector<Entity> source;
+                for (const auto& member_id : candidate.member_ids) {
+                    const auto& item = candidates.at(member_id);
+                    if (item.version != candidate.version || item.member_ids != candidate.member_ids ||
+                        duplicate_ids.contains(member_id) || rejected_boundary_group_ids.contains(member_id))
+                        throw std::invalid_argument("partial V6 preflight graph");
+                    auto entity = item.entity;
+                    entity.extensions["vertex_dxf_boundary"] = boundary_group_marker(candidate.member_ids, candidate.version);
+                    source.push_back(std::move(entity));
+                }
+                validate_native_dxf_wall_source_groups(candidate.version == 6 ? with_original_inventory(std::move(source)) : source,
+                    &wall_source_budget, true);
+            } catch (const std::exception&) {
+                preflight_refused.insert(candidate.member_ids.begin(), candidate.member_ids.end());
+            }
+        }
+    }
     for (const auto& [id, candidate] : candidates) {
-        if ((candidate.version != 3 && candidate.version != 4 && candidate.version != 5) || processed_groups.contains(id)) continue;
+        if ((candidate.version != 3 && candidate.version != 4 && candidate.version != 5 && candidate.version != 6) || processed_groups.contains(id)) continue;
         // Mark the attempted declaration, but conflicting members are still
         // checked below. No member is published until every proof succeeds.
         processed_groups.insert(candidate.member_ids.begin(), candidate.member_ids.end());
         try {
+            if (preflight_refused.contains(id)) throw std::invalid_argument("native source operation preflight refused");
             std::vector<const NativeCandidate*> group;
             std::vector<Entity> source;
             std::map<std::string, std::string> ids;
@@ -2031,9 +2389,11 @@ std::set<std::size_t> import_native_graphs(const DxfDrawing& drawing, bool sourc
                     if (std::binary_search(candidate.member_ids.begin(), candidate.member_ids.end(), target))
                         throw std::invalid_argument("overlapping native boundary graph");
             }
-            if (candidate.version == 5) validate_native_dxf_wall_source_groups(source, &wall_source_budget);
+            if (candidate.version >= 5)
+                validate_native_dxf_wall_source_groups(candidate.version == 6 ? with_original_inventory(source) : source,
+                    &wall_source_budget);
             else validate_native_dxf_boundary_groups(source);
-            if (candidate.version == 5) {
+            if (candidate.version >= 5) {
                 for (const auto* item : group) if (item->entity.type == "wall") {
                     std::set<std::string> actual, expected(item->hosted_ids.begin(), item->hosted_ids.end());
                     for (const auto* child : group)
@@ -2044,7 +2404,7 @@ std::set<std::size_t> import_native_graphs(const DxfDrawing& drawing, bool sourc
             }
             std::vector<Entity> source_boundaries;
             for (const auto& entity : source) if (can_recognize_boundary_entity_type(entity.type)) source_boundaries.push_back(entity);
-            if (candidate.version != 5) validate_boundary_group_source_contexts(source_boundaries);
+            if (candidate.version < 5) validate_boundary_group_source_contexts(source_boundaries);
             validate_boundary_group_ceiling_sources(source_boundaries);
             std::vector<Entity> detached;
             for (const auto& entity : source) {
@@ -2052,7 +2412,7 @@ std::set<std::size_t> import_native_graphs(const DxfDrawing& drawing, bool sourc
                 remap_native_dxf_boundary_dependency_ids(fresh, typed_ids);
                 detached.push_back(std::move(fresh));
             }
-            if (candidate.version == 5) validate_native_dxf_wall_source_groups(detached, &wall_source_budget);
+            if (candidate.version >= 5) validate_native_dxf_wall_source_groups(detached, &wall_source_budget);
             else validate_native_dxf_boundary_groups(detached);
             const auto document = Document::create(detached).snapshot();
             if (!document.is_editable()) throw std::invalid_argument("native boundary group schema is not editable");
@@ -2064,18 +2424,14 @@ std::set<std::size_t> import_native_graphs(const DxfDrawing& drawing, bool sourc
                     !block.polylines.empty() ? block.polylines.front().layer : std::string("0");
                 const auto& fresh = document.entities().at(ids.at(item.entity.id));
                 std::vector<DxfProjectDiagnostic> geometry_diagnostics;
-                if (candidate.version == 5) {
+                if (candidate.version >= 5) {
                     const auto source_graph = wall_source_context_graph(source);
                     const auto& original = source_graph.at(item.entity.id);
-                    const auto source_plan = can_recognize_boundary_entity_type(original.type) ?
-                        boundary_plan_block(original, block.name, layer, true) :
-                        architectural_block(source_graph, original, block.name, layer, geometry_diagnostics);
+                    const auto source_plan = source_plan_block(source_graph, original, block.name, layer, geometry_diagnostics);
                     if (!geometry_diagnostics.empty() || !same_block_geometry(block, source_plan, true))
                         throw std::invalid_argument("native V5 source plan differs");
                 }
-                const auto expected = can_recognize_boundary_entity_type(fresh.type) ?
-                    boundary_plan_block(fresh, block.name, layer, true) :
-                    architectural_block(document, fresh, block.name, layer, geometry_diagnostics);
+                const auto expected = source_plan_block(document.entities(), fresh, block.name, layer, geometry_diagnostics);
                 if (!geometry_diagnostics.empty() || !same_block_geometry(block, expected, true))
                     throw std::invalid_argument("native group geometry differs");
                 const auto effective_layer = layer == "0" ? drawing.inserts.at(item.insert_index).layer : layer;
@@ -2089,7 +2445,7 @@ std::set<std::size_t> import_native_graphs(const DxfDrawing& drawing, bool sourc
                     properties.at("appraisal_facts").contains("ansi") &&
                     properties.at("appraisal_facts").at("ansi").contains("ceiling") &&
                     properties.at("appraisal_facts").at("ansi").at("ceiling").value("kind", std::string{}) == "sloped";
-                if (candidate.version == 5 && properties.contains("phase_id"))
+                if (candidate.version >= 5 && properties.contains("phase_id"))
                     diagnostic(result.diagnostics, item->entity.id, item->entity.type, "source_phase_not_transported");
                 if (sloped || properties.contains("appraisal_reporting"))
                     diagnostic(result.diagnostics, item->entity.id, item->entity.type, "source_confirmation_required");
@@ -2099,7 +2455,7 @@ std::set<std::size_t> import_native_graphs(const DxfDrawing& drawing, bool sourc
         }
     }
     for (const auto& [id, candidate] : candidates) {
-        if (!can_recognize_boundary_entity_type(candidate.entity.type) || candidate.version == 3 || candidate.version == 4 || candidate.version == 5) continue;
+        if (!can_recognize_boundary_entity_type(candidate.entity.type) || candidate.version == 3 || candidate.version == 4 || candidate.version == 5 || candidate.version == 6) continue;
         try {
             if (duplicate_ids.contains(id) || rejected_boundary_group_ids.contains(id) || processed_groups.contains(id))
                 throw std::invalid_argument("conflicting native identity declaration");
@@ -2128,7 +2484,7 @@ std::set<std::size_t> import_native_graphs(const DxfDrawing& drawing, bool sourc
         }
     }
     for (const auto& [id, wall] : candidates) {
-        if (wall.entity.type != "wall" || wall.version == 5) continue;
+        if (wall.entity.type != "wall" || wall.version >= 5) continue;
         try {
             std::vector<const NativeCandidate*> group{&wall};
             std::set<std::string> expected(wall.hosted_ids.begin(), wall.hosted_ids.end()), actual;
@@ -2319,6 +2675,14 @@ Json native_dxf_wall_source_dependency_graph(const Entity& entity) {
             throw std::invalid_argument("invalid native wall-source opening host");
         graph["wall_id"] = *host;
     }
+    if (measured_source_member(entity)) {
+        graph["measurement_source_ids"] = measurement_linework_source_ids_for_admission(entity);
+        const auto& declaration = entity.extensions.at(kMeasuredGraph);
+        if (!declaration.is_object() || declaration.size() != 2 || !declaration.at("version").is_number_integer() ||
+            declaration.at("version") != 1 || !declaration.at("source_ids").is_array())
+            throw std::invalid_argument("invalid V6 measured graph declaration");
+        graph["measurement_graph_ids"] = declaration.at("source_ids");
+    }
     return graph;
 }
 
@@ -2329,6 +2693,13 @@ std::vector<std::string> native_dxf_wall_source_dependency_ids(const Entity& ent
         for (const auto& value : graph.at(key)) ids.insert(value.get<std::string>());
     for (const auto* key : {"room_boundary_id", "wall_id"})
         if (graph.at(key) != "") ids.insert(graph.at(key).get<std::string>());
+    for (const auto& id : measurement_linework_source_ids_for_admission(entity)) ids.insert(id);
+    if (measured_source_member(entity))
+        for (const auto& id : graph.at("measurement_graph_ids")) {
+            if (!id.is_string() || id.get_ref<const std::string&>().empty() || id.get_ref<const std::string&>().size() > 255)
+                throw std::invalid_argument("invalid V6 measured graph owner");
+            ids.insert(id.get<std::string>());
+        }
     // These are recoverable typed incoming physical-room references only.
     // Reaching such an owner rejects V5; its unsupported descriptor never gains
     // transport authority and no arbitrary nested owner_id search is used.
@@ -2358,7 +2729,8 @@ void validate_native_dxf_wall_source_member(const Entity& entity) {
         !marker.contains("member_ids") || !marker.at("member_ids").is_array() ||
         marker.at("member_ids").empty() || marker.at("member_ids").size() > 4096 ||
         (entity.type != "boundary" && entity.type != "measurement_boundary" &&
-         entity.type != "wall" && entity.type != "opening") || !entity.properties.is_object())
+         entity.type != "wall" && entity.type != "opening" &&
+         !(measured_source_member(entity) && entity.type == "measurement_linework")) || !entity.properties.is_object())
         throw std::invalid_argument("invalid V5 member schema");
     std::vector<std::string> members;
     for (const auto& value : marker.at("member_ids")) {
@@ -2372,7 +2744,30 @@ void validate_native_dxf_wall_source_member(const Entity& entity) {
         !std::binary_search(members.begin(), members.end(), entity.id))
         throw std::invalid_argument("invalid V5 membership");
     for (const auto* key : {"physical_wall_room", "measurement_linework_sources", "measurement_linework_group"})
-        if (entity.extensions.contains(key)) throw std::invalid_argument("untransported V5 source graph");
+        if (entity.extensions.contains(key) && (std::string_view(key) == "physical_wall_room" || !measured_source_member(entity)))
+            throw std::invalid_argument("untransported native source graph");
+    if (!measured_source_member(entity) && (entity.extensions.contains(kMeasuredGraph) || entity.extensions.contains(kResolvedContext)))
+        throw std::invalid_argument("V5 cannot carry V6 admission state");
+    if (measured_source_member(entity)) {
+        const auto graph = native_dxf_wall_source_dependency_graph(entity);
+        std::vector<std::string> inventory;
+        for (const auto& id : graph.at("measurement_graph_ids")) {
+            if (!id.is_string() || id.get_ref<const std::string&>().empty() || id.get_ref<const std::string&>().size() > 255)
+                throw std::invalid_argument("invalid V6 inventory identity");
+            inventory.push_back(id.get<std::string>());
+        }
+        if (inventory.size() > 4096 || !std::is_sorted(inventory.begin(), inventory.end()) ||
+            std::adjacent_find(inventory.begin(), inventory.end()) != inventory.end() ||
+            (measurement_linework_source_ids_for_admission(entity).empty() && !inventory.empty()))
+            throw std::invalid_argument("invalid V6 inventory");
+        const auto resolved = member_resolved_context(entity);
+        const auto direct = direct_source_context(entity);
+        const auto resolved_json = resolved_context_json(resolved);
+        for (const auto& [key, value] : direct.items())
+            if (resolved_json.contains(key) && resolved_json.at(key) != value)
+                throw std::invalid_argument("V6 context contradicts direct placement");
+        (void)measurement_linework_copy_isolated(entity);
+    }
     for (const auto* key : {"parent_id", "room_id", "wall_join_id", "level_connection",
                            "material_assignment", "assembly_catalog_id", "refs", "references"})
         if (entity.properties.contains(key)) throw std::invalid_argument("untransported V5 dependency");
@@ -2396,7 +2791,7 @@ void validate_native_dxf_wall_source_member(const Entity& entity) {
         for (const auto& layer : entity.properties.at("layers"))
             if (layer.is_object() && layer.contains("material_assignment"))
                 throw std::invalid_argument("untransported V5 material dependency");
-    if (entity.type == "wall" || entity.type == "opening")
+    if (entity.type == "wall" || entity.type == "opening" || entity.type == "measurement_linework")
         for (const auto* key : {"deduction_ids", "appraisal_facts", "wall_measurement_source"})
             if (entity.properties.contains(key)) throw std::invalid_argument("invalid V5 architecture relationship");
     const auto hosted = entity.extensions.find(kWallSourceHostedOpenings);
@@ -2418,11 +2813,19 @@ void validate_native_dxf_wall_source_member(const Entity& entity) {
     (void)wall_source_stair_floor(entity);
     const auto binding = entity.extensions.find(kWallSourceContextBinding);
     if (binding == entity.extensions.end()) { (void)direct_source_context(entity); return; }
-    if (!binding->is_object() || binding->size() != 3 || !binding->contains("version") ||
-        !binding->at("version").is_number_integer() || binding->at("version") != 1 ||
+    if (!binding->is_object() || binding->size() != (measured_source_member(entity) ? 5 : 3) || !binding->contains("version") ||
+        !binding->at("version").is_number_integer() || binding->at("version") != (measured_source_member(entity) ? 2 : 1) ||
         !binding->contains("source_context") || !binding->contains("destination_context"))
         throw std::invalid_argument("invalid V5 context binding");
     validate_direct_context(binding->at("source_context"));
+    if (measured_source_member(entity)) {
+        if (entity.extensions.contains(kResolvedContext)) throw std::invalid_argument("V6 pending resolved observation must detach");
+        const auto resolved = resolved_context_json(read_resolved_context(binding->at("source_resolved_context")));
+        for (const auto& [key, value] : binding->at("source_context").items())
+            if (resolved.contains(key) && resolved.at(key) != value) throw std::invalid_argument("V6 source context contradiction");
+        if (binding->at("destination_context").is_null() != binding->at("destination_resolved_context").is_null())
+            throw std::invalid_argument("V6 resolved binding state differs");
+    }
     const auto& destination = binding->at("destination_context");
     if (destination.is_null()) {
         if (!direct_source_context(entity).empty()) throw std::invalid_argument("pending V5 context must detach");
@@ -2452,6 +2855,14 @@ void remap_native_dxf_wall_source_dependency_ids(Entity& entity,
         members.push_back(ids.at(id.get<std::string>()));
     std::sort(members.begin(), members.end());
     result.extensions["vertex_dxf_boundary"]["member_ids"] = members;
+    if (measured_source_member(result)) {
+        std::vector<std::string> inventory;
+        for (const auto& id : result.extensions.at(kMeasuredGraph).at("source_ids"))
+            inventory.push_back(ids.at(id.get<std::string>()));
+        std::sort(inventory.begin(), inventory.end());
+        result.extensions[kMeasuredGraph]["source_ids"] = inventory;
+        result = remap_measurement_linework_source_references(result, ids);
+    }
     if (result.type == "wall") {
         std::vector<std::string> hosted;
         for (const auto& id : result.extensions.at(kWallSourceHostedOpenings).at("opening_ids"))
@@ -2488,14 +2899,17 @@ void remap_native_dxf_wall_source_dependency_ids(Entity& entity,
 }
 
 void validate_native_dxf_wall_source_groups(const std::vector<Entity>& entities,
-    NativeDxfWallSourceWorkBudget* work_budget) {
+    NativeDxfWallSourceWorkBudget* work_budget, bool preflight_only) {
     std::map<std::string, const Entity*, std::less<>> owners;
     for (const auto& entity : entities)
         if (!owners.emplace(entity.id, &entity).second) throw std::invalid_argument("duplicate imported identity");
     std::set<std::string> checked;
     struct PendingSourceCheck {
         std::map<std::string, Entity, std::less<>> graph;
+        std::map<std::string, Entity, std::less<>> measured_inventory;
         std::vector<Entity> boundaries;
+        std::map<std::string, DrawingContext, std::less<>> contexts;
+        bool measured{};
     };
     std::vector<PendingSourceCheck> pending_checks;
     // A response may contain many independent components. Charge all of them
@@ -2505,6 +2919,41 @@ void validate_native_dxf_wall_source_groups(const std::vector<Entity>& entities,
     std::size_t source_work = work_budget ? work_budget->source_work : 0;
     if (segments > 50'000 || source_work > 250'000)
         throw std::invalid_argument("V5 cumulative work limit");
+    const bool measured_operation = std::any_of(entities.begin(), entities.end(), measured_source_member);
+    if (measured_operation || (work_budget && work_budget->measured_operation)) {
+        // Charge raw topology pairs for every component before any identified
+        // boundary decoder can run. The multiplier covers source/detached
+        // decoding, plans, identity remapping and editable-document admission.
+        for (const auto& entity : entities) if (wall_source_member(entity) &&
+            can_recognize_boundary_entity_type(entity.type)) {
+            const auto count = raw_boundary_segment_count(entity);
+            const auto work = count * count * 16;
+            if (work > 250'000 - source_work) throw std::invalid_argument("V6 cumulative topology work limit");
+            source_work += work;
+            if (work_budget) work_budget->source_work = source_work;
+        }
+    }
+    std::map<std::string, Entity, std::less<>> complete_measured_inventory;
+    std::map<std::string, DrawingContext, std::less<>> complete_contexts;
+    std::map<std::string, DrawingContext, std::less<>> source_layers;
+    if (measured_operation) {
+        std::vector<Entity> observed;
+        for (const auto& entity : entities) if (measured_source_member(entity) ||
+            entity.type == "measurement_linework" || entity.extensions.contains(kResolvedContext)) {
+            const auto context = member_resolved_context(entity);
+            const auto [layer, inserted] = source_layers.emplace(context.layer_id, context);
+            if (!inserted && layer->second != context)
+                throw std::invalid_argument("V6 source contexts disagree within one drawing layer");
+            const auto direct = direct_source_context(entity);
+            const auto resolved = resolved_context_json(context);
+            for (const auto& [key, value] : direct.items())
+                if (resolved.contains(key) && resolved.at(key) != value)
+                    throw std::invalid_argument("V6 original inventory contradicts direct placement");
+            complete_contexts.emplace(entity.id, context);
+            observed.push_back(entity);
+        }
+        complete_measured_inventory = wall_source_context_graph(observed);
+    }
     for (const auto& root : entities) {
         if (!wall_source_member(root) || checked.contains(root.id)) continue;
         validate_native_dxf_wall_source_member(root);
@@ -2519,11 +2968,16 @@ void validate_native_dxf_wall_source_groups(const std::vector<Entity>& entities,
             members.push_back(*found->second);
         }
         const auto graph = wall_source_context_graph(members);
+        const bool measured = measured_source_member(root);
+        std::map<std::string, DrawingContext, std::less<>> contexts;
+        if (measured) contexts = complete_contexts;
         std::map<std::string, std::set<std::string>> adjacency;
         std::map<std::string, std::vector<std::string>> deductions;
         std::map<std::string, std::size_t> incoming;
         std::vector<Entity> boundaries;
         bool live_source = false;
+        std::size_t measured_segments = 0;
+        std::size_t measured_replay_work = 0;
         std::optional<int> binding_state;
         for (const auto& member : members) {
             const auto binding = member.extensions.find(kWallSourceContextBinding);
@@ -2555,8 +3009,17 @@ void validate_native_dxf_wall_source_groups(const std::vector<Entity>& entities,
                 if (child_context.contains("floor_id") && (!host_context.contains("floor_id") ||
                     child_context.at("floor_id") != host_context.at("floor_id")))
                     throw std::invalid_argument("V5 opening host floor differs");
+            } else if (member.type == "measurement_linework") {
+                const auto [count, replay_work] = raw_measured_stroke_work(member);
+                // Includes decode's replay, exact plans, raw owner remapping and
+                // editable-document admission between source/detached proofs.
+                if (segments > 50'000 - count || replay_work > (250'000 - source_work) / 16)
+                    throw std::invalid_argument("V6 cumulative replay work limit");
+                segments += count; measured_segments += count;
+                source_work += replay_work * 16;
+                measured_replay_work += replay_work * 16;
             } else {
-                auto boundary = read_entity_boundary(member);
+                auto boundary = read_entity_boundary_for_admission(member);
                 if (!boundary) throw std::invalid_argument("V5 boundary geometry missing");
                 std::size_t count = boundary->size();
                 if (const auto holes = member.properties.find("holes"); holes != member.properties.end()) {
@@ -2571,7 +3034,20 @@ void validate_native_dxf_wall_source_groups(const std::vector<Entity>& entities,
                 if (count > 512 || segments > 50'000 - count)
                     throw std::invalid_argument("V5 boundary geometry limit");
                 segments += count;
-                boundaries.push_back(graph.at(member.id));
+                auto proof_boundary = graph.at(member.id);
+                if (measured) {
+                    const auto context = resolved_context_json(contexts.at(member.id));
+                    for (const auto* key : {"property_id", "building_id", "floor_id", "layer_id"})
+                        proof_boundary.properties[key] = context.at(key);
+                    const auto expected = measured_graph_ids(member, complete_measured_inventory, contexts);
+                    if (dependencies.at("measurement_graph_ids") != Json(expected))
+                        throw std::invalid_argument("partial V6 applicable measured graph");
+                    for (const auto& source_id : dependencies.at("measurement_source_ids"))
+                        if (!graph.contains(source_id.get<std::string>()) || graph.at(source_id.get<std::string>()).type != "measurement_linework")
+                            throw std::invalid_argument("V6 measured source owner missing or type differs");
+                    if (!expected.empty()) live_source = true;
+                }
+                boundaries.push_back(std::move(proof_boundary));
                 if (dependencies.at("room_boundary_id") != "" && dependencies.at("room_boundary_id") != member.id)
                     throw std::invalid_argument("V5 ceiling owner differs");
                 for (const auto& id : dependencies.at("deduction_ids")) {
@@ -2603,11 +3079,56 @@ void validate_native_dxf_wall_source_groups(const std::vector<Entity>& entities,
                 }
             }
         }
-        if (!live_source) throw std::invalid_argument("V5 requires live exterior wall measurement");
+        if (!live_source && (!measured || members.size() != 1 || members.front().type != "measurement_linework"))
+            throw std::invalid_argument("native group requires a live source or standalone stroke");
+        if (measured) {
+            // Bound graph contacts and worst-case grouped-face/use matching
+            // before invoking any linework decoder or source graph checker.
+            if (measured_segments > 2048) throw std::invalid_argument("V6 graph source segment limit");
+            const auto charge = [&](std::size_t amount) {
+                if (amount > 250'000 - source_work) throw std::invalid_argument("V6 cumulative matching/replay work limit");
+                source_work += amount;
+            };
+            for (const auto& boundary : boundaries) if (!measurement_linework_source_ids_for_admission(boundary).empty()) {
+                const auto contacts = measured_segments * measured_segments;
+                charge(contacts);
+                std::size_t source_uses = 0;
+                const auto face_work = [&](const Json& uses, bool all_faces) {
+                    if (!uses.is_array()) throw std::invalid_argument("V6 retained face must be an array");
+                    const auto edges = uses.size();
+                    for (const auto& edge : uses) {
+                        if (!edge.is_array() || edge.size() > 250'000 - source_uses)
+                            throw std::invalid_argument("V6 retained source use limit");
+                        source_uses += edge.size();
+                    }
+                    // An arrangement of N straight/circular-arc primitives has
+                    // at most N^2+1 faces. A matched K-edge face can carry at
+                    // most K*N uses. Charge both orientations and every start,
+                    // including failed signature/interval comparisons.
+                    const auto weight = edges * (measured_segments + 1);
+                    const auto attempts = 2 * edges + 1;
+                    const auto faces = all_faces ? contacts + 1 : std::size_t{1};
+                    if (weight > 250'000 || attempts > 250'000 || faces > 250'000 ||
+                        weight > 250'000 / attempts || weight * attempts + 1 > 250'000 / faces)
+                        throw std::invalid_argument("V6 face matching work limit");
+                    charge(faces * (weight * attempts + 1));
+                };
+                const bool grouped = boundary.extensions.contains("measurement_linework_group");
+                face_work(boundary.extensions.at("measurement_linework_sources"), !grouped);
+                if (grouped) for (const auto& member : boundary.extensions.at("measurement_linework_group").at("members"))
+                    face_work(member, true);
+                // Source validation caches are per consumer; ordinary >16-owner
+                // consumers can decode repeatedly. Charge every retained use,
+                // plus a graph rebuild, against the complete raw history work.
+                if (measured_replay_work && source_uses + 1 > (250'000 - source_work) / measured_replay_work)
+                    throw std::invalid_argument("V6 repeated consumer replay work limit");
+                charge(measured_replay_work * (source_uses + 1));
+            }
+        }
         for (const auto& other : entities) {
             if (graph.contains(other.id)) continue;
             const auto dependencies = can_recognize_boundary_entity_type(other.type) ||
-                other.type == "wall" || other.type == "opening" ? native_dxf_wall_source_dependency_ids(other) :
+                other.type == "wall" || other.type == "opening" || other.type == "measurement_linework" ? native_dxf_wall_source_dependency_ids(other) :
                 std::vector<std::string>{};
             for (const auto& target : dependencies)
                 if (graph.contains(target)) throw std::invalid_argument("incoming V5 dependency outside component");
@@ -2626,11 +3147,30 @@ void validate_native_dxf_wall_source_groups(const std::vector<Entity>& entities,
             for (const auto& id : adjacency[ready[i]]) if (connected.insert(id).second) ready.push_back(id);
         if (connected.size() != members.size()) throw std::invalid_argument("disconnected V5 component");
         validate_boundary_group_source_contexts(boundaries, &source_work, true);
-        pending_checks.push_back({graph, std::move(boundaries)});
+        auto proof_inventory = graph;
+        if (measured) for (const auto& [id, entity] : complete_measured_inventory)
+            if (entity.type == "measurement_linework") proof_inventory.try_emplace(id, entity);
+        pending_checks.push_back({graph, std::move(proof_inventory), std::move(boundaries), std::move(contexts), measured});
         checked.insert(connected.begin(), connected.end());
     }
-    if (work_budget) *work_budget = {segments, source_work};
+    if (work_budget) {
+        work_budget->segments = segments;
+        work_budget->source_work = source_work;
+        work_budget->measured_operation = work_budget->measured_operation || measured_operation;
+    }
+    if (preflight_only) return;
     for (const auto& pending : pending_checks) {
+        if (pending.measured) {
+            for (const auto& [id, member] : pending.graph) if (member.type == "measurement_linework") {
+                (void)id;
+                const auto decoded = decode_measurement_linework_model(member.properties.at("model"));
+                if (!decoded.supported()) throw std::invalid_argument("V6 measured source model unsupported");
+                (void)replay_measurement_linework(*decoded.model);
+            }
+            const auto checks = measurement_linework_source_checks_with_contexts(pending.measured_inventory, pending.contexts);
+            for (const auto& boundary : pending.boundaries)
+                if (!measurement_linework_source_current(checks, boundary)) throw std::invalid_argument("stale V6 measured source graph");
+        }
         validate_boundary_group_source_contexts(pending.boundaries);
         for (const auto& [id, member] : pending.graph) {
             (void)id;
@@ -2644,9 +3184,18 @@ void validate_native_dxf_wall_source_groups(const std::vector<Entity>& entities,
 void bind_native_dxf_wall_source_destinations(std::vector<Entity>& entities,
     const std::map<std::string, DrawingContext, std::less<>>& actual_contexts) {
     auto staged = entities;
+    NativeDxfWallSourceWorkBudget work_budget;
+    auto* shared_work = std::any_of(staged.begin(), staged.end(), measured_source_member) ? &work_budget : nullptr;
     // Desktop may already have assigned floor/layer; validate the untouched
     // pending graph by removing only those reviewed assignments in a copy.
     auto pending = staged;
+    // Existing destination strokes are observations of the reviewed destination,
+    // not original-source evidence. Source closure has already been proved in
+    // the mapper/broker. Include these outsiders only in the final destination
+    // inventory, without mixing their actual contexts into the pending proof.
+    std::erase_if(pending, [](const Entity& entity) {
+        return entity.type == "measurement_linework" && !wall_source_member(entity);
+    });
     for (auto& entity : pending) if (wall_source_member(entity)) {
         const auto actual = actual_contexts.find(entity.id);
         if (actual == actual_contexts.end() || !actual->second.complete())
@@ -2662,7 +3211,14 @@ void bind_native_dxf_wall_source_destinations(std::vector<Entity>& entities,
             entity.properties.erase(key);
         }
     }
-    validate_native_dxf_wall_source_groups(pending);
+    validate_native_dxf_wall_source_groups(pending, shared_work);
+    for (auto& entity : staged) if (entity.type == "measurement_linework" && !wall_source_member(entity)) {
+        const auto actual = actual_contexts.find(entity.id);
+        if (actual == actual_contexts.end() || !actual->second.complete())
+            throw std::invalid_argument("V6 destination stroke observation context missing");
+        entity.extensions[kResolvedContext] = {{"version", 1},
+            {"context", resolved_context_json(actual->second)}};
+    }
     for (auto& entity : staged) if (wall_source_member(entity)) {
         const auto& context = actual_contexts.at(entity.id);
         auto& binding = entity.extensions.at(kWallSourceContextBinding);
@@ -2674,6 +3230,7 @@ void bind_native_dxf_wall_source_destinations(std::vector<Entity>& entities,
         for (const auto* key : {"property_id", "building_id", "floor_id", "layer_id", "phase_id"}) entity.properties.erase(key);
         for (const auto& [key, value] : destination.items()) entity.properties[key] = value;
         binding["destination_context"] = destination;
+        if (measured_source_member(entity)) binding["destination_resolved_context"] = resolved_context_json(context);
         const auto stair = entity.extensions.find("vertex_dxf_stair_floor_binding");
         if (stair != entity.extensions.end()) {
             entity.properties["appraisal_facts"]["ansi"]["ceiling"]["stair_from_floor_id"] = context.floor_id;
@@ -2682,10 +3239,16 @@ void bind_native_dxf_wall_source_destinations(std::vector<Entity>& entities,
     }
     std::map<std::string, Entity, std::less<>> final_graph;
     for (const auto& entity : staged) final_graph.emplace(entity.id, entity);
+    for (const auto& entity : staged) if (measured_source_member(entity) &&
+        !measurement_linework_source_ids_for_admission(entity).empty()) {
+        const auto expected = measured_graph_ids(entity, final_graph, actual_contexts);
+        if (entity.extensions.at(kMeasuredGraph).at("source_ids") != Json(expected))
+            throw std::invalid_argument("reviewed V6 destination changes applicable measured graph");
+    }
     for (auto& entity : staged) if (wall_source_member(entity) && entity.properties.contains("wall_measurement_source"))
         for (auto& record : entity.properties.at("wall_measurement_source").at("walls"))
             record.at("context") = direct_source_context(final_graph.at(record.at("id").get<std::string>()));
-    validate_native_dxf_wall_source_groups(staged);
+    validate_native_dxf_wall_source_groups(staged, shared_work);
     entities = std::move(staged);
 }
 
@@ -2715,7 +3278,12 @@ DxfProjectExportResult export_project_dxf(const DocumentSnapshot& document,
 #ifdef SKETCH_PHYSICAL_ROOMS
     const auto physical_rooms = physical_wall_room_checks(document);
 #endif
-    const auto [native_boundaries, fallback_boundaries] = export_boundary_groups(document, scope, result);
+    NativeDxfWallSourceWorkBudget wall_source_budget;
+    const bool measured_operation = std::any_of(document.entities().begin(), document.entities().end(), [&](const auto& owner) {
+        return !scope.inactive_owner_ids.contains(owner.first) && (owner.second.type == "measurement_linework" ||
+            owner.second.extensions.contains("measurement_linework_sources") || owner.second.extensions.contains("measurement_linework_group"));
+    });
+    const auto [native_boundaries, fallback_boundaries] = export_boundary_groups(document, scope, result, wall_source_budget);
     for (const auto& [id, entity] : document.entities()) {
         if (native_boundaries.contains(id)) continue;
         if (scope.inactive_owner_ids.contains(id)) {
@@ -2742,7 +3310,8 @@ DxfProjectExportResult export_project_dxf(const DocumentSnapshot& document,
 #endif
             continue;
         }
-        export_native_entity(document, entity, result, scope, !fallback_boundaries.contains(id));
+        export_native_entity(document, entity, result, scope, !fallback_boundaries.contains(id),
+            measured_operation ? &wall_source_budget : nullptr);
     }
     // Validate the complete mapped drawing before returning it. The caller can
     // still inspect diagnostics; an invalid mapped record is never serialized.

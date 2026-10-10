@@ -38030,7 +38030,7 @@ public:
             const auto wall_source_member = [](const Entity& entity) {
                 const auto marker = entity.extensions.find("vertex_dxf_boundary");
                 return marker != entity.extensions.end() && marker->is_object() &&
-                    marker->value("version", 0) == 5;
+                    (marker->value("version", 0) == 5 || marker->value("version", 0) == 6);
             };
             const auto native_member = [&](const Entity& entity) {
                 return entity.extensions.contains("vertex_dxf_boundary") &&
@@ -38207,12 +38207,16 @@ public:
                         dependency->second->type == "wall" &&
                         destination.layer_id != destinations.at(source_layer(*dependency->second)).layer_id)
                         throw std::invalid_argument("A measured exterior and its source walls must be assigned to the same drawing layer.");
+                    if (wall_source_member(*candidate) && dependency->second->type == "measurement_linework" &&
+                        destination.layer_id != destinations.at(source_layer(*dependency->second)).layer_id)
+                        throw std::invalid_argument("A measured area and its source lines must be assigned to the same drawing layer.");
                 }
             }
             std::vector<std::string> imported_boundary_ids;
             std::map<std::string, std::string, std::less<>> identities;
             for (const auto& candidate : mapped.entities) {
-                if (can_recognize_boundary_entity_type(candidate.type) || candidate.type == "wall" || candidate.type == "opening")
+                if (can_recognize_boundary_entity_type(candidate.type) || candidate.type == "wall" || candidate.type == "opening" ||
+                    (candidate.type == "measurement_linework" && native_member(candidate)))
                     identities.emplace(candidate.id, allocate_id(candidate.type));
             }
             const auto existing_annotation = std::find_if(source.entities().begin(), source.entities().end(),
@@ -38264,7 +38268,12 @@ public:
                 if (native_member(candidate)) {
                     if (can_recognize_boundary_entity_type(candidate.type))
                         imported = remap_boundary_owner_identity(candidate, identity->second);
-                    else imported.id = identity->second;
+                    else {
+                        imported.id = identity->second;
+                        if (candidate.type == "measurement_linework")
+                            imported.properties["model"] = remap_measurement_linework_owner_identity(
+                                candidate.properties.at("model"), identity->second);
+                    }
                     remap_native_dxf_boundary_dependency_ids(imported, identities);
                 } else {
                     imported.id = identity->second;
@@ -38294,6 +38303,27 @@ public:
                 if (native_member(imported))
                     imported_native_boundaries.push_back(imported);
                 changes.push_back(EntityChange::upsert(std::move(imported)));
+            }
+            if (std::any_of(imported_native_boundaries.begin(), imported_native_boundaries.end(), [](const Entity& member) {
+                const auto marker = member.extensions.find("vertex_dxf_boundary");
+                return marker != member.extensions.end() && marker->is_object() && marker->value("version", 0) == 6;
+            })) {
+                const auto destination_scope = constraint_phase_scope(reviewed_hierarchy.entities());
+                for (const auto& [id, existing] : reviewed_hierarchy.entities()) {
+                    if (existing.type != "measurement_linework" || destination_scope.inactive_owner_ids.contains(id)) continue;
+                    const auto context = reviewed_organization.drawing_context(id);
+                    if (!context || !context->complete()) continue;
+                    // Private observations of actual destination strokes prove
+                    // layer-global graph closure. Their prior import admission
+                    // markers are unrelated to this transfer; authoritative
+                    // entities, raw history and isolated-copy scope stay intact.
+                    auto observation = existing;
+                    for (const auto* key : {"vertex_dxf_boundary", "vertex_dxf_wall_source_context_binding",
+                        "vertex_dxf_wall_source_hosted_openings", "vertex_dxf_measured_graph", "vertex_dxf_resolved_context"})
+                        observation.extensions.erase(key);
+                    imported_native_boundaries.push_back(std::move(observation));
+                    imported_wall_source_contexts.emplace(id, *context);
+                }
             }
             bind_native_dxf_wall_source_destinations(imported_native_boundaries, imported_wall_source_contexts);
             for (auto& change : changes) {

@@ -216,7 +216,8 @@ inline void validate_native_dxf_boundary(const Entity& entity, GeometryBudget& b
     const auto& marker = entity.extensions.at("vertex_dxf_boundary");
     if (!marker.is_object() || !marker.contains("version") ||
         !marker.at("version").is_number_integer()) reject();
-    const bool wall_source_group = marker.at("version") == 5;
+    const bool measured_source_group = marker.at("version") == 6;
+    const bool wall_source_group = marker.at("version") == 5 || measured_source_group;
     const bool floor_group = marker.at("version") == 4 || wall_source_group;
     const bool dependency_group = marker.at("version") == 3 || floor_group;
     if (dependency_group) {
@@ -230,6 +231,7 @@ inline void validate_native_dxf_boundary(const Entity& entity, GeometryBudget& b
     }
     if (entity.extensions.contains("vertex_dxf_stair_floor_binding") && !floor_group) reject();
     if (entity.extensions.contains("vertex_dxf_wall_source_context_binding") && !wall_source_group) reject();
+    if (entity.extensions.contains("vertex_dxf_measured_graph") && !measured_source_group) reject();
     if (entity.extensions.contains("vertex_dxf_wall_source_hosted_openings")) reject();
     if (floor_group) {
         // The isolated worker supplies a detached graph. Only the desktop's
@@ -247,7 +249,10 @@ inline void validate_native_dxf_boundary(const Entity& entity, GeometryBudget& b
         const auto binding = entity.extensions.find("vertex_dxf_wall_source_context_binding");
         if (binding == entity.extensions.end() || !binding->is_object() ||
             !binding->contains("destination_context") || !binding->at("destination_context").is_null()) reject();
-        try { validate_native_dxf_wall_source_member(entity); } catch (...) { reject(); }
+        if (measured_source_group && (!binding->contains("destination_resolved_context") ||
+            !binding->at("destination_resolved_context").is_null())) reject();
+        // Full member/source admission follows the response-wide raw geometry
+        // charges below. Dependency inspection must not trigger early replay.
     }
     if (marker.at("depiction") != "BOUNDARY_PLAN_V1" ||
         entity.extensions.contains("physical_wall_room") ||
@@ -539,25 +544,35 @@ inline void validate(const ProjectImportCandidate& result) {
             can_recognize_boundary_entity_type(entity.type) && entity.extensions.contains("vertex_dxf_boundary");
         const bool native_dxf_wall_source = result.kind == ProjectImportKind::dxf &&
             entity.extensions.contains("vertex_dxf_boundary") && entity.extensions.at("vertex_dxf_boundary").is_object() &&
-            entity.extensions.at("vertex_dxf_boundary").value("version", 0) == 5;
+            (entity.extensions.at("vertex_dxf_boundary").value("version", 0) == 5 ||
+             entity.extensions.at("vertex_dxf_boundary").value("version", 0) == 6);
+        const bool native_dxf_measured_source = native_dxf_wall_source &&
+            entity.extensions.at("vertex_dxf_boundary").at("version") == 6;
         const bool shared = entity.type == "boundary" || entity.type == "wall" || entity.type == "opening";
-        const bool dxf = entity.type == "annotation_state" || native_dxf_boundary;
+        const bool dxf = entity.type == "annotation_state" || native_dxf_boundary ||
+            (native_dxf_measured_source && entity.type == "measurement_linework");
         const bool ifc = entity.type == "wall" || entity.type == "slab" || entity.type == "roof" || entity.type == "room" ||
             entity.type == "opening" || entity.type == "ifc_reference" ||
             entity.type == "stair" || entity.type == "railing";
         if (!shared && !(result.kind == ProjectImportKind::dxf ? dxf : ifc)) reject();
         if (entity.properties.contains("parent_id") || entity.properties.contains("layer_id")) reject();
         if (native_dxf_wall_source && !native_dxf_boundary) {
-            if (entity.type != "wall" && entity.type != "opening") reject();
+            if (entity.type != "wall" && entity.type != "opening" &&
+                !(native_dxf_measured_source && entity.type == "measurement_linework")) reject();
             for (const auto* key : {"property_id", "building_id", "floor_id", "layer_id", "phase_id"})
                 if (entity.properties.contains(key)) reject();
             const auto binding = entity.extensions.find("vertex_dxf_wall_source_context_binding");
             if (binding == entity.extensions.end() || !binding->is_object() ||
                 !binding->contains("destination_context") || !binding->at("destination_context").is_null()) reject();
-            try { validate_native_dxf_wall_source_member(entity); } catch (...) { reject(); }
+            if (native_dxf_measured_source && (!binding->contains("destination_resolved_context") ||
+                !binding->at("destination_resolved_context").is_null())) reject();
+            // The shared whole-group pass validates this member after all raw
+            // shape charges, including standalone measured strokes.
         } else if (!native_dxf_boundary &&
             (entity.extensions.contains("vertex_dxf_wall_source_context_binding") ||
-             entity.extensions.contains("vertex_dxf_wall_source_hosted_openings"))) reject();
+             entity.extensions.contains("vertex_dxf_wall_source_hosted_openings") ||
+             entity.extensions.contains("vertex_dxf_measured_graph"))) reject();
+        if (entity.extensions.contains("vertex_dxf_measured_graph") && !native_dxf_measured_source) reject();
         if (native_dxf_boundary) {
             validate_native_dxf_boundary(entity, geometry_budget);
         } else if (entity.type == "boundary") {
@@ -572,6 +587,14 @@ inline void validate(const ProjectImportCandidate& result) {
         } else if (entity.type == "wall") {
             if (native_dxf_wall_source) geometry_budget.charge(1);
             if (!walls.emplace(entity.id, wall(entity)).second) reject();
+        } else if (entity.type == "measurement_linework") {
+            if (!native_dxf_measured_source || !entity.properties.contains("model")) reject();
+            const auto& model = entity.properties.at("model");
+            if (!model.is_object() || !model.contains("segments") || !model.at("segments").is_array()) reject();
+            // Charge shape work before the shared V6 preflight and replay.
+            // Open, retraced and crossing strokes are valid source inputs;
+            // they must not receive closed-boundary topology validation here.
+            geometry_budget.charge(model.at("segments").size());
         } else if (entity.type == "slab") {
             validate_slab(entity, geometry_budget);
         } else if (entity.type == "roof") {

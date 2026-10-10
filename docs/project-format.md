@@ -5147,6 +5147,46 @@ untransported gaps. Valid context-free absolute vertical placement is retained.
 V1/V2/V3/V4 and project container/history schemas remain unchanged. V5 is
 uncompiled and runtime unverified.
 
+Version-6 DXF carriers extend native groups with `measurement_linework` and
+receipt-backed source-derived areas, including standalone strokes. Stroke
+depiction is `LINEWORK_PLAN_V1`; other supported member depictions retain their
+previous contracts. Each wire member adds exact `resolved_context` fields
+`property_id`, `building_id`, `floor_id`, `layer_id` and `level_id` (the last may
+be empty). The typed dependency graph adds `measurement_source_ids` for retained
+uses and `measurement_graph_ids` for the full applicable graph inventory.
+Ordinary unmarked areas include all active unisolated source strokes in their
+resolved context; existing isolated copies retain their referenced-owner cohort.
+Transport does not invent an isolation marker to admit an incomplete graph.
+
+Every V6 runtime member carries exactly
+`extensions.vertex_dxf_measured_graph: {version: 1, source_ids: [...]}` with
+sorted fresh graph-owner identities; non-source-area members have an empty
+inventory. The native marker is exactly `{version: 6,
+depiction: "BOUNDARY_PLAN_V1", member_ids: [...]}`. Pending binding uses
+`extensions.vertex_dxf_wall_source_context_binding` version 2, with exact fields
+`version`, `source_context`, `destination_context`, `source_resolved_context`
+and `destination_resolved_context`. Both destination fields start as null.
+Direct source context preserves original explicit placement; resolved source
+context is captured from the actual hierarchy. It is an observation, not a
+fabricated container graph or destination authority.
+
+Destination review binds direct and resolved contexts from the actual staged
+hierarchy and validates complete source graphs again. Active existing measured
+strokes are considered when deciding whether a destination would alter an
+unmarked graph. Raw stroke ownership and retained uses remap through typed
+codecs, preserving local child identities, receipt JSON, numeric inputs and
+ordered edit/transform history. Exact analytical source/detached plans,
+editable native schemas and cumulative replay/graph-work preflight precede
+publication. Original provenance, appraisal observations and reporting hashes
+are not refreshed. V1/V2/V3/V4/V5 and project container/history schemas remain
+unchanged. Original inventories are proved across source components before
+remapping, including recoverable refused stroke carriers. Structural dependency
+admission avoids topology decoding. Analytical fallback shares the operation's
+replay/topology allowance. Private existing destination observations enter only
+the final actual-context proof, not the pending original-source proof.
+Integrated and independent source review approved this corrected scope;
+compilation, runtime and external round trips remain unverified.
+
 DXF straight lengths use aligned `DIMENSION`; curved segment and physical-wall
 axis lengths use `ARC_DIMENSION` with their actual circular centre and extension
 points. Clockwise source arcs reverse their endpoint order for the DXF CCW
