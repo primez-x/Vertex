@@ -553,8 +553,10 @@ void visit_merge_copy_room_lineage(json& lineage, const Identity& identity) {
         else require_merge_copy_fields(record,{"property_id","building_id","floor_id","layer_id"});
         for (const auto* key : {"property_id","building_id","floor_id","layer_id"})
             if (!record.at(key).is_null()) identity(record.at(key),"context");
-        if (level && !record.at("level_id").is_null() && record.at("level_id")!="")
-            identity(record.at("level_id"),"context");
+        // Level identities belong to a vertical graph, not the document-ID
+        // namespace. Copied graphs retain local levels and links unchanged.
+        if (level && !record.at("level_id").is_null() && !record.at("level_id").is_string())
+            throw std::invalid_argument("Wall merge copy room level identity is invalid.");
     };
     context(lineage.at("context"),true);
     for (auto& source : lineage.at("physical_sources")) {
@@ -752,6 +754,13 @@ void remap_entity_references(Entity& entity,
     }
     reference(properties, "refs");
     reference(properties, "references");
+    if (entity.type == "floor" && properties.contains("vertical_level_binding")) {
+        auto& binding = properties.at("vertical_level_binding");
+        (void)VerticalLevelBinding::from_json(binding);
+        // Remap the owning graph entity only; its level is graph-local.
+        reference(binding, "graph_id");
+        (void)VerticalLevelBinding::from_json(binding);
+    }
     if (multi_flight_stair(entity)) {
         for (const auto* collection : {"flights", "landings"})
             for (auto& child : properties.at(collection)) reference(child, "id");
@@ -908,13 +917,21 @@ void remap_entity_references(Entity& entity,
             }
         }
     }
-    if (is_physical_wall_room(entity))
-        visit_merge_copy_room_descriptor(entity.extensions.at("physical_wall_room"),
-            [&](json& id,std::string_view) {
-                const auto value=id.get<std::string>();
-                if (value.empty()) throw std::invalid_argument("Physical room copy identity is empty.");
-                if (const auto found=remap.find(value);found!=remap.end()) id=found->second;
-            });
+    if (is_physical_wall_room(entity)) {
+        const auto sources = physical_wall_room_source_references(entity);
+        const auto mappings = [&](const std::vector<std::string>& ids) {
+            std::map<std::string,std::string,std::less<>> result;
+            for (const auto& id : ids) {
+                const auto found = remap.find(id);
+                result.emplace(id,found == remap.end() ? id : found->second);
+            }
+            return result;
+        };
+        // Only typed external identities change. Local levels, baseline
+        // features, intervals and captured numeric source values stay intact.
+        entity = remap_physical_wall_room_source_references(entity,
+            mappings(sources.wall_ids),mappings(sources.context_ids),mappings(sources.phase_registry_ids));
+    }
     if (entity.type == "dimension" && properties.contains("target")) {
         reference(properties.at("target"), "entity_id");
         reference(properties.at("target"), "segment_id");

@@ -1,5 +1,33 @@
 # Vertex project formats v1 through v159
 
+## Typed physical-room source copies
+
+The shared physical-room copy codec admits the existing version-one descriptor
+and retained analytical geometry before changing references. It maps external
+wall owners (including phase-observed walls and boundary source uses), resolved
+and captured property/building/floor/layer references, and phase registry owners
+through complete injective role maps. Only these typed references change; raw
+baselines, thickness/elevations, source intervals, local feature identities,
+geometry indices, alternatives, numeric JSON types and retained evidence stay
+intact. Canonical source/phase inventories follow the remapped external IDs.
+
+A level ID belongs to a vertical graph and supports its existing 1-256-byte
+UTF-8 grammar. Optional level remapping is keyed by the original floor and
+original local level. Ordinary copies preserve those local IDs; copying a
+floor remaps only `vertical_level_binding.graph_id`. Historical room merge,
+split and repair descriptors likewise keep local level IDs out of the global
+entity remap.
+
+Intrinsic copy geometry uses the generator's admitted pair allowance for its
+two validation passes. The public retained validator and aggregate analytical
+correspondence operations keep their existing tighter budgets.
+
+Intrinsic retained-lineage admission is separate from complete source and
+destination document validation. Copying references grants no source-currentness,
+digest or appraisal-report authority. This changes no persisted schema or reader
+floor and does not implement complete physical-room DXF/IFC transport. The source
+changes remain uncompiled and runtime-unverified.
+
 ## Reviewed complete selections (v159)
 
 Native reader 159 and JSON/assets extraction 157 retain reviewed physical-room

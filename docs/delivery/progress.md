@@ -14,6 +14,35 @@ changed source does not acquire runtime acceptance without later qualification.
 
 ## Current delivery state
 
+### October 9 physical-room source copies
+
+The current source batch adds a shared typed inventory/remapper for retained
+physical rooms and connects it to the desktop copy path. Complete role maps
+cover physical and phase-observed wall owners, outer/hole source uses,
+property/building/floor/layer references and external phase registry owners.
+Retained lineage and analytical geometry are admitted before and after transfer;
+raw baselines, thickness/elevations, intervals, numeric types, local features,
+alternative IDs and retained history remain intact.
+
+The copy review found that local vertical-level IDs were being remapped through
+the global document-ID map. Historical room descriptors now preserve that
+namespace, while a copied floor remaps only its owning graph reference.
+Optional explicit level maps use original floor/local-level pairs and preserve
+the vertical graph's existing UTF-8 identity grammar.
+
+Independent source review found a copy-admission mismatch: the retained
+comparison budget rejected complex rooms that the existing generator admits.
+Copy admission now charges both geometry passes against the producer's matching
+pair allowance; the public retained validator and aggregate correspondence
+budgets keep their original tighter limits. Integrated root and independent
+source review approved the corrected scope; scoped `git diff --check` passed.
+No build, test, new test, probe, script, native job, launch, package or
+installation has run. These edits are
+uncompiled and runtime-unverified; the installed candidate remains unchanged.
+Complete physical-room exchange with actual level/phase/material/assembly
+dependencies remains open. This copy batch does not close that production gap
+or establish whole-document currentness or appraisal qualification.
+
 ### October 9 measured-line DXF transfer
 
 V6 source implementation adds native measured strokes and complete

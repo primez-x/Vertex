@@ -339,6 +339,7 @@ struct CorrespondenceBudgetFailure:std::invalid_argument {
 };
 struct CorrespondenceBudget {
     std::size_t bytes{},edges{},contacts{};
+    std::size_t geometry_contact_limit{maximum_correspondence_pairs};
     void charge(std::size_t value) {
         if (value>maximum_cache_charge-bytes) throw CorrespondenceBudgetFailure("correspondence exceeds aggregate evidence budget");
         bytes+=value;
@@ -349,7 +350,7 @@ struct CorrespondenceBudget {
         edges+=count;
         const auto pairs=count ? count*(count-1)/2 : 0;
         // Global and local geometry are both validated before Boolean work.
-        if (pairs>(maximum_correspondence_pairs-contacts)/2)
+        if (pairs>(geometry_contact_limit-contacts)/2)
             throw CorrespondenceBudgetFailure("correspondence exceeds aggregate geometry-contact budget");
         contacts+=pairs*2;
         charge(count*sizeof(Segment));
@@ -658,11 +659,13 @@ bool physical_wall_room_regions_equal(const Boundary& first,const std::vector<Bo
     } catch(const Standard_Failure& e) { invalid(std::string("analytical region equality failed: ")+e.what()); }
 }
 
-PhysicalWallRoomLineageCheck validate_retained_physical_wall_room_lineage(
-    const Entity& room,const DrawingContext& context) {
+namespace {
+PhysicalWallRoomLineageCheck admit_retained_physical_wall_room_lineage(
+    const Entity& room,const DrawingContext& context,std::size_t geometry_contact_limit) {
     try {
         const auto descriptor=decode_physical_wall_room_descriptor(room);
         CorrespondenceBudget budget;
+        budget.geometry_contact_limit=geometry_contact_limit;
         const auto lineage=correspondence_lineage(descriptor.source_lineage,descriptor.selected_wall_id,context,budget);
         const auto boundary=boundary_geometry(decode_identified_boundary_entity(room));
         budget.geometry(boundary,descriptor.holes);
@@ -671,6 +674,154 @@ PhysicalWallRoomLineageCheck validate_retained_physical_wall_room_lineage(
         return {lineage.elevation,{lineage.owners.begin(),lineage.owners.end()}};
     } catch (const Json::exception&) { invalid("retained source evidence contains malformed value types"); }
     catch (const Standard_Failure& e) { invalid(std::string("retained room planar validation failed: ")+e.what()); }
+}
+}
+
+PhysicalWallRoomLineageCheck validate_retained_physical_wall_room_lineage(
+    const Entity& room,const DrawingContext& context) {
+    return admit_retained_physical_wall_room_lineage(room,context,maximum_correspondence_pairs);
+}
+
+namespace {
+enum class RoomSourceReferenceRole { wall,context,phase_registry };
+void validate_room_source_id(std::string_view id) {
+    if (id.empty() || id.size()>128 || !std::all_of(id.begin(),id.end(),[](unsigned char c) {
+        return (c>='a' && c<='z') || (c>='A' && c<='Z') || (c>='0' && c<='9') ||
+            c=='-' || c=='_' || c=='.' || c==':';
+    })) invalid("source transfer contains an invalid identity");
+}
+void validate_room_level_id(const std::string& id) {
+    // Vertical-graph levels use the local UTF-8 identity grammar, rather
+    // than the document's ASCII entity IDs. Preserve that namespace here.
+    if (id.empty() || id.size()>256) invalid("source transfer contains an invalid local level identity");
+    try { (void)Json(id).dump(); }
+    catch (const Json::exception&) { invalid("source transfer contains an invalid UTF-8 local level identity"); }
+}
+DrawingContext captured_room_context(const Json& descriptor) {
+    const auto& context=descriptor.at("source_lineage").at("context");
+    lineage_keys(context,{"property_id","building_id","floor_id","layer_id","level_id"});
+    return {context.at("property_id").get<std::string>(),context.at("building_id").get<std::string>(),
+        context.at("floor_id").get<std::string>(),context.at("layer_id").get<std::string>(),
+        context.at("level_id").get<std::string>()};
+}
+// Enumerate only the captured-v1 schema's typed external references. Segment,
+// alternative, face and component identities are deliberately not visited.
+template<class Descriptor,class Visitor>
+void visit_room_source_references(Descriptor& descriptor,const Visitor& visit) {
+    visit(descriptor.at("selected_wall_id"),RoomSourceReferenceRole::wall);
+    auto& lineage=descriptor.at("source_lineage");
+    for (const auto* key:{"property_id","building_id","floor_id","layer_id"})
+        visit(lineage.at("context").at(key),RoomSourceReferenceRole::context);
+    for (auto& source:lineage.at("physical_sources")) {
+        visit(source.at("owner_id"),RoomSourceReferenceRole::wall);
+        for (const auto* key:{"property_id","building_id","floor_id","layer_id"}) {
+            auto& id=source.at("source_context").at(key);
+            if (!id.is_null()) visit(id,RoomSourceReferenceRole::context);
+        }
+    }
+    for (auto& phase:lineage.at("semantic_phases")) {
+        visit(phase.at("id"),RoomSourceReferenceRole::phase_registry);
+        for (auto& owner:phase.at("owners")) visit(owner.at("owner_id"),RoomSourceReferenceRole::wall);
+    }
+    const auto face=[&](auto& value) {
+        for (auto& edge:value.at("edges")) for (auto& use:edge.at("source_uses"))
+            visit(use.at("owner_id"),RoomSourceReferenceRole::wall);
+    };
+    face(lineage.at("outer"));
+    for (auto& hole:lineage.at("holes")) face(hole);
+}
+template<class T> void sort_unique_room_references(std::vector<T>& values) {
+    std::sort(values.begin(),values.end());
+    values.erase(std::unique(values.begin(),values.end()),values.end());
+}
+bool validate_room_source_map(const std::vector<std::string>& references,
+    const std::map<std::string,std::string,std::less<>>& mapping) {
+    std::set<std::string,std::less<>> destinations;
+    bool changed=false;
+    for (const auto& id:references) {
+        const auto found=mapping.find(id);
+        if (found==mapping.end()) invalid("source transfer is missing a typed identity mapping");
+        validate_room_source_id(found->second);
+        if (!destinations.insert(found->second).second) invalid("source transfer collapses distinct typed identities");
+        changed=changed || found->second!=id;
+    }
+    return changed;
+}
+void sort_room_source_inventory(Json& inventory,const char* key) {
+    std::sort(inventory.begin(),inventory.end(),[&](const auto& a,const auto& b) {
+        return a.at(key).template get_ref<const std::string&>()<b.at(key).template get_ref<const std::string&>();
+    });
+}
+}
+
+PhysicalWallRoomSourceReferences physical_wall_room_source_references(const Entity& room) {
+    PhysicalWallRoomSourceReferences result;
+    if (!room.extensions.is_object() || !room.extensions.contains("physical_wall_room")) return result;
+    try {
+        (void)decode_physical_wall_room_descriptor(room);
+        const auto& descriptor=room.extensions.at("physical_wall_room");
+        const auto context=captured_room_context(descriptor);
+        // The producer admits 65,536 edge pairs and validates both local and
+        // global coordinates. Charge those same two passes here without
+        // imposing the tighter aggregate room-correspondence allowance.
+        (void)admit_retained_physical_wall_room_lineage(room,context,2*maximum_correspondence_pairs);
+        visit_room_source_references(descriptor,[&](const Json& value,RoomSourceReferenceRole role) {
+            const auto& id=value.get_ref<const std::string&>();
+            validate_room_source_id(id);
+            auto& ids=role==RoomSourceReferenceRole::wall ? result.wall_ids :
+                role==RoomSourceReferenceRole::context ? result.context_ids : result.phase_registry_ids;
+            ids.push_back(id);
+        });
+        if (!context.level_id.empty()) {
+            validate_room_level_id(context.level_id);
+            result.level_ids.emplace_back(context.floor_id,context.level_id);
+        }
+        sort_unique_room_references(result.wall_ids);
+        sort_unique_room_references(result.context_ids);
+        sort_unique_room_references(result.phase_registry_ids);
+        sort_unique_room_references(result.level_ids);
+        return result;
+    } catch (const Json::exception&) { invalid("source transfer contains malformed value types"); }
+}
+
+Entity remap_physical_wall_room_source_references(const Entity& room,
+    const std::map<std::string,std::string,std::less<>>& wall_ids,
+    const std::map<std::string,std::string,std::less<>>& context_ids,
+    const std::map<std::string,std::string,std::less<>>& phase_registry_ids,
+    const std::map<std::pair<std::string,std::string>,std::string>& level_ids) {
+    const auto references=physical_wall_room_source_references(room);
+    if (!room.extensions.is_object() || !room.extensions.contains("physical_wall_room")) return room;
+    const bool walls_changed=validate_room_source_map(references.wall_ids,wall_ids);
+    (void)validate_room_source_map(references.context_ids,context_ids);
+    const bool phases_changed=validate_room_source_map(references.phase_registry_ids,phase_registry_ids);
+    if (!level_ids.empty()) {
+        std::set<std::pair<std::string,std::string>> destinations;
+        for (const auto& id:references.level_ids) {
+            const auto found=level_ids.find(id);
+            if (found==level_ids.end()) invalid("source transfer is missing a local level mapping");
+            validate_room_level_id(found->second);
+            if (!destinations.emplace(context_ids.at(id.first),found->second).second)
+                invalid("source transfer collapses local levels within a destination floor");
+        }
+    }
+    Entity result=room;
+    auto& descriptor=result.extensions.at("physical_wall_room");
+    auto& lineage=descriptor.at("source_lineage");
+    // Resolve local levels against the original floor before remapping context.
+    if (!level_ids.empty() && !references.level_ids.empty())
+        lineage.at("context").at("level_id")=level_ids.at(references.level_ids.front());
+    visit_room_source_references(descriptor,[&](Json& value,RoomSourceReferenceRole role) {
+        const auto& mapping=role==RoomSourceReferenceRole::wall ? wall_ids :
+            role==RoomSourceReferenceRole::context ? context_ids : phase_registry_ids;
+        value=mapping.at(value.get_ref<const std::string&>());
+    });
+    if (walls_changed) {
+        sort_room_source_inventory(lineage.at("physical_sources"),"owner_id");
+        for (auto& phase:lineage.at("semantic_phases")) sort_room_source_inventory(phase.at("owners"),"owner_id");
+    }
+    if (phases_changed) sort_room_source_inventory(lineage.at("semantic_phases"),"id");
+    (void)physical_wall_room_source_references(result);
+    return result;
 }
 
 bool physical_wall_room_lineage_matches_current_inventory(

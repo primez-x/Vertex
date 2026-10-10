@@ -8,6 +8,7 @@
 #include <map>
 #include <optional>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 namespace sketch {
@@ -33,6 +34,26 @@ struct PhysicalWallRoomLineageCheck {
 // without a document or fresh-source comparison. Malformed evidence rejects.
 [[nodiscard]] PhysicalWallRoomLineageCheck validate_retained_physical_wall_room_lineage(
     const Entity& room,const DrawingContext& context);
+struct PhysicalWallRoomSourceReferences {
+    // Sorted unique external references, separated by their document role.
+    std::vector<std::string> wall_ids,context_ids,phase_registry_ids;
+    // A level is local to the original floor's vertical graph.
+    std::vector<std::pair<std::string,std::string>> level_ids;
+};
+// Admits supported intrinsic retained lineage and geometry before returning
+// references. An absent descriptor returns empty; malformed/future ones reject.
+[[nodiscard]] PhysicalWallRoomSourceReferences physical_wall_room_source_references(const Entity& room);
+// Requires complete injective maps within each external role. Extra entries
+// are ignored; an empty level map preserves local level IDs, otherwise every
+// captured (original floor, original level) pair requires a destination level.
+// Copies only typed references and preserves geometry, numeric JSON types and
+// local identities. This grants no currentness, digest or report authority;
+// callers must validate the complete source and destination document graphs.
+[[nodiscard]] Entity remap_physical_wall_room_source_references(
+    const Entity& room,const std::map<std::string,std::string,std::less<>>& wall_ids,
+    const std::map<std::string,std::string,std::less<>>& context_ids,
+    const std::map<std::string,std::string,std::less<>>& phase_registry_ids,
+    const std::map<std::pair<std::string,std::string>,std::string>& level_ids = {});
 // Predicate over caller-admitted fresh phase detection. Both captured-v1
 // lineages and analytical regions are validated; only semantic_phases may
 // differ. Exact physical inventory, selected source, context/plane and clear
