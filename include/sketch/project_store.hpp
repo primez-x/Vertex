@@ -265,7 +265,8 @@ public:
     // selection, retaining actual owners and complete staged history.
     // v181 fences version-two corner catalog-host admission in mixed dialect six.
     // v183 fences complete wall/corner retirement and baseline demolition.
-    static constexpr std::uint32_t format_version = 183;
+    // v184 fences actual phase corner cohorts, including explicit corner roots.
+    static constexpr std::uint32_t format_version = 184;
     static constexpr std::uint32_t recovery_format_version = 4;
     [[nodiscard]] static std::uint32_t required_format_version(const DocumentSnapshot& snapshot);
     static constexpr std::uint64_t maximum_file_bytes = 4ULL * 1024ULL * 1024ULL * 1024ULL;

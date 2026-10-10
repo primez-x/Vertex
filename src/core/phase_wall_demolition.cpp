@@ -1,10 +1,13 @@
 #include "sketch/phase_wall_demolition.hpp"
 
 #include "sketch/assembly_model.hpp"
+#include "sketch/architectural_object_removal.hpp"
 #include "sketch/constraint_phase_scope.hpp"
+#include "sketch/corner_window.hpp"
 #include "sketch/document_wall.hpp"
 #include "sketch/door_operation.hpp"
 #include "sketch/model_phases.hpp"
+#include "sketch/mixed_wall_removal.hpp"
 #include "sketch/opening_assembly.hpp"
 #include "sketch/wall_semantics.hpp"
 
@@ -134,7 +137,8 @@ void append_missing(Json& rows, const Ids& additions) {
     for (const auto& row : rows) retained.insert(row.get<std::string>());
     for (const auto& id : additions) if (retained.insert(id).second) rows.push_back(id);
 }
-std::optional<Entity> prepare_registry(const Entities& entities,const std::vector<std::string>& selected_wall_ids) {
+std::optional<Entity> prepare_registry(const Entities& entities,const std::vector<std::string>& selected_wall_ids,
+    bool complete_corners=false,std::vector<std::string>* corner_owner_ids=nullptr) {
     if (selected_wall_ids.size() > root_limit) reject("selected wall count exceeds 128");
     if (selected_wall_ids.empty()) return std::nullopt;
     try {
@@ -186,6 +190,67 @@ std::optional<Entity> prepare_registry(const Entities& entities,const std::vecto
         for (const auto& id : walls) active_baseline(id, false);
 
         Ids demolished = walls, affected_owners = walls, inherited_openings;
+        Ids proposed_corner_cuts;
+        std::vector<std::string> corners;
+        if (complete_corners) {
+            // The complete original map supplies reciprocal ownership, exact
+            // derived cuts, both hosts and every saved phase alternative.
+            validate_corner_window_state(entities);
+            Ids closure;
+            const auto active_participant = [&](const std::string& id) {
+                const auto found=entities.find(id);
+                const auto member=owners.find(id);
+                if (found==entities.end() || found->second.required || scope.inactive_owner_ids.contains(id) ||
+                    member==owners.end() || member->second!=destination)
+                    reject("corner participant requires unprotected same-registry active ownership: "+id);
+                const auto state=destination->states.find(id);
+                if (state==destination->states.end() ||
+                    (state->second!=ModelPhase::existing && state->second!=ModelPhase::proposed))
+                    reject("corner participant lacks actual saved activity: "+id);
+            };
+            const auto sole_proposal = [&](const std::string& id) {
+                if (contains(phases.baseline_ids(),id)) return false;
+                std::size_t proposals{};
+                for (const auto& alternative:phases.alternatives()) {
+                    if (contains(alternative.demolished_ids,id)) return false;
+                    if (!contains(alternative.proposed_ids,id)) continue;
+                    if (alternative.id!=*destination->alternative_id) return false;
+                    ++proposals;
+                }
+                return proposals==1;
+            };
+            for (const auto& [id,entity]:entities) {
+                if (entity.type!="corner_window") continue;
+                const auto corner=parse_corner_window(entity);
+                if (std::none_of(corner.wall_ids.begin(),corner.wall_ids.end(),[&](const auto& host) {
+                    return walls.contains(host);
+                })) continue;
+                if (corners.size()>=1000) reject("affected complete corner owner budget exceeded");
+                const bool baseline=contains(phases.baseline_ids(),id);
+                for (const auto& participant:{id,corner.opening_ids[0],corner.opening_ids[1],
+                        corner.wall_ids[0],corner.wall_ids[1]}) {
+                    active_participant(participant);
+                    closure.insert(participant);
+                    if (closure.size()>affected_limit) reject("affected complete corner inventory exceeds budget");
+                }
+                for (const auto& participant:{id,corner.opening_ids[0],corner.opening_ids[1]}) {
+                    if (baseline) {
+                        active_baseline(participant,false);
+                        demolished.insert(participant);affected_owners.insert(participant);
+                    } else if (!sole_proposal(participant)) {
+                        reject("proposed corner retirement requires sole saved-active ownership: "+participant);
+                    }
+                }
+                if (!baseline) proposed_corner_cuts.insert(corner.opening_ids.begin(),corner.opening_ids.end());
+                corners.push_back(id);
+            }
+            // Both the mixed full-source reservation and complete analytical
+            // removal admission precede any native-capable replay. Inspectors
+            // use these same checks without manufacturing an interim snapshot.
+            validate_mixed_wall_removal_source_admission(entities,true,true);
+            if (!corners.empty()) preflight_architectural_object_removal(
+                entities,corners,{},0,true,false,true,true);
+        }
         std::map<std::string, std::vector<const Entity*>, std::less<>> openings;
         for (const auto& [id, entity] : entities) {
             const auto raw_host = field(entity.properties, "wall_id");
@@ -195,9 +260,14 @@ std::optional<Entity> prepare_registry(const Entities& entities,const std::vecto
             if (entity.type != "opening") reject("unsupported affected wall-hosted entity type " + entity.type + ": " + id);
             std::string host, diagnostic;
             if (!read_document_wall_id(entity, host, diagnostic)) reject(id + ": " + diagnostic);
+            // Only a complete reciprocally admitted proposed aggregate can
+            // bypass baseline parking. The public replay physically retires
+            // its owner and both cuts through original-source corner removal.
+            if (proposed_corner_cuts.contains(id)) continue;
             active_baseline(id, true);
             admit_opening(entity);
-            if (affected_owners.size() >= affected_limit) reject("affected wall/opening inventory exceeds budget");
+            if (!affected_owners.contains(id) && affected_owners.size() >= affected_limit)
+                reject("affected wall/opening inventory exceeds budget");
             affected_owners.insert(id);
             if (owners.contains(id)) demolished.insert(id);
             else inherited_openings.insert(id);
@@ -265,6 +335,7 @@ std::optional<Entity> prepare_registry(const Entities& entities,const std::vecto
                 owners.contains(id) || after.inactive_owner_ids.contains(id) || stage.at(id) != entities.at(id))
                 reject("unregistered opening lacks exact inherited host inactivity: " + id);
         }
+        if (corner_owner_ids) *corner_owner_ids=std::move(corners);
         return replacement;
     } catch (const Json::exception& error) {
         reject(std::string("malformed source: ") + error.what());
@@ -281,21 +352,30 @@ nlohmann::json encode_phase_wall_demolition_intent(const PhaseWallDemolitionInte
         if (index && intent.wall_ids[index-1]>=intent.wall_ids[index])
             reject("semantic wall roots must be ascending and unique");
     }
-    return {{"version",1},{"registry_id",intent.registry_id},{"alternative_id",intent.alternative_id},{"wall_ids",intent.wall_ids}};
+    Json result{{"version",intent.complete_actual_corner_window_cohorts ? 2 : 1},
+        {"registry_id",intent.registry_id},{"alternative_id",intent.alternative_id},{"wall_ids",intent.wall_ids}};
+    if (intent.complete_actual_corner_window_cohorts) result["complete_actual_corner_window_cohorts"]=true;
+    return result;
 }
 
 PhaseWallDemolitionIntent decode_phase_wall_demolition_intent(const Json& value) {
     try {
-        if (!value.is_object() || value.size()!=4 || !value.contains("version") ||
-            !value.at("version").is_number_integer() || value.at("version")!=1 ||
+        const bool complete=value.is_object() && value.contains("version") &&
+            value.at("version").is_number_integer() && value.at("version")==2;
+        if (!value.is_object() || value.size()!=(complete ? 5 : 4) || !value.contains("version") ||
+            !value.at("version").is_number_integer() || (!complete && value.at("version")!=1) ||
+            (complete && (!value.contains("complete_actual_corner_window_cohorts") ||
+                !value.at("complete_actual_corner_window_cohorts").is_boolean() ||
+                value.at("complete_actual_corner_window_cohorts")!=true)) ||
             !value.contains("registry_id") || !value.at("registry_id").is_string() ||
             !value.contains("alternative_id") || !value.at("alternative_id").is_string() ||
             !value.contains("wall_ids") || !value.at("wall_ids").is_array() || value.at("wall_ids").size()>root_limit)
-            reject("semantic wall intent requires exact version-one fields");
+            reject("semantic wall intent requires exact version-one or explicit version-two fields");
         const auto& registry_id=value.at("registry_id").get_ref<const std::string&>();
         const auto& alternative_id=value.at("alternative_id").get_ref<const std::string&>();
         identity(registry_id);identity(alternative_id);
         PhaseWallDemolitionIntent result{registry_id,alternative_id,{}};
+        result.complete_actual_corner_window_cohorts=complete;
         for (const auto& id:value.at("wall_ids")) {
             if (!id.is_string()) reject("semantic wall root must be an actual identity");
             if (id.get_ref<const std::string&>().size()>128) reject("semantic wall root identity exceeds budget");
@@ -307,7 +387,7 @@ PhaseWallDemolitionIntent decode_phase_wall_demolition_intent(const Json& value)
 }
 
 std::optional<PhaseWallDemolitionSelection> inspect_phase_wall_demolition_selection(
-    const Entities& actual,const std::vector<std::string>& selected_wall_ids) {
+    const Entities& actual,const std::vector<std::string>& selected_wall_ids,bool complete_actual_corner_window_cohorts) {
     if (selected_wall_ids.empty()) return std::nullopt;
     if (selected_wall_ids.size()>root_limit) reject("selected wall count exceeds 128");
     bounds(actual);
@@ -330,23 +410,57 @@ std::optional<PhaseWallDemolitionSelection> inspect_phase_wall_demolition_select
     }
     if (baseline.empty()) return std::nullopt;
     std::vector<std::string> baseline_ids(baseline.begin(),baseline.end());
-    const auto registry=prepare_registry(actual,baseline_ids);
+    const auto registry=prepare_registry(actual,baseline_ids,complete_actual_corner_window_cohorts);
     if (!registry) reject("baseline selection no longer has an actual saved choice");
     const auto model=ModelPhases::from_json(registry->properties.at("model"));
     if (!model.active_alternative()) reject("baseline selection no longer has an active alternative");
-    return PhaseWallDemolitionSelection{{registry->id,*model.active_alternative(),std::move(baseline_ids)},
+    return PhaseWallDemolitionSelection{{registry->id,*model.active_alternative(),std::move(baseline_ids),
+        complete_actual_corner_window_cohorts},
         std::vector<std::string>(ordinary.begin(),ordinary.end())};
 }
 
 Entities replay_phase_wall_demolition_entities(const Entities& actual,const PhaseWallDemolitionIntent& intent) {
     (void)encode_phase_wall_demolition_intent(intent);
-    const auto registry=prepare_registry(actual,intent.wall_ids);
+    std::vector<std::string> corners;
+    const auto registry=prepare_registry(actual,intent.wall_ids,intent.complete_actual_corner_window_cohorts,&corners);
     if (!registry || registry->id!=intent.registry_id)
         reject("semantic wall selection differs from its actual saved registry");
     const auto phases=ModelPhases::from_json(registry->properties.at("model"));
     if (phases.active_alternative()!=std::optional<std::string>{intent.alternative_id})
         reject("semantic wall selection differs from its actual saved alternative");
-    auto result=actual;result.at(registry->id)=*registry;
+    auto result=actual;
+    if (intent.complete_actual_corner_window_cohorts && !corners.empty()) {
+        // The wall and corner leaves independently see the ORIGINAL source.
+        // Corner replay owns exact retirement, dependents, catalogs and phase
+        // filtering; never grant it the partially parked wall source.
+        result=replay_architectural_object_removal(actual,corners,{},true,0,true,false,true,true);
+        auto& raw=result.at(registry->id).properties.at("model");
+        const auto& wall_raw=registry->properties.at("model");
+        for (auto& row:raw.at("alternatives")) if (row.at("id")==intent.alternative_id) {
+            Ids additions;
+            for (const auto& parked:wall_raw.at("alternatives")) if (parked.at("id")==intent.alternative_id)
+                for (const auto& id:parked.at("demolished_ids")) additions.insert(id.get<std::string>());
+            append_missing(row.at("demolished_ids"),additions);
+        }
+        raw=retain_model_phase_source(actual.at(registry->id).properties.at("model"),ModelPhases::from_json(raw));
+        // Corner replay must not alter the original selected baseline bodies.
+        for (const auto& id:intent.wall_ids) if (result.at(id)!=actual.at(id) ||
+            result.at(id).properties.dump()!=actual.at(id).properties.dump() ||
+            result.at(id).extensions.dump()!=actual.at(id).extensions.dump())
+            reject("complete corner consequence changed a retained baseline wall: "+id);
+    } else result.at(registry->id)=*registry;
+    if (intent.complete_actual_corner_window_cohorts) {
+        bounds(result);
+        validate_corner_window_state(result);
+        const auto after=constraint_phase_scope(result);
+        auto expected_inactive=constraint_phase_scope(actual).inactive_owner_ids;
+        for (const auto& alternative:phases.alternatives()) if (alternative.id==intent.alternative_id)
+            expected_inactive.insert(alternative.demolished_ids.begin(),alternative.demolished_ids.end());
+        if (after.inactive_owner_ids!=expected_inactive)
+            reject("complete corner/wall replay changed unrelated saved activity");
+        for (const auto& id:intent.wall_ids) if (!after.inactive_owner_ids.contains(id))
+            reject("complete replay failed to park an actual selected baseline wall: "+id);
+    }
     return result;
 }
 

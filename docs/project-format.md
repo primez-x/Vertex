@@ -1,4 +1,19 @@
-# Vertex project formats v1 through v183
+# Vertex project formats v1 through v184
+
+## Actual phase corner cohorts (v184, reviewed source integration)
+
+Distinct closed phase-wall authoring inner5 carries
+`complete_actual_corner_window_cohorts:true` and an ascending unique
+`explicit_corner_window_ids` inventory. It requires the existing complete
+corner/catalog markers and matching baseline-wall leaf2 authority. Actual
+explicit owner and managed-cut selections authenticate the inventory; selected
+walls separately derive their complete host consequences from original source.
+Owner membership determines baseline parking versus proposed physical retirement.
+Committed inner4 and historical children retain their meanings.
+
+Current, retained, undone and nested inner5 history requires reader184 and
+extraction182. Independent source review approves the bounded integration. No new
+build or installed behavior is qualified by this source-format addition.
 
 ## Complete wall/corner retirement (v183, source integration)
 

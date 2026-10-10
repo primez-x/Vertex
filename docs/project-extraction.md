@@ -1,5 +1,11 @@
 # Portable project extraction
 
+Exchange version182 requires native reader184 for actual phase corner cohorts
+under closed phase-wall authoring inner5 and baseline-wall leaf2. Explicit
+selected corner inventory, owner-based parking/retirement and retained nested
+history preserve their original source authority. Independent source review
+approves the bounded integration; this is not runtime or migration qualification.
+
 Exchange version181 requires native reader183 for complete wall/corner
 retirement proofs48/49/50 and phase-wall demolition inner4. Complete owner/cut
 closure is derived from original actual host roots, with one room-review stage.

@@ -3626,6 +3626,7 @@ static void validate_phase_constraint_fresh_lifetime(const std::map<std::string,
     bool complete_ordinary_wall_demolition=false;
     bool complete_wall_catalog_demolition=false;
     bool complete_wall_corner_demolition=false;
+    bool complete_actual_wall_corner_demolition=false;
     bool complete_hosted_demolition=false;
     bool complete_opening_demolition=false;
     for (const auto& [id,entity] : candidate) {
@@ -3661,6 +3662,7 @@ static void validate_phase_constraint_fresh_lifetime(const std::map<std::string,
             const auto demolition=decode_phase_wall_demolition_authoring(root_intent.wall_demolition);
             complete_wall_catalog_demolition=complete_wall_catalog_demolition || demolition.complete_hosted_catalog_consequences;
             complete_wall_corner_demolition=complete_wall_corner_demolition || demolition.complete_corner_window_consequences;
+            complete_actual_wall_corner_demolition=complete_actual_wall_corner_demolition || demolition.complete_actual_corner_window_cohorts;
             complete_ordinary_wall_demolition=complete_ordinary_wall_demolition ||
                 !demolition.ordinary_wall_ids.empty() || demolition.complete_hosted_catalog_consequences;
             for (const auto& [original,ids]:demolition.wall_additional_identities) {
@@ -3956,6 +3958,9 @@ static void validate_phase_constraint_fresh_lifetime(const std::map<std::string,
         throw std::invalid_argument("A fresh wall demolition destination borrows the complete catalog proof field");
     if (complete_wall_corner_demolition && fresh.contains("complete_corner_window_consequences"))
         throw std::invalid_argument("A fresh wall demolition destination borrows the corner consequence proof field");
+    if (complete_actual_wall_corner_demolition &&
+        (fresh.contains("complete_actual_corner_window_cohorts") || fresh.contains("explicit_corner_window_ids")))
+        throw std::invalid_argument("A fresh wall demolition destination borrows an actual corner cohort proof field");
     if (complete_opening_demolition && fresh.contains("ordinary_opening_ids"))
         throw std::invalid_argument("A fresh architectural demolition destination borrows the ordinary opening proof field");
     if (phase_drawing_enclosure) {

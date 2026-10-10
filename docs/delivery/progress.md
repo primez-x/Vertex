@@ -14,6 +14,35 @@ changed source does not acquire runtime acceptance without later qualification.
 
 ## Current delivery state
 
+### October 10 actual phase corner cohorts - reviewed source integration
+
+Complete wall/corner source integration is committed and pushed as c16e05c0;
+the exact remote branch matches the local commit. The next source batch addresses
+proposed corners on baseline hosts, selected mixed baseline/proposed hosts, and
+independent selected corners alongside baseline wall demolition. Two exclusive
+workers completed the baseline-wall leaf and phase authoring composer. Root
+integrated controller capture, complete selection/lifetime guards and reader184.
+New authority uses a distinct inner5 and explicit selected corner inventory;
+committed inner4 retains its bounded meaning. Actual owner membership determines
+parking versus complete physical retirement. Original-source candidates admit
+their complete consequences before narrowly deduplicating shared owner/cut and
+typed dependent retirement from mixed host leaves. One room stage/publication
+remains; source ordering, aliases, protected data and old authority remain guarded.
+Independent source review approves the bounded integration with no concrete
+P1/P2 finding. Root reviewed interfaces, exact explicit selection binding,
+historical authority, build-source linkage and nested history floors.
+`git diff --check` is clean. Scoped commit/push/ref verification backs up this
+source batch. No builds, tests/new tests, scripts, probes, native jobs, UI launches,
+packages or installations run. Compilation, interaction, room decisions,
+Undo/reopen, migration and responsiveness remain unqualified. The installed app
+is unchanged and all ten production gates remain open.
+
+Next required implementation includes mixed corner/ordinary/skylight clipboard,
+Properties and transforms, remaining architectural lifecycle and the consolidated
+scope. Source discovery identifies separate corner and skylight placement sessions
+and explicit mixed Copy/Cut refusal; combine complete capture and placement before
+one edit rather than publishing family fragments. Do not restart completed batches.
+
 ### October 10 complete wall/corner deletion - reviewed source integration
 
 Standalone qualified corner-copy deletion is committed and pushed as e0f73c7d,

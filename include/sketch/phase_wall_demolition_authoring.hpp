@@ -18,6 +18,8 @@ struct PhaseWallDemolitionAuthoring {
     PhysicalWallJoinRemovalAdditionalIdentities wall_additional_identities;
     bool complete_hosted_catalog_consequences{false};
     bool complete_corner_window_consequences{false};
+    bool complete_actual_corner_window_cohorts{false};
+    std::vector<std::string> explicit_corner_window_ids;
 };
 
 // Closed inner one retains its exact six-field authority. Closed inner two
@@ -28,6 +30,9 @@ struct PhaseWallDemolitionAuthoring {
 // complete actual corner-window consequences from the selected wall hosts and
 // requires complete hosted catalog consequences. It grants no independent
 // corner root or managed-cut removal authority.
+// Closed inner five separately admits actual owner-classified host consequences
+// and explicit corner roots. Baseline owners park their owner/two-cut aggregate;
+// proposed/ordinary owners retire it, including corners on baseline wall hosts.
 [[nodiscard]] nlohmann::json encode_phase_wall_demolition_authoring(
     const PhaseWallDemolitionAuthoring& intent);
 [[nodiscard]] PhaseWallDemolitionAuthoring decode_phase_wall_demolition_authoring(

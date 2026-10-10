@@ -281,6 +281,12 @@ polling timeout does not permit restarting it.
    proposed hosts, independent non-host baseline corner combinations with other
    producers, and selected cuts parked by demolition remain implementation gaps.
    Extend these through distinct authority without changing inner4 semantics.
+   Subsequent source adds actual owner-classified phase corner cohorts under
+   inner5/wall leaf2, reader184/extraction182, with explicit owner/cut selection
+   binding and narrow duplicate-consequence composition for mixed wall hosts.
+   Qualify proposed corners on baseline hosts, mixed baseline/proposed host
+   deletion, and independent selected baseline corners and managed cuts together
+   with original/retained/undone history. Source integration is not acceptance.
    Independent corner combinations with other producers,
    aggregate clipboard, mixed Properties/transforms and directional group
    controls remain required implementation gaps.

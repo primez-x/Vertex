@@ -377,6 +377,10 @@ std::uint32_t required_format_version_internal(const DocumentSnapshot& snapshot,
             const auto& value=*pending.back(); pending.pop_back();
             if (++nodes>ProjectStore::maximum_json_values)
                 storage_error(StorageErrorCode::resource_limit,"Typed edit reader-floor scan exceeds its JSON budget");
+            if (value.is_object() && value.value("version",nlohmann::json())==5 &&
+                value.value("complete_actual_corner_window_cohorts",nlohmann::json())==true &&
+                value.contains("wall_demolition") && value.contains("explicit_corner_window_ids"))
+                floor=std::max(floor,184U);
             if (value.is_object() &&
                 ((value.value("kind",nlohmann::json())=="physical_wall_deletion" && value.value("version",nlohmann::json())==48) ||
                  (value.value("kind",nlohmann::json())=="mixed_wall_deletion" && value.value("version",nlohmann::json())==49) ||
@@ -550,9 +554,9 @@ std::uint32_t required_format_version_internal(const DocumentSnapshot& snapshot,
     };
     for (const auto& revision : snapshot.history()) {
         if (revision.phase_entity_import) required=std::max(required,160U);
-        if (required<183 && revision.boundary_geometry_edit)
+        if (required<184 && revision.boundary_geometry_edit)
             required=std::max(required,typed_edit_reader_floor(encode_boundary_geometry_edit(*revision.boundary_geometry_edit)));
-        if (required<183 && revision.boundary_constraint_changes)
+        if (required<184 && revision.boundary_constraint_changes)
             required=std::max(required,typed_edit_reader_floor(command_to_json(Command{*revision.boundary_constraint_changes})));
         if (required<122 && revision.boundary_geometry_edit)
             required=std::max(required,quantity_reader_floor(encode_boundary_geometry_edit(*revision.boundary_geometry_edit)));
@@ -670,6 +674,8 @@ std::uint32_t required_format_version_internal(const DocumentSnapshot& snapshot,
                     return 169U;
                 if (intent.is_object()) {
                     const auto demolition=intent.find("wall_demolition");
+                    if (demolition!=intent.end() && demolition->is_object() &&
+                        demolition->value("version",nlohmann::json())==5) return 184U;
                     if (demolition!=intent.end() && demolition->is_object() &&
                         demolition->value("version",nlohmann::json())==4) return 183U;
                     if (demolition!=intent.end() && demolition->is_object() &&
@@ -2949,6 +2955,7 @@ bool verify_sqlite_schema(sqlite3* database, bool allow_recovery = false) {
          sqlite3_column_int(user_version.get(), 0) != 181 &&
          sqlite3_column_int(user_version.get(), 0) != 182 &&
          sqlite3_column_int(user_version.get(), 0) != 183 &&
+         sqlite3_column_int(user_version.get(), 0) != 184 &&
          sqlite3_column_int(user_version.get(), 0) != 174 &&
          sqlite3_column_int(user_version.get(), 0) != 169 &&
          sqlite3_column_int(user_version.get(), 0) != 163 &&
@@ -3671,6 +3678,8 @@ DocumentSnapshot read_snapshot(sqlite3* database, RecoveryLedger* recovery = nul
     // here and authenticate the manifest with its stored version below.
     const auto required_format = required_format_version_internal(snapshot, format_number < 28);
     if (required_format > format_number) {
+        if (required_format>=184)
+            storage_error(StorageErrorCode::unsupported_format,"This project requires reader 184 for complete actual phase corner cohorts and retained history");
         if (required_format>=183)
             storage_error(StorageErrorCode::unsupported_format,"This project requires reader 183 for complete wall/corner retirement, baseline demolition and retained history");
         if (required_format>=182)

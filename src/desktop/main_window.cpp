@@ -33452,7 +33452,7 @@ public:
             if (std::none_of(graph.begin(),graph.end(),[&](const auto& entity){return entity.id==id && entity.type=="opening";}))
                 throw std::invalid_argument("The mixed selection no longer contains its actual opening roots.");
         const std::string message=cut ? "Cut selected walls and objects" : "Delete selected walls and objects";
-        if (const auto wall_selection=inspect_phase_wall_demolition_selection(source.entities(),intent.wall_ids)) {
+        if (const auto wall_selection=inspect_phase_wall_demolition_selection(source.entities(),intent.wall_ids,true)) {
             const PhysicalWallPhaseSelection destination{wall_selection->baseline.registry_id,wall_selection->baseline.alternative_id};
             if (!destination.alternative_id)
                 throw std::invalid_argument("The active wall demolition design changed. Select the objects again.");
@@ -33474,16 +33474,22 @@ public:
             demolition.ordinary_wall_ids=wall_selection->ordinary_wall_ids;
             demolition.complete_hosted_catalog_consequences=true;
             demolition.complete_corner_window_consequences=true;
+            demolition.complete_actual_corner_window_cohorts=true;
             std::vector<std::string> baseline_ids,ordinary_ids;
             for (const auto& id:other_ids) {
                 // The new typed wall lane authenticates and collapses explicit
                 // covered corner owners from the original source itself.
-                if (source.entities().at(id).type=="corner_window") ordinary_ids.push_back(id);
+                if (source.entities().at(id).type=="corner_window") {
+                    ordinary_ids.push_back(id);
+                    demolition.explicit_corner_window_ids.push_back(id);
+                }
                 else (baseline(id) ? baseline_ids : ordinary_ids).push_back(id);
             }
             const std::set<std::string,std::less<>> selected_walls(intent.wall_ids.begin(),intent.wall_ids.end());
             for (const auto& id:opening_ids) {
                 const auto host=read_string(source.entities().at(id).properties,"wall_id");
+                if (const auto owner=read_string(source.entities().at(id).properties,"corner_window_id"))
+                    demolition.explicit_corner_window_ids.push_back(*owner);
                 if ((host && selected_walls.contains(*host)) ||
                     source.entities().at(id).properties.contains("corner_window_id"))
                     demolition.opening_ids.push_back(id);
@@ -33491,6 +33497,9 @@ public:
                 else demolition.opening_ids.push_back(id);
             }
             std::sort(baseline_ids.begin(),baseline_ids.end());
+            std::sort(demolition.explicit_corner_window_ids.begin(),demolition.explicit_corner_window_ids.end());
+            demolition.explicit_corner_window_ids.erase(std::unique(demolition.explicit_corner_window_ids.begin(),
+                demolition.explicit_corner_window_ids.end()),demolition.explicit_corner_window_ids.end());
             if (const auto other=baselineArchitecturalDemolitionCommand(source,baseline_ids,message,destination))
                 demolition.other_authoring=other->phase_constraint_authoring_intent;
             demolition.ordinary=captureArchitecturalSelectionRemoval(source,std::move(ordinary_ids),std::move(components),
@@ -33501,6 +33510,7 @@ public:
             for (const auto* token:{"wall_demolition","other_authoring","ordinary","opening_ids","room_review_intent",
                 "ordinary_wall_ids","wall_additional_identities","complete_hosted_catalog_consequences",
                 "complete_corner_window_consequences",
+                "complete_actual_corner_window_cohorts","explicit_corner_window_ids",
                 "independent_drawing_removal_completion","independent_drawing_removal_intent","owner_ids",
                 "annotations","owner_id","child_id","proof","phase_selection_removal_completion",
                 "phase_selection_removal_intent","phase_deletion","object_ids","components","selection","base_command",
@@ -33726,7 +33736,7 @@ public:
         }
         // Every baseline wall selection uses the complete typed room stage,
         // including wall-only cohorts with no affected rooms or ordinary walls.
-        if (inspect_phase_wall_demolition_selection(source.entities(),wall_ids))
+        if (inspect_phase_wall_demolition_selection(source.entities(),wall_ids,true))
             return removeSelectedMixedPhysicalWalls(source,cut,prepared);
         const bool site = siteCanvas(m_architecturalCanvas);
         const auto site_generation = m_site_publication_generation;

@@ -8,6 +8,7 @@ struct PhaseWallDemolitionIntent {
     std::string registry_id;
     std::string alternative_id;
     std::vector<std::string> wall_ids;
+    bool complete_actual_corner_window_cohorts{false};
     bool operator==(const PhaseWallDemolitionIntent&) const = default;
 };
 
@@ -22,17 +23,25 @@ struct PhaseWallDemolitionSelection {
 // Null means the selection contains no active-alternative baseline walls.
 [[nodiscard]] std::optional<PhaseWallDemolitionSelection> inspect_phase_wall_demolition_selection(
     const std::map<std::string,Entity,std::less<>>& actual,
-    const std::vector<std::string>& selected_wall_ids);
+    const std::vector<std::string>& selected_wall_ids,
+    bool complete_actual_corner_window_cohorts=false);
 
 // Closed semantic selection: the actual saved registry/alternative and an
 // ascending unique inventory of retained baseline walls. No entity payloads
 // or unrelated membership changes can borrow this authority.
+// Closed version two explicitly completes actual corner cohorts touching the
+// selected walls. Default false retains the exact version-one wire authority.
 [[nodiscard]] nlohmann::json encode_phase_wall_demolition_intent(const PhaseWallDemolitionIntent& intent);
 [[nodiscard]] PhaseWallDemolitionIntent decode_phase_wall_demolition_intent(const nlohmann::json& value);
-// Analytical complete actual-source replay. Only the admitted active registry
+// Historical analytical actual-source replay. Only the admitted active registry
 // changes; baseline bodies, cuts, hosted rows, metadata and aliases remain exact.
 // The enclosing producer still owns source/history/constraint admission and
 // explicit physical-room disposition review before publication.
+// Version two first admits complete original-source analytical work, then
+// independently replays actual corner removal against that same source. Active
+// baseline aggregates are parked; sole active proposed aggregates are physically
+// retired. The complete returned candidate validates corner invariants; a
+// registry-only interim source never escapes as version-two replay authority.
 [[nodiscard]] std::map<std::string,Entity,std::less<>> replay_phase_wall_demolition_entities(
     const std::map<std::string,Entity,std::less<>>& actual,const PhaseWallDemolitionIntent& intent);
 

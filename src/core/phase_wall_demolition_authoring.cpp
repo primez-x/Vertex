@@ -2,6 +2,8 @@
 
 #include "sketch/architectural_object_removal.hpp"
 #include "sketch/assembly_document_adapter.hpp"
+#include "sketch/boundary_dimension.hpp"
+#include "sketch/constraint_entity.hpp"
 #include "sketch/constraint_integrity.hpp"
 #include "sketch/constraint_phase_scope.hpp"
 #include "sketch/corner_window.hpp"
@@ -320,9 +322,11 @@ struct Historical {
     std::vector<PhaseConstraintAuthoringIntent> leaves;
     std::optional<PhaseCoordinatedOrdinaryRemoval> ordinary;
 };
-void reserve_historical_corner_proof_names(const Historical& other) {
-    const auto reserve=[](const std::string& destination) {
-        if (destination=="complete_corner_window_consequences")
+void reserve_historical_corner_proof_names(const Historical& other,bool actual_cohorts=false) {
+    const auto reserve=[&](const std::string& destination) {
+        if (destination=="complete_corner_window_consequences" ||
+            (actual_cohorts && (destination=="complete_actual_corner_window_cohorts" ||
+                destination=="explicit_corner_window_ids")))
             invalid("historical fresh destination borrows the enclosing corner consequence proof field");
     };
     if (other.ordinary)
@@ -568,10 +572,37 @@ Entities physical_stage(const Entities& actual,const PhaseConstraintAuthoringInt
     }
     std::vector<std::string> baseline_corner_owners;
     Ids baseline_corner_closure,ordinary_corner_closure,covered_corner_closure;
+    std::vector<std::string> independent_corner_owners;
+    Ids wall_corner_owners,ordinary_wall_corner_closure,retired_corner_cuts;
+    if (edit.complete_actual_corner_window_cohorts) {
+        Ids explicit_owners;
+        const auto authenticate_explicit=[&](const std::string& id) {
+            selected_owner(id);
+            const auto& entity=actual.at(id);
+            if (entity.type=="corner_window") explicit_owners.insert(id);
+            else if (entity.type=="opening" && entity.properties.contains("corner_window_id")) {
+                const auto& owner=entity.properties.at("corner_window_id");
+                if (!owner.is_string()) invalid("explicit managed cut has invalid actual corner ownership");
+                selected_owner(owner.get<std::string>());
+                const auto found=actual.find(owner.get<std::string>());
+                if (found==actual.end() || found->second.type!="corner_window")
+                    invalid("explicit managed cut lacks its actual corner owner");
+                const auto corner=parse_corner_window(found->second);
+                if (std::find(corner.opening_ids.begin(),corner.opening_ids.end(),id)==corner.opening_ids.end())
+                    invalid("explicit managed cut is absent from its actual owner inventory");
+                explicit_owners.insert(found->first);
+            }
+        };
+        for (const auto& id:edit.ordinary.object_ids) authenticate_explicit(id);
+        for (const auto& id:edit.opening_ids) authenticate_explicit(id);
+        if (std::vector<std::string>(explicit_owners.begin(),explicit_owners.end())!=edit.explicit_corner_window_ids)
+            invalid("explicit corner inventory differs from actual explicit owner/cut selections");
+    }
     if (edit.complete_corner_window_consequences) {
         // Actual aggregate membership, backlinks, both host geometries and all
-        // retained alternatives precede every native-capable producer. A cut
-        // selection alone never promotes its owner or either wall into a root.
+        // retained alternatives precede every native-capable producer. Inner
+        // four derives hosts only; inner five separately authenticates explicit
+        // owner/cut selections and never promotes their wall hosts into roots.
         validate_corner_window_state(actual);
         if (const auto error=validate_active_phase_constraint_integrity(actual)) invalid(*error);
         const auto model=ModelPhases::from_json(actual.at(edit.wall_demolition.registry_id).properties.at("model"));
@@ -585,34 +616,102 @@ Entities physical_stage(const Entities& actual,const PhaseConstraintAuthoringInt
                 });
             };
             const bool baseline=touches(edit.wall_demolition.wall_ids),ordinary=touches(edit.ordinary_wall_ids);
-            if (!baseline && !ordinary) continue;
-            if (baseline && ordinary) invalid("corner closure spans baseline and ordinary wall authority");
+            const bool explicit_root=edit.complete_actual_corner_window_cohorts &&
+                std::binary_search(edit.explicit_corner_window_ids.begin(),edit.explicit_corner_window_ids.end(),id);
+            if (!baseline && !ordinary && !explicit_root) continue;
+            if (!edit.complete_actual_corner_window_cohorts && baseline && ordinary)
+                invalid("corner closure spans baseline and ordinary wall authority");
+            const bool park=edit.complete_actual_corner_window_cohorts ? originals.contains(id) : baseline;
             for (const auto& participant:{id,corner.opening_ids[0],corner.opening_ids[1],corner.wall_ids[0],corner.wall_ids[1]}) {
                 selected_owner(participant);
-                if (baseline && !originals.contains(participant))
+                if ((edit.complete_actual_corner_window_cohorts ? park : baseline) && !originals.contains(participant))
                     invalid("baseline wall consequence requires the complete actual original corner aggregate");
             }
-            auto& closure=baseline ? baseline_corner_closure : ordinary_corner_closure;
+            auto& closure=park ? baseline_corner_closure : ordinary_corner_closure;
             closure.insert(id);closure.insert(corner.opening_ids.begin(),corner.opening_ids.end());
-            if (baseline) baseline_corner_owners.push_back(id);
+            if (edit.complete_actual_corner_window_cohorts) {
+                if (!park) {
+                    if (protected_alternatives.contains(id)) invalid("corner owner has protected alternative usage");
+                    for (const auto& cut:corner.opening_ids) {
+                        if (retained_baseline.contains(cut) || protected_alternatives.contains(cut))
+                            invalid("retired corner cut has protected saved ownership");
+                        retired_corner_cuts.insert(cut);
+                    }
+                }
+                if (baseline) wall_corner_owners.insert(id);
+                if (ordinary) {
+                    ordinary_wall_corner_closure.insert(id);
+                    ordinary_wall_corner_closure.insert(corner.opening_ids.begin(),corner.opening_ids.end());
+                }
+                if (!baseline && !ordinary) independent_corner_owners.push_back(id);
+            } else if (baseline) baseline_corner_owners.push_back(id);
         }
         covered_corner_closure=baseline_corner_closure;
         covered_corner_closure.insert(ordinary_corner_closure.begin(),ordinary_corner_closure.end());
         if (covered_corner_closure.size()>4096) invalid("affected corner closure budget exceeded");
         sorted_ids(baseline_corner_owners,1000);
+        if (edit.complete_actual_corner_window_cohorts) {
+            for (const auto& id:edit.explicit_corner_window_ids) {
+                selected_owner(id);
+                if (actual.at(id).type!="corner_window" || !covered_corner_closure.contains(id))
+                    invalid("explicit corner inventory requires actual admitted corner owners");
+            }
+            sorted_ids(independent_corner_owners,1000);
+        }
     }
     Historical other;
     if (edit.complete_hosted_catalog_consequences) {
         // Authenticate the complete explicit selection on the original source
         // before historical leaves or ordinary producers can invoke native work.
         other=historical(edit.other_authoring,edit.wall_demolition,&root);
-        if (edit.complete_corner_window_consequences) reserve_historical_corner_proof_names(other);
+        if (edit.complete_corner_window_consequences)
+            reserve_historical_corner_proof_names(other,edit.complete_actual_corner_window_cohorts);
         const auto selected=std::find_if(source_scope.registries.begin(),source_scope.registries.end(),[&](const auto& registry) {
             return registry.registry_id==edit.wall_demolition.registry_id;
         });
         if (selected==source_scope.registries.end() ||
             selected->alternative_id!=std::optional<std::string>{edit.wall_demolition.alternative_id})
             invalid("complete demolition requires the actual saved registry/alternative");
+        if (edit.complete_actual_corner_window_cohorts) {
+            const auto baseline_child=[&](const std::vector<std::string>& ids,
+                std::initializer_list<const char*> families) {
+                for (const auto& id:ids) {
+                    selected_owner(id);
+                    if (!retained_baseline.contains(id) ||
+                        std::none_of(families.begin(),families.end(),[&](const char* type) {return actual.at(id).type==type;}))
+                        invalid("historical child requires its actual baseline family roots");
+                }
+            };
+            for (const auto& leaf:other.leaves) {
+                if (!leaf.opening_demolition.is_null()) {
+                    const auto child=decode_phase_opening_demolition_intent(leaf.opening_demolition);
+                    baseline_child(child.opening_ids,{"opening"});
+                    for (const auto& id:child.opening_ids) {
+                        const auto& opening=actual.at(id);
+                        if (opening.properties.contains("corner_window_id"))
+                            invalid("historical opening child cannot borrow managed corner-cut authority");
+                        const auto& host=opening.properties.at("wall_id");
+                        if (!host.is_string()) invalid("historical opening child lacks its actual host");
+                        selected_owner(host.get<std::string>());
+                    }
+                } else if (!leaf.slab_demolition.is_null())
+                    baseline_child(decode_slab_demolition_intent(leaf.slab_demolition).slab_ids,{"slab"});
+                else if (!leaf.stair_demolition.is_null())
+                    baseline_child(decode_stair_demolition_intent(leaf.stair_demolition).selected_object_ids,{"stair","railing"});
+                else if (!leaf.stair_demolition_retirement.is_null()) {
+                    const auto child=decode_stair_demolition_retirement_intent(leaf.stair_demolition_retirement);
+                    baseline_child(child.selected_object_ids,{"stair","railing"});
+                    for (const auto& id:child.retired_proposed_rail_ids) {
+                        selected_owner(id);
+                        if (actual.at(id).type!="railing" || retained_baseline.contains(id) || protected_alternatives.contains(id))
+                            invalid("historical stair retirement requires actual unprotected proposed rails");
+                    }
+                } else if (!leaf.roof_replacement.is_null())
+                    baseline_child(decode_phase_roof_replacement_authoring(leaf.roof_replacement).seed_roof_ids,{"roof"});
+                else if (!leaf.structural_replacement.is_null())
+                    baseline_child(decode_phase_structural_replacement_authoring(leaf.structural_replacement).seed_object_ids,{"column","beam"});
+            }
+        }
         for (const auto& id:edit.wall_demolition.wall_ids) {
             selected_owner(id);
             if (actual.at(id).type!="wall" || !retained_baseline.contains(id))
@@ -624,7 +723,7 @@ Entities physical_stage(const Entities& actual,const PhaseConstraintAuthoringInt
             if (opening.type!="opening") invalid("opening selection requires an actual semantic owner");
             if (edit.complete_corner_window_consequences && opening.properties.contains("corner_window_id") &&
                 !covered_corner_closure.contains(id))
-                invalid("managed corner cut requires an actual selected wall closure");
+                invalid("managed corner cut requires an admitted actual corner closure");
             const auto& host=opening.properties.at("wall_id");
             if (!host.is_string()) invalid("opening host must be an actual identity");
             const auto wall_id=host.get<std::string>();selected_owner(wall_id);
@@ -689,10 +788,40 @@ Entities physical_stage(const Entities& actual,const PhaseConstraintAuthoringInt
         if (other.ordinary) authenticate({other.ordinary->object_ids,other.ordinary->components,other.ordinary->roof_additional_identities});
         authenticate(edit.ordinary);
     }
-    const auto wall_candidate=replay_phase_wall_demolition_entities(actual,edit.wall_demolition);
+    auto wall_candidate=replay_phase_wall_demolition_entities(actual,edit.wall_demolition);
+    if (edit.complete_actual_corner_window_cohorts) {
+        retain_registry_order(actual,wall_candidate,edit.wall_demolition);
+        ordinary_authority(actual,wall_candidate,edit.wall_demolition,true,retired_corner_cuts);
+        const auto phase=constraint_phase_scope(wall_candidate);
+        for (const auto& owner:wall_corner_owners) {
+            const auto corner=parse_corner_window(actual.at(owner));
+            for (const auto& id:{owner,corner.opening_ids[0],corner.opening_ids[1]}) {
+                if (baseline_corner_closure.contains(id)) {
+                    if (!wall_candidate.contains(id) || !exact(actual.at(id),wall_candidate.at(id)) ||
+                        !phase.inactive_owner_ids.contains(id)) invalid("wall leaf failed to park actual baseline corner closure");
+                } else if (wall_candidate.contains(id)) invalid("wall leaf failed to retire actual proposed corner closure");
+            }
+        }
+    }
     if (!edit.complete_hosted_catalog_consequences) other=historical(edit.other_authoring,edit.wall_demolition,&root);
     std::vector<Entities> candidates;
     candidates.push_back(wall_candidate);
+    if (!independent_corner_owners.empty()) {
+        auto candidate=replay_architectural_object_removal(actual,independent_corner_owners,{},true,0,true,false,true,true);
+        retain_registry_order(actual,candidate,edit.wall_demolition);
+        ordinary_authority(actual,candidate,edit.wall_demolition,true,retired_corner_cuts);
+        const auto phase=constraint_phase_scope(candidate);
+        for (const auto& owner:independent_corner_owners) {
+            const auto corner=parse_corner_window(actual.at(owner));
+            for (const auto& id:{owner,corner.opening_ids[0],corner.opening_ids[1]}) {
+                if (baseline_corner_closure.contains(id)) {
+                    if (!candidate.contains(id) || !exact(actual.at(id),candidate.at(id)) ||
+                        !phase.inactive_owner_ids.contains(id)) invalid("independent leaf failed to park actual baseline corner closure");
+                } else if (candidate.contains(id)) invalid("independent leaf failed to retire actual corner closure");
+            }
+        }
+        candidates.push_back(std::move(candidate));
+    }
     if (!baseline_corner_owners.empty()) {
         // Every consequence leaf is independently replayed against ORIGINAL
         // actual entities. Neither the partially demolished wall map nor a
@@ -723,8 +852,9 @@ Entities physical_stage(const Entities& actual,const PhaseConstraintAuthoringInt
             actual,edit.ordinary_wall_ids,edit.wall_additional_identities,true,edit.complete_hosted_catalog_consequences,
             edit.complete_corner_window_consequences);
         retain_registry_order(actual,candidate,edit.wall_demolition);
-        ordinary_authority(actual,candidate,edit.wall_demolition,edit.complete_hosted_catalog_consequences);
-        for (const auto& id:ordinary_corner_closure) if (candidate.contains(id))
+        ordinary_authority(actual,candidate,edit.wall_demolition,edit.complete_hosted_catalog_consequences,retired_corner_cuts);
+        const auto& required_retirement=edit.complete_actual_corner_window_cohorts ? ordinary_wall_corner_closure : ordinary_corner_closure;
+        for (const auto& id:required_retirement) if (candidate.contains(id))
             invalid("ordinary wall consequence must retire its complete actual corner owner and both cuts");
         for (const auto& [id,entity]:actual) {
             (void)entity;if (!candidate.contains(id)) ordinary_wall_retired_owners.insert(id);
@@ -772,7 +902,7 @@ Entities physical_stage(const Entities& actual,const PhaseConstraintAuthoringInt
                 invalid("ordinary wall leaf failed to retire its actual hosted opening");
         } else independent.push_back(id);
     }
-    Ids retired_independent_openings;
+    Ids retired_independent_openings=retired_corner_cuts;
     if (!independent.empty()) {
         auto opening=replay_hosted_opening_removal(actual,independent,true,edit.complete_hosted_catalog_consequences);
         if (!opening) invalid("independent opening selection was not admitted");
@@ -893,6 +1023,57 @@ Entities physical_stage(const Entities& actual,const PhaseConstraintAuthoringInt
     }
     auto result=std::move(candidates.front());
     for (std::size_t i=1;i<candidates.size();++i) {
+        if (edit.complete_actual_corner_window_cohorts) {
+            // Two independently admitted original-source host leaves may own
+            // the same proposed aggregate. Suppress only the second identical
+            // retirement delta; never relax the shared physical composer.
+            Ids shared_retirements;
+            for (const auto& id:ordinary_corner_closure)
+                if (!result.contains(id) && !candidates[i].contains(id)) {
+                    shared_retirements.insert(id);
+                    candidates[i].emplace(id,actual.at(id));
+                }
+            const auto shared_aggregate=shared_retirements;
+            for (const auto& [id,entity]:actual) {
+                if (result.contains(id) || candidates[i].contains(id)) continue;
+                bool bound=false;
+                if (can_recognize_boundary_dimension_entity_type(entity.type)) {
+                    const auto decoded=decode_boundary_dimension_entity(entity);
+                    bound=decoded.supported() && shared_aggregate.contains(decoded.dimension->boundary_id);
+                } else if (entity.type=="constraint") {
+                    const auto decoded=decode_constraint_entity(entity);
+                    bound=decoded.supported() && std::any_of(decoded.constraint->bindings.begin(),decoded.constraint->bindings.end(),
+                        [&](const auto& binding) {return shared_aggregate.contains(binding.owner_id);});
+                }
+                // The shared composer already admits repeated retirement of
+                // supported references. Normalize their registry filtering
+                // only when their original typed binding proves this aggregate.
+                if (bound) shared_retirements.insert(id);
+            }
+            if (!shared_retirements.empty()) {
+                const auto& original=actual.at(edit.wall_demolition.registry_id);
+                auto& next=candidates[i].at(edit.wall_demolition.registry_id);
+                std::vector<Json::json_pointer> paths{Json::json_pointer("/model/entity_ids")};
+                const auto& alternatives=original.properties.at("model").at("alternatives");
+                for (std::size_t row=0;row<alternatives.size();++row)
+                    if (alternatives[row].at("id")==edit.wall_demolition.alternative_id)
+                        paths.emplace_back("/model/alternatives/"+std::to_string(row)+"/proposed_ids");
+                for (const auto& path:paths) {
+                    const auto& retained=original.properties.at(path);
+                    const auto& rows=next.properties.at(path);
+                    Json restored=Json::array();Ids originals,present;
+                    for (const auto& row:rows) present.insert(row.get<std::string>());
+                    for (const auto& row:retained) {
+                        const auto id=row.get<std::string>();originals.insert(id);
+                        if (shared_retirements.contains(id) || present.contains(id))
+                            restored.push_back(row);
+                    }
+                    for (const auto& row:rows) if (!originals.contains(row.get<std::string>())) restored.push_back(row);
+                    next.properties.at(path)=std::move(restored);
+                }
+                (void)ModelPhases::from_json(next.properties.at("model"));
+            }
+        }
         if (edit.complete_corner_window_consequences) {
             // A host's first managed cut is independently demolished by both
             // original-source leaves. Merge that identical membership effect
@@ -967,6 +1148,14 @@ void validate_room_binding(const PhaseConstraintAuthoringIntent& root,const Phas
 } // namespace
 
 Json encode_phase_wall_demolition_authoring(const PhaseWallDemolitionAuthoring& intent) {
+    if (intent.complete_actual_corner_window_cohorts &&
+        (!intent.complete_corner_window_consequences || !intent.complete_hosted_catalog_consequences ||
+            !intent.wall_demolition.complete_actual_corner_window_cohorts))
+        invalid("inner five requires complete actual wall/corner and hosted catalog consequences");
+    if (!intent.complete_actual_corner_window_cohorts &&
+        (!intent.explicit_corner_window_ids.empty() || intent.wall_demolition.complete_actual_corner_window_cohorts))
+        invalid("actual corner cohorts require distinct inner five authority");
+    sorted_ids(intent.explicit_corner_window_ids,1000);
     if (intent.complete_corner_window_consequences && !intent.complete_hosted_catalog_consequences)
         invalid("inner four requires complete hosted catalog consequences");
     if (intent.complete_corner_window_consequences)
@@ -974,12 +1163,15 @@ Json encode_phase_wall_demolition_authoring(const PhaseWallDemolitionAuthoring& 
             for (const auto& [owner,rows]:*mapping) {
                 (void)owner;
                 for (const auto& destination:rows)
-                    if (destination=="complete_corner_window_consequences")
+                    if (destination=="complete_corner_window_consequences" ||
+                        (intent.complete_actual_corner_window_cohorts &&
+                            (destination=="complete_actual_corner_window_cohorts" || destination=="explicit_corner_window_ids")))
                         invalid("fresh destination borrows the corner consequence proof field");
             }
     proof_bound(intent.other_authoring);proof_bound(intent.room_review_intent);
     const auto other=historical(intent.other_authoring,intent.wall_demolition);
-    if (intent.complete_corner_window_consequences) reserve_historical_corner_proof_names(other);
+    if (intent.complete_corner_window_consequences)
+        reserve_historical_corner_proof_names(other,intent.complete_actual_corner_window_cohorts);
     sorted_ids(intent.opening_ids,1000);
     auto wall_additional=wall_destinations_wire(intent);
     if (!intent.room_review_intent.is_null()) {
@@ -999,17 +1191,32 @@ Json encode_phase_wall_demolition_authoring(const PhaseWallDemolitionAuthoring& 
         result["version"]=4;
         result["complete_corner_window_consequences"]=true;
     }
+    if (intent.complete_actual_corner_window_cohorts) {
+        result["version"]=5;
+        result["complete_actual_corner_window_cohorts"]=true;
+        result["explicit_corner_window_ids"]=intent.explicit_corner_window_ids;
+    }
     proof_bound(result);return result;
 }
 PhaseWallDemolitionAuthoring decode_phase_wall_demolition_authoring(const Json& value) try {
     proof_bound(value);
     if (!value.is_object() || !value.contains("version") || !value.at("version").is_number_integer() ||
-        (value.at("version")!=1 && value.at("version")!=2 && value.at("version")!=3 && value.at("version")!=4))
+        (value.at("version")!=1 && value.at("version")!=2 && value.at("version")!=3 && value.at("version")!=4 && value.at("version")!=5))
         invalid("unsupported inner demolition version");
-    const bool corners=value.at("version")==4;
+    const bool actual_cohorts=value.at("version")==5;
+    const bool corners=value.at("version")==4 || actual_cohorts;
     const bool complete=value.at("version")==3 || corners;
     const bool ordinary_walls=value.at("version")!=1;
-    if (corners) {
+    if (actual_cohorts) {
+        keys(value,{"version","wall_demolition","other_authoring","ordinary","opening_ids","room_review_intent",
+            "ordinary_wall_ids","wall_additional_identities","complete_hosted_catalog_consequences","complete_corner_window_consequences",
+            "complete_actual_corner_window_cohorts","explicit_corner_window_ids"});
+        for (const auto* flag:{"complete_hosted_catalog_consequences","complete_corner_window_consequences","complete_actual_corner_window_cohorts"})
+            if (!value.at(flag).is_boolean() || value.at(flag)!=true)
+                invalid("inner five requires its complete actual wall/corner and catalog markers");
+        if (!value.at("explicit_corner_window_ids").is_array() || value.at("explicit_corner_window_ids").size()>1000)
+            invalid("invalid explicit actual corner inventory");
+    } else if (corners) {
         keys(value,{"version","wall_demolition","other_authoring","ordinary","opening_ids","room_review_intent",
             "ordinary_wall_ids","wall_additional_identities","complete_hosted_catalog_consequences","complete_corner_window_consequences"});
         if (!value.at("complete_hosted_catalog_consequences").is_boolean() ||
@@ -1030,6 +1237,11 @@ PhaseWallDemolitionAuthoring decode_phase_wall_demolition_authoring(const Json& 
     PhaseWallDemolitionAuthoring result;
     result.complete_hosted_catalog_consequences=complete;
     result.complete_corner_window_consequences=corners;
+    result.complete_actual_corner_window_cohorts=actual_cohorts;
+    if (actual_cohorts) for (const auto& row:value.at("explicit_corner_window_ids")) {
+        if (!row.is_string()) invalid("explicit corner identity must be a string");
+        result.explicit_corner_window_ids.push_back(row.get<std::string>());
+    }
     result.wall_demolition=decode_phase_wall_demolition_intent(value.at("wall_demolition"));
     result.other_authoring=value.at("other_authoring");result.ordinary=ordinary_from_wire(value.at("ordinary"));
     for (const auto& row:value.at("opening_ids")) {
