@@ -16,7 +16,7 @@ ordered_json entity_json(const Entity& entity) {
             {"extensions", ordered_json(entity.extensions)}};
 }
 
-std::string byte_hex(const std::vector<std::byte>& bytes) {
+std::string byte_hex(std::span<const std::byte> bytes) {
     static constexpr char digits[] = "0123456789abcdef";
     std::string result;
     result.resize(bytes.size() * 2);

@@ -14,6 +14,43 @@ changed source does not acquire runtime acceptance without later qualification.
 
 ## Current delivery state
 
+### October 10 original-file receipts and shared asset history — source integration
+
+Asset-bearing DXF import now prepares an exact ordinary-body Asset and a strict
+binary reconstruction recipe instead of another complete encoded DXF Asset.
+Actual fresh payload identities, sizes and hashes are pinned, with bounded
+dependency entities exposing real asset references. Document state admission
+groups those dependencies and streams canonical reconstruction to verify the
+full original file hash. Retained receipt fields, segments and payload bytes are
+immutable; explicit complete removal remains recoverable through history.
+
+Asset copies now share private immutable buffers across commands, snapshots,
+revisions and undo/redo. Freezing makes a private copy even from moved vectors,
+protecting saved history and actual-hash proofs from external mutable aliases.
+Changed bytes create a new buffer. Exact unchanged receipt proofs can be reused
+within an admitted head/restore pass without reconstructing the original on
+every edit. A fixed-buffer Windows BCrypt stream supports full-file verification.
+
+Native format 161 stores verified unique payloads with separate revision metadata.
+It retains legacy schemas/limits, exact schema and reference admission, staged
+publication, recovery ledgers and stored-format digests. The 512 MiB capacity now
+counts unique physical content; revision rows remain capped at 100,000 and actual
+hash/collision work at 8 GiB. Receipt semantics require reader 161 even before
+content is repeated. JSON/assets extraction derives floor 159. DXF destination
+admission now verifies unique content separately from rows, and recovery accounts
+for actual immutable allocations without discounting logical replay work.
+
+Root source inspection and integrated independent review closed the concrete
+reader-downgrade gap. No remaining P1/P2 was identified in this bounded source
+integration; this is not production or runtime-capacity approval.
+Delivery JSON and the source-kit inventory parse; the allowlist matches 1,905
+tracked/new paths without extras or duplicates. Scoped diff checks passed.
+No build, test, new test, probe, script, native job, launch, package or installation
+ran. Compilation, runtime round trips, migration/recovery, memory/performance and
+full-capacity editable-history qualification remain outstanding. Existing replay
+and JSON limits can still refuse otherwise valid large projects. The installed
+candidate is unchanged and all production gates remain open.
+
 ### October 10 DXF asset carrier and isolated worker routing — source integration
 
 Complete project serialization now transports the authenticated asset inventory

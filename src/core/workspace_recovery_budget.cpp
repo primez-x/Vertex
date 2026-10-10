@@ -3,6 +3,7 @@
 #include "sketch/boundary_transform.hpp"
 #include "sketch/boundary_authoring_recovery_resource.hpp"
 #include <set>
+#include <map>
 #include <stdexcept>
 
 namespace sketch {
@@ -24,6 +25,8 @@ WorkspaceRecoveryUsage preflight_workspace_recovery(const DocumentSnapshot& docu
     const WorkspaceRetiredBoundaries& retired, const BoundaryAuthoringResourcePolicy& policy,
     const WorkspaceRecoveryLimits& limits) {
     WorkspaceRecoveryUsage u;
+    std::map<const std::byte*, const Asset*, std::less<>> asset_allocations;
+    std::size_t logical_asset_validation_units = 0;
     add(u.events, events.size(), limits.max_events);
     add(u.document_revisions, document.history().size(), limits.max_document_revisions);
     if (history.events.size() > limits.max_events || navigation.operations.size() > limits.max_events ||
@@ -149,7 +152,14 @@ WorkspaceRecoveryUsage preflight_workspace_recovery(const DocumentSnapshot& docu
         }
         for (const auto& [id, asset] : record.assets) {
             text(id); text(asset.id); text(asset.media_type); text(asset.sha256);
-            add(u.asset_bytes, asset.bytes.size(), limits.max_asset_bytes);
+            const auto existing = asset_allocations.find(asset.bytes.data());
+            if (existing == asset_allocations.end() || !existing->second->bytes.same_storage(asset.bytes)) {
+                add(u.asset_bytes, asset.bytes.size(), limits.max_asset_bytes);
+                asset_allocations.insert_or_assign(asset.bytes.data(), &asset);
+            }
+            // Digests and recovery replay still visit logical revision rows;
+            // immutable storage sharing does not waive their work admission.
+            add(logical_asset_validation_units, asset.bytes.size() / 1024, limits.max_validation_work);
             wire(detail::measure_authoring_recovery_json(asset.metadata, json_policy));
         }
     }
@@ -158,7 +168,7 @@ WorkspaceRecoveryUsage preflight_workspace_recovery(const DocumentSnapshot& docu
     add(base, u.replay_work, limits.max_validation_work);
     add(base, u.events, limits.max_validation_work);
     add(base, u.json_values, limits.max_validation_work);
-    add(base, u.asset_bytes / 1024, limits.max_validation_work);
+    add(base, logical_asset_validation_units, limits.max_validation_work);
     std::size_t passes = u.events;
     add(passes, 8, limits.max_validation_work);
     add(u.validation_work, multiply(base, passes), limits.max_validation_work);

@@ -322,9 +322,8 @@ NativeDxfPhaseSourceAssets decode_native_dxf_phase_asset_carrier(
     for (const auto& record : records) {
         const auto& row = expected->second;
         work(b, record.id.size() * 2ULL + row.media_type.size() + row.sha256.size());
-        work(b, record.byte_count * 3ULL); // Initialization, chunk copy, actual hash.
-        Asset asset{row.id, row.media_type, std::vector<std::byte>(static_cast<std::size_t>(record.byte_count)),
-            row.sha256, row.metadata};
+        work(b, record.byte_count * 4ULL); // Initialization, chunk copy, hash, immutable freeze.
+        std::vector<std::byte> bytes(static_cast<std::size_t>(record.byte_count));
         Reader reader{record.data_records};
         std::size_t offset{};
         for (std::uint64_t index = 0; index < record.chunk_count; ++index) {
@@ -333,11 +332,12 @@ NativeDxfPhaseSourceAssets decode_native_dxf_phase_asset_carrier(
             const auto parts = fields<4>(pair.value);
             const auto decoded = decode_native_dxf_phase_asset_chunk(parts[3], &b);
             require(decoded.size() == chunk_size(record.byte_count, index), "decoded chunk byte count differs");
-            std::copy(decoded.begin(), decoded.end(), asset.bytes.begin() + offset);
+            std::copy(decoded.begin(), decoded.end(), bytes.begin() + offset);
             offset += decoded.size();
         }
-        require(reader.offset == reader.text.size() && offset == asset.bytes.size(), "incomplete decoded asset");
-        require(sha256_hex(asset.bytes) == row.sha256, "decoded asset hash differs from graph manifest");
+        require(reader.offset == reader.text.size() && offset == bytes.size(), "incomplete decoded asset");
+        require(sha256_hex(bytes) == row.sha256, "decoded asset hash differs from graph manifest");
+        Asset asset{row.id, row.media_type, std::move(bytes), row.sha256, row.metadata};
         result.emplace(row.id, std::move(asset));
         ++expected;
     }

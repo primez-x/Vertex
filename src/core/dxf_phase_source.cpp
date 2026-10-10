@@ -1874,16 +1874,35 @@ void admit_native_dxf_phase_retained_asset_capacity(const DocumentSnapshot& dest
         "native retained asset history capacity limit");
     product_work(budget, history.size(), 1);
     std::size_t rows = 0, bytes = 0;
+    std::map<std::string, const Asset*, std::less<>> payloads;
     for (const auto& record : history) {
         charge(rows, record.assets.size(), native_dxf_phase_destination_asset_count_limit,
             "Import would exceed the native retained asset row capacity.");
         product_work(budget, record.assets.size(), 1);
         for (const auto& [id, asset] : record.assets) {
             (void)id;
-            charge(bytes, asset.bytes.size(), static_cast<std::size_t>(native_dxf_phase_destination_asset_payload_limit),
-                "Import would exceed the native retained asset byte capacity.");
+            require(asset.sha256.size() == 64 && asset.bytes.size() <= native_dxf_phase_asset_payload_limit,
+                "invalid retained asset descriptor");
+            if (payloads.emplace(asset.sha256, &asset).second)
+                charge(bytes, asset.bytes.size(), static_cast<std::size_t>(native_dxf_phase_destination_asset_payload_limit),
+                    "Import would exceed the native unique asset byte capacity.");
         }
     }
+    // Admit the complete unique physical inventory before hashing. Declared
+    // equal hashes do not establish equality of caller-supplied buffers.
+    for (const auto& [hash, asset] : payloads) {
+        asset_work(budget, asset->bytes.size());
+        require(asset->bytes.verified_sha256() == hash, "retained asset hash differs from actual bytes");
+    }
+    for (const auto& record : history)
+        for (const auto& [id, asset] : record.assets) {
+            (void)id;
+            const auto* first = payloads.at(asset.sha256);
+            if (first->bytes.same_storage(asset.bytes)) continue;
+            asset_work(budget, static_cast<std::uint64_t>(asset.bytes.size()) + first->bytes.size() + asset.bytes.size());
+            require(asset.bytes.verified_sha256() == asset.sha256 && asset.bytes == first->bytes,
+                "retained asset hash aliases different bytes");
+        }
 }
 
 void admit_native_dxf_phase_destination_snapshot(const DocumentSnapshot& destination,
@@ -1893,9 +1912,8 @@ void admit_native_dxf_phase_destination_snapshot(const DocumentSnapshot& destina
         budget_limits(budget);
         const auto& history = destination.history();
         require(!history.empty() && history.size() <= 4096 && destination.revision() < history.size(), "actual retained history limit");
-        // ProjectStore/recovery counts every retained revision row, including
-        // repeated payloads. Admit that complete physical inventory before the
-        // first current/head or retained payload hash in this replay pass.
+        // Native v161 stores one verified content payload, while retaining every
+        // revision's metadata row. Admit those separate inventories first.
         admit_native_dxf_phase_retained_asset_capacity(destination, &budget);
         HistoryAdmission proof{budget};
         const auto first_head_byte = budget.catalog_transfer.consumed_json_bytes;
@@ -1924,8 +1942,10 @@ void admit_native_dxf_phase_destination_snapshot(const DocumentSnapshot& destina
                 native_dxf_phase_source_byte_limit, "retained prefix JSON byte limit");
             for (const auto& [id, asset] : record.assets) {
                 (void)id;
-                charge(prefix_asset_bytes, asset.bytes.size(), static_cast<std::size_t>(native_dxf_phase_destination_asset_payload_limit),
-                    "retained prefix native asset capacity limit");
+                // Prefix digests still serialize every logical row. Sharing
+                // physical bytes must not discount their actual replay work.
+                charge(prefix_asset_bytes, asset.bytes.size(), static_cast<std::size_t>(budget.phase_assets.max_work_bytes),
+                    "retained prefix asset replay work limit");
             }
             if (record.boundary_constraint_changes) {
                 const auto& command = *record.boundary_constraint_changes;

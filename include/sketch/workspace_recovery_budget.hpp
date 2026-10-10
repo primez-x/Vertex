@@ -15,6 +15,7 @@ struct WorkspaceRecoveryLimits {
     std::size_t max_document_revisions{10'000};
     std::size_t max_entity_rows{250'000};
     std::size_t max_asset_rows{100'000};
+    // Actual retained immutable allocations; logical rows have separate work accounting.
     std::size_t max_asset_bytes{512U * 1024U * 1024U};
     std::size_t max_validation_work{200'000'000};
 };

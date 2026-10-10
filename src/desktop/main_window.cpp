@@ -116,6 +116,7 @@
 #include "sketch/dxf_project_exchange.hpp"
 #include "sketch/dxf_phase_source.hpp"
 #include "sketch/dxf_phase_asset_carrier.hpp"
+#include "sketch/dxf_source_receipt.hpp"
 #include "sketch/dxf_annotation_source.hpp"
 #include "sketch/dxf_sheet_view_source.hpp"
 #include "sketch/ifc_project_exchange.hpp"
@@ -38138,6 +38139,7 @@ public:
     struct PreparedDxfPhaseImport {
         std::vector<Entity> entities;
         std::vector<Asset> assets;
+        NativeDxfSourceAssetMapping source_asset_mapping;
         std::vector<std::string> registry_ids;
         std::vector<std::string> reviewed_existing_hierarchy_ids;
         json context_mapping = json::array();
@@ -38335,6 +38337,7 @@ public:
         auto bound = bind_native_dxf_phase_source_destinations(graph, maps, source, reviewed_new_contexts, &budget);
         prepared.entities = std::move(bound.staged_entities);
         prepared.assets = std::move(bound.staged_assets);
+        prepared.source_asset_mapping = maps.asset_ids;
         // Choose an editing target from one source object, rather than choosing
         // three unrelated lexicographically first identities. An unregistered
         // object has no owning set; choose the first imported set deliberately
@@ -39048,24 +39051,47 @@ public:
                 changes.push_back(EntityChange::upsert(std::move(annotation)));
             }
 
-            if (static_cast<std::uint64_t>(raw.size()) > native_dxf_phase_asset_payload_limit)
-                throw std::invalid_argument("This DXF file is too large to retain losslessly in the current project format.");
-            std::vector<std::byte> source_bytes;
-            source_bytes.reserve(static_cast<std::size_t>(raw.size()));
-            for (const auto value : raw) source_bytes.push_back(static_cast<std::byte>(value));
-            const auto asset_id = allocate_id("dxf-source");
             const auto imported_owner_count = mapped.entities.size() + (phase_import ? phase_import->entities.size() : 0);
-            auto asset = Asset::create(asset_id, "application/dxf", std::move(source_bytes),
-                {{"format", "DXF R2013"}, {"source_path", info.fileName().toStdString()},
-                 {"mapped_entity_count", imported_owner_count},
-                 {"isolated_import", true},
-                 {"source_retention_required", mapped.source_retention_required}});
             auto source_entity = Entity::create("dxf_source",
-                {{"asset_id", asset_id}, {"format", "DXF R2013"},
+                {{"format", "DXF R2013"},
                  {"source_path", info.fileName().toStdString()},
                  {"isolated_import", true},
                  {"mapped_entity_count", imported_owner_count}, {"diagnostics", json::array()}});
             source_entity.id = allocate_id("dxf-source-record");
+            if (phase_import && !phase_import->source_asset_mapping.empty()) {
+                NativeDxfPhaseSourceAssetRefs transferred;
+                std::set<std::string, std::less<>> payload_ids;
+                for (const auto& [original_id, fresh_id] : phase_import->source_asset_mapping) {
+                    (void)original_id;
+                    payload_ids.insert(fresh_id);
+                }
+                for (const auto& change : imported_asset_changes)
+                    if (change.kind == AssetChangeKind::upsert && payload_ids.contains(change.asset.id))
+                        transferred.emplace(change.asset.id, &change.asset);
+                auto receipt = create_native_dxf_source_receipt(
+                    std::string_view(raw.constData(), static_cast<std::size_t>(raw.size())),
+                    mapped.phase_source_assets, phase_import->source_asset_mapping, transferred,
+                    allocate_id("dxf-source-body"), allocate_id("dxf-source-recipe"), &catalog_operation_budget.phase_assets);
+                source_entity.properties.update(receipt.source_properties);
+                for (auto& properties : receipt.dependency_properties) {
+                    auto dependency = Entity::create("dxf_source", std::move(properties));
+                    dependency.id = allocate_id("dxf-source-dependencies");
+                    changes.push_back(EntityChange::upsert(std::move(dependency)));
+                }
+                imported_asset_changes.push_back(AssetChange::upsert(std::move(receipt.ordinary_asset)));
+                imported_asset_changes.push_back(AssetChange::upsert(std::move(receipt.recipe_asset)));
+            } else {
+                std::vector<std::byte> source_bytes;
+                source_bytes.reserve(static_cast<std::size_t>(raw.size()));
+                for (const auto value : raw) source_bytes.push_back(static_cast<std::byte>(value));
+                const auto asset_id = allocate_id("dxf-source");
+                auto asset = Asset::create(asset_id, "application/dxf", std::move(source_bytes),
+                    {{"format", "DXF R2013"}, {"source_path", info.fileName().toStdString()},
+                     {"mapped_entity_count", imported_owner_count}, {"isolated_import", true},
+                     {"source_retention_required", mapped.source_retention_required}});
+                source_entity.properties["asset_id"] = asset_id;
+                imported_asset_changes.push_back(AssetChange::upsert(std::move(asset)));
+            }
             source_entity.properties["layer_reviewed"] = review_layers;
             source_entity.properties["layer_mapping"] = layer_mapping;
             if (phase_import) source_entity.properties["phase_context_mapping"] = phase_import->context_mapping;
@@ -39073,7 +39099,6 @@ public:
                 source_entity.properties["diagnostics"].push_back({{"source_id", item.source_id},
                     {"source_kind", item.source_kind}, {"code", item.code}});
             changes.push_back(EntityChange::upsert(std::move(source_entity)));
-            imported_asset_changes.push_back(AssetChange::upsert(std::move(asset)));
             const Command command = phase_import
                 ? Command{ImportPhaseEntities{source.revision(), std::move(changes),
                     std::move(imported_asset_changes), "Import DXF", phase_import->registry_ids,
@@ -39083,8 +39108,8 @@ public:
             if (phase_import && !phase_import->source_current())
                 throw std::invalid_argument("The project changed before importing design sets. Reopen Import DXF.");
             const auto final_import_preview = Document::preview_command(source, command);
-            // Include the original DXF receipt and all transferred payloads,
-            // as well as repeated assets in every retained revision.
+            // Include original-file receipts and transferred payloads. Native
+            // storage shares actual equal content but retains all metadata rows.
             admit_native_dxf_phase_retained_asset_capacity(final_import_preview, &catalog_operation_budget);
             validateImportedHostedGeometry(final_import_preview, imported_boundary_ids);
             if (phase_import && !phase_import->source_current())

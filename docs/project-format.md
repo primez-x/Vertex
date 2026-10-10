@@ -1,4 +1,45 @@
-# Vertex project formats v1 through v160
+# Vertex project formats v1 through v161
+
+## Immutable source receipts and shared asset payloads (v161, source integration)
+
+Native reader 161 and JSON/assets extraction 159 preserve immutable original-DXF
+reconstruction receipts. The reader floor examines every retained revision and
+applies even before a payload has appeared in multiple revisions. Source receipt
+envelopes and dependency segments cannot be rewritten while retained, and pinned
+payload bytes cannot be replaced under the same identity. Complete explicit
+receipt removal remains reversible through history.
+
+Asset-bearing canonical Vertex DXF retains its exact ordinary body as one Asset
+and a versioned binary recipe as another. The recipe pins original and fresh
+payload identities, lengths, hashes, the exact original file length/hash, and
+bounded dependency-segment membership. All referenced payloads remain real
+Assets. Admission streams canonical reconstruction and verifies the complete
+original hash without allocating another encoded file. Active geometry edits do
+not change the imported source. Ordinary DXF retains the previous raw-file Asset.
+
+V161 stores unique verified content in `asset_payloads(sha256,size,data)`;
+`revision_assets` retains revision-local identity, media type, metadata, declared
+hash and an explicit payload reference. Exact schema, constraints, indexes and
+foreign keys are admitted. Missing, orphaned, mismatched or corrupt content
+refuses before hydration. The 512 MiB byte ceiling applies to unique physical
+content, with the unchanged 100,000 revision-asset-row ceiling. Hash/collision
+verification has a separate 8 GiB work limit. Formats 1–160 retain their inline
+BLOB schema and original aggregate byte admission. Stored-format logical digests
+and semantic downgrade checks retain their previous meanings.
+
+In memory, Asset payload copies share private immutable storage. Freezing copies
+even moved vectors so external mutable aliases cannot alter retained revisions.
+Byte replacement creates a new buffer and discards its cached actual hash.
+Native hydration shares one verified buffer across referencing revision rows.
+Recovery counts actual immutable allocations while separately billing logical
+row replay. Source-bound prefix digests still visit repeated logical bytes; the
+existing finite work limits can refuse large histories.
+
+This is source implementation only. Compilation, legacy migration/recovery
+round trips, failure/rollback, peak memory, responsiveness and full-capacity
+editable-history qualification remain outstanding. Older installed readers
+cannot open files that require this new floor. No production acceptance follows
+from the format increment.
 
 ## Fresh design-set imports (v160, source integration)
 
@@ -5444,8 +5485,10 @@ revision.
 
 Undo and redo create new, monotonically increasing revisions. An edit after undo clears the
 navigation redo stack but retains every old revision and named branch in history. Each revision
-currently stores a full entity and asset state. This is intentionally simple and lossless, but
-large histories can use substantial space; delta compaction is a future format change.
+stores a complete logical entity and asset state. V161 shares immutable payload
+bytes across that state and stores each verified content BLOB once; entity and
+asset metadata remain revision-local. Large histories can still consume
+substantial metadata and replay work; entity delta compaction remains future work.
 
 `DocumentSnapshot` owns copies of every entity, history record, and asset byte. Its getters are
 const-only. Saving a snapshot captured at revision R always writes R, even if the working document

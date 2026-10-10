@@ -190,22 +190,38 @@ const Asset& actual_asset(const Asset* asset) {
 }
 template<class Assets> std::uint64_t assets_validated(const Assets& assets, Budget& b,
     bool manifest_text, std::uint64_t aggregate_limit = 0,
-    std::size_t count_limit = native_dxf_phase_asset_count_limit) {
+    std::size_t count_limit = native_dxf_phase_asset_count_limit, bool unique_payloads = false) {
     require(assets.size() <= count_limit, "asset inventory count limit");
     std::uint64_t total{}, copies{};
+    std::map<std::string, const Asset*, std::less<>> payloads;
     // Complete inventory admission precedes hashing any payload.
     for (const auto& [id, entry] : assets) {
         const auto& asset = actual_asset(entry);
-        inventory_size(total, asset.bytes.size(), b, aggregate_limit);
         copies += fields(id, asset.id, asset.media_type, asset.bytes.size(), asset.sha256,
             asset.metadata, b);
+        if (!unique_payloads || payloads.emplace(asset.sha256, &asset).second)
+            inventory_size(total, asset.bytes.size(), b, aggregate_limit);
         if (manifest_text) descriptor_text(asset.id, asset.media_type, asset.sha256, b);
     }
     work(b, total);
+    if (unique_payloads) {
+        for (const auto& [hash, asset] : payloads)
+            require(asset->bytes.verified_sha256() == hash, "asset SHA-256 differs from actual bytes");
+        for (const auto& [id, entry] : assets) {
+            (void)id;
+            const auto& asset = actual_asset(entry);
+            const auto* first = payloads.at(asset.sha256);
+            if (asset.bytes.same_storage(first->bytes)) continue;
+            work(b, asset.bytes.size() + first->bytes.size() + asset.bytes.size());
+            require(asset.bytes.verified_sha256() == asset.sha256 && asset.bytes == first->bytes,
+                "equal asset hashes alias different actual bytes");
+        }
+        return copies;
+    }
     for (const auto& [id, entry] : assets) {
         (void)id;
         const auto& asset = actual_asset(entry);
-        require(sha256_hex(asset.bytes) == asset.sha256, "asset SHA-256 differs from actual bytes");
+        require(asset.bytes.verified_sha256() == asset.sha256, "asset SHA-256 differs from actual bytes");
     }
     return copies;
 }
@@ -317,7 +333,7 @@ void validate_native_dxf_phase_source_asset_refs(const NativeDxfPhaseSourceAsset
 void validate_native_dxf_phase_destination_asset_refs(const NativeDxfPhaseSourceAssetRefs& assets, Budget* budget) {
     Budget local; auto& b = budget ? *budget : local; limits(b);
     assets_validated(assets, b, false, native_dxf_phase_destination_asset_payload_limit,
-        native_dxf_phase_destination_asset_count_limit);
+        native_dxf_phase_destination_asset_count_limit, true);
 }
 void validate_native_dxf_phase_asset_manifest(const NativeDxfPhaseAssetManifest& manifest, Budget* budget) {
     Budget local; auto& b = budget ? *budget : local; limits(b);
@@ -461,11 +477,11 @@ NativeDxfPhaseSourceAssets read_native_dxf_phase_asset_table(std::istream& input
         require(size == row.byte_count && size <= b.max_payload_bytes &&
             size <= std::numeric_limits<std::size_t>::max(), "asset table payload length differs from manifest");
         // Reserve allocation/initialization, input copy, and hashing before allocation.
-        work(b, size * 2);
-        Asset asset{id, row.media_type, std::vector<std::byte>(static_cast<std::size_t>(size)),
-            row.sha256, row.metadata};
-        read_exact(input, reinterpret_cast<char*>(asset.bytes.data()), asset.bytes.size(), b);
-        require(sha256_hex(asset.bytes) == row.sha256, "asset table payload hash differs from manifest");
+        work(b, size * 3); // Initialization, actual hash, private immutable freeze.
+        std::vector<std::byte> bytes(static_cast<std::size_t>(size));
+        read_exact(input, reinterpret_cast<char*>(bytes.data()), bytes.size(), b);
+        require(sha256_hex(bytes) == row.sha256, "asset table payload hash differs from manifest");
+        Asset asset{id, row.media_type, std::move(bytes), row.sha256, row.metadata};
         work(b, id.size());
         result.emplace(id, std::move(asset));
     }

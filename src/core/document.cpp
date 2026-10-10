@@ -1,4 +1,6 @@
 #include "sketch/document.hpp"
+#include "sketch/sha256_stream.hpp"
+#include "sketch/dxf_source_receipt.hpp"
 #include "sketch/physical_wall_room_data.hpp"
 #include "sketch/document_wall.hpp"
 #include "sketch/door_operation.hpp"
@@ -626,7 +628,7 @@ void validate_asset(const Asset& asset) {
             return (character >= '0' && character <= '9') ||
                    (character >= 'a' && character <= 'f');
         }) ||
-        sha256_hex(asset.bytes) != asset.sha256) {
+        asset.bytes.verified_sha256() != asset.sha256) {
         document_error(DocumentErrorCode::invalid_asset, "asset SHA-256 does not match its bytes");
     }
 }
@@ -888,9 +890,161 @@ std::optional<std::string> validate_measurement_linework_integrity(
     return unsupported;
 }
 
+using ReceiptOwners = std::map<std::string, Entity, std::less<>>;
+using ReceiptAssets = std::map<std::string, Asset, std::less<>>;
+
+struct DxfReceiptValidationCache {
+    struct Entry {
+        const Entity* owner{};
+        std::vector<const nlohmann::json*> dependencies;
+        NativeDxfPhaseSourceAssetRefs assets;
+    };
+    std::map<std::string, Entry, std::less<>> entries;
+};
+
+bool receipt_raw_equal(const nlohmann::json& left, const nlohmann::json& right) {
+    if (left.type() != right.type() || left.size() != right.size()) return false;
+    if (left.is_object()) {
+        auto other = right.begin();
+        for (auto it = left.begin(); it != left.end(); ++it, ++other)
+            if (it.key() != other.key() || !receipt_raw_equal(it.value(), other.value())) return false;
+        return true;
+    }
+    if (left.is_array()) {
+        for (std::size_t i = 0; i < left.size(); ++i)
+            if (!receipt_raw_equal(left[i], right[i])) return false;
+        return true;
+    }
+    return left == right;
+}
+
+bool dxf_dependency_segment(const Entity& entity) {
+    return entity.type == "dxf_source" && entity.properties.contains("schema") &&
+        entity.properties.at("schema") == "vertex.dxf.source-dependencies.v1";
+}
+
+void validate_dxf_source_receipts(const ReceiptOwners& entities, const ReceiptAssets& assets,
+    DxfReceiptValidationCache* cache = nullptr, bool seed_verified_state = false) {
+    try {
+        std::map<std::string, const Entity*, std::less<>> receipts;
+        std::map<std::string, std::map<std::uint64_t, const nlohmann::json*>, std::less<>> segments;
+        const auto identity = [](const nlohmann::json& value) {
+            if (!value.is_string() || !is_valid_identifier(value.get_ref<const std::string&>()))
+                document_error(DocumentErrorCode::invalid_entity, "Invalid DXF source receipt identity");
+            return value.get<std::string>();
+        };
+        std::size_t receipt_rows = 0;
+        for (const auto& [id, entity] : entities) {
+            (void)id;
+            if (entity.type != "dxf_source") continue;
+            if (entity.properties.contains("source_receipt")) {
+                if (++receipt_rows > native_dxf_phase_destination_asset_count_limit ||
+                    !entity.properties.at("source_receipt").is_object())
+                    document_error(DocumentErrorCode::invalid_entity, "Invalid DXF source receipt inventory");
+                const auto recipe = identity(entity.properties.at("source_receipt").at("recipe_asset_id"));
+                if (!receipts.emplace(recipe, &entity).second)
+                    document_error(DocumentErrorCode::invalid_entity, "Duplicate DXF source receipt recipe");
+            }
+            if (dxf_dependency_segment(entity)) {
+                if (++receipt_rows > native_dxf_phase_destination_asset_count_limit ||
+                    !entity.properties.at("segment_index").is_number_unsigned())
+                    document_error(DocumentErrorCode::invalid_entity, "Invalid DXF source dependency ordinal");
+                const auto recipe = identity(entity.properties.at("recipe_asset_id"));
+                const auto index = entity.properties.at("segment_index").get<std::uint64_t>();
+                if (!segments[recipe].emplace(index, &entity.properties).second)
+                    document_error(DocumentErrorCode::invalid_entity, "Duplicate DXF source dependency segment");
+            }
+        }
+        for (const auto& [recipe, group] : segments) {
+            (void)group;
+            if (!receipts.contains(recipe))
+                document_error(DocumentErrorCode::dangling_reference, "DXF source dependencies have no receipt");
+        }
+        NativeDxfPhaseAssetWorkBudget budget;
+        for (const auto& [recipe, entity] : receipts) {
+            NativeDxfPhaseSourceAssetRefs retained;
+            std::vector<const nlohmann::json*> dependencies;
+            const auto collect = [&](const nlohmann::json& properties) {
+                const auto& ids = properties.at("asset_ids");
+                if (!ids.is_array() || ids.size() > native_dxf_phase_destination_asset_count_limit)
+                    document_error(DocumentErrorCode::invalid_entity, "Invalid DXF source dependency references");
+                for (const auto& value : ids) {
+                    const auto id = identity(value);
+                    const auto asset = assets.find(id);
+                    if (asset == assets.end() || !retained.emplace(id, &asset->second).second)
+                        document_error(DocumentErrorCode::dangling_reference, "Missing or repeated DXF source dependency");
+                }
+            };
+            collect(entity->properties);
+            const auto group = segments.find(recipe);
+            if (group != segments.end()) {
+                std::uint64_t next = 0;
+                for (const auto& [index, properties] : group->second) {
+                    if (index != next++)
+                        document_error(DocumentErrorCode::invalid_entity, "Incomplete DXF source dependency segments");
+                    dependencies.push_back(properties);
+                    collect(*properties);
+                }
+            }
+            bool verified = seed_verified_state;
+            if (cache && !verified) {
+                const auto previous = cache->entries.find(recipe);
+                if (previous != cache->entries.end()) {
+                    const auto& entry = previous->second;
+                    verified = receipt_raw_equal(entity->properties.at("source_receipt"),
+                        entry.owner->properties.at("source_receipt")) &&
+                        receipt_raw_equal(entity->properties.at("asset_ids"), entry.owner->properties.at("asset_ids")) &&
+                        dependencies.size() == entry.dependencies.size() && retained.size() == entry.assets.size();
+                    for (std::size_t i = 0; verified && i < dependencies.size(); ++i)
+                        verified = receipt_raw_equal(*dependencies[i], *entry.dependencies[i]);
+                    for (const auto& [id, asset] : retained) {
+                        if (!verified) break;
+                        const auto old = entry.assets.find(id);
+                        verified = old != entry.assets.end() && asset->bytes.same_storage(old->second->bytes) &&
+                            asset->id == old->second->id && asset->media_type == old->second->media_type &&
+                            asset->sha256 == old->second->sha256 && receipt_raw_equal(asset->metadata, old->second->metadata);
+                    }
+                }
+            }
+            if (!verified) validate_native_dxf_source_receipt(entity->properties, dependencies, retained, &budget);
+            if (cache) cache->entries.insert_or_assign(recipe,
+                DxfReceiptValidationCache::Entry{entity, std::move(dependencies), std::move(retained)});
+        }
+    } catch (const DocumentError&) { throw; }
+    catch (const std::exception& error) {
+        document_error(DocumentErrorCode::invalid_entity, std::string("Invalid retained DXF source: ") + error.what());
+    }
+}
+
+void validate_dxf_source_receipt_transition(const ReceiptOwners& before, const ReceiptAssets& before_assets,
+    const ReceiptOwners& after, const ReceiptAssets& after_assets) {
+    for (const auto& [id, entity] : before) {
+        if (entity.type != "dxf_source") continue;
+        const bool main = entity.properties.contains("source_receipt");
+        const bool segment = dxf_dependency_segment(entity);
+        if (!main && !segment) continue;
+        const auto current = after.find(id);
+        if (current == after.end()) continue; // Explicit complete receipt removal is reversible through history.
+        if (current->second.type != "dxf_source" ||
+            (main && (!current->second.properties.contains("source_receipt") ||
+                current->second.properties.at("source_receipt") != entity.properties.at("source_receipt") ||
+                current->second.properties.at("asset_ids") != entity.properties.at("asset_ids"))) ||
+            (segment && current->second.properties != entity.properties))
+            document_error(DocumentErrorCode::invalid_entity, "Retained DXF source receipts are immutable");
+        for (const auto& value : entity.properties.at("asset_ids")) {
+            const auto asset_id = value.get<std::string>();
+            const auto previous = before_assets.find(asset_id);
+            const auto retained = after_assets.find(asset_id);
+            if (previous == before_assets.end() || retained == after_assets.end() ||
+                previous->second.sha256 != retained->second.sha256 || previous->second.bytes != retained->second.bytes)
+                document_error(DocumentErrorCode::invalid_asset, "Retained DXF source payloads cannot be replaced");
+        }
+    }
+}
+
 std::optional<std::string> validate_state(const std::map<std::string, Entity, std::less<>>& entities,
                     const std::map<std::string, Asset, std::less<>>& assets,
-                    bool active_phase_constraints = false) {
+                    bool active_phase_constraints = false, DxfReceiptValidationCache* receipt_cache = nullptr) {
     try {
         validate_stair_attachment_state(entities);
     } catch (const std::exception& error) {
@@ -969,6 +1123,7 @@ std::optional<std::string> validate_state(const std::map<std::string, Entity, st
                            "asset map key does not match its stable id");
         }
     }
+    validate_dxf_source_receipts(entities, assets, receipt_cache);
     std::optional<ConstraintPhaseScope> active_scope;
     if (active_phase_constraints) {
         try { active_scope = constraint_phase_scope(entities); }
@@ -1876,7 +2031,7 @@ std::string make_stable_id() {
     return result.str();
 }
 
-std::string sha256_hex(std::span<const std::byte> bytes) {
+std::string sha256_hex_stream(const std::function<void(const Sha256Sink&)>& produce) {
 #ifdef _WIN32
     BCRYPT_ALG_HANDLE algorithm = nullptr;
     BCRYPT_HASH_HANDLE hash = nullptr;
@@ -1907,18 +2062,26 @@ std::string sha256_hex(std::span<const std::byte> bytes) {
         digest.resize(hash_size);
         check(BCryptCreateHash(algorithm, &hash, object.data(), object_size, nullptr, 0, 0),
               "hash creation");
-        std::size_t offset = 0;
-        while (offset < bytes.size()) {
-            const auto remaining = bytes.size() - offset;
-            const auto chunk = static_cast<ULONG>(std::min<std::size_t>(
-                remaining, static_cast<std::size_t>(std::numeric_limits<ULONG>::max())));
-            check(BCryptHashData(hash,
-                                 reinterpret_cast<PUCHAR>(
-                                     const_cast<std::byte*>(bytes.data() + offset)),
-                                 chunk, 0),
-                  "update");
-            offset += chunk;
-        }
+        std::array<unsigned char, 64 * 1024> staged{};
+        std::size_t staged_size = 0;
+        const auto flush = [&] {
+            if (staged_size != 0) {
+                check(BCryptHashData(hash, staged.data(), static_cast<ULONG>(staged_size), 0), "update");
+                staged_size = 0;
+            }
+        };
+        const Sha256Sink sink = [&](std::span<const std::byte> bytes) {
+            while (!bytes.empty()) {
+                const auto count = std::min(bytes.size(), staged.size() - staged_size);
+                std::copy_n(reinterpret_cast<const unsigned char*>(bytes.data()), count,
+                    staged.data() + staged_size);
+                staged_size += count;
+                bytes = bytes.subspan(count);
+                if (staged_size == staged.size()) flush();
+            }
+        };
+        produce(sink);
+        flush();
         check(BCryptFinishHash(hash, digest.data(), hash_size, 0), "finalization");
     } catch (...) {
         if (hash != nullptr) {
@@ -1939,9 +2102,13 @@ std::string sha256_hex(std::span<const std::byte> bytes) {
     }
     return result;
 #else
-    (void)bytes;
+    (void)produce;
     throw std::runtime_error("SHA-256 requires Windows BCrypt in this build");
 #endif
+}
+
+std::string sha256_hex(std::span<const std::byte> bytes) {
+    return sha256_hex_stream([bytes](const Sha256Sink& sink) { sink(bytes); });
 }
 
 bool is_known_entity_type(std::string_view type) noexcept {
@@ -8928,6 +9095,11 @@ Revision Document::apply(const Command& command) {
         [this](const auto& typed_command) -> Revision {
             validate_expected_revision(head_revision_, typed_command.expected_revision);
             const auto& current = head_record();
+            DxfReceiptValidationCache receipt_cache;
+            // This private head has already passed complete state admission.
+            // Reuse its proof only while exact receipt fields and private
+            // immutable buffers match; newly supplied bytes are revalidated.
+            validate_dxf_source_receipts(current.entities, current.assets, &receipt_cache, true);
             const bool source_active_policy=active_constraint_history_policies(history_).at(static_cast<std::size_t>(head_revision_));
             bool next_active_policy=source_active_policy;
             RevisionRecord next;
@@ -8985,7 +9157,7 @@ Revision Document::apply(const Command& command) {
                     next.phase_entity_import=std::move(proof);
                     next_active_policy=true;
                 }
-                next_unsupported_constraints = validate_state(next.entities, next.assets,next_active_policy);
+                next_unsupported_constraints = validate_state(next.entities, next.assets,next_active_policy, &receipt_cache);
                 if constexpr (std::is_same_v<CommandType, ImportPhaseEntities>)
                     if (next_unsupported_constraints)
                         document_error(DocumentErrorCode::invalid_entity,"Phase import requires supported source semantics: "+*next_unsupported_constraints);
@@ -9004,7 +9176,7 @@ Revision Document::apply(const Command& command) {
                 } catch (const std::exception& error) {
                     document_error(DocumentErrorCode::invalid_entity, error.what());
                 }
-                next_unsupported_constraints = validate_state(next.entities, next.assets,next_active_policy);
+                next_unsupported_constraints = validate_state(next.entities, next.assets,next_active_policy, &receipt_cache);
                 validate_constraint_change(current.entities, next.entities, false, true, true);
                 if (same_state(next, current))
                     return head_revision_;
@@ -9014,7 +9186,7 @@ Revision Document::apply(const Command& command) {
                 validate_action(next.action);
                 next.boundary_translations = typed_command;
                 next.entities = boundary_translation_entities(boundary_identity_history_, current.entities, typed_command);
-                next_unsupported_constraints = validate_state(next.entities, next.assets,next_active_policy);
+                next_unsupported_constraints = validate_state(next.entities, next.assets,next_active_policy, &receipt_cache);
                 validate_constraint_change(current.entities, next.entities);
                 if (same_state(next, current)) return head_revision_;
                 record_boundary_identity_transition(next_identity_history, current.entities, next.entities);
@@ -9067,7 +9239,7 @@ Revision Document::apply(const Command& command) {
                 next.entities = completed_boundary_constraint_entities(boundary_identity_history_, current.entities, current.assets,
                     typed_command,false,source_active_policy,dimension_source);
                 next.assets = boundary_constraint_assets(current.assets, typed_command);
-                next_unsupported_constraints = validate_state(next.entities, next.assets,next_active_policy);
+                next_unsupported_constraints = validate_state(next.entities, next.assets,next_active_policy, &receipt_cache);
 #ifdef VERTEX_HAS_CONSTRAINT_AUTHORING
                 if (!phase_constraint_authoring_proofs(typed_command).empty() || has_complete_wall_join_deletion_proof(typed_command))
                     validate_phase_constraint_fresh_lifetime(current.entities,next.entities,history_,history_.size(),typed_command);
@@ -9093,7 +9265,7 @@ Revision Document::apply(const Command& command) {
                 } catch (const std::exception& error) {
                     document_error(DocumentErrorCode::invalid_entity, error.what());
                 }
-                next_unsupported_constraints = validate_state(next.entities, next.assets,next_active_policy);
+                next_unsupported_constraints = validate_state(next.entities, next.assets,next_active_policy, &receipt_cache);
                 validate_constraint_change(current.entities, next.entities);
                 if (same_state(next, current)) return head_revision_;
                 record_boundary_identity_transition(next_identity_history, current.entities, next.entities);
@@ -9106,7 +9278,7 @@ Revision Document::apply(const Command& command) {
                 } catch (const std::exception& error) {
                     document_error(DocumentErrorCode::invalid_entity, error.what());
                 }
-                next_unsupported_constraints = validate_state(next.entities, next.assets,next_active_policy);
+                next_unsupported_constraints = validate_state(next.entities, next.assets,next_active_policy, &receipt_cache);
                 validate_constraint_change(current.entities, next.entities);
                 if (same_state(next, current)) return head_revision_;
                 record_boundary_identity_transition(next_identity_history, current.entities, next.entities);
@@ -9121,7 +9293,7 @@ Revision Document::apply(const Command& command) {
                 } catch (const std::exception& error) {
                     document_error(DocumentErrorCode::invalid_entity, error.what());
                 }
-                next_unsupported_constraints = validate_state(next.entities, next.assets,next_active_policy);
+                next_unsupported_constraints = validate_state(next.entities, next.assets,next_active_policy, &receipt_cache);
                 validate_constraint_change(current.entities, next.entities);
                 if (same_state(next, current)) return head_revision_;
                 record_boundary_identity_transition(
@@ -9140,6 +9312,7 @@ Revision Document::apply(const Command& command) {
             // Source-bound rooms cannot borrow an ordinary metadata edit to
             // detach their holes or their physical-wall evidence. Deletion is
             // explicit; supported source refresh will need typed authority.
+            validate_dxf_source_receipt_transition(current.entities, current.assets, next.entities, next.assets);
             validate_physical_room_source_transition(current.entities, next.entities,
                 next.boundary_geometry_edit ? &*next.boundary_geometry_edit : nullptr,
                 next.boundary_constraint_changes ? &*next.boundary_constraint_changes : nullptr,next_active_policy);
@@ -9293,6 +9466,7 @@ Document Document::restore(DocumentSnapshot snapshot) {
     std::optional<std::string> unsupported_constraint_history;
     BoundaryIdentityHistory identity_history;
     StairIdentityHistory stair_identity_history;
+    DxfReceiptValidationCache receipt_cache;
     const auto active_policies=active_constraint_history_policies(snapshot.history());
     for (std::size_t index = 0; index < snapshot.history().size(); ++index) {
         const auto& record = snapshot.history()[index];
@@ -9300,7 +9474,7 @@ Document Document::restore(DocumentSnapshot snapshot) {
         if (record.revision != index) {
             document_error(DocumentErrorCode::invalid_history, "stored revisions are not contiguous");
         }
-        auto unsupported = validate_state(record.entities, record.assets,active_policies.at(index));
+        auto unsupported = validate_state(record.entities, record.assets,active_policies.at(index), &receipt_cache);
         if (unsupported && !unsupported_constraint_history)
             unsupported_constraint_history = std::move(unsupported);
 
@@ -9320,6 +9494,8 @@ Document Document::restore(DocumentSnapshot snapshot) {
         }
 
         const auto& previous = snapshot.history()[index - 1];
+        if (!record.source_revision)
+            validate_dxf_source_receipt_transition(previous.entities, previous.assets, record.entities, record.assets);
         const auto boundary_proof_count =
             static_cast<unsigned>(record.boundary_translation.has_value()) +
             static_cast<unsigned>(record.boundary_transform.has_value()) +

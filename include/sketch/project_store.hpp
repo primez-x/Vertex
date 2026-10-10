@@ -221,7 +221,11 @@ public:
     // Reviewed selected physical-room callout placement intents v4 require v158.
     // Physical-room reviews retaining a complete mixed selection require v159.
     // Fresh design-set imports retaining active-phase constraint policy require v160.
-    static constexpr std::uint32_t format_version = 160;
+    // Immutable DXF reconstruction receipts and shared content-addressed asset
+    // payloads require v161; asset identity and metadata remain revision-local.
+    // Histories without receipts or sharing retain their
+    // usual semantic format floor and legacy inline BLOB schema.
+    static constexpr std::uint32_t format_version = 161;
     static constexpr std::uint32_t recovery_format_version = 4;
     [[nodiscard]] static std::uint32_t required_format_version(const DocumentSnapshot& snapshot);
     static constexpr std::uint64_t maximum_file_bytes = 4ULL * 1024ULL * 1024ULL * 1024ULL;
@@ -230,6 +234,8 @@ public:
     static constexpr std::uint64_t maximum_asset_rows = 100'000;
     static constexpr std::uint64_t maximum_encoded_json_bytes = 64ULL * 1024ULL * 1024ULL;
     static constexpr std::uint64_t maximum_json_values = 2'000'000;
+    // Physical unique payload bytes in v161; aggregate revision BLOB bytes in
+    // older formats. Transient buffers, metadata and replay have separate limits.
     static constexpr std::uint64_t maximum_total_asset_bytes = 512ULL * 1024ULL * 1024ULL;
 
     [[nodiscard]] static SaveReceipt save(const std::filesystem::path& destination,

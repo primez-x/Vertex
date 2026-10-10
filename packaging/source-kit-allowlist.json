@@ -3199,6 +3199,10 @@
     },
     {
       "category": "source",
+      "path": "include/sketch/asset_payload.hpp"
+    },
+    {
+      "category": "source",
       "path": "include/sketch/assistance_contract.hpp"
     },
     {
@@ -3480,6 +3484,10 @@
     {
       "category": "source",
       "path": "include/sketch/dxf_sheet_view_source.hpp"
+    },
+    {
+      "category": "source",
+      "path": "include/sketch/dxf_source_receipt.hpp"
     },
     {
       "category": "source",
@@ -3932,6 +3940,10 @@
     {
       "category": "source",
       "path": "include/sketch/section_dimension_resolution.hpp"
+    },
+    {
+      "category": "source",
+      "path": "include/sketch/sha256_stream.hpp"
     },
     {
       "category": "source",
@@ -4760,6 +4772,10 @@
     {
       "category": "source",
       "path": "src/core/dxf_sheet_view_source.cpp"
+    },
+    {
+      "category": "source",
+      "path": "src/core/dxf_source_receipt.cpp"
     },
     {
       "category": "source",

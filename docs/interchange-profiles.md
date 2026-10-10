@@ -250,9 +250,15 @@ follow the [Autodesk DXF formatting contract](https://help.autodesk.com/cloudhel
 Foreign CAD applications may discard comments on SAVEAS, as described in the
 [Autodesk group-code reference](https://help.autodesk.com/cloudhelp/2024/ENU/AutoCAD-DXF/files/GUID-3F0380A5-1C15-464D-BC66-2C5F094BCFB9.htm).
 This carrier therefore does not certify native asset preservation through
-foreign editing. Lossless retention of original DXF files above the native
-256 MiB individual-asset limit and deduplicated retained-history storage remain
-required work. Full-capacity furnished desktop transfer remains open.
+foreign editing. Native asset-bearing import now retains the exact ordinary
+body plus an immutable binary recipe referencing actual freshly mapped Assets.
+Canonical reconstruction is streamed and checked against the full original hash.
+Native format 161 shares verified payload content across revision metadata rows;
+immutable in-memory buffers prevent repeated history copies. Receipt semantics
+require reader 161 even before payload sharing occurs. Individual Assets retain
+their 256 MiB limit; unique stored content has the 512 MiB limit and logical rows
+have a separate 100,000 ceiling. Full-capacity furnished desktop transfer and
+editable-history behavior remain unqualified, with finite replay/JSON budgets.
 Scoped annotation owner contexts
 must match actual layer ancestry, while children may use independent layers.
 Fresh phase import uses an explicit retained command policy rather than legacy

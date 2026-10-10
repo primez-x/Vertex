@@ -1,4 +1,5 @@
 #pragma once
+#include "sketch/asset_payload.hpp"
 #include "sketch/boundary_edit.hpp"
 #include "sketch/boundary_identity_history.hpp"
 #include "sketch/stair_identity_history.hpp"
@@ -50,7 +51,7 @@ struct Entity {
 struct Asset {
     std::string id;
     std::string media_type;
-    std::vector<std::byte> bytes;
+    AssetPayload bytes;
     std::string sha256;
     nlohmann::json metadata = nlohmann::json::object();
 

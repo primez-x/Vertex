@@ -39,6 +39,7 @@
 namespace sketch {
 
 namespace {
+bool snapshot_uses_shared_asset_payloads(const DocumentSnapshot& snapshot);
 bool has_wall_top_plane_semantics(const Entity& entity) {
     if (entity.type != "wall" || !entity.properties.is_object()) return false;
     if (entity.properties.contains("top_plane")) return true;
@@ -889,6 +890,10 @@ std::uint32_t required_format_version_internal(const DocumentSnapshot& snapshot,
         }
         if (revision.boundary_translations) required = std::max(required, 9U);
         for (const auto& [id, entity] : revision.entities) {
+            if (entity.type == "dxf_source" && entity.properties.is_object() &&
+                (entity.properties.contains("source_receipt") ||
+                    entity.properties.value("schema", nlohmann::json()) == "vertex.dxf.source-dependencies.v1"))
+                required = std::max(required, 161U);
             if (entity.type == "opening" && entity.properties.is_object()) {
                 const auto assembly = entity.properties.find("opening_assembly");
                 if (assembly != entity.properties.end() && assembly->is_object() &&
@@ -1222,7 +1227,8 @@ std::uint32_t required_format_version_internal(const DocumentSnapshot& snapshot,
 }  // namespace
 
 std::uint32_t ProjectStore::required_format_version(const DocumentSnapshot& snapshot) {
-    return required_format_version_internal(snapshot);
+    return std::max(required_format_version_internal(snapshot),
+                    snapshot_uses_shared_asset_payloads(snapshot) ? 161U : 1U);
 }
 
 class ProjectStoreAccess final {
@@ -1248,8 +1254,24 @@ public:
 namespace {
 
 constexpr sqlite3_int64 kMaximumAssetBytes = 256LL * 1024LL * 1024LL;
+constexpr std::uint64_t kMaximumAssetVerificationWorkBytes = 8ULL * 1024ULL * 1024ULL * 1024ULL;
 constexpr int kMaximumJsonBytes = 1024 * 1024;
 constexpr int kApplicationId = 0x50535444;  // "PSTD"
+
+// These two v161 definitions are also admitted verbatim. Column/FK/index
+// inspection alone cannot establish the payload CHECK constraints.
+constexpr char kAssetPayloadSchema[] =
+    "CREATE TABLE asset_payloads("
+    "sha256 TEXT PRIMARY KEY CHECK(length(sha256)=64 AND sha256 NOT GLOB '*[^0-9a-f]*'), "
+    "size INTEGER NOT NULL CHECK(size>=0 AND size<=268435456), "
+    "data BLOB NOT NULL CHECK(length(data)=size)) STRICT";
+constexpr char kSharedRevisionAssetSchema[] =
+    "CREATE TABLE revision_assets("
+    "revision INTEGER NOT NULL, asset_id TEXT NOT NULL, media_type TEXT NOT NULL, "
+    "sha256 TEXT NOT NULL, metadata_json TEXT NOT NULL, payload_sha256 TEXT NOT NULL, "
+    "CHECK(sha256=payload_sha256), PRIMARY KEY(revision,asset_id), "
+    "FOREIGN KEY(revision) REFERENCES revisions(revision) ON DELETE CASCADE, "
+    "FOREIGN KEY(payload_sha256) REFERENCES asset_payloads(sha256)) STRICT";
 
 [[noreturn]] void storage_error(StorageErrorCode code, const std::string& message) {
     throw StorageError(code, message);
@@ -2050,6 +2072,32 @@ LoadCounts enforce_preallocation_budgets(sqlite3* database, bool recovery = fals
         storage_error(StorageErrorCode::resource_limit,
                       "project asset row count exceeds the format v1 resource limit");
     }
+    const auto format = scalar_nonnegative(database, "PRAGMA user_version", "format version");
+    if (format >= 161) {
+        // Admit every physical row and reference before any payload is copied.
+        const auto payloads = scalar_nonnegative(database,
+            "SELECT count(*) FROM asset_payloads", "asset payload count");
+        if (payloads > assets || payloads > ProjectStore::maximum_asset_rows)
+            storage_error(StorageErrorCode::integrity_failure,
+                          "project contains redundant asset payloads");
+        if (scalar_nonnegative(database,
+            "SELECT count(*) FROM asset_payloads WHERE typeof(sha256)<>'text' OR "
+            "length(sha256)<>64 OR sha256 GLOB '*[^0-9a-f]*' OR typeof(size)<>'integer' OR "
+            "size<0 OR size>268435456 OR typeof(data)<>'blob' OR length(data)<>size",
+            "invalid asset payload count") != 0)
+            storage_error(StorageErrorCode::integrity_failure,
+                          "project contains an invalid asset payload");
+        if (scalar_nonnegative(database,
+            "SELECT count(*) FROM revision_assets a LEFT JOIN asset_payloads p "
+            "ON p.sha256=a.payload_sha256 WHERE p.sha256 IS NULL OR a.sha256<>a.payload_sha256",
+            "invalid asset payload reference count") != 0 ||
+            scalar_nonnegative(database,
+            "SELECT count(*) FROM asset_payloads WHERE sha256 NOT IN "
+            "(SELECT payload_sha256 FROM revision_assets)",
+            "orphan asset payload count") != 0)
+            storage_error(StorageErrorCode::integrity_failure,
+                          "project contains a missing, orphan or mismatched asset payload");
+    }
     if (names > ProjectStore::maximum_revision_count) {
         storage_error(StorageErrorCode::resource_limit,
                       "project named revision count exceeds the format v1 resource limit");
@@ -2064,7 +2112,6 @@ LoadCounts enforce_preallocation_budgets(sqlite3* database, bool recovery = fals
         "revision_entities),0)+"
         "COALESCE((SELECT sum(length(CAST(metadata_json AS BLOB))) FROM revision_assets),0)",
         "encoded JSON bytes");
-    const auto format = scalar_nonnegative(database, "PRAGMA user_version", "format version");
     const bool translations = format >= 5;
     const auto translation_bytes = translations ? scalar_nonnegative(database,
         "SELECT COALESCE(sum(length(CAST(boundary_translation_json AS BLOB))),0) FROM revisions",
@@ -2111,7 +2158,8 @@ LoadCounts enforce_preallocation_budgets(sqlite3* database, bool recovery = fals
                       "project encoded JSON bytes exceed the format v1 resource limit");
     }
     const auto asset_bytes = scalar_nonnegative(
-        database, "SELECT COALESCE(sum(length(data)),0) FROM revision_assets",
+        database, format >= 161 ? "SELECT COALESCE(sum(size),0) FROM asset_payloads"
+                               : "SELECT COALESCE(sum(length(data)),0) FROM revision_assets",
         "aggregate asset bytes");
     if (asset_bytes > ProjectStore::maximum_total_asset_bytes) {
         storage_error(StorageErrorCode::resource_limit,
@@ -2138,7 +2186,83 @@ std::uint64_t json_value_count(const nlohmann::json& value) {
     return count;
 }
 
-void enforce_snapshot_budget(const DocumentSnapshot& snapshot) {
+struct AssetPayloadInventory {
+    // Borrow caller-owned bytes; the inventory never copies a payload.
+    std::map<std::string, const Asset*, std::less<>> payloads;
+    bool shared = false;
+};
+
+AssetPayloadInventory inspect_asset_payloads(const DocumentSnapshot& snapshot) {
+    std::uint64_t rows = 0;
+    // Bound the entire map before inserting keys or hashing caller bytes.
+    for (const auto& revision : snapshot.history()) {
+        if (revision.assets.size() > ProjectStore::maximum_asset_rows - rows)
+            storage_error(StorageErrorCode::resource_limit, "document asset row limit exceeded");
+        rows += revision.assets.size();
+        for (const auto& [id, asset] : revision.assets) {
+            (void)id;
+            if (asset.bytes.size() > static_cast<std::uint64_t>(kMaximumAssetBytes))
+                storage_error(StorageErrorCode::resource_limit, "document asset exceeds its size limit");
+            if (asset.sha256.size() != 64)
+                storage_error(StorageErrorCode::invalid_snapshot, "document asset SHA-256 is invalid");
+        }
+    }
+    AssetPayloadInventory inventory;
+    std::map<const std::byte*, const Asset*, std::less<>> verified_allocations;
+    std::uint64_t unique_bytes = 0;
+    std::uint64_t verification_work = 0;
+    auto charge_verification = [&](std::uint64_t bytes) {
+        if (bytes > kMaximumAssetVerificationWorkBytes - verification_work)
+            storage_error(StorageErrorCode::resource_limit,
+                          "document asset hash/comparison work exceeds the 8 GiB limit");
+        verification_work += bytes;
+    };
+    for (const auto& revision : snapshot.history()) {
+        for (const auto& [id, asset] : revision.assets) {
+            (void)id;
+            const auto allocation = verified_allocations.find(asset.bytes.data());
+            // Cache every verified immutable allocation, including independently
+            // allocated equal content. The map has at most the admitted row count.
+            if (allocation != verified_allocations.end() &&
+                allocation->second->bytes.same_storage(asset.bytes)) {
+                if (allocation->second->sha256 != asset.sha256)
+                    storage_error(StorageErrorCode::invalid_snapshot,
+                                  "document asset SHA-256 does not match its verified bytes");
+                inventory.shared = true;
+                continue;
+            }
+            charge_verification(asset.bytes.size());
+            const auto actual_hash = sha256_hex(asset.bytes);
+            if (actual_hash != asset.sha256)
+                storage_error(StorageErrorCode::invalid_snapshot,
+                              "document asset SHA-256 does not match its bytes");
+            const auto found = inventory.payloads.find(actual_hash);
+            if (found != inventory.payloads.end()) {
+                // A cryptographic collision must never alias different bytes.
+                charge_verification(found->second->bytes.size() + asset.bytes.size());
+                if (found->second->bytes != asset.bytes)
+                    storage_error(StorageErrorCode::integrity_failure,
+                                  "different asset payloads have the same SHA-256");
+                verified_allocations.emplace(asset.bytes.data(), &asset);
+                inventory.shared = true;
+                continue;
+            }
+            if (asset.bytes.size() > ProjectStore::maximum_total_asset_bytes - unique_bytes)
+                storage_error(StorageErrorCode::resource_limit,
+                              "document unique asset bytes exceed the aggregate limit");
+            unique_bytes += asset.bytes.size();
+            inventory.payloads.emplace(actual_hash, &asset);
+            verified_allocations.emplace(asset.bytes.data(), &asset);
+        }
+    }
+    return inventory;
+}
+
+bool snapshot_uses_shared_asset_payloads(const DocumentSnapshot& snapshot) {
+    return inspect_asset_payloads(snapshot).shared;
+}
+
+AssetPayloadInventory enforce_snapshot_budget(const DocumentSnapshot& snapshot) {
     if (snapshot.history().size() > ProjectStore::maximum_revision_count ||
         snapshot.named_revisions().size() > ProjectStore::maximum_revision_count) {
         storage_error(StorageErrorCode::resource_limit,
@@ -2148,7 +2272,6 @@ void enforce_snapshot_budget(const DocumentSnapshot& snapshot) {
     std::uint64_t asset_rows = 0;
     std::uint64_t json_bytes = 0;
     std::uint64_t json_values = 0;
-    std::uint64_t asset_bytes = 0;
     auto add_json = [&](const nlohmann::json& value) {
         const auto encoded_size = value.dump().size();
         if (encoded_size > ProjectStore::maximum_encoded_json_bytes - json_bytes) {
@@ -2195,14 +2318,10 @@ void enforce_snapshot_budget(const DocumentSnapshot& snapshot) {
                 storage_error(StorageErrorCode::resource_limit,
                               "document asset rows exceed the format v1 aggregate limit");
             }
-            if (asset.bytes.size() > ProjectStore::maximum_total_asset_bytes - asset_bytes) {
-                storage_error(StorageErrorCode::resource_limit,
-                              "document asset bytes exceed the format v1 aggregate limit");
-            }
-            asset_bytes += asset.bytes.size();
             add_json(asset.metadata);
         }
     }
+    return inspect_asset_payloads(snapshot);
 }
 
 std::string revisions_json(const std::vector<Revision>& revisions) {
@@ -2299,7 +2418,8 @@ void put_metadata(sqlite3* database, Statement& statement, std::string_view key,
 }
 
 std::string write_database(const std::filesystem::path& path, const DocumentSnapshot& snapshot,
-                           SaveFaultStage fault_stage, const RecoveryLedger* recovery = nullptr) {
+                           const AssetPayloadInventory& payloads, SaveFaultStage fault_stage,
+                           const RecoveryLedger* recovery = nullptr) {
     auto database = open_database(path, SQLITE_OPEN_READWRITE);
     execute(database.get(), "PRAGMA trusted_schema=OFF");
     execute(database.get(), "PRAGMA foreign_keys=ON");
@@ -2307,7 +2427,8 @@ std::string write_database(const std::filesystem::path& path, const DocumentSnap
     execute(database.get(), "PRAGMA synchronous=FULL");
     execute(database.get(), "PRAGMA locking_mode=EXCLUSIVE");
     execute(database.get(), "PRAGMA application_id=1347638340");
-    const auto format = std::max(recovery ? 4U : 1U, ProjectStore::required_format_version(snapshot));
+    const auto format = std::max({recovery ? 4U : 1U,
+        required_format_version_internal(snapshot), payloads.shared ? 161U : 1U});
     const auto requested_digest = logical_digest(snapshot, format, recovery);
     const auto user_version = "PRAGMA user_version=" + std::to_string(format);
     execute(database.get(), user_version.c_str());
@@ -2341,7 +2462,10 @@ std::string write_database(const std::filesystem::path& path, const DocumentSnap
                 "required INTEGER NOT NULL CHECK(required IN (0,1)), properties_json TEXT NOT NULL, "
                 "extensions_json TEXT NOT NULL, PRIMARY KEY(revision,id), "
                 "FOREIGN KEY(revision) REFERENCES revisions(revision) ON DELETE CASCADE) STRICT;");
-        execute(database.get(),
+        if (format >= 161) {
+            execute(database.get(), kAssetPayloadSchema);
+            execute(database.get(), kSharedRevisionAssetSchema);
+        } else execute(database.get(),
                 "CREATE TABLE revision_assets("
                 "revision INTEGER NOT NULL, asset_id TEXT NOT NULL, media_type TEXT NOT NULL, "
                 "sha256 TEXT NOT NULL, metadata_json TEXT NOT NULL, data BLOB NOT NULL, "
@@ -2405,8 +2529,26 @@ std::string write_database(const std::filesystem::path& path, const DocumentSnap
             "VALUES(?1,?2,?3,?4,?5,?6)");
         Statement asset_statement(
             database.get(),
-            "INSERT INTO revision_assets(revision,asset_id,media_type,sha256,metadata_json,data) "
-            "VALUES(?1,?2,?3,?4,?5,?6)");
+            format >= 161
+                ? "INSERT INTO revision_assets(revision,asset_id,media_type,sha256,metadata_json,payload_sha256) VALUES(?1,?2,?3,?4,?5,?6)"
+                : "INSERT INTO revision_assets(revision,asset_id,media_type,sha256,metadata_json,data) VALUES(?1,?2,?3,?4,?5,?6)");
+        if (format >= 161) {
+            Statement payload_statement(database.get(),
+                "INSERT INTO asset_payloads(sha256,size,data) VALUES(?1,?2,?3)");
+            for (const auto& [hash, asset] : payloads.payloads) {
+                bind_text(database.get(), payload_statement.get(), 1, hash);
+                if (sqlite3_bind_int64(payload_statement.get(), 2,
+                        static_cast<sqlite3_int64>(asset->bytes.size())) != SQLITE_OK)
+                    sqlite_error(database.get(), "cannot bind asset payload size");
+                const auto result = asset->bytes.empty()
+                    ? sqlite3_bind_zeroblob64(payload_statement.get(), 3, 0)
+                    : sqlite3_bind_blob64(payload_statement.get(), 3, asset->bytes.data(),
+                        static_cast<sqlite3_uint64>(asset->bytes.size()), SQLITE_TRANSIENT);
+                if (result != SQLITE_OK) sqlite_error(database.get(), "cannot bind asset payload bytes");
+                payload_statement.done();
+                payload_statement.reset();
+            }
+        }
         for (const auto& revision : snapshot.history()) {
             bind_revision(database.get(), revision_statement.get(), 1, revision.revision);
             bind_optional_revision(database.get(), revision_statement.get(), 2,
@@ -2493,14 +2635,16 @@ std::string write_database(const std::filesystem::path& path, const DocumentSnap
                 bind_text(database.get(), asset_statement.get(), 3, asset.media_type);
                 bind_text(database.get(), asset_statement.get(), 4, asset.sha256);
                 bind_text(database.get(), asset_statement.get(), 5, asset.metadata.dump());
-                const auto bind_result = asset.bytes.empty()
-                                             ? sqlite3_bind_zeroblob64(asset_statement.get(), 6, 0)
-                                             : sqlite3_bind_blob64(
-                                                   asset_statement.get(), 6, asset.bytes.data(),
-                                                   static_cast<sqlite3_uint64>(asset.bytes.size()),
-                                                   SQLITE_TRANSIENT);
-                if (bind_result != SQLITE_OK) {
-                    sqlite_error(database.get(), "cannot bind asset bytes");
+                if (format >= 161) {
+                    bind_text(database.get(), asset_statement.get(), 6, asset.sha256);
+                } else {
+                    const auto bind_result = asset.bytes.empty()
+                        ? sqlite3_bind_zeroblob64(asset_statement.get(), 6, 0)
+                        : sqlite3_bind_blob64(asset_statement.get(), 6, asset.bytes.data(),
+                            static_cast<sqlite3_uint64>(asset.bytes.size()), SQLITE_TRANSIENT);
+                    if (bind_result != SQLITE_OK) {
+                        sqlite_error(database.get(), "cannot bind asset bytes");
+                    }
                 }
                 asset_statement.done();
                 asset_statement.reset();
@@ -2625,6 +2769,7 @@ bool verify_sqlite_schema(sqlite3* database, bool allow_recovery = false) {
          sqlite3_column_int(user_version.get(), 0) != 158 &&
          sqlite3_column_int(user_version.get(), 0) != 159 &&
          sqlite3_column_int(user_version.get(), 0) != 160 &&
+         sqlite3_column_int(user_version.get(), 0) != 161 &&
          sqlite3_column_int(user_version.get(), 0) != 143 &&
          sqlite3_column_int(user_version.get(), 0) != 142 &&
          sqlite3_column_int(user_version.get(), 0) != 141 &&
@@ -2735,6 +2880,7 @@ bool verify_sqlite_schema(sqlite3* database, bool allow_recovery = false) {
     const bool translation_groups = sqlite3_column_int(user_version.get(), 0) >= 9;
     const bool transform_groups = sqlite3_column_int(user_version.get(), 0) >= 18;
     const bool phase_imports = sqlite3_column_int(user_version.get(), 0) >= 160;
+    const bool shared_assets = sqlite3_column_int(user_version.get(), 0) >= 161;
     const bool recovery = sqlite3_column_int(user_version.get(), 0) == 4 ||
         (translations && scalar_nonnegative(database,
             "SELECT count(*) FROM sqlite_schema WHERE name='project_recovery_records'",
@@ -2751,6 +2897,7 @@ bool verify_sqlite_schema(sqlite3* database, bool allow_recovery = false) {
     }
     std::set<std::string, std::less<>> expected_schema{
         "metadata", "named_revisions", "revision_assets", "revision_entities", "revisions"};
+    if (shared_assets) expected_schema.insert("asset_payloads");
     if (recovery) expected_schema.insert("project_recovery_records");
     if (scalar_nonnegative(
             database,
@@ -2773,6 +2920,17 @@ bool verify_sqlite_schema(sqlite3* database, bool allow_recovery = false) {
     if (actual_schema != expected_schema) {
         storage_error(StorageErrorCode::integrity_failure,
                       "project schema does not match format version 1");
+    }
+    if (shared_assets) {
+        Statement definitions(database,
+            "SELECT name,sql FROM sqlite_schema WHERE name IN ('asset_payloads','revision_assets') ORDER BY name");
+        for (const auto* definition : {kAssetPayloadSchema, kSharedRevisionAssetSchema}) {
+            if (!definitions.row() || column_text(definitions.get(), 1, 4096, "asset table definition") != definition)
+                storage_error(StorageErrorCode::integrity_failure,
+                              "project shared asset table constraints do not match format v161");
+        }
+        if (definitions.row()) storage_error(StorageErrorCode::integrity_failure,
+                                            "project has redundant shared asset definitions");
     }
 
     struct ColumnSpec {
@@ -2814,6 +2972,11 @@ bool verify_sqlite_schema(sqlite3* database, bool allow_recovery = false) {
     if (translation_groups) expected_columns.at("revisions").push_back({"boundary_translations_json", "TEXT", 0, 0});
     if (transform_groups) expected_columns.at("revisions").push_back({"boundary_transforms_json", "TEXT", 0, 0});
     if (phase_imports) expected_columns.at("revisions").push_back({"phase_entity_import_json", "TEXT", 0, 0});
+    if (shared_assets) {
+        expected_columns.at("revision_assets").back() = {"payload_sha256", "TEXT", 1, 0};
+        expected_columns.emplace("asset_payloads", std::vector<ColumnSpec>{
+            {"sha256", "TEXT", 1, 1}, {"size", "INTEGER", 1, 0}, {"data", "BLOB", 1, 0}});
+    }
     if (recovery) expected_columns.emplace("project_recovery_records", std::vector<ColumnSpec>{
         {"record_id", "TEXT", 1, 1}, {"record_kind", "TEXT", 1, 0}, {"envelope_json", "TEXT", 1, 0}});
     for (const auto& [table, columns] : expected_columns) {
@@ -2851,6 +3014,44 @@ bool verify_sqlite_schema(sqlite3* database, bool allow_recovery = false) {
                           "project table columns do not match format v1: " +
                               std::string(table));
         }
+        if (shared_assets) {
+            // Only the canonical ascending BINARY primary-key index is allowed;
+            // revisions use their INTEGER rowid key and have no index object.
+            const std::string indexes_sql = "PRAGMA index_list(" + std::string(table) + ")";
+            Statement indexes(database, indexes_sql.c_str());
+            if (table == "revisions") {
+                if (indexes.row()) storage_error(StorageErrorCode::integrity_failure,
+                                                "project revisions contain an unexpected index");
+            } else {
+                if (!indexes.row() || sqlite3_column_int(indexes.get(), 2) != 1 ||
+                    column_text(indexes.get(), 3, 8, "index origin") != "pk" ||
+                    sqlite3_column_int(indexes.get(), 4) != 0)
+                    storage_error(StorageErrorCode::integrity_failure, "project primary-key index is invalid");
+                const auto index_name = column_text(indexes.get(), 1, 256, "index name");
+                if (index_name != "sqlite_autoindex_" + std::string(table) + "_1" || indexes.row())
+                    storage_error(StorageErrorCode::integrity_failure, "project contains redundant indexes");
+                const auto index_sql = "PRAGMA index_xinfo('" + index_name + "')";
+                Statement entries(database, index_sql.c_str());
+                std::size_t ordinal = 0;
+                std::vector<std::size_t> key_columns;
+                for (std::size_t i = 0; i < columns.size(); ++i)
+                    if (columns[i].primary_key != 0) key_columns.push_back(i);
+                while (entries.row()) {
+                    const bool key = ordinal < key_columns.size();
+                    if (ordinal > key_columns.size() || sqlite3_column_int(entries.get(), 0) != ordinal ||
+                        sqlite3_column_int(entries.get(), 1) != (key ? static_cast<int>(key_columns[ordinal]) : -1) ||
+                        sqlite3_column_int(entries.get(), 3) != 0 ||
+                        column_text(entries.get(), 4, 32, "index collation") != "BINARY" ||
+                        sqlite3_column_int(entries.get(), 5) != (key ? 1 : 0) ||
+                        (key ? column_text(entries.get(), 2, 128, "index column") != columns[key_columns[ordinal]].name
+                             : sqlite3_column_type(entries.get(), 2) != SQLITE_NULL))
+                        storage_error(StorageErrorCode::integrity_failure, "project primary-key index columns are invalid");
+                    ++ordinal;
+                }
+                if (ordinal != key_columns.size() + 1)
+                    storage_error(StorageErrorCode::integrity_failure, "project primary-key index is incomplete");
+            }
+        }
     }
 
     std::map<std::string_view, std::set<std::string, std::less<>>, std::less<>>
@@ -2866,6 +3067,11 @@ bool verify_sqlite_schema(sqlite3* database, bool allow_recovery = false) {
              {"revision|revisions|revision|NO ACTION|NO ACTION|NONE"}},
         };
     if (recovery) expected_foreign_keys.emplace("project_recovery_records", std::set<std::string, std::less<>>{});
+    if (shared_assets) {
+        expected_foreign_keys.emplace("asset_payloads", std::set<std::string, std::less<>>{});
+        expected_foreign_keys.at("revision_assets").insert(
+            "payload_sha256|asset_payloads|sha256|NO ACTION|NO ACTION|NONE");
+    }
     for (const auto& [table, expected] : expected_foreign_keys) {
         const std::string foreign_key_sql = "PRAGMA foreign_key_list(" + std::string(table) + ")";
         Statement foreign_key(database, foreign_key_sql.c_str());
@@ -2963,6 +3169,22 @@ DocumentSnapshot read_snapshot(sqlite3* database, RecoveryLedger* recovery = nul
     ProjectStoreAccess::set_identity(snapshot, document_id, head_revision, stored_saved);
     const auto expected_digest = required_metadata(database, "logical_digest");
     const auto counts = enforce_preallocation_budgets(database, recovery != nullptr);
+    if (format_number >= 161) {
+        // The physical table is bounded and its references are admitted above.
+        // Verify every actual stored byte exactly once before hydration copies.
+        Statement payloads(database, "SELECT sha256,size,data FROM asset_payloads ORDER BY sha256");
+        while (payloads.row()) {
+            const auto hash = column_text(payloads.get(), 0, 64, "asset payload sha256");
+            const auto size = sqlite3_column_bytes(payloads.get(), 2);
+            const auto* data = static_cast<const std::byte*>(sqlite3_column_blob(payloads.get(), 2));
+            if (sqlite3_column_type(payloads.get(), 2) != SQLITE_BLOB || size < 0 ||
+                size > kMaximumAssetBytes || sqlite3_column_int64(payloads.get(), 1) != size ||
+                (size != 0 && data == nullptr) ||
+                sha256_hex(std::span<const std::byte>(data, static_cast<std::size_t>(size))) != hash)
+                storage_error(StorageErrorCode::integrity_failure,
+                              "asset payload SHA-256 does not match stored bytes");
+        }
+    }
     std::vector<RevisionRecord> history;
     history.reserve(static_cast<std::size_t>(counts.revisions));
     DecodeBudget decode_budget(recovery != nullptr || format_number >= 5);
@@ -3162,8 +3384,14 @@ DocumentSnapshot read_snapshot(sqlite3* database, RecoveryLedger* recovery = nul
     }
 
     Statement assets(database,
-                     "SELECT revision,asset_id,media_type,sha256,metadata_json,data "
-                     "FROM revision_assets ORDER BY revision,asset_id");
+        format_number >= 161
+            ? "SELECT revision,asset_id,media_type,sha256,metadata_json,NULL FROM revision_assets ORDER BY revision,asset_id"
+            : "SELECT revision,asset_id,media_type,sha256,metadata_json,data FROM revision_assets ORDER BY revision,asset_id");
+    Statement payload_data(database, format_number >= 161
+        ? "SELECT data FROM asset_payloads WHERE sha256=?1" : "SELECT NULL");
+    // Map keys and node count are bounded by the complete preallocation pass.
+    // Asset map nodes stay stable as additional assets/revisions are populated.
+    std::map<std::string, const Asset*, std::less<>> hydrated_payloads;
     sqlite3_int64 asset_rows = 0;
     while (assets.row()) {
         if (++asset_rows > static_cast<sqlite3_int64>(ProjectStore::maximum_asset_rows)) {
@@ -3180,28 +3408,51 @@ DocumentSnapshot read_snapshot(sqlite3* database, RecoveryLedger* recovery = nul
         asset.metadata = parse_budgeted_json(
             column_text(assets.get(), 4, kMaximumJsonBytes, "asset metadata"), true,
             "asset metadata", decode_budget);
-        if (sqlite3_column_type(assets.get(), 5) != SQLITE_BLOB) {
-            storage_error(StorageErrorCode::integrity_failure, "asset data is not a SQLite blob");
-        }
-        const auto size = sqlite3_column_bytes(assets.get(), 5);
-        if (size < 0 || size > kMaximumAssetBytes) {
-            storage_error(StorageErrorCode::integrity_failure, "asset data exceeds its size limit");
-        }
-        const auto* data = static_cast<const std::byte*>(sqlite3_column_blob(assets.get(), 5));
-        if (size != 0 && data == nullptr) {
-            storage_error(StorageErrorCode::integrity_failure, "asset data could not be read");
-        }
-        if (size != 0) {
-            asset.bytes.assign(data, data + static_cast<std::size_t>(size));
-        }
-        if (sha256_hex(asset.bytes) != asset.sha256) {
-            storage_error(StorageErrorCode::integrity_failure,
-                          "asset SHA-256 does not match stored bytes: " + asset.id);
+        const auto cached = format_number >= 161 ? hydrated_payloads.find(asset.sha256)
+                                                 : hydrated_payloads.end();
+        if (cached != hydrated_payloads.end()) {
+            asset.bytes = cached->second->bytes;
+        } else {
+            sqlite3_stmt* byte_row = assets.get();
+            int byte_column = 5;
+            if (format_number >= 161) {
+                bind_text(database, payload_data.get(), 1, asset.sha256);
+                if (!payload_data.row())
+                    storage_error(StorageErrorCode::integrity_failure, "asset payload disappeared during hydration");
+                byte_row = payload_data.get();
+                byte_column = 0;
+            }
+            if (sqlite3_column_type(byte_row, byte_column) != SQLITE_BLOB) {
+                storage_error(StorageErrorCode::integrity_failure, "asset data is not a SQLite blob");
+            }
+            const auto size = sqlite3_column_bytes(byte_row, byte_column);
+            if (size < 0 || size > kMaximumAssetBytes) {
+                storage_error(StorageErrorCode::integrity_failure, "asset data exceeds its size limit");
+            }
+            const auto* data = static_cast<const std::byte*>(sqlite3_column_blob(byte_row, byte_column));
+            if (size != 0 && data == nullptr) {
+                storage_error(StorageErrorCode::integrity_failure, "asset data could not be read");
+            }
+            if (size != 0) {
+                asset.bytes.assign(data, data + static_cast<std::size_t>(size));
+            }
+            if (format_number < 161 && sha256_hex(asset.bytes) != asset.sha256) {
+                storage_error(StorageErrorCode::integrity_failure,
+                              "asset SHA-256 does not match stored bytes: " + asset.id);
+            }
+            if (format_number >= 161) {
+                if (payload_data.row())
+                    storage_error(StorageErrorCode::integrity_failure, "duplicate asset payload during hydration");
+                payload_data.reset();
+            }
         }
         auto& target = history[static_cast<std::size_t>(revision)].assets;
-        if (!target.emplace(asset.id, std::move(asset)).second) {
+        const auto inserted = target.emplace(asset.id, std::move(asset));
+        if (!inserted.second) {
             storage_error(StorageErrorCode::integrity_failure, "project contains duplicate asset ids");
         }
+        if (format_number >= 161 && cached == hydrated_payloads.end())
+            hydrated_payloads.emplace(inserted.first->second.sha256, &inserted.first->second);
     }
 
     // Hydrate only from independently validated assets in this result revision.
@@ -3233,8 +3484,13 @@ DocumentSnapshot read_snapshot(sqlite3* database, RecoveryLedger* recovery = nul
     // Entity/asset rows and deferred compact proofs are fully hydrated before
     // publishing immutable history to format, recovery and digest consumers.
     ProjectStoreAccess::publish_history(snapshot, std::move(history));
+    // Inline legacy payloads may already repeat; that is valid legacy storage.
+    // Shared storage and immutable receipts require v161. Check retained semantics
+    // here and authenticate the manifest with its stored version below.
     const auto required_format = required_format_version_internal(snapshot, format_number < 28);
     if (required_format > format_number) {
+        if (required_format>=161)
+            storage_error(StorageErrorCode::unsupported_format,"This project requires reader 161 for immutable original-DXF reconstruction receipts");
         if (required_format>=160)
             storage_error(StorageErrorCode::unsupported_format,"This project requires reader 160 for retained design-set imports and reviewed hierarchy enrollment");
         if (required_format>=159)
@@ -4014,7 +4270,7 @@ SaveReceipt save_project(const std::filesystem::path& destination,
         // Bound caller-owned data before any I/O. Complete structural validation
         // runs against the decoded staging file below, so the exact bytes to be
         // published are validated once without first copying the whole snapshot.
-        enforce_snapshot_budget(snapshot);
+        const auto payloads = enforce_snapshot_budget(snapshot);
 
         std::error_code path_error;
         const bool destination_exists = std::filesystem::exists(filesystem_path(destination), path_error);
@@ -4052,7 +4308,7 @@ SaveReceipt save_project(const std::filesystem::path& destination,
 #ifdef _WIN32
             ReservedStagingFile reserved_staging(temporary);
             const auto requested_digest = write_database(
-                temporary, snapshot, options.fault_stage, archive ? &archive->recovery() : nullptr);
+                temporary, snapshot, payloads, options.fault_stage, archive ? &archive->recovery() : nullptr);
             inject_if(options.fault_stage, SaveFaultStage::after_database_write);
             reserved_staging.flush_written_bytes();
 

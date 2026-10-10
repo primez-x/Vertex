@@ -63,7 +63,8 @@ void validate_native_dxf_phase_source_assets(const NativeDxfPhaseSourceAssets& a
 void validate_native_dxf_phase_source_asset_refs(const NativeDxfPhaseSourceAssetRefs& assets,
     NativeDxfPhaseAssetWorkBudget* budget = nullptr);
 // Actual current/retained/combined destination inventory only: fixed 512 MiB
-// aggregate and native 100,000-row ceiling. max_payload_bytes remains the
+// verified unique-content aggregate and native 100,000-row ceiling. Equal
+// declared hashes alone cannot alias different bytes. max_payload_bytes remains the
 // lowerable per-asset limit (at most 256 MiB); shared JSON/work limits and all
 // actual metadata/hash checks remain unchanged. No source carrier admission.
 void validate_native_dxf_phase_destination_asset_refs(const NativeDxfPhaseSourceAssetRefs& assets,
