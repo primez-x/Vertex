@@ -25,6 +25,48 @@ double finite_number(const json& value, std::string_view description) {
     return result;
 }
 
+// Alias scalars are admitted only for an owner's reciprocal bare corner cut.
+bool managed_corner_cut(const Entity& opening,
+                        const std::map<std::string, Entity, std::less<>>& entities) {
+    const auto& p = opening.properties;
+    const auto owner_id = p.find("corner_window_id");
+    const auto leg = p.find("corner_leg");
+    if (owner_id == p.end() || !owner_id->is_string() || leg == p.end() ||
+        !leg->is_number_integer() || (*leg != 0 && *leg != 1) ||
+        p.value("opening_kind", json{}) != "opening" ||
+        p.contains("opening_assembly") || p.contains("door_operation") ||
+        p.contains("vertical_placement")) return false;
+    const auto owner = entities.find(owner_id->get_ref<const std::string&>());
+    if (owner == entities.end() || owner->second.id != owner->first ||
+        owner->second.type != "corner_window" || !owner->second.properties.is_object())
+        return false;
+    const auto& owner_properties = owner->second.properties;
+    const auto children = owner_properties.find("opening_ids");
+    const auto walls = owner_properties.find("wall_ids");
+    const auto version = owner_properties.find("version");
+    const auto index = *leg == 0 ? 0 : 1;
+    return version != owner_properties.end() && version->is_number_integer() && *version == 1 &&
+        children != owner_properties.end() && children->is_array() && children->size() == 2 &&
+        walls != owner_properties.end() && walls->is_array() && walls->size() == 2 &&
+        (*children)[index] == opening.id && p.contains("wall_id") &&
+        (*walls)[index] == p.at("wall_id");
+}
+
+double opening_scalar(const json& properties, const char* canonical,
+                      const char* legacy, const char* description, bool managed) {
+    if (!managed) return finite_number(properties.at(canonical), description);
+    const auto current = properties.find(canonical);
+    const auto old = properties.find(legacy);
+    // Match document_wall's canonical-first numeric codec without mutating
+    // retained descriptors; corner_window admission also requires exact equality.
+    const auto result = finite_number(current != properties.end() ? *current :
+                            properties.at(legacy), description);
+    if (current != properties.end() && old != properties.end() &&
+        finite_number(*old, description) != result)
+        invalid(std::string(description) + " has contradictory corner cut aliases");
+    return result;
+}
+
 Vec2 point(const json& value, std::string_view description) {
     if (!value.is_array() || value.size() != 2) {
         invalid(std::string(description) + " must contain exactly two coordinates");
@@ -1106,11 +1148,13 @@ void validate_constraint_wall_host(const std::string& wall_id, const std::map<st
                 host->get_ref<const std::string&>() != wall_id) {
                 continue;
             }
+            const bool managed = candidate.id == id && managed_corner_cut(candidate, entities);
+            const auto& p = candidate.properties;
             wall.openings.push_back(
-                {id, finite_number(candidate.properties.at("offset_m"), "Opening offset"),
-                 finite_number(candidate.properties.at("width_m"), "Opening width"),
-                 finite_number(candidate.properties.at("sill_m"), "Opening sill"),
-                 finite_number(candidate.properties.at("height_m"), "Opening height")});
+                {id, opening_scalar(p, "offset_m", "offset", "Opening offset", managed),
+                 opening_scalar(p, "width_m", "width", "Opening width", managed),
+                 opening_scalar(p, "sill_m", "sill", "Opening sill", managed),
+                 opening_scalar(p, "height_m", "height", "Opening height", managed)});
         }
         validate_wall_semantics(wall);
     } catch (const std::out_of_range&) {

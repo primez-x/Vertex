@@ -7,6 +7,7 @@
 #include "sketch/wall_measurement.hpp"
 #include "sketch/wall_semantics.hpp"
 #include "sketch/document_wall.hpp"
+#include "sketch/corner_window.hpp"
 #include "sketch/boundary_integrity.hpp"
 #include "sketch/boundary_dimension.hpp"
 #include "sketch/model_phases.hpp"
@@ -17,8 +18,11 @@
 #include "sketch/physical_wall_room_split.hpp"
 #endif
 #include <algorithm>
+#include <array>
+#include <charconv>
 #include <cmath>
 #include <iterator>
+#include <optional>
 #include <set>
 #include <stdexcept>
 
@@ -110,6 +114,84 @@ void unknown_refs(const Json& value,const WallSplitIntent& intent,const std::str
             reject("Wall split has unsupported whole-object reference in "+owner+" at "+path+"/"+key);
         unknown_refs(child,intent,owner,path+"/"+key);
     } else if(value.is_array())for(std::size_t i=0;i<value.size();++i)unknown_refs(value[i],intent,owner,path+"/"+std::to_string(i));
+}
+Json corner_station_quantity(double metres) {
+    std::array<char,64> buffer{};
+    for(int precision=17;precision>0;--precision) {
+        const auto converted=std::to_chars(buffer.data(),buffer.data()+buffer.size(),metres,std::chars_format::general,precision);
+        if(converted.ec!=std::errc{})continue;
+        try {
+            const auto quantity=parse_quantity(std::string(buffer.data(),converted.ptr)+" m",Unit::metre);
+            if(quantity.metres!=metres)continue;
+            return {{"version",1},{"original_expression",quantity.original_expression},{"entered_unit","m"},
+                {"exact_metres",{{"numerator",quantity.exact_metres.numerator},{"denominator",quantity.exact_metres.denominator}}}};
+        } catch(const std::invalid_argument&) { /* Try a shorter exact spelling. */ }
+          catch(const std::overflow_error&) { /* Its rational may fit at lower precision. */ }
+    }
+    reject("Wall split corner cut station has no exact bounded quantity input");
+}
+void corner_cut_station(const Entity& retained,Entity& cut,double offset) {
+    const auto& source=retained.properties;
+    for(const auto* key:{"offset_m","offset"})if(source.contains(key))
+        cut.properties[key]=source.at(key).get<double>()==offset?source.at(key):Json(offset);
+    const auto old=source.at(source.contains("offset_m")?"offset_m":"offset").get<double>();
+    if(old==offset)return;
+    const auto entries=source.find("quantity_entries");
+    if(entries==source.end())return;
+    if(!entries->is_object())reject("Wall split corner cut quantity entries must be an object: "+cut.id);
+    std::optional<Json> encoded;
+    for(const auto* key:{"offset_m","offset"}) {
+        const auto pointer="/"+std::string(key);
+        const auto found=entries->find(pointer);
+        if(found==entries->end())continue;
+        if(!source.contains(key) || !found->is_object() || !found->contains("version") ||
+            !found->at("version").is_number_integer() || found->at("version")!=1 ||
+            !found->contains("original_expression") || !found->at("original_expression").is_string() ||
+            found->at("original_expression").get_ref<const std::string&>().size()>4096 || found->dump().size()>1024*1024)
+            reject("Wall split cannot change an unsupported corner cut station receipt: "+cut.id+pointer);
+        if(decode_constraint_quantity_receipt(*found).metres!=source.at(key).get<double>())
+            reject("Wall split corner cut station receipt is stale: "+cut.id+pointer);
+        if(!encoded)encoded=corner_station_quantity(offset);
+        auto& receipt=cut.properties.at("quantity_entries").at(pointer);
+        // Replace the admitted numeric core, retaining opaque siblings both
+        // at receipt level and inside exact_metres. Future/core-free authority
+        // refuses rather than disappearing or acquiring invented semantics.
+        for(const auto* field:{"version","original_expression","entered_unit"})receipt[field]=encoded->at(field);
+        for(const auto* field:{"numerator","denominator"})receipt["exact_metres"][field]=encoded->at("exact_metres").at(field);
+    }
+}
+void complete_corner_window_hosts(const Entities& source,Entities& result,const WallSplitIntent& intent) {
+    bool checked_source=false;
+    for(const auto& [id,entity]:source) {
+        if(entity.type!="corner_window")continue;
+        auto window=parse_corner_window(entity);
+        if(std::find(window.wall_ids.begin(),window.wall_ids.end(),intent.wall_id)==window.wall_ids.end())continue;
+        if(!checked_source) {validate_corner_window_state(source);checked_source=true;}
+        const auto original=window;
+        for(std::size_t leg=0;leg<2;++leg)if(original.wall_ids[leg]==intent.wall_id) {
+            // Only the original outer endpoint remains a corner. A cut that
+            // crosses the seam has already refused in the opening lane.
+            // Directed children retain its start/end role verbatim.
+            const auto& host=original.at_start[leg]?intent.wall_id:intent.second_wall_id;
+            if(result.at(window.opening_ids[leg]).properties.at("wall_id")!=host)
+                reject("Wall split cannot preserve corner-window endpoint: "+id);
+            window.wall_ids[leg]=host;
+            if(host!=original.wall_ids[leg])result.at(id).properties.at("wall_ids").at(leg)=host;
+        }
+        std::array<Wall,2> hosts;
+        for(std::size_t leg=0;leg<2;++leg) {
+            std::string diagnostic;
+            if(!read_document_wall(result.at(window.wall_ids[leg]),{},hosts[leg],diagnostic))reject(diagnostic);
+        }
+        const auto cuts=corner_window_cuts(window,hosts);
+        for(std::size_t leg=0;leg<2;++leg)if(original.wall_ids[leg]==intent.wall_id) {
+            // Derive from the final host, rather than subtracting stations:
+            // admission compares the cut and aggregate offsets exactly.
+            // Unchanged scalars retain their original JSON representation.
+            corner_cut_station(source.at(window.opening_ids[leg]),result.at(window.opening_ids[leg]),cuts[leg].offset);
+        }
+    }
+    if(checked_source)validate_corner_window_state(result);
 }
 void remap_constraints(const Entities& source,Entities& result,const WallSplitIntent& intent,bool tangent_completion) {
     for(const auto& [id,entity]:source)if(entity.type=="constraint") {
@@ -340,12 +422,24 @@ static Entities replay_wall_split(const Entities& source,const WallSplitIntent& 
             unhandled.properties.erase("model");
         }
         if(entity.type=="opening" && entity.properties.value("wall_id",std::string{})==intent.wall_id) {
-            const auto offset=entity.properties.at("offset_m").get<double>();
-            const auto end=offset+entity.properties.at("width_m").get<double>();
+            const bool managed=entity.properties.contains("corner_window_id");
+            const auto offset=entity.properties.at(managed && !entity.properties.contains("offset_m")?"offset":"offset_m").get<double>();
+            const auto end=offset+entity.properties.at(managed && !entity.properties.contains("width_m")?"width":"width_m").get<double>();
             if(offset<station && end>station)reject("Wall split opening "+id+" straddles seam "+std::to_string(station)+
                 " in range ["+std::to_string(offset)+","+std::to_string(end)+"]");
-            if(offset>=station){result.at(id).properties["wall_id"]=intent.second_wall_id;result.at(id).properties["offset_m"]=offset-station;}
+            if(offset>=station) {
+                result.at(id).properties["wall_id"]=intent.second_wall_id;
+                // Managed stations replay once from the final host below,
+                // preserving legacy-only scalar names and their receipts.
+                if(!managed)result.at(id).properties["offset_m"]=offset-station;
+            }
             unhandled.properties.erase("wall_id");
+        }
+        if(entity.type=="corner_window") {
+            (void)parse_corner_window(entity);
+            // Only this admitted host pair is completed below. Opaque owner
+            // metadata and extensions still pass the conservative scan.
+            unhandled.properties.erase("wall_ids");
         }
         if(entity.type=="wall_join") {
             auto join=parse_wall_join(entity.properties,id);
@@ -423,6 +517,7 @@ static Entities replay_wall_split(const Entities& source,const WallSplitIntent& 
         }
         unknown_refs(unhandled.properties,intent,id,"/properties");unknown_refs(unhandled.extensions,intent,id,"/extensions");
     }
+    complete_corner_window_hosts(source,result,intent);
     remap_constraints(source,result,intent,intent.physical_room_completion || preparation_only);
     PersistentConstraint seam{intent.seam_constraint_id,ConstraintRelationKind::coincident,
         {{intent.wall_id,WallEndpointRole::end},{intent.second_wall_id,WallEndpointRole::start}},std::nullopt,std::nullopt};

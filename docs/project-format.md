@@ -24,10 +24,30 @@ The actual geometry has one connected shared frame/corner post and two positive
 glazing solids. The frame fits the union of both cuts; impossible pane clearance,
 disconnected inset footprints or intersection with either host remnant refuses.
 One window schedule row carries both leg widths; the cuts add no extra windows.
-Storage keeps the v161 payload tables. Corner clipboard/clone, transforms,
-active-baseline replacement, wall split/merge, associative leg dimensions and
+Storage keeps the v161 payload tables. Corner transforms, canvas grips,
+active-baseline replacement, associative leg dimensions and
 IFC/DXF ownership transport remain further implementation/qualification work.
 Compilation, rendered behavior and migration/history are unverified.
+
+The separate clipboard envelope `vertex.corner-window.clipboard`, version 1,
+has exactly `format`, `version`, `owner`, `walls`, `cuts` and `catalogs`. The two
+ordered passive wall records prove captured source geometry; they are never
+imported as destination hosts. Owner, walls and cuts use the five-field Entity
+envelope. Catalogs contain only needed material definitions. A staged transfer
+allocates one fresh owner and two cuts, inherits destination host context and
+retargets internal canonical references; external canonical entity/asset
+bindings need explicit transport and currently refuse. Material assignments use
+the ordinary typed catalog remapper. Full retained/undone history and source
+envelopes reserve the fresh trio within bounded work. Station edits replay v1
+quantity cores without deleting opaque receipt or rational siblings. Affected
+unknown/future/core-free/stale receipts refuse. Supported version-one cores also
+match source scalars during passive admission, even when unchanged. Unchanged
+future/core-free payloads remain opaque. Canonical transportability is admitted
+before source deletion. This clipboard contract adds no
+native storage floor or payload table. Existing split/merge replay now preserves
+the aggregate when its outer corner survives, retaining IDs and endpoint roles;
+it cannot merge away that corner or split through its cut. These lifecycle
+additions remain source-only and require runtime qualification.
 
 ## Individual roof skylight transfer (v169, source integration)
 

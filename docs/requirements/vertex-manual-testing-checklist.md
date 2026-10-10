@@ -3217,7 +3217,19 @@ Blocked / missing until testing a candidate that contains it.
 
 - [ ] **WINDOW-CORNER - Create one window across two walls**
   - Steps: Draw two straight walls sharing a corner on the same layer. Ctrl-click both walls and choose Tools > Architecture > Corner window between two selected walls. Set a different width for each wall, a sill height and window height. Save, double-click the window, rename it and change either width and its frame/glazing dimensions. Apply unchanged values once. Inspect plan, 3D and the window schedule. Delete the window, undo/redo, then save/reopen. Repeat with reversed wall directions and an angled corner; try oversized widths, overlapping an existing opening and selecting two disconnected walls.
-  - Expected: One selected window spans both wall cuts, with a shared corner post/frame and two glazing legs. The schedule lists one window with both widths. Properties update both cuts together; unchanged Save adds no undo step. Delete removes the whole window and both cuts while retaining the walls. Invalid geometry leaves the project unchanged. Saved and reopened history retains the full window. Library drag placement, canvas grips, copying and phase replacement remain missing until their separate work is delivered.
+  - Expected: One selected window spans both wall cuts, with a shared corner post/frame and two glazing legs. The schedule lists one window with both widths. Properties update both cuts together; unchanged Save adds no undo step. Delete removes the whole window and both cuts while retaining the walls. Invalid geometry leaves the project unchanged. Saved and reopened history retains the full window. Canvas grips and active-baseline phase replacement remain missing until their separate work is delivered.
+  - Result: Not tested
+  - Notes: ______________________________
+
+- [ ] **WINDOW-CORNER-PLACE-COPY - Place and copy a corner window**
+  - Steps: Draw two pairs of adjoining straight walls on one layer. Find Corner window in Library > Windows. Click it, set different widths for its two legs, then click the first corner. Repeat by dragging the library item to a corner. Select a placed window, Copy, then Paste at the other corner. Try right-click Duplicate, then cancel with Esc or right-click. Cut one window and paste it at another corner. Try a disconnected wall pair, a three-wall junction and a corner hidden by a cropped view. Assign a material, copy into another project and inspect the resulting window schedule/material quantities. Save/reopen and undo/redo placement.
+  - Expected: Placement previews one real two-leg window and cuts both walls together. Each leg keeps its entered width. Copy/Paste and Duplicate preserve the name, physical profile and materials while creating a separate window; they do not copy the source walls. Cut removes only the window and its cuts. Cancel changes nothing. Unsuitable or ambiguous corners produce no partial window. A copied window with unresolved external references reports that limitation instead of losing data.
+  - Result: Not tested
+  - Notes: ______________________________
+
+- [ ] **WINDOW-CORNER-HOST-TOPOLOGY - Split and merge walls beside a corner window**
+  - Steps: Place a corner window at the end of a long wall. Split that wall outside the window cut, keeping the outer corner intact. Select the resulting collinear wall pieces and merge them. Repeat with reversed wall direction and the window at the other endpoint. Inspect both widths, plan, 3D and the window schedule. Try splitting through the window, then undo/redo the valid operations and save/reopen.
+  - Expected: The same window stays at the outer corner and retains its two leg widths, name, material and one schedule row. Its host references follow the surviving wall pieces. Valid split/merge is undoable in one step. A split through the window or a merge that removes its corner refuses without changing the project.
   - Result: Not tested
   - Notes: ______________________________
 

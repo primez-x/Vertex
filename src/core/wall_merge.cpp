@@ -6,6 +6,7 @@
 #include "sketch/constraint_integrity.hpp"
 #include "sketch/constraint_wall_edit.hpp"
 #include "sketch/document_wall.hpp"
+#include "sketch/corner_window.hpp"
 #include "sketch/model_phases.hpp"
 #include "sketch/project_organization.hpp"
 #include "sketch/room_relationships.hpp"
@@ -17,11 +18,14 @@
 #include "sketch/wall_measurement.hpp"
 #include "sketch/wall_semantics.hpp"
 #include <algorithm>
+#include <array>
+#include <charconv>
 #include <cmath>
 #include <iterator>
 #include <numbers>
 #include <limits>
 #include <numeric>
+#include <optional>
 #include <set>
 #include <stdexcept>
 
@@ -238,6 +242,82 @@ void collapse(Json& list,const WallMergeIntent& intent,const std::string& locati
     if (a!=b) reject("Wall merge requires consistent membership at "+location);
     if (b) list.erase(std::remove(list.begin(),list.end(),Json(intent.second_wall_id)),list.end());
 }
+Json corner_station_quantity(double metres) {
+    std::array<char,64> buffer{};
+    for(int precision=17;precision>0;--precision) {
+        const auto converted=std::to_chars(buffer.data(),buffer.data()+buffer.size(),metres,std::chars_format::general,precision);
+        if(converted.ec!=std::errc{})continue;
+        try {
+            const auto quantity=parse_quantity(std::string(buffer.data(),converted.ptr)+" m",Unit::metre);
+            if(quantity.metres!=metres)continue;
+            return {{"version",1},{"original_expression",quantity.original_expression},{"entered_unit","m"},
+                {"exact_metres",{{"numerator",quantity.exact_metres.numerator},{"denominator",quantity.exact_metres.denominator}}}};
+        } catch(const std::invalid_argument&) { /* Try a shorter exact spelling. */ }
+          catch(const std::overflow_error&) { /* Its rational may fit at lower precision. */ }
+    }
+    reject("Wall merge corner cut station has no exact bounded quantity input");
+}
+void corner_cut_station(const Entity& retained,Entity& cut,double offset) {
+    const auto& source=retained.properties;
+    for(const auto* key:{"offset_m","offset"})if(source.contains(key))
+        cut.properties[key]=source.at(key).get<double>()==offset?source.at(key):Json(offset);
+    const auto old=source.at(source.contains("offset_m")?"offset_m":"offset").get<double>();
+    if(old==offset)return;
+    const auto entries=source.find("quantity_entries");
+    if(entries==source.end())return;
+    if(!entries->is_object())reject("Wall merge corner cut quantity entries must be an object: "+cut.id);
+    std::optional<Json> encoded;
+    for(const auto* key:{"offset_m","offset"}) {
+        const auto pointer="/"+std::string(key);
+        const auto found=entries->find(pointer);
+        if(found==entries->end())continue;
+        if(!source.contains(key) || !found->is_object() || !found->contains("version") ||
+            !found->at("version").is_number_integer() || found->at("version")!=1 ||
+            !found->contains("original_expression") || !found->at("original_expression").is_string() ||
+            found->at("original_expression").get_ref<const std::string&>().size()>4096 || found->dump().size()>1024*1024)
+            reject("Wall merge cannot change an unsupported corner cut station receipt: "+cut.id+pointer);
+        if(decode_constraint_quantity_receipt(*found).metres!=source.at(key).get<double>())
+            reject("Wall merge corner cut station receipt is stale: "+cut.id+pointer);
+        if(!encoded)encoded=corner_station_quantity(offset);
+        auto& receipt=cut.properties.at("quantity_entries").at(pointer);
+        // Preserve opaque receipt and exact_metres siblings; affected future
+        // or core-free authority cannot be interpreted and must refuse.
+        for(const auto* field:{"version","original_expression","entered_unit"})receipt[field]=encoded->at(field);
+        for(const auto* field:{"numerator","denominator"})receipt["exact_metres"][field]=encoded->at("exact_metres").at(field);
+    }
+}
+void complete_corner_window_hosts(const Entities& source,Entities& result,const WallMergeIntent& intent) {
+    bool checked_source=false;
+    for(const auto& [id,entity]:source) {
+        if(entity.type!="corner_window")continue;
+        auto window=parse_corner_window(entity);
+        if(!std::any_of(window.wall_ids.begin(),window.wall_ids.end(),[&](const auto& host){return selected(host,intent);}))continue;
+        if(!checked_source) {validate_corner_window_state(source);checked_source=true;}
+        const auto original=window;
+        if(selected(window.wall_ids[0],intent) && selected(window.wall_ids[1],intent))
+            reject("Wall merge cannot collapse both corner-window hosts: "+id);
+        for(std::size_t leg=0;leg<2;++leg)if(selected(original.wall_ids[leg],intent)) {
+            // Only first.start and second.end survive, with unchanged roles.
+            if((original.wall_ids[leg]==intent.first_wall_id && !original.at_start[leg]) ||
+                (original.wall_ids[leg]==intent.second_wall_id && original.at_start[leg]))
+                reject("Wall merge cannot remove a corner-window endpoint at its seam: "+id);
+            if(result.at(window.opening_ids[leg]).properties.at("wall_id")!=intent.first_wall_id)
+                reject("Wall merge cannot preserve corner-window host: "+id);
+            window.wall_ids[leg]=intent.first_wall_id;
+            if(original.wall_ids[leg]!=intent.first_wall_id)
+                result.at(id).properties.at("wall_ids").at(leg)=intent.first_wall_id;
+        }
+        std::array<Wall,2> hosts;
+        for(std::size_t leg=0;leg<2;++leg)hosts[leg]=read_wall(result.at(window.wall_ids[leg]));
+        const auto cuts=corner_window_cuts(window,hosts);
+        for(std::size_t leg=0;leg<2;++leg)if(selected(original.wall_ids[leg],intent)) {
+            // Exact final-host derivation avoids a rounding difference from
+            // adding the first span's length to the old child's station.
+            corner_cut_station(source.at(window.opening_ids[leg]),result.at(window.opening_ids[leg]),cuts[leg].offset);
+        }
+    }
+    if(checked_source)validate_corner_window_state(result);
+}
 bool seam(const WallEndpointBinding& b,const WallMergeIntent& intent) {
     return (b.owner_id==intent.first_wall_id && b.role==WallEndpointRole::end) ||
         (b.owner_id==intent.second_wall_id && b.role==WallEndpointRole::start);
@@ -438,12 +518,18 @@ Entities replayed_wall_merge_entities(const Entities& source,const WallMergeInte
         }
         if(entity.type=="opening" && entity.properties.value("wall_id",std::string{})==second.id) {
             auto& opening=result.at(id);opening.properties["wall_id"]=first.id;
-            const auto key=opening.properties.contains("offset_m")?"offset_m":"offset";
-            const auto station=opening.properties.at(key).get<double>()+segment_length(a.baseline);
-            if(!std::isfinite(station))reject("Wall merge opening station exceeds range: "+id);
-            opening.properties["offset_m"]=station;if(opening.properties.contains("offset"))opening.properties["offset"]=station;
+            if(!opening.properties.contains("corner_window_id")) {
+                const auto key=opening.properties.contains("offset_m")?"offset_m":"offset";
+                const auto station=opening.properties.at(key).get<double>()+segment_length(a.baseline);
+                if(!std::isfinite(station))reject("Wall merge opening station exceeds range: "+id);
+                opening.properties["offset_m"]=station;if(opening.properties.contains("offset"))opening.properties["offset"]=station;
+            }
         }
         if(entity.type=="opening")unhandled.properties.erase("wall_id");
+        if(entity.type=="corner_window") {
+            (void)parse_corner_window(entity);
+            unhandled.properties.erase("wall_ids");
+        }
         if(entity.type=="room_relationships") {
             const auto relationships=RoomRelationshipSnapshot::from_json(entity.properties.at("model"));
             auto& model=result.at(id).properties.at("model");
@@ -541,6 +627,7 @@ Entities replayed_wall_merge_entities(const Entities& source,const WallMergeInte
         if(retired_joins.contains(id))continue;
         unknown_refs(unhandled.properties,intent,id,"/properties");unknown_refs(unhandled.extensions,intent,id,"/extensions");
     }
+    complete_corner_window_hosts(source,result,intent);
     for(const auto& id:retired_joins)
         if(const auto reference=incoming_retired_reference(result,id))reject("Wall merge cannot retire join "+id+": "+*reference);
     for(const auto& second_dimension:second_automatic_axes) {

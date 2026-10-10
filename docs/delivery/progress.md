@@ -14,6 +14,60 @@ changed source does not acquire runtime acceptance without later qualification.
 
 ## Current delivery state
 
+### October 10 corner-window placement, transfer and host topology - source integration
+
+The visible corner-window library entry now has a distinct two-host placement
+workflow. Click placement and drag/drop resolve a shared endpoint of two active,
+visible straight walls on the active layer, including compatible Site poses.
+The sidebar exposes separate leg widths. Ambiguous junctions, invisible/cropped
+endpoints and unsuitable host pairs refuse. Manufactured hover artwork comes
+from the common frame/post/glazing factory on the existing background queues;
+the final click independently stages and admits actual geometry.
+
+Copy/Cut, Paste and right-click/Commands Duplicate transfer only one window,
+its two cut payloads and needed material definitions. Source walls are passive
+geometry evidence, never imported as destination walls. Paste arms placement
+at a new visible corner. The captured profile/dimensions remain exact during
+placement; ordinary Properties edits them afterward. Material catalogs import
+through typed source-reference remapping in the same final command. Cut writes
+the clipboard only after coordinated deletion succeeds; Esc/right-click cancels
+pending placement without mutation.
+
+The transfer producer preserves owner/cut metadata, extensions and unchanged
+numeric representations. Internal canonical references retarget the five
+participants; unsupported external entity/asset bindings refuse. Fresh trio
+IDs are reserved against complete retained/undone history and passive source
+envelopes within explicit bounds. Changed cut station receipts replay supported
+numeric cores while retaining opaque siblings and nested rational metadata;
+affected future/core-free/stale authority refuses rather than being discarded.
+Passive admission also checks supported version-one receipt cores against their
+source scalars, including unchanged cut aliases, owner dimensions and physical
+profile values. Canonical transportability is checked before Cut can delete.
+
+Wall split/merge now retarget the corner owner and cuts together to surviving
+outer endpoints. Identity, leg orientation, raw scalar aliases and measured
+station metadata survive. Managed legacy-only cut aliases are understood by
+the constraint readers without changing ordinary opening contracts. Splitting
+through a cut, merging away a corner endpoint or collapsing both hosts refuses.
+Phase membership completion still precedes final full-map/native admission.
+
+Canvas grips, coordinated group transforms, active-baseline replacement,
+associative leg dimensions and IFC/DXF ownership transport remain corner-window
+implementation gaps. Oversized retained-history transfers and unresolved
+external canonical bindings remain explicit limitations. All production scope
+and all ten gates remain open. The manual list retains 450 original scenarios
+plus thirteen focused checks, with the new checks Not tested.
+
+No builds, tests/new tests, scripts/probes, native jobs, UI launches, packages or
+installations ran. The installed candidate is unchanged. Source inspection and
+static diff/registry checks do not establish compilation, kernel/rendering,
+interaction, migration/history or output acceptance. Independent source review
+approved the integration after correcting scalar aliases, station receipt
+preservation, canonical-reference transport, complete-history identity
+reservation and passive unchanged-receipt validation. Root reviewed the final
+interfaces and declared limits. Scoped source backup is
+completed on the delivery branch after integration review.
+
 ### October 10 coordinated corner windows - source integration
 
 One first-class corner-window owner now coordinates two ordinary wall cuts.

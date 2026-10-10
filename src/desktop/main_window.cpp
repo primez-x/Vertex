@@ -26,6 +26,7 @@
 #include "sketch/architecture.hpp"
 #include "sketch/opening_assembly.hpp"
 #include "sketch/corner_window.hpp"
+#include "sketch/corner_window_transfer.hpp"
 #include "sketch/hosted_opening_plan.hpp"
 #include "sketch/workspace_regeneration_queue.hpp"
 #include "sketch/roof_join_semantics.hpp"
@@ -418,6 +419,7 @@ constexpr std::size_t kMaximumClipboardEntities = 128;
 constexpr std::size_t kMaximumNumericSelectionGraphEntities = 4096;
 constexpr std::string_view kClipboardFormat = "sketch.document.clipboard";
 constexpr std::string_view kRoofOpeningClipboardFormat = "vertex.roof-opening.clipboard";
+constexpr std::string_view kCornerWindowClipboardFormat = "vertex.corner-window.clipboard";
 
 class DxfLayerDestinationDelegate final : public QStyledItemDelegate {
 public:
@@ -469,7 +471,7 @@ json clipboard_entity_json(const Entity& entity) {
                 {"required", entity.required}, {"extensions", entity.extensions}};
 }
 
-Entity clipboard_entity_from_json(const json& value) {
+Entity clipboard_entity_from_json(const json& value, bool passive = false) {
     if (!value.is_object() || !value.contains("id") || !value.contains("type") ||
         !value.contains("properties") || !value.contains("required") ||
         !value.contains("extensions") || value.size() != 5 || !value.at("id").is_string() ||
@@ -487,7 +489,7 @@ Entity clipboard_entity_from_json(const json& value) {
     if (type == "measurement_linework" && !required) {
         throw std::invalid_argument("pasted measurement linework must be required geometry");
     }
-    if (required && type != "measurement_linework") {
+    if (!passive && required && type != "measurement_linework") {
         throw std::invalid_argument("required project entities cannot be pasted");
     }
     return Entity{value.at("id").get<std::string>(), type, value.at("properties"), required,
@@ -2639,6 +2641,7 @@ bool is_hosted_opening_symbol(const SymbolDefinition& definition) {
 }
 
 QString catalog_opening_kind(const SymbolDefinition& definition) {
+    if (definition.id == "svg-v2-10_windows-window-corner") return QStringLiteral("corner_window");
     if (definition.id == "svg-v2-10_windows-skylight" || definition.id == "svg-v2-24_roof_site-skylight")
         return QStringLiteral("skylight");
     if (definition.category == "10_windows") return QStringLiteral("window");
@@ -5954,6 +5957,10 @@ class MainWindow::Impl {
         OpeningAssembly assembly;
         std::optional<DoorOperation> operation;
         bool bare_opening{};
+        bool corner_window{};
+        double second_width{};
+        double corner_pick_radius{};
+        bool fit_corner_profile{true};
         // Only the serial library worker accesses this local profile cache.
         std::shared_ptr<std::pair<std::string,Boundary>> plan_cache;
     };
@@ -31102,9 +31109,126 @@ public:
         return encoded;
     }
 
+    CornerWindowTransfer cornerWindowTransfer(const DocumentSnapshot& source, const Entity& owner_entity) const {
+        const auto corner = parse_corner_window(owner_entity);
+        CornerWindowTransfer transfer{owner_entity,
+            {source.entities().at(corner.wall_ids[0]), source.entities().at(corner.wall_ids[1])},
+            {source.entities().at(corner.opening_ids[0]), source.entities().at(corner.opening_ids[1])}};
+        validate_corner_window_transfer(transfer);
+        return transfer;
+    }
+
+    std::vector<Entity> cornerWindowMaterialCatalogs(const DocumentSnapshot& source,
+        const CornerWindowTransfer& transfer) const {
+        std::map<std::string, std::set<std::string>, std::less<>> needed;
+        for (const auto* entity : {&transfer.owner, &transfer.cuts[0], &transfer.cuts[1]})
+            for (const auto& reference : architectural_material_source_refs(*entity))
+                needed[reference.catalog_id].insert(reference.material_id);
+        std::vector<Entity> result;
+        for (const auto& [id, ids] : needed) {
+            const auto& original = source.entities().at(id);
+            const auto model = AssemblyModel::from_json(original.properties.at("model"));
+            std::vector<AssemblyMaterial> materials;
+            for (const auto& material : model.materials()) if (ids.contains(material.id)) materials.push_back(material);
+            if (materials.size() != ids.size()) throw std::invalid_argument("A corner-window material source is missing.");
+            const auto portable = retain_assembly_catalog_dialect(original.properties.at("model"),
+                AssemblyModel::create(std::move(materials), {}, {}).to_json());
+            result.push_back(Entity{id, "assembly_model", {{"version", 1}, {"model", portable}}, false, json::object()});
+        }
+        return result;
+    }
+
+    bool copyCornerWindowSelection(bool cut) {
+        const auto source = authoringSnapshot();
+        const auto authority = captureSourceEditAuthority(source);
+        if (m_selected_ids.size() != 1) throw std::invalid_argument("Select one corner window to copy.");
+        const auto transfer = cornerWindowTransfer(source, source.entities().at(m_selected_id.toStdString()));
+        json payload{{"format", std::string(kCornerWindowClipboardFormat)}, {"version", 1},
+            {"owner", clipboard_entity_json(transfer.owner)}, {"walls", json::array()},
+            {"cuts", json::array()}, {"catalogs", json::array()}};
+        for (const auto& wall : transfer.walls) payload["walls"].push_back(clipboard_entity_json(wall));
+        for (const auto& opening : transfer.cuts) payload["cuts"].push_back(clipboard_entity_json(opening));
+        for (const auto& catalog : cornerWindowMaterialCatalogs(source, transfer)) payload["catalogs"].push_back(clipboard_entity_json(catalog));
+        const auto encoded = payload.dump();
+        if (encoded.size() > kMaximumClipboardBytes) throw std::invalid_argument("The corner-window clipboard exceeds the local size limit.");
+        auto* clipboard = QGuiApplication::clipboard();
+        if (!clipboard) throw std::runtime_error("The system clipboard is unavailable.");
+        if (!sourceEditAuthorityCurrent(authority)) throw std::invalid_argument("The selected corner window changed before copying.");
+        if (cut && !deleteSelection()) return false;
+        clipboard->setText(QString::fromUtf8(encoded.data(), static_cast<int>(encoded.size())), QClipboard::Clipboard);
+        clearError();
+        return true;
+    }
+
+    void duplicateCornerWindowSelection() {
+        try {
+            const auto source = authoringSnapshot();
+            if (m_selected_ids.size() != 1) throw std::invalid_argument("Select one corner window to duplicate.");
+            auto transfer = cornerWindowTransfer(source, source.entities().at(m_selected_id.toStdString()));
+            auto catalogs = cornerWindowMaterialCatalogs(source, transfer);
+            (void)beginCornerWindowClone(std::move(transfer), std::move(catalogs));
+        } catch (const std::exception& error) {
+            setError(QStringLiteral("Duplicate corner window: %1").arg(QString::fromUtf8(error.what())));
+        }
+    }
+
+    bool beginCornerWindowClone(CornerWindowTransfer transfer, std::vector<Entity> catalogs) {
+        validate_corner_window_transfer(transfer);
+        if (hasPendingPlacementEdit() || m_text_placement_context || m_plan_label_context || m_armed_area_class)
+            throw std::invalid_argument("Finish or cancel the current drawing before placing a copied corner window.");
+        const auto source = authoringSnapshot();
+        const auto authority = captureSourceEditAuthority(source);
+        std::set<std::string, std::less<>> used, supplied;
+        for (const auto* entity : {&transfer.owner, &transfer.cuts[0], &transfer.cuts[1]})
+            for (const auto& reference : architectural_material_source_refs(*entity)) used.insert(reference.catalog_id);
+        std::map<std::string, std::string, std::less<>> remap;
+        std::vector<Entity> imports;
+        for (auto catalog : catalogs) {
+            if (catalog.type != "assembly_model" || !supplied.insert(catalog.id).second || !used.contains(catalog.id))
+                throw std::invalid_argument("The copied corner window has an invalid material catalog set.");
+            const auto model = AssemblyModel::from_json(catalog.properties.at("model"));
+            if (!model.types().empty() || !model.instances().empty())
+                throw std::invalid_argument("Corner-window transfers carry material definitions, not assembly instances.");
+            const auto existing = source.entities().find(catalog.id);
+            if (existing != source.entities().end() && existing->second == catalog &&
+                existing->second.properties.dump() == catalog.properties.dump() && existing->second.extensions.dump() == catalog.extensions.dump()) {
+                remap.emplace(catalog.id, catalog.id); continue;
+            }
+            const auto original_id = catalog.id;
+            do { catalog.id = new_id("assembly-materials"); } while (source.entities().contains(catalog.id));
+            remap.emplace(original_id, catalog.id); imports.push_back(std::move(catalog));
+        }
+        if (used != supplied) throw std::invalid_argument("The copied corner window is missing material definitions.");
+        transfer.owner = remap_architectural_material_source_refs(transfer.owner, remap);
+        for (auto& child : transfer.cuts) child = remap_architectural_material_source_refs(child, remap);
+        if (!sourceEditAuthorityCurrent(authority)) throw std::invalid_argument("The destination changed while preparing the copied corner window.");
+        const auto& catalog = desktop_placeable_symbol_catalog();
+        const auto definition = std::find_if(catalog.begin(), catalog.end(), [](const auto& entry) {
+            return entry.id == "svg-v2-10_windows-window-corner";
+        });
+        if (definition == catalog.end()) throw std::invalid_argument("The corner-window library entry is unavailable.");
+        setTool(CanvasTool::wall);
+        if (m_tool != CanvasTool::wall || !selectEntity({}, false) || !prepareHostedOpening(*definition)) return false;
+        const auto value = parse_corner_window(transfer.owner);
+        m_pending_corner_window_clone = std::move(transfer);
+        m_pending_corner_window_catalogs = std::move(imports);
+        m_pending_opening_profile = value.assembly;
+        m_opening_draw_width->setText(QString::fromStdString(json(value.widths[0]).dump()) + QStringLiteral(" m"));
+        m_corner_draw_second_width->setText(QString::fromStdString(json(value.widths[1]).dump()) + QStringLiteral(" m"));
+        m_opening_draw_sill->setText(QString::fromStdString(json(value.sill).dump()) + QStringLiteral(" m"));
+        m_opening_draw_height->setText(QString::fromStdString(json(value.height).dump()) + QStringLiteral(" m"));
+        for (auto* field : {m_opening_draw_width, m_corner_draw_second_width, m_opening_draw_sill, m_opening_draw_height}) field->setReadOnly(true);
+        m_opening_style->setEnabled(false);
+        resetOpeningPlacementHover();
+        clearError();
+        return true;
+    }
+
     bool copySelection() {
         try {
             if (m_selected_roof_opening) return copyRoofOpeningSelection(false);
+            if (const auto selected = selectedEntity(); m_selected_ids.size() == 1 && selected && selected->type == "corner_window")
+                return copyCornerWindowSelection(false);
             const auto encoded = clipboardSelectionPayload(authoringSnapshot());
             auto* clipboard = QGuiApplication::clipboard();
             if (clipboard == nullptr) {
@@ -33074,6 +33198,8 @@ public:
     bool cutSelection() {
         try {
             if (m_selected_roof_opening) return copyRoofOpeningSelection(true);
+            if (const auto selected = selectedEntity(); m_selected_ids.size() == 1 && selected && selected->type == "corner_window")
+                return copyCornerWindowSelection(true);
             const auto source = authoringSnapshot();
             if (!source.is_editable()) throw std::invalid_argument("This document is read-only.");
             if (hasOnlyHostedOpeningSelection(source)) return removeSelectedHostedOpenings(source,true);
@@ -33307,6 +33433,19 @@ public:
                 throw std::invalid_argument("Clipboard data is empty or exceeds the local size limit.");
             }
             const auto payload = json::parse(encoded.constData(), encoded.constData() + encoded.size());
+            if (payload.is_object() && payload.value("format", "") == kCornerWindowClipboardFormat) {
+                if (payload.size() != 6 || payload.value("version", 0) != 1 || !payload.contains("owner") ||
+                    !payload.contains("walls") || !payload.at("walls").is_array() || payload.at("walls").size() != 2 ||
+                    !payload.contains("cuts") || !payload.at("cuts").is_array() || payload.at("cuts").size() != 2 ||
+                    !payload.contains("catalogs") || !payload.at("catalogs").is_array() || payload.at("catalogs").size() > kMaximumClipboardEntities)
+                    throw std::invalid_argument("Clipboard corner window has an unsupported contract.");
+                CornerWindowTransfer transfer{clipboard_entity_from_json(payload.at("owner"), true),
+                    {clipboard_entity_from_json(payload.at("walls")[0], true), clipboard_entity_from_json(payload.at("walls")[1], true)},
+                    {clipboard_entity_from_json(payload.at("cuts")[0], true), clipboard_entity_from_json(payload.at("cuts")[1], true)}};
+                std::vector<Entity> catalogs;
+                for (const auto& entry : payload.at("catalogs")) catalogs.push_back(clipboard_entity_from_json(entry));
+                return beginCornerWindowClone(std::move(transfer), std::move(catalogs));
+            }
             if (payload.is_object() && payload.value("format", "") == kRoofOpeningClipboardFormat) {
                 if (payload.size()!=4 || payload.value("version",0)!=1 ||
                     !payload.contains("roof") || !payload.contains("opening_id") ||
@@ -41920,10 +42059,13 @@ public:
         cancelOpeningPlacementPreview();
         if (m_pending_opening_kind.isEmpty()) return;
         BoundaryDraftPreview preview;
-        preview.instruction = QStringLiteral("Move onto a wall to place the %1").arg(m_pending_opening_kind);
+        const bool corner = m_pending_opening_kind == QStringLiteral("corner_window");
+        preview.instruction = corner ? QStringLiteral("Move to a corner between two visible walls") :
+            QStringLiteral("Move onto a wall to place the %1").arg(m_pending_opening_kind);
         m_measurementCanvas->setBoundaryDraftPreview(preview);
         m_architecturalCanvas->setBoundaryDraftPreview(preview);
-        m_architecture_hint->setText(QStringLiteral("%1 • click an existing wall to place. Esc cancels.")
+        m_architecture_hint->setText((corner ? QStringLiteral("%1 • click where two walls meet. Esc cancels.") :
+            QStringLiteral("%1 • click an existing wall to place. Esc cancels."))
             .arg(m_opening_style->currentText()));
     }
 
@@ -42133,6 +42275,10 @@ public:
             return false;
         }
         if (!captureOpeningPlacement()) return false;
+        m_pending_corner_window_clone.reset();
+        m_pending_corner_window_catalogs.clear();
+        for (auto* field : {m_opening_draw_width, m_corner_draw_second_width, m_opening_draw_height, m_opening_draw_sill})
+            field->setReadOnly(false);
         m_pending_roof_opening_clone.reset();
         m_pending_roof_opening_clone_row.reset();
         m_pending_roof_opening_clone_digest.clear();
@@ -42211,9 +42357,11 @@ public:
             ? QStringLiteral("Top-hinged sash: 0 degrees closes it; 90 degrees raises it horizontally toward the opening side.")
             : QStringLiteral("Casement swing angle around its jamb."));
         m_opening_draw_width->setText(QString::fromStdString(json(width).dump()) + QStringLiteral(" m"));
+        m_corner_draw_second_width->setText(QString::fromStdString(json(width).dump()) + QStringLiteral(" m"));
         m_opening_draw_height->setText(window ? QStringLiteral("1.2 m") : QStringLiteral("2.1 m"));
         m_opening_draw_sill->setText(window ? QStringLiteral("0.9 m") : QStringLiteral("0 m"));
         auto* opening_form = qobject_cast<QFormLayout*>(m_opening_draw_fields->layout());
+        opening_form->setRowVisible(m_corner_draw_second_width, m_pending_opening_kind == QStringLiteral("corner_window"));
         if (auto* label = qobject_cast<QLabel*>(opening_form->labelForField(m_opening_draw_height)))
             label->setText(skylight ? QStringLiteral("Depth") : QStringLiteral("Height"));
         m_opening_draw_height->setAccessibleName(skylight ? QStringLiteral("Horizontal skylight depth") : QStringLiteral("Height"));
@@ -42244,6 +42392,8 @@ public:
         m_architecture_hint->show();
         m_architecture_hint->setText((skylight
             ? QStringLiteral("%1 • click a roof face to place. Esc cancels.")
+            : m_pending_opening_kind == QStringLiteral("corner_window")
+            ? QStringLiteral("%1 • click where two visible walls meet. Esc cancels.")
             : QStringLiteral("%1 • click an existing wall to place. Esc cancels."))
             .arg(QString::fromStdString(definition.name)));
         syncToolControls();
@@ -42353,6 +42503,105 @@ public:
             result=VisibleOpeningHost{owner->second,std::move(candidate),offset,std::move(frame)};
         }
         return result;
+    }
+
+    struct VisibleCornerWindowHosts {
+        std::array<Wall, 2> walls;
+        std::array<bool, 2> at_start;
+        std::optional<SitePresentationPlacement> site_frame;
+    };
+
+    static std::optional<VisibleCornerWindowHosts> visibleCornerWindowHostsAt(
+        const HostedLibraryDragInput& input, Vec2 displayed_point) {
+        if (!input.source || !std::isfinite(input.corner_pick_radius) || input.corner_pick_radius <= 0.0)
+            throw std::invalid_argument("Corner-window placement needs a captured source and finite pick radius.");
+        struct Endpoint {
+            Wall wall;
+            bool at_start;
+            Vec2 local;
+            Vec2 displayed;
+            std::optional<SitePresentationPlacement> site_frame;
+        };
+        const auto scope = constraint_phase_scope(input.source->entities());
+        std::map<std::string, std::vector<const Entity*>, std::less<>> rosters;
+        for (const auto& [id, entity] : input.source->entities())
+            if (entity.type == "opening" && !scope.inactive_owner_ids.contains(id))
+                if (const auto host = read_string(entity.properties, "wall_id")) rosters[*host].push_back(&entity);
+        std::vector<Endpoint> endpoints;
+        std::set<std::string, std::less<>> seen;
+        for (const auto& visible : input.visible) {
+            if (visible.type != QStringLiteral("wall") || !visible.presentation_key.isEmpty() ||
+                !seen.insert(visible.id.toStdString()).second) continue;
+            const auto found = input.source->entities().find(visible.id.toStdString());
+            if (found == input.source->entities().end() || found->second.type != "wall" ||
+                scope.inactive_owner_ids.contains(found->first) ||
+                read_string(found->second.properties, "layer_id") != std::optional{input.layer_id} ||
+                (input.architectural_context && read_string(found->second.properties, "floor_id") !=
+                    std::optional{input.architectural_context->floor_id})) continue;
+            Wall wall; std::string error;
+            if (!read_document_wall(resolve_vertical_placement(*input.source, found->second), rosters[found->first], wall, error) ||
+                wall.baseline.sweep_radians != 0.0) continue;
+            std::optional<SitePresentationPlacement> site_frame;
+            if (input.site_frames) {
+                const auto* frame = input.site_frames->findGeometry(visible);
+                if (!frame) continue;
+                site_frame = *frame;
+            }
+            for (const bool at_start : {true, false}) {
+                const auto local = at_start ? wall.baseline.start : wall.baseline.end;
+                const auto displayed = site_frame ? site_presented_plan_point(local, *site_frame) :
+                    input.plan_frame ? project_plan_point(local, *input.plan_frame) : local;
+                if (std::hypot(displayed.x-displayed_point.x, displayed.y-displayed_point.y) > input.corner_pick_radius)
+                    continue;
+                // A cropped owner cannot authorize an invisible endpoint.
+                if (std::none_of(visible.snap_points.begin(), visible.snap_points.end(), [&](const Vec2& point) {
+                    return std::hypot(point.x-displayed.x, point.y-displayed.y) <= default_geometry_tolerance_metres;
+                })) continue;
+                endpoints.push_back({wall, at_start, local, displayed, site_frame});
+                if (endpoints.size() > 32) return std::nullopt;
+            }
+        }
+        std::optional<VisibleCornerWindowHosts> nearest;
+        double separation = std::numeric_limits<double>::infinity();
+        bool ambiguous = false;
+        for (std::size_t a = 0; a < endpoints.size(); ++a) for (std::size_t b = a+1; b < endpoints.size(); ++b) {
+            const auto& first = endpoints[a]; const auto& second = endpoints[b];
+            if (first.wall.id == second.wall.id ||
+                std::hypot(first.local.x-second.local.x, first.local.y-second.local.y) > default_geometry_tolerance_metres ||
+                first.site_frame.has_value() != second.site_frame.has_value() ||
+                (first.site_frame && !sameSitePresentationPlacement(*first.site_frame, *second.site_frame))) continue;
+            const auto& first_entity = input.source->entities().at(first.wall.id);
+            const auto& second_entity = input.source->entities().at(second.wall.id);
+            bool same_context = true;
+            for (const auto* key : {"property_id", "building_id", "floor_id", "layer_id", "level_id", "vertical_placement"})
+                if (first_entity.properties.value(key, json{}) != second_entity.properties.value(key, json{})) same_context = false;
+            if (!same_context) continue;
+            const Vec2 u{first.wall.baseline.end.x-first.wall.baseline.start.x, first.wall.baseline.end.y-first.wall.baseline.start.y};
+            const Vec2 v{second.wall.baseline.end.x-second.wall.baseline.start.x, second.wall.baseline.end.y-second.wall.baseline.start.y};
+            if (std::abs((u.x*v.y-u.y*v.x)/(std::hypot(u.x,u.y)*std::hypot(v.x,v.y))) <= default_geometry_tolerance_metres)
+                continue;
+            const auto distance = std::hypot(first.displayed.x-displayed_point.x, first.displayed.y-displayed_point.y);
+            if (distance+default_geometry_tolerance_metres < separation) {
+                nearest = VisibleCornerWindowHosts{{first.wall, second.wall}, {first.at_start, second.at_start}, first.site_frame};
+                separation = distance; ambiguous = false;
+            } else if (std::abs(distance-separation) <= default_geometry_tolerance_metres) ambiguous = true;
+        }
+        return ambiguous ? std::nullopt : nearest;
+    }
+
+    static CornerWindow cornerWindowPlacementValue(const HostedLibraryDragInput& input,
+        const VisibleCornerWindowHosts& hosts, const std::string& owner_id,
+        const std::array<std::string, 2>& cut_ids) {
+        CornerWindow value;
+        value.id = owner_id; value.opening_ids = cut_ids;
+        value.wall_ids = {hosts.walls[0].id, hosts.walls[1].id}; value.at_start = hosts.at_start;
+        value.widths = {input.width, input.second_width}; value.sill = input.sill; value.height = input.height;
+        value.assembly = input.assembly;
+        if (input.fit_corner_profile) {
+            value.assembly.frame_depth_m = std::min({value.assembly.frame_depth_m, hosts.walls[0].thickness, hosts.walls[1].thickness});
+            value.assembly.panel_thickness_m = std::min(value.assembly.panel_thickness_m, value.assembly.frame_depth_m);
+        }
+        return value;
     }
 
     static Boundary openingPlacementPlan(const Wall& host,const HostedOpening& opening,
@@ -42466,6 +42715,27 @@ public:
 
     static std::optional<CanvasEntity> hostedLibraryDragGeometry(
         const HostedLibraryDragInput& input,Vec2 point) {
+        if (input.corner_window) {
+            const auto hosts = visibleCornerWindowHostsAt(input, point);
+            if (!hosts) return std::nullopt;
+            const auto corner = cornerWindowPlacementValue(input, *hosts, "corner-window-preview",
+                {"corner-preview-first", "corner-preview-second"});
+            const auto cuts = corner_window_cuts(corner, hosts->walls);
+            const auto key = corner_window_properties(corner).dump() + '\n' +
+                input.source->entities().at(corner.wall_ids[0]).properties.dump() + '\n' +
+                input.source->entities().at(corner.wall_ids[1]).properties.dump();
+            if (input.plan_cache->first != key) {
+                input.plan_cache->second = project_building_shape_plan(make_corner_window(hosts->walls, cuts, corner.assembly));
+                input.plan_cache->first = key;
+            }
+            CanvasEntity geometry{QStringLiteral("corner-window-placement-preview"), QStringLiteral("window"),
+                input.plan_cache->second, 0.0, false};
+            geometry.stroke_color = QColor(Qt::black); geometry.dark_stroke_color = QColor(210,226,239);
+            geometry.output_stroke_width_mm = .16;
+            if (hosts->site_frame) geometry = site_presented_canvas_entity(geometry, *hosts->site_frame);
+            else if (input.plan_frame) geometry.segments = project_plan_path(std::move(geometry.segments), *input.plan_frame);
+            return geometry;
+        }
         const auto model=input.plan_frame ? unproject_plan_point(point,*input.plan_frame) : point;
         const auto placement=visibleOpeningHostAt(*input.source,input.visible,model,point,input.width,
             input.layer_id,input.architectural_context,input.site_frames ? &*input.site_frames : nullptr,
@@ -42574,6 +42844,8 @@ public:
         return json{{"kind",m_pending_opening_kind.toStdString()},
             {"symbol",m_pending_opening_symbol_id.toStdString()},
             {"width",m_opening_draw_width->text().toStdString()},
+            {"corner_second_width",m_corner_draw_second_width->text().toStdString()},
+            {"corner_clone",m_pending_corner_window_clone ? m_pending_corner_window_clone->owner.id : std::string{}},
             {"height",m_opening_draw_height->text().toStdString()},
             {"sill",m_opening_draw_sill->text().toStdString()},
             {"bay_projection",m_opening_draw_bay_projection->text().toStdString()},
@@ -42656,10 +42928,12 @@ public:
             QString instruction;
             if (completion.succeeded() && completion.receipt->source_revision==request.capture->input->source->revision())
                 geometry=std::move(*request.result);
-            if (geometry && geometry->opening_width_controls) {
-                instruction=QStringLiteral("Click to place %1").arg(m_pending_opening_kind);
+            if (geometry && (geometry->opening_width_controls || request.capture->input->corner_window)) {
+                instruction=request.capture->input->corner_window ? QStringLiteral("Click to place corner window") :
+                    QStringLiteral("Click to place %1").arg(m_pending_opening_kind);
             } else {
-                instruction=QStringLiteral("Choose a visible wall with room for this %1").arg(m_pending_opening_kind);
+                instruction=request.capture->input->corner_window ? QStringLiteral("Choose an unambiguous corner between two visible walls") :
+                    QStringLiteral("Choose a visible wall with room for this %1").arg(m_pending_opening_kind);
                 try { if (completion.error) std::rethrow_exception(completion.error); }
                 catch (const Standard_Failure& error) {
                     const auto* message=error.GetMessageString();
@@ -42705,6 +42979,10 @@ public:
             }
             if (site) input.site_frames=m_site_opening_frames;
             input.width=parse_quantity(m_opening_draw_width->text().toStdString(),unit).metres;
+            input.corner_window=m_pending_opening_kind==QStringLiteral("corner_window");
+            input.second_width=input.corner_window ? parse_quantity(m_corner_draw_second_width->text().toStdString(),unit).metres : 0.0;
+            input.corner_pick_radius=18.0/canvas->viewScale();
+            input.fit_corner_profile=!m_pending_corner_window_clone;
             input.height=parse_quantity(m_opening_draw_height->text().toStdString(),unit).metres;
             input.sill=parse_quantity(m_opening_draw_sill->text().toStdString(),unit).metres;
             input.station_increment=canvas->placementLengthIncrementMetres();
@@ -42779,8 +43057,11 @@ public:
                 input.plan_frame=capture.plan_frame;
                 if (site) input.site_frames=m_site_plan_frames;
                 const auto kind=catalog_opening_kind(*definition);
-                const bool window=kind==QStringLiteral("window");
+                const bool window=kind==QStringLiteral("window") || kind==QStringLiteral("corner_window");
+                input.corner_window=kind==QStringLiteral("corner_window");
+                input.corner_pick_radius=18.0/canvas->viewScale();
                 input.width=catalog_opening_width(*definition)*scale;
+                input.second_width=input.width;
                 input.sill=window ? .9 : 0.0;input.height=window ? 1.2 : 2.1;
                 input.station_increment=canvas->placementLengthIncrementMetres();
                 input.assembly=catalog_opening_assembly(kind,id);
@@ -44578,6 +44859,8 @@ public:
              [this] { showCornerWindowEditor(); }},
             {QStringLiteral("Edit selected corner window"),
              [this] { showCornerWindowEditor(); }},
+            {QStringLiteral("Duplicate selected corner window"),
+             [this] { duplicateCornerWindowSelection(); }},
             {QStringLiteral("Create slab from selected boundary"),
              [this] { createSlabFromDialog(); }},
             {QStringLiteral("Create horizontal assembly from selected boundary"),
@@ -50768,6 +51051,8 @@ private:
             if (definition != catalog.end()) (void)prepareHostedOpening(*definition);
         });
         m_opening_draw_width = dimension_field(opening_form, QStringLiteral("Width"), "openingDrawWidth", QStringLiteral("0.9 m"));
+        m_corner_draw_second_width = dimension_field(opening_form, QStringLiteral("Second leg"), "cornerWindowSecondWidth", QStringLiteral("1 m"));
+        opening_form->setRowVisible(m_corner_draw_second_width, false);
         m_opening_draw_height = dimension_field(opening_form, QStringLiteral("Height"), "openingDrawHeight", QStringLiteral("2.1 m"));
         m_opening_draw_sill = dimension_field(opening_form, QStringLiteral("Sill"), "openingDrawSill", QStringLiteral("0 m"));
         m_skylight_draw_frame = dimension_field(opening_form, QStringLiteral("Frame"), "skylightDrawFrame", QStringLiteral("60 mm"));
@@ -50777,7 +51062,7 @@ private:
             opening_form->setRowVisible(field, false);
             QObject::connect(field, &QLineEdit::textChanged, owner, [this] { resetOpeningPlacementHover(); });
         }
-        for (auto* field:{m_opening_draw_width,m_opening_draw_height,m_opening_draw_sill})
+        for (auto* field:{m_opening_draw_width,m_corner_draw_second_width,m_opening_draw_height,m_opening_draw_sill})
             QObject::connect(field,&QLineEdit::textChanged,owner,[this] { resetOpeningPlacementHover(); });
         m_opening_draw_travel = new QDoubleSpinBox(m_opening_draw_fields);
         m_opening_draw_travel->setObjectName(QStringLiteral("openingDrawTravel"));
@@ -53166,6 +53451,10 @@ private:
                     auto* properties = menu.addAction(QStringLiteral("Properties"));
                     QObject::connect(properties, &QAction::triggered, owner,
                                      guarded([this] { positionContextEditor(true); }));
+                    if (selected && selected->type == "corner_window" && m_selected_ids.size() == 1) {
+                        auto* duplicate = menu.addAction(QStringLiteral("Duplicate corner window"));
+                        QObject::connect(duplicate, &QAction::triggered, owner, guarded([this] { duplicateCornerWindowSelection(); }));
+                    }
                     if (auto* transform=add_command(m_transform_action))
                         transform->setEnabled(m_transform_action->isEnabled() && m_document->is_editable());
                     add_command(m_copy_action);
@@ -61832,7 +62121,77 @@ private:
         m_architecturalCanvas->setBoundaryDraftPreview(std::move(preview));
     }
 
+    void updateCornerWindowPlacement(Vec2 point, bool commit) {
+        auto* canvas = m_workspace == Workspace::measurement ? m_measurementCanvas : m_architecturalCanvas;
+        try {
+            const bool site = siteCanvas(canvas);
+            if (site) {
+                requireSitePublicationCurrent();
+                if (!m_site_opening_source || !m_site_opening_authority || !sourceEditAuthorityCurrent(*m_site_opening_authority))
+                    throw std::invalid_argument("The Site Plan source changed. Cancel and place the corner window again.");
+            } else requirePlanOpeningPlacementCurrent();
+            if (!commit) { previewOpeningPlacement(point); return; }
+            cancelOpeningPlacementPreview();
+            HostedLibraryDragInput input;
+            input.source = site ? m_site_opening_source : m_plan_opening_source;
+            input.visible = canvas->entities(); input.layer_id = m_active_layer_id.toStdString();
+            input.plan_frame = site ? std::nullopt : m_plan_opening_frame;
+            input.architectural_context = organize_project(*input.source).drawing_context(input.layer_id);
+            if (!input.architectural_context || !input.architectural_context->complete())
+                throw std::invalid_argument("The captured corner-window layer is unavailable.");
+            if (site) input.site_frames = m_site_opening_frames;
+            input.corner_window = true; input.corner_pick_radius = 18.0/canvas->viewScale();
+            input.fit_corner_profile = !m_pending_corner_window_clone;
+            if (m_pending_corner_window_clone) {
+                const auto copied = parse_corner_window(m_pending_corner_window_clone->owner);
+                input.width = copied.widths[0]; input.second_width = copied.widths[1];
+                input.sill = copied.sill; input.height = copied.height; input.assembly = copied.assembly;
+            } else {
+                const auto unit = m_metric_units ? Unit::metre : Unit::foot;
+                input.width = parse_quantity(m_opening_draw_width->text().toStdString(), unit).metres;
+                input.second_width = parse_quantity(m_corner_draw_second_width->text().toStdString(), unit).metres;
+                input.sill = parse_quantity(m_opening_draw_sill->text().toStdString(), unit).metres;
+                input.height = parse_quantity(m_opening_draw_height->text().toStdString(), unit).metres;
+                input.assembly = m_pending_opening_profile.value_or(default_opening_assembly(OpeningAssemblyKind::window));
+            }
+            const auto hosts = visibleCornerWindowHostsAt(input, point);
+            if (!hosts) throw std::invalid_argument("Choose where exactly two visible straight walls meet on the active layer.");
+            const auto id = new_id("corner-window");
+            const std::array<std::string, 2> child_ids{new_id("opening"), new_id("opening")};
+            const auto value = cornerWindowPlacementValue(input, *hosts, id, child_ids);
+            ApplyEntityChanges staged;
+            if (m_pending_corner_window_clone) {
+                staged = corner_window_clone_command(*input.source, *m_pending_corner_window_clone, id, child_ids,
+                    value.wall_ids, value.at_start, input.source->revision());
+                for (const auto& catalog : m_pending_corner_window_catalogs) staged.entity_changes.push_back(EntityChange::upsert(catalog));
+            } else {
+                Entity entity{id, "corner_window", corner_window_properties(value), false, json::object()};
+                entity.properties["name"] = "Corner window";
+                const auto& host = input.source->entities().at(value.wall_ids[0]);
+                for (const auto* key : {"property_id", "building_id", "floor_id", "layer_id", "level_id"})
+                    if (host.properties.contains(key)) entity.properties[key] = host.properties.at(key);
+                staged = corner_window_upsert_command(*input.source, entity, input.source->revision());
+            }
+            const auto command = augmentAuthoredCommand(Command{std::move(staged)}, *input.source);
+            const auto candidate = Document::preview_command(*input.source, command);
+            validate_architectural_geometry_changes(*input.source, candidate, {id});
+            if (site) {
+                requireSitePublicationCurrent();
+                if (!sourceEditAuthorityCurrent(*m_site_opening_authority)) throw std::invalid_argument("The corner-window source changed before placement.");
+            } else requirePlanOpeningPlacementCurrent();
+            if (!applyAuthoredCommand(command)) return;
+            setTool(CanvasTool::select);
+            (void)selectEntity(id_from(id), false);
+            clearError();
+        } catch (const Standard_Failure& error) {
+            setError(QStringLiteral("Corner window: %1").arg(QString::fromUtf8(error.GetMessageString())));
+        } catch (const std::exception& error) {
+            setError(QStringLiteral("Corner window: %1").arg(QString::fromUtf8(error.what())));
+        }
+    }
+
     void updateOpeningPlacement(Vec2 point, bool commit) {
+        if (m_pending_opening_kind == QStringLiteral("corner_window")) { updateCornerWindowPlacement(point, commit); return; }
         if (m_pending_opening_kind == QStringLiteral("skylight")) { updateSkylightPlacement(point, commit); return; }
         BoundaryDraftPreview preview;
         preview.instruction = QStringLiteral("Move onto a wall to place the %1").arg(m_pending_opening_kind);
@@ -63218,6 +63577,12 @@ private:
         m_pending_opening_symbol_id.clear();
         m_pending_opening_door_operation.reset();
         m_pending_opening_profile.reset();
+        m_pending_corner_window_clone.reset();
+        m_pending_corner_window_catalogs.clear();
+        for (auto* field : {m_opening_draw_width, m_corner_draw_second_width, m_opening_draw_sill, m_opening_draw_height})
+            if (field) field->setReadOnly(false);
+        if (m_corner_draw_second_width && m_opening_draw_fields)
+            qobject_cast<QFormLayout*>(m_opening_draw_fields->layout())->setRowVisible(m_corner_draw_second_width, false);
         if (m_architecture_hint) m_architecture_hint->hide();
         if (m_opening_draw_fields) m_opening_draw_fields->hide();
         if (m_wall_draw_fields) m_wall_draw_fields->show();
@@ -67076,6 +67441,8 @@ private:
     std::optional<PendingOpeningPlacementPreview> m_pending_opening_placement_preview;
     std::optional<CanvasRoofOpeningTarget> m_selected_roof_opening;
     std::optional<RoofOpeningCloneSource> m_pending_roof_opening_clone;
+    std::optional<CornerWindowTransfer> m_pending_corner_window_clone;
+    std::vector<Entity> m_pending_corner_window_catalogs;
     std::optional<json> m_pending_roof_opening_clone_row;
     std::string m_pending_roof_opening_clone_digest;
     std::shared_ptr<const RoofOpeningCanvasCapture> m_roof_opening_capture;
@@ -67227,6 +67594,7 @@ private:
     QLineEdit* m_wall_draw_thickness{};
     QLineEdit* m_wall_draw_height{};
     QLineEdit* m_opening_draw_width{};
+    QLineEdit* m_corner_draw_second_width{};
     QLineEdit* m_opening_draw_height{};
     QLineEdit* m_opening_draw_sill{};
     QLineEdit* m_skylight_draw_frame{};
