@@ -10,6 +10,7 @@ namespace sketch {
 
 // Dialect five retains independently reconstructed coordinated corner owners,
 // their physical/phase consequences, and explicit ordinary/drawing selections.
+// Dialect six alone enables version-two corner catalog-host completion.
 [[nodiscard]] DocumentSnapshot prepare_mixed_selection_removal_stage(
     const DocumentSnapshot& source, const CornerSelectionRemovalIntent& ordinary,
     const Command& ordinary_command);

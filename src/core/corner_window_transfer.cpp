@@ -1,6 +1,8 @@
 #include "sketch/corner_window_transfer.hpp"
 
 #include "sketch/boundary_dimension.hpp"
+#include "sketch/assembly_document_adapter.hpp"
+#include "sketch/assembly_model.hpp"
 #include "sketch/corner_window.hpp"
 #include "sketch/constraint_entity.hpp"
 #include "sketch/document_wall.hpp"
@@ -44,24 +46,24 @@ bool valid_id(std::string_view value) {
 }
 
 void validate_json(const Json& value, std::size_t depth, std::size_t& count,
-                   std::size_t& text_bytes) {
+                   std::size_t& text_bytes, std::size_t byte_limit = json_byte_limit) {
     if (++count > json_value_limit || depth > json_depth_limit)
         reject("passive JSON exceeds complexity limits");
     if (value.is_discarded() || value.is_binary() ||
         (value.is_number_float() && !std::isfinite(value.get<double>())))
         reject("passive JSON contains a nonportable value");
     const auto add_text = [&](std::size_t bytes) {
-        if (bytes > json_byte_limit - text_bytes) reject("passive JSON exceeds the byte limit");
+        if (bytes > byte_limit - text_bytes) reject("passive JSON exceeds the byte limit");
         text_bytes += bytes;
     };
     if (value.is_string()) add_text(value.get_ref<const std::string&>().size());
     else if (value.is_array()) {
-        for (const auto& child : value) validate_json(child, depth + 1, count, text_bytes);
+        for (const auto& child : value) validate_json(child, depth + 1, count, text_bytes, byte_limit);
     } else if (value.is_object()) {
         for (const auto& [key, child] : value.items()) {
             if (key.size() > 128) reject("passive JSON contains an oversized key");
             add_text(key.size());
-            validate_json(child, depth + 1, count, text_bytes);
+            validate_json(child, depth + 1, count, text_bytes, byte_limit);
         }
     }
 }
@@ -260,19 +262,51 @@ struct IdentityReservation {
     }
 };
 
-void reserve_identities(const DocumentSnapshot& destination, const CornerWindowTransfer& transfer,
-                        const Ids& fresh) {
+void reserve_identities(const DocumentSnapshot& destination, const std::vector<const CornerWindowTransfer*>& transfers,
+                        const Ids& fresh, const std::vector<Entity>& imported_catalogs = {}) {
     const auto& history = destination.history();
     if (history.empty() || history.size() > 4096 || destination.revision() >= history.size())
         reject("destination retained history exceeds admission bounds");
-    IdentityReservation reservation{fresh};
+    Ids all_fresh = fresh, imported_ids;
+    for (const auto& catalog : imported_catalogs) {
+        if (!valid_id(catalog.id) || !all_fresh.insert(catalog.id).second)
+            reject("imported catalog identities must be distinct and fresh");
+        imported_ids.insert(catalog.id);
+    }
+    IdentityReservation reservation{all_fresh};
     // Match the conservative source-envelope reservation used by physical
     // replacements, without decoding unknown metadata or rewriting any string.
     for (const auto* key : {"id", "type", "properties", "required", "extensions"}) reservation.text(key);
-    reservation.entity(transfer.owner);
-    for (const auto& host : transfer.walls) reservation.entity(host);
-    for (const auto& cut : transfer.cuts) reservation.entity(cut);
-    for (const auto& dimension : transfer.dimensions) reservation.entity(dimension);
+    const auto reserve_transported_material_entity = [&](const Entity& entity) {
+        if (imported_ids.empty()) { reservation.entity(entity); return; }
+        // Remapped typed catalog references intentionally name a new import.
+        // Validate those sites, then exclude only their value from this scan;
+        // all opaque data, keys and material names still reserve identities.
+        (void)architectural_material_source_refs(entity);
+        auto scanned = entity;
+        auto assignment = scanned.properties.find("material_assignment");
+        if (assignment != scanned.properties.end() && assignment->contains("catalog_id") &&
+            assignment->at("catalog_id").is_string() &&
+            imported_ids.contains(assignment->at("catalog_id").get<std::string>()))
+            assignment->at("catalog_id") = nullptr;
+        reservation.entity(scanned);
+    };
+    for (const auto* transfer : transfers) {
+        reserve_transported_material_entity(transfer->owner);
+        for (const auto& host : transfer->walls) reservation.entity(host);
+        for (const auto& cut : transfer->cuts) reserve_transported_material_entity(cut);
+        for (const auto& dimension : transfer->dimensions) reservation.entity(dimension);
+    }
+    for (const auto& catalog : imported_catalogs) {
+        for (const auto* transfer : transfers) {
+            if (catalog.id == transfer->owner.id) reject("catalog identity overlaps a source owner");
+            for (const auto& host : transfer->walls) if (catalog.id == host.id) reject("catalog identity overlaps a source host");
+            for (const auto& cut : transfer->cuts) if (catalog.id == cut.id) reject("catalog identity overlaps a source cut");
+            for (const auto& dimension : transfer->dimensions) if (catalog.id == dimension.id) reject("catalog identity overlaps a source dimension");
+        }
+        reservation.text(catalog.type); reservation.read(catalog.properties); reservation.read(catalog.extensions);
+    }
+    auto& history_reservation = reservation;
     // Scan every saved record, including records beyond the current Undo head.
     // Ordinary ApplyEntityChanges retains resulting maps rather than commands;
     // typed change lanes and raw intents may also carry retired source envelopes.
@@ -280,31 +314,31 @@ void reserve_identities(const DocumentSnapshot& destination, const CornerWindowT
         const auto& record = history[index];
         if (record.revision != index) reject("destination history is not contiguous");
         for (const auto& [id, entity] : record.entities) {
-            reservation.text(id); reservation.entity(entity);
+            history_reservation.text(id); history_reservation.entity(entity);
         }
         for (const auto& [id, asset] : record.assets) {
-            if (++reservation.nodes > IdentityReservation::node_limit) reject("retained asset row budget exceeded");
-            reservation.text(id); reservation.text(asset.id); reservation.read(asset.metadata);
+            if (++history_reservation.nodes > IdentityReservation::node_limit) reject("retained asset row budget exceeded");
+            history_reservation.text(id); history_reservation.text(asset.id); history_reservation.read(asset.metadata);
         }
-        if (record.boundary_translations) reservation.changes(record.boundary_translations->entity_changes);
-        if (record.boundary_transforms) reservation.changes(record.boundary_transforms->entity_changes);
+        if (record.boundary_translations) history_reservation.changes(record.boundary_translations->entity_changes);
+        if (record.boundary_transforms) history_reservation.changes(record.boundary_transforms->entity_changes);
         if (record.boundary_constraint_changes) {
             const auto& proof = *record.boundary_constraint_changes;
-            reservation.changes(proof.entity_changes);
-            reservation.changes(proof.physical_entity_changes);
-            reservation.changes(proof.supplemental_entity_changes);
-            reservation.changes(proof.selection_entity_changes);
-            if (proof.rigid_group_transform) reservation.changes(proof.rigid_group_transform->entity_changes);
+            history_reservation.changes(proof.entity_changes);
+            history_reservation.changes(proof.physical_entity_changes);
+            history_reservation.changes(proof.supplemental_entity_changes);
+            history_reservation.changes(proof.selection_entity_changes);
+            if (proof.rigid_group_transform) history_reservation.changes(proof.rigid_group_transform->entity_changes);
             for (const auto* payload : {&proof.room_review_intent, &proof.room_review_geometry_proof,
                 &proof.phase_room_review_intent, &proof.phase_constraint_authoring_intent,
-                &proof.independent_drawing_removal_intent}) reservation.read(*payload);
-            if (proof.room_review_additional_intents.size() > IdentityReservation::node_limit - reservation.nodes)
+                &proof.independent_drawing_removal_intent}) history_reservation.read(*payload);
+            if (proof.room_review_additional_intents.size() > IdentityReservation::node_limit - history_reservation.nodes)
                 reject("retained review-intent row budget exceeded");
-            for (const auto& payload : proof.room_review_additional_intents) reservation.read(payload);
+            for (const auto& payload : proof.room_review_additional_intents) history_reservation.read(payload);
         }
         if (record.phase_entity_import) for (const auto& id : record.phase_entity_import->entity_ids) {
-            if (++reservation.nodes > IdentityReservation::node_limit) reject("retained import row budget exceeded");
-            reservation.text(id);
+            if (++history_reservation.nodes > IdentityReservation::node_limit) reject("retained import row budget exceeded");
+            history_reservation.text(id);
         }
     }
 }
@@ -527,11 +561,11 @@ void validate_corner_window_transfer(const CornerWindowTransfer& transfer) {
     for (auto dimension : transfer.dimensions) retarget_references(dimension, self);
 }
 
-ApplyEntityChanges corner_window_clone_command(const DocumentSnapshot& destination,
+static ApplyEntityChanges clone_command(const DocumentSnapshot& destination,
     const CornerWindowTransfer& transfer, const std::string& owner_id,
     const std::array<std::string, 2>& opening_ids, const std::array<std::string, 2>& wall_ids,
     const std::array<bool, 2>& at_start, Revision expected_revision,
-    const std::map<std::string, std::string, std::less<>>& dimension_ids) {
+    const std::map<std::string, std::string, std::less<>>& dimension_ids, bool reserve_history) {
     if (!destination.is_editable() || destination.revision() != expected_revision)
         reject("destination is read-only or stale");
     validate_corner_window_transfer(transfer);
@@ -553,7 +587,7 @@ ApplyEntityChanges corner_window_clone_command(const DocumentSnapshot& destinati
             destination.entities().contains(id) || id == wall_ids[0] || id == wall_ids[1])
             reject("dimensions require distinct fresh destination identities");
     }
-    reserve_identities(destination, transfer, fresh_ids);
+    if (reserve_history) reserve_identities(destination, {&transfer}, fresh_ids);
     std::array<Entity, 2> host_entities;
     for (std::size_t leg = 0; leg < host_entities.size(); ++leg) {
         const auto found = destination.entities().find(wall_ids[leg]);
@@ -630,5 +664,143 @@ ApplyEntityChanges corner_window_clone_command(const DocumentSnapshot& destinati
         }
     }
     return command;
+}
+
+ApplyEntityChanges corner_window_clone_command(const DocumentSnapshot& destination,
+    const CornerWindowTransfer& transfer, const std::string& owner_id,
+    const std::array<std::string, 2>& opening_ids, const std::array<std::string, 2>& wall_ids,
+    const std::array<bool, 2>& at_start, Revision expected_revision,
+    const std::map<std::string, std::string, std::less<>>& dimension_ids) {
+    return clone_command(destination, transfer, owner_id, opening_ids, wall_ids, at_start,
+        expected_revision, dimension_ids, true);
+}
+
+struct GroupBudget {
+    std::size_t values{}, text_bytes{}, encoded_bytes{};
+};
+
+static void validate_material_catalog_group(const std::vector<Entity>& catalogs, GroupBudget& budget) {
+    if (catalogs.size() > 128) reject("group catalog limit exceeded");
+    std::map<std::string, const Entity*, std::less<>> pooled;
+    for (const auto& catalog : catalogs) {
+        validate_envelope(catalog, "assembly_model");
+        validate_json(catalog.properties, 0, budget.values, budget.text_bytes, 4 * 1024 * 1024);
+        validate_json(catalog.extensions, 0, budget.values, budget.text_bytes, 4 * 1024 * 1024);
+        const auto bytes = catalog.properties.dump().size() + catalog.extensions.dump().size() + catalog.id.size() + 64;
+        if (bytes > 4 * 1024 * 1024 - budget.encoded_bytes) reject("group catalog byte limit exceeded");
+        budget.encoded_bytes += bytes;
+        const auto [found, inserted] = pooled.emplace(catalog.id, &catalog);
+        if (!inserted && (*found->second != catalog || found->second->properties.dump() != catalog.properties.dump() ||
+            found->second->extensions.dump() != catalog.extensions.dump()))
+            reject("shared catalog identities require exact material definitions");
+        const auto model = AssemblyModel::from_json(catalog.properties.at("model"));
+        if (!model.types().empty() || !model.instances().empty()) reject("group catalogs may carry material definitions only");
+    }
+}
+
+static void validate_transfer_group(const std::vector<const CornerWindowTransfer*>& transfers,
+    std::size_t values = 0, std::size_t text_bytes = 0, std::size_t encoded_bytes = 0) {
+    if (transfers.empty() || transfers.size() > 128) reject("group member limit exceeded");
+    std::size_t dimensions = 0;
+    for (const auto* pointer : transfers) {
+        const auto& transfer = *pointer;
+        if (transfer.dimensions.size() > dimension_row_limit - dimensions)
+            reject("group dimension limit exceeded");
+        dimensions += transfer.dimensions.size();
+    }
+    if (3 * transfers.size() + dimensions > 4096) reject("group change limit exceeded");
+    constexpr std::size_t group_bytes = 4 * 1024 * 1024;
+    Ids owned;
+    std::map<std::string, const Entity*, std::less<>> hosts;
+    const auto inspect = [&](const Entity& entity) {
+        validate_json(entity.properties, 0, values, text_bytes, group_bytes);
+        validate_json(entity.extensions, 0, values, text_bytes, group_bytes);
+        const auto bytes = entity.properties.dump().size() + entity.extensions.dump().size() +
+            entity.id.size() + entity.type.size() + 64;
+        if (bytes > group_bytes - encoded_bytes) reject("group encoded byte limit exceeded");
+        encoded_bytes += bytes;
+    };
+    for (const auto* pointer : transfers) {
+        const auto& transfer = *pointer;
+        const auto own = [&](const Entity& entity) {
+            inspect(entity);
+            if (!owned.insert(entity.id).second || hosts.contains(entity.id))
+                reject("group owner, cut and dimension identities must be distinct");
+        };
+        own(transfer.owner);
+        for (const auto& cut : transfer.cuts) own(cut);
+        for (const auto& dimension : transfer.dimensions) own(dimension);
+        for (const auto& host : transfer.walls) {
+            inspect(host);
+            if (owned.contains(host.id)) reject("group host identity overlaps transported content");
+            const auto [found, inserted] = hosts.emplace(host.id, &host);
+            if (!inserted && (*found->second != host ||
+                found->second->properties.dump() != host.properties.dump() ||
+                found->second->extensions.dump() != host.extensions.dump()))
+                reject("shared group hosts require exact source envelopes");
+        }
+    }
+    for (const auto* transfer : transfers) validate_corner_window_transfer(*transfer);
+}
+
+void validate_corner_window_transfer_group(const std::vector<CornerWindowTransfer>& transfers,
+    const std::vector<Entity>& material_catalogs) {
+    if (transfers.empty() || transfers.size() > 128) reject("group member limit exceeded");
+    GroupBudget budget;
+    validate_material_catalog_group(material_catalogs, budget);
+    std::vector<const CornerWindowTransfer*> passive;
+    for (const auto& transfer : transfers) passive.push_back(&transfer);
+    validate_transfer_group(passive, budget.values, budget.text_bytes, budget.encoded_bytes);
+    for (const auto& catalog : material_catalogs) for (const auto& transfer : transfers) {
+        if (catalog.id == transfer.owner.id) reject("material catalog identity overlaps a source owner");
+        for (const auto& wall : transfer.walls) if (catalog.id == wall.id) reject("material catalog identity overlaps a source host");
+        for (const auto& cut : transfer.cuts) if (catalog.id == cut.id) reject("material catalog identity overlaps a source cut");
+        for (const auto& dimension : transfer.dimensions) if (catalog.id == dimension.id) reject("material catalog identity overlaps a source dimension");
+    }
+}
+
+ApplyEntityChanges corner_window_group_clone_command(const DocumentSnapshot& destination,
+    const std::vector<CornerWindowCloneRequest>& requests, Revision expected_revision,
+    const std::vector<Entity>& imported_material_catalogs) {
+    if (requests.empty() || requests.size() > 128) reject("group request limit exceeded");
+    if (!destination.is_editable() || destination.revision() != expected_revision)
+        reject("destination is read-only or stale");
+    if (imported_material_catalogs.size() > 128) reject("group catalog limit exceeded");
+    std::size_t dimensions = 0;
+    for (const auto& request : requests) {
+        if (request.transfer.dimensions.size() > dimension_row_limit - dimensions)
+            reject("group dimension limit exceeded");
+        dimensions += request.transfer.dimensions.size();
+        if (request.dimension_ids.size() != request.transfer.dimensions.size())
+            reject("group dimension identity map must exactly cover its member");
+    }
+    if (requests.size() * 3 + dimensions + imported_material_catalogs.size() > 4096)
+        reject("group change limit exceeded");
+    GroupBudget budget;
+    validate_material_catalog_group(imported_material_catalogs, budget);
+    Ids fresh;
+    std::vector<const CornerWindowTransfer*> passive;
+    for (const auto& request : requests) passive.push_back(&request.transfer);
+    validate_transfer_group(passive, budget.values, budget.text_bytes, budget.encoded_bytes);
+    for (const auto& request : requests) {
+        const auto add = [&](const std::string& id) {
+            if (!valid_id(id) || !fresh.insert(id).second) reject("group clone identities must be distinct and fresh");
+        };
+        add(request.owner_id);
+        for (const auto& id : request.opening_ids) add(id);
+        if (request.dimension_ids.size() != request.transfer.dimensions.size())
+            reject("group dimension identity map must exactly cover its member");
+        for (const auto& [original, id] : request.dimension_ids) { (void)original; add(id); }
+    }
+    reserve_identities(destination, passive, fresh, imported_material_catalogs);
+    ApplyEntityChanges result{expected_revision, {}, {}, requests.size() == 1 ? "Clone corner window" : "Clone corner windows"};
+    for (const auto& request : requests) {
+        auto member = clone_command(destination, request.transfer, request.owner_id, request.opening_ids,
+            request.wall_ids, request.at_start, expected_revision, request.dimension_ids, false);
+        if (member.entity_changes.size() > 4096 - result.entity_changes.size()) reject("group change limit exceeded");
+        for (auto& change : member.entity_changes) result.entity_changes.push_back(std::move(change));
+    }
+    for (const auto& catalog : imported_material_catalogs) result.entity_changes.push_back(EntityChange::upsert(catalog));
+    return result;
 }
 } // namespace sketch

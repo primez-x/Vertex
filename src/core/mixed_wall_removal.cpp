@@ -2,8 +2,13 @@
 
 #include "sketch/assembly_document_adapter.hpp"
 #include "sketch/constraint_phase_scope.hpp"
+#include "sketch/corner_window.hpp"
+#include "sketch/document_wall.hpp"
 #include "sketch/phase_constraint_authoring.hpp"
+#include "sketch/phase_hosted_opening_edit.hpp"
+#include "sketch/phase_wall_profile_capture.hpp"
 #include "sketch/project_organization.hpp"
+#include "sketch/site_frame.hpp"
 #include "sketch/stair_semantics.hpp"
 
 #include <Standard_Failure.hxx>
@@ -186,7 +191,8 @@ void source_bound(const Entities& actual, Budget& budget) {
 // joins, all embedded rows and independent roots. No native building codec,
 // shortened source, manufactured admission map or per-lane budget reset occurs.
 // Counting unselected geometry trades capacity for an auditable pre-factory bound.
-void analytical_work(const Entities& actual, Budget& budget,bool include_manufactured_opening_hosts=false) {
+void analytical_work(const Entities& actual, Budget& budget,bool include_manufactured_opening_hosts=false,
+    bool complete_corner_catalog_hosts=false) {
     std::map<std::string, std::size_t, std::less<>> opening_counts, costs;
     for (const auto& [id, entity] : actual) {
         (void)id;
@@ -250,6 +256,9 @@ void analytical_work(const Entities& actual, Budget& budget,bool include_manufac
     }
     if (include_manufactured_opening_hosts) for (const auto& [id, entity] : actual) {
         if (entity.type!="opening") continue;
+        // A managed corner leg is only a void. Its owner alone supplies the
+        // manufactured body in the explicit completion lane.
+        if (complete_corner_catalog_hosts && entity.properties.contains("corner_window_id")) continue;
         const auto host=entity.properties.find("wall_id");
         if (host==entity.properties.end() || !host->is_string()) reject("opening lacks an actual wall identity");
         const auto wall=costs.find(host->get<std::string>());
@@ -261,6 +270,120 @@ void analytical_work(const Entities& actual, Budget& budget,bool include_manufac
         const auto cost=33*(1+wall->second);
         costs.emplace(id,cost);
     }
+    Ids inactive_corner_copy_owners;
+    if (complete_corner_catalog_hosts) {
+        // This aggregate validator, the profile codecs, document wall reader
+        // and placement resolvers below are analytical; none creates a solid.
+        validate_corner_window_state(actual);
+        const auto scope = constraint_phase_scope(actual);
+        const auto organization = organize_project(actual);
+        const auto context = [&](const Entity& entity) {
+            const auto& p = entity.properties;
+            const bool scoped = p.contains("property_id") || p.contains("building_id") ||
+                p.contains("floor_id") || p.contains("layer_id") || p.contains("level_id") || p.contains("wall_id");
+            const auto node = organization.nodes.find(entity.id);
+            if (scoped && (node == organization.nodes.end() || !node->second.issues.empty()))
+                reject("corner participant has unresolved actual drawing context: " + entity.id);
+        };
+        // Decode each reached material catalog once. Source JSON has already
+        // shared the enclosing inventory bound; catalog expansion below retains
+        // the original cumulative allowance across all rows and independent roots.
+        std::map<std::string, Ids, std::less<>> materials;
+        const auto material = [&](const std::string& catalog_id, const std::string& material_id) {
+            // Local material names follow the catalog codec, not the document
+            // owner identifier alphabet.
+            identity(catalog_id);
+            auto found = materials.find(catalog_id);
+            if (found == materials.end()) {
+                const auto catalog = actual.find(catalog_id);
+                if (catalog == actual.end() || catalog->second.type != "assembly_model")
+                    reject("corner material lacks an actual catalog: " + catalog_id);
+                const auto model = AssemblyModel::from_json(catalog->second.properties.at("model"));
+                Ids rows;
+                for (const auto& row : model.materials()) rows.insert(row.id);
+                found = materials.emplace(catalog_id, std::move(rows)).first;
+            }
+            if (!found->second.contains(material_id)) reject("corner material is absent from actual catalog: " + material_id);
+        };
+        const auto assignment = [&](const Entity& entity) {
+            const auto value = entity.properties.find("material_assignment");
+            if (value == entity.properties.end()) return;
+            if (!value->is_object() || !value->contains("version") || !value->at("version").is_number_integer() ||
+                value->at("version") != 1 || !value->contains("catalog_id") || !value->at("catalog_id").is_string() ||
+                !value->contains("material_id") || !value->at("material_id").is_string())
+                reject("corner participant has an unsupported material assignment: " + entity.id);
+            material(value->at("catalog_id").get<std::string>(), value->at("material_id").get<std::string>());
+        };
+        std::map<std::string, std::vector<const Entity*>, std::less<>> active_openings;
+        Ids charged_pocket_hosts;
+        for (const auto& [id, entity] : actual) {
+            if (entity.type != "opening" || scope.inactive_owner_ids.contains(id)) continue;
+            const auto host = entity.properties.find("wall_id");
+            if (host != entity.properties.end() && host->is_string())
+                active_openings[host->get<std::string>()].push_back(&entity);
+        }
+        for (const auto& [id, entity] : actual) {
+            if (entity.type != "corner_window") continue;
+            if (scope.inactive_owner_ids.contains(id)) {
+                // Complete saved aggregates were admitted above. Their parked
+                // catalog rows remain stored but manufacture no active body,
+                // matching native presentation after baseline demolition.
+                inactive_corner_copy_owners.insert(id);
+                continue;
+            }
+            const auto owner = parse_corner_window(entity);
+            context(entity); assignment(entity);
+            const std::array<std::string, 3> site_ids{id, owner.wall_ids[0], owner.wall_ids[1]};
+            const auto sites = resolve_site_presentations(actual, site_ids);
+            const auto& site = sites.at(id);
+            std::array<Wall, 2> hosts;
+            std::size_t cost = 33; // Fixed frame/post/panes and source site transform.
+            for (std::size_t leg = 0; leg < hosts.size(); ++leg) {
+                const auto& wall = actual.at(owner.wall_ids[leg]);
+                const auto& child = actual.at(owner.opening_ids[leg]);
+                if (scope.inactive_owner_ids.contains(wall.id) || scope.inactive_owner_ids.contains(child.id))
+                    reject("corner catalog owner requires both actual active walls and cuts: " + id);
+                context(wall); context(child); assignment(wall); assignment(child);
+                const auto& placement = sites.at(wall.id);
+                if (placement.source_frame != site.source_frame ||
+                    placement.forward.translation_m.x != site.forward.translation_m.x ||
+                    placement.forward.translation_m.y != site.forward.translation_m.y ||
+                    placement.forward.translation_m.z != site.forward.translation_m.z ||
+                    placement.forward.rotation_radians != site.forward.rotation_radians)
+                    reject("corner catalog owner and hosts require one actual site frame: " + id);
+                validate_wall_profile_source_entity(wall);
+                const auto& siblings = active_openings[wall.id];
+                if (siblings.size() > 128) reject("corner host opening inventory exceeded: " + wall.id);
+                for (const auto* sibling : siblings) validate_hosted_opening_profile_entity(*sibling);
+                std::string error;
+                if (!read_document_wall(resolve_vertical_placement(actual, wall), siblings, hosts[leg], error))
+                    reject("corner actual wall codec refused " + wall.id + ": " + error);
+                const auto& host = hosts[leg];
+                if (host.layers.size() > 32 || host.pocket_recesses.size() > 256)
+                    reject("corner host layer/pocket inventory exceeded: " + wall.id);
+                validate_wall_semantics(host);
+                for (const auto& layer : host.layers) if (layer.material)
+                    material(layer.material->catalog_id, layer.material->material_id);
+                // The historical wall inventory reserves layered full cuts,
+                // but has no pocket term. Add the complete sibling rebuild
+                // supplement once per actual corner host, using the same
+                // multipass ledger rather than giving this lane a fresh limit.
+                if (charged_pocket_hosts.insert(wall.id).second)
+                    budget.product(native_passes * 32 * opening_counts[wall.id],
+                        (1 + host.layers.size()) * host.pocket_recesses.size());
+                // Complete host/cut/pocket work, two clearance builders and
+                // reconstruction for this corner's manufactured assembly.
+                cost += 66 * std::max<std::size_t>(1, host.layers.size()) *
+                    (1 + host.openings.size() + host.pocket_recesses.size());
+            }
+            const auto cuts = corner_window_cuts(owner, hosts);
+            for (std::size_t leg = 0; leg < cuts.size(); ++leg)
+                if (std::find(hosts[leg].openings.begin(), hosts[leg].openings.end(), cuts[leg]) == hosts[leg].openings.end())
+                    reject("corner catalog cut differs from its actual host: " + id);
+            budget.product(native_passes, cost);
+            costs.emplace(id, cost);
+        }
+    }
     AssemblyExpansionBudget expansion_budget;
     expansion_budget.max_nodes = 4096 / native_passes;
     expansion_budget.max_profile_segments = geometry_limit / native_passes;
@@ -270,6 +393,7 @@ void analytical_work(const Entities& actual, Budget& budget,bool include_manufac
         for (const auto& row : model.instances()) {
             const auto expansion = model.expand(row, expansion_budget);
             if (expansion.profiles.empty() && row.placement) {
+                if (inactive_corner_copy_owners.contains(row.placement->host_entity_id)) continue;
                 const auto found = costs.find(row.placement->host_entity_id);
                 if (found == costs.end()) reject("catalog placement lacks an actual supported host");
                 budget.product(native_passes, found->second);
@@ -355,9 +479,11 @@ bool needs_opening_hosted_lane(const Entities& actual, const MixedWallRemovalInt
 }
 } // namespace
 
-void validate_mixed_wall_removal_source_admission(const Entities& actual,bool include_manufactured_opening_hosts) {
+void validate_mixed_wall_removal_source_admission(const Entities& actual,bool include_manufactured_opening_hosts,
+    bool complete_corner_catalog_hosts) {
     try {
-        Budget budget; source_bound(actual, budget); analytical_work(actual, budget,include_manufactured_opening_hosts);
+        Budget budget; source_bound(actual, budget);
+        analytical_work(actual, budget,include_manufactured_opening_hosts,complete_corner_catalog_hosts);
     } catch (const Json::exception& error) {
         reject(std::string("malformed actual source admission: ") + error.what());
     }

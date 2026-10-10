@@ -440,6 +440,11 @@ std::optional<PreparedNativeGeometry> prepare_native_geometry(
         }
     }
 
+    // Legacy catalog copies use the physical host's local model coordinates.
+    // Retain the actual admitted two-wall body before its site presentation;
+    // copying the presented shape would apply the site's pose twice.
+    std::map<std::string, TopoDS_Shape, std::less<>> corner_host_shapes;
+    std::map<std::string, std::string, std::less<>> corner_host_content;
     for (const auto& [id, entity] : entities) {
         if (cancelled && cancelled()) return std::nullopt;
         if (inactive_owner_ids.contains(id)) continue;
@@ -507,14 +512,22 @@ std::optional<PreparedNativeGeometry> prepare_native_geometry(
                     if (color.isValid()) presentation_color = Quantity_Color(color.redF(), color.greenF(),
                                                                             color.blueF(), Quantity_TOC_sRGB);
                 }
-                const auto shape = place_native_shape(make_corner_window(hosts, cuts, corner.assembly), site_placement);
+                const auto local_shape = make_corner_window(hosts, cuts, corner.assembly);
+                if (local_shape.IsNull() || !BRepCheck_Analyzer(local_shape).IsValid())
+                    throw std::invalid_argument("corner window produced an invalid local native shape");
+                const auto shape = place_native_shape(local_shape, site_placement);
                 if (shape.IsNull() || !BRepCheck_Analyzer(shape).IsValid())
                     throw std::invalid_argument("corner window produced an invalid native shape");
                 if (cancelled && cancelled()) return std::nullopt;
                 mesh_shape(shape);
                 const bool visible = !visible_ids || visible_ids->contains(id);
+                // Include both resolved walls, active sibling cuts and their
+                // placement dependencies in every legacy copy's cache receipt.
+                // The owner envelope alone cannot identify this derived body.
+                corner_host_content.emplace(id, content);
                 solids.emplace(id, PreparedNativeSolid{std::move(content), shape, presentation_color,
                                 material_color, visible, {}, {}, site_placement});
+                corner_host_shapes.emplace(id, local_shape);
                 if (progress) progress(solids.size());
             } catch (const std::exception& error) {
                 append_unique(errors, "corner window '" + id + "': " + error.what());
@@ -1015,6 +1028,12 @@ std::optional<PreparedNativeGeometry> prepare_native_geometry(
             opening_host_shapes.emplace(host_id,shape);
             return shape;
         }
+        if (geometry_entity.type == "corner_window") {
+            const auto found = corner_host_shapes.find(host_id);
+            if (found == corner_host_shapes.end())
+                throw std::invalid_argument("corner assembly host has no admitted active two-wall body");
+            return found->second;
+        }
         if (can_recognize_building_entity_type(geometry_entity.type)) {
             return make_building_shape(decode_building_entity(geometry_entity), entities);
         }
@@ -1097,6 +1116,13 @@ std::optional<PreparedNativeGeometry> prepare_native_geometry(
                 content.push_back('\0');
                 append_entity_content(content, geometry_entity);
                 append_building_dependencies(content, snapshot, geometry_entity);
+                if (geometry_entity.type == "corner_window") {
+                    const auto receipt = corner_host_content.find(host->first);
+                    if (receipt == corner_host_content.end() || !corner_host_shapes.contains(host->first))
+                        throw std::invalid_argument("corner assembly host has no admitted geometry receipt");
+                    content.append(receipt->second);
+                    content.push_back('\0');
+                }
                 if (geometry_entity.type=="opening") {
                     const auto wall_id=geometry_entity.properties.at("wall_id").get<std::string>();
                     const auto resolved_wall=effective_geometry_entity(snapshot,entities.at(wall_id));

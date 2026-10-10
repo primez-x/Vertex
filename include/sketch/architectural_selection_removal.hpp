@@ -22,11 +22,14 @@ struct ArchitecturalSelectionRemovalIntent {
 // authoring can enable them without extending historical roof-only authority.
 // Complete placed consequences additionally admit qualified rows on a sole
 // active proposed opening without removing its active existing/proposed wall.
+// The separate corner opt-in supplies complete owner-hosted component admission
+// only for the explicit new corner selection producer; defaults stay unchanged.
 [[nodiscard]] RoofRemovalEntities replay_architectural_selection_removal(
     const RoofRemovalEntities& actual, const ArchitecturalSelectionRemovalIntent& intent,
     bool allow_manufactured_opening_hosts = false,
     bool complete_roof_hosted_catalog_consequences = false,
     bool complete_wall_hosted_catalog_consequences = false,
-    bool complete_placed_catalog_consequences = false);
+    bool complete_placed_catalog_consequences = false,
+    bool complete_corner_window_removal = false);
 
 } // namespace sketch

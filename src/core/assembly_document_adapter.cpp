@@ -119,8 +119,8 @@ std::vector<ArchitecturalMaterialReferenceSite> architectural_material_reference
     require(properties.is_object(), "architectural material source properties must be an object");
     std::vector<ArchitecturalMaterialReferenceSite> result;
     if (properties.contains("material_assignment")) {
-        static constexpr std::array<std::string_view, 11> roles{
-            "wall", "opening", "room", "room_boundary", "slab", "roof", "stair", "railing", "column", "beam", "roof_join"};
+        static constexpr std::array<std::string_view, 12> roles{
+            "wall", "opening", "room", "room_boundary", "slab", "roof", "stair", "railing", "column", "beam", "roof_join", "corner_window"};
         require(std::find(roles.begin(), roles.end(), source.type) != roles.end(),
             "material assignment requires an architectural object");
         const auto& assignment = properties.at("material_assignment");

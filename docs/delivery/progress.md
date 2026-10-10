@@ -14,6 +14,78 @@ changed source does not acquire runtime acceptance without later qualification.
 
 ## Current delivery state
 
+### October 10 corner-window group clipboard - source integration
+
+Corner-only Copy/Cut/Paste/Duplicate now captures the complete selected roster
+instead of requiring one owner. Clipboard version three carries closed old
+single-member packets and one deduplicated material pool. Shared source hosts
+require identical envelopes. Group validation bounds members, dimensions,
+passive bytes/values and aggregate changes; clone/import identities reserve
+against complete source and retained/undone destination history.
+
+Destination corner picks remain passive requests on one captured source.
+Accepted legs have labelled draft overlays; the final member composes every
+clone against that original source, augments once, admits the complete
+Document/native candidate, checks source/context/pending fences and publishes
+one command. Cancellation clears every request/import/reservation/overlay.
+Baseline Cut captures original content/materials before one coordinated Delete;
+clipboard publication follows successful deletion. Mixed-family selections
+refuse without subsetting and remain a required gap. The existing practical
+placement/copy checklist task now includes groups, intermediate cancellation,
+one-step Undo, shared walls/materials and alternative transport. All 500
+task/result pairs remain Not tested.
+
+No builds, tests/new tests, scripts, probes, native jobs, UI launches, packages
+or installations run. Source integration does not establish compilation,
+interaction, native geometry, history or performance acceptance. The installed
+candidate is unchanged; all ten production gates remain open.
+Independent read-only review found and corrected an imported-catalog identity
+reservation gap: member/import IDs now share one passive/history ledger, with
+an exception only for validated intentionally remapped typed catalog slots.
+Opaque strings/keys/material names stay reserved. The existing material-source
+decoder/remapper now admits corner-window owners through the same strict v1
+assignment contract. Independent review approves this bounded source batch.
+
+### October 10 corner-owner catalog copies - source integration
+
+The preceding coordinated corner-removal batch is committed and pushed as
+a8736097. The next source completes the actual corner-owner legacy catalog
+host-copy path. Removal admission derives both resolved wall hosts, exact
+managed cuts, materials and their common site presentation before manufacturing
+the corner body. Bare cut children cannot supply a manufactured host copy.
+Explicit row-only removal preserves exact owner/cut/host envelopes and their
+phase memberships; baseline demolition retains original catalog rows. Selecting
+a physically retired owner with its hosted row removes that row once, while
+unrelated selected components remain independent actual-source leaves.
+Source/candidate assembly and native work share the bounded allowance before
+factories, including analytical-only admission. Historical default-false
+architectural callers retain their authority.
+
+Native display caches the admitted local corner body before site presentation
+and supplies it to existing legacy copy placement. Its cache receipt includes
+both resolved hosts, active cuts and placement dependencies, preventing stale
+copy topology after host edits. Inactive or failed owners cannot supply a body.
+Source review also identified a missing corner cost in shared analytical
+preflight. New default-false source-budget/catalog-host opt-ins complete that
+admission. Version-two corner selection and mixed dialect six alone enable
+the wider producer; historical version one/dialect five keep their authority
+and old budget path. Reader181/extraction179 fence new retained/undone history.
+Compilation, actual copy display,
+site coordinates, deletion, history and performance remain unqualified. No
+builds, tests/new tests, scripts, probes, native jobs, UI launches, packages or
+installations run; the installed candidate is unchanged. Multi-corner clipboard
+is a separate active implementation assignment. Mixed clipboard/Properties/
+transforms, corner combinations with wall/opening producers and the full
+production qualification remain required. All ten production gates stay open.
+Independent read-only review approves the corrected actual-source admission,
+historical default paths, version pairing, all-history reader fence and native
+cache dependencies. Root reviewed the integrated APIs and current dispatch;
+`git diff --check` is clean, and the manual checklist still has 500 matching
+Not-tested results. Scoped commit/push/ref verification back up this source
+batch without runtime acceptance. Standalone corner-copy row Delete still needs
+current-controller routing: the admitted row-only kernel is currently reached
+only when a corner owner is selected in the same ordinary cohort.
+
 ### October 10 coordinated corner-window deletion - source integration
 
 The preceding redraw/baseline-wall dispatch is committed and pushed as

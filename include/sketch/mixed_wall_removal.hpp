@@ -17,8 +17,10 @@ using MixedWallRemovalEntities = std::map<std::string, Entity, std::less<>>;
 // Source-only analytical admission before native join/roof inspectors. This
 // neither invokes native factories nor grants any removal authority; replay
 // independently repeats admission against its full immutable source.
+// Explicit corner completion admits actual owner-hosted catalog copies while
+// managed corner cuts remain bare voids. Historical callers keep their limits.
 void validate_mixed_wall_removal_source_admission(const MixedWallRemovalEntities& actual,
-    bool include_manufactured_opening_hosts=false);
+    bool include_manufactured_opening_hosts=false, bool complete_corner_catalog_hosts=false);
 
 // Both sides must be selected. Every leaf sees the same complete actual map.
 // Attached openings follow their wall; independent opening/room/drawing roots

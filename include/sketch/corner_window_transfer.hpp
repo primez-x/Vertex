@@ -20,6 +20,31 @@ struct CornerWindowTransfer {
     std::vector<Entity> dimensions;
 };
 
+// A passive placement request. All members are derived from the same actual
+// destination snapshot; no intermediate clone acquires source authority.
+struct CornerWindowCloneRequest {
+    CornerWindowTransfer transfer;
+    std::string owner_id;
+    std::array<std::string, 2> opening_ids;
+    std::array<std::string, 2> wall_ids;
+    std::array<bool, 2> at_start;
+    std::map<std::string, std::string, std::less<>> dimension_ids;
+};
+
+// 1..128 members, at most 2048 dimensions, 4 MiB encoded passive envelopes,
+// 100000 JSON values, and 4096 raw changes. Shared hosts require exact envelopes;
+// owners, cuts and dimensions never share identities across members.
+void validate_corner_window_transfer_group(const std::vector<CornerWindowTransfer>& transfers,
+    const std::vector<Entity>& material_catalogs = {});
+
+// Returns one complete raw command, including optional fresh material-only
+// catalog rows. All imported and member identities are reserved together in
+// retained/undone history. Caller owns catalog/phase membership augmentation,
+// complete Document/native geometry preview and the final source fence.
+[[nodiscard]] ApplyEntityChanges corner_window_group_clone_command(
+    const DocumentSnapshot& destination, const std::vector<CornerWindowCloneRequest>& requests,
+    Revision expected_revision, const std::vector<Entity>& imported_material_catalogs = {});
+
 // Checks bounded portable envelopes, reciprocal ownership, raw placement,
 // structural geometry, supported quantity cores and canonical-reference
 // portability before clipboard arming or source deletion. Unchanged future or

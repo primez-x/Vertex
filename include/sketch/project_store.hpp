@@ -263,7 +263,8 @@ public:
     // with explicit source roots, including mixed and undone history.
     // v180 adds explicit coordinated corner removal/demolition to mixed
     // selection, retaining actual owners and complete staged history.
-    static constexpr std::uint32_t format_version = 180;
+    // v181 fences version-two corner catalog-host admission in mixed dialect six.
+    static constexpr std::uint32_t format_version = 181;
     static constexpr std::uint32_t recovery_format_version = 4;
     [[nodiscard]] static std::uint32_t required_format_version(const DocumentSnapshot& snapshot);
     static constexpr std::uint64_t maximum_file_bytes = 4ULL * 1024ULL * 1024ULL * 1024ULL;

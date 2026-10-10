@@ -31474,18 +31474,46 @@ public:
             if (!decoded.supported() || decoded.dimension->kind!=BoundaryDimensionKind::corner_window_leg_length)
                 throw std::invalid_argument("The corner window has an unsupported attached dimension. Resolve it before copying.");
             (void)resolve_current_boundary_dimension(*decoded.dimension,source);
+            if (transfer.dimensions.size() == 2048)
+                throw std::invalid_argument("The corner window exceeds the portable dimension limit.");
             transfer.dimensions.push_back(entity);
         }
         validate_corner_window_transfer(transfer);
         return transfer;
     }
 
-    std::vector<Entity> cornerWindowMaterialCatalogs(const DocumentSnapshot& source,
-        const CornerWindowTransfer& transfer) const {
+    bool hasCornerWindowSelection() const {
+        const auto source = authoringSnapshot();
+        return std::any_of(m_selected_ids.begin(), m_selected_ids.end(), [&](const auto& id) {
+            const auto found = source.entities().find(id.toStdString());
+            return found != source.entities().end() && found->second.type == "corner_window";
+        });
+    }
+
+    std::vector<CornerWindowTransfer> cornerWindowSelectionTransfers(const DocumentSnapshot& source) const {
+        if (m_selected_ids.isEmpty() || m_selected_ids.size() > 128 || !m_selected_roof_openings.empty())
+            throw std::invalid_argument("Choose a bounded selection containing only corner windows.");
+        // Admit the complete roster before collecting any portable subset.
+        for (const auto& id : m_selected_ids) {
+            const auto found = source.entities().find(id.toStdString());
+            if (found == source.entities().end() || found->second.type != "corner_window")
+                throw std::invalid_argument("Clipboard transfer for the complete mixed corner-window and other-object selection is not yet available.");
+        }
+        std::vector<CornerWindowTransfer> result;
+        for (const auto& id : m_selected_ids) result.push_back(cornerWindowTransfer(source, source.entities().at(id.toStdString())));
+        validate_corner_window_transfer_group(result);
+        return result;
+    }
+
+    std::vector<Entity> cornerWindowGroupMaterialCatalogs(const DocumentSnapshot& source,
+        const std::vector<CornerWindowTransfer>& transfers) const {
         std::map<std::string, std::set<std::string>, std::less<>> needed;
-        for (const auto* entity : {&transfer.owner, &transfer.cuts[0], &transfer.cuts[1]})
-            for (const auto& reference : architectural_material_source_refs(*entity))
-                needed[reference.catalog_id].insert(reference.material_id);
+        for (const auto& transfer : transfers)
+            for (const auto* entity : {&transfer.owner, &transfer.cuts[0], &transfer.cuts[1]})
+                for (const auto& reference : architectural_material_source_refs(*entity))
+                    needed[reference.catalog_id].insert(reference.material_id);
+        if (needed.size() > kMaximumClipboardEntities)
+            throw std::invalid_argument("The corner-window group exceeds the material catalog limit.");
         std::vector<Entity> result;
         for (const auto& [id, ids] : needed) {
             const auto& original = source.entities().at(id);
@@ -31500,27 +31528,65 @@ public:
         return result;
     }
 
-    bool copyCornerWindowSelection(bool cut) {
-        const auto source = authoringSnapshot();
-        const auto authority = captureSourceEditAuthority(source);
-        if (m_selected_ids.size() != 1) throw std::invalid_argument("Select one corner window to copy.");
-        const auto transfer = cornerWindowTransfer(source, source.entities().at(m_selected_id.toStdString()));
+    static json cornerWindowClipboardMember(const CornerWindowTransfer& transfer, const std::vector<Entity>& catalogs = {}) {
         json payload{{"format", std::string(kCornerWindowClipboardFormat)}, {"version", transfer.dimensions.empty() ? 1 : 2},
             {"owner", clipboard_entity_json(transfer.owner)}, {"walls", json::array()},
             {"cuts", json::array()}, {"catalogs", json::array()}};
         for (const auto& wall : transfer.walls) payload["walls"].push_back(clipboard_entity_json(wall));
         for (const auto& opening : transfer.cuts) payload["cuts"].push_back(clipboard_entity_json(opening));
         if (!transfer.dimensions.empty()) {
-            payload["dimensions"]=json::array();
-            for (const auto& dimension:transfer.dimensions) payload["dimensions"].push_back(clipboard_entity_json(dimension));
+            payload["dimensions"] = json::array();
+            for (const auto& dimension : transfer.dimensions) payload["dimensions"].push_back(clipboard_entity_json(dimension));
         }
-        for (const auto& catalog : cornerWindowMaterialCatalogs(source, transfer)) payload["catalogs"].push_back(clipboard_entity_json(catalog));
+        for (const auto& catalog : catalogs) payload["catalogs"].push_back(clipboard_entity_json(catalog));
+        return payload;
+    }
+
+    static CornerWindowTransfer cornerWindowClipboardTransfer(const json& payload) {
+        const bool dimensional = payload.value("version", 0) == 2;
+        if (!payload.is_object() || payload.size() != (dimensional ? 7 : 6) ||
+            payload.value("format", "") != kCornerWindowClipboardFormat || !payload.contains("version") ||
+            !payload.at("version").is_number_integer() || (!dimensional && payload.at("version") != 1) ||
+            !payload.contains("owner") || !payload.contains("walls") || !payload.at("walls").is_array() || payload.at("walls").size() != 2 ||
+            !payload.contains("cuts") || !payload.at("cuts").is_array() || payload.at("cuts").size() != 2 ||
+            !payload.contains("catalogs") || !payload.at("catalogs").is_array() || payload.at("catalogs").size() > kMaximumClipboardEntities ||
+            (dimensional && (!payload.contains("dimensions") || !payload.at("dimensions").is_array() ||
+                payload.at("dimensions").empty() || payload.at("dimensions").size() > 2048)))
+            throw std::invalid_argument("Clipboard corner window has an unsupported contract.");
+        CornerWindowTransfer result{clipboard_entity_from_json(payload.at("owner"), true),
+            {clipboard_entity_from_json(payload.at("walls")[0], true), clipboard_entity_from_json(payload.at("walls")[1], true)},
+            {clipboard_entity_from_json(payload.at("cuts")[0], true), clipboard_entity_from_json(payload.at("cuts")[1], true)}};
+        if (dimensional) for (const auto& row : payload.at("dimensions")) result.dimensions.push_back(clipboard_entity_from_json(row, true));
+        validate_corner_window_transfer(result);
+        return result;
+    }
+
+    bool copyCornerWindowSelection(bool cut) {
+        const auto source = authoringSnapshot();
+        const auto authority = captureSourceEditAuthority(source);
+        const auto transfers = cornerWindowSelectionTransfers(source);
+        const auto catalogs = cornerWindowGroupMaterialCatalogs(source, transfers);
+        validate_corner_window_transfer_group(transfers, catalogs);
+        json payload;
+        if (transfers.size() == 1) payload = cornerWindowClipboardMember(transfers.front(), catalogs);
+        else {
+            payload = {{"format", std::string(kCornerWindowClipboardFormat)}, {"version", 3}, {"members", json::array()}, {"catalogs", json::array()}};
+            for (const auto& transfer : transfers) payload["members"].push_back(cornerWindowClipboardMember(transfer));
+            for (const auto& catalog : catalogs) payload["catalogs"].push_back(clipboard_entity_json(catalog));
+        }
         const auto encoded = payload.dump();
         if (encoded.size() > kMaximumClipboardBytes) throw std::invalid_argument("The corner-window clipboard exceeds the local size limit.");
         auto* clipboard = QGuiApplication::clipboard();
         if (!clipboard) throw std::runtime_error("The system clipboard is unavailable.");
         if (!sourceEditAuthorityCurrent(authority)) throw std::invalid_argument("The selected corner window changed before copying.");
-        if (cut && !deleteSelection()) return false;
+        if (cut) {
+            if (!deleteSelection()) return false;
+            const auto after = authoringSnapshot();
+            if (authority.context.document != m_document || after.revision() != source.revision() + 1 ||
+                after.history().at(source.revision()).entities != source.entities() ||
+                after.history().at(source.revision()).assets != source.assets())
+                throw std::invalid_argument("The cut source changed before clipboard publication.");
+        }
         clipboard->setText(QString::fromUtf8(encoded.data(), static_cast<int>(encoded.size())), QClipboard::Clipboard);
         clearError();
         return true;
@@ -31529,44 +31595,106 @@ public:
     void duplicateCornerWindowSelection() {
         try {
             const auto source = authoringSnapshot();
-            if (m_selected_ids.size() != 1) throw std::invalid_argument("Select one corner window to duplicate.");
-            auto transfer = cornerWindowTransfer(source, source.entities().at(m_selected_id.toStdString()));
-            auto catalogs = cornerWindowMaterialCatalogs(source, transfer);
-            (void)beginCornerWindowClone(std::move(transfer), std::move(catalogs));
+            const auto authority = captureSourceEditAuthority(source);
+            auto transfers = cornerWindowSelectionTransfers(source);
+            auto catalogs = cornerWindowGroupMaterialCatalogs(source, transfers);
+            if (!sourceEditAuthorityCurrent(authority))
+                throw std::invalid_argument("The selected corner-window group changed before duplication.");
+            (void)beginCornerWindowGroupClone(std::move(transfers), std::move(catalogs));
         } catch (const std::exception& error) {
             setError(QStringLiteral("Duplicate corner window: %1").arg(QString::fromUtf8(error.what())));
         }
     }
 
     bool beginCornerWindowClone(CornerWindowTransfer transfer, std::vector<Entity> catalogs) {
-        validate_corner_window_transfer(transfer);
+        return beginCornerWindowGroupClone({std::move(transfer)}, std::move(catalogs));
+    }
+
+    bool beginCornerWindowGroupClone(std::vector<CornerWindowTransfer> transfers, std::vector<Entity> catalogs) {
+        validate_corner_window_transfer_group(transfers, catalogs);
+        if (!m_pending_corner_window_group.empty()) clearPreview(false);
         if (hasPendingPlacementEdit() || m_text_placement_context || m_plan_label_context || m_armed_area_class)
             throw std::invalid_argument("Finish or cancel the current drawing before placing a copied corner window.");
         const auto source = authoringSnapshot();
         const auto authority = captureSourceEditAuthority(source);
+        if (catalogs.size() > kMaximumClipboardEntities) throw std::invalid_argument("Corner-window material catalog limit exceeded.");
         std::set<std::string, std::less<>> used, supplied;
-        for (const auto* entity : {&transfer.owner, &transfer.cuts[0], &transfer.cuts[1]})
-            for (const auto& reference : architectural_material_source_refs(*entity)) used.insert(reference.catalog_id);
+        std::map<std::string, std::set<std::string>, std::less<>> needed;
+        for (const auto& transfer : transfers)
+            for (const auto* entity : {&transfer.owner, &transfer.cuts[0], &transfer.cuts[1]})
+                for (const auto& reference : architectural_material_source_refs(*entity)) {
+                    used.insert(reference.catalog_id); needed[reference.catalog_id].insert(reference.material_id);
+                }
+        auto occupied = retainedSlabIdentityNames(source, true);
+        std::size_t passive_nodes = 0, passive_bytes = 0, encoded_bytes = 0;
+        const auto reserve_passive = [&](const Entity& entity) {
+            occupied.insert(entity.id); occupied.insert(entity.type);
+            const auto reserve = [&](const json& root) {
+                std::vector<std::pair<const json*, std::size_t>> pending{{&root, 0}};
+                while (!pending.empty()) {
+                    const auto [value, depth] = pending.back(); pending.pop_back();
+                    if (++passive_nodes > 100000 || depth > 64 || value->is_binary() || value->is_discarded() ||
+                        (value->is_number_float() && !std::isfinite(value->get<double>())))
+                        throw std::invalid_argument("The copied corner-window group exceeds its passive JSON work limit.");
+                    const auto retain = [&](const std::string& text) {
+                        if (text.size() > kMaximumClipboardBytes - passive_bytes)
+                            throw std::invalid_argument("The copied corner-window group exceeds its passive byte limit.");
+                        passive_bytes += text.size(); occupied.insert(text);
+                    };
+                    if (value->is_string()) retain(value->get_ref<const std::string&>());
+                    else if (value->is_object()) for (const auto& [key, child] : value->items()) {
+                        if (key.size() > 128) throw std::invalid_argument("A copied corner-window field exceeds the key limit.");
+                        retain(key); pending.push_back({&child, depth + 1});
+                    } else if (value->is_array()) for (const auto& child : *value) pending.push_back({&child, depth + 1});
+                }
+            };
+            reserve(entity.properties); reserve(entity.extensions);
+            const auto bytes = clipboard_entity_json(entity).dump().size();
+            if (bytes > kMaximumClipboardBytes - encoded_bytes)
+                throw std::invalid_argument("The copied corner-window group exceeds its aggregate encoded byte limit.");
+            encoded_bytes += bytes;
+        };
+        for (const auto& transfer : transfers) {
+            reserve_passive(transfer.owner);
+            for (const auto& wall : transfer.walls) reserve_passive(wall);
+            for (const auto& cut : transfer.cuts) reserve_passive(cut);
+            for (const auto& dimension : transfer.dimensions) reserve_passive(dimension);
+        }
+        for (const auto& catalog : catalogs) reserve_passive(catalog);
+        std::map<std::string, const Entity*, std::less<>> pooled_catalogs;
+        for (const auto& catalog : catalogs) {
+            const auto [found, inserted] = pooled_catalogs.emplace(catalog.id, &catalog);
+            if (!inserted && (*found->second != catalog || found->second->properties.dump() != catalog.properties.dump() ||
+                found->second->extensions.dump() != catalog.extensions.dump()))
+                throw std::invalid_argument("The copied corner-window group contains conflicting material catalog definitions.");
+        }
         std::map<std::string, std::string, std::less<>> remap;
         std::vector<Entity> imports;
-        for (auto catalog : catalogs) {
+        for (const auto& [pooled_id, original] : pooled_catalogs) {
+            (void)pooled_id;
+            auto catalog = *original;
             if (catalog.type != "assembly_model" || !supplied.insert(catalog.id).second || !used.contains(catalog.id))
                 throw std::invalid_argument("The copied corner window has an invalid material catalog set.");
             const auto model = AssemblyModel::from_json(catalog.properties.at("model"));
             if (!model.types().empty() || !model.instances().empty())
                 throw std::invalid_argument("Corner-window transfers carry material definitions, not assembly instances.");
+            for (const auto& id : needed.at(catalog.id))
+                if (std::none_of(model.materials().begin(), model.materials().end(), [&](const auto& material) { return material.id == id; }))
+                    throw std::invalid_argument("The copied corner-window group has a missing material definition.");
             const auto existing = source.entities().find(catalog.id);
             if (existing != source.entities().end() && existing->second == catalog &&
                 existing->second.properties.dump() == catalog.properties.dump() && existing->second.extensions.dump() == catalog.extensions.dump()) {
                 remap.emplace(catalog.id, catalog.id); continue;
             }
             const auto original_id = catalog.id;
-            do { catalog.id = new_id("assembly-materials"); } while (source.entities().contains(catalog.id));
+            do { catalog.id = new_id("assembly-materials"); } while (!occupied.insert(catalog.id).second);
             remap.emplace(original_id, catalog.id); imports.push_back(std::move(catalog));
         }
         if (used != supplied) throw std::invalid_argument("The copied corner window is missing material definitions.");
-        transfer.owner = remap_architectural_material_source_refs(transfer.owner, remap);
-        for (auto& child : transfer.cuts) child = remap_architectural_material_source_refs(child, remap);
+        for (auto& transfer : transfers) {
+            transfer.owner = remap_architectural_material_source_refs(transfer.owner, remap);
+            for (auto& child : transfer.cuts) child = remap_architectural_material_source_refs(child, remap);
+        }
         if (!sourceEditAuthorityCurrent(authority)) throw std::invalid_argument("The destination changed while preparing the copied corner window.");
         const auto& catalog = desktop_placeable_symbol_catalog();
         const auto definition = std::find_if(catalog.begin(), catalog.end(), [](const auto& entry) {
@@ -31575,9 +31703,19 @@ public:
         if (definition == catalog.end()) throw std::invalid_argument("The corner-window library entry is unavailable.");
         setTool(CanvasTool::wall);
         if (m_tool != CanvasTool::wall || !selectEntity({}, false) || !prepareHostedOpening(*definition)) return false;
-        const auto value = parse_corner_window(transfer.owner);
-        m_pending_corner_window_clone = std::move(transfer);
+        m_pending_corner_window_group = std::move(transfers);
+        m_pending_corner_window_placements.clear();
+        m_pending_corner_window_reserved = std::move(occupied);
+        m_pending_corner_window_clone = m_pending_corner_window_group.front();
         m_pending_corner_window_catalogs = std::move(imports);
+        configurePendingCornerWindowMember();
+        resetOpeningPlacementHover();
+        clearError();
+        return true;
+    }
+
+    void configurePendingCornerWindowMember() {
+        const auto value = parse_corner_window(m_pending_corner_window_clone->owner);
         m_pending_opening_profile = value.assembly;
         m_opening_draw_width->setText(QString::fromStdString(json(value.widths[0]).dump()) + QStringLiteral(" m"));
         m_corner_draw_second_width->setText(QString::fromStdString(json(value.widths[1]).dump()) + QStringLiteral(" m"));
@@ -31585,16 +31723,13 @@ public:
         m_opening_draw_height->setText(QString::fromStdString(json(value.height).dump()) + QStringLiteral(" m"));
         for (auto* field : {m_opening_draw_width, m_corner_draw_second_width, m_opening_draw_sill, m_opening_draw_height}) field->setReadOnly(true);
         m_opening_style->setEnabled(false);
-        resetOpeningPlacementHover();
-        clearError();
-        return true;
     }
 
     bool copySelection() {
         try {
             if (rejectMixedSelectionCommand(QStringLiteral("Copy"))) return false;
             if (!m_selected_roof_openings.empty()) return copyRoofOpeningSelection(false);
-            if (const auto selected = selectedEntity(); m_selected_ids.size() == 1 && selected && selected->type == "corner_window")
+            if (hasCornerWindowSelection())
                 return copyCornerWindowSelection(false);
             const auto encoded = clipboardSelectionPayload(authoringSnapshot());
             auto* clipboard = QGuiApplication::clipboard();
@@ -33734,7 +33869,7 @@ public:
         try {
             if (rejectMixedSelectionCommand(QStringLiteral("Cut"))) return false;
             if (!m_selected_roof_openings.empty()) return copyRoofOpeningSelection(true);
-            if (const auto selected = selectedEntity(); m_selected_ids.size() == 1 && selected && selected->type == "corner_window")
+            if (hasCornerWindowSelection())
                 return copyCornerWindowSelection(true);
             const auto source = authoringSnapshot();
             if (!source.is_editable()) throw std::invalid_argument("This document is read-only.");
@@ -33970,21 +34105,30 @@ public:
             }
             const auto payload = json::parse(encoded.constData(), encoded.constData() + encoded.size());
             if (payload.is_object() && payload.value("format", "") == kCornerWindowClipboardFormat) {
-                const bool dimensional=payload.value("version",0)==2;
-                if (payload.size() != (dimensional ? 7 : 6) || !payload.contains("version") ||
-                    !payload.at("version").is_number_integer() || (!dimensional && payload.at("version")!=1) || !payload.contains("owner") ||
-                    !payload.contains("walls") || !payload.at("walls").is_array() || payload.at("walls").size() != 2 ||
-                    !payload.contains("cuts") || !payload.at("cuts").is_array() || payload.at("cuts").size() != 2 ||
-                    !payload.contains("catalogs") || !payload.at("catalogs").is_array() || payload.at("catalogs").size() > kMaximumClipboardEntities)
-                    throw std::invalid_argument("Clipboard corner window has an unsupported contract.");
-                if (dimensional && (!payload.contains("dimensions") || !payload.at("dimensions").is_array() ||
-                    payload.at("dimensions").empty() || payload.at("dimensions").size()>2048))
-                    throw std::invalid_argument("Clipboard corner dimensions have an unsupported contract.");
-                CornerWindowTransfer transfer{clipboard_entity_from_json(payload.at("owner"), true),
-                    {clipboard_entity_from_json(payload.at("walls")[0], true), clipboard_entity_from_json(payload.at("walls")[1], true)},
-                    {clipboard_entity_from_json(payload.at("cuts")[0], true), clipboard_entity_from_json(payload.at("cuts")[1], true)}};
-                if (dimensional) for (const auto& row:payload.at("dimensions"))
-                    transfer.dimensions.push_back(clipboard_entity_from_json(row,true));
+                if (payload.value("version", 0) == 3) {
+                    if (payload.size() != 4 || !payload.at("version").is_number_integer() ||
+                        !payload.contains("members") || !payload.at("members").is_array() ||
+                        payload.at("members").size() < 2 || payload.at("members").size() > 128 ||
+                        !payload.contains("catalogs") || !payload.at("catalogs").is_array() || payload.at("catalogs").size() > 128)
+                        throw std::invalid_argument("Clipboard corner-window group has an unsupported contract.");
+                    std::size_t dimensions = 0;
+                    for (const auto& member : payload.at("members")) {
+                        if (!member.is_object() || !member.contains("catalogs") || !member.at("catalogs").is_array() ||
+                            !member.at("catalogs").empty())
+                            throw std::invalid_argument("Corner-window group members must use the shared material pool.");
+                        if (member.contains("dimensions")) {
+                            if (!member.at("dimensions").is_array() || member.at("dimensions").size() > 2048 - dimensions)
+                                throw std::invalid_argument("Clipboard corner-window group exceeds the dimension limit.");
+                            dimensions += member.at("dimensions").size();
+                        }
+                    }
+                    std::vector<CornerWindowTransfer> transfers;
+                    for (const auto& member : payload.at("members")) transfers.push_back(cornerWindowClipboardTransfer(member));
+                    std::vector<Entity> catalogs;
+                    for (const auto& entry : payload.at("catalogs")) catalogs.push_back(clipboard_entity_from_json(entry));
+                    return beginCornerWindowGroupClone(std::move(transfers), std::move(catalogs));
+                }
+                auto transfer = cornerWindowClipboardTransfer(payload);
                 std::vector<Entity> catalogs;
                 for (const auto& entry : payload.at("catalogs")) catalogs.push_back(clipboard_entity_from_json(entry));
                 return beginCornerWindowClone(std::move(transfer), std::move(catalogs));
@@ -34351,6 +34495,7 @@ public:
                 // partitioning. Corner cuts, child hosts and derived cleanup do
                 // not manufacture additional selection authority.
                 CornerSelectionRemovalIntent intent;
+                intent.complete_corner_catalog_hosts=true;
                 intent.other=captureExplicitSelectionRemoval(source,authority.ordinary_selection);
                 std::vector<std::string> other_ids;
                 for (const auto& id:intent.other.architectural.object_ids) {
@@ -42880,11 +43025,43 @@ public:
         const bool corner = m_pending_opening_kind == QStringLiteral("corner_window");
         preview.instruction = corner ? QStringLiteral("Move to a corner between two visible walls") :
             QStringLiteral("Move onto a wall to place the %1").arg(m_pending_opening_kind);
+        decorateCornerWindowGroupPreview(preview);
         m_measurementCanvas->setBoundaryDraftPreview(preview);
         m_architecturalCanvas->setBoundaryDraftPreview(preview);
         m_architecture_hint->setText((corner ? QStringLiteral("%1 • click where two walls meet. Esc cancels.") :
             QStringLiteral("%1 • click an existing wall to place. Esc cancels."))
             .arg(m_opening_style->currentText()));
+        if (!m_pending_corner_window_group.empty()) m_architecture_hint->setText(preview.instruction);
+    }
+
+    void clearPendingCornerWindowClone() {
+        m_pending_corner_window_clone.reset();
+        m_pending_corner_window_catalogs.clear();
+        m_pending_corner_window_group.clear();
+        m_pending_corner_window_placements.clear();
+        m_pending_corner_window_reserved.clear();
+        m_pending_corner_window_previous = {};
+    }
+
+    void decorateCornerWindowGroupPreview(BoundaryDraftPreview& preview) const {
+        if (m_pending_corner_window_group.size() < 2 || !m_pending_corner_window_clone) return;
+        preview.segments.insert(preview.segments.end(), m_pending_corner_window_previous.segments.begin(),
+            m_pending_corner_window_previous.segments.end());
+        preview.labels.insert(preview.labels.end(), m_pending_corner_window_previous.labels.begin(),
+            m_pending_corner_window_previous.labels.end());
+        const auto name = read_string(m_pending_corner_window_clone->owner.properties, "name").value_or("Corner window");
+        preview.instruction = QStringLiteral("%1 of %2: %3 • %4 placements pending • %5. Right-click or Esc cancels the whole group.")
+            .arg(m_pending_corner_window_placements.size() + 1).arg(m_pending_corner_window_group.size())
+            .arg(QString::fromStdString(name)).arg(m_pending_corner_window_placements.size()).arg(preview.instruction);
+    }
+
+    json cornerWindowGroupPlacementConfiguration() const {
+        json result = json::array();
+        for (const auto& placement : m_pending_corner_window_placements)
+            result.push_back({{"source_owner", placement.transfer.owner.id}, {"owner", placement.owner_id},
+                {"cuts", placement.opening_ids}, {"hosts", placement.wall_ids},
+                {"at_start", placement.at_start}, {"dimensions", placement.dimension_ids}});
+        return result;
     }
 
     QString createAnnotationLabel(const QString& template_id,const QString& content,Vec2 position) {
@@ -42992,6 +43169,7 @@ public:
     void clearPlanOpeningPlacement() {
         cancelOpeningPlacementPreview();
         cancelRoofOpeningCanvasPreview();
+        clearPendingCornerWindowClone();
         m_pending_roof_opening_clone.reset();
         m_pending_roof_opening_clone_row.reset();
         m_pending_roof_opening_clone_digest.clear();
@@ -43094,8 +43272,7 @@ public:
             return false;
         }
         if (!captureOpeningPlacement()) return false;
-        m_pending_corner_window_clone.reset();
-        m_pending_corner_window_catalogs.clear();
+        clearPendingCornerWindowClone();
         for (auto* field : {m_opening_draw_width, m_corner_draw_second_width, m_opening_draw_height, m_opening_draw_sill})
             field->setReadOnly(false);
         m_pending_roof_opening_clone.reset();
@@ -43666,6 +43843,8 @@ public:
             {"width",m_opening_draw_width->text().toStdString()},
             {"corner_second_width",m_corner_draw_second_width->text().toStdString()},
             {"corner_clone",m_pending_corner_window_clone ? m_pending_corner_window_clone->owner.id : std::string{}},
+            {"corner_group_count",m_pending_corner_window_group.size()},
+            {"corner_group_placements",cornerWindowGroupPlacementConfiguration()},
             {"height",m_opening_draw_height->text().toStdString()},
             {"sill",m_opening_draw_sill->text().toStdString()},
             {"bay_projection",m_opening_draw_bay_projection->text().toStdString()},
@@ -43763,6 +43942,8 @@ public:
             }
             if (!request.capture->canvas->completeComponentPlacementPreview(request.serial,std::move(geometry))) continue;
             BoundaryDraftPreview preview;preview.instruction=instruction;
+            decorateCornerWindowGroupPreview(preview);
+            instruction = preview.instruction;
             request.capture->canvas->setBoundaryDraftPreview(std::move(preview));
             m_architecture_hint->setText(instruction);
         }
@@ -43834,6 +44015,8 @@ public:
         const auto serial=canvas->beginComponentPlacementPreview();
         BoundaryDraftPreview preview;
         preview.instruction=QStringLiteral("Move onto a wall to place the %1").arg(m_pending_opening_kind);
+        decorateCornerWindowGroupPreview(preview);
+        if (!m_pending_corner_window_group.empty()) m_architecture_hint->setText(preview.instruction);
         canvas->setBoundaryDraftPreview(std::move(preview));
         PendingOpeningPlacementPreview request{m_opening_placement_capture,serial,point,
             std::make_shared<std::optional<CanvasEntity>>()};
@@ -54412,8 +54595,8 @@ private:
                     auto* properties = menu.addAction(QStringLiteral("Properties"));
                     QObject::connect(properties, &QAction::triggered, owner,
                                      guarded([this] { positionContextEditor(true); }));
-                    if (selected && selected->type == "corner_window" && m_selected_ids.size() == 1) {
-                        auto* duplicate = menu.addAction(QStringLiteral("Duplicate corner window"));
+                    if (hasCornerWindowSelection()) {
+                        auto* duplicate = menu.addAction(m_selected_ids.size() == 1 ? QStringLiteral("Duplicate corner window") : QStringLiteral("Duplicate corner windows"));
                         QObject::connect(duplicate, &QAction::triggered, owner, guarded([this] { duplicateCornerWindowSelection(); }));
                     }
                     if (auto* transform=add_command(m_transform_action))
@@ -54530,6 +54713,16 @@ private:
             // Source acquisition must precede selection reconciliation: a
             // replaced recovery head cannot prune selection from a stale base.
             const auto snapshot = authoringSnapshot();
+            if (!m_pending_corner_window_group.empty()) {
+                const auto authority = siteCanvas(m_workspace == Workspace::measurement ? m_measurementCanvas : m_architecturalCanvas)
+                    ? m_site_opening_authority : m_plan_opening_authority;
+                if (!authority || !sourceEditAuthorityCurrent(*authority)) {
+                    clearPreview(false);
+                    m_tool = CanvasTool::select;
+                    syncToolControls();
+                    owner->statusBar()->showMessage(QStringLiteral("Copied corner-window placement cancelled because its source or context changed."));
+                }
+            }
             if (m_output_sheet_document.lock() == m_document && !m_output_sheet_owner.isEmpty()) {
                 const auto found = snapshot.entities().find(m_output_sheet_owner.toStdString());
                 if (found == snapshot.entities().end() || found->second.type != kSheetViewEntityType) {
@@ -56857,7 +57050,7 @@ private:
                             ? ordinary_selection_removal_authority(decode_ordinary_selection_removal_intent(intent.at("ordinary")))
                             : intent.at("version")==4
                             ? phase_selection_removal_authority(decode_phase_selection_removal_intent(intent.at("ordinary")))
-                            : intent.at("version")==5
+                            : (intent.at("version")==5 || intent.at("version")==6)
                             ? corner_selection_removal_authority(decode_corner_selection_removal_intent(intent.at("ordinary")))
                             : decode_architectural_drawing_removal_intent(intent.at("ordinary"));
                         targets.insert(ordinary.architectural.object_ids.begin(),ordinary.architectural.object_ids.end());
@@ -64191,11 +64384,18 @@ private:
         auto* canvas = m_workspace == Workspace::measurement ? m_measurementCanvas : m_architecturalCanvas;
         try {
             const bool site = siteCanvas(canvas);
-            if (site) {
-                requireSitePublicationCurrent();
-                if (!m_site_opening_source || !m_site_opening_authority || !sourceEditAuthorityCurrent(*m_site_opening_authority))
-                    throw std::invalid_argument("The Site Plan source changed. Cancel and place the corner window again.");
-            } else requirePlanOpeningPlacementCurrent();
+            try {
+                if (site) {
+                    requireSitePublicationCurrent();
+                    if (!m_site_opening_source || !m_site_opening_authority || !sourceEditAuthorityCurrent(*m_site_opening_authority))
+                        throw std::invalid_argument("The Site Plan source changed. Cancel and place the corner window again.");
+                } else requirePlanOpeningPlacementCurrent();
+            } catch (...) {
+                clearPreview(false);
+                m_tool = CanvasTool::select;
+                syncToolControls();
+                throw;
+            }
             if (!commit) { previewOpeningPlacement(point); return; }
             cancelOpeningPlacementPreview();
             HostedLibraryDragInput input;
@@ -64222,22 +64422,60 @@ private:
             }
             const auto hosts = visibleCornerWindowHostsAt(input, point);
             if (!hosts) throw std::invalid_argument("Choose where exactly two visible straight walls meet on the active layer.");
-            const auto id = new_id("corner-window");
-            const std::array<std::string, 2> child_ids{new_id("opening"), new_id("opening")};
+            const auto allocate = [&](std::string_view prefix) {
+                auto id = new_id(prefix);
+                if (m_pending_corner_window_clone)
+                    while (!m_pending_corner_window_reserved.insert(id).second) id = new_id(prefix);
+                return id;
+            };
+            const auto id = allocate("corner-window");
+            const std::array<std::string, 2> child_ids{allocate("opening"), allocate("opening")};
             const auto value = cornerWindowPlacementValue(input, *hosts, id, child_ids);
             ApplyEntityChanges staged;
+            const auto configuration = openingPlacementConfiguration();
+            const auto captured_authority = site ? m_site_opening_authority : m_plan_opening_authority;
+            std::vector<std::string> selected_clones;
             if (m_pending_corner_window_clone) {
-                auto occupied=retainedSlabIdentityNames(*input.source);
-                occupied.insert(id); occupied.insert(child_ids.begin(),child_ids.end());
                 std::map<std::string,std::string,std::less<>> dimension_ids;
                 for (const auto& dimension:m_pending_corner_window_clone->dimensions) {
-                    auto fresh=new_id("dimension");
-                    while (!occupied.insert(fresh).second) fresh=new_id("dimension");
-                    dimension_ids.emplace(dimension.id,std::move(fresh));
+                    dimension_ids.emplace(dimension.id, allocate("dimension"));
                 }
-                staged = corner_window_clone_command(*input.source, *m_pending_corner_window_clone, id, child_ids,
-                    value.wall_ids, value.at_start, input.source->revision(),dimension_ids);
-                for (const auto& catalog : m_pending_corner_window_catalogs) staged.entity_changes.push_back(EntityChange::upsert(catalog));
+                CornerWindowCloneRequest request{*m_pending_corner_window_clone, id, child_ids,
+                    value.wall_ids, value.at_start, std::move(dimension_ids)};
+                // Structural checks use actual hosts without native construction
+                // or publication. All sibling/cohort geometry is admitted once
+                // against the complete last-click candidate below.
+                const auto cuts = corner_window_cuts(value, hosts->walls);
+                if (m_pending_corner_window_placements.size() + 1 < m_pending_corner_window_group.size()) {
+                    Boundary spans;
+                    for (std::size_t leg = 0; leg < 2; ++leg) {
+                        const auto& wall = hosts->walls[leg];
+                        const auto station = value.at_start[leg] ? cuts[leg].offset + cuts[leg].width : cuts[leg].offset;
+                        const auto endpoint = value.at_start[leg] ? wall.baseline.start : wall.baseline.end;
+                        spans.push_back({endpoint, point_at_host_station(wall.baseline, station), 0.0});
+                    }
+                    if (hosts->site_frame) {
+                        for (auto& span : spans) {
+                            span.start = site_presented_plan_point(span.start, *hosts->site_frame);
+                            span.end = site_presented_plan_point(span.end, *hosts->site_frame);
+                        }
+                    } else if (input.plan_frame) spans = project_plan_path(std::move(spans), *input.plan_frame);
+                    const auto label_position = spans.front().start;
+                    const auto name = read_string(request.transfer.owner.properties, "name").value_or("Corner window");
+                    for (const auto& span : spans) m_pending_corner_window_previous.segments.push_back(span);
+                    m_pending_corner_window_previous.labels.push_back({label_position,
+                        QStringLiteral("%1: %2 (pending)").arg(m_pending_corner_window_placements.size() + 1).arg(QString::fromStdString(name)), 0.0});
+                    m_pending_corner_window_placements.push_back(std::move(request));
+                    m_pending_corner_window_clone = m_pending_corner_window_group.at(m_pending_corner_window_placements.size());
+                    configurePendingCornerWindowMember();
+                    resetOpeningPlacementHover();
+                    clearError();
+                    return;
+                }
+                auto requests = m_pending_corner_window_placements;
+                requests.push_back(std::move(request));
+                for (const auto& placed : requests) selected_clones.push_back(placed.owner_id);
+                staged = corner_window_group_clone_command(*input.source, requests, input.source->revision(), m_pending_corner_window_catalogs);
             } else {
                 Entity entity{id, "corner_window", corner_window_properties(value), false, json::object()};
                 entity.properties["name"] = "Corner window";
@@ -64247,15 +64485,32 @@ private:
                 staged = corner_window_upsert_command(*input.source, entity, input.source->revision());
             }
             const auto command = augmentAuthoredCommand(Command{std::move(staged)}, *input.source);
+            if (const auto* changes = std::get_if<ApplyEntityChanges>(&command); changes && changes->entity_changes.size() > 4096)
+                throw std::invalid_argument("The complete corner-window group exceeds the command change limit.");
             const auto candidate = Document::preview_command(*input.source, command);
-            validate_architectural_geometry_changes(*input.source, candidate, {id});
-            if (site) {
-                requireSitePublicationCurrent();
-                if (!sourceEditAuthorityCurrent(*m_site_opening_authority)) throw std::invalid_argument("The corner-window source changed before placement.");
-            } else requirePlanOpeningPlacementCurrent();
+            if (m_pending_corner_window_group.size() > 1) validate_architectural_geometry_changes(*input.source, candidate);
+            else validate_architectural_geometry_changes(*input.source, candidate, {id});
+            try {
+                if (site) {
+                    requireSitePublicationCurrent();
+                    if (!m_site_opening_authority || !sourceEditAuthorityCurrent(*m_site_opening_authority))
+                        throw std::invalid_argument("The corner-window source changed before placement.");
+                } else requirePlanOpeningPlacementCurrent();
+                if (!captured_authority || !sourceEditAuthorityCurrent(*captured_authority) ||
+                    input.source != (site ? m_site_opening_source : m_plan_opening_source) ||
+                    configuration != openingPlacementConfiguration())
+                    throw std::invalid_argument("The pending corner-window group or accepted placements changed before publication.");
+            } catch (...) {
+                clearPreview(false);
+                m_tool = CanvasTool::select;
+                syncToolControls();
+                throw;
+            }
             if (!applyAuthoredCommand(command)) return;
             setTool(CanvasTool::select);
-            (void)selectEntity(id_from(id), false);
+            if (selected_clones.empty()) (void)selectEntity(id_from(alternativeReplacementTargetID(command, id)), false);
+            else for (std::size_t index = 0; index < selected_clones.size(); ++index)
+                (void)selectEntity(id_from(alternativeReplacementTargetID(command, selected_clones[index])), index != 0);
             clearError();
         } catch (const Standard_Failure& error) {
             setError(QStringLiteral("Corner window: %1").arg(QString::fromUtf8(error.GetMessageString())));
@@ -65651,8 +65906,7 @@ private:
         m_pending_opening_symbol_id.clear();
         m_pending_opening_door_operation.reset();
         m_pending_opening_profile.reset();
-        m_pending_corner_window_clone.reset();
-        m_pending_corner_window_catalogs.clear();
+        clearPendingCornerWindowClone();
         for (auto* field : {m_opening_draw_width, m_corner_draw_second_width, m_opening_draw_sill, m_opening_draw_height})
             if (field) field->setReadOnly(false);
         if (m_corner_draw_second_width && m_opening_draw_fields)
@@ -69796,6 +70050,10 @@ private:
     std::vector<RoofOpeningGroupClone> m_pending_roof_opening_group_clones;
     std::optional<CornerWindowTransfer> m_pending_corner_window_clone;
     std::vector<Entity> m_pending_corner_window_catalogs;
+    std::vector<CornerWindowTransfer> m_pending_corner_window_group;
+    std::vector<CornerWindowCloneRequest> m_pending_corner_window_placements;
+    std::set<std::string, std::less<>> m_pending_corner_window_reserved;
+    BoundaryDraftPreview m_pending_corner_window_previous;
     std::optional<json> m_pending_roof_opening_clone_row;
     std::string m_pending_roof_opening_clone_digest;
     std::shared_ptr<const RoofOpeningCanvasCapture> m_roof_opening_capture;

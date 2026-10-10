@@ -2368,7 +2368,7 @@ ApplyEntityChanges corner_window_remove_command(const DocumentSnapshot& source,
     if (!source.is_editable() || source.revision() != expected_revision)
         throw std::invalid_argument("Corner-window source is read-only or stale");
 #ifdef VERTEX_HAS_HORIZONTAL_AUTHORING
-    return prepare_corner_window_removal(source, {owner_id}, "Delete corner window");
+    return prepare_corner_window_removal(source, {owner_id}, "Delete corner window", true);
 #else
     const auto corner = parse_corner_window(source.entities().at(owner_id));
     // The minimal core has no complete phase retirement kernel. Retained

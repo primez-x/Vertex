@@ -133,7 +133,7 @@ void metadata(const DocumentSnapshot& source, const DocumentSnapshot& preview) {
 
 Json encode_corner_selection_removal_intent(const CornerSelectionRemovalIntent& intent) {
     bounded(intent);
-    Json result{{"version", 1}, {"kind", "corner_removal"}, {"corner_ids", intent.corner_ids},
+    Json result{{"version", intent.complete_corner_catalog_hosts ? 2 : 1}, {"kind", "corner_removal"}, {"corner_ids", intent.corner_ids},
         {"other", other_present(intent.other) ? encode_architectural_drawing_removal_intent(intent.other) : Json(nullptr)}};
     if (result.dump().size() > intent_byte_limit) reject("intent exceeds one MiB");
     return result;
@@ -145,11 +145,12 @@ CornerSelectionRemovalIntent decode_corner_selection_removal_intent(const Json& 
     if (value.dump().size() > intent_byte_limit) reject("intent exceeds one MiB");
     if (!value.is_object() || value.size() != 4 || !value.contains("version") || !value.contains("kind") ||
         !value.contains("corner_ids") || !value.contains("other")) reject("unsupported intent field set");
-    if (!value.at("version").is_number_integer() || value.at("version") != 1 ||
+    if (!value.at("version").is_number_integer() || (value.at("version") != 1 && value.at("version") != 2) ||
         !value.at("kind").is_string() || value.at("kind") != "corner_removal") reject("unsupported intent version/kind");
     const auto& ids = value.at("corner_ids");
     if (!ids.is_array() || ids.empty() || ids.size() > selection_limit) reject("invalid explicit corner inventory");
     CornerSelectionRemovalIntent result;
+    result.complete_corner_catalog_hosts = value.at("version") == 2;
     for (const auto& id : ids) {
         if (!id.is_string()) reject("corner owner must be an identity");
         result.corner_ids.push_back(id.get<std::string>());
@@ -172,7 +173,7 @@ Entities replay_corner_selection_removal_architectural(const Entities& actual,
     (void)encode_corner_selection_removal_intent(intent);
     // Reserve the shared source/host/roof/native work before either complete
     // producer runs. The ordinary lane retains its historical authority.
-    validate_mixed_wall_removal_source_admission(actual, true);
+    validate_mixed_wall_removal_source_admission(actual, true, intent.complete_corner_catalog_hosts);
     validate_physical_wall_join_removal_identity_lifetime(actual, {}, 0, intent.other.architectural.roof_additional_identities);
     for (const auto& id : intent.corner_ids) {
         const auto found = actual.find(id);
@@ -183,9 +184,39 @@ Entities replay_corner_selection_removal_architectural(const Entities& actual,
     auto expected_aliases = original_aliases;
     auto expected_inactive = constraint_phase_scope(actual).inactive_owner_ids;
     std::vector<Entities> candidates;
-    candidates.push_back(replay_corner_window_removal(actual, intent.corner_ids, active_phase_constraints));
-    if (architectural(intent.other)) candidates.push_back(replay_architectural_selection_removal(
-        actual, intent.other.architectural, intent.other.allow_manufactured_opening_hosts));
+    candidates.push_back(replay_corner_window_removal(actual, intent.corner_ids, active_phase_constraints,
+        intent.complete_corner_catalog_hosts));
+    auto other=intent.other.architectural;
+    const auto corner_aliases=embedded_assembly_presentation_ids(candidates.front());
+    Ids corner_closure;
+    for (const auto& id:intent.corner_ids) {
+        const auto corner=parse_corner_window(actual.at(id));
+        corner_closure.insert(id);
+        corner_closure.insert(corner.opening_ids.begin(),corner.opening_ids.end());
+    }
+    // Explicit selected owners dominate their actual hosted rows once. The
+    // complete intent still retains every qualified selection; only an exact
+    // source row already retired by the independently admitted corner kernel
+    // can omit a second component replay. Unrelated rows retain their authority.
+    if (intent.complete_corner_catalog_hosts) std::erase_if(other.components,[&](const auto& key) {
+        if (!original_aliases.contains(key)) reject("selected component lacks an actual qualified source row");
+        if (corner_aliases.contains(key)) return false;
+        const auto catalog=actual.find(key.first);
+        if (catalog==actual.end() || catalog->second.type!="assembly_model")
+            reject("selected component lacks its actual catalog");
+        const auto model=AssemblyModel::from_json(catalog->second.properties.at("model"));
+        const auto row=std::find_if(model.instances().begin(),model.instances().end(),[&](const auto& value) {
+            return value.id==key.second;
+        });
+        if (row==model.instances().end() || !row->placement ||
+            !corner_closure.contains(row->placement->host_entity_id) ||
+            candidates.front().contains(row->placement->host_entity_id))
+            reject("component retirement is not a consequence of the explicit corner owners");
+        return true;
+    });
+    if (!other.object_ids.empty() || !other.components.empty())
+        candidates.push_back(replay_architectural_selection_removal(actual,other,
+            intent.other.allow_manufactured_opening_hosts,false,false,false,intent.complete_corner_catalog_hosts));
     for (const auto& candidate : candidates) {
         const auto aliases = embedded_assembly_presentation_ids(candidate);
         for (const auto& [key, alias] : aliases) {
@@ -201,7 +232,7 @@ Entities replay_corner_selection_removal_architectural(const Entities& actual,
     }
     auto result = candidates.size() == 1 ? std::move(candidates.front()) :
         compose_ordinary_architectural_removal_candidates(actual, candidates, true, true);
-    validate_mixed_wall_removal_source_admission(result, true);
+    validate_mixed_wall_removal_source_admission(result, true, intent.complete_corner_catalog_hosts);
     validate_corner_window_state(result);
     validate_document_assembly_instances(result);
     if (embedded_assembly_presentation_ids(result) != expected_aliases) reject("composition changed exact surviving component aliases");

@@ -272,9 +272,28 @@ polling timeout does not permit restarting it.
    original source before one publication. Selected drawing dependents cannot
    remove a baseline dimension bound to a newly demolished corner. Qualify this
    source addition and retained/undone history. Corner combinations with wall,
-   opening and other baseline-family producers, legacy catalog host-copy rows,
+   opening and other baseline-family producers,
    aggregate clipboard, mixed Properties/transforms and directional group
    controls remain required implementation gaps.
+   Subsequent source completes corner-owner legacy catalog host-copy admission
+   using both actual resolved walls and managed cuts. Explicit row-only removal
+   preserves aggregate bodies/memberships, baseline demolition retains rows,
+   and actual owner retirement dominates its already-retired row once. Native
+   display reuses the admitted local corner body before applying legacy copy
+   placement. Qualify copy display, deletion, site coordinates, Undo/reopen and
+   bounded work. Version-two corner selection/mixed dialect six carry explicit
+   default-false source-budget/catalog-host completion under reader181/
+   extraction179; historical version one/dialect five retain their authority.
+   This source change does not close a production gate.
+   Route standalone qualified corner-copy row Delete through explicit actual
+   component authority; a copy host must not become a selected owner root.
+   The row-only kernel is currently reached only alongside a selected corner.
+   Subsequent corner-only group clipboard version three captures the full
+   roster and shared material pool. Destination picks stay passive until one
+   final source-bound publication; cancellation cannot partially place a group.
+   Qualify Copy/Cut/Paste/Duplicate, source materials, dimensions, alternative
+   transport, Undo/reopen and pending-placement cancellation. Mixed-family
+   clipboard remains required work.
 10. Implement observed native/vendor/device adapters through existing workers;
     complete declared IFC/DXF/Pinc fidelity and independently consumed output.
     Add offline OCR text regions/confidence feeding reviewed proposals. New

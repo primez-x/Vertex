@@ -1,4 +1,32 @@
-# Vertex project formats v1 through v180
+# Vertex project formats v1 through v181
+
+## Corner-owner catalog copy completion (v181, source integration)
+
+Mixed-removal dialect six alone carries the closed corner-selection intent
+version two. Its four fields retain the existing shape; version two enables
+actual corner-owner catalog host-copy admission and owner dominance. Dialect
+five must carry version one and retains its previous producer authority and
+reader180 floor. New retained or undone dialect-six history requires
+reader181/extraction179. The outer command envelope45 remains unchanged.
+
+The current corner producer admits catalog copies hosted on an actual corner
+owner. Their body comes from both resolved walls, the owner's two exact managed
+cuts and its manufactured assembly. Bare cut children do not supply a
+manufactured copy body. Explicit copy-row removal retains the owner, cuts,
+hosts and their phase membership exactly. Baseline demolition retains its
+catalog rows. An explicitly selected physically retired owner dominates its
+own already-retired hosted row once; unrelated selected rows retain independent
+authority. New default-false source-budget and catalog-host opt-ins admit the
+complete actual aggregate before factories run. Historical callers keep their
+previous authority. Native presentation reuses the admitted local corner body
+for legacy placement, preserving local-host coordinates instead of applying a
+site pose twice. Its cache receipt includes both resolved hosts, active cuts
+and placement dependencies. No asset-storage schema changes.
+
+Compilation, native display, coordinates, deletion, history and migration
+remain unqualified. This source integration does not close a production gate.
+Standalone copy-row controller routing remains a gap; current version-two
+dispatch requires an actual corner owner in the ordinary selected cohort.
 
 ## Coordinated corner-window mixed deletion (v180, source integration)
 
@@ -339,6 +367,22 @@ when no dimensions are transported. Only supported owner-bound leg dimensions
 are carried. Paste reserves explicit fresh identities through retained/undone
 history and clones all entities atomically; text offsets and rotation follow
 the actual destination leg frame while metadata is retained.
+
+Clipboard version three has exactly `format`, `version`, `members`, `catalogs`.
+Members are closed version-one/two passive packets with empty per-member
+catalogs; the outer pool deduplicates exact needed material definitions. Limits
+are 128 members/catalogs, 2048 dimensions, four MiB passive data, 100000 JSON
+values and 4096 aggregate changes. Owner/cut/dimension identities are distinct;
+shared source wall identities require identical complete envelopes. Imported
+catalog and member destinations reserve identities across passive source and
+complete retained/undone destination history. Each destination host pair is
+picked against one original snapshot; accepted picks remain passive requests
+and draft overlays. The final member composes all clones from that same source,
+augments phases/catalogs once, admits the complete candidate and publishes one
+command. Cancellation clears all members, imports, reservations and overlays.
+Cut captures the original source content before one coordinated deletion.
+Existing single-member version-one/two meanings remain. The clipboard format
+does not add a native storage floor; runtime/history qualification stays open.
 
 Reader 172 and extraction 170 follow these forms through current and retained
 history, including undone/deleted rows. Payload tables remain v161. Source

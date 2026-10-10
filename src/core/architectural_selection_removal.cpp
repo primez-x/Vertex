@@ -128,7 +128,7 @@ EmbeddedAssemblyPresentationIds expected_aliases(const Entities& source, const s
 Entities replay_architectural_selection_removal(const Entities& actual,
     const ArchitecturalSelectionRemovalIntent& intent, bool allow_manufactured_opening_hosts,
     bool complete_roof_hosted_catalog_consequences, bool complete_wall_hosted_catalog_consequences,
-    bool complete_placed_catalog_consequences) {
+    bool complete_placed_catalog_consequences, bool complete_corner_window_removal) {
     try {
         bounds(actual);
         if (intent.object_ids.size() > selection_limit ||
@@ -161,11 +161,11 @@ Entities replay_architectural_selection_removal(const Entities& actual,
         if (allow_manufactured_opening_hosts) {
             // Reserve the complete source's conservative shared 16-pass roof,
             // host and component inventory before any native inspector/factory.
-            validate_mixed_wall_removal_source_admission(actual, true);
+            validate_mixed_wall_removal_source_admission(actual, true, complete_corner_window_removal);
             if (!objects.empty() || !selected_components.empty())
                 preflight_architectural_object_removal(actual, objects, intent.components, 0,
                     complete_generic_catalog,
-                    complete_placed_catalog_consequences);
+                    complete_placed_catalog_consequences,complete_corner_window_removal,complete_corner_window_removal);
         }
         std::vector<Entities> candidates;
         if (!roofs.empty()) {
@@ -188,10 +188,10 @@ Entities replay_architectural_selection_removal(const Entities& actual,
             auto ordinary = allow_manufactured_opening_hosts ?
                 replay_architectural_object_removal(actual, objects, components, true, 0,
                     complete_generic_catalog,
-                    complete_placed_catalog_consequences) :
+                    complete_placed_catalog_consequences,complete_corner_window_removal,complete_corner_window_removal) :
                 replay_architectural_object_removal(actual, objects, components, false, 0,
                     complete_generic_catalog,
-                    complete_placed_catalog_consequences);
+                    complete_placed_catalog_consequences,complete_corner_window_removal,complete_corner_window_removal);
             bounds(ordinary);
             candidates.push_back(std::move(ordinary));
         }

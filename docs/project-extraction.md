@@ -1,5 +1,11 @@
 # Portable project extraction
 
+Exchange version 179 requires native reader181 for mixed-removal dialect six
+and its version-two corner-owner catalog host-copy admission. Retained and
+undone history preserve the complete original command, source/stage bindings,
+fresh destination reservations and exact corner aggregate authority. Older
+dialect five retains exchange178/native180. No asset-storage schema changes.
+
 Exchange version 178 requires native reader180 for coordinated corner-window
 mixed deletion. Closed mixed intent dialect five retains explicit corner
 owners, independently admitted physical retirement or retained-baseline
