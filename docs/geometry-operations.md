@@ -48,8 +48,13 @@ distance between roots. Uncertain discriminants return indeterminate. An exact
 axis-aligned semicircle tangent can be admitted only when compensated endpoint,
 midpoint, center and radius arithmetic establishes it, including every prior
 origin subtraction. Rounded translation cannot establish that exception.
-Noncanonical uncertain tangencies remain indeterminate; general tangency
-qualification is still open.
+For exact shared endpoints, arbitrary sweeps and rotations use endpoint-anchored
+circle equations. A single shared contact is admitted only when the complete
+second-root distance and its numerical error allowance lie within the metre
+tolerance. Origin/chord subtraction and power-of-two scaling must retain their
+inputs exactly. Other contacts retain the existing two-root or indeterminate
+path. Nonshared uncertain tangencies remain indeterminate. Numerical error
+allowances, interior tangency and general tangency qualification remain open.
 
 Rotation uses an explicit world-space pivot and radians. Horizontal reflection
 reflects y about the supplied pivot, vertical reflection reflects x. Reflections

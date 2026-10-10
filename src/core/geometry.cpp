@@ -673,6 +673,103 @@ IntersectionResult intersect_arcs(const Segment& left_segment, const Segment& ri
         }
     };
 
+    // A shared source station is an exact root of both endpoint-defined
+    // circles. In coordinates X from that station, each circle satisfies
+    // S*|X|^2 - V.X = 0, where V = sign*S*chord + C*J(chord),
+    // S = sin(sweep/2), C = cos(sweep/2), and sign selects start/end.
+    // Their radical axis is N.X = 0, N = S_right*V_left-S_left*V_right.
+    // The only other root has distance |cross(V_left,V_right)|/|N|.
+    // Bound that entire distance before merging it with the known station;
+    // a small radial discriminant alone cannot establish a tangent.
+    const auto same_station = [](Vec2 a, Vec2 b) { return a.x == b.x && a.y == b.y; };
+    const bool shared_station = same_station(left_segment.start, right_segment.start) ||
+        same_station(left_segment.start, right_segment.end) ||
+        same_station(left_segment.end, right_segment.start) ||
+        same_station(left_segment.end, right_segment.end);
+    if (exact_input_origin && shared_station &&
+        exact_point_difference(left_segment.end, left_segment.start) &&
+        exact_point_difference(right_segment.end, right_segment.start)) {
+        const auto left_chord = left_segment.end - left_segment.start;
+        const auto right_chord = right_segment.end - right_segment.start;
+        int exponent = 0;
+        std::frexp(std::max({std::abs(left_chord.x), std::abs(left_chord.y),
+                            std::abs(right_chord.x), std::abs(right_chord.y)}), &exponent);
+        const Vec2 q_left{std::ldexp(left_chord.x, -exponent),
+                          std::ldexp(left_chord.y, -exponent)};
+        const Vec2 q_right{std::ldexp(right_chord.x, -exponent),
+                           std::ldexp(right_chord.y, -exponent)};
+        const bool exact_scale = std::ldexp(q_left.x, exponent) == left_chord.x &&
+            std::ldexp(q_left.y, exponent) == left_chord.y &&
+            std::ldexp(q_right.x, exponent) == right_chord.x &&
+            std::ldexp(q_right.y, exponent) == right_chord.y;
+        const auto scaled_tolerance = std::ldexp(tolerance, -exponent);
+        constexpr auto epsilon = std::numeric_limits<double>::epsilon();
+        constexpr auto arithmetic_error = 64.0 * epsilon;
+        constexpr auto trig_error = 16.0 * epsilon;
+        constexpr auto underflow_error = 128.0 * std::numeric_limits<double>::denorm_min();
+        const auto half_angle = [](double sweep) {
+            return std::abs(sweep) == std::numbers::pi
+                ? Vec2{std::copysign(1.0, sweep), 0.0}
+                : Vec2{std::sin(sweep * 0.5), std::cos(sweep * 0.5)};
+        };
+        const auto left_angle = half_angle(left_segment.sweep_radians);
+        const auto right_angle = half_angle(right_segment.sweep_radians);
+        if (exact_scale && std::isfinite(scaled_tolerance) && scaled_tolerance > 0.0 &&
+            finite(left_angle) && finite(right_angle) &&
+            std::abs(left_angle.x) > trig_error && std::abs(right_angle.x) > trig_error) {
+            for (const auto station : std::array{left_segment.start, left_segment.end}) {
+                if (!(same_station(station, right_segment.start) || same_station(station, right_segment.end))) continue;
+                const auto left_sign = station.x == left_segment.start.x &&
+                    station.y == left_segment.start.y ? 1.0 : -1.0;
+                const auto right_sign = station.x == right_segment.start.x &&
+                    station.y == right_segment.start.y ? 1.0 : -1.0;
+                const auto coefficient = [](Vec2 q, Vec2 angle, double sign) {
+                    return Vec2{std::fma(sign * angle.x, q.x, -angle.y * q.y),
+                                std::fma(sign * angle.x, q.y, angle.y * q.x)};
+                };
+                const auto v_left = coefficient(q_left, left_angle, left_sign);
+                const auto v_right = coefficient(q_right, right_angle, right_sign);
+                const auto left_error = arithmetic_error *
+                    (std::abs(q_left.x) + std::abs(q_left.y)) + underflow_error;
+                const auto right_error = arithmetic_error *
+                    (std::abs(q_right.x) + std::abs(q_right.y)) + underflow_error;
+                const Vec2 normal{
+                    std::fma(right_angle.x, v_left.x, -left_angle.x * v_right.x),
+                    std::fma(right_angle.x, v_left.y, -left_angle.x * v_right.y)};
+                const auto component_error = [&](double a, double b) {
+                    return std::abs(right_angle.x) * left_error +
+                        std::abs(left_angle.x) * right_error +
+                        trig_error * (std::abs(a) + std::abs(b) + left_error + right_error) +
+                        arithmetic_error * (std::abs(right_angle.x * a) +
+                                            std::abs(left_angle.x * b)) + underflow_error;
+                };
+                const auto norm = length(normal);
+                const auto norm_error = length({component_error(v_left.x, v_right.x),
+                                               component_error(v_left.y, v_right.y)}) +
+                    arithmetic_error * norm + underflow_error;
+                const auto product = v_left.y * v_right.x;
+                const auto determinant = std::fma(v_left.x, v_right.y, -product) +
+                    std::fma(-v_left.y, v_right.x, product);
+                const auto determinant_error = left_error *
+                    (std::abs(v_right.x) + std::abs(v_right.y)) + right_error *
+                    (std::abs(v_left.x) + std::abs(v_left.y)) +
+                    2.0 * left_error * right_error + arithmetic_error *
+                    (std::abs(v_left.x * v_right.y) + std::abs(product)) + underflow_error;
+                const auto lower_norm = norm - norm_error;
+                if (!finite(normal) || !std::isfinite(norm_error) || !(lower_norm > 0.0)) continue;
+                const auto upper_distance = (std::abs(determinant) + determinant_error) /
+                    lower_norm;
+                if (std::isfinite(upper_distance) && upper_distance >= 0.0 &&
+                    upper_distance <= scaled_tolerance * (1.0 - arithmetic_error)) {
+                    add_point(result, station, tolerance);
+                    return result;
+                }
+                // A coincident/uncertain radical axis or a separated second
+                // root retains the existing two-root/indeterminate path.
+            }
+        }
+    }
+
     // Axis diameters can establish an exact tangent independently of the
     // cancellation-prone circle discriminant only if every earlier origin
     // subtraction retained the actual endpoints. Other unresolved tangencies

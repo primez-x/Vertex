@@ -14,6 +14,44 @@ changed source does not acquire runtime acceptance without later qualification.
 
 ## Current delivery state
 
+### October 9 shared-endpoint tangency and restored architectural fields
+
+The previous conservative arc/arc correction still rejected ordinary tangent
+joins outside its axis-aligned semicircle proof. A supported example is the
+quarter arc `(-1,1) -> (0,0)` with sweep `+pi/2` joined to
+`(0,0) -> (1,-1)` with sweep `-pi/2`. A new endpoint-anchored circle certificate
+uses the exact shared station, each chord and sweep, and the radical axis to
+bound the possible second root. It admits a single contact only when the
+entire second-root distance and error allowance fit within metre tolerance.
+Exact origin/chord subtraction and reversible power-of-two scaling gate this
+proof. Unrelated pairs skip its arithmetic. The earlier separated-root and
+rounded-origin counterexamples retain their guarded paths.
+
+This adds arbitrary-sweep and rotated shared-endpoint joins, not generic
+interior tangency. Nonshared uncertain tangencies remain indeterminate. The
+hardcoded trigonometric error allowance assumes conventional math-library
+accuracy; Windows numerical qualification remains necessary. These limits
+remain explicit in GEO-BASE-001 rather than being treated as accepted behavior.
+
+Building-object named fields formerly kept a sticky dirty flag after any
+editing. Restoring the exact prefilled text still reparsed its generated
+decimal. A supported native coordinate `1e-20 m` can then overflow the exact
+quantity parser's denominator, preventing an unrelated property edit.
+The dialog now captures initial text after each form is populated and removes
+only that field's dirty flag when restored. Original native values, angles and
+receipts are retained; changed expressions continue parsing. Roof conversion
+and explicit programmatic host-interval edits keep their existing semantics.
+The other examined profile/layer dialogs already retain unchanged values.
+The boundary corner editor also reports an unchanged position as a no-op,
+clearing the candidate and disabling Apply rather than showing a solver error.
+
+Root integration review and independent source review approved the bounded
+changes. Scoped `git diff --check` passed. No builds, tests, new tests, probes,
+scripts, native jobs, launches, packages or installations ran. Compilation,
+actual tangent contact behavior, field interaction, receipts and history remain
+unverified. The installed candidate is unchanged; full production acceptance
+remains open.
+
 ### October 9 analytical curve contacts and unchanged measurement editing
 
 Source inspection found the arc/arc kernel used radial penetration tolerance to

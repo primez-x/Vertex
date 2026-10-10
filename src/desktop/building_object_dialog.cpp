@@ -683,6 +683,7 @@ private:
     void rebuild_form() {
         invalidate_candidate();
         fields.clear();
+        initial_field_text.clear();
         quantity_pointers.clear();
         dirty.clear();
         parsed_quantities.clear();
@@ -866,6 +867,7 @@ private:
         if (original_object.has_value()) {
             populate_from_original();
         }
+        for (const auto& [name, field] : fields) initial_field_text.emplace(name, field->text());
         refresh_pitch();
         refresh_stair_summary();
         // Changes to any form control invalidate a previously submitted candidate
@@ -2155,7 +2157,7 @@ private:
         QObject::connect(edit, &QLineEdit::textChanged, owner,
                          [this, name](const QString&) {
                              if (!loading) {
-                                 dirty[name] = true;
+                                 mark_field_edit(name);
                              }
                          });
         layout->addRow(std::move(label), edit);
@@ -2171,7 +2173,7 @@ private:
         QObject::connect(edit, &QLineEdit::textChanged, owner,
                          [this, name](const QString&) {
                              if (!loading) {
-                                 dirty[name] = true;
+                                 mark_field_edit(name);
                              }
                          });
         layout->addRow(std::move(label), edit);
@@ -2188,7 +2190,7 @@ private:
         QObject::connect(edit, &QLineEdit::textChanged, owner,
                          [this, name](const QString&) {
                              if (!loading) {
-                                 dirty[name] = true;
+                                 mark_field_edit(name);
                              }
                          });
         layout->addRow(std::move(label), edit);
@@ -2205,7 +2207,7 @@ private:
         QObject::connect(edit, &QLineEdit::textChanged, owner,
                          [this, name](const QString&) {
                              if (!loading) {
-                                 dirty[name] = true;
+                                 mark_field_edit(name);
                              }
                          });
         layout->addRow(std::move(label), edit);
@@ -2220,7 +2222,7 @@ private:
         QObject::connect(edit, &QLineEdit::textChanged, owner,
                          [this, name](const QString&) {
                              if (!loading) {
-                                 dirty[name] = true;
+                                 mark_field_edit(name);
                              }
                          });
         layout->addRow(std::move(label), edit);
@@ -2260,6 +2262,19 @@ private:
         const auto found = fields.find(name);
         if (found != fields.end()) {
             found->second->setText(value);
+        }
+    }
+
+    void mark_field_edit(const char* name) {
+        const auto initial = initial_field_text.find(name);
+        const auto field = fields.find(name);
+        // Restoring the prefilled text retains the captured native value and
+        // its receipt; generated display text is not new authored authority.
+        if (initial != initial_field_text.end() && field != fields.end() &&
+            field->second->text() == initial->second) {
+            dirty.erase(name);
+        } else {
+            dirty[name] = true;
         }
     }
 
@@ -2884,6 +2899,7 @@ private:
     QLabel* roof_openings_help{};
     QTableWidget* roof_openings_table{};
     std::map<std::string, QLineEdit*, std::less<>> fields;
+    std::map<std::string, QString, std::less<>> initial_field_text;
     std::map<std::string, std::string, std::less<>> quantity_pointers;
     std::map<std::string, json, std::less<>> original_quantity_entries;
     std::map<std::string, Quantity, std::less<>> parsed_quantities;

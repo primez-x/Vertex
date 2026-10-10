@@ -62296,6 +62296,10 @@ public:
                         };
                         edit.target_position = {coordinate(x->text(), original_point.x),
                                                 coordinate(y->text(), original_point.y)};
+                        if (edit.target_position.x == original_point.x && edit.target_position.y == original_point.y) {
+                            clear_preview(QStringLiteral("No geometry change. Enter a new position to move this corner."));
+                            return;
+                        }
                     } else if (curve) {
                         if (original_edge.segment.sweep_radians != 0 &&
                             length->text().trimmed() == initial_edge_input_text(original_edge.segment, mode) &&

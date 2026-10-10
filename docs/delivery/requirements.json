@@ -2360,7 +2360,7 @@
         "binding": null
       },
       "qualification_history": [],
-      "delivery_notes": "October 9 source-only correction preserves actual near-tangent arc/arc roots and prevents rounded origin translation from proving an exact tangent. Uncertain noncanonical tangencies remain indeterminate; general arc/arc tangency and numerical qualification are still required. See docs/delivery/progress.md and docs/geometry-operations.md. No changed-source compilation or runtime acceptance is claimed.",
+      "delivery_notes": "October 9 source-only corrections preserve actual near-tangent arc/arc roots and prevent rounded origin translation from proving an exact tangent. A later endpoint-anchored circle certificate admits shared-endpoint tangencies across sweeps and rotations only when the entire second-root distance/error band fits within tolerance. Nonshared uncertain tangencies remain indeterminate; interior tangency and numerical qualification are still required. See docs/delivery/progress.md and docs/geometry-operations.md. No changed-source compilation or runtime acceptance is claimed.",
       "source_snapshot": {
         "id": "GEO-BASE-001",
         "area": "geometry",
@@ -3655,7 +3655,7 @@
         "binding": null
       },
       "qualification_history": [],
-      "delivery_notes": null,
+      "delivery_notes": "October 9 source-only editing corrections retain unchanged source measurements instead of reparsing generated or rounded display values. Building-object named fields also restore original native values and receipts when temporarily edited text is restored to its captured prefill. Changed expressions still use exact quantity parsing. Compilation and user-observed editing remain unverified; see docs/delivery/progress.md.",
       "source_snapshot": {
         "id": "APX-KEY-002",
         "area": "apex_parity",
@@ -8360,7 +8360,7 @@
         "binding": null
       },
       "qualification_history": [],
-      "delivery_notes": null,
+      "delivery_notes": "October 9 source-only correction makes named building-object field edit state reflect current text rather than sticky editing history. Restoring captured prefilled text retains original native numbers and receipts through unrelated edits. Profile and layer dialogs already use equivalent unchanged-value guards in the examined paths. No compilation, runtime lifecycle or production acceptance is claimed; see docs/delivery/progress.md.",
       "source_snapshot": {
         "id": "ARCH-EDIT-001",
         "area": "architecture",
