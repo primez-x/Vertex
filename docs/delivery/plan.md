@@ -206,6 +206,20 @@ polling timeout does not permit restarting it.
    reconstruct ordinary deletion closure, admit removal-only child authority,
    respect physical and phase-semantic roof dominance and retain exact staged
    history/source proofs before one final publication.
+   Ordinary deletion preparation now returns the complete admitted
+   command before publication, retaining actual producer intents and allocated
+   identities. The architectural/drawing ordinary lane has a bounded canonical
+   source intent and independently replays both leaves against the full captured
+   snapshot. Accept that proof only when it reproduces the entire ordinary
+   candidate; missing or partial proof remains a mixed-command gap. Complete the
+   snapshot-aware persisted composition for hosted-opening, wall/room-review and
+   phase ordinary deletion. The first envelope45 composition admits fully
+   reconstructed architectural/drawing ordinary deletion and actual surviving
+   skylight removal, with physical/phase roof dominance and exact detached
+   source/history bindings. Other combinations refuse the whole selection and
+   remain required implementation gaps. Qualify Undo/redo, save/reopen and
+   extraction under reader176/exchange174. Existing project command envelopes
+   must not acquire broader meanings as a shortcut.
 10. Implement observed native/vendor/device adapters through existing workers;
     complete declared IFC/DXF/Pinc fidelity and independently consumed output.
     Add offline OCR text regions/confidence feeding reviewed proposals. New

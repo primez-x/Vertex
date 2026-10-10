@@ -1,6 +1,7 @@
 #include "sketch/drawing_selection_removal.hpp"
 
 #include "sketch/annotation_entity_codec.hpp"
+#include "sketch/architectural_selection_removal.hpp"
 #include "sketch/assembly_document_adapter.hpp"
 #include "sketch/boundary_dimension.hpp"
 #include "sketch/constraint_entity.hpp"
@@ -567,7 +568,8 @@ void local_reference_admission(const Entities& source, const Authority& selected
 // Review may already omit a selected row, but must preserve every surviving
 // row and carrier field exactly. Ordinary known override retirement is allowed
 // only for an actual owner already retired by that independently admitted stage.
-void selected_stage(const Entities& actual, const Entities& stage, const Authority& selected) {
+void selected_stage(const Entities& actual, const Entities& stage, const Authority& selected,
+    const Entities* reconstructed_architectural_stage) {
     const auto stage_phase = phases(stage);
     for (const auto& id : selected.roots) {
         const auto before = selected.phase.owners.find(id), after = stage_phase.owners.find(id);
@@ -608,6 +610,19 @@ void selected_stage(const Entities& actual, const Entities& stage, const Authori
         }
         auto& overrides = before.properties.at("state").at("overrides");
         const auto& staged_overrides = retained.properties.at("state").at("overrides");
+        // This permission exists only inside the architectural producer below,
+        // after it reconstructs this exact stage from the immutable actual map.
+        // A computed component alias is not an actual entity key; roof-join
+        // splitting may also copy overrides. Admit those exact consequences,
+        // while the final comparison still protects every other carrier field
+        // and all unselected local rows.
+        if (reconstructed_architectural_stage) {
+            const auto architectural = reconstructed_architectural_stage->find(owner);
+            if (architectural == reconstructed_architectural_stage->end() ||
+                !exact(architectural->second, retained))
+                reject("architectural annotation stage lost its source provenance: " + owner);
+            overrides = architectural->second.properties.at("state").at("overrides");
+        }
         std::set<std::pair<std::string, std::string>> staged_targets;
         for (const auto& row : staged_overrides)
             staged_targets.emplace(row.at("target_kind").get<std::string>(), row.at("target_id").get<std::string>());
@@ -684,7 +699,8 @@ void cleanup(Entity& entity, const Authority& selected) {
         (void)RoomRelationshipSnapshot::from_json(p.at("model"));
     }
 }
-Entities replay(const Entities& actual, const Entities& stage, const DrawingSelectionRemovalIntent& intent, bool active) {
+Entities replay(const Entities& actual, const Entities& stage, const DrawingSelectionRemovalIntent& intent, bool active,
+    const Entities* reconstructed_architectural_stage = nullptr) {
     intent_bounds(intent); Budget budget; bounds(actual, budget);
     if (&actual != &stage) bounds(stage, budget);
     validate_constraints(actual, active);
@@ -698,7 +714,7 @@ Entities replay(const Entities& actual, const Entities& stage, const DrawingSele
         const auto scratch = remainder(entity, actual, selected.strokes);
         if (touches(scratch, selected.retired, budget)) reject("actual opaque reference requires a qualified removal codec: " + id);
     }
-    selected_stage(actual, stage, selected);
+    selected_stage(actual, stage, selected, reconstructed_architectural_stage);
     const auto original_aliases = embedded_assembly_presentation_ids(stage);
     Entities result = stage;
     for (const auto& id : selected.retired) {
@@ -804,5 +820,20 @@ DrawingSelectionRemovalEntities replay_drawing_selection_removal_after_review(co
     const DrawingSelectionRemovalEntities& admitted_review_stage, const DrawingSelectionRemovalIntent& intent, bool active_phase_constraints) {
     try { return replay(actual, admitted_review_stage, intent, active_phase_constraints); }
     catch (const Json::exception& error) { reject(std::string("malformed actual/review source: ") + error.what()); }
+}
+DrawingSelectionRemovalEntities replay_drawing_selection_removal_with_architectural(
+    const DrawingSelectionRemovalEntities& actual, const DrawingSelectionRemovalIntent& drawing,
+    const ArchitecturalSelectionRemovalIntent& architectural,
+    bool allow_manufactured_opening_hosts, bool active_phase_constraints) {
+    try {
+        // Analytical actual-source admission runs before any native factory.
+        // No caller-supplied candidate can grant this narrower composition path.
+        (void)replay(actual, actual, drawing, active_phase_constraints);
+        const auto stage = replay_architectural_selection_removal(
+            actual, architectural, allow_manufactured_opening_hosts);
+        return replay(actual, stage, drawing, active_phase_constraints, &stage);
+    } catch (const Json::exception& error) {
+        reject(std::string("malformed actual/architectural source: ") + error.what());
+    }
 }
 } // namespace sketch

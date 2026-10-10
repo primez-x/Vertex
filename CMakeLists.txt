@@ -876,6 +876,8 @@ if(SKETCH_BUILD_ARCHITECTURE OR SKETCH_BUILD_DESKTOP)
     src/core/phase_stair_replacement.cpp
     src/core/stair_edit_dependencies.cpp
     src/core/drawing_selection_removal.cpp src/core/drawing_removal_command.cpp
+    src/core/architectural_drawing_removal.cpp
+  src/core/mixed_selection_removal.cpp
     src/core/sheet_view_restriction_migration.cpp
     src/core/stair_clone.cpp
     src/core/slab_layer_stack_edit.cpp src/core/slab_geometry_edit.cpp src/core/slab_clone.cpp

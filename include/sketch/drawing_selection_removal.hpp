@@ -6,6 +6,8 @@
 
 namespace sketch {
 
+struct ArchitecturalSelectionRemovalIntent;
+
 using DrawingSelectionRemovalEntities = std::map<std::string, Entity, std::less<>>;
 
 enum class DrawingSelectionAnnotationKind { label, symbol };
@@ -56,5 +58,15 @@ struct DrawingSelectionRemovalIntent {
     const DrawingSelectionRemovalEntities& actual,
     const DrawingSelectionRemovalEntities& admitted_review_stage,
     const DrawingSelectionRemovalIntent& intent, bool active_phase_constraints);
+
+// Reconstructs the architectural stage from actual selection authority itself.
+// Only that stage's exact annotation override consequences may compose with
+// independent selected rows. The generic reviewed-stage contract is unchanged.
+// The snapshot-owning caller reserves fresh identities across retained history.
+[[nodiscard]] DrawingSelectionRemovalEntities replay_drawing_selection_removal_with_architectural(
+    const DrawingSelectionRemovalEntities& actual,
+    const DrawingSelectionRemovalIntent& drawing,
+    const ArchitecturalSelectionRemovalIntent& architectural,
+    bool allow_manufactured_opening_hosts, bool active_phase_constraints);
 
 } // namespace sketch

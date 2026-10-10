@@ -1,6 +1,6 @@
 # Vertex user testing checklist
 
-450 practical tasks, grouped by how you use the app (U001–U449 plus U100a), plus forty focused drawing and architectural checks below (490 total). This replaces the earlier engineering-oriented checklist. The old 130-item list is preserved separately as engineering-requirements-checklist.md.
+450 practical tasks, grouped by how you use the app (U001–U449 plus U100a), plus forty-three focused drawing and architectural checks below (493 total). This replaces the earlier engineering-oriented checklist. The old 130-item list is preserved separately as engineering-requirements-checklist.md.
 
 This is a user acceptance list for the intended app, not a claim that every listed action is implemented or working in the current preview. If you cannot find a control, or a feature is absent, mark **Blocked / missing** and describe it. Specialized sections can be skipped if you do not use them or lack the device or sample files.
 
@@ -3406,6 +3406,12 @@ Blocked / missing until testing a candidate that contains it.
 - [ ] **SKYLIGHT-MIXED-SELECT - Select a skylight together with other objects**
   - Steps: Select a skylight, Ctrl-click a wall or furniture symbol, then Ctrl-click the skylight's surrounding roof. Remove the roof from the selection with another Ctrl-click; the skylight should remain selected. Repeat in reverse order and with a selection window, then in 3D. Plain-click a selected member, remove the most recently clicked member with Ctrl-click, and use Alt-click to choose one overlapping object. Click empty space once, then again to begin drawing.
   - Expected: Objects and skylights have independent highlights and the selected count includes both kinds. Selecting a skylight alone never selects its containing roof. Ctrl-click changes only the picked target; plain-clicking a selected member retains the group. Removing the primary member returns focus to the previously selected remaining member. Alt-click replaces the selection with the chosen target. The first empty click clears selection without placing a node. Mixed commands that are still missing report that gap without editing only part of the selection.
+  - Result: Not tested
+  - Notes: ______________________________
+
+- [ ] **SKYLIGHT-MIXED-DELETE - Delete skylights together with other objects**
+  - Steps: Ctrl-select a skylight and a furniture symbol, then press Delete. Undo once and redo. Repeat with an area and with another roof. Select a roof together with its own skylight and delete both. Repeat in a remodeling alternative, save and reopen. Try a mixed selection containing a wall and a skylight as well.
+  - Expected: The complete supported selection disappears together and one Undo restores it. Deleting a selected roof also removes its selected child without creating a replacement roof just for that child. Remodeling preserves the original baseline and records the intended changes together. A combination that is still unsupported explains the gap and preserves every selected item; it never deletes only part of the selection.
   - Result: Not tested
   - Notes: ______________________________
 

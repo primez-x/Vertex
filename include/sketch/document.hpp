@@ -482,6 +482,11 @@ struct ApplyBoundaryConstraintChanges {
     // source consequences. No raw geometry payload lends scale authority.
     std::optional<WallGroupScaleIntent> wall_group_scale;
     bool wall_group_scale_completion{};
+    // Envelope forty-five reconstructs ordinary removal and embedded roof
+    // child removal from one complete source snapshot and staged closed proofs.
+    // This exclusive lane grants no sibling geometry, payload or asset authority.
+    nlohmann::json mixed_selection_removal_intent=nullptr;
+    bool mixed_selection_removal_completion{};
 };
 
 using Command = std::variant<ApplyEntityChanges, ImportPhaseEntities, NameRevision, TranslateBoundary,

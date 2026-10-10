@@ -253,7 +253,9 @@ public:
     // active alternatives, including reviewed and undone phase intent v19.
     // v175 adds roof-face skylight rotation and its explicit retained edit,
     // replacement and transform dialects without activating legacy row fields.
-    static constexpr std::uint32_t format_version = 175;
+    // v176 retains atomic ordinary-object/skylight removal with complete
+    // captured and detached-stage history authority under command envelope45.
+    static constexpr std::uint32_t format_version = 176;
     static constexpr std::uint32_t recovery_format_version = 4;
     [[nodiscard]] static std::uint32_t required_format_version(const DocumentSnapshot& snapshot);
     static constexpr std::uint64_t maximum_file_bytes = 4ULL * 1024ULL * 1024ULL * 1024ULL;

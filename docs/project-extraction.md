@@ -1,5 +1,14 @@
 # Portable project extraction
 
+Exchange version 174 requires native reader 176 for atomic ordinary-object and
+skylight removal. Command envelope 45 retains the actual ordinary selection,
+actual child roster, independently qualified ordinary command, and exact
+detached-stage child command. Captured save state and full source/stage history
+bindings survive extraction and Undo. Historical envelopes remain unchanged.
+The first composition dialect covers ordinary architectural/drawing removal;
+hosted-opening, wall/room-review and phase ordinary lanes remain required work.
+Source integration does not establish compilation or round-trip acceptance.
+
 Exchange version 173 requires native reader 175 for roof-face skylight rotation.
 Schema-four roofs, opening intent four, composite nine and phase twenty/twenty-one
 retain the reference dimensions, actual face angle and explicit new authority.

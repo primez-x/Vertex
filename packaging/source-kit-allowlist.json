@@ -3207,6 +3207,10 @@
     },
     {
       "category": "source",
+      "path": "include/sketch/architectural_drawing_removal.hpp"
+    },
+    {
+      "category": "source",
       "path": "include/sketch/architectural_footprint_edit.hpp"
     },
     {
@@ -3636,6 +3640,10 @@
     {
       "category": "source",
       "path": "include/sketch/mixed_phase_wall_demolition.hpp"
+    },
+    {
+      "category": "source",
+      "path": "include/sketch/mixed_selection_removal.hpp"
     },
     {
       "category": "source",
@@ -4643,6 +4651,10 @@
     },
     {
       "category": "source",
+      "path": "src/core/architectural_drawing_removal.cpp"
+    },
+    {
+      "category": "source",
       "path": "src/core/architectural_footprint_edit.cpp"
     },
     {
@@ -4912,6 +4924,10 @@
     {
       "category": "source",
       "path": "src/core/mixed_phase_wall_demolition.cpp"
+    },
+    {
+      "category": "source",
+      "path": "src/core/mixed_selection_removal.cpp"
     },
     {
       "category": "source",

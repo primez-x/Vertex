@@ -1,4 +1,31 @@
-# Vertex project formats v1 through v175
+# Vertex project formats v1 through v176
+
+## Atomic ordinary-object and skylight removal (v176, source integration)
+
+Reader 176 adds exclusive command envelope 45. Its exact fields are `version`,
+`kind`, `expected_revision`, `message`, `mixed_selection_removal_completion:true`
+and `mixed_selection_removal_intent`. No sibling geometry, change, asset or
+other completion field grants authority. Its closed intent version one retains
+`ordinary`, `ordinary_command`, `members`, `child_command`,
+`source_snapshot_digest`, `source_authoring_digest`, `source_entities_digest`,
+`source_saved_revision`, `stage_snapshot_digest` and `stage_authoring_digest`.
+The aggregate selection limit is 1000; wire size is bounded to one MiB before
+typed admission. Only independently reconstructed ordinary architectural/drawing
+removal under raw command one is admitted in this first composition dialect.
+
+Every named child must be an actual profiled skylight of its named source roof.
+An explicitly selected roof dominates its children even when demolition retains
+that roof's physical baseline. Dominated children need no independent edit or
+replacement authority. Surviving children receive removal-only replay at the
+exact detached ordinary stage. Their retained command is asset-free raw one or
+pure phase34 roof replacement, with exact actual-source partition and edits.
+No arbitrary geometry, profiles, movement, clone or replacement payload is
+admitted. Snapshot-aware replay recreates both detached stages, including full
+history and captured save bookkeeping. The live document retains only one
+event, preserving one Undo; retained replay reconstructs the original admitted
+history prefix rather than using the present project's save state. Earlier
+command dialects keep their meanings. This source work is not runtime or
+migration certification; the remaining ordinary deletion lanes are still gaps.
 
 ## Roof-face skylight rotation (v175, source integration)
 
@@ -369,6 +396,21 @@ phase-semantic roof dominance, retain exact staged source/history bindings and
 publish one final event. Flattening typed phase/review commands into raw payloads
 does not supply that authority. Mixed controls currently suppress subset edits;
 the full mixed command lifecycles remain production requirements.
+
+Ordinary deletion preparation is separate from publication. Prepared desktop
+results retain the original command and, where available, its actual removal
+intent, allocated destinations and room-review geometry proof. A source-only
+architectural/drawing removal intent has exactly `version: 1`, `architectural`,
+`drawing` and `allow_manufactured_opening_hosts`. The architectural object has
+exactly `object_ids`, qualified `components` (`catalog_id`, `instance_id`) and
+`roof_additional_identities`; `drawing` is null or the existing closed drawing
+removal intent. Canonical sorted selection inventories share a 1000-target
+budget; roof destinations share a 4096-identity budget. Wire data is bounded
+before serialization and interpretation. Every leaf sees the actual complete
+snapshot, and fresh destinations are reserved against retained history before
+native work. The drawing leaf then composes its consequences with the admitted
+architectural result. This intent supplies source preparation/validation only;
+it is not a new persisted document command or a completed mixed deletion mode.
 
 ## Roof-hosted fixed skylights (v168, source integration)
 

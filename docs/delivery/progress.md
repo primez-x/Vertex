@@ -14,6 +14,66 @@ changed source does not acquire runtime acceptance without later qualification.
 
 ## Current delivery state
 
+### October 10 atomic mixed deletion - source integration
+
+The preceding mixed-selection source is committed and pushed as a386d2ff.
+Ordinary deletion now prepares its complete command before publication across
+hosted openings, walls, architectural/drawing combinations, phases, corner
+windows, embedded components and generic roots. Preparation preserves actual
+producer intents, allocated destinations, reviewed geometry and the complete
+source/selection fence. Normal ordinary Delete still publishes once. The new
+architectural/drawing source intent is captured only when independent replay
+matches every entity in the complete ordinary candidate. Its narrow annotation
+composition admits exact internally reconstructed architectural overrides while
+preserving all other carrier fields and unselected local rows. The generic
+reviewed-stage API remains unchanged.
+
+Envelope45 composes that qualified ordinary architectural/drawing deletion with
+actual selected skylight children. It recreates the complete detached ordinary
+history stage and removal-only child stage, validates source and stage snapshot,
+authoring, entity and save authority, and publishes one final event. Explicit
+roof selection dominates its own children, including retained physical baselines;
+dominated children require membership validation rather than an independently
+permitted local edit. Surviving ordinary children use exact raw removal; actual
+baseline hosts use exact typed roof replacement against the staged source.
+Reader176/extraction174 fence retained and undone history. Source-kit ownership
+includes all four new helper files.
+
+Independent review found exponential prefix replay, rotated ordinary skylight
+refusal and missing historical declaration reservations. The corrections use
+operation/thread-scoped bounded memoization keyed by exact full source and
+canonical intent, removal-only raw changes for ordinary schema-four children,
+and lifetime-only traversal of ordinary roof destinations and staged phase
+replacement destinations. Cache hits retain all source admission guards; cache
+entries follow complete stage admission. Outer state/identity/lifetime checks
+remain. Repeated prefix validation/hash cost and interactive latency still need
+qualification; this is not a performance claim.
+
+Independent rereview accepted all three source corrections with no remaining
+concrete P1/P2 in its bounded scope. Root reviewed the integrated preparation,
+controller, canonical codec, live/retained replay, policy, identity reservations,
+source kit and format floors. Static inspection found all four new helper files
+listed once, preserved all 277 requirement definitions, changed only two delivery
+notes and confirmed 493 task/result pairs. `git diff --check` is clean. Scoped
+commit, push and exact remote-ref verification accompany this source batch;
+they do not qualify application behavior. The cache's serialized-content budget
+does not measure exact JSON allocator memory, and performance remains open.
+
+The first composition dialect does not yet cover ordinary hosted-opening,
+wall/room-review, phase, corner-window and unsupported generic deletion lanes.
+These combinations preserve the complete selection and report the gap. Mixed
+Cut, Copy/Paste/Duplicate, properties and transforms, native directional group
+controls and all other production scope remain required. The manual list keeps
+all 450 originals and adds a practical mixed-deletion task (493 total); every
+new task remains Not tested. All 277 requirements remain in the registry.
+
+No builds, tests/new tests, scripts, probes, native jobs, UI launches, packages
+or installations run. Source inspection and Git backup do not establish
+compilation, rendering, interaction, Undo/reopen or migration acceptance. The
+installed candidate is unchanged and all ten production gates remain open.
+Continue the missing ordinary deletion lanes and mixed clipboard/transform
+integration; retain the complete consolidated plan as the terminal objective.
+
 ### October 10 mixed object/skylight selection - source integration
 
 The skylight group side-resize batch is committed and pushed as dd30b59d,

@@ -185,6 +185,7 @@ struct LifetimeReservations {
         sequence(value.measured_owners); sequence(value.physical_room_owners);
     }
     void read(const WallMergeIntent& value) { text(value.first_wall_id); text(value.second_wall_id); }
+    void read(const WallGroupScaleIntent& value) { sequence(value.wall_ids); }
     void read(const JointAnnotationTranslationIntent& value) { text(value.owner_id); text(value.child_id); }
     void read(const JointReferenceTranslationIntent& value) { text(value.reference_id); }
     void read(const JointOwnerTranslationIntent& value) { text(value.owner_id); }
@@ -208,6 +209,8 @@ struct LifetimeReservations {
         optional(value.exterior_corner_move); optional(value.wall_split); optional(value.exterior_segment_resize);
         optional(value.exterior_segment_arc); optional(value.rigid_group_transform); optional(value.joint_translation);
         optional(value.disto_measurement); optional(value.wall_merge);
+        optional(value.wall_group_scale); read(value.independent_drawing_removal_intent);
+        read(value.mixed_selection_removal_intent);
         read(value.room_review_intent); read(value.room_review_geometry_proof);
         read(value.phase_room_review_intent); read(value.phase_constraint_authoring_intent);
     }
@@ -312,6 +315,11 @@ void reserve_join_envelope_names(LifetimeReservations& reservations) {
         "proof", "disto_measurement", "disto_measurement_completion", "record", "replace_existing",
         "reading_id", "target_field", "unit", "captured_at", "model", "firmware", "transport", "provenance",
         "wall_merge", "first_wall_id", "selection_entity_changes", "selection_completion", "curve_construction_completion",
+        "independent_drawing_removal_completion", "independent_drawing_removal_intent",
+        "wall_group_scale_completion", "wall_group_scale", "pivot_m", "scale", "move_connected_walls",
+        "mixed_selection_removal_completion", "mixed_selection_removal_intent", "ordinary", "ordinary_command",
+        "members", "roof_id", "opening_id", "child_command", "source_snapshot_digest", "source_authoring_digest",
+        "source_entities_digest", "source_saved_revision", "stage_snapshot_digest", "stage_authoring_digest",
         "target_id", "target_length_metres", "move_connected", "new_vertex_id", "new_segment_id", "new_dimension_id",
         "replacement_segments", "replacement_authoring", "replacement_properties", "replacement_dimension_ids",
         "replacement_child_mapping", "replacement_removed_reference_ids", "replacement_wall_source_ids",
