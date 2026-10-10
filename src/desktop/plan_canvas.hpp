@@ -37,6 +37,7 @@ class QSvgRenderer;
 class QTouchEvent;
 class QPointingDevice;
 class QMimeData;
+class QContextMenuEvent;
 
 namespace sketch::desktop {
 
@@ -723,6 +724,9 @@ public:
     // Emitted only on a stationary right-button release. The target is the
     // painted entity under the pointer, or an empty string for canvas space.
     void setRightClicked(std::function<void(Vec2, QString)> callback);
+    // Keyboard context uses the visible selection or canvas center, with a
+    // global Qt logical-pixel anchor and no pointer hit or selection change.
+    void setKeyboardContextMenuRequested(std::function<void(Vec2, QPoint)> callback);
     void setFinishRequested(std::function<void()> callback);
     void setPendingDimensionTargetRequested(
         std::function<std::optional<CanvasPendingDimensionTarget>()> callback);
@@ -759,6 +763,7 @@ protected:
     void mouseDoubleClickEvent(QMouseEvent* event) override;
     void mouseMoveEvent(QMouseEvent* event) override;
     void mouseReleaseEvent(QMouseEvent* event) override;
+    void contextMenuEvent(QContextMenuEvent* event) override;
     void wheelEvent(QWheelEvent* event) override;
     void keyPressEvent(QKeyEvent* event) override;
     void keyReleaseEvent(QKeyEvent* event) override;
@@ -1316,6 +1321,8 @@ private:
     std::function<bool(const QString&)> m_symbol_drop_uses_raw_point;
     std::function<void(Vec2)> m_cursor_moved;
     std::function<void(Vec2, QString)> m_right_clicked;
+    std::function<void(Vec2, QPoint)> m_keyboard_context_menu_requested;
+    bool m_keyboard_context_menu_dispatch_active{};
     std::function<void()> m_finish_requested;
     std::function<std::optional<CanvasPendingDimensionTarget>()> m_pending_dimension_target_requested;
     std::function<void(CanvasPendingDimensionTarget, bool)> m_pending_dimension_orientation_requested;

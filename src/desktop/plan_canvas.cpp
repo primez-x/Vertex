@@ -6,6 +6,7 @@
 #include "sketch/desktop/area_class_palette.hpp"
 
 #include <QApplication>
+#include <QContextMenuEvent>
 #include <QDataStream>
 #include <QCryptographicHash>
 #include <QDialog>
@@ -4062,6 +4063,52 @@ void PlanCanvas::resetGesture() {
 
 void PlanCanvas::setRightClicked(std::function<void(Vec2, QString)> callback) {
     m_right_clicked = std::move(callback);
+}
+
+void PlanCanvas::setKeyboardContextMenuRequested(std::function<void(Vec2, QPoint)> callback) {
+    m_keyboard_context_menu_requested = std::move(callback);
+}
+
+void PlanCanvas::contextMenuEvent(QContextMenuEvent* event) {
+    // Pointer menus are already handled on stationary right release. Consume
+    // their redundant native context event, including right-pan releases.
+    event->accept();
+    if (event->reason() != QContextMenuEvent::Keyboard || m_keyboard_context_menu_dispatch_active) return;
+    const auto idle = [this] {
+        return isVisible() && QApplication::mouseButtons()==Qt::NoButton &&
+            drawingCommandIdle() && m_boundary_preview.empty() && !m_wall_preview &&
+            !m_boundary_draft_preview && !m_point_placement_requested &&
+            !m_component_placement_preview && !m_component_placement_preview_pending &&
+            !m_symbol_drag_active && !m_symbol_drag_preview &&
+            !m_move_preview_request_in_progress && !m_move_preview_delta &&
+            !m_transform_preview_request_in_progress && !m_transform_preview_pointer &&
+            !m_boundary_vertex_preview_request_in_progress && !m_vertex_release_pending &&
+            !m_opening_width_preview_request_in_progress && !m_generated_label_move_preview &&
+            !m_overview_dragging && !m_selection_start && !m_pending_dimension_space_tap;
+    };
+    if (!hasFocus() || !idle() || !m_keyboard_context_menu_requested) return;
+    const QPointer<PlanCanvas> guard(this);
+    struct DispatchReset {
+        QPointer<PlanCanvas> owner;
+        ~DispatchReset() { if (owner) owner->m_keyboard_context_menu_dispatch_active=false; }
+    } reset_dispatch{guard};
+    m_keyboard_context_menu_dispatch_active=true;
+    const bool admitted = admitInteraction(true);
+    if (!guard || !admitted || !hasFocus() || !idle() || !m_keyboard_context_menu_requested) return;
+
+    const QRectF viewport(rect());
+    auto anchor = viewport.center();
+    if (const auto bounds = selectionBounds()) {
+        // Explicit extrema also admit visible zero-width/height selections.
+        const auto left = std::max(viewport.left(), bounds->left());
+        const auto right = std::min(viewport.right(), bounds->right());
+        const auto top = std::max(viewport.top(), bounds->top());
+        const auto bottom = std::min(viewport.bottom(), bounds->bottom());
+        if (left <= right && top <= bottom)
+            anchor = QPointF((left + right) * 0.5, (top + bottom) * 0.5);
+    }
+    const auto callback = m_keyboard_context_menu_requested;
+    callback(toModel(anchor, viewport), mapToGlobal(anchor.toPoint()));
 }
 
 void PlanCanvas::mouseDoubleClickEvent(QMouseEvent* event) {

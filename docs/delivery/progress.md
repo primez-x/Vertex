@@ -14,6 +14,37 @@ changed source does not acquire runtime acceptance without later qualification.
 
 ## Current delivery state
 
+### October 9 keyboard canvas actions and menu source implementation
+
+Both focused idle canvases now handle Windows keyboard context events for the
+Menu key and Shift+F10. Plan requests retain ordinary and generated-callout
+selection; native 3D requests retain the primary object and complete selected
+group without pointer picking. Menus anchor at the visible selection, with a
+canvas-center fallback in logical pixels. Pending drawing, placement and
+device gestures consume the request without opening or cancelling an action.
+Redundant mouse context events preserve existing right-release cancellation
+and navigation behavior. Menu and Shift+F10 are reserved from custom bindings.
+
+The shared plan menu checks actual source, selection, workspace, layer,
+visibility and Site publication before its actions. Proxies preserve original
+command eligibility and recheck it at activation. Add text rechecks source
+after its input dialog. Selected-object captions now name the selection, and
+the plan menu exposes the existing Transform selection editor.
+
+Native callback source evidence now uses lexical save/restore scopes for
+keyboard menus, pointer completion and transform-start observers. Nested
+callbacks restore their enclosing capture even when snapshots are identical;
+new transform-start observers see their own actual published source. No
+project format or command schema changed.
+
+Independent source review identified the nested native capture lifetime defect;
+root applied the correction and reviewed the integrated source. The exact
+Windows event route and local OCCT shape-bound/projection contracts were
+inspected in primary source. No builds, tests, probes, scripts, native jobs,
+launches, packages or installations ran. Compilation, runtime focus, physical
+keyboard/DPI input and callback behavior remain unverified. The installed
+candidate is unchanged; production accessibility acceptance remains open.
+
 ### October 9 unit-aware assistance command source implementation
 
 Assistance language commands now use the canvas's current default input unit:

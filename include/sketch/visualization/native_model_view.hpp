@@ -14,6 +14,7 @@
 #include <string>
 
 QT_BEGIN_NAMESPACE
+class QContextMenuEvent;
 class QSinglePointEvent;
 class QTouchEvent;
 QT_END_NAMESPACE
@@ -49,15 +50,16 @@ public:
     // Exact immutable source of the successfully published AIS scene. A newer
     // queued request never substitutes its source for displayed geometry.
     [[nodiscard]] std::shared_ptr<const DocumentSnapshot> publishedSnapshot() const noexcept;
-    // Actual displayed-source press capture, retained through synchronous
-    // selection/edit/context and Move/manipulator completion callbacks.
+    // Actual displayed-source press or idle keyboard-context capture, retained
+    // through synchronous selection/edit/context and Move/manipulator callbacks.
     [[nodiscard]] std::shared_ptr<const DocumentSnapshot> gestureSourceSnapshot() const noexcept;
     // Called after the native press capture and before the first preview. The
     // shell captures selection/workspace/context here; this emits no command.
     std::function<void(QString)> onTransformGestureStarted;
     // Authorize semantic input before native picking/manipulation. Starting
     // captures context; later calls validate that same press. Camera input is
-    // independent, and a stationary context click starts its own admission.
+    // independent; stationary pointer and idle keyboard context requests each
+    // start their own admission.
     std::function<bool(bool starting)> onSceneInputRequested;
     void fitAll();
     // Synchronize complete logical selection; IDs without a displayed solid
@@ -141,6 +143,9 @@ public:
         onEntityTransformRequested;
     // Stationary right release: hit entity ID (empty for background), followed
     // by global Qt logical pixels. Hit selection is notified before the menu.
+    // Idle keyboard context: retained primary ID (empty without selection),
+    // with no picking or selection notification. The anchor uses its displayed
+    // projected bounds, or the visible viewport center when unavailable.
     std::function<void(QString, QPoint)> onContextMenuRequested;
     std::function<void(QString)> onError;
     // Geometry status for the viewport banner: preparation progress, terminal
@@ -174,6 +179,7 @@ protected:
     void mouseDoubleClickEvent(QMouseEvent* event) override;
     void mouseMoveEvent(QMouseEvent* event) override;
     void mouseReleaseEvent(QMouseEvent* event) override;
+    void contextMenuEvent(QContextMenuEvent* event) override;
     void tabletEvent(QTabletEvent* event) override;
     void wheelEvent(QWheelEvent* event) override;
     QPaintEngine* paintEngine() const override;

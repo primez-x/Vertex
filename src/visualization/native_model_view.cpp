@@ -21,6 +21,7 @@
 #include <AIS_Shape.hxx>
 #include <AIS_ColoredShape.hxx>
 #include <BRep_Builder.hxx>
+#include <Bnd_Box.hxx>
 #include <Aspect_DisplayConnection.hxx>
 #include <Aspect_Handle.hxx>
 #include <OpenGl_GraphicDriver.hxx>
@@ -40,6 +41,7 @@
 
 #include <QApplication>
 #include <QByteArray>
+#include <QContextMenuEvent>
 #include <QGuiApplication>
 #include <QFileInfo>
 #include <QImageWriter>
@@ -195,6 +197,26 @@ public:
     std::shared_ptr<const DocumentSnapshot> published_snapshot;
     std::shared_ptr<const DocumentSnapshot> gesture_snapshot;
     std::shared_ptr<const DocumentSnapshot> commit_snapshot;
+    // Synchronous callbacks can pump nested pointer or menu events. Each
+    // callback exposes its own captured source and then restores the enclosing
+    // callback's evidence, even when both captures share the same snapshot.
+    class CommitSourceScope {
+    public:
+        explicit CommitSourceScope(NativeModelView* owner)
+            : m_owner(owner), m_previous(owner->m_impl->commit_snapshot) {}
+        CommitSourceScope(const CommitSourceScope&)=delete;
+        CommitSourceScope& operator=(const CommitSourceScope&)=delete;
+        ~CommitSourceScope() { restore(); }
+        void restore() noexcept {
+            if (m_restored) return;
+            if (m_owner) m_owner->m_impl->commit_snapshot=std::move(m_previous);
+            m_restored=true;
+        }
+    private:
+        QPointer<NativeModelView> m_owner;
+        std::shared_ptr<const DocumentSnapshot> m_previous;
+        bool m_restored{};
+    };
     std::optional<NativeModelView::VisibleEntityIds> visible_ids;
     NativeGeometryRegenerator regenerator;
     QTimer* preparation_timer{};
@@ -279,6 +301,7 @@ public:
     QPointF left_press;
     bool left_moved{};
     bool space_pan_armed{};
+    bool keyboard_context_dispatch_active{};
     std::optional<std::string> translation_entity_id;
     std::vector<std::string> translation_preview_ids;
     struct WorldPoint {
@@ -1043,6 +1066,57 @@ public:
         return QSize(width,height)==capture.native_size;
     }
 
+    QPoint keyboard_context_anchor(const SelectionCapture& capture, const QRect& visible) const {
+        const auto fallback=visible.center();
+        if (capture.selection.isEmpty() || capture.native_size.isEmpty()) return fallback;
+        const auto found=solids.find(capture.selection.back().toStdString());
+        if (found==solids.end() || found->second.presentation.IsNull() ||
+            found->second.presentation->Shape().IsNull() ||
+            !context->IsDisplayed(found->second.presentation)) return fallback;
+        // Use the displayed shape (including material-region compounds), not
+        // document coordinates or a newly prepared solid. AIS shape bounds are
+        // local; apply the presentation's complete parent/local transformation.
+        const auto& bounds=found->second.presentation->BoundingBox();
+        if (bounds.IsVoid() || bounds.IsOpen()) return fallback;
+        const auto low=bounds.CornerMin();
+        const auto high=bounds.CornerMax();
+        double left=std::numeric_limits<double>::infinity();
+        double top=left;
+        double right=-left;
+        double bottom=right;
+        for (int corner=0;corner<8;++corner) {
+            auto world=gp_Pnt((corner&1) ? high.X() : low.X(),
+                              (corner&2) ? high.Y() : low.Y(),
+                              (corner&4) ? high.Z() : low.Z());
+            world.Transform(found->second.presentation->Transformation());
+            if (!std::isfinite(world.X()) || !std::isfinite(world.Y()) || !std::isfinite(world.Z()))
+                return fallback;
+            const auto projected=view->Camera()->Project(world);
+            // V3d_View::Convert uses this top-left pixel projection internally.
+            // Keep it in floating point until visible clipping so far-offscreen
+            // geometry cannot overflow OCCT's integer pixel conversion.
+            const auto x=(projected.X()+1.0)*0.5*capture.native_size.width()/capture.pixel_ratio;
+            const auto y=(capture.native_size.height()-1.0-
+                (projected.Y()+1.0)*0.5*capture.native_size.height())/capture.pixel_ratio;
+            if (!std::isfinite(x) || !std::isfinite(y) || !std::isfinite(projected.Z()) ||
+                projected.Z() < -1.0 || projected.Z() > 1.0) return fallback;
+            left=std::min(left,x);
+            top=std::min(top,y);
+            right=std::max(right,x);
+            bottom=std::max(bottom,y);
+        }
+        if (right<visible.left() || left>visible.right() || bottom<visible.top() || top>visible.bottom())
+            return fallback;
+        // Center only the visible portion, including a partially offscreen
+        // selected object. Convert to Qt logical pixels before rounding.
+        left=std::max(left,static_cast<double>(visible.left()));
+        right=std::min(right,static_cast<double>(visible.right()));
+        top=std::max(top,static_cast<double>(visible.top()));
+        bottom=std::min(bottom,static_cast<double>(visible.bottom()));
+        return QPoint(qBound(visible.left(),qRound(left+(right-left)*0.5),visible.right()),
+                      qBound(visible.top(),qRound(top+(bottom-top)*0.5),visible.bottom()));
+    }
+
     void restore_selection_highlights() {
         if (context.IsNull()) return;
         context->ClearSelected(false);
@@ -1590,6 +1664,9 @@ void NativeModelView::resetCompletedPointerInteraction(bool restore_controls) {
 }
 
 bool NativeModelView::event(QEvent* event) {
+    // A context request must not retire/cancel another device's gesture merely
+    // by arriving. Its handler checks idle ownership without changing it.
+    if (event->type()==QEvent::ContextMenu) return QWidget::event(event);
     const QPointer<NativeModelView> input_guard(this);
     if (m_impl) retireDisconnectedTablet();
     if (!input_guard) { event->accept(); return true; }
@@ -1644,6 +1721,59 @@ bool NativeModelView::event(QEvent* event) {
         return true;
     }
     return QWidget::event(event);
+}
+
+void NativeModelView::contextMenuEvent(QContextMenuEvent* event) {
+    // Pointer menus are already dispatched by stationary right release. Consume
+    // Qt's redundant event even after orbit so it cannot open a parent menu.
+    if (event->reason()==QContextMenuEvent::Mouse) { event->accept(); return; }
+    if (event->reason()!=QContextMenuEvent::Keyboard) { QWidget::contextMenuEvent(event); return; }
+    event->accept();
+    if (m_impl->keyboard_context_dispatch_active) return;
+    const QPointer<NativeModelView> guard(this);
+    const auto idle=[this] {
+        return hasFocus() && isVisible() && isReady() && !m_impl->view.IsNull() && !m_impl->context.IsNull() &&
+            !m_impl->window.IsNull() && !m_impl->view->Camera().IsNull() &&
+            m_impl->gesture==Impl::Gesture::none && m_impl->initiating_button==Qt::NoButton &&
+            !isMoveActive() && !m_impl->translation_start && m_impl->translation_preview_ids.empty() &&
+            !m_impl->manipulation_transform && !m_impl->selection_capture && !m_impl->gesture_snapshot &&
+            !m_impl->tablet_active && !m_impl->tablet_dispatch_depth &&
+            !m_impl->touch && !m_impl->touch_dispatch_depth && !m_impl->space_pan_armed &&
+            QApplication::mouseButtons()==Qt::NoButton &&
+            (m_impl->manipulator.IsNull() || !m_impl->manipulator->HasActiveTransformation());
+    };
+    struct ContextDispatchReset {
+        QPointer<NativeModelView> owner;
+        ~ContextDispatchReset() {
+            if (owner) owner->m_impl->keyboard_context_dispatch_active=false;
+        }
+    } reset_dispatch{guard};
+    Impl::CommitSourceScope source_scope(this);
+    m_impl->keyboard_context_dispatch_active=true;
+    try {
+        if (!idle()) return;
+        const auto callback=onContextMenuRequested;
+        if (!callback) return;
+        const auto capture=m_impl->capture_selection();
+        if (!m_impl->selection_current(capture)) return;
+        if (!admitSceneInput(true) || !guard || !idle() || !m_impl->selection_current(capture)) return;
+        const auto visible=visibleRegion().boundingRect().intersected(rect());
+        if (visible.isEmpty()) return;
+        const auto anchor=mapToGlobal(m_impl->keyboard_context_anchor(capture,visible));
+        if (!m_impl->selection_current(capture)) return;
+        const auto primary=capture.selection.isEmpty() ? QString{} : capture.selection.back();
+        m_impl->commit_snapshot=capture.source;
+        callback(primary,anchor);
+    } catch (const Standard_Failure& error) {
+        source_scope.restore();
+        if (guard) m_impl->show_input_error(QStringLiteral("3D keyboard context failed: ")+exception_text(error));
+    } catch (const std::exception& error) {
+        source_scope.restore();
+        if (guard) m_impl->show_input_error(QStringLiteral("3D keyboard context failed: ")+exception_text(error));
+    } catch (...) {
+        source_scope.restore();
+        if (guard) m_impl->show_input_error(QStringLiteral("3D keyboard context failed: unknown failure"));
+    }
 }
 
 void NativeModelView::showEvent(QShowEvent* event) {
@@ -2129,6 +2259,8 @@ void NativeModelView::pointerPress(QSinglePointEvent* event) {
         const auto capture_transform = [this](const QString& target) {
             m_impl->gesture_snapshot = m_impl->published_snapshot;
             const QPointer<NativeModelView> guard(this);
+            Impl::CommitSourceScope source_scope(this);
+            m_impl->commit_snapshot=m_impl->gesture_snapshot;
             try {
                 const auto observer=onTransformGestureStarted;
                 if (observer) observer(target);
@@ -2141,12 +2273,14 @@ void NativeModelView::pointerPress(QSinglePointEvent* event) {
                 return !guard.isNull() && (!m_impl->tablet_dispatch_depth || !m_impl->tablet_dispatch_retired) &&
                     (!m_impl->touch_dispatch_depth || !m_impl->touch_dispatch_retired);
             } catch (const std::exception& error) {
+                source_scope.restore();
                 if (guard) {
                     guard->cancelInteraction();
                     guard->m_impl->show_input_error(QStringLiteral("3D edit capture failed: ") +
                         QString::fromUtf8(error.what()));
                 }
             } catch (...) {
+                source_scope.restore();
                 if (guard) {
                     guard->cancelInteraction();
                     guard->m_impl->show_input_error(QStringLiteral("3D edit capture failed: unknown observer failure"));
@@ -2304,10 +2438,7 @@ void NativeModelView::pointerRelease(QSinglePointEvent* event) {
         return;
     }
     const QPointer<NativeModelView> owner_guard(this);
-    struct CommitSourceReset {
-        QPointer<NativeModelView> owner;
-        ~CommitSourceReset() { if (owner) owner->m_impl->commit_snapshot.reset(); }
-    } reset_source{owner_guard};
+    Impl::CommitSourceScope source_scope(this);
     const auto point = m_impl->input_point(event->position());
     // Sub-threshold release movement must not replace the press-owned hit.
     // Dragging still uses the release point for its final camera/edit endpoint.

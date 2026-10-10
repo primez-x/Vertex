@@ -41623,7 +41623,8 @@ public:
         const std::vector<QKeySequence> reserved{
             QKeySequence::Undo, QKeySequence::Redo, QKeySequence::Copy,
             QKeySequence::Cut, QKeySequence::Paste, QKeySequence::SelectAll,
-            QKeySequence(QStringLiteral("Ctrl+Shift+Z"))};
+            QKeySequence(QStringLiteral("Ctrl+Shift+Z")),
+            QKeySequence(QStringLiteral("Shift+F10"))};
         for (std::size_t index = 0; index < keys.size(); ++index) {
             const auto& sequence = keys[index];
             if (sequence.isEmpty()) continue;
@@ -41631,7 +41632,8 @@ public:
             const auto key = sequence[0].key();
             const auto modifiers = sequence[0].keyboardModifiers();
             if (key == Qt::Key_unknown || key == Qt::Key_Control || key == Qt::Key_Shift ||
-                key == Qt::Key_Alt || key == Qt::Key_Meta || key == Qt::Key_Tab || key == Qt::Key_Backtab ||
+                key == Qt::Key_Alt || key == Qt::Key_Meta || key == Qt::Key_Menu ||
+                key == Qt::Key_Tab || key == Qt::Key_Backtab ||
                 key == Qt::Key_Return || key == Qt::Key_Enter || key == Qt::Key_Escape ||
                 key == Qt::Key_Backspace || key == Qt::Key_Delete || key == Qt::Key_Insert ||
                 (key >= Qt::Key_Home && key <= Qt::Key_PageDown) ||
@@ -48944,11 +48946,9 @@ private:
                                 }
                             };
                         };
-                        if (!single) {
-                            auto* count=menu.addAction(QStringLiteral("%1 selected").arg(m_selected_ids.size()));
-                            count->setEnabled(false);
-                            menu.addSeparator();
-                        }
+                        auto* caption=menu.addAction(selectionCaption());
+                        caption->setEnabled(false);
+                        menu.addSeparator();
                         if (single && selectedEntity() && supportsSitePlacement(*selectedEntity())) {
                             auto* placement = menu.addAction(QStringLiteral("Site placement and coordinate frame…"));
                             placement->setObjectName(QStringLiteral("sitePlacementContextAction"));
@@ -50627,8 +50627,14 @@ private:
             }
             if (m_inspector && m_inspector->isVisible()) positionContextEditor();
         });
-        canvas->setRightClicked([this,canvas](Vec2 point, QString target) {
+        const auto show_context_menu = [this,canvas](Vec2 point, QString target,
+                                                    QPoint global_position, bool keyboard) {
             try {
+                // Keyboard access preserves the unfinished action. Pointer
+                // right-click keeps its established finish/cancel behavior.
+                if (keyboard && (m_refreshing || hasPendingPlacementEdit() ||
+                    m_text_placement_context || m_plan_label_context || m_armed_area_class ||
+                    m_drawing_alignment || m_drawing_alignment_invalidated)) return;
                 try { if (siteCanvas(canvas)) requireSitePublicationCurrent(false); }
                 catch (const std::exception& error) { clearSitePublication(); setError(QString::fromUtf8(error.what())); return; }
                 if (m_linework_drawing) { finishMeasurementLinework(); return; }
@@ -50646,7 +50652,8 @@ private:
                         m_symbol_library_status->setText(QStringLiteral("Component placement cancelled."));
                     return;
                 }
-                const auto label_hit=canvas->labelPresentationAtModelPoint(point);
+                const auto label_hit=keyboard ? std::optional<CanvasLabelPresentationIdentity>{}
+                    : canvas->labelPresentationAtModelPoint(point);
                 const auto label=label_hit ? canvas->labelPresentation(*label_hit) : std::nullopt;
                 if ((label && label->avoid_components &&
                     (label_hit->callout_role.isEmpty() || area_callout_role(label_hit->callout_role.toStdString()))) ||
@@ -50685,16 +50692,50 @@ private:
                     QObject::connect(automatic,&QAction::triggered,owner,[this,canvas,menu_current] {
                         if (menu_current(true)) (void)resetGeneratedLabelPositions(canvas);
                     });
-                    label_menu.exec(QCursor::pos());return;
+                    label_menu.exec(global_position);return;
                 }
-                if (!target.isEmpty() && !m_selected_ids.contains(target)) {
+                if (!keyboard && !target.isEmpty() && !m_selected_ids.contains(target)) {
                     if (!selectEntity(target, false)) return;
                 }
+                const auto menu_source=captureCanvasGeometrySource(canvas,std::nullopt,false);
+                const auto menu_authority=captureSourceEditAuthority(*menu_source);
+                const bool menu_site=siteCanvas(canvas);
+                const auto menu_site_generation=m_site_publication_generation;
+                const auto menu_current=[this,canvas,menu_authority,menu_site,menu_site_generation] {
+                    const auto* active=m_workspace==Workspace::measurement ? m_measurementCanvas : m_architecturalCanvas;
+                    if (canvas==active && sourceEditAuthorityCurrent(menu_authority,false) &&
+                        menu_site==siteCanvas(canvas) && (!menu_site || menu_site_generation==m_site_publication_generation) &&
+                        !hasPendingPlacementEdit() && !m_text_placement_context && !m_plan_label_context &&
+                        !m_armed_area_class && !m_drawing_alignment && !m_drawing_alignment_invalidated) return true;
+                    setError(QStringLiteral("The project, selection or plan changed. Reopen its actions."));
+                    return false;
+                };
+                const auto guarded=[this,menu_current](auto action) {
+                    return [this,menu_current,action=std::move(action)] {
+                        try { if (menu_current()) action(); }
+                        catch (const std::exception& error) {
+                            setError(QStringLiteral("Context menu: %1").arg(QString::fromUtf8(error.what())));
+                        }
+                    };
+                };
                 QMenu menu(owner);
+                const auto add_command=[&menu,this,guarded](QAction* action) {
+                    if (!action) return static_cast<QAction*>(nullptr);
+                    auto* item=menu.addAction(action->icon(),action->text());
+                    item->setObjectName(action->objectName());
+                    item->setEnabled(action->isEnabled());
+                    item->setCheckable(action->isCheckable());
+                    item->setChecked(action->isChecked());
+                    item->setShortcut(action->shortcut());
+                    item->setShortcutContext(Qt::WidgetShortcut);
+                    const QPointer<QAction> original(action);
+                    QObject::connect(item,&QAction::triggered,owner,guarded([original] {
+                        if (original && original->isEnabled()) original->trigger();
+                    }));
+                    return item;
+                };
                 if (!m_selected_id.isEmpty()) {
-                    auto* selection = menu.addAction(m_selected_ids.size() > 1
-                        ? QStringLiteral("%1 selected").arg(m_selected_ids.size())
-                        : QStringLiteral("Selected"));
+                    auto* selection = menu.addAction(selectionCaption());
                     selection->setEnabled(false);
                     if (m_selected_ids.size() == 1) {
                         const auto entity = selectedEntity();
@@ -50702,24 +50743,24 @@ private:
                             auto* appearance = menu.addAction(QStringLiteral("Drawing appearance…"));
                             appearance->setObjectName(QStringLiteral("objectAppearanceContextAction"));
                             appearance->setEnabled(m_document->is_editable());
-                            QObject::connect(appearance, &QAction::triggered, owner, [this] { showObjectAppearance(); });
+                            QObject::connect(appearance, &QAction::triggered, owner, guarded([this] { showObjectAppearance(); }));
                         }
                         if (entity && entity->type == "wall") {
-                            menu.addAction(owner->findChild<QAction*>(QStringLiteral("createDoor")));
-                            menu.addAction(owner->findChild<QAction*>(QStringLiteral("createWindow")));
+                            add_command(owner->findChild<QAction*>(QStringLiteral("createDoor")));
+                            add_command(owner->findChild<QAction*>(QStringLiteral("createWindow")));
                             auto* length = menu.addAction(QStringLiteral("Change length…"));
                             QObject::connect(length, &QAction::triggered, owner,
-                                             [this] { showConstraintEditor(); });
+                                             guarded([this] { showConstraintEditor(); }));
                             auto* measurement=menu.addAction(QStringLiteral("Wall measurement…"));
-                            QObject::connect(measurement,&QAction::triggered,owner,[this]{
+                            QObject::connect(measurement,&QAction::triggered,owner,guarded([this]{
                                 positionContextEditor();
                                 m_inspector->ensureWidgetVisible(m_dimension_properties_group,0,8);
-                            });
+                            }));
                         }
                         if (entity && ConstraintDialog::supportsEntity(*entity)) {
                             auto* constraints = menu.addAction(QStringLiteral("Dimensions and constraints…"));
                             QObject::connect(constraints, &QAction::triggered, owner,
-                                             [this] { showConstraintEditor(); });
+                                             guarded([this] { showConstraintEditor(); }));
                         }
                         if (entity && canvas == m_architecturalCanvas && !siteCanvas(canvas) &&
                             (entity->type == "wall" || entity->type == "opening" || entity->type == "room" ||
@@ -50731,91 +50772,100 @@ private:
                             dimension->setEnabled(m_document->is_editable());
                             const auto selected_id = m_selected_id;
                             QObject::connect(dimension, &QAction::triggered, owner,
-                                [this, selected_id] { showObjectViewDimension(selected_id); });
+                                guarded([this, selected_id] { showObjectViewDimension(selected_id); }));
                         }
                         if(entity && (entity->type=="measurement_linework" || can_recognize_boundary_entity_type(entity->type))) {
                             auto* dimension=owner->findChild<QAction*>(QStringLiteral("dimensionCreator"));
-                            if(dimension){menu.addAction(dimension);dimension->setEnabled(m_document->is_editable());}
+                            if(auto* item=add_command(dimension)) item->setEnabled(dimension->isEnabled() && m_document->is_editable());
                         }
                     }
                     const auto selected = selectedEntity();
                     if (selected && selected->type == "wall")
-                        menu.addAction(owner->findChild<QAction*>(QStringLiteral("measureExteriorFromWalls")));
+                        add_command(owner->findChild<QAction*>(QStringLiteral("measureExteriorFromWalls")));
                     if (m_selected_ids.size()==1 && selected && selected->type=="measurement_boundary" &&
                         (selected->extensions.contains("measurement_linework_sources") || selected->extensions.contains("measurement_linework_group")))
-                        menu.addAction(owner->findChild<QAction*>(QStringLiteral("reviewMeasuredAreaSources")));
+                        add_command(owner->findChild<QAction*>(QStringLiteral("reviewMeasuredAreaSources")));
                     if (m_selected_ids.size() == 1 && selected && selected->type == "measurement_boundary" &&
                         selected->properties.contains("wall_measurement_source")) {
-                        menu.addAction(owner->findChild<QAction*>(QStringLiteral("refreshExteriorMeasurement")));
+                        add_command(owner->findChild<QAction*>(QStringLiteral("refreshExteriorMeasurement")));
                         if (supportedExteriorWallMeasurement(*selected))
-                            menu.addAction(owner->findChild<QAction*>(QStringLiteral("replaceExteriorMeasurementSources")));
+                            add_command(owner->findChild<QAction*>(QStringLiteral("replaceExteriorMeasurementSources")));
                     }
                     if (m_selected_ids.size()==1 && selected &&
                         (selected->type=="measurement_boundary" || selected->type=="boundary"))
-                        menu.addAction(m_auto_subtract_action);
+                        add_command(m_auto_subtract_action);
                     if (m_selected_ids.size() == 1 && selected &&
                         is_closed_boundary_entity(selected->type)) {
                         try {
                             const auto property = propertyEntity();
                             if (property && calculation_workflow_name(property->properties) == "appraisal")
-                                menu.addAction(m_edit_appraisal_facts_action);
+                                add_command(m_edit_appraisal_facts_action);
                         } catch (const std::exception&) {
                             // Fail closed if the current workflow cannot be resolved.
                         }
                     }
                     if (m_selected_ids.size() == 1 && selected && is_closed_boundary_entity(selected->type) &&
                         inspect_boundary_entity_version(*selected).format == BoundaryEntityFormat::anonymous_legacy)
-                        menu.addAction(m_upgrade_boundary_identities_action);
+                        add_command(m_upgrade_boundary_identities_action);
                     if (selected && is_closed_boundary_entity(selected->type) &&
                         inspect_boundary_entity_version(*selected).format ==
                             BoundaryEntityFormat::identified_v1) {
                         auto* geometry = menu.addAction(QStringLiteral("Edit boundary geometry…"));
                         QObject::connect(geometry, &QAction::triggered, owner,
-                                         [this] { showBoundaryGeometryEditor(); });
-                        menu.addAction(owner->findChild<QAction*>(QStringLiteral("removeBoundaryVertex")));
+                                         guarded([this] { showBoundaryGeometryEditor(); }));
+                        add_command(owner->findChild<QAction*>(QStringLiteral("removeBoundaryVertex")));
                         for (const auto* id : {"createRoom", "createSlab", "createFloor"})
-                            menu.addAction(owner->findChild<QAction*>(QString::fromLatin1(id)));
+                            add_command(owner->findChild<QAction*>(QString::fromLatin1(id)));
                     }
                     if (m_selected_ids.size()==1 && selected && selected->type=="measurement_linework") {
                         auto* geometry=menu.addAction(QStringLiteral("Edit measured stroke…"));
-                        QObject::connect(geometry,&QAction::triggered,owner,[this]{showBoundaryGeometryEditor();});
+                        QObject::connect(geometry,&QAction::triggered,owner,guarded([this]{showBoundaryGeometryEditor();}));
                     }
                     if (selected && (selected->type == "wall" || selected->type == "wall_join")) {
                         if (selected->type=="wall" && m_selected_ids.size()<=2)
-                            menu.addAction(owner->findChild<QAction*>(QStringLiteral("mergePhysicalWalls")));
-                        if (m_selected_ids.size() > 1) menu.addAction(owner->findChild<QAction*>(QStringLiteral("joinWalls")));
-                        menu.addAction(owner->findChild<QAction*>(QStringLiteral("unjoinWalls")));
+                            add_command(owner->findChild<QAction*>(QStringLiteral("mergePhysicalWalls")));
+                        if (m_selected_ids.size() > 1) add_command(owner->findChild<QAction*>(QStringLiteral("joinWalls")));
+                        add_command(owner->findChild<QAction*>(QStringLiteral("unjoinWalls")));
                     }
                     if (selected && (selected->type == "roof" || selected->type == "roof_join")) {
-                        if (m_selected_ids.size() > 1) menu.addAction(owner->findChild<QAction*>(QStringLiteral("joinRoofs")));
-                        menu.addAction(owner->findChild<QAction*>(QStringLiteral("unjoinRoofs")));
+                        if (m_selected_ids.size() > 1) add_command(owner->findChild<QAction*>(QStringLiteral("joinRoofs")));
+                        add_command(owner->findChild<QAction*>(QStringLiteral("unjoinRoofs")));
                     }
                     auto* properties = menu.addAction(QStringLiteral("Properties"));
                     QObject::connect(properties, &QAction::triggered, owner,
-                                     [this] { positionContextEditor(); });
-                    menu.addAction(m_copy_action);
-                    menu.addAction(m_cut_action);
-                    menu.addAction(m_delete_action);
+                                     guarded([this] { positionContextEditor(); }));
+                    if (auto* transform=add_command(m_transform_action))
+                        transform->setEnabled(m_transform_action->isEnabled() && m_document->is_editable());
+                    add_command(m_copy_action);
+                    add_command(m_cut_action);
+                    add_command(m_delete_action);
                     auto* deselect = menu.addAction(QStringLiteral("Deselect"));
                     QObject::connect(deselect, &QAction::triggered, owner,
-                                     [this] { (void)selectEntity({}); });
+                                     guarded([this] { (void)selectEntity({}); }));
                     menu.addSeparator();
                 }
-                menu.addAction(m_paste_action);
+                add_command(m_paste_action);
                 auto* add_text = menu.addAction(QStringLiteral("Add text here…"));
-                QObject::connect(add_text, &QAction::triggered, owner, [this, point] {
+                add_text->setEnabled(m_document->is_editable());
+                QObject::connect(add_text, &QAction::triggered, owner, guarded([this, point, menu_current] {
                     bool accepted = false;
                     const auto text = QInputDialog::getText(owner, QStringLiteral("Add text"),
                         QStringLiteral("Text"), QLineEdit::Normal, {}, &accepted).trimmed();
-                    if (!accepted || text.isEmpty()) return;
+                    if (!accepted || text.isEmpty() || !menu_current()) return;
                     (void)createAnnotationLabel(QStringLiteral("note"), text, point);
-                });
+                }));
                 auto* fit = menu.addAction(QStringLiteral("Fit drawing"));
-                QObject::connect(fit, &QAction::triggered, owner, [this] { fitView(); });
-                menu.exec(QCursor::pos());
+                QObject::connect(fit, &QAction::triggered, owner, guarded([this] { fitView(); }));
+                menu.exec(global_position);
             } catch (const std::exception& error) {
                 setError(QStringLiteral("Context menu: %1").arg(QString::fromUtf8(error.what())));
             }
+        };
+        canvas->setRightClicked([show_context_menu](Vec2 point, QString target) {
+            show_context_menu(point, std::move(target), QCursor::pos(), false);
+        });
+        canvas->setKeyboardContextMenuRequested([show_context_menu](Vec2 point, QPoint global_position) {
+            show_context_menu(point, {}, global_position, true);
         });
         canvas->setFinishRequested([this, canvas] {
             if (m_drawing_alignment || m_drawing_alignment_invalidated) {

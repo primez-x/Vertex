@@ -14,6 +14,17 @@ that a physical pen, touch device, screen reader, keyboard-only run, or every
 Qt style has passed. Those observations remain required for the final quality
 gate.
 
+Focused idle plan and native 3D canvases accept the Windows keyboard context
+event used by the Menu key and Shift+F10. Actions use the retained selection,
+including multiple objects and generated plan callouts, without picking under
+the pointer. Menu anchors use the visible selection or viewport center in Qt
+logical pixels. Unfinished gestures and placements retain their input without
+opening a menu. Pointer right-drag navigation and stationary cancel/context
+behavior remain separate. Menu and Shift+F10 are reserved from custom command
+bindings. Menu edits retain their source and selection authority; a changed
+project or editing context requires reopening the menu. This is source
+implementation; keyboard-only and physical-device qualification remains open.
+
 The plan canvases opt into Qt touch and tablet tracking explicitly. A primary
 touch contact or active-pen press is routed through the same pointer path as a
 left mouse press, so selection, point placement, snapping, overview-map
