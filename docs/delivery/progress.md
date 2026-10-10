@@ -14,6 +14,26 @@ changed source does not acquire runtime acceptance without later qualification.
 
 ## Current delivery state
 
+### October 10 retained-command decoder correction
+
+Native directional group resizing is committed and pushed as 64e3bef6, with
+exact local/remote ref verification. Source inspection found that the command
+decoder's initial version ceiling remained 47 even though its later branches
+handle versions 48 through 51. The ceiling now admits those existing versions;
+each continues through its exact-field, canonical proof and family validation.
+This repairs reachability of retained wall/corner deletion and mixed clipboard
+history decoding without changing those commands' meanings or reader floors.
+Root inspected the guard and existing branches; source whitespace is clean.
+Save/reopen and extraction behavior remain unqualified under source-only work.
+
+The mixed edit composer is being corrected after independent review found
+legitimate embedded-assembly edits refused and measured-area lineage references
+misclassified as owned topology. Separate workers are implementing closed
+ordinary transform requests and a same-original-snapshot compound edit command.
+Full desktop routing, drawing/wall and Properties coverage remain required.
+No build, test, script, probe, native job, launch, package or installation runs;
+the installed candidate remains unchanged and every production gate stays open.
+
 ### October 10 native directional group resizing - reviewed source integration
 
 The ordinary clipboard spacing and selected corner-cut batch is committed and
