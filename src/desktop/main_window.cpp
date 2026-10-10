@@ -52072,6 +52072,15 @@ private:
             }
             catch (const std::exception& error) { setError(QString::fromUtf8(error.what())); }
         });
+        canvas->setIdleWallSelectionRequested([this] {
+            // Authoritative draft state owns clicks even if its preview was
+            // cleared by a validation error. Existing selection edits (including
+            // vertex previews) remain part of the idle Wall pointer surface.
+            return !m_boundary_session && !m_pending_wall_start && !m_linework_drawing &&
+                m_pending_symbol_id.isEmpty() && m_pending_opening_kind.isEmpty() &&
+                !m_text_placement_context && !m_plan_label_context && !m_armed_area_class &&
+                !m_drawing_parked && !m_drawing_travel_armed;
+        });
         canvas->setPendingDimensionTargetRequested([this, canvas] {
             return pendingDimensionTarget(canvas);
         });

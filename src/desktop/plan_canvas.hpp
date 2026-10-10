@@ -551,8 +551,8 @@ public:
     // A temporary one-click command consumes input before picks or authoring.
     void setPointPlacementRequested(std::function<void(Vec2)> callback);
     void setEntityClicked(std::function<void(QString)> callback);
-    // Unmodified left-button double-click in Select mode. The first click has
-    // already applied ordinary selection; this callback requests the object's
+    // Unmodified left-button double-click with idle selection available. The
+    // first click already applied ordinary selection; this requests the object's
     // contextual editor without replaying a second selection/authoring press.
     void setEntityDoubleClicked(std::function<void(QString)> callback);
     // Returning true consumes the contextual request; false uses the body editor.
@@ -624,6 +624,10 @@ public:
     // Admit semantic input against the exact displayed source before any hit
     // or handle work. Context cancellation remains a shell-owned decision.
     void setInteractionAdmissionRequested(std::function<bool(bool context)> callback);
+    // Wall and Sloped Wall share idle selection with the ordinary pointer.
+    // The host supplies pending authoring state even if its preview is absent.
+    // This read-only predicate must not refresh or mutate the canvas.
+    void setIdleWallSelectionRequested(std::function<bool()> callback);
     // nullopt retains the ordinary transform preview; an engaged empty
     // proposal rejects it. Pending exact projections never invent geometry.
     void setEntityTransformPreviewRequested(std::function<std::optional<std::vector<CanvasEntity>>(
@@ -1300,6 +1304,7 @@ private:
     std::function<bool(QStringList, double, Vec2)> m_entities_transform_requested;
     std::function<void(QString)> m_entity_edit_gesture_started;
     std::function<bool(bool)> m_interaction_admission_requested;
+    std::function<bool()> m_idle_wall_selection_requested;
     std::function<std::optional<std::vector<CanvasEntity>>(
         QString, double, double, Vec2, std::uint64_t)> m_entity_transform_preview_requested;
     std::function<bool(QString, double, double, Vec2)> m_entity_axis_resize_requested;

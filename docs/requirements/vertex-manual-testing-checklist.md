@@ -109,6 +109,7 @@ Start with the workspace, draw a room, close it with the mouse, drag-select it, 
   - Notes / steps to reproduce: ____________________
 
 - [ ] **U008 — Use the unified canvas pointer**
+  - Steps: Select an existing object, then choose Wall from Commands. Click once on empty canvas outside the selected frame: the selection should clear without starting a wall. Click again to start a wall, then right-click to cancel that pending start. Select the object again and drag inside its frame to move it; drag outside to pan. Ctrl-click two objects and Ctrl-drag a selection window. Repeat with Sloped Wall and the ordinary Wall drawing choice in 2D and the architectural plan.
   - Expected: There are no Select, Draw First or Define First mode toggles. Click an object to select it, click empty canvas to draw, drag inside a selected object to move it, drag elsewhere to pan, and Ctrl-drag to select a region.
   - Result: Not tested
   - Notes / steps to reproduce: ____________________

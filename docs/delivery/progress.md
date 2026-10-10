@@ -14,6 +14,28 @@ changed source does not acquire runtime acceptance without later qualification.
 
 ## Current delivery state
 
+### October 10 idle Wall pointer precedence — source integration
+
+Current-source canvas review found explicit Wall tool state bypassed the shared
+selection predicate. A stationary empty click could start a wall while retaining
+an old selection, and selected-frame movement/handles were unavailable on that
+route. Idle Wall and Sloped Wall now use the existing selection, deselect-before-draw, frame
+movement, transform, contextual-property and cursor paths. This preserves the
+selection when switching tools instead of silently clearing it as a workaround.
+
+The host supplies actual pending drawing/placement state through a pure idle
+predicate. Local previews and authoritative pending states prevent input from
+being reinterpreted as selection when a validation error clears a preview.
+Existing vertex selection edits remain enabled. Separate purpose tools and
+left/right/middle navigation routes are unchanged. U008 now includes practical
+explicit-Wall click, move, cancel and multi-selection steps. The library README
+also matches the actual 352 SVG files; this count is not artwork qualification.
+
+Root reviewed the integrated event precedence, host callback and draft-failure
+path; scoped diff checks passed. No build, test, probe, native job, UI launch,
+package or installation ran. The installed candidate remains unchanged and the
+interaction has not been user-observed. All ten production gates remain open.
+
 ### October 10 source recovery and coordinated room relationships — source integration
 
 Tools and command search now expose Imported sources for actual retained DXF,

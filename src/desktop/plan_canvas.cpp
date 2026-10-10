@@ -7879,8 +7879,22 @@ std::vector<CanvasLabelPresentationIdentity> PlanCanvas::selectedLabelPresentati
 }
 
 bool PlanCanvas::selectionInteractionEnabled() const {
-    return m_selection_controls_visible && (m_tool == CanvasTool::select || m_tool == CanvasTool::boundary) &&
-           !m_boundary_draft_preview;
+    if (!m_selection_controls_visible || m_boundary_draft_preview) return false;
+    if (m_tool == CanvasTool::select || m_tool == CanvasTool::boundary) return true;
+    if ((m_tool != CanvasTool::wall && m_tool != CanvasTool::sloped_wall) ||
+        m_wall_preview || !m_boundary_preview.empty() ||
+        !m_area_class_caption.isEmpty() || m_point_placement_requested ||
+        m_component_placement_preview || m_component_placement_preview_pending ||
+        m_symbol_drag_active || m_symbol_drag_preview) return false;
+    // Idle wall tools use the same hybrid pointer: picks and the retained
+    // frame precede drawing. A draft or unplaced component owns input instead.
+    // Preview failures must not make pending host authoring appear idle.
+    try {
+        const auto callback = m_idle_wall_selection_requested;
+        return !callback || callback();
+    } catch (...) {
+        return false;
+    }
 }
 
 QString PlanCanvas::contextTarget(QPointF point) const {
@@ -7969,6 +7983,13 @@ void PlanCanvas::setEntityEditGestureStarted(std::function<void(QString)> callba
 
 void PlanCanvas::setInteractionAdmissionRequested(std::function<bool(bool)> callback) {
     m_interaction_admission_requested = std::move(callback);
+}
+
+void PlanCanvas::setIdleWallSelectionRequested(std::function<bool()> callback) {
+    resetGesture();
+    m_idle_wall_selection_requested = std::move(callback);
+    if (m_last_mouse_position) updatePointerCursor(*m_last_mouse_position);
+    update();
 }
 
 bool PlanCanvas::admitInteraction(bool context) {
