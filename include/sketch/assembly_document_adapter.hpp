@@ -117,6 +117,9 @@ inline constexpr std::size_t assembly_catalog_transport_node_limit = 1'000'000;
 // opaque nested metadata is not scanned for reference-looking strings.
 [[nodiscard]] AssemblyCatalogSourceReferences complete_assembly_catalog_source_refs(
     const Entity& source, AssemblyCatalogTransferBudget& budget);
+// Actual embedded placement hosts use the same role contract in captured
+// documents and detached source graphs. A registry/catalog/context is no host.
+[[nodiscard]] bool is_complete_assembly_catalog_host_type(std::string_view type) noexcept;
 // Requires mappings for the actual catalog owner and all reached hosts/context.
 // Patches only Entity.id, placement.host_entity_id and the four context slots;
 // complete rows, dialect/order, local identities, numeric forms and metadata

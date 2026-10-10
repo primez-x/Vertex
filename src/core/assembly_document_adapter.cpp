@@ -566,6 +566,12 @@ Entity remap_complete_assembly_catalog_source_refs(const Entity& source,
     (void)complete_assembly_catalog_source_refs(result, budget);
     return result;
 }
+bool is_complete_assembly_catalog_host_type(std::string_view type) noexcept {
+    static constexpr std::array<std::string_view, 12> host_roles{
+        "boundary", "measurement_boundary", "room_boundary", "wall", "opening", "slab", "roof",
+        "stair", "railing", "column", "beam", "terrain_surface"};
+    return std::find(host_roles.begin(), host_roles.end(), type) != host_roles.end();
+}
 AssemblyDocumentEntities capture_complete_assembly_catalog_sources(const DocumentSnapshot& source,
     const std::vector<std::string>& catalog_ids, AssemblyCatalogTransferBudget& budget) {
     validate_catalog_transfer_budget(budget);
@@ -577,9 +583,6 @@ AssemblyDocumentEntities capture_complete_assembly_catalog_sources(const Documen
         require(selected.insert(id).second, "duplicate complete assembly catalog capture owner");
     }
     AssemblyDocumentEntities result;
-    static constexpr std::array<std::string_view, 12> host_roles{
-        "boundary", "measurement_boundary", "room_boundary", "wall", "opening", "slab", "roof",
-        "stair", "railing", "column", "beam", "terrain_surface"};
     for (const auto& id : selected) {
         const auto owner = source.entities().find(id);
         require(owner != source.entities().end() && owner->second.id == id && owner->second.type == "assembly_model",
@@ -589,7 +592,7 @@ AssemblyDocumentEntities capture_complete_assembly_catalog_sources(const Documen
         for (const auto& host_id : references.hosted_entity_ids) {
             const auto host = source.entities().find(host_id);
             require(host != source.entities().end() && host->second.id == host_id &&
-                std::find(host_roles.begin(), host_roles.end(), host->second.type) != host_roles.end(),
+                is_complete_assembly_catalog_host_type(host->second.type),
                 "complete assembly catalog source host is missing or has inconsistent role/identity");
         }
         for (const auto& [key, role] : catalog_context_slots) {

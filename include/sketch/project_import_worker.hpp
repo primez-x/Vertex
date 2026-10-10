@@ -5,6 +5,7 @@
 #include "sketch/document.hpp"
 #include "sketch/document_wall.hpp"
 #include "sketch/dxf_project_exchange.hpp"
+#include "sketch/dxf_phase_source.hpp"
 #include "sketch/geometry.hpp"
 #include "sketch/wall_semantics.hpp"
 #include "sketch/opening_assembly.hpp"
@@ -17,6 +18,7 @@
 #include <cstring>
 #include <functional>
 #include <map>
+#include <optional>
 #include <set>
 #include <span>
 #include <stdexcept>
@@ -54,6 +56,9 @@ struct ProjectImportCandidate {
     // live closure declares which owners reviewed destination binding may copy.
     NativeDxfCatalogSources catalog_sources;
     std::vector<std::string> authoring_catalog_ids;
+    // PSIP0004 complete original phase inventory. This is source evidence,
+    // never a fabricated destination hierarchy or permission to publish it.
+    std::optional<nlohmann::json> phase_source_graph;
 };
 
 inline const char* project_import_kind_name(ProjectImportKind kind) {
@@ -572,7 +577,7 @@ inline void validate(const ProjectImportCandidate& result) {
         result.diagnostics.size() > project_import_diagnostic_limit ||
         (!result.diagnostics.empty() && !result.source_retention_required)) reject();
     if (result.kind != ProjectImportKind::dxf && (!result.physical_source_graphs.empty() ||
-        !result.catalog_sources.empty() || !result.authoring_catalog_ids.empty())) reject();
+        !result.catalog_sources.empty() || !result.authoring_catalog_ids.empty() || result.phase_source_graph)) reject();
     if (result.catalog_sources.size() > project_import_entity_limit ||
         result.authoring_catalog_ids.size() > result.catalog_sources.size() ||
         !std::is_sorted(result.authoring_catalog_ids.begin(), result.authoring_catalog_ids.end()) ||
@@ -791,6 +796,10 @@ inline void validate(const ProjectImportCandidate& result) {
     }
     // Validate the detached graph using the same native entity, reference and
     // geometry checks as an ordinary command. No live document is mutated.
+    if (result.phase_source_graph) {
+        try { (void)decode_native_dxf_phase_source_graph(*result.phase_source_graph, &source_budget); }
+        catch (...) { reject(); }
+    }
     if (result.kind == ProjectImportKind::dxf && !result.catalog_sources.empty()) {
         try {
             // All candidate shape charges precede catalog/model decoding. The
@@ -818,26 +827,28 @@ inline void validate(const ProjectImportCandidate& result) {
 // every candidate through Document. Callers still commit an ordinary command.
 inline std::vector<std::byte> encode_project_import_candidate(const ProjectImportCandidate& result) {
     project_import_detail::validate(result);
+    const bool phase_protocol = result.phase_source_graph.has_value();
     const bool catalog_protocol = !result.catalog_sources.empty();
     nlohmann::json entities = nlohmann::json::array(), diagnostics = nlohmann::json::array();
     for (const auto& e : result.entities) {
         auto record = nlohmann::json{{"id", e.id}, {"type", e.type}, {"properties", e.properties}, {"extensions", e.extensions}};
-        if (catalog_protocol) record["required"] = e.required;
+        if (catalog_protocol || phase_protocol) record["required"] = e.required;
         entities.push_back(std::move(record));
     }
     for (const auto& d : result.diagnostics)
         diagnostics.push_back({{"source_id", d.source_id}, {"source_kind", d.source_kind}, {"code", d.code}});
-    auto value = nlohmann::json{{"protocol", catalog_protocol ? "PSIP0003" :
+    auto value = nlohmann::json{{"protocol", phase_protocol ? "PSIP0004" : catalog_protocol ? "PSIP0003" :
             result.physical_source_graphs.empty() ? "PSIP0001" : "PSIP0002"},
         {"kind", project_import_kind_name(result.kind)},
         {"entities", std::move(entities)}, {"diagnostics", std::move(diagnostics)},
         {"source_retention_required", result.source_retention_required}};
-    if (catalog_protocol || !result.physical_source_graphs.empty())
+    if (phase_protocol || catalog_protocol || !result.physical_source_graphs.empty())
         value["physical_source_graphs"] = result.physical_source_graphs;
-    if (catalog_protocol) {
+    if (catalog_protocol || phase_protocol) {
         value["catalog_sources"] = result.catalog_sources;
         value["authoring_catalog_ids"] = result.authoring_catalog_ids;
     }
+    if (phase_protocol) value["phase_source_graph"] = *result.phase_source_graph;
     const auto wire = value.dump();
     if (wire.size() > project_import_output_limit) project_import_detail::reject();
     std::vector<std::byte> output(wire.size());
@@ -852,8 +863,14 @@ inline ProjectImportCandidate decode_project_import_candidate(
         !report.diagnostics.empty() || report.output.empty() || report.output.size() > project_import_output_limit) reject();
     std::size_t nodes = 0;
     std::vector<std::set<std::string>> object_keys;
+    std::string root_field;
     const auto callback = [&](int depth, nlohmann::json::parse_event_t event, nlohmann::json& value) {
-        if (depth > assembly_catalog_transport_depth_limit || ++nodes > assembly_catalog_transport_node_limit) reject();
+        if (event == nlohmann::json::parse_event_t::key && depth == 1) root_field = value.get<std::string>();
+        // Only this named root field may have the additional envelope depth.
+        // Exact protocol/field admission below still rejects it in old profiles.
+        const int depth_limit = root_field == "phase_source_graph"
+            ? static_cast<int>(native_dxf_phase_source_depth_limit) + 1 : assembly_catalog_transport_depth_limit;
+        if (depth > depth_limit || ++nodes > assembly_catalog_transport_node_limit) reject();
         if (event == nlohmann::json::parse_event_t::object_start) object_keys.emplace_back();
         if (event == nlohmann::json::parse_event_t::key &&
             (object_keys.empty() || !object_keys.back().insert(value.get<std::string>()).second)) reject();
@@ -867,10 +884,9 @@ inline ProjectImportCandidate decode_project_import_candidate(
     const auto value = nlohmann::json::parse(begin, begin + report.output.size(), callback);
     const bool physical_protocol = value.is_object() && value.contains("protocol") && value.at("protocol") == "PSIP0002";
     const bool catalog_protocol = value.is_object() && value.contains("protocol") && value.at("protocol") == "PSIP0003";
-    // The initial parser has one bounded ceiling. Only the exact PSIP0003
-    // catalog field uses the complete-catalog framing allowance. Preserve the
-    // original limits for every other field and for the entire PSIP0001/2
-    // payload, regardless of incoming object-key order.
+    const bool phase_protocol = value.is_object() && value.contains("protocol") && value.at("protocol") == "PSIP0004";
+    // Only exact versioned source fields use the larger framing allowance.
+    // Old profiles retain their original field limits regardless of key order.
     const auto legacy_json_limits = [&](const auto& self, const nlohmann::json& item, int depth) -> void {
         if (depth > 32) reject();
         const auto check_string = [&](const std::string& text) {
@@ -880,19 +896,23 @@ inline ProjectImportCandidate decode_project_import_candidate(
         else if (item.is_object()) for (auto field = item.begin(); field != item.end(); ++field) {
             if (depth + 1 > 32) reject();
             check_string(field.key());
-            if (catalog_protocol && depth == 0 && field.key() == "catalog_sources") continue;
+            if (depth == 0 && (((catalog_protocol || phase_protocol) && field.key() == "catalog_sources") ||
+                              (phase_protocol && field.key() == "phase_source_graph"))) continue;
             self(self, field.value(), depth + 1);
         }
         else if (item.is_array()) for (const auto& child : item) self(self, child, depth + 1);
     };
     legacy_json_limits(legacy_json_limits, value, 0);
-    if (catalog_protocol)
+    if (phase_protocol)
+        fields(value, {"protocol", "kind", "entities", "diagnostics", "source_retention_required",
+            "physical_source_graphs", "catalog_sources", "authoring_catalog_ids", "phase_source_graph"});
+    else if (catalog_protocol)
         fields(value, {"protocol", "kind", "entities", "diagnostics", "source_retention_required",
             "physical_source_graphs", "catalog_sources", "authoring_catalog_ids"});
     else if (physical_protocol)
         fields(value, {"protocol", "kind", "entities", "diagnostics", "source_retention_required", "physical_source_graphs"});
     else fields(value, {"protocol", "kind", "entities", "diagnostics", "source_retention_required"});
-    if ((!physical_protocol && !catalog_protocol && value.at("protocol") != "PSIP0001") ||
+    if ((!physical_protocol && !catalog_protocol && !phase_protocol && value.at("protocol") != "PSIP0001") ||
         value.at("kind") != project_import_kind_name(expected_kind) ||
         !value.at("source_retention_required").is_boolean() || !value.at("entities").is_array() ||
         !value.at("diagnostics").is_array() || value.at("entities").size() > project_import_entity_limit ||
@@ -900,30 +920,34 @@ inline ProjectImportCandidate decode_project_import_candidate(
     ProjectImportCandidate result;
     result.kind = expected_kind;
     result.source_retention_required = value.at("source_retention_required").get<bool>();
-    if (physical_protocol || catalog_protocol) {
+    if (physical_protocol || catalog_protocol || phase_protocol) {
         const auto& proofs = value.at("physical_source_graphs");
-        if (expected_kind != ProjectImportKind::dxf || !proofs.is_object() || (!catalog_protocol && proofs.empty()) ||
+        if (expected_kind != ProjectImportKind::dxf || !proofs.is_object() || (physical_protocol && proofs.empty()) ||
             proofs.size() > project_import_entity_limit) reject();
         for (const auto& [id, proof] : proofs.items())
             result.physical_source_graphs.emplace(text(nlohmann::json(id), false, 128), proof);
     }
-    if (catalog_protocol) {
+    if (catalog_protocol || phase_protocol) {
         const auto& catalogs = value.at("catalog_sources");
         const auto& authoring = value.at("authoring_catalog_ids");
-        if (expected_kind != ProjectImportKind::dxf || !catalogs.is_object() || catalogs.empty() ||
+        if (expected_kind != ProjectImportKind::dxf || !catalogs.is_object() || (catalog_protocol && catalogs.empty()) ||
             catalogs.size() > project_import_entity_limit || !authoring.is_array() ||
             authoring.size() > catalogs.size()) reject();
         for (const auto& [id, snapshot] : catalogs.items())
             result.catalog_sources.emplace(text(nlohmann::json(id), false, 128), snapshot);
         for (const auto& id : authoring) result.authoring_catalog_ids.push_back(text(id, false, 128));
     }
+    if (phase_protocol) {
+        if (expected_kind != ProjectImportKind::dxf || !value.at("phase_source_graph").is_object()) reject();
+        result.phase_source_graph = value.at("phase_source_graph");
+    }
     for (const auto& e : value.at("entities")) {
-        if (catalog_protocol) {
+        if (catalog_protocol || phase_protocol) {
             fields(e, {"id", "type", "properties", "required", "extensions"});
             if (!e.at("required").is_boolean()) reject();
         } else fields(e, {"id", "type", "properties", "extensions"});
         result.entities.push_back({text(e.at("id"), false), text(e.at("type"), false),
-            e.at("properties"), catalog_protocol && e.at("required").get<bool>(), e.at("extensions")});
+            e.at("properties"), (catalog_protocol || phase_protocol) && e.at("required").get<bool>(), e.at("extensions")});
     }
     for (const auto& d : value.at("diagnostics")) {
         fields(d, {"source_id", "source_kind", "code"});

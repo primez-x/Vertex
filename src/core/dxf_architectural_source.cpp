@@ -1,6 +1,8 @@
 #include "sketch/dxf_architectural_source.hpp"
 #include "sketch/dxf_project_exchange.hpp"
+#include "sketch/document_wall.hpp"
 #include "sketch/roof_join_semantics.hpp"
+#include "sketch/terrain_surface.hpp"
 #ifdef SKETCH_DXF_NATIVE_GEOMETRY
 #include "sketch/building_plan_projection.hpp"
 #include "sketch/document_solid.hpp"
@@ -100,6 +102,155 @@ std::size_t independent_compound_edges(const Entity& source, const Entity& catal
         visiting.erase(id); sizes.emplace(id, edges); return edges;
     };
     return visit(visit, source.properties.at("instance").at("type_id").get<std::string>(), 1);
+}
+
+std::string phase_owner_id(const Json& value) {
+    if (!value.is_string()) throw std::invalid_argument("phase auxiliary owner identity invalid");
+    const auto& id = value.get_ref<const std::string&>();
+    if (id.empty() || id.size() > 128 || !std::all_of(id.begin(), id.end(), [](unsigned char c) {
+        return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') ||
+            c == '-' || c == '_' || c == '.' || c == ':';
+    })) throw std::invalid_argument("phase auxiliary owner identity invalid");
+    return id;
+}
+
+// The terrain ceiling accommodates the full 4096-point/8192-triangle dialect.
+// Do not reuse the smaller V8 raw ceiling or change that historical contract.
+std::size_t phase_raw_nodes(const Json& value) {
+    std::size_t nodes = 0;
+    const auto visit = [&](const auto& self, const Json& child, std::size_t depth) -> void {
+        if (depth > 24 || ++nodes > 65'536)
+            throw std::invalid_argument("phase auxiliary raw JSON limit");
+        if (child.is_string() && child.get_ref<const std::string&>().size() > 8192)
+            throw std::invalid_argument("phase auxiliary raw string limit");
+        if (child.is_object()) for (const auto& [key, entry] : child.items()) {
+            if (key.size() > 8192) throw std::invalid_argument("phase auxiliary raw key limit");
+            self(self, entry, depth + 1);
+        }
+        else if (child.is_array()) for (const auto& entry : child) self(self, entry, depth + 1);
+    };
+    visit(visit, value, 0);
+    return nodes;
+}
+
+std::size_t phase_raw_envelope(const Entity& source) {
+    (void)phase_owner_id(Json(source.id));
+    if (!source.properties.is_object() || !source.extensions.is_object())
+        throw std::invalid_argument("phase auxiliary envelope invalid");
+    return phase_raw_nodes(source.properties) + phase_raw_nodes(source.extensions);
+}
+
+std::vector<std::string> phase_raw_wall_ids(const Entity& source) {
+    const auto& properties = source.properties;
+    if (source.type != "wall_join" || !properties.is_object() || properties.size() != 3 ||
+        !properties.contains("version") || !properties.contains("style") || !properties.contains("wall_ids") ||
+        !properties.at("version").is_number_integer() || properties.at("version") != 1 ||
+        properties.at("style") != "fused")
+        throw std::invalid_argument("phase auxiliary wall join dialect invalid");
+    const auto& rows = properties.at("wall_ids");
+    if (!rows.is_array() || rows.size() < 2 || rows.size() > 32)
+        throw std::invalid_argument("phase auxiliary wall join raw member limit");
+    std::vector<std::string> result;
+    std::set<std::string, std::less<>> unique;
+    for (const auto& row : rows) {
+        auto id = phase_owner_id(row);
+        if (!unique.insert(id).second) throw std::invalid_argument("phase auxiliary wall join repeated member");
+        result.push_back(std::move(id));
+    }
+    return result;
+}
+
+std::pair<std::size_t, std::size_t> phase_raw_terrain_counts(const Entity& source) {
+    const auto& model = source.properties.at("model");
+    if (!model.is_object()) throw std::invalid_argument("phase auxiliary terrain model invalid");
+    const auto& points = model.at("points");
+    const auto& triangles = model.at("triangles");
+    if (!points.is_array() || points.size() < 3 || points.size() > TerrainSurface::maximum_points ||
+        !triangles.is_array() || triangles.empty() || triangles.size() > TerrainSurface::maximum_triangles)
+        throw std::invalid_argument("phase auxiliary terrain raw count limit");
+    for (const auto& point : points) if (!point.is_object() || point.size() != 4 ||
+        !point.contains("id") || !point.contains("x_m") || !point.contains("y_m") || !point.contains("elevation_m"))
+        throw std::invalid_argument("phase auxiliary terrain raw point invalid");
+    for (const auto& triangle : triangles) if (!triangle.is_array() || triangle.size() != 3)
+        throw std::invalid_argument("phase auxiliary terrain raw triangle invalid");
+    return {points.size(), triangles.size()};
+}
+
+const Entity& phase_actual_owner(const std::string& id, const Entity& source,
+    const std::map<std::string, Entity, std::less<>>& authored) {
+    const auto found = authored.find(id);
+    if (id != source.id && found == authored.end())
+        throw std::invalid_argument("phase auxiliary actual member missing");
+    const auto& owner = id == source.id ? source : found->second;
+    if (owner.id != id) throw std::invalid_argument("phase auxiliary actual owner identity differs");
+    return owner;
+}
+
+// Source is a candidate replacement, so inspect it once and every other actual
+// join. This matches Document's global exclusivity, including inactive members.
+void phase_validate_join_graph(const Entity& source,
+    const std::map<std::string, Entity, std::less<>>& authored) {
+    std::map<std::string, std::string, std::less<>> ownership;
+    const auto check = [&](const Entity& owner) {
+        if (owner.type != "wall_join") return;
+        (void)phase_raw_envelope(owner);
+        (void)phase_raw_wall_ids(owner);
+        const auto join = parse_wall_join(owner.properties, owner.id);
+        for (const auto& id : join.wall_ids) {
+            if (phase_actual_owner(id, source, authored).type != "wall")
+                throw std::invalid_argument("phase auxiliary wall join actual member missing/type differs");
+            if (!ownership.emplace(id, owner.id).second)
+                throw std::invalid_argument("phase auxiliary wall belongs to multiple joins");
+        }
+    };
+    check(source);
+    for (const auto& [id, owner] : authored) {
+        if (id != owner.id) throw std::invalid_argument("phase auxiliary actual map identity differs");
+        if (id != source.id) check(owner);
+    }
+}
+
+std::map<std::string, std::vector<const Entity*>, std::less<>> phase_wall_openings(
+    const std::vector<std::string>& members, const std::map<std::string, Entity, std::less<>>& authored) {
+    std::map<std::string, std::vector<const Entity*>, std::less<>> result;
+    for (const auto& id : members) result.emplace(id, std::vector<const Entity*>{});
+    for (const auto& [id, owner] : authored) {
+        if (id != owner.id) throw std::invalid_argument("phase auxiliary actual map identity differs");
+        if (owner.type != "opening") continue;
+        const auto host = phase_owner_id(owner.properties.at("wall_id"));
+        const auto found = result.find(host);
+        if (found != result.end()) {
+            if (found->second.size() >= 128) throw std::invalid_argument("phase auxiliary raw hosted opening limit");
+            found->second.push_back(&owner);
+        }
+    }
+    return result;
+}
+
+std::vector<Wall> phase_decode_join_walls(const Entity& source,
+    const std::vector<std::string>& members, const std::map<std::string, Entity, std::less<>>& authored) {
+    const auto openings = phase_wall_openings(members, authored);
+    // Reserve raw shapes for every member before the shared placement pass.
+    for (const auto& id : members) {
+        const auto& wall = phase_actual_owner(id, source, authored);
+        (void)phase_raw_envelope(wall);
+        if (wall.properties.contains("layers") && (!wall.properties.at("layers").is_array() ||
+            wall.properties.at("layers").size() > 32))
+            throw std::invalid_argument("phase auxiliary wall join raw layer limit");
+        for (const auto* opening : openings.at(id)) (void)phase_raw_envelope(*opening);
+    }
+    const auto placed = resolve_vertical_placements(authored, members);
+    std::vector<Wall> result;
+    result.reserve(members.size());
+    for (const auto& id : members) {
+        Wall wall;
+        std::string error;
+        if (!read_document_wall(placed.at(id), openings.at(id), wall, error))
+            throw std::invalid_argument(error.empty() ? "phase auxiliary physical wall decode failed" : error);
+        validate_wall_semantics(wall);
+        result.push_back(std::move(wall));
+    }
+    return result;
 }
 }
 
@@ -419,6 +570,229 @@ Boundary native_dxf_architectural_source_plan(const Entity& source,
 #else
     (void)source; (void)authored;
     throw std::invalid_argument("V8 architectural native geometry unavailable");
+#endif
+}
+
+bool native_dxf_phase_auxiliary_source_type(std::string_view type) noexcept {
+    return type == "wall_join" || type == "terrain_surface";
+}
+
+std::vector<std::string> native_dxf_phase_auxiliary_source_dependencies(const Entity& source) {
+    if (!native_dxf_phase_auxiliary_source_type(source.type))
+        throw std::invalid_argument("phase auxiliary source family required");
+    (void)phase_raw_envelope(source);
+    if (source.type == "terrain_surface") {
+        (void)phase_raw_terrain_counts(source);
+        return {};
+    }
+    (void)phase_raw_wall_ids(source);
+    return parse_wall_join(source.properties, source.id).wall_ids;
+}
+
+void remap_native_dxf_phase_auxiliary_source_dependencies(Entity& source,
+    const std::map<std::string, std::string, std::less<>>& mapping) {
+    const auto members = native_dxf_phase_auxiliary_source_dependencies(source);
+    if (source.type == "terrain_surface") {
+        // Validate the actual model without serializing it: local point IDs,
+        // signed zero, numeric storage and all owner metadata remain untouched.
+        (void)TerrainSurface::from_json(source.properties.at("model"));
+        return;
+    }
+    auto result = source;
+    std::set<std::string, std::less<>> targets;
+    for (const auto& id : members) {
+        const auto target = phase_owner_id(Json(mapping.at(id)));
+        if (!targets.insert(target).second)
+            throw std::invalid_argument("phase auxiliary wall member mapping not injective");
+    }
+    for (auto& id : result.properties["wall_ids"]) id = mapping.at(phase_owner_id(id));
+    (void)native_dxf_phase_auxiliary_source_dependencies(result);
+    source = std::move(result);
+}
+
+std::optional<DrawingContext> native_dxf_phase_auxiliary_source_context(const Entity& source,
+    const std::map<std::string, Entity, std::less<>>& authored, const ProjectOrganization& organization) {
+    const auto members = native_dxf_phase_auxiliary_source_dependencies(source);
+    phase_validate_join_graph(source, authored);
+    if (source.type == "terrain_surface") {
+        // Site terrain can live directly on a property; drawing_context()
+        // intentionally exposes only complete floor/layer drawing placements.
+        const auto node = organization.nodes.find(source.id);
+        if (node == organization.nodes.end() || !node->second.issues.empty() ||
+            node->second.context.property_id.empty())
+            throw std::invalid_argument("phase auxiliary terrain source hierarchy unresolved");
+        const auto& context = node->second.context;
+        if (phase_actual_owner(context.property_id, source, authored).type != "property")
+            throw std::invalid_argument("phase auxiliary terrain actual property role differs");
+        for (const auto& [slot, resolved] : {
+            std::pair{"property_id", &context.property_id}, std::pair{"building_id", &context.building_id},
+            std::pair{"floor_id", &context.floor_id}, std::pair{"layer_id", &context.layer_id}}) {
+            const auto direct = source.properties.find(slot);
+            if (direct != source.properties.end() && phase_owner_id(*direct) != *resolved)
+                throw std::invalid_argument("phase auxiliary terrain source hierarchy conflicts");
+        }
+        return context;
+    }
+    std::optional<DrawingContext> result;
+    for (const auto& id : members) {
+        const auto context = organization.drawing_context(id);
+        if (!context || !context->complete())
+            throw std::invalid_argument("phase auxiliary wall join member hierarchy unresolved");
+        if (result && *result != *context)
+            throw std::invalid_argument("phase auxiliary wall join member contexts conflict");
+        result = context;
+    }
+    return result;
+}
+
+void admit_native_dxf_phase_auxiliary_source_work(const Entity& source,
+    const std::map<std::string, Entity, std::less<>>& authored, NativeDxfWallSourceWorkBudget& budget) {
+    if (!native_dxf_phase_auxiliary_source_type(source.type)) return;
+    constexpr std::size_t limit = 67'108'864;
+    const auto charge = [&](std::size_t amount) {
+        if (budget.architectural_work > limit)
+            throw std::invalid_argument("cumulative phase auxiliary architectural work limit");
+        if (amount > limit - budget.architectural_work) {
+            budget.architectural_work = limit;
+            throw std::invalid_argument("cumulative phase auxiliary architectural work limit");
+        }
+        budget.architectural_work += amount;
+    };
+    charge(1); // Refuse exhausted attempts before any raw traversal.
+    const auto admit_raw = [&](const Entity& owner) {
+        std::size_t nodes = 0;
+        try { nodes = phase_raw_envelope(owner); }
+        catch (...) {
+            // A failed traversal can reach either raw ceiling. Its inspection
+            // still consumes the ledger, preventing uncharged retry work.
+            charge(2 * 65'536 * 32);
+            throw;
+        }
+        charge(nodes * 32);
+        return nodes;
+    };
+    (void)admit_raw(source);
+    // Bound the complete actual-map scans before inspecting join ownership,
+    // opening rosters or resolving vertical placement. Failed work is retained.
+    if (authored.size() > (limit - budget.architectural_work) / 128)
+        throw std::invalid_argument("phase auxiliary actual graph work limit");
+    charge(authored.size() * 128);
+    std::map<std::string, std::string, std::less<>> ownership;
+    const auto admit_join = [&](const Entity& owner) {
+        if (owner.type != "wall_join") return;
+        if (owner.id != source.id) (void)admit_raw(owner);
+        for (const auto& id : phase_raw_wall_ids(owner)) {
+            if (phase_actual_owner(id, source, authored).type != "wall")
+                throw std::invalid_argument("phase auxiliary wall join raw actual member missing/type differs");
+            if (!ownership.emplace(id, owner.id).second)
+                throw std::invalid_argument("phase auxiliary wall belongs to multiple joins");
+        }
+    };
+    admit_join(source);
+    for (const auto& [id, owner] : authored) {
+        if (id != owner.id) throw std::invalid_argument("phase auxiliary actual map identity differs");
+        if (id != source.id) admit_join(owner);
+    }
+    std::size_t primitives = 0;
+    if (source.type == "terrain_surface") {
+        const auto [points, triangles] = phase_raw_terrain_counts(source);
+        primitives = triangles * 3;
+        // Validation, detached remapping and plan_edges insert triangle edges
+        // into ordered trees. Reserve four passes at the maximum tree depth.
+        std::size_t depth = 1;
+        for (auto remaining = primitives; remaining > 1; remaining /= 2) ++depth;
+        charge(points * 128 + primitives * (depth + 1) * 128);
+    } else {
+        const auto members = phase_raw_wall_ids(source);
+        const auto openings = phase_wall_openings(members, authored);
+        bool level_placement = false;
+        for (const auto& id : members) {
+            const auto& wall = phase_actual_owner(id, source, authored);
+            (void)admit_raw(wall);
+            if (const auto placement = wall.properties.find("vertical_placement");
+                placement != wall.properties.end() && placement->is_object() &&
+                placement->value("mode", Json()) == "level") level_placement = true;
+            if (!wall.properties.contains("baseline") || !wall.properties.at("baseline").is_object())
+                throw std::invalid_argument("phase auxiliary wall join requires actual physical baseline");
+            std::size_t layers = 1;
+            if (const auto found = wall.properties.find("layers"); found != wall.properties.end()) {
+                if (!found->is_array() || found->size() > 32)
+                    throw std::invalid_argument("phase auxiliary wall join raw layer limit");
+                layers = std::max<std::size_t>(1, found->size());
+            }
+            for (const auto* opening : openings.at(id)) (void)admit_raw(*opening);
+            // Each layer builds cap/side/seam edges and every hosted cut.
+            // Include curved/sloping cuts before union connectivity and HLR.
+            const auto edges = layers * (48 + openings.at(id).size() * 32);
+            if (edges > 8192 || primitives > 8192 - edges)
+                throw std::invalid_argument("phase auxiliary wall join topology limit");
+            primitives += edges;
+        }
+        if (level_placement) {
+            // organize_project replays every floor binding, even unrelated
+            // floors. Reserve full support before any placement/graph codec.
+            std::size_t floors = 0, maximum_level_work = 0;
+            for (const auto& [id, owner] : authored) {
+                (void)id;
+                if (owner.type == "property" || owner.type == "building" || owner.type == "floor" || owner.type == "layer") {
+                    (void)admit_raw(owner);
+                    if (owner.type == "floor" && owner.properties.contains("vertical_level_binding")) ++floors;
+                }
+                if (owner.type != "vertical_levels") continue;
+                const auto nodes = admit_raw(owner);
+                const auto& model = owner.properties.at("model");
+                if (!model.is_object() || !model.at("levels").is_array() || !model.at("links").is_array() ||
+                    model.at("levels").size() > 4096 || model.at("links").size() > 8192)
+                    throw std::invalid_argument("phase auxiliary raw vertical graph limit");
+                const auto levels = model.at("levels").size(), links = model.at("links").size();
+                std::size_t depth = 1;
+                for (auto remaining = levels + links + 1; remaining > 1; remaining /= 2) ++depth;
+                // Upper bound includes all links as connected and all level
+                // searches; no decoded graph chooses a cheaper admission path.
+                const auto cost = nodes + (levels + links + 1) * depth * 4 + links * (links + 2 * levels) + levels;
+                maximum_level_work = std::max(maximum_level_work, cost);
+            }
+            // Shared batch placement organizes once. Four passes cover source
+            // validation/projection and detached validation/projection.
+            const auto passes = 4 * (floors + members.size() + 1);
+            if (maximum_level_work > (limit - budget.architectural_work) / 32 / passes)
+                throw std::invalid_argument("phase auxiliary vertical placement replay work limit");
+            charge(maximum_level_work * passes * 32);
+        }
+        if (primitives * primitives > limit / 32)
+            throw std::invalid_argument("phase auxiliary wall join nonlinear work limit");
+        charge(primitives * primitives * 32);
+    }
+    if (budget.segments > 50'000 || primitives > 50'000 - budget.segments)
+        throw std::invalid_argument("phase auxiliary primitive limit");
+    budget.segments += primitives;
+}
+
+void validate_native_dxf_phase_auxiliary_source(const Entity& source,
+    const std::map<std::string, Entity, std::less<>>& authored) {
+    const auto members = native_dxf_phase_auxiliary_source_dependencies(source);
+    phase_validate_join_graph(source, authored);
+    if (source.type == "terrain_surface") {
+        (void)TerrainSurface::from_json(source.properties.at("model"));
+        return;
+    }
+    (void)phase_decode_join_walls(source, members, authored);
+}
+
+Boundary native_dxf_phase_auxiliary_source_plan(const Entity& source,
+    const std::map<std::string, Entity, std::less<>>& authored) {
+    const auto members = native_dxf_phase_auxiliary_source_dependencies(source);
+    phase_validate_join_graph(source, authored);
+    if (source.type == "terrain_surface")
+        return TerrainSurface::from_json(source.properties.at("model")).plan_edges();
+#ifdef SKETCH_DXF_NATIVE_GEOMETRY
+    const auto join = parse_wall_join(source.properties, source.id);
+    const auto walls = phase_decode_join_walls(source, members, authored);
+    const auto fused_shape = make_wall_join(join, walls);
+    return project_building_shape_plan(fused_shape);
+#else
+    (void)members;
+    throw std::invalid_argument("phase auxiliary wall join native geometry unavailable");
 #endif
 }
 } // namespace sketch

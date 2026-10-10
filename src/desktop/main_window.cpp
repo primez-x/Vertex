@@ -38133,6 +38133,10 @@ public:
             const auto mapped = importProjectCandidate(raw, ProjectImportKind::dxf);
             if (!mapped.isolation_controls_attested)
                 throw std::runtime_error("The DXF import worker did not attest its sandbox controls.");
+            // Do not silently discard a complete phase authoring inventory by
+            // feeding only its CAD depiction into the legacy destination binder.
+            if (mapped.phase_source_graph)
+                throw std::invalid_argument("The design alternatives need complete destination mapping before this drawing can be imported. The project is unchanged.");
             const bool complete_catalog_transfer = !mapped.catalog_sources.empty();
             NativeDxfWallSourceWorkBudget catalog_operation_budget;
             const auto source = authoringSnapshot();

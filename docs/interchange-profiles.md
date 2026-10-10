@@ -146,16 +146,26 @@ The shared ModelPhases source codec now preserves surviving saved array order
 for ordinary edits and provides complete injective owner remapping. It patches
 only the roster, baseline and each alternative's demolition/proposal owner
 lists; alternative identities, names and active selection remain local. It does
-not supply transport authentication or destination ownership. V9 capture,
-wire admission, actual destination binding and publication remain unimplemented.
+not supply transport authentication or destination ownership. A separate source
+graph codec now captures and validates complete touched registries, raw owners,
+catalogs, hosts, wall joins, terrain and context dependencies. Explicit role
+inventories distinguish complete retained bodies from their active depiction.
+PSIP0004 carries this inventory as bounded source evidence. Conservative ambient
+source admission can reject large otherwise valid graphs, and existing catalog
+helpers still refuse unsupported canonical owner references. Neither source
+inventory nor wire admission authenticates CAD depiction or grants live ownership.
+The actual V9 DXF carrier, depiction authentication, reviewed destination maps,
+complete binding and atomic publication remain unimplemented. The DXF mapper
+does not yet generate the new field, and the desktop refuses a phase-bearing
+candidate before its legacy binder could discard the inventory.
 
 The desktop authoring target now selects among existing phase registries, with
 each registry retaining its saved active alternative. Enrollment, deletion,
 hosted ownership, annotation filtering and automatic wall measurements evaluate
 the actual registry graph. This source change does not add V9 transport or turn
 retained V1-V8 phase proof into an editable imported destination registry.
-The desktop must also expose registry selection so all transferred alternatives
-remain editable. No existing carrier is advertised as completing this contract.
+No existing carrier is advertised as completing this contract. This increment
+has source inspection only; compilation and runtime qualification are deferred.
 
 ### Complete material catalogs (V8, reviewed source integration)
 

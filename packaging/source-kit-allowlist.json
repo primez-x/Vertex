@@ -3455,6 +3455,10 @@
     },
     {
       "category": "source",
+      "path": "include/sketch/dxf_phase_source.hpp"
+    },
+    {
+      "category": "source",
       "path": "include/sketch/dxf_project_exchange.hpp"
     },
     {
@@ -4708,6 +4712,10 @@
     {
       "category": "source",
       "path": "src/core/dxf_exchange.cpp"
+    },
+    {
+      "category": "source",
+      "path": "src/core/dxf_phase_source.cpp"
     },
     {
       "category": "source",

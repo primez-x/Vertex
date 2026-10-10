@@ -9,6 +9,7 @@
 #include <cstddef>
 #include <algorithm>
 #include <map>
+#include <optional>
 #include <set>
 #include <stdexcept>
 #include <string>
@@ -51,6 +52,9 @@ struct DxfProjectImportResult {
     // The authoring subset alone may be allocated and published as live owners.
     NativeDxfCatalogSources catalog_sources;
     std::vector<std::string> authoring_catalog_ids;
+    // Complete V9 authoring source inventory, separate from CAD depiction.
+    // Source evidence cannot become live owners without actual destination binding.
+    std::optional<nlohmann::json> phase_source_graph;
 
     bool complete() const noexcept { return diagnostics.empty(); }
 };

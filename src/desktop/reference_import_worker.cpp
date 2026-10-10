@@ -312,6 +312,8 @@ int main(int argc, char** argv) {
                     candidate.catalog_sources = std::move(result.catalog_sources);
                     candidate.authoring_catalog_ids = std::move(result.authoring_catalog_ids);
                 }
+                if constexpr (requires { result.phase_source_graph; })
+                    candidate.phase_source_graph = std::move(result.phase_source_graph);
                 for (auto& diagnostic : result.diagnostics)
                     candidate.diagnostics.push_back({std::move(diagnostic.source_id),
                         std::move(diagnostic.source_kind), std::move(diagnostic.code)});

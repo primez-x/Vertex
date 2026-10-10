@@ -14,6 +14,44 @@ changed source does not acquire runtime acceptance without later qualification.
 
 ## Current delivery state
 
+### October 10 complete phase source inventory — source integration
+
+The new source graph codec captures each touched registry's complete roster,
+including baseline, demolition and every inactive proposal, separately from its
+complete active body inventory. Raw Entity properties, extensions, required
+flags and local identities remain intact. Closure includes complete catalogs,
+actual hosts, physical-room lineage, source hierarchy and level dependencies;
+overlapping ownership, inconsistent roles and unsupported authoritative links
+refuse. Source hierarchy is evidence, never destination publication authority.
+Catalogs retain valid partial direct hierarchy bindings; site terrain may resolve
+to its actual property without a building, floor or drawing layer.
+
+Separate wall-join and terrain helpers now admit these two phase body families
+without widening V8. Joins require actual member closure, exclusive membership
+and matching contexts; terrain retains its raw points and triangle identities.
+The graph and helpers charge shared raw/semantic/geometry resource ledgers.
+Admission conservatively includes the ambient source snapshot and can refuse
+otherwise valid large inputs. Complete catalog helpers still refuse unsupported
+canonical owner references, including top-level phase_id and asset dependencies.
+
+PSIP0004 now carries an optional complete graph through the result and worker
+candidate types with strict versioned fields and bounded decoding. This is a
+transport primitive: the DXF mapper does not yet generate a V9 carrier. Actual
+CAD depiction authentication, reviewed destination maps, binding all retained
+owners and atomic live publication remain unfinished. The desktop refuses a
+phase-bearing candidate before its legacy binder can silently drop the graph.
+
+Root and integrated independent source review approved the inspected increment
+after closing actual catalog host role admission, failed role-vector scan
+accounting, valid partial catalog context handling and property-only site terrain
+context. No actionable P1/P2 finding remains in this source scope. The
+source-kit manifest includes both new codec inputs, with
+1,891 declared paths matching tracked inputs plus these additions, without
+duplicates or omissions. Scoped diff checks and manifest/requirements JSON
+parsing passed. No build, test, new test, probe, script, native job, launch,
+package or installation ran. Compilation, runtime behavior and capacity remain
+unverified; the installed app is unchanged.
+
 ### October 10 multiple design sets — source integration
 
 The desktop now selects an explicit model_phases registry for authoring and
