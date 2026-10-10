@@ -52,7 +52,11 @@ struct DxfProjectImportResult {
     // The authoring subset alone may be allocated and published as live owners.
     NativeDxfCatalogSources catalog_sources;
     std::vector<std::string> authoring_catalog_ids;
-    // Complete V9 authoring source inventory, separate from CAD depiction.
+    // Complete V9 raw authoring source inventory. A phase-bearing export puts
+    // every supported body/catalog and complete registry roster in this graph.
+    // Import authenticates every
+    // active CAD block against this graph; entities contains disjoint legacy
+    // candidates only. Inactive owners have no geometry-currentness claim.
     // Source evidence cannot become live owners without actual destination binding.
     std::optional<nlohmann::json> phase_source_graph;
 
@@ -92,6 +96,10 @@ struct NativeDxfWallSourceWorkBudget {
     // V8 family solids/HLR have a separate shared bounded ledger; legacy
     // wall/topology contracts retain their original source_work limit.
     std::size_t architectural_work{};
+    // Retained destination assets are not foreign JSON graph payloads. Count
+    // every snapshot/hash replay against their own bounded operation ledger.
+    std::size_t destination_asset_replay_bytes{};
+    std::size_t destination_asset_replay_work{};
 };
 // Authenticates V8 source closure and the exact live subset before admission.
 // All attempts share the ledger; preflight reserves downstream catalog passes.
@@ -390,8 +398,9 @@ inline void remap_native_dxf_boundary_dependency_ids(Entity& entity,
 // the mapper proves exact plans and an editable Document before publication.
 inline void validate_native_dxf_boundary_groups(const std::vector<Entity>& entities,
     const NativeDxfPhysicalSourceGraphs* physical_source_graphs = nullptr,
-    const std::map<std::string, Entity, std::less<>>* actual_destination_entities = nullptr) {
-    validate_native_dxf_wall_source_groups(entities, nullptr, false, physical_source_graphs, actual_destination_entities);
+    const std::map<std::string, Entity, std::less<>>* actual_destination_entities = nullptr,
+    NativeDxfWallSourceWorkBudget* work_budget = nullptr) {
+    validate_native_dxf_wall_source_groups(entities, work_budget, false, physical_source_graphs, actual_destination_entities);
     std::map<std::string, const Entity*, std::less<>> owners;
     for (const auto& entity : entities)
         if (!owners.emplace(entity.id, &entity).second) throw std::invalid_argument("duplicate imported identity");

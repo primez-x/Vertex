@@ -797,7 +797,35 @@ inline void validate(const ProjectImportCandidate& result) {
     // Validate the detached graph using the same native entity, reference and
     // geometry checks as an ordinary command. No live document is mutated.
     if (result.phase_source_graph) {
-        try { (void)decode_native_dxf_phase_source_graph(*result.phase_source_graph, &source_budget); }
+        try {
+            const auto graph = decode_native_dxf_phase_source_graph(*result.phase_source_graph, &source_budget);
+            // The worker is a separate trust boundary. Recheck the carrier's
+            // single source namespace before destination IDs are allocated;
+            // overlap must not turn into two independently editable copies.
+            const auto admit_identity_lookup = [&] {
+                auto& ledger = source_budget.catalog_transfer;
+                constexpr std::size_t lookup_work = 32;
+                if (ledger.consumed_validation_work > ledger.max_validation_work ||
+                    lookup_work > ledger.max_validation_work - ledger.consumed_validation_work) reject();
+                ledger.consumed_validation_work += lookup_work;
+            };
+            for (const auto& entity : result.entities) {
+                admit_identity_lookup();
+                if (graph.entities.contains(entity.id)) reject();
+            }
+            for (const auto& [id, catalog] : result.catalog_sources) {
+                (void)catalog;
+                admit_identity_lookup();
+                if (graph.entities.contains(id)) reject();
+            }
+            for (const auto& [id, proof] : result.physical_source_graphs) {
+                (void)id;
+                for (const auto& row : proof.at("entities")) {
+                    admit_identity_lookup();
+                    if (graph.entities.contains(text(row.at("id"), false, 128))) reject();
+                }
+            }
+        }
         catch (...) { reject(); }
     }
     if (result.kind == ProjectImportKind::dxf && !result.catalog_sources.empty()) {
@@ -814,7 +842,10 @@ inline void validate(const ProjectImportCandidate& result) {
         return;
     }
     if (result.kind == ProjectImportKind::dxf) {
-        try { validate_native_dxf_boundary_groups(result.entities, &result.physical_source_graphs); } catch (...) { reject(); }
+        try {
+            validate_native_dxf_boundary_groups(result.entities, &result.physical_source_graphs, nullptr,
+                result.phase_source_graph ? &source_budget : nullptr);
+        } catch (...) { reject(); }
     }
     auto document = Document::create(result.kind == ProjectImportKind::ifc
         ? detached_ifc_validation_entities(result.entities) : result.entities);

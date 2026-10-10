@@ -14,6 +14,53 @@ changed source does not acquire runtime acceptance without later qualification.
 
 ## Current delivery state
 
+### October 10 V9 carrier and destination binding — source integration
+
+The actual DXF mapper now exports complete design-set source graphs through a
+bounded V9 carrier, separately authenticating the exact active native CAD body
+inventory. All registries, inactive/demolition/proposal owners, complete catalogs,
+hosts, hierarchy and supported auxiliary owners travel together. Empty active
+depiction is supported. Import checks chunks/schema, identity INSERT placement,
+native geometry/layer/context parity and disjoint legacy ownership. PSIP0004
+rechecks source ownership rather than trusting a separate worker process.
+
+The destination binder uses exact injective body, catalog, registry, context and
+stair-child mappings. Nested boundary and measured-stroke owner identities are
+remapped with their typed codecs; local names and opaque phase metadata remain
+local. Existing contexts require actual equivalent destination owners. Explicit
+import defaults to authorizing new source hierarchy copies; interactive review
+can choose equivalent existing contexts. Source evidence alone cannot overwrite
+existing hierarchy. The desktop stages the complete graph, legacy drawing items
+and retained original DXF as one command, with captured source/modal authority
+fences. Generic fresh-object enrollment does not silently assign unregistered
+imported owners to the old selected design set. Initial selection, active layer
+and design-set target follow one imported object's actual source ownership.
+For an unregistered selected object, the editing target deliberately uses the
+first imported set instead of an unrelated existing destination set;
+pending drawing/placement refuses this target change.
+
+Review corrections reserve actual physical-room detection only where consumed,
+keep ordinary retained wall states out of the legacy topology-work allowance,
+and bound retained asset replay separately from the foreign graph JSON limit.
+Mixed phase/legacy import validation shares the same operation ledger across
+preflight, binding and revalidation. Finite raw, model, topology and history
+limits remain; large otherwise valid projects may refuse. Unsupported incoming
+annotation/constraint dependencies and canonical catalog references still need
+transport support and remain visible gaps.
+
+This is source implementation, not production qualification. Compilation,
+runtime round trips, history/storage replay, capacity, usability and independent
+CAD interoperability remain unverified. No build, test, new test, probe, script,
+native job, launch, package or installation ran; the installed candidate and
+historical acceptance evidence remain unchanged.
+
+Root integrated source review closed the identified mapping, authority,
+capacity, editing-target and temporary-lifetime defects. Independent review
+inspected the carrier, binder, worker boundary and retained-prefix reservations;
+runtime qualification remains deferred. Scoped diff checks and requirements JSON
+parsing passed. The source-kit allowlist still matches all 1,891 tracked paths
+with no missing, extra or duplicate entries.
+
 ### October 10 complete phase source inventory — source integration
 
 The new source graph codec captures each touched registry's complete roster,

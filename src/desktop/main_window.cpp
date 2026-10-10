@@ -114,6 +114,7 @@
 #include "sketch/boundary_integrity.hpp"
 #include "sketch/document_digest.hpp"
 #include "sketch/dxf_project_exchange.hpp"
+#include "sketch/dxf_phase_source.hpp"
 #include "sketch/ifc_project_exchange.hpp"
 #include "sketch/project_import_worker.hpp"
 #include "sketch/geometry_operations.hpp"
@@ -38113,6 +38114,201 @@ public:
         }
     }
 
+    struct PreparedDxfPhaseImport {
+        std::vector<Entity> entities;
+        json context_mapping = json::array();
+        std::string first_body_id;
+        std::string first_layer_id;
+        std::string first_registry_id;
+        std::function<bool()> source_current;
+    };
+
+    std::optional<PreparedDxfPhaseImport> prepareDxfPhaseImport(
+        const json& raw_graph, const DocumentSnapshot& source, bool review_contexts,
+        NativeDxfWallSourceWorkBudget& budget) {
+        const auto source_document = m_document;
+        admit_native_dxf_phase_destination_snapshot(source, &budget);
+        const auto modal = captureModalContext();
+        const auto authority = captureSourceEditAuthority(source);
+        const auto graph = decode_native_dxf_phase_source_graph(raw_graph, &budget);
+        auto occupied = retainedSlabIdentityNames(source, true);
+        for (const auto& [id, entity] : source.entities()) { (void)entity; occupied.insert(id); }
+        for (const auto& [id, asset] : source.assets()) { (void)asset; occupied.insert(id); }
+        const auto allocate = [&](const std::string& kind) {
+            auto id = new_id(kind);
+            while (!occupied.insert(id).second) id = new_id(kind);
+            return id;
+        };
+        NativeDxfPhaseDestinationMaps maps;
+        for (const auto& id : graph.body_ids) {
+            maps.body_owner_ids.emplace(id, allocate(graph.entities.at(id).type));
+            for (const auto& child : native_dxf_architectural_child_identity_ids(graph.entities.at(id)))
+                if (!maps.stair_child_ids.contains(child))
+                    maps.stair_child_ids.emplace(child, allocate("architectural-child"));
+        }
+        for (const auto& id : graph.catalog_ids) maps.catalog_owner_ids.emplace(id, allocate("assembly-catalog"));
+        for (const auto& id : graph.registry_ids) maps.registry_owner_ids.emplace(id, allocate("design-set"));
+        std::set<std::string, std::less<>> created_contexts;
+        for (const auto& id : graph.context_ids) {
+            maps.reviewed_context_owner_ids.emplace(id, allocate(graph.entities.at(id).type));
+            created_contexts.insert(id);
+        }
+        const auto name = [](const Entity& entity) {
+            const auto field = entity.properties.find("name");
+            return QString::fromStdString(field != entity.properties.end() && field->is_string()
+                ? field->get<std::string>() : entity.id);
+        };
+        const auto type_name = [](const std::string& type) {
+            if (type == "property") return QStringLiteral("Property");
+            if (type == "building") return QStringLiteral("Building");
+            if (type == "floor") return QStringLiteral("Floor");
+            if (type == "layer") return QStringLiteral("Layer");
+            return QStringLiteral("Levels");
+        };
+        if (review_contexts && !graph.context_ids.empty()) {
+            QDialog dialog(owner);
+            dialog.setObjectName(QStringLiteral("dxfPhaseDestinationDialog"));
+            dialog.setWindowTitle(QStringLiteral("Import design sets"));
+            dialog.resize(780, 430);
+            auto* layout = new QVBoxLayout(&dialog);
+            auto* explanation = new QLabel(QStringLiteral(
+                "Import all design alternatives, including inactive and demolished objects. "
+                "Create the source hierarchy or choose matching existing destinations. "
+                "Existing destinations must preserve the source attributes and relationships."), &dialog);
+            explanation->setWordWrap(true);
+            layout->addWidget(explanation);
+            std::map<std::string, QStandardItemModel*, std::less<>> models;
+            for (const auto& id : graph.context_ids) {
+                const auto& original = graph.entities.at(id);
+                if (models.contains(original.type)) continue;
+                auto* model = new QStandardItemModel(&dialog);
+                auto* create = new QStandardItem(QStringLiteral("Create source copy"));
+                create->setData(QString{}, Qt::UserRole);
+                model->appendRow(create);
+                for (const auto& [target_id, target] : source.entities()) {
+                    if (target.type != original.type) continue;
+                    auto* option = new QStandardItem(name(target));
+                    option->setData(QString::fromStdString(target_id), Qt::UserRole);
+                    model->appendRow(option);
+                }
+                models.emplace(original.type, model);
+            }
+            auto* table = new QTableWidget(static_cast<int>(graph.context_ids.size()), 3, &dialog);
+            table->setObjectName(QStringLiteral("dxfPhaseDestinationTable"));
+            table->setHorizontalHeaderLabels({QStringLiteral("Type"), QStringLiteral("Source"), QStringLiteral("Destination")});
+            table->verticalHeader()->hide();
+            table->horizontalHeader()->setSectionResizeMode(0, QHeaderView::ResizeToContents);
+            table->horizontalHeader()->setSectionResizeMode(1, QHeaderView::Stretch);
+            table->horizontalHeader()->setSectionResizeMode(2, QHeaderView::Stretch);
+            table->setEditTriggers(QAbstractItemView::EditKeyPressed);
+            int row = 0;
+            for (const auto& id : graph.context_ids) {
+                const auto& original = graph.entities.at(id);
+                table->setItem(row, 0, new QTableWidgetItem(type_name(original.type)));
+                table->setItem(row, 1, new QTableWidgetItem(name(original)));
+                for (const auto column : {0, 1})
+                    table->item(row, column)->setFlags(table->item(row, column)->flags() & ~Qt::ItemIsEditable);
+                auto* choice = new QTableWidgetItem(QStringLiteral("Create source copy"));
+                choice->setData(Qt::UserRole, QString{});
+                table->setItem(row, 2, choice);
+                table->setItemDelegateForRow(row, new DxfLayerDestinationDelegate(models.at(original.type), table));
+                ++row;
+            }
+            QObject::connect(table, &QTableWidget::clicked, table, [table](const QModelIndex& index) {
+                if (index.column() == 2) table->edit(index);
+            });
+            layout->addWidget(table);
+            auto* buttons = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, &dialog);
+            buttons->button(QDialogButtonBox::Ok)->setText(QStringLiteral("Import"));
+            QObject::connect(buttons, &QDialogButtonBox::accepted, &dialog, &QDialog::accept);
+            QObject::connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
+            layout->addWidget(buttons);
+            styleDialog(dialog);
+            if (dialog.exec() != QDialog::Accepted) return std::nullopt;
+            if (m_document != source_document || !modalContextUnchanged(modal) ||
+                !sourceEditAuthorityCurrent(authority))
+                throw std::invalid_argument("The project changed while reviewing design sets. Reopen Import DXF.");
+            row = 0;
+            for (const auto& id : graph.context_ids) {
+                const auto* choice = table->item(row++, 2);
+                if (!choice || !choice->data(Qt::UserRole).isValid())
+                    throw std::invalid_argument("Choose a destination for every source hierarchy item.");
+                const auto target_id = choice->data(Qt::UserRole).toString().toStdString();
+                if (target_id.empty()) continue;
+                const auto actual = source.entities().find(target_id);
+                if (actual == source.entities().end() || actual->second.type != graph.entities.at(id).type)
+                    throw std::invalid_argument("A design-set destination has the wrong type.");
+                maps.reviewed_context_owner_ids.at(id) = target_id;
+                created_contexts.erase(id);
+            }
+        }
+        // Remapped source records remain evidence. Only the context copies
+        // explicitly chosen above become proposed actual destination owners.
+        const auto mapped_graph = remap_native_dxf_phase_source_graph(graph, maps, &budget);
+        std::vector<Entity> reviewed_new_contexts;
+        PreparedDxfPhaseImport prepared;
+        prepared.source_current = [this, source_document, modal, authority] {
+            return m_document == source_document && modalContextUnchanged(modal) &&
+                sourceEditAuthorityCurrent(authority);
+        };
+        for (const auto& id : graph.context_ids) {
+            const auto& target_id = maps.reviewed_context_owner_ids.at(id);
+            const bool created = created_contexts.contains(id);
+            if (created) reviewed_new_contexts.push_back(mapped_graph.entities.at(target_id));
+            prepared.context_mapping.push_back({{"source_id", id}, {"destination_id", target_id},
+                {"type", graph.entities.at(id).type}, {"created", created}});
+        }
+        const auto bound = bind_native_dxf_phase_source_destinations(graph, maps, source, reviewed_new_contexts, &budget);
+        prepared.entities = bound.staged_entities;
+        // Choose an editing target from one source object, rather than choosing
+        // three unrelated lexicographically first identities. An unregistered
+        // object has no owning set; choose the first imported set deliberately
+        // rather than falling back to an unrelated existing destination set.
+        admit_native_dxf_phase_document_entities(graph.entities, &budget);
+        const auto organization = organize_project(graph.entities);
+        std::map<std::string, std::string, std::less<>> source_registries;
+        for (const auto& registry_id : graph.registry_ids) {
+            const auto model = ModelPhases::from_json(graph.entities.at(registry_id).properties.at("model"));
+            for (const auto& member : model.entity_ids())
+                source_registries.emplace(member, registry_id);
+        }
+        std::string editing_body;
+        for (const auto& id : graph.depicted_body_ids) {
+            if (!organization.drawing_context(id)) continue;
+            if (editing_body.empty()) editing_body = id;
+            if (source_registries.contains(id)) { editing_body = id; break; }
+        }
+        if (!editing_body.empty()) {
+            const auto context = organization.drawing_context(editing_body);
+            prepared.first_body_id = maps.body_owner_ids.at(editing_body);
+            prepared.first_layer_id = maps.reviewed_context_owner_ids.at(context->layer_id);
+            if (source_registries.contains(editing_body))
+                prepared.first_registry_id = maps.registry_owner_ids.at(source_registries.at(editing_body));
+            else if (!graph.registry_ids.empty())
+                prepared.first_registry_id = maps.registry_owner_ids.at(graph.registry_ids.front());
+        } else {
+            // A design set may intentionally have no active CAD bodies. Keep
+            // it editable and use one retained member's layer when available.
+            if (!graph.registry_ids.empty()) {
+                const auto& registry_id = graph.registry_ids.front();
+                prepared.first_registry_id = maps.registry_owner_ids.at(registry_id);
+                const auto model = ModelPhases::from_json(graph.entities.at(registry_id).properties.at("model"));
+                for (const auto& member : model.entity_ids())
+                    if (const auto context = organization.drawing_context(member)) {
+                        prepared.first_layer_id = maps.reviewed_context_owner_ids.at(context->layer_id);
+                        break;
+                    }
+            }
+            if (prepared.first_layer_id.empty())
+                for (const auto& id : graph.context_ids)
+                    if (graph.entities.at(id).type == "layer") {
+                        prepared.first_layer_id = maps.reviewed_context_owner_ids.at(id);
+                        break;
+                    }
+        }
+        return prepared;
+    }
+
     bool importDxf(const QString& path, bool review_layers = false) {
         if (path.trimmed().isEmpty()) {
             setError(QStringLiteral("Choose a DXF file to import."));
@@ -38133,15 +38329,18 @@ public:
             const auto mapped = importProjectCandidate(raw, ProjectImportKind::dxf);
             if (!mapped.isolation_controls_attested)
                 throw std::runtime_error("The DXF import worker did not attest its sandbox controls.");
-            // Do not silently discard a complete phase authoring inventory by
-            // feeding only its CAD depiction into the legacy destination binder.
-            if (mapped.phase_source_graph)
-                throw std::invalid_argument("The design alternatives need complete destination mapping before this drawing can be imported. The project is unchanged.");
             const bool complete_catalog_transfer = !mapped.catalog_sources.empty();
             NativeDxfWallSourceWorkBudget catalog_operation_budget;
             const auto source = authoringSnapshot();
             if (!m_document->is_editable()) throw std::invalid_argument("This document is read-only.");
             const auto source_document = m_document;
+            std::optional<PreparedDxfPhaseImport> phase_import;
+            if (mapped.phase_source_graph) {
+                if (hasPendingPlacementEdit() || m_text_placement_context || m_plan_label_context || m_armed_area_class)
+                    throw std::invalid_argument("Finish or cancel the current drawing or placement before importing design sets.");
+                phase_import = prepareDxfPhaseImport(*mapped.phase_source_graph, source, review_layers, catalog_operation_budget);
+                if (!phase_import) return false;
+            }
             const auto reserve_destination_catalog = [&](const Entity& existing, std::size_t passes) {
                 auto& budget = catalog_operation_budget.catalog_transfer;
                 const auto before = budget.consumed_validation_work;
@@ -38206,6 +38405,8 @@ public:
             if (floor_id.empty()) throw std::invalid_argument("The target drawing layer has no floor.");
 
             std::vector<EntityChange> changes;
+            if (phase_import) for (const auto& entity : phase_import->entities)
+                changes.push_back(EntityChange::upsert(entity));
             struct DxfDestination { std::string floor_id; std::string layer_id; };
             std::map<std::string, DxfDestination, std::less<>> destinations;
             std::map<std::string, std::size_t, std::less<>> source_layer_counts;
@@ -38257,6 +38458,7 @@ public:
             std::set<std::string, std::less<>> reserved_ids;
             for (const auto& [id, entity] : source.entities()) { (void)entity; reserved_ids.insert(id); }
             for (const auto& [id, asset] : source.assets()) { (void)asset; reserved_ids.insert(id); }
+            if (phase_import) for (const auto& entity : phase_import->entities) reserved_ids.insert(entity.id);
             if (complete_catalog_transfer) {
                 const auto occupied = retainedSlabIdentityNames(source);
                 reserved_ids.insert(occupied.begin(), occupied.end());
@@ -38405,7 +38607,8 @@ public:
                 validate_native_dxf_catalog_sources(mapped.entities, mapped.physical_source_graphs,
                     mapped.catalog_sources, mapped.authoring_catalog_ids, &catalog_operation_budget);
             else
-                validate_native_dxf_boundary_groups(mapped.entities, &mapped.physical_source_graphs);
+                validate_native_dxf_boundary_groups(mapped.entities, &mapped.physical_source_graphs, nullptr,
+                    phase_import ? &catalog_operation_budget : nullptr);
             std::map<std::string, const Entity*, std::less<>> native_boundaries;
             for (const auto& candidate : mapped.entities)
                 if (native_member(candidate))
@@ -38711,12 +38914,14 @@ public:
                     if (member.type == "assembly_model") changes.push_back(EntityChange::upsert(member));
             } else {
                 bind_native_dxf_wall_source_destinations(imported_native_boundaries, imported_wall_source_contexts,
-                    has_physical_room_group ? &actual_destination_entities : nullptr, &mapped.physical_source_graphs);
+                    has_physical_room_group ? &actual_destination_entities : nullptr, &mapped.physical_source_graphs,
+                    nullptr, phase_import ? &catalog_operation_budget : nullptr);
                 if (has_physical_room_group)
                     for (const auto& member : imported_native_boundaries)
                         if (wall_source_member(member)) actual_destination_entities.insert_or_assign(member.id, member);
                 validate_native_dxf_boundary_groups(imported_native_boundaries, &mapped.physical_source_graphs,
-                    has_physical_room_group ? &actual_destination_entities : nullptr);
+                    has_physical_room_group ? &actual_destination_entities : nullptr,
+                    phase_import ? &catalog_operation_budget : nullptr);
             }
             for (auto& change : changes) {
                 if (change.kind != EntityChangeKind::upsert || !wall_source_member(change.entity)) continue;
@@ -38748,38 +38953,55 @@ public:
             std::vector<std::byte> source_bytes;
             source_bytes.reserve(static_cast<std::size_t>(raw.size()));
             for (const auto value : raw) source_bytes.push_back(static_cast<std::byte>(value));
-            const auto asset_id = new_id("dxf-source");
+            const auto asset_id = allocate_id("dxf-source");
+            const auto imported_owner_count = mapped.entities.size() + (phase_import ? phase_import->entities.size() : 0);
             auto asset = Asset::create(asset_id, "application/dxf", std::move(source_bytes),
                 {{"format", "DXF R2013"}, {"source_path", info.fileName().toStdString()},
-                 {"mapped_entity_count", mapped.entities.size()},
+                 {"mapped_entity_count", imported_owner_count},
                  {"isolated_import", true},
                  {"source_retention_required", mapped.source_retention_required}});
             auto source_entity = Entity::create("dxf_source",
                 {{"asset_id", asset_id}, {"format", "DXF R2013"},
                  {"source_path", info.fileName().toStdString()},
                  {"isolated_import", true},
-                 {"mapped_entity_count", mapped.entities.size()}, {"diagnostics", json::array()}});
+                 {"mapped_entity_count", imported_owner_count}, {"diagnostics", json::array()}});
+            source_entity.id = allocate_id("dxf-source-record");
             source_entity.properties["layer_reviewed"] = review_layers;
             source_entity.properties["layer_mapping"] = layer_mapping;
+            if (phase_import) source_entity.properties["phase_context_mapping"] = phase_import->context_mapping;
             for (const auto& item : mapped.diagnostics)
                 source_entity.properties["diagnostics"].push_back({{"source_id", item.source_id},
                     {"source_kind", item.source_kind}, {"code", item.code}});
             changes.push_back(EntityChange::upsert(std::move(source_entity)));
             const auto command = ApplyEntityChanges{source.revision(), std::move(changes),
                 {AssetChange::upsert(std::move(asset))}, "Import DXF"};
+            if (phase_import && !phase_import->source_current())
+                throw std::invalid_argument("The project changed before importing design sets. Reopen Import DXF.");
             validateImportedHostedGeometry(Document::preview_command(source, command), imported_boundary_ids);
-            if (!applyDocumentCommand(command)) return false;
+            if (phase_import && !phase_import->source_current())
+                throw std::invalid_argument("The project changed during design-set preparation. Reopen Import DXF.");
+            // V9 carries explicit complete source membership, including owners
+            // that were deliberately unregistered. Generic fresh-object
+            // enrollment would place them into the previously selected set.
+            if (!(phase_import ? applyAuthoredCommand(command, true) : applyDocumentCommand(command))) return false;
             if (!imported_boundary_ids.empty()) m_selected_id = id_from(imported_boundary_ids.front());
             m_active_layer_id = id_from(review_layers && !selected_import_layer.empty() ? selected_import_layer : layer_id);
+            if (phase_import) {
+                if (!phase_import->first_body_id.empty()) m_selected_id = id_from(phase_import->first_body_id);
+                if (!phase_import->first_layer_id.empty()) m_active_layer_id = id_from(phase_import->first_layer_id);
+                m_phase_registry_id = id_from(phase_import->first_registry_id);
+                m_phase_registry_document = m_document;
+            }
             clearError();
             refresh();
             const auto report_path = path + QStringLiteral(".fidelity.json");
             QSaveFile report_file(report_path);
-            json report{{"format", "DXF R2013"}, {"mapped_entity_count", mapped.entities.size()},
+            json report{{"format", "DXF R2013"}, {"mapped_entity_count", imported_owner_count},
                         {"source_retention_required", mapped.source_retention_required},
                         {"diagnostics", json::array()}};
             report["layer_reviewed"] = review_layers;
             report["layer_mapping"] = layer_mapping;
+            if (phase_import) report["phase_context_mapping"] = phase_import->context_mapping;
             for (const auto& item : mapped.diagnostics)
                 report["diagnostics"].push_back({{"source_id", item.source_id},
                     {"source_kind", item.source_kind}, {"code", item.code}});

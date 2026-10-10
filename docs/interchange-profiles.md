@@ -132,7 +132,7 @@ work.
 
 ## Native project mapping
 
-### Phase authoring transfer (planned V9, implementation incomplete)
+### Phase authoring transfer (V9, source integration; qualification incomplete)
 
 V1-V8 phase observations remain private source evidence. Complete editable
 phase transfer requires a separate V9 authoring inventory and PSIP0004 worker
@@ -154,18 +154,38 @@ PSIP0004 carries this inventory as bounded source evidence. Conservative ambient
 source admission can reject large otherwise valid graphs, and existing catalog
 helpers still refuse unsupported canonical owner references. Neither source
 inventory nor wire admission authenticates CAD depiction or grants live ownership.
-The actual V9 DXF carrier, depiction authentication, reviewed destination maps,
-complete binding and atomic publication remain unimplemented. The DXF mapper
-does not yet generate the new field, and the desktop refuses a phase-bearing
-candidate before its legacy binder could discard the inventory.
+The mapper now emits a V9 authoring carrier whenever actual phase registries
+exist. One bounded chunked raw graph carries the complete authoring inventory;
+separate active CAD body blocks authenticate native geometry, hierarchy, layer
+and identity placement. Empty active depiction is valid. Import rejects missing,
+duplicate, orphaned or malformed carrier records and overlapping legacy source
+ownership. PSIP0004 repeats the ownership checks at the worker trust boundary.
+
+Destination mapping requires complete, injective body/catalog/registry/context
+maps and separate stair-child identities. Typed owner references change while
+local alternative, level, catalog and terrain names remain local. Existing
+context owners must be actual destination records with equivalent mapped source
+semantics; they cannot be overwritten by retained evidence. An explicit import
+defaults to creating source hierarchy copies. The interactive review can instead
+choose existing equivalent contexts; no existing hierarchy merge is inferred.
+The pure binder receives those caller-authorized new contexts separately from
+the retained source graph, validates the combined actual destination, and returns
+only proposed new owners. Desktop publication combines them, legacy drawing
+items and the retained original DXF in one command. The initial selection,
+active layer and design-set target follow one imported object's actual ownership.
+An unregistered selected object uses the first imported design set as an explicit
+editing-target fallback, without enrolling that object.
 
 The desktop authoring target now selects among existing phase registries, with
 each registry retaining its saved active alternative. Enrollment, deletion,
 hosted ownership, annotation filtering and automatic wall measurements evaluate
-the actual registry graph. This source change does not add V9 transport or turn
-retained V1-V8 phase proof into an editable imported destination registry.
-No existing carrier is advertised as completing this contract. This increment
-has source inspection only; compilation and runtime qualification are deferred.
+the actual registry graph. V1-V8 retain their prior contracts and are not
+retrospectively treated as complete phase authoring inventories. V9 still
+refuses unsupported incoming annotation/constraint dependencies and canonical
+catalog references. Whole-history admission has explicit finite capacity;
+otherwise valid large projects may refuse. This increment has source inspection
+only. Compilation, runtime round trips, history/storage replay, usability,
+capacity and independent CAD interoperability remain unqualified.
 
 ### Complete material catalogs (V8, reviewed source integration)
 

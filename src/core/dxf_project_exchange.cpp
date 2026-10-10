@@ -1,4 +1,6 @@
 #include "sketch/dxf_project_exchange.hpp"
+#include "sketch/dxf_phase_source.hpp"
+#include "sketch/model_phases.hpp"
 
 #include "sketch/annotation_catalog.hpp"
 #include "sketch/annotation_entity_codec.hpp"
@@ -30,6 +32,7 @@
 #include <cmath>
 #include <cstdint>
 #include <initializer_list>
+#include <iterator>
 #include <limits>
 #include <map>
 #include <numbers>
@@ -58,6 +61,9 @@ constexpr const char* kMeasuredGraph = "vertex_dxf_measured_graph";
 constexpr const char* kResolvedContext = "vertex_dxf_resolved_context";
 constexpr const char* kPhysicalGraph = "vertex_dxf_physical_source_graph";
 constexpr const char* kCatalogTableIdentity = "vertex.catalog.sources";
+constexpr const char* kPhaseGraphIdentity = "vertex.phase.sources";
+constexpr const char* kPhaseGraphChunk = "PHASE_SOURCE_GRAPH_CHUNK_V1";
+constexpr const char* kPhaseBodyPlan = "PHASE_BODY_PLAN_V1";
 Entity read_catalog_source(const std::string& id, const Json& record);
 std::vector<std::string> catalog_identity_list(const Json& values);
 AssemblyDocumentEntities merged_catalog_source_graph(const NativeDxfPhysicalSourceGraphs& proofs,
@@ -2825,6 +2831,180 @@ bool same_block_geometry(const DxfBlock& a, const DxfBlock& b, bool exact = fals
     return true;
 }
 
+Json phase_context_json(const DrawingContext& context) {
+    // Site terrain may have only a property. All other body contexts have
+    // already been proved complete by the source graph's semantic admission.
+    return {{"property_id", context.property_id}, {"building_id", context.building_id},
+        {"floor_id", context.floor_id}, {"layer_id", context.layer_id}, {"level_id", context.level_id}};
+}
+
+struct PhasePlans {
+    std::map<std::string, DxfBlock, std::less<>> blocks;
+    std::map<std::string, Json, std::less<>> contexts;
+    std::map<std::string, std::string, std::less<>> layers;
+};
+
+PhasePlans phase_source_plans(const NativeDxfPhaseSourceGraph& graph,
+    NativeDxfWallSourceWorkBudget& budget) {
+    // Keep full source ownership for validation and saved phase evaluation.
+    // Only the private geometry observation omits inactive bodies: otherwise
+    // an inactive opening would cut its still-active wall's CAD depiction.
+    admit_physical_plan_work(graph.entities, budget);
+    admit_physical_support_work(graph.entities, budget, 2, graph.depicted_body_ids.size(), 0, 2);
+    const auto scope = constraint_phase_scope(graph.entities);
+    const auto organization = organize_project(graph.entities);
+    auto active = graph.entities;
+    for (const auto& id : graph.body_ids)
+        if (!std::binary_search(graph.depicted_body_ids.begin(), graph.depicted_body_ids.end(), id)) active.erase(id);
+    std::set<std::string, std::less<>> visible(graph.depicted_body_ids.begin(), graph.depicted_body_ids.end());
+    std::size_t measured_edges = 0, boundary_edges = 0;
+    const auto charge = [&](std::size_t amount) {
+        if (budget.source_work > 250'000 || amount > 250'000 - budget.source_work)
+            throw std::invalid_argument("V9 cumulative source geometry work limit");
+        budget.source_work += amount;
+    };
+    for (const auto& id : graph.depicted_body_ids) {
+        const auto& owner = graph.entities.at(id);
+        if (owner.type == "measurement_linework") {
+            const auto [edges, replay_work] = raw_measured_stroke_work(owner);
+            if (edges > 512 - measured_edges || replay_work > 250'000 / 16)
+                throw std::invalid_argument("V9 measured source geometry limit");
+            measured_edges += edges; charge(replay_work * 16);
+        } else if (can_recognize_boundary_entity_type(owner.type)) {
+            auto observation = owner;
+            observation.extensions["vertex_dxf_boundary"] = {{"version", 7}};
+            const auto edges = raw_boundary_segment_count(observation);
+            if (edges > 512 - boundary_edges) throw std::invalid_argument("V9 boundary geometry limit");
+            boundary_edges += edges; charge(edges * edges * 16);
+        }
+    }
+    if (budget.segments > 50'000 || measured_edges + boundary_edges > 50'000 - budget.segments)
+        throw std::invalid_argument("V9 cumulative source primitive limit");
+    budget.segments += measured_edges + boundary_edges;
+    charge(measured_edges * measured_edges * 16);
+    // Validate retained measured lineage using the actual complete active
+    // layer inventory. The graph capture must include every source outsider.
+    // Organize actual raw hierarchy directly. The legacy detached-context
+    // helper imposes an owner-ID grammar on floor-local level names, which
+    // must remain unchanged in V9 source evidence.
+    const auto measured_checks = measurement_linework_source_checks(active, &visible);
+    for (const auto& id : graph.depicted_body_ids)
+        if (!measurement_linework_source_current(measured_checks, graph.entities.at(id)))
+            throw std::invalid_argument("V9 active measured source is stale");
+#ifdef SKETCH_PHYSICAL_ROOMS
+    std::map<std::string, PhysicalWallRoomCheck, std::less<>> physical_checks;
+    if (std::any_of(graph.depicted_body_ids.begin(), graph.depicted_body_ids.end(), [&](const auto& id) {
+        return graph.entities.at(id).extensions.contains("physical_wall_room");
+    })) {
+        admit_native_dxf_phase_physical_room_checks(graph.entities, &budget);
+        std::vector<Entity> values;
+        for (const auto& [id, owner] : graph.entities) { (void)id; values.push_back(owner); }
+        physical_checks = physical_wall_room_checks(Document::create(std::move(values)).snapshot());
+    }
+#endif
+    PhasePlans result;
+    for (const auto& id : graph.depicted_body_ids) {
+        const auto& owner = graph.entities.at(id);
+        const auto context = native_dxf_phase_auxiliary_source_type(owner.type)
+            ? native_dxf_phase_auxiliary_source_context(owner, graph.entities, organization)
+            : native_dxf_architectural_source_context(owner, graph.entities, organization);
+        if (!context) throw std::invalid_argument("V9 active source context missing");
+        std::vector<DxfProjectDiagnostic> diagnostics;
+        auto layer = layer_for(graph.entities, owner, diagnostics, &*context);
+        if (owner.type == "wall_join") {
+            const auto name = layer_name(graph.entities, context->layer_id);
+            layer = valid_layer(name.value_or("0"), diagnostics, id, owner.type);
+        }
+        if (!diagnostics.empty()) throw std::invalid_argument("V9 active CAD layer unavailable");
+        DxfBlock block;
+        if (native_dxf_phase_auxiliary_source_type(owner.type)) {
+            DxfDrawing plan;
+            const auto edges = native_dxf_phase_auxiliary_source_plan(owner, active);
+            if (edges.size() > 4096) throw std::invalid_argument("V9 auxiliary plan primitive limit");
+            for (const auto& edge : edges) add_segment_as_dxf(plan, edge, layer, diagnostics, id, owner.type);
+            block = {"", {}, std::move(plan.lines), std::move(plan.arcs), std::move(plan.polylines), {}, {}};
+        } else if (can_recognize_boundary_entity_type(owner.type)) {
+            auto observation = owner;
+            observation.extensions["vertex_dxf_boundary"] = {{"version", 7}};
+            if (owner.extensions.contains("physical_wall_room")) {
+#ifdef SKETCH_PHYSICAL_ROOMS
+                const auto check = physical_checks.find(id);
+                if (check == physical_checks.end() || !check->second.current)
+                    throw std::invalid_argument("V9 active physical room is stale");
+#else
+                throw std::invalid_argument("V9 physical room geometry unavailable");
+#endif
+            }
+            block = boundary_plan_block(observation, "", layer, true);
+        } else if (owner.type == "wall" || owner.type == "opening") {
+            const auto placed = resolve_vertical_placement(graph.entities, owner);
+            block = architectural_block(active, placed, "", layer, diagnostics, scope);
+        } else {
+            // V9 raw graph admission owns phase/qualified-join metadata. The
+            // V8 source validator is deliberately not used on this graph.
+            block = source_plan_block(active, owner, "", layer, diagnostics);
+        }
+        if (!diagnostics.empty()) throw std::invalid_argument("V9 active source plan unavailable");
+        result.blocks.emplace(id, std::move(block));
+        result.contexts.emplace(id, phase_context_json(*context)); result.layers.emplace(id, std::move(layer));
+    }
+    return result;
+}
+
+Json bounded_phase_carrier_json(std::string_view bytes, NativeDxfWallSourceWorkBudget& budget,
+    bool native_record = false) {
+    auto& ledger = budget.catalog_transfer;
+    if (ledger.consumed_json_bytes > ledger.max_json_bytes || bytes.size() > ledger.max_json_bytes - ledger.consumed_json_bytes)
+        throw std::invalid_argument("V9 cumulative carrier byte limit");
+    ledger.consumed_json_bytes += bytes.size();
+    std::vector<std::set<std::string>> keys;
+    std::size_t record_nodes = 0;
+    const auto callback = [&](int depth, Json::parse_event_t event, Json& value) {
+        if (depth > static_cast<int>(native_record ? 16 : native_dxf_phase_source_depth_limit) ||
+            (native_record && (++record_nodes > 4096 || (value.is_string() && value.get_ref<const std::string&>().size() > 8192))) ||
+            ledger.consumed_json_nodes >= ledger.max_json_nodes || ledger.consumed_validation_work >= ledger.max_validation_work)
+            throw std::invalid_argument("V9 cumulative carrier JSON work limit");
+        ++ledger.consumed_json_nodes; ++ledger.consumed_validation_work;
+        if (event == Json::parse_event_t::object_start) keys.emplace_back();
+        else if (event == Json::parse_event_t::object_end) keys.pop_back();
+        else if (event == Json::parse_event_t::key && !keys.back().insert(value.get<std::string>()).second)
+            throw std::invalid_argument("duplicate V9 graph key");
+        return true;
+    };
+    return Json::parse(bytes, callback);
+}
+
+void export_phase_carrier(const NativeDxfPhaseSourceGraph& graph, DxfDrawing& drawing,
+    NativeDxfWallSourceWorkBudget& budget) {
+    const auto encoded = encode_native_dxf_phase_source_graph(graph, &budget).dump(-1, ' ', true);
+    // Charge actual encoded framing as well as raw source admission.
+    (void)bounded_phase_carrier_json(encoded, budget);
+    auto plans = phase_source_plans(graph, budget);
+    constexpr std::size_t chunk_bytes = 6000;
+    const auto count = (encoded.size() + chunk_bytes - 1) / chunk_bytes;
+    if (!count || count > 4096) throw std::invalid_argument("V9 graph chunk count limit");
+    DxfDrawing staged;
+    for (std::size_t part = 0; part < count; ++part) {
+        DxfBlock block; block.name = "VERTEX_PHASE_PROOF_" + std::to_string(part + 1);
+        block.vertex_entity_json = Json{{"version", 9}, {"depiction", kPhaseGraphChunk},
+            {"graph_id", kPhaseGraphIdentity}, {"chunk_index", part}, {"chunk_count", count},
+            {"data", encoded.substr(part * chunk_bytes, chunk_bytes)}}.dump(-1, ' ', true);
+        (void)bounded_phase_carrier_json(block.vertex_entity_json, budget, true);
+        staged.inserts.push_back({block.name, {}, 1, 1, 0, "0"}); staged.blocks.push_back(std::move(block));
+    }
+    std::size_t ordinal = 0;
+    for (auto& [id, block] : plans.blocks) {
+        block.name = "VERTEX_PHASE_PLAN_" + std::to_string(++ordinal);
+        block.vertex_entity_json = Json{{"version", 9}, {"depiction", kPhaseBodyPlan},
+            {"graph_id", kPhaseGraphIdentity}, {"id", id}, {"type", graph.entities.at(id).type},
+            {"resolved_context", plans.contexts.at(id)}, {"cad_layer", plans.layers.at(id)}}.dump(-1, ' ', true);
+        (void)bounded_phase_carrier_json(block.vertex_entity_json, budget, true);
+        staged.inserts.push_back({block.name, {}, 1, 1, 0, plans.layers.at(id)}); staged.blocks.push_back(std::move(block));
+    }
+    drawing.blocks.insert(drawing.blocks.end(), std::make_move_iterator(staged.blocks.begin()), std::make_move_iterator(staged.blocks.end()));
+    drawing.inserts.insert(drawing.inserts.end(), std::make_move_iterator(staged.inserts.begin()), std::make_move_iterator(staged.inserts.end()));
+}
+
 // Bindings to absent project scaffolding remain inert source evidence. Only
 // boundary topology and wall/opening host relationships become active here.
 Entity detached_native_entity(const Entity& source, const std::map<std::string, std::string>& ids,
@@ -2903,8 +3083,114 @@ Entity detached_native_entity(const Entity& source, const std::map<std::string, 
     return result;
 }
 
+std::set<std::size_t> import_phase_carrier(const DxfDrawing& drawing, bool source_is_metres,
+    DxfProjectImportResult& result, NativeDxfWallSourceWorkBudget& budget) {
+    std::map<std::string, Json, std::less<>> payloads;
+    std::set<std::string, std::less<>> phase_blocks;
+    bool unreadable_metadata = false;
+    auto discovery_budget = budget;
+    for (const auto& block : drawing.blocks) {
+        if (block.vertex_entity_json.empty()) continue;
+        try {
+            auto payload = bounded_phase_carrier_json(block.vertex_entity_json, discovery_budget, true);
+            const bool phase = payload.is_object() &&
+                ((payload.contains("version") && payload.at("version") == 9) ||
+                 (payload.contains("depiction") && (payload.at("depiction") == kPhaseGraphChunk || payload.at("depiction") == kPhaseBodyPlan)));
+            const auto name = block_identity(block.name);
+            if (phase) phase_blocks.insert(name);
+            if (!payloads.emplace(name, std::move(payload)).second) throw std::invalid_argument("duplicate native block identity");
+        } catch (const std::exception&) {
+            unreadable_metadata = true;
+            if (block.name.starts_with("VERTEX_PHASE_")) phase_blocks.insert(block_identity(block.name));
+        }
+    }
+    if (phase_blocks.empty()) return {};
+    // Discovery consumed raw parser work too, including competing malformed
+    // legacy records. No-phase V1..V8 retains its unchanged operation ledger.
+    budget = std::move(discovery_budget);
+    if (!source_is_metres || unreadable_metadata) throw std::invalid_argument("V9 unreadable carrier or source units");
+    std::map<std::string, std::vector<std::size_t>, std::less<>> uses;
+    for (std::size_t index = 0; index < drawing.inserts.size(); ++index)
+        uses[block_identity(drawing.inserts[index].block_name)].push_back(index);
+    std::set<std::size_t> activated;
+    std::map<std::size_t, std::string> chunks;
+    std::map<std::string, const DxfBlock*, std::less<>> bodies;
+    std::size_t chunk_count = 0, encoded_bytes = 0;
+    for (const auto& block : drawing.blocks) {
+        const auto name = block_identity(block.name);
+        if (!phase_blocks.contains(name)) continue;
+        if (uses[name].size() != 1) throw std::invalid_argument("V9 orphan or duplicate carrier INSERT");
+        const auto index = uses[name].front(); const auto& insert = drawing.inserts[index];
+        const auto& payload = payloads.at(name);
+        if (!payload.is_object() || !payload.contains("version") || !payload.at("version").is_number_integer() || payload.at("version") != 9 ||
+            payload.at("graph_id") != kPhaseGraphIdentity || insert.insertion.x != 0 || insert.insertion.y != 0 ||
+            insert.scale_x != 1 || insert.scale_y != 1 || insert.rotation_degrees != 0 || block.base.x != 0 || block.base.y != 0)
+            throw std::invalid_argument("V9 carrier placement/version differs");
+        activated.insert(index);
+        if (payload.at("depiction") == kPhaseGraphChunk) {
+            if (payload.size() != 6 || !payload.at("chunk_index").is_number_unsigned() || !payload.at("chunk_count").is_number_unsigned() ||
+                !payload.at("data").is_string() || insert.layer != "0" || !block.lines.empty() || !block.arcs.empty() ||
+                !block.polylines.empty() || !block.circles.empty() || !block.labels.empty())
+                throw std::invalid_argument("V9 chunk schema/geometry differs");
+            const auto count = payload.at("chunk_count").get<std::size_t>(); const auto part = payload.at("chunk_index").get<std::size_t>();
+            const auto& data = payload.at("data").get_ref<const std::string&>();
+            if (!count || count > 4096 || part >= count || (chunk_count && count != chunk_count) || data.empty() || data.size() > 6000 ||
+                (part + 1 < count && data.size() != 6000) || std::any_of(data.begin(), data.end(), [](unsigned char c) { return c > 127; }) ||
+                encoded_bytes > native_dxf_phase_source_byte_limit || data.size() > native_dxf_phase_source_byte_limit - encoded_bytes)
+                throw std::invalid_argument("V9 partial/conflicting/oversized chunks");
+            // Charge before storing even a competing duplicate declaration.
+            auto& ledger = budget.catalog_transfer;
+            if (ledger.consumed_validation_work > ledger.max_validation_work || data.size() > ledger.max_validation_work - ledger.consumed_validation_work)
+                throw std::invalid_argument("V9 cumulative chunk work limit");
+            ledger.consumed_validation_work += data.size(); encoded_bytes += data.size(); chunk_count = count;
+            if (!chunks.emplace(part, data).second) throw std::invalid_argument("V9 duplicate graph chunk");
+        } else if (payload.at("depiction") == kPhaseBodyPlan) {
+            if (payload.size() != 7 || !payload.at("id").is_string() || !payload.at("type").is_string() ||
+                !payload.at("cad_layer").is_string() || !payload.at("resolved_context").is_object())
+                throw std::invalid_argument("V9 active body carrier schema differs");
+            const auto id = payload.at("id").get<std::string>();
+            if (id.empty() || id.size() > 255 || !bodies.emplace(id, &block).second)
+                throw std::invalid_argument("V9 duplicate/invalid depicted owner");
+        } else throw std::invalid_argument("V9 unsupported carrier depiction");
+    }
+    if (!chunk_count || chunks.size() != chunk_count) throw std::invalid_argument("V9 source graph incomplete");
+    std::string encoded; encoded.reserve(encoded_bytes);
+    for (std::size_t part = 0; part < chunk_count; ++part) encoded += chunks.at(part);
+    auto value = bounded_phase_carrier_json(encoded, budget);
+    const auto graph = decode_native_dxf_phase_source_graph(value, &budget);
+    if (graph.registry_ids.empty() || bodies.size() != graph.depicted_body_ids.size())
+        throw std::invalid_argument("V9 registry/depicted inventory differs");
+    // Legacy and V9 owners have one source identity namespace, including failed
+    // legacy declarations. A rejected competing body may not disappear and
+    // leave the complete graph apparently authenticated.
+    for (const auto& [name, payload] : payloads) {
+        if (phase_blocks.contains(name) || !payload.is_object()) continue;
+        const auto reject = [&](const Json& id) {
+            if (id.is_string() && graph.entities.contains(id.get_ref<const std::string&>()))
+                throw std::invalid_argument("V9 and legacy source ownership overlaps");
+        };
+        if (payload.contains("id")) reject(payload.at("id"));
+        if (payload.contains("member_ids") && payload.at("member_ids").is_array())
+            for (const auto& id : payload.at("member_ids")) reject(id);
+    }
+    const auto plans = phase_source_plans(graph, budget);
+    for (const auto& id : graph.depicted_body_ids) {
+        const auto found = bodies.find(id);
+        if (found == bodies.end()) throw std::invalid_argument("V9 active CAD body missing");
+        const auto& block = *found->second; const auto name = block_identity(block.name);
+        const auto& payload = payloads.at(name); const auto& insert = drawing.inserts[uses.at(name).front()];
+        if (payload.at("type") != graph.entities.at(id).type || payload.at("resolved_context") != plans.contexts.at(id) ||
+            payload.at("cad_layer") != plans.layers.at(id) || insert.layer != plans.layers.at(id) ||
+            !same_block_geometry(block, plans.blocks.at(id), true))
+            throw std::invalid_argument("V9 active CAD geometry/context parity differs");
+    }
+    result.phase_source_graph = std::move(value);
+    return activated;
+}
+
 std::set<std::size_t> import_native_graphs(const DxfDrawing& drawing, bool source_is_metres,
-                                         DxfProjectImportResult& result) {
+    DxfProjectImportResult& result, NativeDxfWallSourceWorkBudget& wall_source_budget,
+    const std::set<std::size_t>& phase_inserts) {
     // Inventory metadata-only carriers independently before decoding owners.
     // Missing, duplicate, noncanonical or conflicting chunks leave no proof.
     struct ProofChunks { std::size_t count{}; std::map<std::size_t, std::string> data; std::vector<std::size_t> inserts; bool refused{}; };
@@ -2914,6 +3200,7 @@ std::set<std::size_t> import_native_graphs(const DxfDrawing& drawing, bool sourc
     std::set<std::size_t> proof_inserts;
     std::size_t aggregate_proof_bytes = 0;
     for (std::size_t index = 0; index < drawing.inserts.size(); ++index) {
+        if (phase_inserts.contains(index)) continue;
         const auto& insert = drawing.inserts[index];
         const auto block = std::find_if(drawing.blocks.begin(), drawing.blocks.end(), [&](const auto& value) {
             return block_identity(value.name) == block_identity(insert.block_name);
@@ -3016,6 +3303,7 @@ std::set<std::size_t> import_native_graphs(const DxfDrawing& drawing, bool sourc
     bool original_physical_inventory_incomplete = false;
     bool original_measured_context_incomplete = false;
     for (std::size_t i = 0; i < drawing.inserts.size(); ++i) {
+        if (phase_inserts.contains(i)) continue;
         const auto& insert = drawing.inserts[i];
         const auto block = std::find_if(drawing.blocks.begin(), drawing.blocks.end(),
             [&](const auto& value) { return block_identity(value.name) == block_identity(insert.block_name); });
@@ -3147,7 +3435,6 @@ std::set<std::size_t> import_native_graphs(const DxfDrawing& drawing, bool sourc
     }
     for (const auto& [id, owner] : catalog_sources) { (void)owner; allocated_ids.insert(id); }
     std::set<std::string> processed_groups;
-    NativeDxfWallSourceWorkBudget wall_source_budget;
     std::set<std::string> preflight_refused;
     wall_source_budget.measured_operation = std::any_of(candidates.begin(), candidates.end(),
         [](const auto& entry) { return entry.second.version >= 6; });
@@ -5177,15 +5464,37 @@ DxfProjectExportResult export_project_dxf(const DocumentSnapshot& document,
     DxfProjectExportResult result;
     result.drawing.insertion_units = 6; // SI metres are authoritative in the project model.
     NativeDxfWallSourceWorkBudget wall_source_budget;
+    std::set<std::string> phase_owned;
+    const bool phase_operation = std::any_of(document.entities().begin(), document.entities().end(), [](const auto& owner) {
+        return owner.second.type == "model_phases";
+    });
+    if (phase_operation) {
+        try {
+            std::vector<std::string> seeds;
+            // A phase-bearing operation has one complete native authoring
+            // inventory. Include unregistered supported bodies/catalogs too,
+            // so a legacy proof cannot take ownership of shared source context.
+            for (const auto& [id, owner] : document.entities())
+                if (owner.type == "model_phases" || (is_model_phase_entity_type(owner.type) && owner.type != "building" && owner.type != "floor"))
+                    seeds.push_back(id);
+            const auto graph = capture_native_dxf_phase_source_graph(document, seeds, &wall_source_budget);
+            export_phase_carrier(graph, result.drawing, wall_source_budget);
+            for (const auto& [id, owner] : graph.entities) { (void)owner; phase_owned.insert(id); }
+        } catch (const std::exception& error) {
+            // Complete phase retention is atomic. Never emit an active-only
+            // fallback that silently loses inactive proposals or demolition.
+            throw std::invalid_argument(std::string("Complete design-set DXF export failed: ") + error.what());
+        }
+    }
     const bool physical_operation = std::any_of(document.entities().begin(), document.entities().end(), [](const auto& owner) {
         return owner.second.extensions.contains("physical_wall_room") || raw_material_assignment(owner.second);
     });
     try {
         // Reserve the initial full-source organization and phase selection
         // before either can decode a shared level/phase graph repeatedly.
-        if (physical_operation) admit_physical_support_work(document.entities(), wall_source_budget, 1, 0, 0, 2);
-        if (physical_operation) admit_physical_plan_work(document.entities(), wall_source_budget);
-        if (physical_operation) for (const auto& [id, owner] : document.entities()) {
+        if (physical_operation && !phase_operation) admit_physical_support_work(document.entities(), wall_source_budget, 1, 0, 0, 2);
+        if (physical_operation && !phase_operation) admit_physical_plan_work(document.entities(), wall_source_budget);
+        if (physical_operation && !phase_operation) for (const auto& [id, owner] : document.entities()) {
             (void)id;
             admit_native_dxf_architectural_source_work(owner, document.entities(), wall_source_budget);
         }
@@ -5213,14 +5522,16 @@ DxfProjectExportResult export_project_dxf(const DocumentSnapshot& document,
             scope.inactive_owner_ids.contains(host->first)) scope.inactive_owner_ids.insert(id);
     }
     const bool measured_operation = std::any_of(document.entities().begin(), document.entities().end(), [&](const auto& owner) {
-        return !scope.inactive_owner_ids.contains(owner.first) && (owner.second.type == "measurement_linework" ||
+        return !phase_owned.contains(owner.first) && !scope.inactive_owner_ids.contains(owner.first) && (owner.second.type == "measurement_linework" ||
             owner.second.extensions.contains("measurement_linework_sources") || owner.second.extensions.contains("measurement_linework_group"));
     });
-    const auto [native_boundaries, fallback_boundaries] = export_boundary_groups(document, scope, result, wall_source_budget);
+    const auto [native_boundaries, fallback_boundaries] = phase_operation
+        ? std::pair<std::set<std::string>, std::set<std::string>>{}
+        : export_boundary_groups(document, scope, result, wall_source_budget);
 #ifdef SKETCH_PHYSICAL_ROOMS
     std::map<std::string, PhysicalWallRoomCheck, std::less<>> physical_rooms;
     const bool physical_fallback = std::any_of(document.entities().begin(), document.entities().end(), [&](const auto& owner) {
-        return !native_boundaries.contains(owner.first) && !scope.inactive_owner_ids.contains(owner.first) && owner.second.extensions.contains("physical_wall_room");
+        return !phase_owned.contains(owner.first) && !native_boundaries.contains(owner.first) && !scope.inactive_owner_ids.contains(owner.first) && owner.second.extensions.contains("physical_wall_room");
     });
     if (physical_fallback) try {
         // Currentness organizes/places selected walls for every retained room
@@ -5251,6 +5562,7 @@ DxfProjectExportResult export_project_dxf(const DocumentSnapshot& document,
     }
 #endif
     for (const auto& [id, entity] : document.entities()) {
+        if (phase_owned.contains(id)) continue;
         if (native_boundaries.contains(id)) continue;
         if (scope.inactive_owner_ids.contains(id)) {
             diagnostic(result.diagnostics, id, entity.type, "inactive_design_evidence_not_representable");
@@ -5307,7 +5619,33 @@ DxfProjectImportResult import_project_dxf(std::string_view bytes,
     const bool source_is_metres = parsed.drawing.insertion_units == 6;
     preflight_project_expansion(parsed.drawing, limits);
     normalize_drawing_to_metres(parsed.drawing, *factor);
-    const auto native_inserts = import_native_graphs(parsed.drawing, source_is_metres, result);
+    NativeDxfWallSourceWorkBudget native_budget;
+    const auto phase_inserts = import_phase_carrier(parsed.drawing, source_is_metres, result, native_budget);
+    auto native_inserts = import_native_graphs(parsed.drawing, source_is_metres, result, native_budget, phase_inserts);
+    native_inserts.insert(phase_inserts.begin(), phase_inserts.end());
+    if (result.phase_source_graph) {
+        for (std::size_t index = 0; index < parsed.drawing.inserts.size(); ++index) {
+            if (native_inserts.contains(index)) continue;
+            const auto& insert = parsed.drawing.inserts[index];
+            const auto block = std::find_if(parsed.drawing.blocks.begin(), parsed.drawing.blocks.end(), [&](const auto& candidate) {
+                return block_identity(candidate.name) == block_identity(insert.block_name);
+            });
+            if (block != parsed.drawing.blocks.end() && !block->vertex_entity_json.empty())
+                throw std::invalid_argument("V9 competing legacy native carrier was not completely activated");
+        }
+        std::set<std::string, std::less<>> phase_owners;
+        for (const auto& row : result.phase_source_graph->at("entities")) phase_owners.insert(row.at("id").get<std::string>());
+        for (const auto& [id, proof] : result.physical_source_graphs) {
+            (void)id;
+            for (const auto& row : proof.at("entities"))
+                if (phase_owners.contains(row.at("id").get<std::string>()))
+                    throw std::invalid_argument("V9 and legacy physical source ownership overlaps");
+        }
+        for (const auto& [id, catalog] : result.catalog_sources) {
+            (void)catalog;
+            if (phase_owners.contains(id)) throw std::invalid_argument("V9 and legacy catalog source ownership overlaps");
+        }
+    }
     std::size_t boundary_counter = 0;
     import_direct_geometry(parsed.drawing, result, boundary_counter);
     AnnotationState annotations;
