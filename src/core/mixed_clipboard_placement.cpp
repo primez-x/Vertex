@@ -2,6 +2,14 @@
 
 #include "sketch/assembly_document_adapter.hpp"
 #include "sketch/assembly_model.hpp"
+#include "sketch/architectural_document_adapter.hpp"
+#include "sketch/annotation_entity_codec.hpp"
+#include "sketch/boundary_dimension.hpp"
+#include "sketch/boundary_entity.hpp"
+#include "sketch/boundary_integrity.hpp"
+#include "sketch/constraint_entity.hpp"
+#include "sketch/measurement_linework.hpp"
+#include "sketch/terrain_surface.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -496,6 +504,157 @@ MixedClipboardPlacement prepare_mixed_clipboard_placement(const DocumentSnapshot
     }
     for (const auto& [id, entity] : result.roof_candidates) { (void)id; output_budget.entity(entity); }
     for (const auto& intent : result.roof_intents) output_budget.read(encode_roof_edit_intent(intent));
+    return result;
+}
+ApplyEntityChanges translated_mixed_clipboard_ordinary_graph(const DocumentSnapshot& source,
+    const ApplyEntityChanges& prepared,const std::map<std::string,Vec2,std::less<>>& owner_offsets,
+    const std::map<std::pair<std::string,std::string>,Vec2>& annotation_offsets) {
+    if (!source.is_editable() || prepared.expected_revision!=source.revision() ||
+        prepared.entity_changes.empty() || prepared.entity_changes.size()>change_limit ||
+        !prepared.asset_changes.empty() || owner_offsets.size()!=prepared.entity_changes.size())
+        reject("fresh graph translation requires one captured complete fresh inventory");
+    PreparedBudget input_budget;
+    Entities copied;
+    for (const auto& change:prepared.entity_changes) {
+        if (change.kind!=EntityChangeKind::upsert || source.entities().contains(change.entity.id) ||
+            (!change.entity_id.empty() && change.entity_id!=change.entity.id))
+            reject("fresh graph translation cannot edit an original owner");
+        input_budget.entity(change.entity);
+        const auto offset=owner_offsets.find(change.entity.id);
+        if (offset==owner_offsets.end() || !std::isfinite(offset->second.x) || !std::isfinite(offset->second.y) ||
+            std::abs(offset->second.x)>1e12 || std::abs(offset->second.y)>1e12)
+            reject("fresh graph translation requires bounded explicit owner offsets");
+    }
+    for (const auto& change:prepared.entity_changes)
+        if (!copied.emplace(change.entity.id,change.entity).second) reject("fresh graph translation repeats an owner");
+    if (annotation_offsets.size()>change_limit) reject("fresh annotation offset budget exceeded");
+    std::set<std::pair<std::string,std::string>> annotation_children;
+    if (!annotation_offsets.empty()) for (const auto& [id,entity]:copied) {
+        if (entity.type!=kAnnotationEntityType) continue;
+        const auto state=decode_annotation_entity(entity);
+        for (const auto& child:state.labels) annotation_children.emplace(id,child.id);
+        for (const auto& child:state.symbols) annotation_children.emplace(id,child.id);
+    }
+    for (const auto& [key,offset]:annotation_offsets) {
+        const auto owner=copied.find(key.first);
+        if (owner==copied.end() || owner->second.type!=kAnnotationEntityType ||
+            !std::isfinite(offset.x) || !std::isfinite(offset.y) || std::abs(offset.x)>1e12 || std::abs(offset.y)>1e12)
+            reject("fresh annotation offset requires a bounded actual child target");
+        if (!annotation_children.contains(key)) reject("fresh annotation offset has no qualified child");
+    }
+    std::vector<BoundaryTransformation> boundaries;
+    Ids plain_source_owners,boundary_ids;
+    for (const auto& [id,entity]:copied) {
+        if (!can_recognize_boundary_entity_type(entity.type)) continue;
+        const auto offset=owner_offsets.at(id);
+        if (entity.type=="measurement_boundary" && entity.extensions.contains("measurement_linework_sources") &&
+            !entity.properties.contains("boundary_authoring") && !entity.extensions.contains("boundary_geometry_derivation"))
+            plain_source_owners.insert(id);
+        else if (offset.x!=0.0 || offset.y!=0.0) {
+            boundaries.push_back({id,{{},0,false,false,offset}});boundary_ids.insert(id);
+        }
+    }
+    auto placed=boundaries.empty() ? copied : transformed_boundary_entities_per_owner_batch(copied,boundaries);
+    for (const auto& id:plain_source_owners) {
+        const auto offset=owner_offsets.at(id);
+        if (offset.x==0.0 && offset.y==0.0) continue;
+        const auto& original=copied.at(id);
+        auto boundary=decode_identified_boundary_entity(original);
+        const PlanarTransform transform{{},0,false,false,offset};
+        for (auto& edge:boundary.segments) edge.segment=transform_segment(edge.segment,transform);
+        placed.at(id)=encode_identified_boundary_entity(boundary,&original);
+    }
+    const auto physical=stage_fresh_architectural_clipboard_translation(
+        source,copied,{},source.revision(),owner_offsets);
+    for (const auto& [id,entity]:physical)
+        if (!exact(entity,copied.at(id))) placed.at(id)=entity;
+    for (auto& [id,entity]:placed) {
+        const auto offset=owner_offsets.at(id);
+        const PlanarTransform transform{{},0,false,false,offset};
+        if (offset.x==0.0 && offset.y==0.0 && entity.type!=kAnnotationEntityType) continue;
+        if (entity.type=="measurement_linework") {
+            const auto decoded=decode_measurement_linework_model(entity.properties.at("model"));
+            if (!decoded.supported()) reject("fresh graph has unsupported measured linework");
+            const auto moved=transformed_measurement_linework(*decoded.model,transform);
+            const Json operation{{"version",1},{"pivot",{transform.pivot.x,transform.pivot.y}},
+                {"rotation_radians",transform.rotation_radians},{"flip_horizontal",transform.flip_horizontal},
+                {"flip_vertical",transform.flip_vertical},{"offset",{offset.x,offset.y}}};
+            // Append only the new derivation to raw source evidence. Encoding
+            // the whole model would normalize historical numeric receipt forms.
+            auto& raw=entity.properties.at("model");
+            if (decoded.model->schema_version>=measurement_linework_schema_version_v3)
+                raw.at("operations").push_back({{"type","transform"},{"transform",operation}});
+            else {
+                if (decoded.model->schema_version==measurement_linework_schema_version_v1) {
+                    raw.at("version")=measurement_linework_schema_version_v2;
+                    raw.at("replay_version")=measurement_linework_replay_version_v2;
+                    raw["transforms"]=Json::array();
+                }
+                raw.at("transforms").push_back(operation);
+            }
+            const auto retained=decode_measurement_linework_model(raw);
+            if (!retained.supported()) reject("translated raw measured linework is unsupported");
+            const auto expected=replay_measurement_linework(moved),actual=replay_measurement_linework(*retained.model);
+            if (actual.stroke_id!=expected.stroke_id || actual.closed!=expected.closed ||
+                actual.anchor.x!=expected.anchor.x || actual.anchor.y!=expected.anchor.y ||
+                actual.replay_version!=expected.replay_version || actual.edges!=expected.edges || actual.receipts!=expected.receipts)
+                reject("raw measured translation differs from its typed operation");
+        } else if (entity.type=="constraint") {
+            const auto decoded=decode_constraint_entity(entity);
+            if (!decoded.supported()) reject("fresh graph has an unsupported constraint");
+            // Only a fixed anchor owns a translated coordinate. Keep raw
+            // bindings, dialect and quantity receipts intact for every relation.
+            if (decoded.constraint->anchor) {
+                const auto moved=transform_point(*decoded.constraint->anchor,transform);
+                auto& anchor=entity.properties.at("anchor_m");
+                if (offset.x!=0.0) anchor.at(0)=moved.x;
+                if (offset.y!=0.0) anchor.at(1)=moved.y;
+                if (!decode_constraint_entity(entity).supported())
+                    reject("translated raw constraint is unsupported");
+            }
+        } else if (entity.type=="dimension") {
+            const auto decoded=decode_boundary_dimension_entity(entity);
+            if (!decoded.supported()) reject("fresh graph has an unsupported dimension");
+            // The boundary kernel already moves its own bound callouts once.
+            if (!boundary_ids.contains(decoded.dimension->boundary_id) && exact(entity,copied.at(id))) {
+                auto dimension=*decoded.dimension;
+                dimension.text_position=transform_point(dimension.text_position,transform);
+                entity=encode_boundary_dimension_entity(dimension,&entity);
+            }
+        } else if (entity.type==kAnnotationEntityType) {
+            (void)decode_annotation_entity(entity);
+            for (const auto* collection:{"labels","symbols"})
+                for (auto& child:entity.properties.at("state").at(collection)) {
+                    auto& placement=child.at("placement");
+                    const auto local=annotation_offsets.find({id,child.at("id").get<std::string>()});
+                    const auto translation=local==annotation_offsets.end() ? offset : local->second;
+                    if (translation.x!=0.0) placement["x"]=placement.at("x").get<double>()+translation.x;
+                    if (translation.y!=0.0) placement["y"]=placement.at("y").get<double>()+translation.y;
+                }
+            validate_annotation_entity(entity);
+        } else if (entity.type=="terrain_surface") {
+            (void)TerrainSurface::from_json(entity.properties.at("model"));
+            for (auto& point:entity.properties.at("model").at("points")) {
+                point["x_m"]=point.at("x_m").get<double>()+offset.x;
+                point["y_m"]=point.at("y_m").get<double>()+offset.y;
+            }
+            (void)TerrainSurface::from_json(entity.properties.at("model"));
+        } else if (entity.type=="label") {
+            auto& point=entity.properties.at("position");
+            if (!point.is_array() || (point.size()!=2 && point.size()!=3) ||
+                !point.at(0).is_number() || !point.at(1).is_number())
+                reject("fresh legacy label requires its explicit plan position");
+            const auto position=transform_point({point.at(0).get<double>(),point.at(1).get<double>()},transform);
+            if (!std::isfinite(position.x) || !std::isfinite(position.y)) reject("fresh legacy label translation overflows");
+            point.at(0)=position.x;point.at(1)=position.y;
+        }
+    }
+    auto result=prepared;
+    PreparedBudget output_budget;
+    for (auto& change:result.entity_changes) {
+        const auto& entity=placed.at(change.entity.id);
+        output_budget.entity(entity);change.entity=entity;
+    }
     return result;
 }
 } // namespace sketch

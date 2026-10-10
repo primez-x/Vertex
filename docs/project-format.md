@@ -52,6 +52,26 @@ and extraction183 apply when envelope51 is nested in retained room history.
 Desktop coordination is still in progress. This source contract does not
 establish compilation, native geometry, interaction or production acceptance.
 
+Fresh-graph placement has a separate pure staging producer. Its input is the
+actual editable destination snapshot, fresh additions and explicit local XY
+offsets for every fresh owner. It cannot modify an original entity or create
+destination phase authority. Physical hosts carry their copied openings and
+railings once; hosted catalogs follow physical, drawing-boundary and terrain
+hosts, conjugating world-authored profiles through their actual Site frames.
+Qualified annotation-child offsets preserve the distinction between model
+coordinates and saved-view overlays. Typed measured strokes append only their
+new transformation to raw receipts and operations. Non-anchor constraints stay
+exact; fixed anchors change only the affected raw coordinates.
+
+Changed positional `quantity_entries` on translated physical objects retire
+verbatim into the passive extension `clipboard_translation_quantity_archive`.
+Its closed version-one object contains `version` and `rows`; each row contains
+`pointer`, `receipt`, `original_value`, `translated_value` and `offset_m:[x,y]`.
+Rows are bounded to 4096. Existing compatible rows and untouched receipts remain
+exact. A dedicated family derivation that already retires a receipt remains its
+sole archive. This passive history does not authorize geometry or introduce a
+new reader floor; final envelope51 admission still governs publication.
+
 ## Actual phase corner cohorts (v184, reviewed source integration)
 
 Distinct closed phase-wall authoring inner5 carries

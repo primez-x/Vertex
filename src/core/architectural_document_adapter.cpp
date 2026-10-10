@@ -10,12 +10,15 @@
 #include "sketch/corner_window_removal.hpp"
 #include "sketch/boundary_dimension.hpp"
 #include "sketch/document_solid.hpp"
+#include "sketch/document_wall.hpp"
 #include "sketch/model_phases.hpp"
 #include "sketch/phase_roof_transform.hpp"
 #include "sketch/project_organization.hpp"
 #include "sketch/slab_semantics.hpp"
 #include "sketch/structural_object_edit.hpp"
 #include "sketch/stair_transform.hpp"
+#include "sketch/site_frame.hpp"
+#include "sketch/vertical_levels.hpp"
 #include "sketch/wall_semantics.hpp"
 #ifdef VERTEX_HAS_HORIZONTAL_AUTHORING
 #include "sketch/slab_hosted_geometry_edit.hpp"
@@ -1893,6 +1896,355 @@ ApplyEntityChanges architectural_transaction_command(const DocumentSnapshot& sou
                                                      const ArchitecturalTransaction& transaction,
                                                      Revision expected_revision) {
     return make_command(source, transaction, expected_revision);
+}
+
+namespace {
+constexpr std::string_view clipboard_quantity_archive = "clipboard_translation_quantity_archive";
+
+void validate_clipboard_offset(Vec2 offset) {
+    if (!std::isfinite(offset.x) || !std::isfinite(offset.y) ||
+        std::abs(offset.x)>1e12 || std::abs(offset.y)>1e12)
+        throw std::invalid_argument("Fresh clipboard translation requires bounded finite XY offsets");
+}
+bool equal_clipboard_offset(Vec2 a, Vec2 b) { return a.x==b.x && a.y==b.y; }
+bool clipboard_physical_owner(const Entity& entity) {
+    return entity.type=="wall" || entity.type=="slab" || entity.type=="room" ||
+        entity.type=="assembly_instance" || can_recognize_building_entity_type(entity.type);
+}
+bool clipboard_contains_host(const nlohmann::json& value,
+    const std::map<std::string,Vec2,std::less<>>& hosts) {
+    if (value.is_string()) return hosts.contains(value.get_ref<const std::string&>());
+    if (value.is_object()) {
+        for (const auto& [key,child] : value.items())
+            if (hosts.contains(key) || clipboard_contains_host(child,hosts)) return true;
+    } else if (value.is_array())
+        for (const auto& child : value) if (clipboard_contains_host(child,hosts)) return true;
+    return false;
+}
+bool clipboard_host_binding(const nlohmann::json& value,
+    const std::map<std::string,Vec2,std::less<>>& hosts) {
+    if (value.is_object()) {
+        for (const auto& [key,child] : value.items()) {
+            if (key=="host_entity_id" && clipboard_contains_host(child,hosts)) return true;
+            if (clipboard_host_binding(child,hosts)) return true;
+        }
+    } else if (value.is_array())
+        for (const auto& child : value) if (clipboard_host_binding(child,hosts)) return true;
+    return false;
+}
+void validate_clipboard_stair_connection(const EntityState& context, const Entity& entity) {
+    const auto stair=decode_stair_properties(entity.id,entity.properties);
+    if (!stair.level_connection) return;
+    const auto& connection=*stair.level_connection;
+    const auto graph=context.find(connection.graph_entity_id);
+    if (graph==context.end() || graph->second.type!="vertical_levels" ||
+        !graph->second.properties.contains("model"))
+        throw std::invalid_argument("Fresh clipboard stair requires its retained level graph");
+    const auto levels=VerticalLevelGraph::from_json(graph->second.properties.at("model"));
+    const auto link=std::find_if(levels.links().begin(),levels.links().end(),
+        [&](const auto& value) { return value.id==connection.link_id; });
+    if (link==levels.links().end() || link->lower_level_id!=connection.lower_level_id ||
+        link->upper_level_id!=connection.upper_level_id ||
+        link->state==RelationshipState::disconnected ||
+        std::abs(stair.total_rise-levels.floor_to_floor_height(connection.link_id))>
+            VerticalLevelGraph::height_tolerance_m)
+        throw std::invalid_argument("Fresh clipboard stair has an incoherent retained level connection");
+}
+void validate_clipboard_quantity_archive(const Entity& entity) {
+    const auto archive=entity.extensions.find(std::string(clipboard_quantity_archive));
+    if (archive==entity.extensions.end()) return;
+    if (!archive->is_object() || archive->size()!=2 || !archive->contains("version") ||
+        !archive->at("version").is_number_integer() || archive->at("version")!=1 ||
+        !archive->contains("rows") || !archive->at("rows").is_array() ||
+        archive->at("rows").size()>4096)
+        throw std::invalid_argument("Fresh clipboard quantity archive namespace is unsupported");
+    for (const auto& row : archive->at("rows")) {
+        if (!row.is_object() || row.size()!=5 || !row.contains("pointer") ||
+            !row.at("pointer").is_string() || !row.contains("receipt") ||
+            !row.contains("original_value") || !row.contains("translated_value") ||
+            !row.contains("offset_m") || !row.at("offset_m").is_array() ||
+            row.at("offset_m").size()!=2 || !row.at("offset_m").at(0).is_number() ||
+            !row.at("offset_m").at(1).is_number())
+            throw std::invalid_argument("Fresh clipboard quantity archive row is malformed");
+        const auto& pointer=row.at("pointer").get_ref<const std::string&>();
+        if (pointer.empty() || pointer.size()>4096 || pointer.front()!='/')
+            throw std::invalid_argument("Fresh clipboard quantity archive pointer is malformed");
+        (void)nlohmann::json::json_pointer(pointer);
+        validate_clipboard_offset({row.at("offset_m").at(0).get<double>(),
+            row.at("offset_m").at(1).get<double>()});
+    }
+}
+// The fresh source is the only receipt authority. Neither its copied phase
+// descriptor nor an existing destination owner authorizes an entered value.
+void retire_clipboard_quantities(const Entity& before, Entity& after, Vec2 offset) {
+    const auto entries=before.properties.find("quantity_entries");
+    if (entries==before.properties.end()) return;
+    if (!entries->is_object() || entries->size()>4096)
+        throw std::invalid_argument("Fresh clipboard quantities must be a bounded map");
+    for (const auto& [pointer,receipt] : entries->items()) {
+        if (pointer.empty() || pointer.size()>4096 || pointer.front()!='/')
+            throw std::invalid_argument("Fresh clipboard quantity pointer is malformed");
+        const nlohmann::json::json_pointer path(pointer);
+        if (!before.properties.contains(path) || !after.properties.contains(path) ||
+            before.properties.at(path)==after.properties.at(path)) continue;
+        // A dedicated family derivation may already have retired this entry.
+        // It remains the sole archive in that case, without duplicate records.
+        if (!after.properties.contains("quantity_entries") ||
+            !after.properties.at("quantity_entries").contains(pointer)) continue;
+        const auto key=std::string(clipboard_quantity_archive);
+        if (!after.extensions.contains(key)) after.extensions[key]=
+            {{"version",1},{"rows",nlohmann::json::array()}};
+        auto& rows=after.extensions.at(key).at("rows");
+        if (rows.size()==4096)
+            throw std::invalid_argument("Fresh clipboard quantity archive row budget exceeded");
+        rows.push_back({{"pointer",pointer},{"receipt",receipt},
+            {"original_value",before.properties.at(path)},
+            {"translated_value",after.properties.at(path)},
+            {"offset_m",{offset.x,offset.y}}});
+        after.properties.at("quantity_entries").erase(pointer);
+    }
+}
+// Copy only changed geometry owned by translation. Unmoved dimensions, aliases,
+// child profiles, legacy transport markers and numeric encodings stay exact.
+nlohmann::json clipboard_geometry_encoding(const nlohmann::json& before,
+    const nlohmann::json& after) {
+    if (before==after) return before;
+    auto result=after;
+    if (before.is_array() && after.is_array() && before.size()==after.size())
+        for (std::size_t i=0;i<before.size();++i)
+            result.at(i)=clipboard_geometry_encoding(before.at(i),after.at(i));
+    else if (before.is_object() && after.is_object())
+        for (const auto& [key,value] : before.items())
+            if (after.contains(key)) result[key]=clipboard_geometry_encoding(value,after.at(key));
+    return result;
+}
+Entity clipboard_geometry_fields(const Entity& source, const Entity& transformed,
+    std::initializer_list<const char*> fields, bool retain_extensions=false) {
+    auto result=source;
+    for (const auto* key : fields)
+        if (source.properties.contains(key) && transformed.properties.contains(key) &&
+            source.properties.at(key)!=transformed.properties.at(key))
+            result.properties[key]=clipboard_geometry_encoding(source.properties.at(key),
+                transformed.properties.at(key));
+    if (retain_extensions) result.extensions=transformed.extensions;
+    return result;
+}
+} // namespace
+
+EntityState stage_fresh_architectural_clipboard_translation(const DocumentSnapshot& actual_source,
+    const EntityState& fresh_entities, Vec2 offset, Revision expected_revision,
+    const std::map<std::string,Vec2,std::less<>>& owner_offsets) {
+    if (actual_source.revision()!=expected_revision)
+        throw DocumentError(DocumentErrorCode::stale_revision,"Fresh clipboard source revision is stale");
+    if (!actual_source.is_editable())
+        throw DocumentError(DocumentErrorCode::read_only,"Fresh clipboard source is read-only");
+    validate_clipboard_offset(offset);
+    // Shared raw-envelope bounds precede every codec, recursive discovery and
+    // catalog expansion. No existing actual owner enters this edit inventory.
+    stair_transform_detail::source_bounds(fresh_entities);
+    for (const auto& [id,entity] : fresh_entities) {
+        if (actual_source.entities().contains(id) || !is_known_entity_type(entity.type))
+            throw std::invalid_argument("Fresh clipboard requires new supported entity identities");
+        validate_clipboard_quantity_archive(entity);
+    }
+    for (const auto& [id,translation] : owner_offsets) {
+        if (!fresh_entities.contains(id))
+            throw std::invalid_argument("Fresh clipboard translation offset has no fresh owner");
+        validate_clipboard_offset(translation);
+    }
+    const auto translation_for=[&](const std::string& id) {
+        const auto found=owner_offsets.find(id);
+        return found==owner_offsets.end()?offset:found->second;
+    };
+    const auto fresh_host=[&](const std::string& id, std::string_view type)->const Entity& {
+        const auto found=fresh_entities.find(id);
+        if (found==fresh_entities.end() || found->second.type!=type)
+            throw std::invalid_argument("Fresh clipboard physical dependency requires its copied host: "+id);
+        return found->second;
+    };
+    std::map<std::string,Vec2,std::less<>> physical_offsets;
+    std::size_t stair_risers=0;
+    for (const auto& [id,entity] : fresh_entities) {
+        if (!clipboard_physical_owner(entity)) continue;
+        auto translation=translation_for(id);
+        if (canonical_hosted_railing(entity)) {
+            const auto rail=decode_railing_properties(id,entity.properties);
+            const auto& host=rail.host?rail.host->stair_id:rail.landing_host->stair_id;
+            (void)fresh_host(host,"stair");
+            const auto host_translation=translation_for(host);
+            if (owner_offsets.contains(id) && !equal_clipboard_offset(translation,host_translation))
+                throw std::invalid_argument("Fresh clipboard hosted railing has conflicting host translation");
+            translation=host_translation;
+        }
+        physical_offsets.emplace(id,translation);
+        if (physical_offsets.size()>4096)
+            throw std::invalid_argument("Fresh clipboard physical owner budget exceeded");
+        if (entity.type=="stair") {
+            const auto count=entity.properties.find("riser_count");
+            if (count==entity.properties.end() || !count->is_number_integer() ||
+                *count<1 || *count>10000 || count->get<std::size_t>()>100000-stair_risers)
+                throw std::invalid_argument("Fresh clipboard stair geometry budget exceeded");
+            stair_risers+=count->get<std::size_t>();
+        }
+    }
+    for (const auto& [id,entity] : fresh_entities) {
+        if (entity.type=="opening") {
+            std::string host,error;
+            if (!read_document_wall_id(entity,host,error)) throw std::invalid_argument(error);
+            (void)fresh_host(host,"wall");
+            if (owner_offsets.contains(id) &&
+                !equal_clipboard_offset(translation_for(id),physical_offsets.at(host)))
+                throw std::invalid_argument("Fresh clipboard opening has conflicting host translation");
+        } else if (entity.type=="corner_window") {
+            const auto corner=parse_corner_window(entity);
+            for (const auto& host : corner.wall_ids) (void)fresh_host(host,"wall");
+            for (const auto& cut : corner.opening_ids) (void)fresh_host(cut,"opening");
+            if (!equal_clipboard_offset(physical_offsets.at(corner.wall_ids[0]),
+                    physical_offsets.at(corner.wall_ids[1])) || (owner_offsets.contains(id) &&
+                    !equal_clipboard_offset(translation_for(id),physical_offsets.at(corner.wall_ids[0]))))
+                throw std::invalid_argument("Fresh clipboard corner requires coherent translations of both copied hosts");
+        } else if (entity.type=="wall_join" || entity.type=="roof_join") {
+            const auto kind=entity.type=="wall_join"?ArchitecturalJoinKind::wall:ArchitecturalJoinKind::roof;
+            for (const auto& member : join_members(entity,kind))
+                (void)fresh_host(member,join_member_type(kind));
+        }
+    }
+    // This map is a read-only resolution context, never a DocumentSnapshot or
+    // an authoring source. Destination baseline/proposed membership is passive.
+    auto context=actual_source.entities();
+    context.insert(fresh_entities.begin(),fresh_entities.end());
+    std::set<std::string,std::less<>> corner_cuts;
+    for (const auto& [id,entity] : fresh_entities) {
+        if (entity.type!="corner_window") continue;
+        const auto corner=parse_corner_window(entity);
+        std::array<Wall,2> walls;
+        for (std::size_t leg=0;leg<2;++leg) {
+            const auto& cut=fresh_entities.at(corner.opening_ids[leg]);
+            if (!corner_cuts.insert(cut.id).second ||
+                !cut.properties.contains("corner_window_id") ||
+                cut.properties.at("corner_window_id")!=id ||
+                !cut.properties.contains("corner_leg") ||
+                !cut.properties.at("corner_leg").is_number_integer() ||
+                cut.properties.at("corner_leg")!=leg ||
+                !cut.properties.contains("wall_id") ||
+                cut.properties.at("wall_id")!=corner.wall_ids[leg])
+                throw std::invalid_argument("Fresh clipboard corner cut ownership is incomplete");
+            std::vector<const Entity*> openings;
+            for (const auto& opening : hosted_opening_ids(fresh_entities,corner.wall_ids[leg]))
+                openings.push_back(&fresh_entities.at(opening));
+            std::string error;
+            const auto wall=resolve_vertical_placement(context,fresh_entities.at(corner.wall_ids[leg]));
+            if (!read_document_wall(wall,openings,walls[leg],error)) throw std::invalid_argument(error);
+        }
+        (void)corner_window_cuts(corner,walls);
+    }
+    for (const auto& [id,entity] : fresh_entities)
+        if (entity.type=="opening" && (entity.properties.contains("corner_window_id") ||
+                entity.properties.contains("corner_leg")) && !corner_cuts.contains(id))
+            throw std::invalid_argument("Fresh clipboard has an orphan managed corner cut");
+    auto catalog_offsets=physical_offsets;
+    for (const auto& [id,entity] : fresh_entities) {
+        if (entity.type=="opening") {
+            std::string host,error;
+            if (!read_document_wall_id(entity,host,error)) throw std::invalid_argument(error);
+            catalog_offsets.emplace(id,physical_offsets.at(host));
+        } else if (entity.type=="boundary" || entity.type=="measurement_boundary" ||
+            entity.type=="room_boundary" || entity.type=="terrain_surface") {
+            // The caller stages these fresh drawing descriptors separately.
+            // Only their hosted catalog consequences belong to this producer.
+            catalog_offsets.emplace(id,translation_for(id));
+        }
+    }
+    auto result=fresh_entities;
+    auto wall_roster=fresh_entities;
+    AssemblyExpansionBudget independent_budget;
+    for (const auto& [id,translation] : physical_offsets) {
+        const auto& before=fresh_entities.at(id);
+        ArchitecturalTransform movement;
+        movement.x=translation.x; movement.y=translation.y;
+        movement.scale=1.0;
+        auto& after=result.at(id);
+        if (before.type!="assembly_instance" && !canonical_hosted_railing(before))
+            (void)resolve_vertical_placement(context,before);
+        if (before.type=="stair") validate_clipboard_stair_connection(context,before);
+        if (before.type=="assembly_instance") {
+            auto value=decode_document_assembly_instance(before);
+            (void)expand_document_assembly_instance(before,context,independent_budget);
+            if (!equal_clipboard_offset(translation,{})) {
+                value.instance.root_transform=compose_assembly_transform(
+                    {{translation.x,translation.y,0},0,1},*value.instance.root_transform);
+                after=encode_document_assembly_instance(before,value);
+            }
+        } else if (canonical_hosted_railing(before)) {
+            // Its actual geometry is derived from the moved fresh stair; the
+            // retained local station/host fields are not another world point.
+            const auto rail=decode_railing_properties(id,before.properties);
+            const auto& host=rail.host?rail.host->stair_id:rail.landing_host->stair_id;
+            const auto resolved=resolve_vertical_placement(context,context.at(host));
+            (void)derive_hosted_railing_layout(rail,decode_stair_properties(host,resolved.properties));
+        } else if (before.type=="wall") {
+            const auto transformed=transform_wall_entity(wall_roster,before,movement,1.0);
+            after=clipboard_geometry_fields(before,transformed,{"baseline"},true);
+        } else if (before.type=="slab") {
+#ifdef VERTEX_HAS_HORIZONTAL_AUTHORING
+            SlabGeometryEditIntent intent;
+            intent.slab_id=id; intent.kind=SlabGeometryEditKind::transform_plan;
+            intent.transform=PlanarTransform{{},0,false,false,translation};
+            after=replay_slab_geometry_entity(before,intent);
+#else
+            after=clipboard_geometry_fields(before,transform_slab_entity(before,movement),{"boundary","holes"});
+#endif
+        } else if (before.type=="room") {
+            after=clipboard_geometry_fields(before,transform_room_entity(before,movement),
+                {"boundary","segments","holes"});
+        } else {
+            (void)decode_building_entity(resolve_vertical_placement(context,before));
+            const auto transformed=transform_building_entity(context,before,movement);
+            if (before.type=="roof") after=transformed;
+            else after=clipboard_geometry_fields(before,transformed,
+                {"base_center_m","base_position_m","start_m","end_m"});
+        }
+        after.properties=clipboard_geometry_encoding(before.properties,after.properties);
+        // Preserve raw envelopes on exact placement no-ops, after source decode.
+        if (equal_clipboard_offset(translation,{})) after=before;
+        else retire_clipboard_quantities(before,after,translation);
+    }
+    AssemblyExpansionBudget catalog_budget;
+    for (const auto& [id,catalog] : fresh_entities) {
+        if (catalog.type!="assembly_model") continue;
+        if (!catalog.properties.contains("model"))
+            throw std::invalid_argument("Fresh clipboard assembly catalog lacks its typed model");
+        const auto& raw=catalog.properties.at("model");
+        const auto model=AssemblyModel::from_json(raw);
+        auto remainder=catalog;
+        for (auto& row : remainder.properties.at("model").at("instances"))
+            if (row.contains("placement") && row.at("placement").is_object())
+                row.at("placement").erase("host_entity_id");
+        if (clipboard_host_binding(remainder.properties,catalog_offsets) ||
+            clipboard_host_binding(remainder.extensions,catalog_offsets))
+            throw std::invalid_argument("Fresh clipboard catalog has an unsupported copied-host binding");
+        std::map<std::string,AssemblyTransform,std::less<>> transforms;
+        for (const auto& instance : model.instances()) {
+            if (!instance.placement) continue;
+            const auto& host=instance.placement->host_entity_id;
+            const auto selected=catalog_offsets.find(host);
+            if (selected==catalog_offsets.end()) continue;
+            const auto expansion=model.expand(instance,catalog_budget);
+            const auto translation=selected->second;
+            AssemblyTransform operation{{translation.x,translation.y,0},0,1};
+            if (!expansion.profiles.empty()) {
+                const auto frame=resolve_site_presentation(context,host).forward;
+                operation=conjugate_assembly_transform_through_rigid_frame(operation,
+                    {{frame.translation_m.x,frame.translation_m.y,frame.translation_m.z},
+                        frame.rotation_radians,1,false});
+            }
+            transforms.emplace(instance.id,operation);
+        }
+        if (!transforms.empty()) result.at(id).properties["model"]=
+            transform_hosted_assembly_model(raw,transforms,true);
+    }
+    stair_transform_detail::source_bounds(result);
+    return result;
 }
 
 ApplyEntityChanges architectural_group_transform_command(const DocumentSnapshot& source,

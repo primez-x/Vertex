@@ -14,6 +14,33 @@ changed source does not acquire runtime acceptance without later qualification.
 
 ## Current delivery state
 
+### October 10 mixed clipboard - fresh graph staging reviewed
+
+The atomic wall/room consequence integration is committed and pushed as
+0491bcc4, with exact local/remote ref verification. The next core source batch
+replaces mixed placement's synthetic authoring candidate with a pure fresh-graph
+producer on the actual captured source. It stages typed drawing and physical
+geometry, host-dependent openings/railings/catalogs, measured receipts, fixed
+anchors, terrain and qualified annotation-child offsets without publishing or
+enrolling a family fragment. Changed physical positional receipts are archived
+verbatim; untouched raw data retains its encoding.
+
+Independent source review found and corrected a missing Vec2 comparison,
+terrain-hosted catalogs left behind by translation, and unnecessary constraint
+re-encoding. The bounded re-review approves those corrections with no remaining
+concrete P1/P2 finding. Root inspected staging interfaces, coordinate ownership,
+raw evidence preservation and source linkage. Compilation and runtime behavior
+remain unqualified.
+
+Desktop integration remains under review. Source now captures saved view/crop,
+Site frames and focus, offers separate roof destinations for independent
+skylight cohorts, and prepares complete SVG/text previews in background work.
+An exclusive desktop worker is adding the missing independent dimension
+callouts. Mixed Properties/transforms and the full consolidated scope remain
+required. No builds, tests/new tests, scripts, probes, native jobs, launches,
+packages or installations run. The installed app is unchanged and all ten
+production gates remain open.
+
 ### October 10 mixed clipboard - compound placement integration in progress
 
 The passive foundation is committed and pushed as e0899ac9. Two exclusive

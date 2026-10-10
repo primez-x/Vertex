@@ -121,6 +121,27 @@ struct RailingEndpointEdit {
     const DocumentSnapshot& source, const ArchitecturalTransaction& transaction,
     Revision expected_revision);
 
+// Translate a prepared fresh physical clipboard graph without making its copied
+// phase metadata an authoring source. The original editable snapshot supplies
+// read-only context/levels/catalog definitions; every returned owner is fresh.
+// Per-owner offsets are captured local XY translations, keyed by fresh identity;
+// missing entries use offset. Nonphysical inventory is returned unchanged for
+// the caller's drawing/annotation lanes; hosted catalog rows for fresh drawing
+// boundaries still follow their captured offsets. Hosted openings/rails follow fresh
+// hosts once, and world-authored catalog profiles use the host's actual Site
+// frame. Conflicting dependent offsets or incomplete physical closures refuse.
+// Changed quantity_entries retire verbatim into the bounded passive extension
+// clipboard_translation_quantity_archive:{version:1,rows:[{pointer,receipt,
+// original_value,translated_value,offset_m:[x,y]}]}; untouched receipts and prior
+// compatible rows remain exact. This is geometry staging, not publication,
+// destination enrollment, a retained command proof or full Document admission.
+[[nodiscard]] std::map<std::string, Entity, std::less<>>
+stage_fresh_architectural_clipboard_translation(
+    const DocumentSnapshot& actual_source,
+    const std::map<std::string, Entity, std::less<>>& fresh_entities,
+    Vec2 offset, Revision expected_revision,
+    const std::map<std::string, Vec2, std::less<>>& owner_offsets = {});
+
 // A captured model-space pivot for rotation, uniform scaling and XYZ movement.
 // The shared-transform overload applies this same operator to every object;
 // object positions must never replace the caller's pivot. Hosted railings

@@ -42,6 +42,18 @@ struct MixedClipboardPlacement {
     MixedClipboardRoofOpeningMapping roof_opening_identity_mapping;
 };
 
+// Translate one complete prepared fresh graph on the captured actual source.
+// Each owner has an explicit local XY offset (Site callers conjugate their
+// common displayed operation). Typed geometry retains its receipts/derivations;
+// physical hosts and catalog consequences use the independent fresh producer.
+// Optional qualified annotation-child offsets distinguish model coordinates
+// from retained view-overlay coordinates without reinterpreting their mode.
+// This returns fresh additions only, without enrollment, preview or publication.
+[[nodiscard]] ApplyEntityChanges translated_mixed_clipboard_ordinary_graph(
+    const DocumentSnapshot& source, const ApplyEntityChanges& prepared,
+    const std::map<std::string, Vec2, std::less<>>& owner_offsets,
+    const std::map<std::pair<std::string, std::string>, Vec2>& annotation_offsets = {});
+
 // Passive admission, exact family coverage, selected-host dominance, shared
 // material reconciliation and one fresh identity reservation against complete
 // passive content plus all retained/undone history. No publication or command
