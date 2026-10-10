@@ -2167,6 +2167,18 @@ ConstraintAuthoringPreview ConstraintAuthoringBuilder::build(Source snapshot,con
                 candidate.at(id) = entity;
             }
         }
+        const auto no_document_change = [&]() {
+            result.accepted_ = false;
+            result.candidate_entities_ = snapshot.entities();
+            result.changed_walls_.clear();
+            result.changed_boundaries_.clear();
+            result.boundary_edits_.clear();
+            result.exterior_source_edits_.clear();
+            result.changed_measured_strokes_.clear();
+            result.measured_stroke_edits_.clear();
+            result.diagnostics_.push_back("Constraint authoring intent makes no document change");
+            return result;
+        };
         bool entity_changed = candidate.size() != snapshot.entities().size();
         if (!entity_changed) {
             for (const auto& [id, entity] : candidate) {
@@ -2177,16 +2189,10 @@ ConstraintAuthoringPreview ConstraintAuthoringBuilder::build(Source snapshot,con
                 }
             }
         }
-        if (!entity_changed) {
-            result.changed_walls_.clear();
-            result.changed_boundaries_.clear();
-            result.boundary_edits_.clear();
-            result.exterior_source_edits_.clear();
-            result.changed_measured_strokes_.clear();
-            result.measured_stroke_edits_.clear();
-            result.diagnostics_.push_back("Constraint authoring intent makes no document change");
-            return result;
-        }
+        // A wall on a reflection axis can be unchanged while its saved
+        // dimensions still move. Rigid joints must complete every owned
+        // consequence before classifying the full operation as a no-op.
+        if (!entity_changed && !rigid_joint) return no_document_change();
 
         result.accepted_ = true;
         result.candidate_entities_ = std::move(candidate);
@@ -2279,6 +2285,8 @@ ConstraintAuthoringPreview ConstraintAuthoringBuilder::build(Source snapshot,con
                 if (original != proposed) result.changed_boundaries_.push_back({original,proposed});
             }
         }
+        if (rigid_joint && result.candidate_entities_ == snapshot.entities())
+            return no_document_change();
         if (intent.wall_curve_construction) {
             if (result.candidate_entities_.at(intent.wall_curve_construction->edit.wall_id) != *constructed_wall)
                 invalid("Source completion did not preserve the exact selected wall construction");

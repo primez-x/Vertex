@@ -1758,6 +1758,11 @@ bool exact_assets(const std::map<std::string,Asset,std::less<>>& left,
     }
     return true;
 }
+ApplyBoundaryConstraintChanges without_room_geometry_selection(ApplyBoundaryConstraintChanges command) {
+    command.selection_completion=false;
+    command.selection_entity_changes.clear();
+    return command;
+}
 Json qualified_ordinary_geometry(const Command& geometry_command) {
     const auto* geometry=std::get_if<ApplyBoundaryConstraintChanges>(&geometry_command);
     if (!geometry || geometry->wall_edits.empty()) invalid("review requires a direct command with explicit wall edits");
@@ -1823,6 +1828,7 @@ Json room_review_geometry_proof(const DocumentSnapshot& source,const Command& ge
     if (is_physical_wall_room_rigid_review_command(geometry_command)) return command_to_json(geometry_command);
     if (is_physical_wall_room_joint_review_command(geometry_command)) return command_to_json(geometry_command);
     if (is_physical_wall_room_active_constraint_review_command(geometry_command)) return command_to_json(geometry_command);
+    if (is_physical_wall_room_selection_geometry_review_command(geometry_command)) return command_to_json(geometry_command);
     return qualified_ordinary_geometry(geometry_command);
 }
 void require_room_review_curve(const DocumentSnapshot& source,const Command& curve_command) {
@@ -1855,9 +1861,7 @@ Json plain_room_review_proof(const ApplyBoundaryConstraintChanges& command) {
         invalid("staged batch decisions require an exact plain room-review envelope for their intent version");
     return proof;
 }
-} // namespace
-
-bool is_physical_wall_room_geometry_review_command(const Command& command) {
+bool unwrapped_room_geometry_review_command(const Command& command) {
     try {
         if (is_physical_wall_room_deletion_review_command(command) || is_physical_wall_room_profile_review_command(command) ||
             is_physical_wall_room_rigid_review_command(command) || is_physical_wall_room_joint_review_command(command)) return true;
@@ -1866,6 +1870,45 @@ bool is_physical_wall_room_geometry_review_command(const Command& command) {
         (void)qualified_ordinary_geometry(command);
         return true;
     } catch (const std::exception&) { return false; }
+}
+} // namespace
+
+bool is_physical_wall_room_selection_geometry_review_command(const Command& command) {
+    try {
+        const auto* geometry=std::get_if<ApplyBoundaryConstraintChanges>(&command);
+        if (!geometry || !geometry->selection_completion || geometry->selection_entity_changes.empty() ||
+            geometry->selection_entity_changes.size()>1000 ||
+            geometry->room_review_completion || !geometry->room_review_intent.is_null() ||
+            geometry->room_review_geometry_completion || !geometry->room_review_geometry_proof.is_null() ||
+            geometry->room_review_batch_completion || !geometry->room_review_additional_intents.empty() ||
+            geometry->phase_room_review_completion || !geometry->phase_room_review_intent.is_null() ||
+            geometry->independent_drawing_removal_completion || !geometry->independent_drawing_removal_intent.is_null() ||
+            geometry->disto_measurement_completion || geometry->disto_measurement) return false;
+        std::set<std::string> targets;
+        for (const auto& change:geometry->selection_entity_changes)
+            if (change.kind!=EntityChangeKind::upsert || change.entity_id!=change.entity.id ||
+                !valid_id(change.entity.id) || !targets.insert(change.entity.id).second) return false;
+        const Command base{without_room_geometry_selection(*geometry)};
+        // Never consult selection admission again: the unchanged underlying
+        // typed geometry retains its original direct proof and authority.
+        if (!unwrapped_room_geometry_review_command(base)) return false;
+        const auto proof=command_to_json(command);
+        if (proof.dump().size()>1024*1024) return false;
+        keys(proof,{"version","kind","expected_revision","message","selection_completion","proof","selection_entity_changes"});
+        if (proof.at("version")!=22 || proof.at("kind")!="apply_boundary_constraint_changes" ||
+            proof.at("selection_completion")!=true || proof.at("proof").dump()!=command_to_json(base).dump()) return false;
+        // The existing v22 codec checks the exact unnested child identity and
+        // supported nonwall payload shape. Actual existing-object membership,
+        // geometry and equal/conflicting consequences remain Document-owned.
+        return command_to_json(command_from_json(proof)).dump()==proof.dump();
+    } catch (const std::exception&) { return false; }
+}
+
+bool is_physical_wall_room_geometry_review_command(const Command& command) {
+    const auto* geometry=std::get_if<ApplyBoundaryConstraintChanges>(&command);
+    if (geometry && (geometry->selection_completion || !geometry->selection_entity_changes.empty()))
+        return is_physical_wall_room_selection_geometry_review_command(command);
+    return unwrapped_room_geometry_review_command(command);
 }
 
 bool is_physical_wall_room_rigid_review_command(const Command& command) {
@@ -2474,6 +2517,16 @@ DocumentSnapshot preview_physical_wall_room_review_geometry(const DocumentSnapsh
     const Json& retained_geometry_proof) {
     if (!source.is_editable()) invalid("captured document is read-only");
     const auto proof=room_review_geometry_proof(source,geometry_command,retained_geometry_proof);
+    if (const auto* selected=std::get_if<ApplyBoundaryConstraintChanges>(&geometry_command);
+        selected && selected->selection_completion) {
+        const Command base{without_room_geometry_selection(*selected)};
+        if (is_physical_wall_room_profile_review_command(base)) {
+            // Profile invariants apply to the independently admitted geometry
+            // lane before ordinary selected objects supply their consequences.
+            const auto profile=Document::preview_command(source,base);
+            validate_physical_wall_room_profile_review_source(source.entities(),profile.entities(),base);
+        }
+    }
     // The original child command owns all ordinary admission and consequences.
     auto derived=Document::preview_command(source,geometry_command);
     const bool deletion=is_physical_wall_room_deletion_review_command(geometry_command);

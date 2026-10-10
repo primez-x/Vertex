@@ -2506,7 +2506,7 @@ static Command room_review_geometry_command(const ApplyBoundaryConstraintChanges
     const bool mixed_opening_deletion=proof.at("kind")=="mixed_wall_opening_deletion";
     if ((mixed_opening_deletion && version!=40) || (mixed_deletion && version!=37 && version!=39) ||
         (grouped_deletion && version!=31 && version!=35 && version!=36 && version!=38) || (!grouped_deletion && !mixed_deletion && !mixed_opening_deletion &&
-        version!=1 && version!=10 && version!=17 && version!=19 && version!=21 && version!=23 && version!=34 && !ordinary_room_wall_proof_version(version)))
+        version!=1 && version!=10 && version!=17 && version!=19 && version!=21 && version!=22 && version!=23 && version!=34 && !ordinary_room_wall_proof_version(version)))
         throw std::invalid_argument("Room review cannot wrap another geometry intent");
     const auto decoded=[&]()->Command {
 #ifdef VERTEX_HAS_PHYSICAL_ROOM_REVIEW
@@ -2525,6 +2525,11 @@ static Command room_review_geometry_command(const ApplyBoundaryConstraintChanges
         (ordinary && (ordinary->expected_revision!=command.expected_revision || ordinary->message!=command.message)))
         throw std::invalid_argument("Wall room review must retain the original geometry command identity");
 #ifdef VERTEX_HAS_PHYSICAL_ROOM_REVIEW
+    if (is_physical_wall_room_selection_geometry_review_command(decoded)) {
+        if (command_to_json(decoded).dump()!=proof.dump())
+            throw std::invalid_argument("Room review mixed selection must retain its complete canonical wall geometry proof");
+        return decoded;
+    }
     if (is_physical_wall_room_deletion_review_command(decoded)) {
         for (const auto& encoded:room_review_intents(command))
             if (!decode_physical_wall_room_review_intent(encoded).context_plane_selection)
@@ -5462,6 +5467,14 @@ std::map<std::string, Entity, std::less<>> completed_boundary_constraint_entitie
             if (has_room_review_geometry_completion(command)) {
                 const auto geometry=room_review_geometry_command(command);
                 if (const auto* constrained=std::get_if<ApplyBoundaryConstraintChanges>(&geometry)) {
+                    if (is_physical_wall_room_selection_geometry_review_command(geometry)) {
+                        const Command inner{without_selection_completion(*constrained)};
+                        if (is_physical_wall_room_profile_review_command(inner)) {
+                            const auto inner_source=completed_boundary_constraint_entities(history,source,source_assets,
+                                std::get<ApplyBoundaryConstraintChanges>(inner),retained_replay,active_policy,original_dimension_source);
+                            validate_physical_wall_room_profile_review_source(source,inner_source,inner);
+                        }
+                    }
                     reviewed_source=completed_boundary_constraint_entities(history,source,source_assets,*constrained,retained_replay,active_policy,original_dimension_source);
                     validate_completed_constraint_change(source,reviewed_source,*constrained,retained_replay);
                     validate_physical_room_source_transition(source,reviewed_source,nullptr,constrained,active_policy);

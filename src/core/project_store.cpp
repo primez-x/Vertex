@@ -376,6 +376,15 @@ std::uint32_t required_format_version_internal(const DocumentSnapshot& snapshot,
             const auto& value=*pending.back(); pending.pop_back();
             if (++nodes>ProjectStore::maximum_json_values)
                 storage_error(StorageErrorCode::resource_limit,"Typed edit reader-floor scan exceeds its JSON budget");
+            if (value.is_object() && value.value("room_review_geometry_completion",nlohmann::json())==true &&
+                value.contains("room_review_geometry_proof")) {
+                const auto& geometry=value.at("room_review_geometry_proof");
+                if (geometry.is_object() && geometry.value("version",nlohmann::json())==22 &&
+                    geometry.value("kind",nlohmann::json())=="apply_boundary_constraint_changes" &&
+                    geometry.value("selection_completion",nlohmann::json())==true &&
+                    geometry.contains("proof") && geometry.contains("selection_entity_changes"))
+                    floor=std::max(floor,159U);
+            }
             if (value.is_object() && value.value("version",nlohmann::json())==4 &&
                 value.contains("selected_dimension_placements") && value.contains("retained") &&
                 value.contains("fresh") && value.contains("kept_reference_ids") &&
@@ -439,9 +448,9 @@ std::uint32_t required_format_version_internal(const DocumentSnapshot& snapshot,
         return false;
     };
     for (const auto& revision : snapshot.history()) {
-        if (required<158 && revision.boundary_geometry_edit)
+        if (required<159 && revision.boundary_geometry_edit)
             required=std::max(required,typed_edit_reader_floor(encode_boundary_geometry_edit(*revision.boundary_geometry_edit)));
-        if (required<158 && revision.boundary_constraint_changes)
+        if (required<159 && revision.boundary_constraint_changes)
             required=std::max(required,typed_edit_reader_floor(command_to_json(Command{*revision.boundary_constraint_changes})));
         if (required<122 && revision.boundary_geometry_edit)
             required=std::max(required,quantity_reader_floor(encode_boundary_geometry_edit(*revision.boundary_geometry_edit)));
@@ -744,13 +753,31 @@ std::uint32_t required_format_version_internal(const DocumentSnapshot& snapshot,
             if (active_phase_review(command.room_review_intent) ||
                 std::any_of(command.room_review_additional_intents.begin(),command.room_review_additional_intents.end(),active_phase_review))
                 required=std::max(required,84U);
-            const auto selected_placement_review=[](const nlohmann::json& intent) {
-                return intent.is_object() && intent.value("version",nlohmann::json())==4 &&
-                    intent.contains("selected_dimension_placements");
+            const auto selected_placement_review_floor=[&](const nlohmann::json& intent) -> std::uint32_t {
+                if (!intent.is_object() || intent.value("version",nlohmann::json())!=4 ||
+                    !intent.contains("selected_dimension_placements")) return 0U;
+                // Detached batch stages retain their original geometry in
+                // history rather than in the final room envelope. Bind the
+                // floor to that receipt's immediate successor, including Undo.
+                const auto receipt=intent.find("selected_dimension_source");
+                if (receipt!=intent.end() && receipt->is_object()) {
+                    const auto anchor=receipt->find("original_revision");
+                    if (anchor!=receipt->end() && (anchor->is_number_unsigned() ||
+                        (anchor->is_number_integer() && anchor->get<std::int64_t>()>=0))) {
+                        const auto original=anchor->get<Revision>();
+                        if (original<std::numeric_limits<Revision>::max()) {
+                            const auto stage=retained_revisions.find(original+1);
+                            if (stage!=retained_revisions.end() && stage->second->boundary_constraint_changes &&
+                                stage->second->boundary_constraint_changes->selection_completion)
+                                return 159U;
+                        }
+                    }
+                }
+                return 158U;
             };
-            if (selected_placement_review(command.room_review_intent) ||
-                std::any_of(command.room_review_additional_intents.begin(),command.room_review_additional_intents.end(),selected_placement_review))
-                required=std::max(required,158U);
+            required=std::max(required,selected_placement_review_floor(command.room_review_intent));
+            for (const auto& intent:command.room_review_additional_intents)
+                required=std::max(required,selected_placement_review_floor(intent));
             if (command.curve_construction_completion)
                 required = std::max(required,75U);
             if (command.room_review_batch_completion || !command.room_review_additional_intents.empty())
@@ -2576,6 +2603,7 @@ bool verify_sqlite_schema(sqlite3* database, bool allow_recovery = false) {
          sqlite3_column_int(user_version.get(), 0) != 156 &&
          sqlite3_column_int(user_version.get(), 0) != 157 &&
          sqlite3_column_int(user_version.get(), 0) != 158 &&
+         sqlite3_column_int(user_version.get(), 0) != 159 &&
          sqlite3_column_int(user_version.get(), 0) != 143 &&
          sqlite3_column_int(user_version.get(), 0) != 142 &&
          sqlite3_column_int(user_version.get(), 0) != 141 &&
@@ -3174,6 +3202,8 @@ DocumentSnapshot read_snapshot(sqlite3* database, RecoveryLedger* recovery = nul
     ProjectStoreAccess::publish_history(snapshot, std::move(history));
     const auto required_format = required_format_version_internal(snapshot, format_number < 28);
     if (required_format > format_number) {
+        if (required_format>=159)
+            storage_error(StorageErrorCode::unsupported_format,"This project requires reader 159 for physical-room review with complete mixed selection geometry");
         if (required_format>=158)
             storage_error(StorageErrorCode::unsupported_format,"This project requires reader 158 for reviewed selected physical-room callout placements");
         if (required_format>=157)

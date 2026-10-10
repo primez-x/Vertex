@@ -14,6 +14,46 @@ changed source does not acquire runtime acceptance without later qualification.
 
 ## Current delivery state
 
+### October 9 rigid room-callout and complete-selection source implementation
+
+Numeric Transform now carries independently selected current-room callouts
+through in-place rotation and horizontal/vertical reflection alongside walls.
+Positions derive from the actual original Plan geometry or each dimension's
+captured Site frame. Zero offsets remain explicit when source walls change;
+copying still requires the measured owner for independent identities. The
+translation and rigid factories share one placement partition rather than
+duplicating source qualification.
+
+Unconnected Site wall groups now use the existing per-owner rigid joint
+producer. Mixed presentation, unaffected-callout and architectural consequences
+retain their complete existing canonical selection envelope v22 through room
+review. Only one admitted inner wall geometry and bounded existing nonwall
+upserts qualify; recursive or competing room/DISTO/removal authority refuses.
+Document independently source-replays both lanes, and contained profile
+invariants are repeated on the inner geometry before selection consequences.
+Original selection, pending quantities, exact candidate/source fences and one
+atomic geometry/room Apply remain retained.
+
+Axis-invariant rigid reflections now complete saved wall dimensions before
+deciding that the full operation made no change. A final geometry no-op can
+still carry independently selected room labels or furniture through ordinary
+source admission; every wall, measured boundary, constraint and physical room
+must remain byte-exact. Other solve refusals remain binding.
+
+Native reader 159 and extraction 157 preserve this composition. The existing
+room intent v4, selection command v22 and outer command ceiling 42 are unchanged.
+Reader floors inspect complete nested room proofs and actual immediate retained
+geometry successors for staged callout receipts. Earlier unrelated histories
+retain their minimum requirements.
+
+Independent source review found the unconnected Site, mixed-envelope and
+saved-dimension ordering blockers described above. The corrections received
+final source approval with no remaining actionable finding; root reviewed the
+integrated changes.
+No builds, tests, probes, scripts, native jobs, launches, packages or
+installations ran. Compilation, runtime and storage round trips remain
+unverified; the installed candidate is unchanged.
+
 ### October 9 reviewed physical-room callout placement source implementation
 
 Ordinary and batch physical-room review now admit selected current-room

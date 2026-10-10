@@ -108,6 +108,12 @@ void validate_physical_wall_room_dimension_placements(
 // Source-independent bounded canonical shape only. Actual source admission
 // remains owned by Document and the existing specialized geometry producers.
 [[nodiscard]] bool is_physical_wall_room_geometry_review_command(const Command& command);
+// One canonical v22 selection envelope retains an admitted typed geometry
+// command and nonempty bounded unique existing-object upserts. Only the two
+// selection fields are stripped for shape admission; Document independently
+// validates both lanes against the actual source. No nested selection, room
+// review or DISTO completion supplies physical-room geometry authority.
+[[nodiscard]] bool is_physical_wall_room_selection_geometry_review_command(const Command& command);
 // Direct rigid v10 or mixed measured-source v11 requires at least one curved
 // v4/straight v5 wall proof. Connected neighbors keep ordinary v1/v2/v3
 // authority. A v21 wall-callout completion may wrap only that same v10/v11

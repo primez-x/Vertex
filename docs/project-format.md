@@ -1,4 +1,31 @@
-# Vertex project formats v1 through v158
+# Vertex project formats v1 through v159
+
+## Reviewed complete selections (v159)
+
+Native reader 159 and JSON/assets extraction 157 retain reviewed physical-room
+edits whose geometry includes an existing complete-selection command. The
+existing canonical command envelope v22 stays intact: one admitted typed
+wall geometry proof plus 1-1000 unique existing nonwall upserts, within one
+MiB. Its inner command retains its original identity and source authority.
+Recursive selection, competing room-review/removal intent and DISTO authority
+are excluded. Actual source admission, supported object types, equal or
+conflicting consequences, assets and physical relationships remain validated
+by Document; a selection payload cannot supply additional wall authority.
+
+Room review retains and replays the entire envelope. A contained wall-profile
+proof is independently source-validated before ordinary selected consequences
+are applied. Staged selected-callout receipts resolve their immediate retained
+geometry successor; a selection successor raises the same reader floor,
+including retained and undone history. Other projects retain their existing
+minimum reader requirements.
+
+Selected current-room callouts can follow numerical translation, rotation and
+reflection using original-position offsets in the existing room intent v4.
+Each Site callout keeps its own captured source frame. Pending quantities are
+withheld until explicit room review; placement and geometry publish together
+in one revision. Copies still require the measured owner to allocate independent
+identities. No intent field, command version or ceiling changes in this slice.
+Compilation, runtime and save/reopen qualification remain pending.
 
 ## Selected physical-room callout placements (v158)
 
