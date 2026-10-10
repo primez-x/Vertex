@@ -1070,6 +1070,29 @@ remain additional scope.
 Independent integrated source review approved. No compilation, interaction or storage
 qualification was performed under the source-only instruction.
 
+## Independent copied view-overlay placement
+
+Roof and horizontal-assembly identity clones retain the original annotation
+rows and append independently identified copies. After the captured physical
+operation, the controller transforms only the appended unbound owner-associated
+`start_m` and `end_m` points from their actual source. Each point uses its owning
+view's effective projection plane, including section cut displacement and the
+retained built-in section interpretation. Translation, rotation, reflection
+and scaling use the same coordinate frame as the physical saved-view source;
+Site presentation does not apply again. Text height, line weight, style,
+source row order and unrelated fields remain unchanged.
+
+Bound dimensions keep their owning-view axis and relative line offset and
+derive witnesses and values from the copied silhouette. Explicit annotations
+on a copied roof join require affine-equivalent captured member operations;
+annotations on individual members use their own operations. The shared point
+projection also supplies structural copying, preserving small local movement
+without subtracting distant absolute coordinates.
+
+The complete source-derived candidate remains one ordinary entity command.
+There is no new persisted proof, project dialect or reader floor. Compilation,
+interaction and storage qualification remain pending.
+
 ## Coordinated structural and architectural alternatives (v125)
 
 Native reader 125 and JSON/assets extraction 123 retain active-design authoring

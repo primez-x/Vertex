@@ -1,4 +1,5 @@
 #include "sketch/sheet_view_model.hpp"
+#include "sketch/assembly_model.hpp"
 
 #include <algorithm>
 #include <cctype>
@@ -196,6 +197,63 @@ CoordinatedViewOrigins coordinated_view_origins(const CoordinatedView& view) {
         for (std::size_t i = 0; i < projection.size(); ++i)
             projection[i] += view.direction[i] * view.presentation.cut_depth_m;
     return {reference, projection};
+}
+
+std::array<double, 2> transform_coordinated_overlay_point(const CoordinatedView& view,
+    const std::array<double, 2>& point, const AssemblyTransform& transform) {
+    (void)transform_assembly_point({}, transform);
+    for (double coordinate : point)
+        require(std::isfinite(coordinate) && std::abs(coordinate) <= 1e6,
+            "view overlay coordinate outside finite bounds");
+    double dot = 0, direction_length = 0, up_length = 0;
+    for (std::size_t i = 0; i < 3; ++i) {
+        require(std::isfinite(view.origin_m[i]) && std::isfinite(view.direction[i]) &&
+            std::isfinite(view.up[i]), "view frame must be finite");
+        dot += view.direction[i] * view.up[i];
+        direction_length += view.direction[i] * view.direction[i];
+        up_length += view.up[i] * view.up[i];
+    }
+    require(std::abs(direction_length - 1) <= 1e-9 && std::abs(up_length - 1) <= 1e-9 &&
+        std::abs(dot) <= 1e-9, "view direction and up must be orthonormal");
+    switch (view.kind) {
+    case CoordinatedViewKind::plan: case CoordinatedViewKind::elevation: break;
+    case CoordinatedViewKind::section: nonnegative(view.presentation.cut_depth_m); break;
+    default: throw std::invalid_argument("unknown coordinated view kind");
+    }
+    const auto origin = coordinated_view_origins(view).projection_m;
+    for (double coordinate : origin)
+        require(std::isfinite(coordinate), "view projection origin must be finite");
+    const bool translation_only = transform.rotation_radians == 0 && transform.scale == 1 &&
+        !transform.mirrored_y && transform.vertical_scale == 1;
+    if (translation_only && transform.translation_m == AssemblyPoint3{}) return point;
+    const auto& u = view.up; const auto& d = view.direction;
+    const std::array<double, 3> right{u[2] * d[1] - u[1] * d[2],
+        u[0] * d[2] - u[2] * d[0], u[1] * d[0] - u[0] * d[1]};
+    const auto [c, s] = assembly_rotation_components(transform.rotation_radians);
+    const auto parity = transform.mirrored_y ? -1.0 : 1.0;
+    const auto x_coefficient = (transform.scale - 1.0) - transform.scale * (1.0 - c);
+    const auto y_coefficient = parity == 1.0 ? x_coefficient :
+        -(transform.scale + 1.0) + transform.scale * (1.0 - c);
+    // Evaluate (L-I)*projection_origin+t without subtracting distant world points.
+    const AssemblyPoint3 origin_delta{
+        x_coefficient * origin[0] - transform.scale * s * parity * origin[1] + transform.translation_m.x,
+        transform.scale * s * origin[0] + y_coefficient * origin[1] + transform.translation_m.y,
+        (transform.scale * transform.vertical_scale - 1.0) * origin[2] + transform.translation_m.z};
+    auto linear = transform;
+    linear.translation_m = {};
+    const auto local = translation_only ? AssemblyPoint3{} : transform_assembly_point(
+        {point[0] * right[0] + point[1] * u[0], point[0] * right[1] + point[1] * u[1],
+            point[0] * right[2] + point[1] * u[2]}, linear);
+    const std::array<double, 3> delta{local.x + origin_delta.x, local.y + origin_delta.y,
+        local.z + origin_delta.z};
+    std::array<double, 2> result = translation_only ? point : std::array<double, 2>{};
+    for (std::size_t i = 0; i < 3; ++i) {
+        result[0] += delta[i] * right[i]; result[1] += delta[i] * u[i];
+    }
+    for (double coordinate : result)
+        require(std::isfinite(coordinate) && std::abs(coordinate) <= 1e6,
+            "transformed view overlay coordinate outside finite bounds");
+    return result;
 }
 
 void to_json(nlohmann::json& value, const CoordinatedViewKind& kind) {

@@ -314,38 +314,10 @@ bool identity_transform(const AssemblyTransform& t) {
 }
 void transform_overlay(Json& row, const CoordinatedView& view, const AssemblyTransform& transform) {
     if (identity_transform(transform)) return;
-    // right = cross(up, -direction). The explicit point is on the actual
-    // view plane; no host depth or inferred object coordinate is introduced.
-    const auto& u = view.up; const auto& d = view.direction;
-    const std::array<double, 3> right{u[2] * d[1] - u[1] * d[2],
-        u[0] * d[2] - u[2] * d[0], u[1] * d[0] - u[0] * d[1]};
-    const auto [c, s] = assembly_rotation_components(transform.rotation_radians);
-    const auto parity = transform.mirrored_y ? -1.0 : 1.0;
-    const auto x_coefficient = (transform.scale - 1.0) - transform.scale * (1.0 - c);
-    const auto y_coefficient = parity == 1.0 ? x_coefficient :
-        -(transform.scale + 1.0) + transform.scale * (1.0 - c);
-    // Evaluate (L-I)*origin+t directly. Reconstructing a distant absolute
-    // point and subtracting its origin can erase a small local translation.
-    const AssemblyPoint3 origin_delta{
-        x_coefficient * view.origin_m[0] - transform.scale * s * parity * view.origin_m[1] + transform.translation_m.x,
-        transform.scale * s * view.origin_m[0] + y_coefficient * view.origin_m[1] + transform.translation_m.y,
-        (transform.scale * transform.vertical_scale - 1.0) * view.origin_m[2] + transform.translation_m.z};
-    auto linear = transform;
-    linear.translation_m = {};
-    const bool translation_only = transform.rotation_radians == 0.0 && transform.scale == 1.0 &&
-        !transform.mirrored_y && transform.vertical_scale == 1.0;
     for (const auto* field : {"start_m", "end_m"}) {
         const auto& raw = row.at(field);
         const auto x = raw.at(0).get<double>(), y = raw.at(1).get<double>();
-        const auto point = translation_only ? AssemblyPoint3{} : transform_assembly_point(
-            {x * right[0] + y * u[0], x * right[1] + y * u[1], x * right[2] + y * u[2]}, linear);
-        const std::array<double, 3> delta{point.x + origin_delta.x, point.y + origin_delta.y, point.z + origin_delta.z};
-        double projected_x = translation_only ? x : 0.0;
-        double projected_y = translation_only ? y : 0.0;
-        for (std::size_t i = 0; i < 3; ++i) {
-            projected_x += delta[i] * right[i]; projected_y += delta[i] * u[i];
-        }
-        if (!std::isfinite(projected_x) || !std::isfinite(projected_y)) reject("copied overlay projection is not finite");
+        const auto [projected_x, projected_y] = transform_coordinated_overlay_point(view, {x, y}, transform);
         if (projected_x != x || projected_y != y) row.at(field) = Json::array({projected_x, projected_y});
     }
 }

@@ -8,6 +8,8 @@
 
 namespace sketch {
 
+struct AssemblyTransform;
+
 enum class CoordinatedViewKind { plan, elevation, section };
 enum class ViewDetail { coarse, medium, fine };
 enum class SectionOverlayKind { text, detail_line, dimension };
@@ -115,6 +117,14 @@ struct CoordinatedViewOrigins {
 // the built-in legacy interpretation; detached overlays use the projection
 // origin after the section cut displacement. The saved view stays unchanged.
 [[nodiscard]] CoordinatedViewOrigins coordinated_view_origins(const CoordinatedView& view);
+// Transforms an explicit detached overlay point on the actual projection plane
+// into the same saved view's right/up frame. The caller must already qualify
+// the operation in the same 3D coordinate frame as the saved view. This grants
+// no physical geometry or bound-dimension authority; bound dimensions resolve
+// from their current host.
+[[nodiscard]] std::array<double, 2> transform_coordinated_overlay_point(
+    const CoordinatedView& view, const std::array<double, 2>& point,
+    const AssemblyTransform& transform);
 struct SheetRect {
     double x_mm{};
     double y_mm{};

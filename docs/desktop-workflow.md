@@ -669,6 +669,13 @@ building geometry is rebuilt and validated before Apply; dimensions, beam
 vectors, stair landings, railing posts, roof openings, metadata, and ordinary undo/redo remain
 part of the same Document command.
 
+Transformed roof and floor copies also carry their linked text, detail lines
+and explicit endpoint dimensions in each saved plan, elevation or section.
+Their original annotations stay in place. Associative dimensions retain the
+saved view axis and line offset and resolve against the independent copied
+object. A shared joined-roof annotation requires one common transform for its
+members; individual member annotations follow their own captured operations.
+
 Boundary clone mode allocates a new boundary, segment IDs, and vertex IDs. It
 preserves drawing context, area metadata, names, custom properties, extensions,
 and per-edge metadata, while remapping recognized self-references. User text and

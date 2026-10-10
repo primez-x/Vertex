@@ -44055,6 +44055,113 @@ private:
         return Command{std::move(command)};
     }
 
+    static void transformIndependentCopyOverlays(const DocumentSnapshot& source,
+        ModelCopyEntities& candidate,
+        const std::vector<ArchitecturalGroupTransformTarget>& operations,
+        const std::map<std::string, std::string, std::less<>>& identities) {
+        std::map<std::string, AssemblyTransform, std::less<>> transforms;
+        for (const auto& operation : operations) {
+            const auto original = source.entities().find(operation.entity_id);
+            const auto copied = identities.find(operation.entity_id);
+            if (original == source.entities().end() || copied == identities.end() ||
+                !candidate.contains(copied->second) ||
+                !transforms.emplace(operation.entity_id,
+                    architectural_group_assembly_transform(operation.transform)).second)
+                throw std::invalid_argument("A copied annotation requires one captured operation for its actual owner.");
+        }
+        const auto equivalent = [](const AssemblyTransform& left, const AssemblyTransform& right) {
+            const auto coefficients = [](const AssemblyTransform& value) {
+                const auto [c, s] = assembly_rotation_components(value.rotation_radians);
+                const auto parity = value.mirrored_y ? -1.0 : 1.0;
+                return std::array<double, 7>{value.scale * c, -value.scale * s * parity,
+                    value.scale * s, value.scale * c * parity,
+                    value.scale * value.vertical_scale, value.translation_m.x,
+                    value.translation_m.y};
+            };
+            if (left.mirrored_y != right.mirrored_y) return false;
+            const auto a = coefficients(left), b = coefficients(right);
+            const auto close = [](double x, double y) {
+                return std::abs(x - y) <= 64.0 * std::numeric_limits<double>::epsilon() *
+                    std::max({1.0, std::abs(x), std::abs(y)});
+            };
+            for (std::size_t i = 0; i < a.size(); ++i) if (!close(a[i], b[i])) return false;
+            return close(left.translation_m.z, right.translation_m.z);
+        };
+        const auto owner_transform = [&](const std::string& owner) -> AssemblyTransform {
+            if (const auto found = transforms.find(owner); found != transforms.end()) return found->second;
+            const auto original = source.entities().find(owner);
+            if (original == source.entities().end() || !identities.contains(owner))
+                throw std::invalid_argument("A copied annotation lost its actual source owner.");
+            std::string physical_owner = owner;
+            if (can_recognize_boundary_dimension_entity_type(original->second.type)) {
+                const auto dimension = decode_boundary_dimension_entity(original->second);
+                if (!dimension.supported())
+                    throw std::invalid_argument("A copied annotation's dimension owner is unsupported.");
+                physical_owner = dimension.dimension->boundary_id;
+                if (const auto found = transforms.find(physical_owner); found != transforms.end())
+                    return found->second;
+            }
+            const auto physical = source.entities().find(physical_owner);
+            if (physical == source.entities().end() || physical->second.type != "roof_join")
+                throw std::invalid_argument("A copied annotation has no captured physical owner operation.");
+            const auto join = parse_roof_join(physical->second.properties, physical_owner);
+            std::optional<AssemblyTransform> common;
+            for (const auto& member : join.roof_ids) {
+                const auto found = transforms.find(member);
+                if (found == transforms.end() || (common && !equivalent(*common, found->second)))
+                    throw std::invalid_argument("Copy joined roofs with one common transform to carry their shared annotations.");
+                common = found->second;
+            }
+            if (!common) throw std::invalid_argument("A copied roof annotation has no actual joined members.");
+            return *common;
+        };
+        for (const auto& [id, original] : source.entities()) {
+            if (original.type != kSheetViewEntityType) continue;
+            const auto copied_entity = candidate.find(id);
+            if (copied_entity == candidate.end())
+                throw std::invalid_argument("A copy cannot remove a saved annotation view.");
+            auto& changed = copied_entity->second;
+            if (changed == original && changed.properties.dump() == original.properties.dump() &&
+                changed.extensions.dump() == original.extensions.dump()) continue;
+            const auto model = decode_sheet_view_entity(original);
+            auto& raw_views = changed.properties.at("model").at("views");
+            for (const auto& view : model.views()) {
+                auto raw_view = raw_views.end();
+                for (const auto& overlay : view.overlays) {
+                    // Bound dimensions retain their source-axis/relative-offset
+                    // contract and regenerate against the independent silhouette.
+                    if (overlay.dimension_binding || overlay.object_id.empty() ||
+                        !identities.contains(overlay.object_id) || !identities.contains(overlay.id)) continue;
+                    const auto transform = owner_transform(overlay.object_id);
+                    if (transform == AssemblyTransform{}) continue;
+                    if (raw_view == raw_views.end())
+                        raw_view = std::find_if(raw_views.begin(), raw_views.end(), [&](const auto& row) {
+                            return row.at("id") == view.id;
+                        });
+                    if (raw_view == raw_views.end() || !raw_view->contains("overlays"))
+                        throw std::invalid_argument("A copied annotation lost its actual saved view.");
+                    auto& rows = raw_view->at("overlays");
+                    const auto copied_id = identities.at(overlay.id);
+                    auto row = std::find_if(rows.begin(), rows.end(), [&](const auto& value) {
+                        return value.at("id") == copied_id;
+                    });
+                    if (row == rows.end() || row->at("object_id") != identities.at(overlay.object_id) ||
+                        (row->contains("dimension_binding") && !row->at("dimension_binding").is_null()))
+                        throw std::invalid_argument("A copied annotation no longer matches its qualified source.");
+                    // Saved physical views consume source-model coordinates.
+                    // The operation already has its actual level/world pivot;
+                    // a Site presentation frame must not be applied again.
+                    for (const auto* key : {"start_m", "end_m"}) {
+                        const auto& point = std::string_view(key) == "start_m" ? overlay.start_m : overlay.end_m;
+                        const auto moved = transform_coordinated_overlay_point(view, point, transform);
+                        if (moved != point) row->at(key) = moved;
+                    }
+                }
+            }
+            validate_sheet_view_entity(changed);
+        }
+    }
+
     static ApplyEntityChanges sourceDerivedRoofCloneCommand(const DocumentSnapshot& source,
         const std::vector<std::string>& owners,
         const std::vector<ArchitecturalGroupTransformTarget>& operations, const std::string& message,
@@ -44127,9 +44234,11 @@ private:
             throw std::invalid_argument("The roof copy is missing a selected roof's transform.");
         const auto movement = architectural_group_transform_command(detached, targets,
             new_id("roof-copy-transform"), detached.revision());
-        const auto candidate = movement.entity_changes.empty() ? detached : Document::preview_command(detached, movement);
+        const auto transformed = movement.entity_changes.empty() ? detached : Document::preview_command(detached, movement);
+        auto candidate = transformed.entities();
+        transformIndependentCopyOverlays(source, candidate, operations, identities);
         creation.entity_changes.clear();
-        for (const auto& [id, entity] : candidate.entities()) {
+        for (const auto& [id, entity] : candidate) {
             const auto before = source.entities().find(id);
             if (before == source.entities().end() || before->second != entity ||
                 before->second.properties.dump() != entity.properties.dump() ||
@@ -44137,13 +44246,13 @@ private:
                 creation.entity_changes.push_back(EntityChange::upsert(entity));
         }
         for (const auto& id : plan.required_entity_ids) {
-            const auto& retained = candidate.entities().at(id);
+            const auto& retained = candidate.at(id);
             const auto& original = source.entities().at(id);
             if (retained != original || retained.properties.dump() != original.properties.dump() ||
                 retained.extensions.dump() != original.extensions.dump())
                 throw std::invalid_argument("Copying a roof would modify an original owner or dependency.");
         }
-        if (candidate.assets() != source.assets())
+        if (transformed.assets() != source.assets())
             throw std::invalid_argument("A roof copy must retain its actual shared assets.");
         (void)Document::preview_command(source, creation);
         if (capture) {
@@ -45239,6 +45348,7 @@ private:
                 throw std::invalid_argument(reasons);
             }
         }
+        transformIndependentCopyOverlays(source, candidate, operations, identities);
         ApplyEntityChanges creation{source.revision(), {}, {}, message};
         for (const auto& [id, entity] : candidate) {
             const auto before = source.entities().find(id);

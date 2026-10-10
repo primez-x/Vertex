@@ -14,6 +14,32 @@ changed source does not acquire runtime acceptance without later qualification.
 
 ## Current delivery state
 
+### October 9 independent copied view-overlay source implementation
+
+Transformed roof and horizontal-assembly copies now move their appended
+unbound owner-associated text, detail lines and explicit dimension points in
+saved plans, elevations and sections. Fresh overlay identities and mapped
+owners qualify each update against the actual original view. Original rows,
+styles, paper sizes, assets and baseline geometry remain retained. Whole joined
+roof annotations use a common captured member operation; individual member
+annotations retain their own operations. The existing mixed-family copy
+composition and one captured atomic command carry these updates.
+
+Bound dimensions already derive placement from the copied silhouette and
+relative line offset; their saved owning-view axis and offset are preserved.
+The earlier broad bound-dimension-copy gap was narrowed through source tracing
+rather than changing that contract. The new shared point projection uses the
+actual section cut plane and preserves small translations at distant origins.
+Structural copies now share that projection rather than duplicating raw-origin
+math. No command or project format changes were introduced.
+
+Root reviewed the integrated source. Independent source review approved with
+no actionable introduced blocker and confirmed the shared library link,
+projection math and original-row preservation. No builds, tests, probes,
+scripts, native jobs, launches, packages or installations ran. Compilation,
+interactions and storage round trips remain unverified; the installed candidate
+is unchanged.
+
 ### October 9 keyboard canvas actions and menu source implementation
 
 Both focused idle canvases now handle Windows keyboard context events for the
