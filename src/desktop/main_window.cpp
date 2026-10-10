@@ -36089,15 +36089,33 @@ public:
                 const auto view_caption = QString::fromStdString(view->name).trimmed().isEmpty()
                     ? QString::fromLatin1(architectural_view_name(view_kind)).toUpper()
                     : QString::fromStdString(view->name).trimmed().toUpper();
+                std::array<char, 64> scale_buffer{};
+                const auto scale_result = std::to_chars(scale_buffer.data(),
+                    scale_buffer.data() + scale_buffer.size(), output_denominator);
+                if (scale_result.ec != std::errc{})
+                    throw std::invalid_argument("viewport scale cannot be formatted");
+                const auto caption = view_caption + QStringLiteral("  •  1:") +
+                    QString::fromLatin1(scale_buffer.data(),
+                        static_cast<qsizetype>(scale_result.ptr - scale_buffer.data()));
+                const auto caption_rect = viewport_rect.adjusted(4.0 * paper_scale,
+                    3.0 * paper_scale, -4.0 * paper_scale, -3.0 * paper_scale);
+                const auto caption_font = sheet_text_font(8.0, paper_scale);
+                const QFontMetricsF caption_metrics(caption_font, painter.device());
+                const int caption_flags = Qt::AlignLeft | Qt::AlignTop |
+                                          Qt::TextWordWrap | Qt::TextWrapAnywhere;
+                const auto measured_caption = caption_metrics.boundingRect(
+                    QRectF(0, 0, std::max(1.0, caption_rect.width()), 1e9), caption_flags, caption);
+                if (caption_rect.width() <= 0 || caption_rect.height() <= 0 ||
+                    measured_caption.width() > caption_rect.width() ||
+                    std::max(caption_metrics.height(), measured_caption.height()) > caption_rect.height())
+                    throw std::invalid_argument((QStringLiteral(
+                        "Sheet %1: complete name and scale do not fit viewport %2. "
+                        "Enlarge the viewport in Sheet layout.")
+                        .arg(QString::fromStdString(sheet.number),
+                             QString::fromStdString(viewport.id))).toStdString());
                 painter.setPen(QColor(45, 52, 60));
-                painter.setFont(sheet_text_font(8.0, paper_scale));
-                painter.drawText(viewport_rect.adjusted(4.0 * paper_scale,
-                                                        3.0 * paper_scale,
-                                                        -4.0 * paper_scale,
-                                                        -3.0 * paper_scale),
-                                 Qt::AlignLeft | Qt::AlignTop,
-                                 view_caption + QStringLiteral("  •  1:%1")
-                                     .arg(QString::number(output_denominator, 'f', 0)));
+                painter.setFont(caption_font);
+                painter.drawText(caption_rect, caption_flags, caption);
             }
 
             // Schedule placements are part of the persisted sheet graph. Draw
@@ -36157,6 +36175,20 @@ public:
             // Cross-sheet callouts are persisted page annotations. Render the
             // marker and its target identity on the owning sheet so a printed
             // page remains understandable when viewed outside the project.
+            struct CalloutLayout {
+                const SheetCallout* source;
+                QPointF anchor;
+                double radius;
+                QRectF marker;
+                QRectF label;
+                QString text;
+            };
+            std::vector<CalloutLayout> callout_layouts;
+            const auto callout_font = sheet_text_font(8.0, paper_scale);
+            const auto callout_stroke_width = 0.7 * paper_scale;
+            const QFontMetricsF callout_metrics(callout_font, painter.device());
+            const int callout_flags = Qt::AlignLeft | Qt::AlignVCenter |
+                                      Qt::TextWordWrap | Qt::TextWrapAnywhere;
             for (const auto& callout : sheet.callouts) {
                 const QPointF anchor(page.left() + callout.x_mm * paper_scale,
                                      page.top() + callout.y_mm * paper_scale);
@@ -36171,18 +36203,52 @@ public:
                 const auto label = QString::fromStdString(callout.label).trimmed();
                 const auto text = (label.isEmpty() ? target_ref
                                                    : label + QStringLiteral("  →  ") + target_ref);
-                const auto radius = std::max(5.0, 7.0 * paper_scale);
+                const auto radius = 7.0 * paper_scale;
+                const auto stroke_radius = radius + 0.5 * callout_stroke_width;
+                const QRectF marker(anchor.x() - stroke_radius, anchor.y() - stroke_radius,
+                                    2.0 * stroke_radius, 2.0 * stroke_radius);
+                const auto tolerance = 1e-7 * paper_scale;
+                if (!page.adjusted(-tolerance, -tolerance, tolerance, tolerance).contains(marker))
+                    throw std::invalid_argument((QStringLiteral(
+                        "Sheet %1: callout %2 marker extends beyond the page. "
+                        "Move the callout anchor inward.")
+                        .arg(QString::fromStdString(sheet.number),
+                             QString::fromStdString(callout.id))).toStdString());
+                std::optional<QRectF> label_rect;
+                const auto preferred_width = 170.0 * paper_scale;
+                const auto spacing = 3.0 * paper_scale;
+                for (const bool right : {true, false}) {
+                    const auto edge = right ? marker.right() + spacing
+                                            : marker.left() - spacing;
+                    const auto width = std::min(preferred_width,
+                        right ? page.right() - edge : edge - page.left());
+                    if (width <= 0) continue;
+                    const auto measured = callout_metrics.boundingRect(
+                        QRectF(0, 0, width, 1e9), callout_flags, text);
+                    const auto height = std::max(2.0 * radius,
+                        std::max(callout_metrics.height(), measured.height()));
+                    if (measured.width() > width || height > page.height()) continue;
+                    const auto top = std::clamp(anchor.y() - height * 0.5,
+                        page.top(), page.bottom() - height);
+                    label_rect = QRectF(right ? edge : edge - width, top, width, height);
+                    break;
+                }
+                if (!label_rect)
+                    throw std::invalid_argument((QStringLiteral(
+                        "Sheet %1: complete label and target do not fit callout %2. "
+                        "Move the anchor to provide more space, or enlarge the sheet.")
+                        .arg(QString::fromStdString(sheet.number),
+                             QString::fromStdString(callout.id))).toStdString());
+                callout_layouts.push_back({&callout, anchor, radius, marker, *label_rect, text});
+            }
+            for (const auto& callout : callout_layouts) {
                 QPainterStateGuard callout_state(&painter);
-                painter.setPen(QPen(QColor(27, 103, 153), std::max(1.0, paper_scale * 0.7)));
+                painter.setPen(QPen(QColor(27, 103, 153), callout_stroke_width));
                 painter.setBrush(QColor(224, 242, 254));
-                painter.drawEllipse(anchor, radius, radius);
+                painter.drawEllipse(callout.anchor, callout.radius, callout.radius);
                 painter.setPen(QColor(17, 73, 109));
-                painter.setFont(sheet_text_font(8.0, paper_scale));
-                painter.drawText(QRectF(anchor.x() + radius + 3.0 * paper_scale,
-                                       anchor.y() - radius,
-                                       std::max(40.0, 170.0 * paper_scale),
-                                       2.0 * radius),
-                                 Qt::AlignLeft | Qt::AlignVCenter, text);
+                painter.setFont(callout_font);
+                painter.drawText(callout.label, callout_flags, callout.text);
             }
 
             // A4 portrait is narrower than the large-sheet title block.
@@ -36216,17 +36282,9 @@ public:
                 }
                 for (const auto& placement : sheet.schedules)
                     check(rect(placement.bounds), QStringLiteral("schedule placement"), placement.id);
-                for (const auto& callout : sheet.callouts) {
-                    const QPointF anchor(page.left() + callout.x_mm * paper_scale,
-                                         page.top() + callout.y_mm * paper_scale);
-                    const auto radius = std::max(5.0, 7.0 * paper_scale);
-                    const QRectF marker(anchor.x() - radius, anchor.y() - radius,
-                                        2.0 * radius, 2.0 * radius);
-                    const QRectF label(anchor.x() + radius + 3.0 * paper_scale,
-                                       anchor.y() - radius, std::max(40.0, 170.0 * paper_scale),
-                                       2.0 * radius);
-                    check(marker.united(label), QStringLiteral("callout"), callout.id);
-                }
+                for (const auto& callout : callout_layouts)
+                    check(callout.marker.united(callout.label), QStringLiteral("callout"),
+                          callout.source->id);
             };
             const int wrap_flags = Qt::AlignLeft | Qt::AlignVCenter |
                                    Qt::TextWordWrap | Qt::TextWrapAnywhere;

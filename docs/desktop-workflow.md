@@ -910,6 +910,21 @@ stops with the sheet and placement identity and an instruction to enlarge the
 schedule. The shared selected-sheet and drawing-set output paths use this same
 layout.
 
+Viewport captions print the actual rendered scale, including fractional ratios,
+with the complete saved view name. The caption wraps within the viewport; if
+it cannot fit, output identifies the viewport to enlarge in **Sheet layout**.
+Cross-sheet callouts wrap their label and target reference in the available
+page space. Text uses the right side of its marker when it fits, otherwise the
+left, and stays vertically within the page. The saved anchor and target remain
+unchanged. A marker extending beyond the page or a label with insufficient
+space blocks output with the callout identity and an instruction to adjust it.
+Footer overlap checks use these actual measured marker and label envelopes.
+
+Associative dimensions on flight- or landing-hosted railings derive their
+geometry from the current authored stair host. Ordinary object placement is
+resolved once. Missing, invalid or inactive stair hosts remain explicit
+dimension errors; they do not produce guessed measurements.
+
 The title block and revision history wrap long text using measured paper-size
 typography. Every saved revision prints in its stored order. If the complete
 history or title block cannot fit, output stops with an instruction to increase

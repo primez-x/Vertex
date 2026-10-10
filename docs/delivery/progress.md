@@ -14,6 +14,39 @@ changed source does not acquire runtime acceptance without later qualification.
 
 ## Current delivery state
 
+### October 9 linked annotation and hosted-dimension source corrections
+
+Viewport caption ratios now use the actual rendering denominator without
+integer rounding. A persisted 1:25.5 viewport no longer advertises 1:26 while
+drawing at 1:25.5. Complete names and ratios use measured wrapping or an
+actionable viewport-capacity refusal.
+
+Cross-sheet callouts now measure their complete label and target text against
+available page space. Labels wrap, try the marker's right side then its left,
+and remain vertically within the page. Marker stroke bounds are checked too.
+Unrenderable placements are explicitly refused with sheet and callout identity.
+Existing anchors, targets and source fingerprints are preserved; footer overlap
+checks consume the same measured annotation envelopes that are drawn.
+Marker radius and stroke width use paper units without screen-pixel minima,
+so the small drawing-set preflight does not enlarge a valid large-sheet marker
+past the page boundary.
+
+Bound dimensions on hosted railings now use the authoritative authored-map
+geometry overload used by view rendering, rather than the plain builder that
+refuses hosted forms. Flight and landing hosts must be active in the saved
+design. Ordinary placement remains resolved once; current stair placement is
+derived once by the host-aware builder. Missing or malformed hosts still
+produce dimension diagnostics. Independent annotation visibility and saved
+view axes/offsets remain unchanged; no owner-appearance suppression was added.
+
+Root integration review and independent source review approved the corrected
+batch. The review's large-sheet preflight pixel-floor finding was corrected
+and rechecked at source level. Scoped `git diff --check` passed. No builds,
+tests, probes, scripts,
+native jobs, launches, packages or installations ran. Compilation, output
+typography and dimension behavior remain unverified; the installed candidate
+is unchanged. Production acceptance remains open.
+
 ### October 9 coordinated output capacity and failure-state correction
 
 Source inspection found that a positive but very narrow or short appraisal

@@ -149,8 +149,14 @@ TopoDS_Shape source_shape(const DocumentSnapshot& source, const Entity& input,
         if (!read_document_room(resolved, room, error)) throw std::invalid_argument(error);
         return make_room_volume(room);
     }
-    if (can_recognize_building_entity_type(input.type))
-        return make_building_shape(decode_building_entity(resolved));
+    if (can_recognize_building_entity_type(input.type)) {
+        const auto decoded = decode_building_entity(resolved);
+        if (const auto* railing = std::get_if<Railing>(&decoded)) {
+            if (railing->host) require_active_source(source, railing->host->stair_id, scope);
+            if (railing->landing_host) require_active_source(source, railing->landing_host->stair_id, scope);
+        }
+        return make_building_shape(decoded, source.entities());
+    }
     throw std::invalid_argument("source object has no supported architectural geometry: " + input.id);
 }
 
