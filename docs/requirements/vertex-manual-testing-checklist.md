@@ -1,6 +1,6 @@
 # Vertex user testing checklist
 
-450 practical tasks, grouped by how you use the app (U001–U449 plus U100a), plus four focused door checks below. This replaces the earlier engineering-oriented checklist. The old 130-item list is preserved separately as engineering-requirements-checklist.md.
+450 practical tasks, grouped by how you use the app (U001–U449 plus U100a), plus five focused door/window checks below. This replaces the earlier engineering-oriented checklist. The old 130-item list is preserved separately as engineering-requirements-checklist.md.
 
 This is a user acceptance list for the intended app, not a claim that every listed action is implemented or working in the current preview. If you cannot find a control, or a feature is absent, mark **Blocked / missing** and describe it. Specialized sections can be skipped if you do not use them or lack the device or sample files.
 
@@ -3156,6 +3156,17 @@ them Blocked / missing until testing a candidate that contains them.
 - [ ] **DOOR-FOUR-PANEL - Fold both pairs of a four-panel door**
   - Steps: Choose the four-panel bifold artwork in Library and place it in a straight wall. Try Open at 0%, 50% and 100%, then reverse the folding side. Inspect the schedule, resize, undo, redo, save/reopen and export the plan and IFC.
   - Expected: Four leaves form two mirrored folding pairs, pinned at both jambs. Their center sliders approach their own jambs as the door opens. Both views and exports show four leaves. The schedule identifies Four-panel bifold and both jambs. Changing the mechanism never silently substitutes a two-panel model.
+  - Result: Not tested
+  - Notes: ______________________________
+
+## Additional bow-window check
+
+This source addition is not yet included in the installed candidate. Mark it
+Blocked / missing until testing a candidate that contains it.
+
+- [ ] **WINDOW-BOW - Place and edit a five-pane bow window**
+  - Steps: Draw a straight wall, choose Window - Bow in Library and drag it onto the wall. Inspect the plan and 3D. Double-click it and change its width, sill, height, projection and wall side. Change layout to Fixed and back to Bow. Scale and mirror the host wall, undo, redo, save/reopen and inspect the window schedule and IFC export. Try a projection too large for the opening.
+  - Expected: Five separate glazed facets project beyond the selected wall face, with a frame, head and sill. The displayed projection matches the farthest actual facet. Mirroring reverses its side; uniform scaling changes all bow dimensions together. The schedule names Five-pane bow and records five panes, projection and side. It never becomes a single flat pane without an explicit layout change. Impossible dimensions are refused without changing the project.
   - Result: Not tested
   - Notes: ______________________________
 

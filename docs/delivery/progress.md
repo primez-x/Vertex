@@ -14,6 +14,45 @@ changed source does not acquire runtime acceptance without later qualification.
 
 ## Current delivery state
 
+### October 10 five-pane bow windows - source integration
+
+The supplied bow-window SVG/Pinc counterpart previously fell through to a flat
+fixed profile. It now selects a separate five-pane projecting assembly, with a
+strict ten-key opening-assembly v5 and native reader 166/extraction 164. Existing
+assembly v1-v4 retain their contracts. New profile floors follow every retained
+revision and nested/undone command proof, using the existing payload tables.
+
+Five finite glazed facets follow a circular profile fitted to the actual mouth
+and greatest requested projection. A bounded angle solve, true perpendicular
+frame offsets, miter joints, head/sill caps, recessed mounting returns and butt
+adapters construct the physical assembly. Invalid/degenerate facets, excessive
+projection and material/host conflicts refuse. The existing bay arithmetic is
+unchanged. Plan, 3D and IFC consume the same manufactured solids.
+
+Library drag/placement and Properties expose projection and side. Profile
+conversion clears dormant fields; untouched numerical dimensions retain their
+actual values. Uniform host transforms scale bow projection and reflections
+reverse its side. Schedules expose five panes, bow mechanism, projection and
+side with source provenance; IFC uses a user-defined five-panel bow partition
+and verifies native reconstruction against the actual profile/mesh. The original
+450 user scenarios remain intact, with five supplementary door/window checks;
+all new checks remain Not tested and outside the installed candidate.
+
+Root reviewed the integrated source and bounded independent review identified
+no remaining concrete P1/P2. An assembly may require 153 pairwise Boolean
+checks plus 18 host checks; preview cost and kernel reliability remain runtime
+qualification risks rather than measured failures. Scoped diff checks and
+registry JSON/checklist inspection supply source evidence only.
+No builds, tests, new tests, scripts/probes, native jobs, UI launches, packages
+or installations ran. Compilation, OCCT booleans, actual appearance/interaction,
+storage/history/migration and independently consumed output remain unqualified.
+The installed candidate is unchanged and all ten production gates remain open.
+
+Next source gaps: distinct awning and double-hung operations for those named
+catalog families, and coordinated multi-host corner windows. Existing catalog
+labels/fixed fallbacks do not supply these semantics. Preserve the full plan and
+external prerequisites; this batch does not support an overall percentage/ETA.
+
 ### October 10 hosted sliding/folding doors - source integration
 
 Distinct barn, pocket, two-panel bifold and four-panel bifold operations now

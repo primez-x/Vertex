@@ -35,6 +35,7 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <limits>
 #include <numbers>
 #include <map>
 #include <set>
@@ -486,6 +487,203 @@ TopoDS_Shape bay_window_parts(const Wall& host, const HostedOpening& opening,
     return result;
 }
 
+TopoDS_Shape bow_window_parts(const Wall& host, const HostedOpening& opening,
+                             const OpeningAssembly& assembly, const OpeningFrame& frame) {
+    if (host.baseline.sweep_radians != 0.0)
+        throw std::invalid_argument("Bow windows require a straight host until curved fitting is available");
+    const double width = opening.width, bar = assembly.frame_width_m;
+    const double chord = width - 2.0 * bar;
+    const double depth = assembly.frame_depth_m, projection = assembly.window_bow_projection_m;
+    const double height = opening.height - 2.0 * bar;
+    const double base = host.elevation + opening.sill;
+    const double side = assembly.window_open_left ? 1.0 : -1.0;
+    const double face = host.thickness * 0.5;
+    const double rear = side * assembly.inset_m - depth * 0.5;
+    const double mount_face = side * assembly.inset_m + depth * 0.5;
+    if (!std::isfinite(chord) || chord <= tolerance || !std::isfinite(projection) ||
+        projection <= depth + tolerance || height <= 2.0 * bar + 4.0 * tolerance ||
+        assembly.glazing_thickness_m <= tolerance || assembly.glazing_thickness_m > depth)
+        throw std::invalid_argument("Bow projection and facets leave no framed glazing cavity");
+
+    // Six equally spaced points on a circular arc make five planar facets.
+    // The central facet is flat: its actual projection is R*(cos(theta/5)-cos(theta)),
+    // rather than the unused circle's crown R*(1-cos(theta)). The stable sine
+    // identity avoids cancellation for a shallow bow. A sub-semicircular arc
+    // keeps all five facets directed along the host mouth without overhangs.
+    const double ratio = projection / chord;
+    const double maximum_ratio = std::cos(std::numbers::pi / 10.0) * 0.5;
+    if (!std::isfinite(ratio) || ratio <= 0.0 || ratio >= maximum_ratio)
+        throw std::invalid_argument("Bow projection exceeds its five-facet mouth chord");
+    double lower = 0.0, upper = std::numbers::pi * 0.5;
+    for (int iteration = 0; iteration < 64; ++iteration) {
+        const double angle = (lower + upper) * 0.5;
+        const double candidate = std::sin(angle * 0.6) * std::sin(angle * 0.4) / std::sin(angle);
+        if (candidate < ratio) lower = angle;
+        else upper = angle;
+    }
+    const double theta = (lower + upper) * 0.5;
+    const double radius = chord / (2.0 * std::sin(theta));
+    if (!std::isfinite(radius) || radius <= depth + tolerance || theta <= 0.0 ||
+        theta >= std::numbers::pi * 0.5)
+        throw std::invalid_argument("Bow circle is not representable at the requested projection");
+    std::array<Vec2, 6> outer{}, inner{};
+    std::array<Vec2, 5> along{}, inward{};
+    std::array<double, 5> lengths{};
+    for (std::size_t index = 0; index < outer.size(); ++index) {
+        const double angle = theta * (2.0 * static_cast<double>(index) / 5.0 - 1.0);
+        outer[index] = {width * 0.5 + radius * std::sin(angle),
+            face + 2.0 * radius * std::sin((theta + angle) * 0.5) *
+                                      std::sin((theta - angle) * 0.5)};
+        if (!std::isfinite(outer[index].x) || !std::isfinite(outer[index].y))
+            throw std::invalid_argument("Bow facet vertices are not finite");
+    }
+    // Exact mouth and central-facet coordinates retain the requested dimensions
+    // through the bounded angle solve's final floating-point rounding.
+    outer.front() = {bar, face};
+    outer.back() = {width - bar, face};
+    outer[2].y = outer[3].y = face + projection;
+    for (std::size_t index = 0; index < along.size(); ++index) {
+        const Vec2 delta{outer[index + 1].x - outer[index].x,
+                         outer[index + 1].y - outer[index].y};
+        lengths[index] = std::hypot(delta.x, delta.y);
+        if (!std::isfinite(lengths[index]) || lengths[index] <= 2.0 * bar + 4.0 * tolerance ||
+            delta.x <= tolerance)
+            throw std::invalid_argument("Bow facet is too short or degenerates at the mouth");
+        along[index] = {delta.x / lengths[index], delta.y / lengths[index]};
+        inward[index] = {along[index].y, -along[index].x};
+    }
+    const auto offset_point = [&](std::size_t index) {
+        return Vec2{outer[index].x + depth * inward[index].x,
+                    outer[index].y + depth * inward[index].y};
+    };
+    const auto cross = [](Vec2 first, Vec2 second) {
+        return first.x * second.y - first.y * second.x;
+    };
+    // Offset each facet by its true perpendicular frame depth. Adjacent offset
+    // lines meet at a miter; only the two end lines are clipped at the wall face.
+    for (std::size_t index = 1; index + 1 < inner.size(); ++index) {
+        const auto first = offset_point(index - 1), second = offset_point(index);
+        const double determinant = cross(along[index - 1], along[index]);
+        if (!std::isfinite(determinant) ||
+            determinant >= -32.0 * std::numeric_limits<double>::epsilon())
+            throw std::invalid_argument("Bow facet miter lines are degenerate");
+        const double station = cross({second.x - first.x, second.y - first.y}, along[index]) /
+                               determinant;
+        inner[index] = {first.x + station * along[index - 1].x,
+                        first.y + station * along[index - 1].y};
+    }
+    if (along.front().y <= 0.0 || along.back().y >= 0.0)
+        throw std::invalid_argument("Bow end facets do not reach the physical wall face");
+    inner.front() = {bar + depth / along.front().y, face};
+    inner.back() = {width - bar + depth / along.back().y, face};
+    for (std::size_t index = 0; index < inner.size(); ++index) {
+        if (!std::isfinite(inner[index].x) || !std::isfinite(inner[index].y) ||
+            inner[index].y < face - tolerance ||
+            (index > 0 && inner[index].x <= inner[index - 1].x + tolerance))
+            throw std::invalid_argument("Bow inner frame collapses or crosses its wall mouth");
+    }
+    const auto prism = [&](const std::vector<Vec2>& polygon, double z, double rise) {
+        double twice_area = 0.0;
+        std::vector<gp_Pnt> points;
+        for (std::size_t index = 0; index < polygon.size(); ++index) {
+            const auto& p = polygon[index];
+            const auto& next = polygon[(index + 1) % polygon.size()];
+            // Translate before computing area to retain precision at a wide mouth.
+            twice_area += (p.x - polygon.front().x) * (next.y - polygon.front().y) -
+                          (next.x - polygon.front().x) * (p.y - polygon.front().y);
+            if (std::hypot(next.x - p.x, next.y - p.y) <= tolerance)
+                throw std::invalid_argument("Bow frame polygon contains a degenerate edge");
+            points.push_back(opening_point(frame, p.x, side * p.y, z));
+        }
+        if (!std::isfinite(twice_area) || std::abs(twice_area) <= tolerance * tolerance)
+            throw std::invalid_argument("Bow frame polygon leaves no positive material area");
+        return extrude_polygon(points, gp_Vec(0, 0, rise), "Bow frame profile extrusion failed");
+    };
+    TopoDS_Compound result;
+    BRep_Builder builder; builder.MakeCompound(result);
+    std::vector<TopoDS_Shape> parts;
+    const auto add = [&](const TopoDS_Shape& part) {
+        const double volume = solid_volume(part);
+        if (part.IsNull() || !BRepCheck_Analyzer(part).IsValid() || !std::isfinite(volume) ||
+            volume <= tolerance * tolerance * tolerance)
+            throw std::invalid_argument("Bow assembly contains an invalid or empty material part");
+        parts.push_back(part);
+        builder.Add(result, part);
+    };
+    const double mount_across = assembly.inset_m - depth * 0.5;
+    for (double x : {0.0, width - bar})
+        add(opening_box(frame, x, mount_across, bar, depth, opening.height, base,
+                        "Bow mounting jamb construction failed"));
+    const double return_depth = face - mount_face;
+    if (return_depth > tolerance) for (double x : {0.0, width - bar})
+        add(opening_box(frame, x, side > 0.0 ? mount_face : -face, bar, return_depth,
+                        opening.height, base, "Bow mounting return construction failed"));
+    std::vector<Vec2> plate{{bar, rear}, {width - bar, rear}};
+    for (auto vertex = outer.rbegin(); vertex != outer.rend(); ++vertex) plate.push_back(*vertex);
+    add(prism(plate, base, bar));
+    add(prism(plate, base + opening.height - bar, bar));
+    for (std::size_t index = 0; index < along.size(); ++index) {
+        const auto& a = outer[index]; const auto& b = outer[index + 1];
+        const auto station = [&](const Vec2& point) {
+            return (point.x - a.x) * along[index].x + (point.y - a.y) * along[index].y;
+        };
+        const double first = std::max(0.0, station(inner[index])) + bar;
+        const double last = std::min(lengths[index], station(inner[index + 1])) - bar;
+        const double glass_width = last - first, glass_height = height - 2.0 * bar;
+        const double inner_length = station(inner[index + 1]) - station(inner[index]);
+        const double twice_area = cross({b.x - a.x, b.y - a.y},
+            {inner[index + 1].x - a.x, inner[index + 1].y - a.y}) +
+            cross({inner[index + 1].x - a.x, inner[index + 1].y - a.y},
+                  {inner[index].x - a.x, inner[index].y - a.y});
+        if (!std::isfinite(glass_width) || glass_width <= 4.0 * tolerance ||
+            inner_length <= tolerance || !std::isfinite(twice_area) ||
+            twice_area >= -tolerance * tolerance)
+            throw std::invalid_argument("Bow mitered facet leaves no clear glazing pane");
+        const auto global_a = opening_point(frame, a.x, side * a.y, base);
+        const Vec2 direction{frame.along.x * along[index].x + frame.left.x * side * along[index].y,
+                             frame.along.y * along[index].x + frame.left.y * side * along[index].y};
+        const OpeningFrame facet{{global_a.X(), global_a.Y()}, direction, {-direction.y, direction.x}};
+        const double inward_across = side > 0.0 ? -depth : 0.0;
+        const auto aperture = opening_box(facet, first, inward_across - tolerance,
+            glass_width, depth + 2.0 * tolerance, glass_height, base + 2.0 * bar,
+            "Bow glazing aperture construction failed");
+        add(cut(prism({a, b, inner[index + 1], inner[index]}, base + bar, height), aperture));
+        add(opening_box(facet, first + 2.0 * tolerance,
+            inward_across + (depth - assembly.glazing_thickness_m) * 0.5,
+            glass_width - 4.0 * tolerance, assembly.glazing_thickness_m,
+            glass_height - 4.0 * tolerance, base + 2.0 * bar + 2.0 * tolerance,
+            "Bow glazing construction failed"));
+    }
+    // End-cap adapters join the mitered facets to the recessed mounting jambs
+    // across real faces; their height butts against the sill and head plates.
+    const double left_adapter_width = inner.front().x - bar;
+    const double right_adapter_width = width - bar - inner.back().x;
+    add(opening_box(frame, bar, side > 0.0 ? rear : -face,
+        left_adapter_width, face - rear, height, base + bar,
+        "Bow left mounting butt adapter construction failed"));
+    add(opening_box(frame, inner.back().x, side > 0.0 ? rear : -face,
+        right_adapter_width, face - rear, height, base + bar,
+        "Bow right mounting butt adapter construction failed"));
+    const auto wall_shape = make_wall(host);
+    const double overlap_limit = tolerance * tolerance * std::max(1.0, opening.height);
+    const auto require_clear = [&](const TopoDS_Shape& first, const TopoDS_Shape& second,
+                                   const char* message) {
+        const double overlap = common_volume(first, second);
+        if (!std::isfinite(overlap) || overlap > overlap_limit)
+            throw std::invalid_argument(message);
+    };
+    for (std::size_t first = 0; first < parts.size(); ++first) {
+        require_clear(parts[first], wall_shape, "Bow assembly intersects its host wall");
+        for (std::size_t second = first + 1; second < parts.size(); ++second)
+            require_clear(parts[first], parts[second], "Bow facet or mounting parts share material");
+    }
+    const double volume = solid_volume(result);
+    if (!BRepCheck_Analyzer(result).IsValid() || !std::isfinite(volume) ||
+        volume <= tolerance * tolerance * tolerance)
+        throw std::invalid_argument("Bow assembly did not produce valid material solids");
+    return result;
+}
+
 double endpoint_distance(const Vec2& first, const Vec2& second) {
     const auto distance = std::hypot(first.x - second.x, first.y - second.y);
     if (!std::isfinite(distance)) {
@@ -914,6 +1112,13 @@ OpeningAssemblyGeometry make_opening_assembly_geometry(const Wall& wall, const H
             return {bay_window_parts(checked, opening, assembly, frame), std::nullopt, {}};
         } catch (const Standard_Failure& error) {
             throw std::invalid_argument(std::string("Bay geometry failed: ") + error.what());
+        }
+    }
+    if (window && assembly.window_layout == WindowLayoutKind::bow) {
+        try {
+            return {bow_window_parts(checked, opening, assembly, frame), std::nullopt, {}};
+        } catch (const Standard_Failure& error) {
+            throw std::invalid_argument(std::string("Bow geometry failed: ") + error.what());
         }
     }
     const double base_elevation = wall.elevation + opening.sill;

@@ -5283,7 +5283,8 @@ Entity replay_rigid_source_opening(const Entity& original, const PlanarTransform
         auto assembly=parse_opening_assembly(expected.properties.at("opening_assembly"));
         assembly.inset_m=-assembly.inset_m;
         if (assembly.window_layout==WindowLayoutKind::casement ||
-            assembly.window_layout==WindowLayoutKind::sliding || assembly.window_layout==WindowLayoutKind::bay)
+            assembly.window_layout==WindowLayoutKind::sliding || assembly.window_layout==WindowLayoutKind::bay ||
+            assembly.window_layout==WindowLayoutKind::bow)
             assembly.window_open_left=!assembly.window_open_left;
         expected.properties["opening_assembly"]=opening_assembly_json(assembly);
     }

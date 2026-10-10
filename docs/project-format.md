@@ -1,4 +1,32 @@
-# Vertex project formats v1 through v165
+# Vertex project formats v1 through v166
+
+## Five-pane projecting bow windows (v166, source integration)
+
+Native reader 166 and JSON/assets extraction 164 retain opening-assembly v5.
+Its exact ten keys are the seven base profile keys (`version`, `kind`,
+`frame_width_m`, `frame_depth_m`, `panel_thickness_m`, `glazing_thickness_m`,
+`inset_m`) plus `window_layout`, `window_open_left`, and
+`window_bow_projection_m`. Kind must be `window`, layout must be `bow`, side
+is Boolean, and projection must be finite, positive and at most 10 m.
+Historical assembly v1 through v4 keep their contracts and reject bow layouts.
+Bow has five fixed panes; no dormant hinge, travel, angle or bay fields persist.
+
+The five physical glazing facets follow a circular bow on a straight host.
+Projection measures the greatest actual facet distance beyond the selected
+wall face; it is not a flat-pane width or an arbitrary artwork scale. A bounded
+angle solve admits only a non-overhanging circular profile. Frame-depth offsets
+produce real miter joints, caps, mounting returns and individual glazing panes.
+Impossible projection, insufficient glazing clearance, degenerate facets or
+material conflicts refuse the change. Plan, 3D and export derive from these
+same solids. Uniform host transforms scale bow projection; reflection changes
+the projecting side. This does not change historical bay replay behavior.
+
+Schedules expose five panes, bow mechanism, projection and side. IFC uses a
+user-defined five-panel bow partition and the native physical mesh/profile.
+Reader floors scan retained revisions and nested proofs, including undone
+changes. V166 retains the v161 payload tables. Compilation, physical geometry,
+interaction, storage/history and independently consumed output remain
+unqualified during source-only execution.
 
 ## Barn, pocket and bifold door mechanisms (v165, source integration)
 

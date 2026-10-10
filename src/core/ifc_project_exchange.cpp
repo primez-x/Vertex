@@ -890,7 +890,7 @@ std::string window_partition_enum(const OpeningAssembly& profile) {
     case WindowLayoutKind::double_fixed: case WindowLayoutKind::sliding:
         return ".DOUBLE_PANEL_VERTICAL.";
     case WindowLayoutKind::triple_fixed: return ".TRIPLE_PANEL_VERTICAL.";
-    case WindowLayoutKind::bay: return ".USERDEFINED.";
+    case WindowLayoutKind::bay: case WindowLayoutKind::bow: return ".USERDEFINED.";
     case WindowLayoutKind::fixed: case WindowLayoutKind::casement: return ".SINGLE_PANEL.";
     }
     throw std::invalid_argument("Unknown window layout");
@@ -901,7 +901,9 @@ std::string window_partition_label(const OpeningAssembly& profile,
     // IFC4 permits a partition label only with USERDEFINED. The bay has
     // three projecting facets, rather than three panels in one plane.
     // https://standards.buildingsmart.org/IFC/RELEASE/IFC4/ADD2_TC1/HTML/schema/ifcsharedbldgelements/lexical/ifcwindow.htm
-    return profile.window_layout == WindowLayoutKind::bay ? step_string("BAY_WINDOW", limits) : "$";
+    if (profile.window_layout == WindowLayoutKind::bay) return step_string("BAY_WINDOW", limits);
+    if (profile.window_layout == WindowLayoutKind::bow) return step_string("FIVE_PANEL_BOW_WINDOW", limits);
+    return "$";
 }
 
 std::string door_operation_label(const std::optional<DoorOperation>& operation,

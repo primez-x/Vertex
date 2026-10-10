@@ -233,7 +233,9 @@ public:
     // vertical binding edit; nested and undone proofs require reader 164.
     // Door operation v4 and explicit barn/pocket/bifold conversion v3 require
     // v165 throughout retained entities and nested/undone command proofs.
-    static constexpr std::uint32_t format_version = 165;
+    // v166 carries five-pane projecting bow-window profiles, including retained
+    // entities and nested/undone command proofs.
+    static constexpr std::uint32_t format_version = 166;
     static constexpr std::uint32_t recovery_format_version = 4;
     [[nodiscard]] static std::uint32_t required_format_version(const DocumentSnapshot& snapshot);
     static constexpr std::uint64_t maximum_file_bytes = 4ULL * 1024ULL * 1024ULL * 1024ULL;

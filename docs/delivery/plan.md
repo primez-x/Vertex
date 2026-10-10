@@ -114,6 +114,10 @@ polling timeout does not permit restarting it.
    and four-panel bifold mechanisms across placement, edits, actual wall cuts,
    plan/3D, quantities, migration/history and exchange. Generic hinged fallback
    is not completion of those families; source integration is not acceptance.
+   Qualify the separate five-pane projecting bow-window source profile and its
+   actual assembly, placement/editing, reflected/scaled host, schedules and
+   output. Corner windows still require coordinated multi-host semantics;
+   awning and double-hung catalog families need distinct physical operations.
 10. Implement observed native/vendor/device adapters through existing workers;
     complete declared IFC/DXF/Pinc fidelity and independently consumed output.
     Add offline OCR text regions/confidence feeding reviewed proposals. New

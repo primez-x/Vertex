@@ -633,6 +633,7 @@ Entity transform_wall_entity(EntityState& entities, const Entity& source,
             assembly.panel_thickness_m *= transform.scale;
             assembly.glazing_thickness_m *= transform.scale;
             assembly.inset_m *= transform.scale;
+            assembly.window_bow_projection_m *= transform.scale;
             opening.properties["opening_assembly"] = opening_assembly_json(assembly);
         }
     }

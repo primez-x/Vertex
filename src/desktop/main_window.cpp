@@ -2721,6 +2721,9 @@ OpeningAssembly catalog_opening_assembly(const QString& kind, const QString& sym
         else if (symbol_id == QStringLiteral("svg-v2-10_windows-window-bay")) {
             profile.window_layout = WindowLayoutKind::bay;
             profile.window_bay_projection_m = 0.65;
+        } else if (symbol_id == QStringLiteral("svg-v2-10_windows-window-bow")) {
+            profile.window_layout = WindowLayoutKind::bow;
+            profile.window_bow_projection_m = 0.6;
         }
     }
     return profile;
@@ -7849,7 +7852,8 @@ public:
                     assembly.inset_m = -assembly.inset_m;
                     if (assembly.window_layout == WindowLayoutKind::casement ||
                         assembly.window_layout == WindowLayoutKind::sliding ||
-                        assembly.window_layout == WindowLayoutKind::bay)
+                        assembly.window_layout == WindowLayoutKind::bay ||
+                        assembly.window_layout == WindowLayoutKind::bow)
                         assembly.window_open_left = !assembly.window_open_left;
                     entity.properties["opening_assembly"] = opening_assembly_json(assembly);
                 }
@@ -42018,17 +42022,21 @@ public:
             uses_door_opening_fraction(m_pending_opening_door_operation->kind);
         const bool casement = window && m_pending_opening_profile->window_layout == WindowLayoutKind::casement;
         const bool bay = window && m_pending_opening_profile->window_layout == WindowLayoutKind::bay;
+        const bool bow = window && m_pending_opening_profile->window_layout == WindowLayoutKind::bow;
+        const bool projecting = bay || bow;
         if (bay) m_pending_opening_profile->window_bay_projection_m *= scale;
+        if (bow) m_pending_opening_profile->window_bow_projection_m *= scale;
         {
             const QSignalBlocker side_blocker(m_opening_draw_bay_side);
             m_opening_draw_bay_side->setCurrentIndex(m_pending_opening_profile->window_open_left ? 0 : 1);
             m_opening_draw_bay_projection->setText(QString::fromStdString(
-                json(m_pending_opening_profile->window_bay_projection_m).dump()) + QStringLiteral(" m"));
+                json(bow ? m_pending_opening_profile->window_bow_projection_m :
+                    m_pending_opening_profile->window_bay_projection_m).dump()) + QStringLiteral(" m"));
         }
-        m_opening_draw_bay_projection->setVisible(bay);
-        m_opening_draw_bay_projection_label->setVisible(bay);
-        m_opening_draw_bay_side->setVisible(bay);
-        m_opening_draw_bay_side_label->setVisible(bay);
+        m_opening_draw_bay_projection->setVisible(projecting);
+        m_opening_draw_bay_projection_label->setVisible(projecting);
+        m_opening_draw_bay_side->setVisible(projecting);
+        m_opening_draw_bay_side_label->setVisible(projecting);
         {
             const QSignalBlocker blocker(m_opening_draw_travel);
             m_opening_draw_travel->setValue(0.0);
@@ -42532,6 +42540,8 @@ public:
                     catalog_opening_assembly(m_pending_opening_kind,m_pending_opening_symbol_id));
                 if (input.assembly.window_layout==WindowLayoutKind::bay)
                     input.assembly.window_bay_projection_m=parse_quantity(m_opening_draw_bay_projection->text().toStdString(),unit).metres;
+                if (input.assembly.window_layout==WindowLayoutKind::bow)
+                    input.assembly.window_bow_projection_m=parse_quantity(m_opening_draw_bay_projection->text().toStdString(),unit).metres;
                 validate_opening_assembly(input.assembly);
                 if (m_pending_opening_kind==QStringLiteral("door"))
                     input.operation=m_pending_opening_symbol_id.isEmpty() ? std::optional<DoorOperation>{DoorOperation{}}
@@ -42599,6 +42609,7 @@ public:
                 input.assembly=catalog_opening_assembly(kind,id);
                 input.bare_opening=kind==QStringLiteral("opening") && input.assembly.kind!=OpeningAssemblyKind::passage;
                 if (input.assembly.window_layout==WindowLayoutKind::bay) input.assembly.window_bay_projection_m*=scale;
+                if (input.assembly.window_layout==WindowLayoutKind::bow) input.assembly.window_bow_projection_m*=scale;
                 input.operation=catalog_door_operation(*definition);
                 input.plan_cache=std::make_shared<std::pair<std::string,Boundary>>();
                 capture.opening=std::make_shared<HostedLibraryDragInput>(std::move(input));
@@ -50548,7 +50559,8 @@ private:
         m_opening_draw_bay_projection->hide();
         m_opening_draw_bay_projection_label->hide();
         QObject::connect(m_opening_draw_bay_projection, &QLineEdit::editingFinished, owner, [this] {
-            if (m_pending_opening_profile && m_pending_opening_profile->window_layout == WindowLayoutKind::bay)
+            if (m_pending_opening_profile && (m_pending_opening_profile->window_layout == WindowLayoutKind::bay ||
+                m_pending_opening_profile->window_layout == WindowLayoutKind::bow))
                 resetOpeningPlacementHover();
         });
         m_opening_draw_bay_side = new QComboBox(m_opening_draw_fields);
@@ -50559,7 +50571,8 @@ private:
         m_opening_draw_bay_side->hide();
         m_opening_draw_bay_side_label->hide();
         QObject::connect(m_opening_draw_bay_side, &QComboBox::currentIndexChanged, owner, [this](int index) {
-            if (!m_pending_opening_profile || m_pending_opening_profile->window_layout != WindowLayoutKind::bay) return;
+            if (!m_pending_opening_profile || (m_pending_opening_profile->window_layout != WindowLayoutKind::bay &&
+                m_pending_opening_profile->window_layout != WindowLayoutKind::bow)) return;
             m_pending_opening_profile->window_open_left = index == 0;
             resetOpeningPlacementHover();
         });
@@ -60872,6 +60885,11 @@ private:
                     parse_quantity(m_opening_draw_bay_projection->text().toStdString(), unit).metres;
                 validate_opening_assembly(*m_pending_opening_profile);
             }
+            if (m_pending_opening_profile && m_pending_opening_profile->window_layout == WindowLayoutKind::bow) {
+                m_pending_opening_profile->window_bow_projection_m =
+                    parse_quantity(m_opening_draw_bay_projection->text().toStdString(), unit).metres;
+                validate_opening_assembly(*m_pending_opening_profile);
+            }
             const auto* canvas = m_workspace == Workspace::measurement ? m_measurementCanvas : m_architecturalCanvas;
             const bool site = siteCanvas(canvas);
             if (site) {
@@ -65266,7 +65284,7 @@ private:
                 window_layout->setObjectName(QStringLiteral("openingWindowLayout"));
                 window_layout->addItems({QStringLiteral("Fixed single pane"), QStringLiteral("Fixed double pane"),
                     QStringLiteral("Fixed triple pane"), QStringLiteral("Casement"), QStringLiteral("Sliding"),
-                    QStringLiteral("Bay")});
+                    QStringLiteral("Bay"), QStringLiteral("Bow - five panes")});
                 window_layout->setCurrentIndex(static_cast<int>(assembly.window_layout));
                 window_jamb = new QComboBox(&dialog);
                 window_jamb->setObjectName(QStringLiteral("openingWindowJamb"));
@@ -65292,7 +65310,8 @@ private:
                 window_travel->setValue(assembly.window_slide_fraction * 100.0);
                 displayed_window_travel = window_travel->value();
                 bay_projection = new QLineEdit(format_length(assembly.window_layout == WindowLayoutKind::bay
-                    ? assembly.window_bay_projection_m : 0.65, m_metric_units), &dialog);
+                    ? assembly.window_bay_projection_m : assembly.window_layout == WindowLayoutKind::bow
+                        ? assembly.window_bow_projection_m : 0.65, m_metric_units), &dialog);
                 bay_projection->setObjectName(QStringLiteral("openingWindowBayProjection"));
                 bay_projection->setToolTip(QStringLiteral("Distance beyond the selected wall face."));
                 bay_front = new QDoubleSpinBox(&dialog);
@@ -65315,12 +65334,13 @@ private:
                     const bool casement = choice == WindowLayoutKind::casement;
                     const bool sliding = choice == WindowLayoutKind::sliding;
                     const bool bay = choice == WindowLayoutKind::bay;
-                    form->setRowVisible(panel, !bay);
+                    const bool bow = choice == WindowLayoutKind::bow;
+                    form->setRowVisible(panel, !bay && !bow);
                     form->setRowVisible(window_jamb, casement || sliding);
-                    form->setRowVisible(window_side, casement || sliding || bay);
+                    form->setRowVisible(window_side, casement || sliding || bay || bow);
                     form->setRowVisible(window_angle, casement);
                     form->setRowVisible(window_travel, sliding);
-                    form->setRowVisible(bay_projection, bay);
+                    form->setRowVisible(bay_projection, bay || bow);
                     form->setRowVisible(bay_front, bay);
                 };
                 QObject::connect(window_layout, &QComboBox::currentIndexChanged, &dialog, sync_window_fields);
@@ -65359,8 +65379,9 @@ private:
                     const bool casement = edited.window_layout == WindowLayoutKind::casement;
                     const bool sliding = edited.window_layout == WindowLayoutKind::sliding;
                     const bool bay = edited.window_layout == WindowLayoutKind::bay;
+                    const bool bow = edited.window_layout == WindowLayoutKind::bow;
                     edited.window_hinge_at_end = (casement || sliding) && window_jamb->currentIndex() == 1;
-                    edited.window_open_left = !(casement || sliding || bay) || window_side->currentIndex() == 0;
+                    edited.window_open_left = !(casement || sliding || bay || bow) || window_side->currentIndex() == 0;
                     edited.window_angle_degrees = casement
                         ? window_angle->value() == displayed_window_angle ? assembly.window_angle_degrees : window_angle->value()
                         : 90.0;
@@ -65372,6 +65393,8 @@ private:
                     edited.window_bay_front_fraction = bay
                         ? bay_front->value() == displayed_bay_front ? assembly.window_bay_front_fraction : bay_front->value() / 100.0
                         : 0.5;
+                    edited.window_bow_projection_m = bow ? read_dimension(bay_projection,
+                        assembly.window_layout == WindowLayoutKind::bow ? assembly.window_bow_projection_m : 0.65) : 0.0;
                 }
                 edited.frame_width_m = read_dimension(frame_width, assembly.frame_width_m);
                 edited.frame_depth_m = read_dimension(frame_depth, assembly.frame_depth_m);
