@@ -14,6 +14,29 @@ changed source does not acquire runtime acceptance without later qualification.
 
 ## Current delivery state
 
+### October 9 constraint-editor native value retention
+
+The constraint dialog still parsed generated wall and measured-segment length
+text before recognizing an unchanged resize. Native lengths whose generated
+decimal exceeds the exact parser's rational range could therefore reject a
+no-op. The dialog now recognizes matching source length text after checking
+the current document authority, before constructing a new edit intent. Apply
+closes the dialog without an accepted service receipt or history event.
+
+Fixed-anchor coordinates also retain the captured native coordinate when its
+prefilled text is unchanged or restored. Each changed coordinate still parses
+through the existing quantity path. Actual resize and relation edits continue
+through the existing preview, phase replacement and source-authority checks.
+The bounded core constraint lifecycle audit found no additional confirmed
+defect in the examined validation, residual checks and entity preservation.
+
+Root integration review and independent source review approved the bounded
+dialog changes. Scoped `git diff --check` passed. No builds, tests, new tests,
+probes, scripts, native jobs, launches, packages or installations ran.
+Compilation, interaction, receipts and history remain unverified, and the
+installed candidate is unchanged. General nonshared interior arc tangency
+remains open; diagnosis did not produce a geometry patch or acceptance.
+
 ### October 9 shared-endpoint tangency and restored architectural fields
 
 The previous conservative arc/arc correction still rejected ordinary tangent

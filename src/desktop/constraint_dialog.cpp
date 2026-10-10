@@ -516,6 +516,12 @@ public:
             if (endpoints[index] == binding) { anchor->setCurrentIndex(static_cast<int>(index)); return; }
     }
 
+    void prefillAnchorPoint(Vec2 value) {
+        displayed_anchor_source = value;
+        anchor_x->setText(editable_dimension(value.x, true));
+        anchor_y->setText(editable_dimension(value.y, true));
+    }
+
     void prefillCurveTarget() {
         const auto index = bindings[0]->currentIndex();
         if (index < 0 || static_cast<std::size_t>(index) >= endpoints.size()) return;
@@ -600,8 +606,7 @@ public:
                         selectBinding(i, c.bindings[i]);
                 if (c.length) length->setText(text(c.length->original_expression));
                 if (c.anchor) {
-                    anchor_x->setText(editable_dimension(c.anchor->x, true));
-                    anchor_y->setText(editable_dimension(c.anchor->y, true));
+                    prefillAnchorPoint(*c.anchor);
                 }
             } else {
                 for (std::size_t i = 0; i + 1 < endpoints.size(); i += 2) {
@@ -619,8 +624,7 @@ public:
                     const auto segment = boundary_mode ? edges.at(measured_mode ? static_cast<std::size_t>(std::max(0,stroke_segment->currentIndex())) : 0).segment : baseline(snapshot.entities().at(selected_id));
                     length->setText(editable_dimension(wall_resize ? segment_length(segment) :
                         std::hypot(segment.end.x - segment.start.x, segment.end.y - segment.start.y), metric));
-                    anchor_x->setText(editable_dimension(segment.start.x, true));
-                    anchor_y->setText(editable_dimension(segment.start.y, true));
+                    prefillAnchorPoint(segment.start);
                 } catch (const std::exception&) { length->clear(); }
             }
         }
@@ -745,9 +749,15 @@ public:
                 (void)resolve_constraint_arc_segment(value, snapshot.entities());
             if (value.relation == ConstraintRelationKind::tangent)
                 (void)resolve_constraint_tangent_segments(value,snapshot.entities());
-            if (value.relation == ConstraintRelationKind::fixed_anchor)
-                value.anchor = Vec2{parse_quantity(anchor_x->text().toStdString(), unit).metres,
-                                    parse_quantity(anchor_y->text().toStdString(), unit).metres};
+            if (value.relation == ConstraintRelationKind::fixed_anchor) {
+                const auto coordinate = [&](QLineEdit* field, std::optional<double> original) {
+                    // Generated source-coordinate text is presentation, not a new quantity.
+                    return original && field->text().trimmed() == editable_dimension(*original, true)
+                        ? *original : parse_quantity(field->text().toStdString(), unit).metres;
+                };
+                value.anchor = Vec2{coordinate(anchor_x, displayed_anchor_source ? std::optional<double>{displayed_anchor_source->x} : std::nullopt),
+                                    coordinate(anchor_y, displayed_anchor_source ? std::optional<double>{displayed_anchor_source->y} : std::nullopt)};
+            }
             result.relation_mutations.push_back(ConstraintRelationMutation::upsert(std::move(value)));
             result.message = operation == 1 ? "add geometry constraint" : "edit geometry constraint";
         }
@@ -932,6 +942,20 @@ public:
         invalidate();
         try {
             requireCurrentSource();
+            if (mode->currentData().toInt() == 0) {
+                const auto& selected = snapshot.entities().at(selected_id);
+                const auto edges = measured_mode ? endpoint_edges(selected) : std::vector<EndpointEdge>{};
+                const auto segment = measured_mode
+                    ? edges.at(static_cast<std::size_t>(stroke_segment->currentIndex())).segment : baseline(selected);
+                if (length->text().trimmed() == editable_dimension(segment_length(segment), metric)) {
+                    // Avoid reparsing an unchanged generated decimal that may exceed the
+                    // exact rational range even though the native geometry is supported.
+                    unchanged_resize = true;
+                    apply_button->setEnabled(true);
+                    status->setPlainText(QStringLiteral("Length is unchanged. Apply closes this dialog without adding an undo step."));
+                    return true;
+                }
+            }
             const auto command = intent();
             const auto replacements = phase_scope.registries.empty() ? std::vector<PhaseWallReplacementRequest>{}
                 : phase_wall_replacement_requests(snapshot.entities(), command);
@@ -1128,6 +1152,7 @@ public:
     std::vector<WallEndpointBinding> endpoints;
     QStringList endpoint_labels;
     std::optional<PersistentConstraint> selected_constraint;
+    std::optional<Vec2> displayed_anchor_source;
     std::optional<ConstraintRelationKind> configured_relation;
     std::optional<ConstraintAuthoringPreview> preview, accepted;
     std::function<DocumentSnapshot()> current_source;

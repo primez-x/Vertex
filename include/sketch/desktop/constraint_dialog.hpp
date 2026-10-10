@@ -15,8 +15,9 @@ namespace sketch::desktop {
 // accepted service preview or replacement command to its current Document,
 // which revalidates identity, revision and the displayed candidate before
 // making one reversible change.
-// An unchanged measured resize can close successfully without a service preview
-// or a history event; callers check acceptedCommand, then acceptedPreview.
+// An unchanged wall or measured resize can close without parsing generated
+// dimension text, a service preview or a history event; callers check
+// acceptedCommand, then acceptedPreview.
 class ConstraintDialog final : public QDialog {
 public:
     // Supports analytical walls, receipt-backed measured strokes and identified boundaries.

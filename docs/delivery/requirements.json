@@ -3655,7 +3655,7 @@
         "binding": null
       },
       "qualification_history": [],
-      "delivery_notes": "October 9 source-only editing corrections retain unchanged source measurements instead of reparsing generated or rounded display values. Building-object named fields also restore original native values and receipts when temporarily edited text is restored to its captured prefill. Changed expressions still use exact quantity parsing. Compilation and user-observed editing remain unverified; see docs/delivery/progress.md.",
+    "delivery_notes": "October 9 source-only editing corrections retain unchanged source measurements instead of reparsing generated or rounded display values. Building-object named fields also restore original native values and receipts when temporarily edited text is restored to its captured prefill. The constraint dialog recognizes unchanged wall/measured lengths before parsing generated text, and retains unchanged or restored native fixed-anchor coordinates. Changed expressions still use exact quantity parsing. Compilation and user-observed editing remain unverified; see docs/delivery/progress.md.",
       "source_snapshot": {
         "id": "APX-KEY-002",
         "area": "apex_parity",
