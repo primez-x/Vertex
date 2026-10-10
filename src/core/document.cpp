@@ -53,6 +53,7 @@
 #include "sketch/mixed_selection_removal.hpp"
 #include "sketch/ordinary_selection_removal.hpp"
 #include "sketch/phase_selection_removal.hpp"
+#include "sketch/mixed_clipboard_command.hpp"
 #include "sketch/phase_constraint_authoring.hpp"
 #include "sketch/phase_coordinated_demolition.hpp"
 #include "sketch/phase_opening_demolition.hpp"
@@ -2621,6 +2622,10 @@ static bool has_phase_room_review_completion(const ApplyBoundaryConstraintChange
     return command.phase_room_review_completion || !command.phase_room_review_intent.is_null();
 }
 
+static bool has_mixed_clipboard_placement(const ApplyBoundaryConstraintChanges& command) {
+    return command.clipboard_placement_completion || !command.clipboard_placement_intent.is_null();
+}
+
 static bool has_phase_constraint_authoring(const ApplyBoundaryConstraintChanges& command) {
     return command.phase_constraint_authoring_completion || !command.phase_constraint_authoring_intent.is_null();
 }
@@ -2767,10 +2772,8 @@ static void validate_phase_room_review_mode(const ApplyBoundaryConstraintChanges
         throw std::invalid_argument("Phase room review cannot borrow another edit or asset authority");
 }
 
-static void validate_phase_constraint_authoring_mode(const ApplyBoundaryConstraintChanges& command) {
-    if (!command.phase_constraint_authoring_completion || command.phase_constraint_authoring_intent.is_null())
-        throw std::invalid_argument("Active design authoring requires its retained mode and semantic intent");
-    if (!command.boundary_edits.empty() || !command.wall_edits.empty() || !command.entity_changes.empty() ||
+static bool has_source_authoring_sibling_changes(const ApplyBoundaryConstraintChanges& command) {
+    return !command.boundary_edits.empty() || !command.wall_edits.empty() || !command.entity_changes.empty() ||
         !command.physical_entity_changes.empty() || !command.exterior_source_edits.empty() ||
         !command.supplemental_entity_changes.empty() || !command.supplemental_asset_changes.empty() ||
         !command.measured_stroke_edits.empty() || !command.dimension_placement_moves.empty() ||
@@ -2784,8 +2787,28 @@ static void validate_phase_constraint_authoring_mode(const ApplyBoundaryConstrai
         has_phase_room_review_completion(command) || command.wall_dimension_completion ||
         command.curve_construction_completion || has_disto_measurement_completion(command) ||
         has_wall_group_scale(command) || has_phase_selection_removal(command) ||
-        has_ordinary_selection_removal(command) || has_mixed_selection_removal(command))
+        has_ordinary_selection_removal(command) || has_mixed_selection_removal(command);
+}
+
+static void validate_phase_constraint_authoring_mode(const ApplyBoundaryConstraintChanges& command) {
+    if (!command.phase_constraint_authoring_completion || command.phase_constraint_authoring_intent.is_null())
+        throw std::invalid_argument("Active design authoring requires its retained mode and semantic intent");
+    if (has_source_authoring_sibling_changes(command))
         throw std::invalid_argument("Active design authoring cannot borrow raw geometry, assets or another edit authority");
+}
+
+static void validate_mixed_clipboard_placement_mode(const ApplyBoundaryConstraintChanges& command) {
+    if (!command.clipboard_placement_completion || command.clipboard_placement_intent.is_null() ||
+        has_phase_constraint_authoring(command) || has_independent_drawing_removal(command) ||
+        has_source_authoring_sibling_changes(command))
+        throw std::invalid_argument("Combined clipboard placement requires its exclusive captured-source intent.");
+#ifdef VERTEX_HAS_CONSTRAINT_AUTHORING
+    const auto intent=validate_mixed_clipboard_placement_intent(command.clipboard_placement_intent);
+    if (intent.at("expected_revision")!=command.expected_revision || intent.at("message")!=command.message)
+        throw std::invalid_argument("Combined clipboard placement changed its command identity.");
+#else
+    throw std::invalid_argument("Combined clipboard placement requires the production authoring engine.");
+#endif
 }
 
 static void validate_room_aware_wall_split_mode(const ApplyBoundaryConstraintChanges& command) {
@@ -3123,6 +3146,10 @@ static std::vector<nlohmann::json> phase_constraint_authoring_proofs(const Apply
         if (proof.at("kind")!="apply_boundary_constraint_changes") return;
         const auto version=proof.at("version").get<int>();
         if (version==34) result.push_back(proof.at("phase_constraint_authoring_intent"));
+        else if (version==51) {
+            const auto& roof=proof.at("clipboard_placement_intent").at("roof_authoring");
+            if (!roof.is_null()) result.push_back(roof);
+        }
         // Removal envelopes own full snapshot-bound replay. Forty-five's child
         // is staged; completed ordinary/phase removal owns its own source fence.
         else if (version==45 || version==46 || version==47) return;
@@ -3381,7 +3408,12 @@ static std::vector<bool> active_constraint_history_policies(const std::vector<Re
             if (record.boundary_constraint_changes) {
                 try {
                     const auto& command=*record.boundary_constraint_changes;
-                    if (has_phase_selection_removal(command)) {
+                    if (has_mixed_clipboard_placement(command)) {
+                        validate_mixed_clipboard_placement_mode(command);
+#ifdef VERTEX_HAS_CONSTRAINT_AUTHORING
+                        result[index]=result[index] || mixed_clipboard_placement_active_phase_policy(command.clipboard_placement_intent);
+#endif
+                    } else if (has_phase_selection_removal(command)) {
                         validate_phase_selection_removal_mode(command);
                         result[index]=true;
                     } else if (has_mixed_selection_removal(command)) {
@@ -3513,7 +3545,11 @@ static PhaseConstraintLifetimeProofs phase_constraint_lifetime_proofs(const Appl
         if (depth>2) throw std::invalid_argument("Retained identity proof wrapper depth is invalid");
         if (proof.at("kind")!="apply_boundary_constraint_changes") return;
         const auto version=proof.at("version").get<int>();
-        if (version==34) result.phase_proofs.push_back(proof.at("phase_constraint_authoring_intent"));
+        if (version==51) {
+            const auto& roof=proof.at("clipboard_placement_intent").at("roof_authoring");
+            if (!roof.is_null()) result.phase_proofs.push_back(roof);
+        }
+        else if (version==34) result.phase_proofs.push_back(proof.at("phase_constraint_authoring_intent"));
         else if (version==33) result.phase_room_proofs.push_back(proof.at("phase_room_review_intent"));
         else if (version==47) {
             const auto intent=validate_completed_phase_selection_removal_intent(proof.at("phase_selection_removal_intent"));
@@ -3601,6 +3637,22 @@ static void validate_phase_constraint_fresh_lifetime(const std::map<std::string,
     const std::map<std::string,Entity,std::less<>>& candidate,
     const std::vector<RevisionRecord>& history,std::size_t preceding_records,
     const ApplyBoundaryConstraintChanges& command) {
+    if (has_mixed_clipboard_placement(command)) {
+        validate_mixed_clipboard_placement_mode(command);
+        const auto& roof=command.clipboard_placement_intent.at("roof_authoring");
+        if (!roof.is_null()) {
+            ApplyBoundaryConstraintChanges child;
+            child.expected_revision=command.expected_revision;
+            child.message=command.message;
+            child.phase_constraint_authoring_completion=true;
+            child.phase_constraint_authoring_intent=roof;
+            const auto stage=replay_phase_constraint_authoring(source,roof);
+            validate_phase_constraint_fresh_lifetime(source,stage,history,preceding_records,child);
+        }
+        // Fresh copy slots have their own complete snapshot/lifetime validator;
+        // do not reinterpret computed enrollment as roof-only raw authority.
+        return;
+    }
     std::set<std::string,std::less<>> fresh;
     std::set<std::string,std::less<>> nested_fresh;
     const auto lifetime_proofs=phase_constraint_lifetime_proofs(command);
@@ -4475,6 +4527,19 @@ void validate_completed_constraint_change(const std::map<std::string, Entity, st
         // reconstruction; partial wall authority cannot validate their union.
         try { validate_independent_drawing_removal_mode(command); (void)command_to_json(Command{command}); }
         catch (const DocumentError&) { throw; }
+        catch (const std::exception& error) { document_error(DocumentErrorCode::constraint_violation,error.what()); }
+        return;
+    }
+    if (has_mixed_clipboard_placement(command)) {
+        try {
+            validate_mixed_clipboard_placement_mode(command);
+#ifdef VERTEX_HAS_CONSTRAINT_AUTHORING
+            if (entity_map_digest(replay_mixed_clipboard_placement(before,command.clipboard_placement_intent))!=entity_map_digest(after))
+                throw std::invalid_argument("Combined clipboard placement differs from complete source reconstruction.");
+#else
+            throw std::invalid_argument("Combined clipboard placement requires the production authoring engine.");
+#endif
+        } catch (const DocumentError&) { throw; }
         catch (const std::exception& error) { document_error(DocumentErrorCode::constraint_violation,error.what()); }
         return;
     }
@@ -6124,6 +6189,20 @@ std::map<std::string, Entity, std::less<>> completed_boundary_constraint_entitie
     const ApplyBoundaryConstraintChanges& command, bool retained_replay = false,
     bool active_phase_constraints = false,
     const std::map<std::string,Entity,std::less<>>* original_dimension_source = nullptr) {
+    if (has_mixed_clipboard_placement(command)) {
+        try {
+            validate_mixed_clipboard_placement_mode(command);
+#ifdef VERTEX_HAS_CONSTRAINT_AUTHORING
+            auto result=replay_mixed_clipboard_placement(source,command.clipboard_placement_intent);
+            validate_boundary_identity_transition(history,source,result);
+            (void)validate_state(result,source_assets,active_phase_constraints || mixed_clipboard_placement_active_phase_policy(command.clipboard_placement_intent));
+            return result;
+#else
+            throw std::invalid_argument("Combined clipboard placement requires the production authoring engine.");
+#endif
+        } catch (const DocumentError&) { throw; }
+        catch (const std::exception& error) { document_error(DocumentErrorCode::invalid_entity,error.what()); }
+    }
     if (has_phase_selection_removal(command))
         document_error(DocumentErrorCode::invalid_entity,"Phase selection removal requires complete snapshot-aware replay");
     if (has_ordinary_selection_removal(command))
@@ -8019,6 +8098,16 @@ nlohmann::json command_to_json(const Command& command) {
             }
             return encoded;
         } else if constexpr (std::is_same_v<T, ApplyBoundaryConstraintChanges>) {
+            if (has_mixed_clipboard_placement(typed)) {
+                try {
+                    validate_mixed_clipboard_placement_mode(typed);
+                    return nlohmann::json{{"version",51},{"kind","apply_boundary_constraint_changes"},
+                        {"expected_revision",typed.expected_revision},{"message",typed.message},
+                        {"clipboard_placement_completion",true},
+                        {"clipboard_placement_intent",typed.clipboard_placement_intent}};
+                } catch (const DocumentError&) { throw; }
+                catch (const std::exception& error) { document_error(DocumentErrorCode::invalid_entity,error.what()); }
+            }
             if (has_phase_selection_removal(typed)) {
                 try {
                     validate_phase_selection_removal_mode(typed);
@@ -8646,6 +8735,25 @@ Command command_from_json(const nlohmann::json& value,
             return result;
         }
         if (kind == "apply_boundary_constraint_changes") {
+            if (value.at("version")==51) {
+                command_exact_fields(value,{"version","kind","expected_revision","message",
+                    "clipboard_placement_completion","clipboard_placement_intent"},
+                    DocumentErrorCode::invalid_entity,"serialized combined clipboard placement");
+                if (!value.at("clipboard_placement_completion").is_boolean() ||
+                    !value.at("clipboard_placement_completion").get<bool>())
+                    throw std::invalid_argument("Combined clipboard placement mode is invalid.");
+                ApplyBoundaryConstraintChanges result;
+                result.expected_revision=command_revision(value.at("expected_revision"),"Clipboard placement revision");
+                result.message=command_string(value.at("message"),"Clipboard placement message",1024);
+#ifdef VERTEX_HAS_CONSTRAINT_AUTHORING
+                result.clipboard_placement_intent=validate_mixed_clipboard_placement_intent(value.at("clipboard_placement_intent"));
+#else
+                throw std::invalid_argument("Combined clipboard placement requires the production authoring engine.");
+#endif
+                result.clipboard_placement_completion=true;
+                validate_mixed_clipboard_placement_mode(result);
+                return result;
+            }
             if (value.at("version")==47) {
                 command_exact_fields(value,{"version","kind","expected_revision","message",
                     "phase_selection_removal_completion","phase_selection_removal_intent"},
@@ -9796,7 +9904,15 @@ Revision Document::apply(const Command& command) {
                 next.action = typed_command.message.empty()
                     ? "Apply boundary constraints" : typed_command.message;
                 validate_action(next.action);
-                if (has_phase_selection_removal(typed_command)) {
+                if (has_mixed_clipboard_placement(typed_command)) {
+                    (void)command_to_json(Command{typed_command});
+#ifdef VERTEX_HAS_CONSTRAINT_AUTHORING
+                    validate_mixed_clipboard_placement_source(snapshot(),typed_command.clipboard_placement_intent);
+                    next_active_policy=source_active_policy || mixed_clipboard_placement_active_phase_policy(typed_command.clipboard_placement_intent);
+#else
+                    document_error(DocumentErrorCode::invalid_entity,"Combined clipboard placement requires the production authoring engine");
+#endif
+                } else if (has_phase_selection_removal(typed_command)) {
                     (void)command_to_json(Command{typed_command});
                     next_active_policy=true;
                 } else if (has_ordinary_selection_removal(typed_command)) {
@@ -10409,7 +10525,26 @@ Document Document::restore(DocumentSnapshot snapshot) {
 #ifdef VERTEX_HAS_PHYSICAL_ROOM_REVIEW
                     dimension_source=room_dimension_original_source(snapshot.history(),index,previous.entities,proof);
 #endif
-                    if (has_phase_selection_removal(proof)) {
+                    if (has_mixed_clipboard_placement(proof)) {
+                        (void)command_to_json(Command{proof});
+#ifdef VERTEX_HAS_CONSTRAINT_AUTHORING
+                        auto prefix=snapshot;
+                        prefix.history_=std::make_shared<const std::vector<RevisionRecord>>(
+                            snapshot.history().begin(),snapshot.history().begin()+index);
+                        prefix.revision_=previous.revision;
+                        prefix.saved_revision_=mixed_clipboard_placement_source_saved_revision(proof.clipboard_placement_intent);
+                        if (prefix.saved_revision_ && *prefix.saved_revision_>prefix.revision_)
+                            throw std::invalid_argument("Clipboard placement captured save revision is outside its source prefix");
+                        prefix.named_revisions_=expected_names;
+                        prefix.editable_=true;
+                        prefix.read_only_reason_.clear();
+                        validate_mixed_clipboard_placement_source(prefix,proof.clipboard_placement_intent);
+                        expected.entities=completed_boundary_constraint_entities(identity_history,previous.entities,previous.assets,
+                            proof,true,active_policies.at(index-1),dimension_source);
+#else
+                        throw std::invalid_argument("Combined clipboard placement requires the production authoring engine");
+#endif
+                    } else if (has_phase_selection_removal(proof)) {
                         (void)command_to_json(Command{proof});
 #ifdef VERTEX_HAS_CONSTRAINT_AUTHORING
                         auto prefix=snapshot;

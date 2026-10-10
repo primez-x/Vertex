@@ -843,6 +843,7 @@ if(SKETCH_BUILD_ARCHITECTURE OR SKETCH_BUILD_DESKTOP)
   # connected solve. Keep it in the authoritative library without a cyclic
   # document/authoring dependency; the public authoring target remains stable.
   target_sources(sketch_document PRIVATE src/core/constraint_authoring.cpp src/core/phase_constraint_authoring.cpp
+    src/core/authored_phase_membership.cpp src/core/mixed_clipboard_command.cpp
     src/core/phase_coordinated_demolition.cpp
     src/core/phase_wall_replacement.cpp src/core/phase_wall_replacement_authoring.cpp
     src/core/phase_wall_replacement_command.cpp src/core/phase_wall_replacement_request.cpp
@@ -900,6 +901,9 @@ if(SKETCH_BUILD_ARCHITECTURE OR SKETCH_BUILD_DESKTOP)
     sketch_building_entities sketch_architectural_document_adapter sketch_assembly_geometry)
   add_library(sketch_constraint_authoring INTERFACE)
   target_link_libraries(sketch_constraint_authoring INTERFACE sketch_document sketch_constraints sketch_precision sketch_project_organization)
+  add_library(sketch_mixed_clipboard_placement src/core/mixed_clipboard_placement.cpp)
+  target_include_directories(sketch_mixed_clipboard_placement PUBLIC include)
+  target_link_libraries(sketch_mixed_clipboard_placement PUBLIC sketch_mixed_clipboard_transfer sketch_document)
   if(BUILD_TESTING)
     add_executable(joint_translation_authoring_tests tests/joint_translation_authoring_tests.cpp)
     target_link_libraries(joint_translation_authoring_tests PRIVATE sketch_constraint_authoring sketch_storage sketch_exchange sketch_sqlite)
@@ -1155,6 +1159,7 @@ if(SKETCH_BUILD_DESKTOP)
   target_link_libraries(sketch_desktop PUBLIC sketch_hosted_opening_resize)
   target_link_libraries(sketch_desktop PUBLIC sketch_corner_window_transfer)
   target_link_libraries(sketch_desktop PUBLIC sketch_mixed_clipboard_transfer)
+  target_link_libraries(sketch_desktop PUBLIC sketch_mixed_clipboard_placement)
   add_dependencies(sketch_desktop vertex-import-worker)
   target_link_libraries(sketch_desktop PUBLIC sketch_survey_contract sketch_storage sketch_project_ownership sketch_recovery_discovery sketch_project_organization sketch_project_visibility sketch_appraisal_document sketch_precision sketch_geometry_operations sketch_assistance_engine sketch_constraint_authoring sketch_room_relationship_geometry_commit sketch_calculations sketch_schedule_model sketch_document_schedule_adapter sketch_architectural_schedule sketch_visualization sketch_building_plan_projection sketch_plan_canvas sketch_boundary_input sketch_boundary_commit sketch_project_workspace_archive_restore sketch_project_workspace_preview_adapters sketch_workspace_save_coordinator sketch_workspace_save_queue sketch_workspace_regeneration_queue sketch_performance_telemetry sketch_workspace_autosave_scheduler sketch_offline_policy sketch_field_adapter_contract sketch_workspace_accessibility sketch_architectural_document_adapter sketch_sheet_output_scene sketch_output_fingerprint sketch_dxf_project_exchange sketch_ifc_project_exchange sketch_georeferencing_runtime sketch_project_resource_catalog Qt6::Widgets Qt6::PrintSupport Qt6::Pdf Qt6::Svg)
   qt_add_executable(vertex WIN32 src/desktop/main.cpp resources/windows/vertex.rc)

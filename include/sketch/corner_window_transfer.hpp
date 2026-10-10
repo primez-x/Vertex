@@ -43,7 +43,14 @@ void validate_corner_window_transfer_group(const std::vector<CornerWindowTransfe
 // complete Document/native geometry preview and the final source fence.
 [[nodiscard]] ApplyEntityChanges corner_window_group_clone_command(
     const DocumentSnapshot& destination, const std::vector<CornerWindowCloneRequest>& requests,
-    Revision expected_revision, const std::vector<Entity>& imported_material_catalogs = {});
+    Revision expected_revision, const std::vector<Entity>& imported_material_catalogs = {},
+    const std::vector<Entity>& fresh_wall_hosts = {});
+
+// fresh_wall_hosts are explicit fresh additions prepared from transported
+// selected walls. Their identities are reserved with every cloned member;
+// they never replace actual hosts or manufacture another source snapshot.
+// The caller proves the source-to-fresh mapping and includes these wall rows
+// in its complete command. This function returns only members and catalogs.
 
 // Checks bounded portable envelopes, reciprocal ownership, raw placement,
 // structural geometry, supported quantity cores and canonical-reference

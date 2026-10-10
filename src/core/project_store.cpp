@@ -377,6 +377,10 @@ std::uint32_t required_format_version_internal(const DocumentSnapshot& snapshot,
             const auto& value=*pending.back(); pending.pop_back();
             if (++nodes>ProjectStore::maximum_json_values)
                 storage_error(StorageErrorCode::resource_limit,"Typed edit reader-floor scan exceeds its JSON budget");
+            if (value.is_object() && value.value("kind",nlohmann::json())=="apply_boundary_constraint_changes" &&
+                value.value("version",nlohmann::json())==51 &&
+                value.contains("clipboard_placement_completion") && value.contains("clipboard_placement_intent"))
+                floor=std::max(floor,185U);
             if (value.is_object() && value.value("version",nlohmann::json())==5 &&
                 value.value("complete_actual_corner_window_cohorts",nlohmann::json())==true &&
                 value.contains("wall_demolition") && value.contains("explicit_corner_window_ids"))
@@ -554,9 +558,9 @@ std::uint32_t required_format_version_internal(const DocumentSnapshot& snapshot,
     };
     for (const auto& revision : snapshot.history()) {
         if (revision.phase_entity_import) required=std::max(required,160U);
-        if (required<184 && revision.boundary_geometry_edit)
+        if (required<185 && revision.boundary_geometry_edit)
             required=std::max(required,typed_edit_reader_floor(encode_boundary_geometry_edit(*revision.boundary_geometry_edit)));
-        if (required<184 && revision.boundary_constraint_changes)
+        if (required<185 && revision.boundary_constraint_changes)
             required=std::max(required,typed_edit_reader_floor(command_to_json(Command{*revision.boundary_constraint_changes})));
         if (required<122 && revision.boundary_geometry_edit)
             required=std::max(required,quantity_reader_floor(encode_boundary_geometry_edit(*revision.boundary_geometry_edit)));
@@ -2956,6 +2960,7 @@ bool verify_sqlite_schema(sqlite3* database, bool allow_recovery = false) {
          sqlite3_column_int(user_version.get(), 0) != 182 &&
          sqlite3_column_int(user_version.get(), 0) != 183 &&
          sqlite3_column_int(user_version.get(), 0) != 184 &&
+         sqlite3_column_int(user_version.get(), 0) != 185 &&
          sqlite3_column_int(user_version.get(), 0) != 174 &&
          sqlite3_column_int(user_version.get(), 0) != 169 &&
          sqlite3_column_int(user_version.get(), 0) != 163 &&
@@ -3678,6 +3683,8 @@ DocumentSnapshot read_snapshot(sqlite3* database, RecoveryLedger* recovery = nul
     // here and authenticate the manifest with its stored version below.
     const auto required_format = required_format_version_internal(snapshot, format_number < 28);
     if (required_format > format_number) {
+        if (required_format>=185)
+            storage_error(StorageErrorCode::unsupported_format,"This project requires reader 185 for atomic mixed clipboard placement and retained history");
         if (required_format>=184)
             storage_error(StorageErrorCode::unsupported_format,"This project requires reader 184 for complete actual phase corner cohorts and retained history");
         if (required_format>=183)

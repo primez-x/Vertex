@@ -3663,6 +3663,18 @@
     },
     {
       "category": "source",
+      "path": "include/sketch/mixed_clipboard_command.hpp"
+    },
+    {
+      "category": "source",
+      "path": "include/sketch/mixed_clipboard_placement.hpp"
+    },
+    {
+      "category": "source",
+      "path": "include/sketch/authored_phase_membership.hpp"
+    },
+    {
+      "category": "source",
       "path": "include/sketch/mixed_phase_wall_demolition.hpp"
     },
     {
@@ -4988,6 +5000,18 @@
     {
       "category": "source",
       "path": "src/core/mixed_clipboard_transfer.cpp"
+    },
+    {
+      "category": "source",
+      "path": "src/core/mixed_clipboard_command.cpp"
+    },
+    {
+      "category": "source",
+      "path": "src/core/mixed_clipboard_placement.cpp"
+    },
+    {
+      "category": "source",
+      "path": "src/core/authored_phase_membership.cpp"
     },
     {
       "category": "source",

@@ -496,6 +496,11 @@ struct ApplyBoundaryConstraintChanges {
     // retirement to one captured source; its pure base owns its own authority.
     nlohmann::json phase_selection_removal_intent=nullptr;
     bool phase_selection_removal_completion{};
+    // Envelope fifty-one combines fresh copied content with independently
+    // replayed actual roof-host edits and deterministic membership enrollment.
+    // One captured source owns the complete placement and retained Undo proof.
+    nlohmann::json clipboard_placement_intent=nullptr;
+    bool clipboard_placement_completion{};
 };
 
 using Command = std::variant<ApplyEntityChanges, ImportPhaseEntities, NameRevision, TranslateBoundary,

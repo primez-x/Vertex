@@ -565,7 +565,8 @@ static ApplyEntityChanges clone_command(const DocumentSnapshot& destination,
     const CornerWindowTransfer& transfer, const std::string& owner_id,
     const std::array<std::string, 2>& opening_ids, const std::array<std::string, 2>& wall_ids,
     const std::array<bool, 2>& at_start, Revision expected_revision,
-    const std::map<std::string, std::string, std::less<>>& dimension_ids, bool reserve_history) {
+    const std::map<std::string, std::string, std::less<>>& dimension_ids, bool reserve_history,
+    const std::map<std::string, Entity, std::less<>>* fresh_hosts = nullptr) {
     if (!destination.is_editable() || destination.revision() != expected_revision)
         reject("destination is read-only or stale");
     validate_corner_window_transfer(transfer);
@@ -591,10 +592,17 @@ static ApplyEntityChanges clone_command(const DocumentSnapshot& destination,
     std::array<Entity, 2> host_entities;
     for (std::size_t leg = 0; leg < host_entities.size(); ++leg) {
         const auto found = destination.entities().find(wall_ids[leg]);
-        if (!valid_id(wall_ids[leg]) || found == destination.entities().end() ||
-            found->second.id != wall_ids[leg] || found->second.type != "wall")
+        const Entity* host = found == destination.entities().end() ? nullptr : &found->second;
+        if (fresh_hosts) {
+            const auto prepared = fresh_hosts->find(wall_ids[leg]);
+            if (prepared != fresh_hosts->end()) {
+                if (host) reject("fresh wall host overlaps an actual destination entity");
+                host = &prepared->second;
+            }
+        }
+        if (!valid_id(wall_ids[leg]) || !host || host->id != wall_ids[leg] || host->type != "wall")
             reject("destination requires two actual wall hosts");
-        host_entities[leg] = found->second;
+        host_entities[leg] = *host;
     }
     const auto walls = decode_hosts(host_entities);
     Remap remap{{transfer.owner.id, {owner_id, "corner_window"}},
@@ -761,7 +769,7 @@ void validate_corner_window_transfer_group(const std::vector<CornerWindowTransfe
 
 ApplyEntityChanges corner_window_group_clone_command(const DocumentSnapshot& destination,
     const std::vector<CornerWindowCloneRequest>& requests, Revision expected_revision,
-    const std::vector<Entity>& imported_material_catalogs) {
+    const std::vector<Entity>& imported_material_catalogs, const std::vector<Entity>& fresh_wall_hosts) {
     if (requests.empty() || requests.size() > 128) reject("group request limit exceeded");
     if (!destination.is_editable() || destination.revision() != expected_revision)
         reject("destination is read-only or stale");
@@ -779,6 +787,19 @@ ApplyEntityChanges corner_window_group_clone_command(const DocumentSnapshot& des
     GroupBudget budget;
     validate_material_catalog_group(imported_material_catalogs, budget);
     Ids fresh;
+    std::map<std::string, Entity, std::less<>> prepared_hosts;
+    if (fresh_wall_hosts.size() > 128) reject("fresh wall host limit exceeded");
+    for (const auto& host : fresh_wall_hosts) {
+        validate_envelope(host, "wall");
+        validate_json(host.properties, 0, budget.values, budget.text_bytes, 4 * 1024 * 1024);
+        validate_json(host.extensions, 0, budget.values, budget.text_bytes, 4 * 1024 * 1024);
+        const auto bytes = host.properties.dump().size() + host.extensions.dump().size() + host.id.size() + 64;
+        if (bytes > 4 * 1024 * 1024 - budget.encoded_bytes) reject("fresh wall host byte limit exceeded");
+        budget.encoded_bytes += bytes;
+        if (destination.entities().contains(host.id) || !fresh.insert(host.id).second)
+            reject("prepared wall hosts require distinct fresh identities");
+        prepared_hosts.emplace(host.id, host);
+    }
     std::vector<const CornerWindowTransfer*> passive;
     for (const auto& request : requests) passive.push_back(&request.transfer);
     validate_transfer_group(passive, budget.values, budget.text_bytes, budget.encoded_bytes);
@@ -796,7 +817,7 @@ ApplyEntityChanges corner_window_group_clone_command(const DocumentSnapshot& des
     ApplyEntityChanges result{expected_revision, {}, {}, requests.size() == 1 ? "Clone corner window" : "Clone corner windows"};
     for (const auto& request : requests) {
         auto member = clone_command(destination, request.transfer, request.owner_id, request.opening_ids,
-            request.wall_ids, request.at_start, expected_revision, request.dimension_ids, false);
+            request.wall_ids, request.at_start, expected_revision, request.dimension_ids, false, &prepared_hosts);
         if (member.entity_changes.size() > 4096 - result.entity_changes.size()) reject("group change limit exceeded");
         for (auto& change : member.entity_changes) result.entity_changes.push_back(std::move(change));
     }

@@ -70,8 +70,16 @@ struct RoofOpeningGroupClonePlacement {
 // admits every fresh identity against actual and passive source data, and
 // admits the complete destination once. Retained-history reservation remains
 // the caller's responsibility. No new owner pose or dimensions are authored.
+// A destination absent from actual may bind only an explicitly supplied,
+// already prepared fresh roof. The caller authenticates these exact roofs to
+// its ordinary producer and jointly reserves their owner/carried-child IDs.
+// Fresh replay validates the complete physical roof without manufacturing an
+// actual map. Its returned intent is preparation authority only: replay against
+// the exact fresh roof and replace that addition, never submit it as an edit to
+// an original actual owner. Multiple groups on one host require combined replay.
 [[nodiscard]] RoofEditIntent prepare_roof_opening_group_clone_placement(
     const std::map<std::string, Entity, std::less<>>& actual,
-    const RoofOpeningGroupClonePlacement& request);
+    const RoofOpeningGroupClonePlacement& request,
+    const std::map<std::string, Entity, std::less<>>& fresh_roofs = {});
 
 } // namespace sketch

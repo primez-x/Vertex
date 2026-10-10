@@ -1,4 +1,44 @@
-# Vertex project formats v1 through v184
+# Vertex project formats v1 through v185
+
+## Atomic mixed clipboard placement (v185, source integration in progress)
+
+Closed `apply_boundary_constraint_changes` envelope51 contains exactly
+`version`, `kind`, `expected_revision`, `message`,
+`clipboard_placement_completion:true` and `clipboard_placement_intent`.
+The inner version-one intent contains `version`, `expected_revision`,
+`source_snapshot_digest`, `source_authoring_digest`, `source_entities_digest`,
+`source_saved_revision`, `roof_authoring`, `additions`,
+`selected_registry_id` and `message`. It binds the complete editable source,
+including history and saved state. Sibling edit authorities are rejected without
+copying their payloads. Admission bounds the intent before copying/serializing
+or entering semantic replay: 4 MiB, 100000 values, depth64 and 4096 additions.
+
+`roof_authoring` is null or one canonical standalone roof phase intent from
+dialects4/17/20/21. It replays against the original actual map with the existing
+roof lifetime guards. `additions` is a canonical fresh-only entity command;
+existing owners, asset changes and caller-authored hierarchy/design/view updates
+are excluded. Actual phase membership and imported page object enrollment are
+computed independently. Page enrollment appends only raw `object_ids`, retaining
+all other stored fields. One complete state and command governs publication,
+history, Undo and Redo. A roof-free placement into a design set also retains its
+active-phase policy through history navigation.
+
+Fresh names reserve actual, retained and undone entity/child/alias names,
+opaque fields, assets, and canonical recorded proofs. Captured clone content
+and declared destinations remain reserved even when absent from materialized
+states. The optional roof leaf also reserves its own proof-only names before
+fresh sibling additions. Current and nested retained envelope51 history requires
+reader185 and extraction183; earlier command dialects keep their authority.
+
+Placement preparation supports explicit copied wall/roof hosts without
+fabricating an authoritative snapshot. Copied roof children use qualified
+source-owner/child mappings, and a selected copied roof dominates its selected
+child. Independent skylights can target an actual roof or an authenticated
+fresh ordinary roof; the latter changes its one fresh addition and conveys no
+edit authority over an original roof. Complete rosters are replayed together.
+
+Desktop coordination is still in progress. This source contract does not
+establish compilation, native geometry, interaction or production acceptance.
 
 ## Actual phase corner cohorts (v184, reviewed source integration)
 

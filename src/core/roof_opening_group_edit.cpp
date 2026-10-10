@@ -191,6 +191,31 @@ void consistent_passive_source(Hosts& hosts, const RoofOpeningCloneSource& sourc
         previous.extensions.dump() != source.roof.extensions.dump())
         invalid("Skylight group contains conflicting passive source roofs");
 }
+// Fresh physical replay must not borrow actual-map authority. Inspect actual
+// names separately, including opaque keys/strings, without adding prepared
+// roofs to that map or treating them as captured document owners.
+struct FreshActualReservation {
+    const std::set<std::string, std::less<>>& fresh;
+    std::size_t nodes{}, bytes{};
+    void text(const std::string& value) {
+        constexpr std::size_t byte_limit = 64 * 1024 * 1024;
+        if (value.size() > byte_limit - bytes) invalid("Skylight actual identity byte budget exceeded");
+        bytes += value.size();
+        if (fresh.contains(value)) invalid("Fresh skylight identity aliases actual source data");
+    }
+    void read(const nlohmann::json& value, unsigned depth = 0) {
+        if (depth > 64 || ++nodes > 4 * 1024 * 1024)
+            invalid("Skylight actual identity complexity budget exceeded");
+        if (value.is_string()) text(value.get_ref<const std::string&>());
+        else if (value.is_object()) for (const auto& [key, child] : value.items()) {
+            text(key); read(child, depth + 1);
+        }
+        else if (value.is_array()) for (const auto& child : value) read(child, depth + 1);
+    }
+    void entity(const Entity& value) {
+        text(value.id); text(value.type); read(value.properties); read(value.extensions);
+    }
+};
 } // namespace
 
 Vec2 roof_opening_group_member_center_world(const Entities& actual, const RoofOpeningGroupMember& member) {
@@ -344,10 +369,16 @@ std::vector<RoofEditIntent> prepare_roof_opening_group_removal(const Entities& a
 }
 
 RoofEditIntent prepare_roof_opening_group_clone_placement(const Entities& actual,
-    const RoofOpeningGroupClonePlacement& request) {
+    const RoofOpeningGroupClonePlacement& request, const Entities& fresh_roofs) {
     bounded_group(request.clones.size());
     finite(request.destination_anchor_world);
-    const auto destination = host(actual_roof(actual, request.destination_roof_id));
+    if (fresh_roofs.size() > group_limit) invalid("Skylight fresh roof host budget exceeded");
+    for (const auto& [id, roof] : fresh_roofs) {
+        if (id != roof.id || roof.type != "roof" || actual.contains(id))
+            invalid("Skylight fresh roof host overlaps actual content or has an inconsistent role");
+    }
+    const bool fresh_destination = fresh_roofs.contains(request.destination_roof_id);
+    const auto destination = host(actual_roof(fresh_destination ? fresh_roofs : actual, request.destination_roof_id));
     const auto anchor = roof_opening_group_clone_anchor_world(request.clones);
     auto opening = opening_intent(destination);
     opening.uses_clone_schema = true;
@@ -384,7 +415,18 @@ RoofEditIntent prepare_roof_opening_group_clone_placement(const Entities& actual
         opening.upserts.push_back(std::move(row));
     }
     auto result = composite(std::move(opening));
-    (void)replay_roof_edit_entities(actual, {result});
+    if (fresh_destination) {
+        // This explicit prepared-host inventory is not an actual source map.
+        // Reuse its physical child/opaque-name freshness checks, then inspect
+        // actual names independently. The caller reserves retained history and
+        // all other family names before entering this preparation leaf.
+        const auto children = new_roof_opening_identity_ids(fresh_roofs, {*result.openings});
+        std::set<std::string, std::less<>> fresh(children.begin(), children.end());
+        for (const auto& [id, roof] : fresh_roofs) { (void)roof; fresh.insert(id); }
+        FreshActualReservation reservation{fresh};
+        for (const auto& [id, entity] : actual) { reservation.text(id); reservation.entity(entity); }
+        (void)replay_roof_edit_entity(*destination.entity, result);
+    } else (void)replay_roof_edit_entities(actual, {result});
     return result;
 }
 
