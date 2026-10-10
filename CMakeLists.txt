@@ -157,6 +157,7 @@ endif()
 add_library(sketch_dxf_project_exchange src/core/dxf_project_exchange.cpp
   src/core/dxf_architectural_source.cpp src/core/dxf_phase_source.cpp
   src/core/dxf_phase_asset_source.cpp
+  src/core/dxf_phase_asset_carrier.cpp
   src/core/dxf_annotation_source.cpp src/core/dxf_constraint_source.cpp
   src/core/dxf_sheet_view_source.cpp)
 target_include_directories(sketch_dxf_project_exchange PUBLIC include)

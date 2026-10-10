@@ -14,6 +14,37 @@ changed source does not acquire runtime acceptance without later qualification.
 
 ## Current delivery state
 
+### October 10 DXF asset carrier and isolated worker routing — source integration
+
+Complete project serialization now transports the authenticated asset inventory
+in a canonical group-999 footer. Physical comment values stay within 255 bytes;
+ordinary geometry retains the existing 16 MiB parser limit. Footer admission,
+exact manifest matching, canonical chunk framing and actual payload hashes are
+checked before native activation. Ordinary text resembling a marker is not a
+carrier. Public export results are reauthenticated before complete serialization
+so mutable or orphan payloads cannot bypass the source graph or CAD picture.
+
+An explicit `dxf-assets/0` worker profile admits the separate larger transport,
+without CAD normalization or weakening the ordinary input/output profile.
+Sandbox controls remain mandatory. Desktop reads are bounded and check file
+size, EOF and read errors; noncarrier DXF retains its ordinary size limit.
+
+Full-capacity desktop transfer remains unfinished: original retention still
+stores one raw DXF asset, capped at 256 MiB, and native persistence/recovery counts
+repeated payload bytes across revisions against 512 MiB. Lossless reconstruction
+receipts and content-addressed history storage are the next required source
+work. External CAD applications may discard DXF comments when saving; this does
+not establish preservation of the native asset graph through foreign editors.
+
+Independent source review closed the serializer integrity and growing-file read
+findings and found no remaining P1/P2 in the bounded carrier/worker integration.
+Scoped diff checks and delivery JSON parsing passed; the source-kit allowlist
+matches all 1,901 tracked/new paths without duplicates or extras.
+The source changes are not compiled or runtime-qualified. No build, test, new
+test, probe, script, native job, launch, package or installation ran. The installed
+candidate remains unchanged. All ten production gates remain open; no overall
+completion percentage or ETA is supported by this source increment.
+
 ### October 10 referenced asset graph and worker framing — source integration
 
 The complete phase graph now consumes the document-authoring catalog policy.

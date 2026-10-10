@@ -1,5 +1,6 @@
 #include "sketch/dxf_project_exchange.hpp"
 #include "sketch/dxf_phase_source.hpp"
+#include "sketch/dxf_phase_asset_carrier.hpp"
 #include "sketch/dxf_annotation_source.hpp"
 #include "sketch/dxf_constraint_source.hpp"
 #include "sketch/dxf_sheet_view_source.hpp"
@@ -3250,11 +3251,17 @@ Json bounded_phase_carrier_json(std::string_view bytes, NativeDxfWallSourceWorkB
 }
 
 void export_phase_carrier(const NativeDxfPhaseSourceGraph& graph, DxfDrawing& drawing,
-    NativeDxfWallSourceWorkBudget& budget, std::vector<DxfProjectDiagnostic>& diagnostics) {
-    // A manifest alone would produce an unusable exchange file. Keep this
-    // refusal until the separately bounded payload carrier is connected.
-    if (!graph.assets.empty())
-        throw std::invalid_argument("Native DXF referenced-asset payload transport is not implemented.");
+    NativeDxfWallSourceWorkBudget& budget, std::vector<DxfProjectDiagnostic>& diagnostics,
+    NativeDxfPhaseSourceAssets& assets) {
+    const auto first_asset_json = budget.phase_assets.consumed_json_bytes;
+    validate_native_dxf_phase_source_assets(graph.assets, &budget.phase_assets);
+    std::uint64_t copy_bytes = budget.phase_assets.consumed_json_bytes - first_asset_json;
+    for (const auto& [id, asset] : graph.assets)
+        copy_bytes += id.size() + asset.id.size() + asset.media_type.size() + asset.sha256.size() + asset.bytes.size();
+    if (copy_bytes > budget.phase_assets.max_work_bytes - budget.phase_assets.consumed_work_bytes)
+        throw std::invalid_argument("V9 asset export copy work limit");
+    budget.phase_assets.consumed_work_bytes += copy_bytes;
+    assets = graph.assets;
     const auto encoded = encode_native_dxf_phase_source_graph(graph, &budget).dump(-1, ' ', true);
     // Charge actual encoded framing as well as raw source admission.
     (void)bounded_phase_carrier_json(encoded, budget);
@@ -3373,7 +3380,9 @@ Entity detached_native_entity(const Entity& source, const std::map<std::string, 
 }
 
 std::set<std::size_t> import_phase_carrier(const DxfDrawing& drawing, bool source_is_metres,
-    DxfProjectImportResult& result, NativeDxfWallSourceWorkBudget& budget) {
+    DxfProjectImportResult& result, NativeDxfWallSourceWorkBudget& budget,
+    const NativeDxfPhaseAssetCarrier& asset_carrier,
+    const NativeDxfPhaseSourceAssets* serialization_assets = nullptr) {
     std::map<std::string, Json, std::less<>> payloads;
     std::set<std::string, std::less<>> phase_blocks;
     bool unreadable_metadata = false;
@@ -3455,7 +3464,22 @@ std::set<std::size_t> import_phase_carrier(const DxfDrawing& drawing, bool sourc
     std::string encoded; encoded.reserve(encoded_bytes);
     for (std::size_t part = 0; part < chunk_count; ++part) encoded += chunks.at(part);
     auto value = bounded_phase_carrier_json(encoded, budget);
-    const auto graph = decode_native_dxf_phase_source_graph(value, &budget);
+    NativeDxfPhaseSourceAssets source_assets;
+    const NativeDxfPhaseSourceAssets* actual_assets = &source_assets;
+    if (value.is_object() && value.contains("version") && value.at("version") == 4) {
+        const auto manifest = decode_native_dxf_phase_asset_manifest(value.at("asset_manifest"), &budget.phase_assets);
+        if (serialization_assets) {
+            // Complete export checks the actual payloads before encoding them;
+            // no synthetic carrier or decoded byte copy is needed here.
+            bind_native_dxf_phase_asset_manifest(manifest, *serialization_assets, &budget.phase_assets);
+            actual_assets = serialization_assets;
+        } else {
+            if (!asset_carrier.has_assets) throw std::invalid_argument("V9 asset payload carrier is missing");
+            source_assets = decode_native_dxf_phase_asset_carrier(asset_carrier, manifest, &budget.phase_assets);
+        }
+    } else if (asset_carrier.has_assets || (serialization_assets && !serialization_assets->empty()))
+        throw std::invalid_argument("Unexpected V9 asset payload carrier");
+    const auto graph = decode_native_dxf_phase_source_graph(value, &budget, *actual_assets);
     if (graph.registry_ids.empty() || bodies.size() != graph.depicted_body_ids.size() || support.size() != graph.support_ids.size())
         throw std::invalid_argument("V9 registry/depicted inventory differs");
     // Legacy and V9 owners have one source identity namespace, including failed
@@ -3495,6 +3519,7 @@ std::set<std::size_t> import_phase_carrier(const DxfDrawing& drawing, bool sourc
     }
     result.diagnostics.insert(result.diagnostics.end(), support_plans.diagnostics.begin(), support_plans.diagnostics.end());
     result.phase_source_graph = std::move(value);
+    result.phase_source_assets = std::move(source_assets);
     return activated;
 }
 
@@ -5790,7 +5815,7 @@ DxfProjectExportResult export_project_dxf(const DocumentSnapshot& document,
                     (is_model_phase_entity_type(owner.type) && owner.type != "building" && owner.type != "floor"))
                     seeds.push_back(id);
             const auto graph = capture_native_dxf_phase_source_graph(document, seeds, &wall_source_budget);
-            export_phase_carrier(graph, result.drawing, wall_source_budget, result.diagnostics);
+            export_phase_carrier(graph, result.drawing, wall_source_budget, result.diagnostics, result.phase_source_assets);
             for (const auto& [id, owner] : graph.entities) { (void)owner; phase_owned.insert(id); }
         } catch (const std::exception& error) {
             // Complete phase retention is atomic. Never emit an active-only
@@ -5908,6 +5933,8 @@ DxfProjectExportResult export_project_dxf(const DocumentSnapshot& document,
     try {
         (void)export_dxf_ascii(result.drawing, limits);
     } catch (const std::exception&) {
+        if (phase_operation)
+            throw std::invalid_argument("Complete design-set DXF drawing is not serializable.");
         diagnostic(result.diagnostics, {}, "PROJECT", "mapped_drawing_not_serializable");
         result.drawing = {};
         result.drawing.insertion_units = 6;
@@ -5915,14 +5942,29 @@ DxfProjectExportResult export_project_dxf(const DocumentSnapshot& document,
     return result;
 }
 
+std::string serialize_project_dxf(const DxfProjectExportResult& result, const DxfExchangeLimits& limits) {
+    const auto ordinary = export_dxf_ascii(result.drawing, limits);
+    NativeDxfWallSourceWorkBudget budget;
+    DxfProjectImportResult authenticated;
+    const NativeDxfPhaseAssetCarrier no_input_carrier;
+    (void)import_phase_carrier(result.drawing, result.drawing.insertion_units == 6, authenticated,
+        budget, no_input_carrier, &result.phase_source_assets);
+    if (!result.phase_source_assets.empty() && !authenticated.phase_source_graph)
+        throw std::invalid_argument("DXF payloads have no authenticated native source graph");
+    return export_native_dxf_phase_asset_carrier(ordinary, result.phase_source_assets, &budget.phase_assets);
+}
+
 DxfProjectImportResult import_project_dxf(std::string_view bytes,
                                           const DxfExchangeLimits& limits) {
-    auto parsed = parse_dxf_ascii(bytes, limits);
+    NativeDxfWallSourceWorkBudget native_budget;
+    const auto asset_carrier = split_native_dxf_phase_asset_carrier(bytes, &native_budget.phase_assets);
+    auto parsed = parse_dxf_ascii(asset_carrier.ordinary_dxf, limits);
     DxfProjectImportResult result;
     for (const auto& item : parsed.diagnostics)
         diagnostic(result.diagnostics, {}, item.entity_type, item.code);
     const auto factor = metres_per_source_unit(parsed.drawing.insertion_units);
     if (!factor) {
+        if (asset_carrier.has_assets) throw std::invalid_argument("Native asset-bearing DXF source units are unsupported");
         diagnostic(result.diagnostics, {}, "HEADER",
                    parsed.drawing.insertion_units == 0 ? "source_units_unspecified" : "source_units_unsupported");
         result.source_retention_required = true;
@@ -5931,8 +5973,9 @@ DxfProjectImportResult import_project_dxf(std::string_view bytes,
     const bool source_is_metres = parsed.drawing.insertion_units == 6;
     preflight_project_expansion(parsed.drawing, limits);
     normalize_drawing_to_metres(parsed.drawing, *factor);
-    NativeDxfWallSourceWorkBudget native_budget;
-    const auto phase_inserts = import_phase_carrier(parsed.drawing, source_is_metres, result, native_budget);
+    const auto phase_inserts = import_phase_carrier(parsed.drawing, source_is_metres, result, native_budget, asset_carrier);
+    if (asset_carrier.has_assets && !result.phase_source_graph)
+        throw std::invalid_argument("Native asset carrier has no authenticated source graph");
     auto native_inserts = import_native_graphs(parsed.drawing, source_is_metres, result, native_budget, phase_inserts);
     native_inserts.insert(phase_inserts.begin(), phase_inserts.end());
     if (result.phase_source_graph) {

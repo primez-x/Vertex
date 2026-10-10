@@ -232,11 +232,28 @@ Binding previews actual staged additions against the retained destination.
 Final desktop capacity admission includes the source receipt and every repeated
 asset row in the prospective history, before live publication. Source-transfer
 and native retained-history limits remain distinct (256 MiB and 512 MiB).
-This is source integration, not complete exchange transport. The DXF exporter
-explicitly refuses asset-bearing graphs until their payload carrier is connected;
-it cannot emit a manifest-only file. The legacy DXF parser and worker profiles
-still limit input, and large original-source retention still needs a lossless
-solution. Full-capacity furnished transfer remains open. Scoped annotation owner contexts
+Complete serialization now appends a canonical group-999 footer for the exact
+asset inventory. `VERTEX_PHASE_ASSETS_V1` begins sorted `VXPA1` asset headers and
+`VXPD1` Base64 chunks; `VERTEX_PHASE_ASSETS_END_V1` precedes the ordinary EOF.
+Each chunk carries at most 168 raw bytes and every physical comment value stays
+within 255 ASCII bytes. The decoder admits aggregate sizes before allocation,
+requires exact graph-manifest equality and verifies actual decoded hashes.
+Complete serialization reauthenticates graph/body/support pictures and actual
+payloads; orphan, missing or mismatched inventories refuse. Ordinary DXF geometry
+retains its existing 16 MiB parser and geometry limits. A separate bounded
+`dxf-assets/0` worker profile admits up to 512 MiB transport and 384 MiB response,
+with the existing sandbox controls and strict core decoding of original bytes.
+Ordinary worker limits remain unchanged.
+
+DXF string values have a finite physical limit; these short comment records
+follow the [Autodesk DXF formatting contract](https://help.autodesk.com/cloudhelp/2018/ENU/AutoCAD-DXF/files/GUID-89CB823D-614D-4D1E-8204-568EC72DF869.htm).
+Foreign CAD applications may discard comments on SAVEAS, as described in the
+[Autodesk group-code reference](https://help.autodesk.com/cloudhelp/2024/ENU/AutoCAD-DXF/files/GUID-3F0380A5-1C15-464D-BC66-2C5F094BCFB9.htm).
+This carrier therefore does not certify native asset preservation through
+foreign editing. Lossless retention of original DXF files above the native
+256 MiB individual-asset limit and deduplicated retained-history storage remain
+required work. Full-capacity furnished desktop transfer remains open.
+Scoped annotation owner contexts
 must match actual layer ancestry, while children may use independent layers.
 Fresh phase import uses an explicit retained command policy rather than legacy
 constraint satisfaction for inactive alternatives. Existing legacy commands

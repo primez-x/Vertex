@@ -35,7 +35,12 @@ struct DxfProjectDiagnostic {
 struct DxfProjectExportResult {
     DxfDrawing drawing;
     std::vector<DxfProjectDiagnostic> diagnostics;
+    // Manifest-bound native payloads belong to complete project transport;
+    // serializing drawing alone is only the ordinary CAD picture.
+    NativeDxfPhaseSourceAssets phase_source_assets;
 };
+[[nodiscard]] std::string serialize_project_dxf(const DxfProjectExportResult& result,
+    const DxfExchangeLimits& limits = {});
 
 using NativeDxfPhysicalSourceGraphs = std::map<std::string, nlohmann::json, std::less<>>;
 using NativeDxfCatalogSources = std::map<std::string, nlohmann::json, std::less<>>;

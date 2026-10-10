@@ -115,6 +115,7 @@
 #include "sketch/document_digest.hpp"
 #include "sketch/dxf_project_exchange.hpp"
 #include "sketch/dxf_phase_source.hpp"
+#include "sketch/dxf_phase_asset_carrier.hpp"
 #include "sketch/dxf_annotation_source.hpp"
 #include "sketch/dxf_sheet_view_source.hpp"
 #include "sketch/ifc_project_exchange.hpp"
@@ -37784,7 +37785,7 @@ public:
         try {
             const auto source = m_document->snapshot();
             const auto mapped = export_project_dxf(source);
-            const auto ascii = export_dxf_ascii(mapped.drawing);
+            const auto ascii = serialize_project_dxf(mapped);
             QSaveFile destination(path);
             destination.setDirectWriteFallback(false);
             const QByteArray bytes(ascii.data(), static_cast<qsizetype>(ascii.size()));
@@ -38392,14 +38393,19 @@ public:
             const QFileInfo info(path);
             if (!info.exists() || !info.isFile())
                 throw std::invalid_argument("The DXF file does not exist.");
-            constexpr qint64 max_bytes = static_cast<qint64>(DxfExchangeLimits{}.max_bytes);
+            constexpr qint64 max_bytes = static_cast<qint64>(native_dxf_phase_asset_transport_byte_limit);
             if (info.size() <= 0 || info.size() > max_bytes)
                 throw std::invalid_argument("The DXF file exceeds the local import limit.");
             QFile input(path);
             if (!input.open(QIODevice::ReadOnly))
                 throw std::invalid_argument("The DXF file could not be opened.");
-            const auto raw = input.readAll();
-            if (raw.size() != info.size()) throw std::invalid_argument("The DXF file could not be read completely.");
+            const auto raw = input.read(max_bytes + 1);
+            if (raw.isEmpty() || raw.size() > max_bytes || raw.size() != info.size() ||
+                !input.atEnd() || input.error() != QFileDevice::NoError)
+                throw std::invalid_argument("The DXF file changed, exceeded its limit, or could not be read completely.");
+            if (static_cast<std::size_t>(raw.size()) > DxfExchangeLimits{}.max_bytes &&
+                !native_dxf_phase_asset_carrier_present(std::string_view(raw.constData(), static_cast<std::size_t>(raw.size()))))
+                throw std::invalid_argument("The ordinary DXF file exceeds the local import limit.");
             const auto mapped = importProjectCandidate(raw, ProjectImportKind::dxf);
             if (!mapped.isolation_controls_attested)
                 throw std::runtime_error("The DXF import worker did not attest its sandbox controls.");
@@ -39042,6 +39048,8 @@ public:
                 changes.push_back(EntityChange::upsert(std::move(annotation)));
             }
 
+            if (static_cast<std::uint64_t>(raw.size()) > native_dxf_phase_asset_payload_limit)
+                throw std::invalid_argument("This DXF file is too large to retain losslessly in the current project format.");
             std::vector<std::byte> source_bytes;
             source_bytes.reserve(static_cast<std::size_t>(raw.size()));
             for (const auto value : raw) source_bytes.push_back(static_cast<std::byte>(value));

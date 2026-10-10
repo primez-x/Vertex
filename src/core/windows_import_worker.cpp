@@ -50,6 +50,26 @@ void diagnostic(WindowsImportWorkerReport& report, const char* code) {
     report.diagnostics.emplace_back(code);
 }
 
+bool validate_resource_profile(const WindowsImportWorkerOptions& options,
+                               WindowsImportWorkerReport& report) {
+    switch (options.resource_profile) {
+    case WindowsImportWorkerResourceProfile::ordinary:
+        if (!options.arguments.empty() && options.arguments.front() == L"dxf-assets") {
+            diagnostic(report, "worker_resource_profile_arguments_mismatch");
+            return false;
+        }
+        return true;
+    case WindowsImportWorkerResourceProfile::native_dxf_assets:
+        if (options.arguments != std::vector<std::wstring>{L"dxf-assets", L"0"}) {
+            diagnostic(report, "worker_resource_profile_arguments_mismatch");
+            return false;
+        }
+        return true;
+    }
+    diagnostic(report, "invalid_worker_resource_profile");
+    return false;
+}
+
 void retain_ocr_failure_diagnostic(const WindowsImportWorkerOptions& options,
                                   WindowsImportWorkerReport& report) {
     if (options.arguments != std::vector<std::wstring>{L"ocr", L"0"} ||
@@ -82,7 +102,8 @@ void retain_ocr_failure_diagnostic(const WindowsImportWorkerOptions& options,
 void retain_project_failure_diagnostic(const WindowsImportWorkerOptions& options,
                                       WindowsImportWorkerReport& report) {
     if ((options.arguments != std::vector<std::wstring>{L"ifc", L"0"} &&
-         options.arguments != std::vector<std::wstring>{L"dxf", L"0"}) ||
+         options.arguments != std::vector<std::wstring>{L"dxf", L"0"} &&
+         options.arguments != std::vector<std::wstring>{L"dxf-assets", L"0"}) ||
         report.exit_code != 4 || report.output.empty() || report.output.size() > 128) return;
     const std::string_view marker(reinterpret_cast<const char*>(report.output.data()), report.output.size());
     constexpr std::string_view prefix = "VERTEX_PROJECT_FAILURE_V1:";
@@ -752,16 +773,26 @@ WindowsImportWorkerReport run_windows_import_worker(const WindowsImportWorkerOpt
         return report;
     }
     report.status = WindowsImportWorkerStatus::invalid_request;
+    if (!validate_resource_profile(options, report)) {
+        sort_diagnostics(report);
+        return report;
+    }
+    const bool native_dxf_assets =
+        options.resource_profile == WindowsImportWorkerResourceProfile::native_dxf_assets;
+    const auto input_limit = native_dxf_assets ? windows_import_worker_native_dxf_input_limit :
+        64ULL * 1024 * 1024;
+    const auto output_limit = native_dxf_assets ? windows_import_worker_native_dxf_output_limit :
+        256ULL * 1024 * 1024;
     if (!local_absolute_path(options.executable) || !ordinary_object(options.executable, false))
         diagnostic(report, "invalid_worker_executable");
     if (!local_absolute_path(options.temporary_root) || !ordinary_object(options.temporary_root, true))
         diagnostic(report, "invalid_temporary_root");
-    if (options.input.size() > 64ULL * 1024 * 1024) diagnostic(report, "input_size_limit");
+    if (options.input.size() > input_limit) diagnostic(report, "input_size_limit");
     if (options.timeout_ms == 0 || options.timeout_ms > 30'000) diagnostic(report, "invalid_timeout");
     if (options.memory_bytes == 0 || options.memory_bytes > 4ULL * 1024 * 1024 * 1024)
         diagnostic(report, "invalid_memory_limit");
     if (options.max_active_processes != 1) diagnostic(report, "invalid_active_process_limit");
-    if (options.max_output_bytes == 0 || options.max_output_bytes > 256ULL * 1024 * 1024)
+    if (options.max_output_bytes == 0 || options.max_output_bytes > output_limit)
         diagnostic(report, "invalid_output_limit");
     if (!report.diagnostics.empty()) {
         sort_diagnostics(report);
@@ -1132,6 +1163,11 @@ WindowsImportWorkerReport run_windows_import_worker(const WindowsImportWorkerOpt
     WindowsImportWorkerReport report;
     if (cancellation_requested(options)) {
         mark_cancelled(report);
+        return report;
+    }
+    if (!validate_resource_profile(options, report)) {
+        report.status = WindowsImportWorkerStatus::invalid_request;
+        sort_diagnostics(report);
         return report;
     }
     report.status = WindowsImportWorkerStatus::unsupported;

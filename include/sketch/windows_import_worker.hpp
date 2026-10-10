@@ -12,6 +12,14 @@
 
 namespace sketch {
 
+enum class WindowsImportWorkerResourceProfile {
+    ordinary,
+    native_dxf_assets,
+};
+
+inline constexpr std::uint64_t windows_import_worker_native_dxf_input_limit = 512ULL * 1024 * 1024;
+inline constexpr std::uint64_t windows_import_worker_native_dxf_output_limit = 384ULL * 1024 * 1024;
+
 // The broker accepts an executable that is already part of the locally
 // installed worker package. It never accepts a source/project handle or a
 // command line assembled from imported document text.
@@ -29,6 +37,9 @@ struct WindowsImportWorkerOptions {
     // A caller may set this flag to true once; keep it asserted until this
     // invocation returns. A null flag preserves the uncancellable API.
     std::shared_ptr<const std::atomic_bool> cancellation_requested;
+    // The larger native carrier ceilings require exactly {L"dxf-assets", L"0"}.
+    // Select output and memory budgets explicitly; this does not increase them.
+    WindowsImportWorkerResourceProfile resource_profile{WindowsImportWorkerResourceProfile::ordinary};
 };
 
 enum class WindowsImportWorkerStatus {

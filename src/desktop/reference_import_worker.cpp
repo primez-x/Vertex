@@ -5,6 +5,7 @@
 #include "cad_library_bridge.hpp"
 #include "sketch/project_import_worker.hpp"
 #include "sketch/dxf_project_exchange.hpp"
+#include "sketch/dxf_phase_asset_carrier.hpp"
 #include "sketch/ifc_project_exchange.hpp"
 
 #include <QBuffer>
@@ -218,14 +219,19 @@ int main(int argc, char** argv) {
     QCoreApplication::setLibraryPaths({QDir(QCoreApplication::applicationDirPath()).absoluteFilePath("../plugins")});
     const auto args = app.arguments();
     if (args.size() != 3) return 2;
+    const bool native_dxf_assets = args[1] == "dxf-assets";
+    if (native_dxf_assets && args[2] != "0") return 2;
     bool valid_page = false;
     const auto page = args[2].toInt(&valid_page);
     if (!valid_page || page < 0 || page >= static_cast<int>(sketch::desktop::referencePageLimit)) return 2;
+    const auto input_limit = native_dxf_assets ?
+        static_cast<qsizetype>(sketch::windows_import_worker_native_dxf_input_limit) :
+        sketch::desktop::referenceInputLimit;
     QByteArray input;
     char chunk[65536];
     for (;;) {
         const auto count = std::fread(chunk, 1, sizeof(chunk), stdin);
-        if (input.size() + static_cast<qsizetype>(count) > sketch::desktop::referenceInputLimit) return 3;
+        if (input.size() > input_limit || static_cast<qsizetype>(count) > input_limit - input.size()) return 3;
         input.append(chunk, static_cast<qsizetype>(count));
         if (count < sizeof(chunk)) {
             if (std::ferror(stdin)) return 3;
@@ -297,7 +303,7 @@ int main(int argc, char** argv) {
             return std::fflush(stdout) == 0 ? 0 : 5;
         } catch (...) { return 4; }
     }
-    if (args[1] == "dxf" || args[1] == "ifc") {
+    if (args[1] == "dxf" || native_dxf_assets || args[1] == "ifc") {
         if (page != 0) return 2;
         const char* stage = "core";
         try {
@@ -320,7 +326,15 @@ int main(int argc, char** argv) {
                     candidate.diagnostics.push_back({std::move(diagnostic.source_id),
                         std::move(diagnostic.source_kind), std::move(diagnostic.code)});
             };
-            if (args[1] == "dxf") {
+            if (native_dxf_assets) {
+                candidate.kind = sketch::ProjectImportKind::dxf;
+                // Presence selects only this bounded transport. The core must
+                // strictly admit the original carrier and retain its ordinary
+                // geometry budgets; normalization cannot repair this input.
+                if (!sketch::native_dxf_phase_asset_carrier_present(bytes))
+                    throw std::invalid_argument("Native DXF asset carrier required");
+                copy_result(sketch::import_project_dxf(bytes));
+            } else if (args[1] == "dxf") {
                 candidate.kind = sketch::ProjectImportKind::dxf;
                 // Verify native metadata against the original representation.
                 // A library's repair/normalization must never rehabilitate it.

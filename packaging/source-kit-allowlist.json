@@ -3463,6 +3463,10 @@
     },
     {
       "category": "source",
+      "path": "include/sketch/dxf_phase_asset_carrier.hpp"
+    },
+    {
+      "category": "source",
       "path": "include/sketch/dxf_phase_asset_source.hpp"
     },
     {
@@ -4736,6 +4740,10 @@
     {
       "category": "source",
       "path": "src/core/dxf_exchange.cpp"
+    },
+    {
+      "category": "source",
+      "path": "src/core/dxf_phase_asset_carrier.cpp"
     },
     {
       "category": "source",

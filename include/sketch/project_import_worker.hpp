@@ -6,6 +6,7 @@
 #include "sketch/document_wall.hpp"
 #include "sketch/dxf_project_exchange.hpp"
 #include "sketch/dxf_phase_source.hpp"
+#include "sketch/dxf_phase_asset_carrier.hpp"
 #include "sketch/geometry.hpp"
 #include "sketch/wall_semantics.hpp"
 #include "sketch/opening_assembly.hpp"
@@ -1086,14 +1087,22 @@ using ProjectImportBroker = std::function<WindowsImportWorkerReport(const Window
 inline ProjectImportCandidate import_project_in_worker(std::span<const std::byte> source,
     ProjectImportKind kind, WindowsImportWorkerOptions options,
     const ProjectImportBroker& broker = run_windows_import_worker) {
-    if (source.empty() || source.size() > project_import_input_limit)
-        throw std::invalid_argument("Project imports must contain between 1 byte and 64 MiB.");
+    const auto maximum_input = kind == ProjectImportKind::dxf
+        ? windows_import_worker_native_dxf_input_limit : project_import_input_limit;
+    if (source.empty() || source.size() > maximum_input)
+        throw std::invalid_argument("Project import exceeds its bounded input profile.");
+    const bool native_assets = kind == ProjectImportKind::dxf && native_dxf_phase_asset_carrier_present(
+        std::string_view(reinterpret_cast<const char*>(source.data()), source.size()));
+    if (!native_assets && source.size() > project_import_input_limit)
+        throw std::invalid_argument("Ordinary project imports must not exceed 64 MiB.");
     const std::string name = project_import_kind_name(kind);
-    options.arguments = {std::wstring(name.begin(), name.end()), L"0"};
+    options.arguments = {native_assets ? std::wstring{L"dxf-assets"} : std::wstring(name.begin(), name.end()), L"0"};
+    options.resource_profile = native_assets ? WindowsImportWorkerResourceProfile::native_dxf_assets
+        : WindowsImportWorkerResourceProfile::ordinary;
     options.input.assign(source.begin(), source.end());
-    options.max_output_bytes = project_import_output_limit;
+    options.max_output_bytes = native_assets ? project_import_asset_output_limit : project_import_output_limit;
     options.timeout_ms = 30'000;
-    options.memory_bytes = 512ULL * 1024 * 1024;
+    options.memory_bytes = native_assets ? 4ULL * 1024 * 1024 * 1024 : 512ULL * 1024 * 1024;
     options.max_active_processes = 1;
     options.proj_offline_required = true;
     const auto report = broker(options);
