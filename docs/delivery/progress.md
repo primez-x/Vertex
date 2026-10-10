@@ -14,6 +14,52 @@ changed source does not acquire runtime acceptance without later qualification.
 
 ## Current delivery state
 
+### October 9 standalone DXF boundary reconstruction and coherent IFC unit authority
+
+Closed standalone native boundaries now export a bounded version-2 JSON block
+with depiction `BOUNDARY_PLAN_V1`, while ordinary analytical outer/hole curves
+remain visible to CAD consumers. Version-1 wall/opening blocks stay unchanged.
+Import requires identity metre placement, a complete exact regenerated plan,
+full valid hole geometry and an editable detached document. Local topology,
+classifications, native properties and inline hole ownership survive this
+bounded reconstruction; entity ownership is fresh.
+
+Independent review caught the desktop's generic-boundary-only identity list,
+the isolated broker's anonymous-boundary-only validation and stale owners in
+construction/edit receipts. The desktop and broker now admit all three native
+boundary roles through the explicit version-2 marker. A typed core owner-remap
+helper validates original/result integrity and changes only owned fields,
+preserving local child IDs, receipt schema, numeric JSON and transform history.
+Desktop remapping uses that helper rather than the generic reference visitor,
+which could otherwise change a local ID sharing the original owner's string.
+Unknown active schemas cannot become native editables through read-only Document
+creation. Reviewed floor/layer assignment remains one atomic transaction.
+
+Review also identified appraisal deductions and nested ANSI room/stair links
+outside Document's generic reference vocabulary. Standalone activation now
+explicitly refuses those missing graphs and live wall/measured-line source
+bindings in both mapper and broker. Their ordinary analytical curves and
+original source remain recoverable with fidelity diagnostics. Transport and
+reconstruction of complete linked appraisal/source graphs remain a real gap;
+this batch does not certify full-project lossless DXF exchange.
+
+IFC core reconstruction now consistently uses actual linked-project length
+authority. Legacy axes/swept solids no longer trust orphan metre declarations.
+Unproved units produce inert references for every recognized product instead
+of editable unscaled metre boundaries; raw IFC bytes and metadata are retained.
+Recognized nonlength monetary/derived/named units do not invalidate a proved
+metre length. Unsupported/ambiguous length authority and unknown unit roles
+remain refused. The separate library's proved conversion policy is unchanged.
+
+Historical DXF top-level-polyline and IFC orphan-axis expectations need
+reconciliation when qualification resumes. No tests were added, changed or run.
+Root integration review and independent combined DXF/IFC source review approved
+the corrected bounded implementation; scoped `git diff --check` passed.
+Requirements JSON parsed with acceptance flags unchanged. Compilation, numerical/interaction behavior,
+history/storage, external consumers and production acceptance remain unverified.
+The installed candidate remains unchanged. No builds, tests, probes, scripts,
+native jobs, launches, packages or installations ran.
+
 ### October 9 analytical DXF holes, IFC opening hosts and site yaw display
 
 Ordinary boundary export previously returned after its outer outline, omitting

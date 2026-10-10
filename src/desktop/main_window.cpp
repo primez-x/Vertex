@@ -38160,7 +38160,7 @@ public:
             std::vector<std::string> imported_boundary_ids;
             std::map<std::string, std::string, std::less<>> identities;
             for (const auto& candidate : mapped.entities) {
-                if (candidate.type == "boundary" || candidate.type == "wall" || candidate.type == "opening")
+                if (can_recognize_boundary_entity_type(candidate.type) || candidate.type == "wall" || candidate.type == "opening")
                     identities.emplace(candidate.id, allocate_id(candidate.type));
             }
             const auto existing_annotation = std::find_if(source.entities().begin(), source.entities().end(),
@@ -38207,8 +38207,13 @@ public:
                 if (identity == identities.end())
                     throw std::invalid_argument("DXF mapping produced an unsupported native entity.");
                 auto imported = candidate;
-                imported.id = identity->second;
-                remap_entity_references(imported, identities);
+                if (can_recognize_boundary_entity_type(candidate.type) &&
+                    candidate.extensions.contains("vertex_dxf_boundary")) {
+                    imported = remap_boundary_owner_identity(candidate, identity->second);
+                } else {
+                    imported.id = identity->second;
+                    remap_entity_references(imported, identities);
+                }
                 for (const auto* key : {"dxf_dimension", "dxf_arc_dimension", "dxf_angular_dimension"}) {
                     if (!imported.extensions.contains(key)) continue;
                     auto& dimension = imported.extensions[key];

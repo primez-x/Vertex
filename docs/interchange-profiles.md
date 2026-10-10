@@ -132,6 +132,57 @@ work.
 
 ## Native project mapping
 
+### Standalone boundary records and project unit authority (2026-10-09)
+
+The subsequent source implementation adds a version-2 JSON envelope for closed
+standalone `boundary`, `measurement_boundary` and `room_boundary` entities.
+It uses the existing bounded `VERTEX_ENTITY_V1` XDATA carrier and requires the
+explicit depiction `BOUNDARY_PLAN_V1`; version-1 wall/opening envelopes remain
+unchanged. Ordinary analytical outer/hole polylines remain in the block for CAD
+consumers. Native properties, classifications, local edge/vertex identities and
+inline hole ownership can reconstruct together with a fresh entity owner.
+
+Activation requires metre units, identity INSERT/base placement, complete valid
+outer/hole geometry, an editable detached document, and exact agreement with
+the entire independently regenerated block. Every hole participates in that
+proof. Known construction and geometry-edit receipts remap only their owner;
+their input expressions, local IDs, numeric JSON, schemas and transform history
+remain exact. The isolated response validates the explicit native marker,
+bounds analytical pair/segment work, and revalidates the full document. Desktop
+import handles all three boundary types and assigns reviewed destinations in
+the existing atomic import transaction. Legacy layer names cannot override the
+chosen destination on later export.
+
+This record transports one standalone boundary. Live wall/measured-line sources,
+active deduction links and ANSI ceiling room/stair/deduction references require
+their dependent graphs and are not promoted by this carrier. Generic document
+reference validation alone does not cover those appraisal links. Mapper and
+broker explicitly reject them; unsupported graphs, unknown active schemas,
+oversized metadata and geometry mismatches retain ordinary curves with fidelity
+diagnostics and original-source retention. Physical source-bound rooms retain
+their existing checked-output path. These remain explicit compatibility gaps,
+not a lossless whole-project DXF certification.
+
+IFC now uses one actual project's linked length-unit assignment for every core
+editable reconstruction, including legacy axes and swept solids. Orphan metre
+declarations cannot authorize a wall, slab or opening. Recognized nonlength
+assignment members do not invalidate a proved metre length unit. Missing,
+ambiguous or unsupported length authority yields inert `ifc_reference` products,
+including products with no Vertex metadata; original arguments, metadata and
+the complete source bytes remain available. No unscaled coordinates are
+published as editable native metres. The separate CAD library's proved unit
+conversion policy is unchanged.
+Unit form/role checks follow the IFC4 ADD2 TC1
+[named unit layout](https://standards.buildingsmart.org/IFC/RELEASE/IFC4/ADD2_TC1/HTML/schema/ifcmeasureresource/lexical/ifcnamedunit.htm),
+[named unit enumeration](https://standards.buildingsmart.org/IFC/RELEASE/IFC4/ADD2_TC1/HTML/schema/ifcmeasureresource/lexical/ifcunitenum.htm)
+and distinct
+[derived unit enumeration](https://standards.buildingsmart.org/IFC/RELEASE/IFC4/ADD2_TC1/HTML/schema/ifcmeasureresource/lexical/ifcderivedunitenum.htm).
+
+These changes are source-only and uncompiled. Historical checks that require
+top-level boundary polylines or an editable orphan-unit IFC axis need adjustment
+when qualification resumes; they have not been changed or run. External CAD/IFC
+round trips, complete graph fidelity and production acceptance remain open.
+
 ### Source fidelity corrections (2026-10-09)
 
 Ordinary native boundaries with inline holes now export every supported hole

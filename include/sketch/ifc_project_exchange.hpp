@@ -82,15 +82,22 @@ struct IfcProjectImportResult {
 // Parses IFC4 STEP records in memory and reconstructs reliable, typed native
 // walls, slabs, and rectangular hosted openings when the required geometry and
 // Vertex property-set metadata are present. Other reliable footprints remain
-// editable boundary candidates with source metadata. The function never opens
-// a path or mutates a Document. Malformed input throws before returning any
-// partial result; unsupported records produce stable diagnostics and require
-// source retention.
+// editable boundary candidates with source metadata. All typed reconstruction,
+// including legacy axes and swept solids, requires one actual IFCPROJECT whose
+// linked UnitsInContext assignment proves an unprefixed SI metre length unit.
+// Recognized nonlength unit forms do not override that length authority;
+// unsupported, ambiguous or unresolved length-unit roles remain inactive.
+// Orphan declarations cannot authorize reconstruction. Unsupported units retain
+// every product as an inert ifc_reference with original arguments and metadata;
+// required source retention preserves all referenced geometry and unit records.
+// Source coordinates never become editable metre geometry without that proof.
+// The function never opens a path or mutates a Document. Malformed input throws
+// before returning any partial result; unsupported records produce stable
+// diagnostics and require source retention.
 // With the optional native bridge, native curved hosts and exact fill profiles
 // activate only after their regenerated geometry, dimensions, contexts, and
 // host/void/fill relationships agree, and the actual project's linked length
-// unit assignment proves metres. Orphan declarations cannot authorize native
-// host/void/fill activation. Foreign tessellations remain diagnosed
+// unit assignment proves metres. Foreign tessellations remain diagnosed
 // source data; metadata alone never activates native manufacturing semantics.
 // Hosted voids require one actual wall parent across all void relationships.
 // Proved swept and native voids retain legacy door/window classification without

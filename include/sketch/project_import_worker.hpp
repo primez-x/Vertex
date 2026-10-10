@@ -1,7 +1,9 @@
 #pragma once
 
 #include "sketch/annotation_entity_codec.hpp"
+#include "sketch/boundary_entity.hpp"
 #include "sketch/document.hpp"
+#include "sketch/dxf_project_exchange.hpp"
 #include "sketch/geometry.hpp"
 #include "sketch/wall_semantics.hpp"
 #include "sketch/opening_assembly.hpp"
@@ -208,6 +210,33 @@ inline void validate_slab(const Entity& entity, GeometryBudget& budget) {
     }
     budget.charge_cross(topology_segments);
     if (validate_boundary_holes(outer, holes).has_value()) reject();
+}
+
+inline void validate_native_dxf_boundary(const Entity& entity, GeometryBudget& budget) {
+    const auto& marker = entity.extensions.at("vertex_dxf_boundary");
+    fields(marker, {"version", "depiction"});
+    if (!marker.at("version").is_number_integer() || marker.at("version") != 2 ||
+        marker.at("depiction") != "BOUNDARY_PLAN_V1" ||
+        entity.extensions.contains("physical_wall_room") ||
+        native_dxf_boundary_has_untransported_links(entity)) reject();
+    const auto& properties = entity.properties;
+    const char* key = properties.contains("boundary_model_version") ? "segments" :
+        properties.contains("boundary") ? "boundary" : "segments";
+    if (!properties.contains(key)) reject();
+    // Bound pair/segment work before the full Document topology/receipt checks.
+    // Native edges may include local identities and opaque source fields.
+    const auto outer = boundary(properties.at(key), true, budget, false);
+    std::vector<Boundary> holes;
+    std::size_t topology_segments = outer.size();
+    if (const auto values = properties.find("holes"); values != properties.end()) {
+        if (!values->is_array()) reject();
+        for (const auto& value : *values) {
+            holes.push_back(boundary(value, true, budget, false));
+            topology_segments += holes.back().size();
+        }
+    }
+    budget.charge_cross(topology_segments);
+    if (validate_boundary_holes(outer, holes)) reject();
 }
 // These checks deliberately use only the core protocol/analytical geometry.
 // A broker must bound authored parameters before any native solid construction.
@@ -472,14 +501,18 @@ inline void validate(const ProjectImportCandidate& result) {
         (void)text(entity.id, false);
         if (!entity_ids.insert(entity.id).second || entity.required ||
             !entity.properties.is_object() || !entity.extensions.is_object()) reject();
+        const bool native_dxf_boundary = result.kind == ProjectImportKind::dxf &&
+            can_recognize_boundary_entity_type(entity.type) && entity.extensions.contains("vertex_dxf_boundary");
         const bool shared = entity.type == "boundary" || entity.type == "wall" || entity.type == "opening";
-        const bool dxf = entity.type == "annotation_state";
+        const bool dxf = entity.type == "annotation_state" || native_dxf_boundary;
         const bool ifc = entity.type == "wall" || entity.type == "slab" || entity.type == "roof" || entity.type == "room" ||
             entity.type == "opening" || entity.type == "ifc_reference" ||
             entity.type == "stair" || entity.type == "railing";
         if (!shared && !(result.kind == ProjectImportKind::dxf ? dxf : ifc)) reject();
         if (entity.properties.contains("parent_id") || entity.properties.contains("layer_id")) reject();
-        if (entity.type == "boundary") {
+        if (native_dxf_boundary) {
+            validate_native_dxf_boundary(entity, geometry_budget);
+        } else if (entity.type == "boundary") {
             if (entity.properties.contains("boundary_model_version") ||
                 !entity.properties.contains("boundary") ||
                 !entity.properties.contains("classification") ||

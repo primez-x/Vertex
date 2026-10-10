@@ -437,6 +437,95 @@ IdentifiedBoundary replay_geometry_derivation(const Entity& entity) {
 }
 } // namespace
 
+Entity remap_boundary_owner_identity(const Entity& source, std::string destination_id) {
+    const auto version = inspect_boundary_entity_version(source);
+    if (version.format == BoundaryEntityFormat::unsupported_version)
+        throw std::invalid_argument(version.diagnostic);
+    if (destination_id == source.id)
+        throw std::invalid_argument("Boundary owner remapping requires a fresh entity identity");
+    auto result = source;
+    result.id = std::move(destination_id);
+    // Inspection validates the destination identifier without rewriting its
+    // geometry or interpreting identity-shaped legacy vendor fields.
+    (void)inspect_boundary_entity_version(result);
+    if (version.format == BoundaryEntityFormat::anonymous_legacy) return result;
+
+    const auto qualify = [](const Entity& owner) {
+        if (const auto reason = validate_physical_wall_room_descriptor(owner))
+            throw std::invalid_argument(*reason);
+        if (owner.properties.contains("wall_measurement_source"))
+            (void)exterior_wall_measurement_source_ids(owner);
+        if (const auto reason = validate_boundary_integrity({{owner.id, owner}}))
+            throw std::invalid_argument(*reason);
+    };
+    qualify(source);
+    const auto remap_authoring = [&](nlohmann::json& envelope) {
+        const auto decoded = decode_boundary_receipt_envelope(envelope);
+        if (!decoded.supported()) throw std::invalid_argument(decoded.diagnostic);
+        auto record = *decoded.record;
+        if (record.boundary_id != source.id)
+            throw std::invalid_argument("Boundary construction owner does not match its source");
+        record.boundary_id = result.id;
+        const auto encoded = encode_boundary_receipt_envelope(record);
+        // The typed encoder validates the remapped record, but can canonicalize
+        // numeric JSON. Replace only its owner field in the retained wire value
+        // so schema, transforms, captured inputs and extensions remain exact.
+        envelope.at("boundary_id") = encoded.at("boundary_id");
+    };
+    if (result.properties.contains("boundary_authoring"))
+        remap_authoring(result.properties.at("boundary_authoring"));
+    if (result.extensions.contains("boundary_geometry_derivation")) {
+        auto& derivation = result.extensions.at("boundary_geometry_derivation");
+        // qualify(source) has already strictly replayed versions one/two and
+        // every operation envelope. Version two's origin has no owner field.
+        if (derivation.at("version") == 1)
+            remap_authoring(derivation.at("source_boundary_authoring"));
+        const auto remap_edit = [&](nlohmann::json& value) {
+            auto edit = decode_boundary_geometry_edit(value);
+            if (edit.boundary_id != source.id)
+                throw std::invalid_argument("Boundary geometry edit owner does not match its source");
+            edit.boundary_id = result.id;
+            if (edit.kind == BoundaryGeometryEditKind::redefine_boundary) {
+                edit.target_id = result.id;
+                if (!edit.replacement_authoring.is_null()) {
+                    remap_authoring(edit.replacement_authoring);
+                    value.at("replacement_authoring") = edit.replacement_authoring;
+                }
+            }
+            const auto encoded = encode_boundary_geometry_edit(edit);
+            // Preserve the original edit dialect and numeric representation;
+            // local targets, replacement IDs and external sources are unchanged.
+            value.at("boundary_id") = encoded.at("boundary_id");
+        };
+        for (auto& operation : derivation.at("operations")) {
+            const auto kind = operation.at("kind").get<std::string>();
+            if (kind == "geometry_edit") remap_edit(operation.at("value"));
+            else if (kind == "vertex_batch") {
+                for (auto& edit : operation.at("value")) remap_edit(edit);
+            } else if (kind == "transform") {
+                auto transformation = decode_boundary_transform(operation.at("value"));
+                if (transformation.boundary_id != source.id)
+                    throw std::invalid_argument("Boundary transform owner does not match its source");
+                transformation.boundary_id = result.id;
+                operation.at("value").at("boundary_id") =
+                    encode_boundary_transform(transformation).at("boundary_id");
+            } else if (kind == "wall_merge" || kind == "physical_room_wall_merge" ||
+                       kind == "physical_room_wall_split") {
+                // Strict compound replay derives the boundary owner from the
+                // Entity. Persisted identities belong to its unchanged local
+                // children or external wall sources. Repair descriptor digests
+                // also exclude Entity.id, so those proofs remain exact.
+            } else {
+                throw std::invalid_argument("Unsupported boundary owner remapping operation: " + kind);
+            }
+        }
+    }
+    // This also exercises the existing architectural-engine guards for compound
+    // physical operations. No source/candidate state escapes on any failure.
+    qualify(result);
+    return result;
+}
+
 void record_boundary_identities(BoundaryIdentityHistory& history,
     const std::map<std::string, Entity, std::less<>>& entities) {
     for (const auto& [id, entity] : entities) {

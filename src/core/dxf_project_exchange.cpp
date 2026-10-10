@@ -4,6 +4,7 @@
 #include "sketch/annotation_entity_codec.hpp"
 #include "sketch/boundary_dimension.hpp"
 #include "sketch/boundary_entity.hpp"
+#include "sketch/boundary_integrity.hpp"
 #include "sketch/constraint_phase_scope.hpp"
 #include "sketch/measurement_linework.hpp"
 #include "sketch/document_wall.hpp"
@@ -39,6 +40,7 @@ using Json = nlohmann::json;
 constexpr double kGeometryTolerance = 1e-7;
 constexpr double kFullTurn = 2.0 * std::numbers::pi;
 constexpr const char* kManufacturedDepiction = "MANUFACTURED_PLAN_V1";
+constexpr const char* kBoundaryDepiction = "BOUNDARY_PLAN_V1";
 
 std::string block_identity(std::string_view name) {
     std::string result(name);
@@ -499,6 +501,71 @@ Json bounded_native_json(std::string_view bytes) {
     return Json::parse(bytes, callback);
 }
 
+DxfBlock boundary_plan_block(const Entity& entity, std::string name, const std::string& layer) {
+    if (native_dxf_boundary_has_untransported_links(entity))
+        throw std::invalid_argument("native boundary dependent graph is not transported");
+    const auto outer = read_entity_boundary(entity);
+    if (!outer || outer->size() > 4096 ||
+        !same_point(outer->back().end, outer->front().start))
+        throw std::invalid_argument("native boundary must be closed");
+    std::vector<Boundary> holes;
+    std::size_t segment_count = outer->size();
+    if (const auto values = entity.properties.find("holes"); values != entity.properties.end()) {
+        if (!values->is_array()) throw std::invalid_argument("native holes must be an array");
+        for (const auto& value : *values) {
+            auto hole = read_boundary_value(value);
+            if (!hole || hole->size() > 4096 - segment_count)
+                throw std::invalid_argument("native hole primitive limit");
+            segment_count += hole->size();
+            holes.push_back(std::move(*hole));
+        }
+    }
+    if (const auto error = validate_boundary_holes(*outer, holes))
+        throw std::invalid_argument(*error);
+    DxfDrawing plan;
+    std::vector<DxfProjectDiagnostic> diagnostics;
+    add_boundary_as_dxf(plan, *outer, layer, diagnostics, entity.id, entity.type);
+    for (const auto& hole : holes)
+        add_boundary_as_dxf(plan, hole, layer, diagnostics, entity.id, entity.type);
+    if (!diagnostics.empty()) throw std::invalid_argument("native boundary plan is not representable");
+    return {std::move(name), {}, std::move(plan.lines), std::move(plan.arcs),
+            std::move(plan.polylines), {}, {}};
+}
+
+Entity detached_native_entity(const Entity& source, const std::map<std::string, std::string>& ids);
+
+bool export_boundary_entity(const DocumentSnapshot& document, const Entity& entity, const std::string& layer,
+                            DxfProjectExportResult& result) {
+    try {
+        auto metadata = native_payload(document, entity, {});
+        // V1 remains the unchanged wall/opening contract. V2 admits only a
+        // closed native boundary whose entire outer/hole plan can be proved.
+        metadata["version"] = 2;
+        metadata["depiction"] = kBoundaryDepiction;
+        const auto payload = metadata.dump();
+        if (payload.size() > 16 * 1024) throw std::invalid_argument("native payload byte limit");
+        (void)bounded_native_json(payload);
+        if (entity.extensions.contains("physical_wall_room"))
+            throw std::invalid_argument("physical room source graph unavailable");
+        // A standalone boundary cannot promise editable reconstruction of
+        // absent dependent graphs. Organizational bindings alone are detached.
+        if (!Document::create({detached_native_entity(entity, {{entity.id, entity.id}})}).snapshot().is_editable())
+            throw std::invalid_argument("native boundary schema is not editable");
+        auto block = boundary_plan_block(entity,
+            "VERTEX_BOUNDARY_" + std::to_string(result.drawing.blocks.size() + 1), layer);
+        block.vertex_entity_json = payload;
+        DxfDrawing bounded;
+        bounded.blocks.push_back(block);
+        (void)export_dxf_ascii(bounded);
+        result.drawing.inserts.push_back({block.name, {}, 1, 1, 0, layer});
+        result.drawing.blocks.push_back(std::move(block));
+        return true;
+    } catch (const std::exception&) {
+        diagnostic(result.diagnostics, entity.id, entity.type, "native_boundary_not_representable");
+        return false;
+    }
+}
+
 void export_architectural_entity(const DocumentSnapshot& document, const Entity& entity,
                                 DxfProjectExportResult& result, const ConstraintPhaseScope& scope) {
     try {
@@ -626,6 +693,8 @@ void export_native_entity(const DocumentSnapshot& document, const Entity& entity
             diagnostic(result.diagnostics, entity.id, entity.type, "boundary_not_representable");
             return;
         }
+        if (boundary->size() >= 2 && same_point(boundary->back().end, boundary->front().start) &&
+            export_boundary_entity(document, entity, layer, result)) return;
         const auto line_count = result.drawing.lines.size();
         const auto arc_count = result.drawing.arcs.size();
         const auto polyline_count = result.drawing.polylines.size();
@@ -1290,6 +1359,13 @@ NativeCandidate decode_native_candidate(const DxfBlock& block, std::size_t inser
     std::set<std::string> expected{"version", "id", "type", "properties", "extensions", "hosted_opening_ids"};
     std::set<std::string> actual;
     if (!payload.is_object()) throw std::invalid_argument("native payload must be object");
+    const bool boundary = payload.contains("version") && payload.at("version").is_number_integer() &&
+        payload.at("version") == 2;
+    if (boundary) {
+        expected.insert("depiction");
+        if (!payload.contains("depiction") || payload.at("depiction") != kBoundaryDepiction)
+            throw std::invalid_argument("boundary depiction contract missing");
+    }
     const bool manufactured = payload.contains("properties") && payload.at("properties").is_object() &&
         payload.at("properties").contains("opening_assembly");
     if (manufactured) {
@@ -1301,14 +1377,16 @@ NativeCandidate decode_native_candidate(const DxfBlock& block, std::size_t inser
 #endif
     }
     for (const auto& [key, value] : payload.items()) { (void)value; actual.insert(key); }
-    if (actual != expected || !payload.at("version").is_number_integer() || payload.at("version") != 1 ||
+    if (actual != expected || !payload.at("version").is_number_integer() ||
+        (!boundary && payload.at("version") != 1) ||
         !payload.at("id").is_string() || !payload.at("type").is_string() ||
         !payload.at("properties").is_object() || !payload.at("extensions").is_object() ||
         !payload.at("hosted_opening_ids").is_array()) throw std::invalid_argument("invalid native payload schema");
     NativeCandidate candidate{{payload.at("id").get<std::string>(), payload.at("type").get<std::string>(),
                                payload.at("properties"), false, payload.at("extensions")}, {}, insert_index, &block};
     if (candidate.entity.id.empty() || candidate.entity.id.size() > 255 ||
-        (candidate.entity.type != "wall" && candidate.entity.type != "opening") ||
+        (boundary ? !can_recognize_boundary_entity_type(candidate.entity.type) :
+         candidate.entity.type != "wall" && candidate.entity.type != "opening") ||
         (manufactured && candidate.entity.type != "opening"))
         throw std::invalid_argument("native entity type/id not allowed");
     std::set<std::string> hosted;
@@ -1317,13 +1395,17 @@ NativeCandidate decode_native_candidate(const DxfBlock& block, std::size_t inser
             !hosted.insert(id.get<std::string>()).second) throw std::invalid_argument("invalid hosted ID list");
         candidate.hosted_ids.push_back(id.get<std::string>());
     }
-    if (candidate.entity.type == "opening" && !candidate.hosted_ids.empty())
-        throw std::invalid_argument("opening cannot host children");
+    if ((candidate.entity.type == "opening" || boundary) && !candidate.hosted_ids.empty())
+        throw std::invalid_argument("native entity cannot host children");
+    if (boundary && candidate.entity.extensions.contains("physical_wall_room"))
+        throw std::invalid_argument("physical room source graph unavailable");
     return candidate;
 }
 
-bool same_block_geometry(const DxfBlock& a, const DxfBlock& b) {
-    const auto near = [](double x, double y) { return std::abs(x - y) <= kGeometryTolerance; };
+bool same_block_geometry(const DxfBlock& a, const DxfBlock& b, bool exact = false) {
+    const auto near = [exact](double x, double y) {
+        return exact ? x == y : std::abs(x - y) <= kGeometryTolerance;
+    };
     const auto point = [&](DxfPoint x, DxfPoint y) { return near(x.x, y.x) && near(x.y, y.y); };
     if (!a.labels.empty() || !b.labels.empty() || a.lines.size() != b.lines.size() ||
         a.arcs.size() != b.arcs.size() || a.polylines.size() != b.polylines.size() ||
@@ -1348,18 +1430,28 @@ bool same_block_geometry(const DxfBlock& a, const DxfBlock& b) {
 }
 
 // Bindings to absent project scaffolding remain inert source evidence. Only
-// wall/opening identity and host relationships become active in this profile.
+// boundary topology and wall/opening host relationships become active here.
 Entity detached_native_entity(const Entity& source, const std::map<std::string, std::string>& ids) {
-    Entity result = source;
+    Entity result = can_recognize_boundary_entity_type(source.type) && ids.at(source.id) != source.id
+        ? remap_boundary_owner_identity(source, ids.at(source.id)) : source;
     result.id = ids.at(source.id);
     if (!result.extensions.contains("vertex_dxf_source"))
         result.extensions["vertex_dxf_source"] = {{"version", 1}, {"id", source.id},
             {"properties", source.properties}, {"extensions", source.extensions}};
-    for (const auto* key : {"floor_id", "layer_id", "vertical_placement", "level_connection",
-                            "material_assignment", "wall_join_id", "room_id", "building_id", "property_id"})
+    for (const auto* key : {"floor_id", "layer_id", "building_id", "property_id"})
         result.properties.erase(key);
-    if (result.properties.contains("layers") && result.properties.at("layers").is_array())
-        for (auto& layer : result.properties["layers"]) if (layer.is_object()) layer.erase("material_assignment");
+    if (can_recognize_boundary_entity_type(source.type)) {
+        // Legacy names are organizational bindings too. A reviewed desktop
+        // destination must not be overridden on later export by a source name.
+        result.properties.erase("layer");
+        result.properties.erase("layer_name");
+    } else {
+        for (const auto* key : {"vertical_placement", "level_connection", "material_assignment",
+                               "wall_join_id", "room_id"}) result.properties.erase(key);
+        if (result.properties.contains("layers") && result.properties.at("layers").is_array())
+            for (auto& layer : result.properties["layers"])
+                if (layer.is_object()) layer.erase("material_assignment");
+    }
     if (source.type == "wall") {
         Wall decoded;
         std::string error;
@@ -1371,7 +1463,7 @@ Entity detached_native_entity(const Entity& source, const std::map<std::string, 
         if (decoded.top_gradient_m_per_m)
             result.properties["top_plane"] = wall_top_plane_json(*decoded.top_gradient_m_per_m);
         for (const auto* key : {"thickness", "height", "elevation", "slope_rise"}) result.properties.erase(key);
-    } else {
+    } else if (source.type == "opening") {
         result.properties["wall_id"] = ids.at(source.properties.at("wall_id").get<std::string>());
         for (const auto* key : {"offset", "width", "sill", "height"}) {
             const auto canonical = std::string(key) + "_m";
@@ -1409,6 +1501,34 @@ std::set<std::size_t> import_native_graphs(const DxfDrawing& drawing, bool sourc
     }
     std::set<std::string> allocated_ids;
     for (const auto& [id, candidate] : candidates) { (void)candidate; allocated_ids.insert(id); }
+    for (const auto& [id, candidate] : candidates) {
+        if (!can_recognize_boundary_entity_type(candidate.entity.type)) continue;
+        try {
+            if (duplicate_ids.contains(id)) throw std::invalid_argument("duplicate native identity");
+            auto fresh = make_stable_id();
+            while (!allocated_ids.insert(fresh).second) fresh = make_stable_id();
+            auto entity = detached_native_entity(candidate.entity, {{id, fresh}});
+            // Missing dependent graphs are never removed to force admission.
+            // Document validation and a regenerated complete plan prove this
+            // detached boundary before any candidate is published.
+            const auto document = Document::create({entity}).snapshot();
+            if (!document.is_editable()) throw std::invalid_argument("native boundary schema is not editable");
+            const auto& block = *candidate.block;
+            const auto layer = !block.lines.empty() ? block.lines.front().layer :
+                !block.arcs.empty() ? block.arcs.front().layer :
+                !block.polylines.empty() ? block.polylines.front().layer : std::string("0");
+            const auto expected = boundary_plan_block(document.entities().at(fresh), block.name, layer);
+            if (!same_block_geometry(block, expected, true))
+                throw std::invalid_argument("native boundary geometry differs");
+            const auto effective_layer = layer == "0" ? drawing.inserts.at(candidate.insert_index).layer : layer;
+            entity.extensions["dxf_source"] = source_extension(effective_layer, "INSERT");
+            entity.extensions["vertex_dxf_boundary"] = {{"version", 2}, {"depiction", kBoundaryDepiction}};
+            result.entities.push_back(std::move(entity));
+            activated.insert(candidate.insert_index);
+        } catch (const std::exception&) {
+            diagnostic(result.diagnostics, id, candidate.entity.type, "native_boundary_not_activated");
+        }
+    }
     for (const auto& [id, wall] : candidates) {
         if (wall.entity.type != "wall") continue;
         try {

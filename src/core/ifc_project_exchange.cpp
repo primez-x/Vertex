@@ -22,6 +22,7 @@
 #include <charconv>
 #include <cmath>
 #include <cstdint>
+#include <iterator>
 #include <limits>
 #include <map>
 #include <optional>
@@ -2408,23 +2409,72 @@ std::optional<Segment> reconstructed_wall_axis(const GeometryResult& geometry, c
     return axis;
 }
 
-// Retain the earlier declaration policy for legacy wall/slab/axis exchange.
-// Native mesh activation uses the actual project assignment below.
-bool declared_metre_units(const ParsedStep& parsed, std::size_t& count, const IfcExchangeLimits& limits) {
-    bool found = false;
-    for (const auto& record : parsed.records) {
-        if (record.type == "IFCCONVERSIONBASEDUNIT") return false;
-        if (record.type != "IFCSIUNIT") continue;
-        const auto fields = split_top_level(record.args, count, limits);
-        require(fields.size() == 4);
-        if (upper(fields[1]) != ".LENGTHUNIT.") continue;
-        if (found || fields[2] != "$" || upper(fields[3]) != ".METRE.") return false;
-        found = true;
-    }
-    return found;
+// IFC4 named and derived units use different role enumerations. USERDEFINED
+// does not prove a nonlength role, and an unknown role must not hide a second
+// length authority. These lists follow IFC4 ADD2 TC1 IfcMeasureResource.
+bool nonlength_named_unit_role(std::string_view role) {
+    static constexpr std::string_view roles[] = {
+        ".ABSORBEDDOSEUNIT.", ".AMOUNTOFSUBSTANCEUNIT.", ".AREAUNIT.", ".DOSEEQUIVALENTUNIT.",
+        ".ELECTRICCAPACITANCEUNIT.", ".ELECTRICCHARGEUNIT.", ".ELECTRICCONDUCTANCEUNIT.",
+        ".ELECTRICCURRENTUNIT.", ".ELECTRICRESISTANCEUNIT.", ".ELECTRICVOLTAGEUNIT.",
+        ".ENERGYUNIT.", ".FORCEUNIT.", ".FREQUENCYUNIT.", ".ILLUMINANCEUNIT.", ".INDUCTANCEUNIT.",
+        ".LUMINOUSFLUXUNIT.", ".LUMINOUSINTENSITYUNIT.", ".MAGNETICFLUXDENSITYUNIT.",
+        ".MAGNETICFLUXUNIT.", ".MASSUNIT.", ".PLANEANGLEUNIT.", ".POWERUNIT.", ".PRESSUREUNIT.",
+        ".RADIOACTIVITYUNIT.", ".SOLIDANGLEUNIT.", ".THERMODYNAMICTEMPERATUREUNIT.",
+        ".TIMEUNIT.", ".VOLUMEUNIT."};
+    return std::find(std::begin(roles), std::end(roles), role) != std::end(roles);
 }
 
-#ifdef SKETCH_IFC_NATIVE_GEOMETRY
+bool nonlength_derived_unit_role(std::string_view role) {
+    static constexpr std::string_view roles[] = {
+        ".ANGULARVELOCITYUNIT.", ".AREADENSITYUNIT.", ".COMPOUNDPLANEANGLEUNIT.",
+        ".DYNAMICVISCOSITYUNIT.", ".HEATFLUXDENSITYUNIT.", ".INTEGERCOUNTRATEUNIT.",
+        ".ISOTHERMALMOISTURECAPACITYUNIT.", ".KINEMATICVISCOSITYUNIT.", ".LINEARVELOCITYUNIT.",
+        ".MASSDENSITYUNIT.", ".MASSFLOWRATEUNIT.", ".MOISTUREDIFFUSIVITYUNIT.",
+        ".MOLECULARWEIGHTUNIT.", ".SPECIFICHEATCAPACITYUNIT.", ".THERMALADMITTANCEUNIT.",
+        ".THERMALCONDUCTANCEUNIT.", ".THERMALRESISTANCEUNIT.", ".THERMALTRANSMITTANCEUNIT.",
+        ".VAPORPERMEABILITYUNIT.", ".VOLUMETRICFLOWRATEUNIT.", ".ROTATIONALFREQUENCYUNIT.",
+        ".TORQUEUNIT.", ".MOMENTOFINERTIAUNIT.", ".LINEARMOMENTUNIT.", ".LINEARFORCEUNIT.",
+        ".PLANARFORCEUNIT.", ".MODULUSOFELASTICITYUNIT.", ".SHEARMODULUSUNIT.",
+        ".LINEARSTIFFNESSUNIT.", ".ROTATIONALSTIFFNESSUNIT.", ".MODULUSOFSUBGRADEREACTIONUNIT.",
+        ".ACCELERATIONUNIT.", ".CURVATUREUNIT.", ".HEATINGVALUEUNIT.", ".IONCONCENTRATIONUNIT.",
+        ".LUMINOUSINTENSITYDISTRIBUTIONUNIT.", ".MASSPERLENGTHUNIT.",
+        ".MODULUSOFLINEARSUBGRADEREACTIONUNIT.", ".MODULUSOFROTATIONALSUBGRADEREACTIONUNIT.",
+        ".PHUNIT.", ".ROTATIONALMASSUNIT.", ".SECTIONAREAINTEGRALUNIT.", ".SECTIONMODULUSUNIT.",
+        ".SOUNDPOWERLEVELUNIT.", ".SOUNDPOWERUNIT.", ".SOUNDPRESSURELEVELUNIT.",
+        ".SOUNDPRESSUREUNIT.", ".TEMPERATUREGRADIENTUNIT.", ".TEMPERATURERATEOFCHANGEUNIT.",
+        ".THERMALEXPANSIONCOEFFICIENTUNIT.", ".WARPINGCONSTANTUNIT.", ".WARPINGMOMENTUNIT."};
+    return std::find(std::begin(roles), std::end(roles), role) != std::end(roles);
+}
+
+bool valid_si_unit_role(std::string_view role, std::string_view name, std::string_view prefix) {
+    static constexpr std::pair<std::string_view, std::string_view> units[] = {
+        {".ELECTRICCURRENTUNIT.", ".AMPERE."}, {".RADIOACTIVITYUNIT.", ".BECQUEREL."},
+        {".LUMINOUSINTENSITYUNIT.", ".CANDELA."}, {".ELECTRICCHARGEUNIT.", ".COULOMB."},
+        {".VOLUMEUNIT.", ".CUBIC_METRE."}, {".THERMODYNAMICTEMPERATUREUNIT.", ".DEGREE_CELSIUS."},
+        {".ELECTRICCAPACITANCEUNIT.", ".FARAD."}, {".MASSUNIT.", ".GRAM."},
+        {".ABSORBEDDOSEUNIT.", ".GRAY."}, {".INDUCTANCEUNIT.", ".HENRY."},
+        {".FREQUENCYUNIT.", ".HERTZ."}, {".ENERGYUNIT.", ".JOULE."},
+        {".THERMODYNAMICTEMPERATUREUNIT.", ".KELVIN."}, {".LUMINOUSFLUXUNIT.", ".LUMEN."},
+        {".ILLUMINANCEUNIT.", ".LUX."}, {".LENGTHUNIT.", ".METRE."},
+        {".AMOUNTOFSUBSTANCEUNIT.", ".MOLE."}, {".FORCEUNIT.", ".NEWTON."},
+        {".ELECTRICRESISTANCEUNIT.", ".OHM."}, {".PRESSUREUNIT.", ".PASCAL."},
+        {".PLANEANGLEUNIT.", ".RADIAN."}, {".TIMEUNIT.", ".SECOND."},
+        {".ELECTRICCONDUCTANCEUNIT.", ".SIEMENS."}, {".DOSEEQUIVALENTUNIT.", ".SIEVERT."},
+        {".AREAUNIT.", ".SQUARE_METRE."}, {".SOLIDANGLEUNIT.", ".STERADIAN."},
+        {".MAGNETICFLUXDENSITYUNIT.", ".TESLA."}, {".ELECTRICVOLTAGEUNIT.", ".VOLT."},
+        {".POWERUNIT.", ".WATT."}, {".MAGNETICFLUXUNIT.", ".WEBER."}};
+    static constexpr std::string_view prefixes[] = {
+        ".EXA.", ".PETA.", ".TERA.", ".GIGA.", ".MEGA.", ".KILO.", ".HECTO.", ".DECA.",
+        ".DECI.", ".CENTI.", ".MILLI.", ".MICRO.", ".NANO.", ".PICO.", ".FEMTO.", ".ATTO."};
+    if (prefix != "$" && std::find(std::begin(prefixes), std::end(prefixes), prefix) == std::end(prefixes))
+        return false;
+    return std::find(std::begin(units), std::end(units), std::pair{role, name}) != std::end(units);
+}
+
+// Every reconstruction uses the actual project's UnitsInContext. Orphan
+// declarations neither authorize nor override that linked assignment. Other
+// recognized unit roles do not require conversion to prove metre length units.
 bool metre_units(const ParsedStep& parsed, std::size_t& count, const IfcExchangeLimits& limits) {
     const StepRecord* project = nullptr;
     for (const auto& record : parsed.records) if (record.type == "IFCPROJECT") {
@@ -2447,16 +2497,67 @@ bool metre_units(const ParsedStep& parsed, std::size_t& count, const IfcExchange
         const auto unit_id = reference(value);
         if (!unit_id) return false;
         const auto* unit = find_record(parsed, *unit_id);
-        if (!unit || unit->type != "IFCSIUNIT") return false;
+        if (!unit) return false;
         const auto fields = split_top_level(unit->args, count, limits);
-        if (fields.size() != 4 || fields[0] != "*") return false;
-        if (upper(fields[1]) != ".LENGTHUNIT.") continue;
-        if (found || fields[2] != "$" || upper(fields[3]) != ".METRE.") return false;
+        if (unit->type == "IFCMONETARYUNIT") {
+            if (fields.size() != 1 || fields[0] == "$" || fields[0].front() != '\'' ||
+                fields[0].back() != '\'') return false;
+            (void)decode_string(fields[0], limits);
+            continue;
+        }
+        if (unit->type == "IFCDERIVEDUNIT") {
+            if (fields.size() != 3 || !nonlength_derived_unit_role(upper(fields[1])) ||
+                fields[0].front() != '(' || fields[0].back() != ')') return false;
+            const auto elements = list_references(fields[0], count, limits);
+            if (elements.empty()) return false;
+            for (const auto id : elements) {
+                const auto* element = find_record(parsed, id);
+                if (!element || element->type != "IFCDERIVEDUNITELEMENT") return false;
+                const auto element_fields = split_top_level(element->args, count, limits);
+                if (element_fields.size() != 2 || !reference(element_fields[0])) return false;
+                const auto* component = find_record(parsed, *reference(element_fields[0]));
+                if (!component || (component->type != "IFCSIUNIT" &&
+                    component->type != "IFCCONVERSIONBASEDUNIT" &&
+                    component->type != "IFCCONVERSIONBASEDUNITWITHOFFSET" &&
+                    component->type != "IFCCONTEXTDEPENDENTUNIT")) return false;
+                (void)number<int>(element_fields[1]);
+            }
+            if (fields[2] != "$") (void)decode_string(fields[2], limits);
+            continue;
+        }
+        const bool si = unit->type == "IFCSIUNIT";
+        const bool conversion = unit->type == "IFCCONVERSIONBASEDUNIT";
+        const bool offset = unit->type == "IFCCONVERSIONBASEDUNITWITHOFFSET";
+        const bool context = unit->type == "IFCCONTEXTDEPENDENTUNIT";
+        if ((!si && !conversion && !offset && !context) ||
+            fields.size() != (context ? 3U : offset ? 5U : 4U)) return false;
+        const auto role = upper(fields[1]);
+        if (role != ".LENGTHUNIT." && !nonlength_named_unit_role(role)) return false;
+        if (si) {
+            if (fields[0] != "*" || !valid_si_unit_role(role, upper(fields[3]), upper(fields[2]))) return false;
+        } else {
+            const auto dimensions_id = reference(fields[0]);
+            const auto* dimensions = dimensions_id ? find_record(parsed, *dimensions_id) : nullptr;
+            if (!dimensions || dimensions->type != "IFCDIMENSIONALEXPONENTS") return false;
+            const auto exponents = split_top_level(dimensions->args, count, limits);
+            if (exponents.size() != 7) return false;
+            for (const auto& exponent : exponents) (void)number<int>(exponent);
+            if (fields[2] == "$") return false;
+            (void)decode_string(fields[2], limits);
+            if (conversion || offset) {
+                const auto factor_id = reference(fields[3]);
+                const auto* factor = factor_id ? find_record(parsed, *factor_id) : nullptr;
+                if (!factor || factor->type != "IFCMEASUREWITHUNIT" ||
+                    split_top_level(factor->args, count, limits).size() != 2) return false;
+            }
+            if (offset) (void)number<double>(fields[4]);
+        }
+        if (role != ".LENGTHUNIT.") continue;
+        if (found || !si || fields[2] != "$" || upper(fields[3]) != ".METRE.") return false;
         found = true;
     }
     return found;
 }
-#endif
 
 std::optional<std::vector<IfcNativeMesh>> product_meshes(const ParsedStep& parsed,
     const StepRecord& product, std::size_t& count, const IfcExchangeLimits& limits,
@@ -3081,9 +3182,8 @@ IfcProjectImportResult import_project_ifc(std::string_view bytes,
     std::size_t argument_count = parsed.argument_count;
     std::set<int> retained_metadata_records;
     const auto metadata_by_id = vertex_properties(parsed, argument_count, limits, retained_metadata_records);
-    const auto supported_units = declared_metre_units(parsed, argument_count, limits);
+    const auto supported_units = metre_units(parsed, argument_count, limits);
 #ifdef SKETCH_IFC_NATIVE_GEOMETRY
-    const auto native_project_units = metre_units(parsed, argument_count, limits);
     NativeReconstructionLedger native_ledger{{0, 0, "ifc_native_reconstruction_budget_exceeded"},
         limits.max_mesh_vertices, limits.max_mesh_triangles};
 #endif
@@ -3092,14 +3192,17 @@ IfcProjectImportResult import_project_ifc(std::string_view bytes,
     for (const auto& record : parsed.records) {
         if (!is_product(record.type)) continue;
 #ifdef SKETCH_IFC_NATIVE_GEOMETRY
-        if (!native_project_units && metadata_by_id.contains(record.id)) {
+        if (!supported_units && metadata_by_id.contains(record.id)) {
             const auto& metadata = metadata_by_id.at(record.id);
             if (native_mesh_role(metadata, "wall") || native_mesh_role(metadata, "void") ||
-                native_mesh_role(metadata, "fill"))
+                native_mesh_role(metadata, "fill") ||
+                (record.type == "IFCROOF" && native_mesh_role(metadata, "roof")) ||
+                (record.type == "IFCSPACE" && native_mesh_role(metadata, "room")))
                 add_diagnostic(result.diagnostics, "#" + std::to_string(record.id), record.type,
                     "native_project_length_units_not_reconstructed");
         }
 #endif
+        if (!supported_units) continue;
         if (auto mesh = product_meshes(parsed, record, argument_count, limits, mesh_vertices, mesh_triangles))
             meshes_by_id.emplace(record.id, std::move(*mesh));
     }
@@ -3138,7 +3241,7 @@ IfcProjectImportResult import_project_ifc(std::string_view bytes,
                     }
                 } else link_valid = parents == aggregate_parents.end();
             }
-            if (native_project_units && link_valid && meshes_by_id.contains(record.id)) {
+            if (supported_units && link_valid && meshes_by_id.contains(record.id)) {
                 if (auto candidate = reconstructed_native_stair_or_railing(parsed, record, metadata,
                     meshes_by_id.at(record.id), argument_count, limits, native_ledger, host, host_metadata)) {
                     if (admitted_native_ids.insert(candidate->id).second) {
@@ -3155,7 +3258,7 @@ IfcProjectImportResult import_project_ifc(std::string_view bytes,
                     "native_stair_or_railing_reconstruction_budget_exceeded");
         }
         if (!recovered) add_diagnostic(result.diagnostics, "#" + std::to_string(record.id), record.type,
-            native_project_units ? "native_stair_or_railing_geometry_metadata_inconsistent" :
+            supported_units ? "native_stair_or_railing_geometry_metadata_inconsistent" :
                 "native_project_length_units_not_reconstructed");
     }
     std::map<std::string, std::string> stair_identity_map;
@@ -3177,6 +3280,20 @@ IfcProjectImportResult import_project_ifc(std::string_view bytes,
 #endif
     for (const auto& record : parsed.records) {
         if (is_product(record.type)) {
+            if (!supported_units) {
+                // Source coordinates have no proved metre interpretation. Keep
+                // every product inert, including products without a decoded
+                // footprint or Vertex payload. The required source receipt
+                // retains the referenced geometry and unit records verbatim.
+                const auto metadata = metadata_by_id.find(record.id);
+                result.entities.push_back(Entity{"ifc-" + std::to_string(record.id), "ifc_reference",
+                    Json{{"ifc_name", product_string(record, 2, argument_count, limits)},
+                         {"ifc_type", record.type}}, false,
+                    Json{{"ifc_source", {{"record_id", record.id}, {"record_type", record.type},
+                                         {"arguments", record.args}}},
+                         {"ifc_vertex_properties", metadata == metadata_by_id.end() ? Json::object() : metadata->second}}});
+                continue;
+            }
 #ifdef SKETCH_IFC_NATIVE_GEOMETRY
             if (admitted_stairs.contains(record.id) || admitted_rails.contains(record.id)) {
                 auto candidate = admitted_stairs.contains(record.id) ? admitted_stairs.at(record.id) : admitted_rails.at(record.id);
@@ -3190,11 +3307,7 @@ IfcProjectImportResult import_project_ifc(std::string_view bytes,
             }
             if (record.type == "IFCROOF" || record.type == "IFCSPACE") {
                 bool reconstructed = false;
-                if (!native_project_units && metadata_by_id.contains(record.id) &&
-                    native_mesh_role(metadata_by_id.at(record.id), record.type == "IFCROOF" ? "roof" : "room"))
-                    add_diagnostic(result.diagnostics, "#" + std::to_string(record.id), record.type,
-                        "native_project_length_units_not_reconstructed");
-                if (native_project_units && meshes_by_id.contains(record.id) && metadata_by_id.contains(record.id)) {
+                if (supported_units && meshes_by_id.contains(record.id) && metadata_by_id.contains(record.id)) {
                     try {
                         if (auto candidate = reconstructed_native_roof_or_room(parsed, record,
                             metadata_by_id.at(record.id), meshes_by_id.at(record.id), argument_count, limits, native_ledger)) {
@@ -3220,7 +3333,7 @@ IfcProjectImportResult import_project_ifc(std::string_view bytes,
                     add_diagnostic(result.diagnostics, "#" + std::to_string(record.id), record.type,
                         "native_roof_or_room_geometry_metadata_inconsistent");
             }
-            if (native_project_units && record.type == "IFCWALL" && meshes_by_id.contains(record.id) &&
+            if (supported_units && record.type == "IFCWALL" && meshes_by_id.contains(record.id) &&
                 metadata_by_id.contains(record.id) && native_mesh_role(metadata_by_id.at(record.id), "wall")) {
                 const auto& metadata = metadata_by_id.at(record.id);
                 try {
@@ -3432,7 +3545,7 @@ IfcProjectImportResult import_project_ifc(std::string_view bytes,
         });
         bool recovered = false;
 #ifdef SKETCH_IFC_NATIVE_GEOMETRY
-        if (native_project_units && host && opening.properties.value("ifc_type", "") == "IFCOPENINGELEMENT" &&
+        if (supported_units && host && opening.properties.value("ifc_type", "") == "IFCOPENINGELEMENT" &&
             opening.extensions.contains("ifc_vertex_properties")) {
             const auto& metadata = opening.extensions.at("ifc_vertex_properties");
             const auto source_id = opening.extensions.at("ifc_source").at("record_id").get<int>();
@@ -3460,7 +3573,7 @@ IfcProjectImportResult import_project_ifc(std::string_view bytes,
             }
         }
 #endif
-        if (!recovered && baseline && std::abs(baseline->sweep_radians) <= kTolerance &&
+        if (!recovered && supported_units && baseline && std::abs(baseline->sweep_radians) <= kTolerance &&
             footprint && footprint->size() == 4 && !rotated &&
             opening.properties.contains("ifc_extrusion_depth_m")) {
             const auto length = std::hypot(baseline->end.x - baseline->start.x, baseline->end.y - baseline->start.y);
@@ -3536,7 +3649,7 @@ IfcProjectImportResult import_project_ifc(std::string_view bytes,
     std::set<int> reconstructed_fill_relations;
 #ifdef SKETCH_IFC_NATIVE_GEOMETRY
     for (auto& opening : result.entities) {
-        if (!native_project_units || opening.type != "opening") continue;
+        if (!supported_units || opening.type != "opening") continue;
         const auto void_id = opening.extensions.at("ifc_source").at("record_id").get<int>();
         const auto links = fills.find(void_id);
         if (links == fills.end() || links->second.size() != 1) continue;

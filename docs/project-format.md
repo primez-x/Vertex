@@ -5044,6 +5044,19 @@ annotation merging. Native wall/opening candidates also retain their INSERT
 layer in `extensions.dxf_source`. This opaque metadata does not change the
 native container version or historical command interpretation.
 
+Closed standalone DXF boundaries can additionally reconstruct through native
+JSON envelope version 2 with depiction `BOUNDARY_PLAN_V1`. The admitted entity
+retains `extensions.vertex_dxf_boundary` with those two fields. This is import
+provenance, not drawing geometry or an authentication credential. Native
+properties, local topology, inline holes and supported self-owned authoring
+proofs use the ordinary boundary codecs. Fresh entity ownership remaps only
+typed owner fields; source IDs and original organization remain inert in
+`extensions.vertex_dxf_source`. Active external appraisal or measured-source
+graphs require separate transport and cannot activate through this standalone
+record. Unknown active schemas remain refused. Full geometry, isolated-candidate
+and atomic destination validation still apply. No project container floor or
+historical command schema changes; compilation and round trips remain unverified.
+
 DXF straight lengths use aligned `DIMENSION`; curved segment and physical-wall
 axis lengths use `ARC_DIMENSION` with their actual circular centre and extension
 points. Clockwise source arcs reverse their endpoint order for the DXF CCW

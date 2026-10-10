@@ -85,7 +85,7 @@ struct DxfBlock {
     std::vector<DxfArc> arcs;
     std::vector<DxfPolyline> polylines;
     std::vector<DxfLabel> labels;
-    // Optional bounded native wall/opening JSON, transported only as BLOCK
+    // Optional bounded native boundary/wall/opening JSON, transported only as BLOCK
     // definition XDATA for registered APPID VERTEX_ENTITY_V1. UTF-8 chunks
     // are <=255 bytes; all XDATA on one entity is bounded to 16 KiB.
     // Geometry remains ordinary 2D DXF even when this payload is ignored.

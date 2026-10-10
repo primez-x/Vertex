@@ -4,6 +4,14 @@
 
 namespace sketch {
 struct PhysicalWallPhaseSelection;
+// Detached import/copy of one boundary with a fresh entity owner. Local child
+// identities, geometry, input expressions and opaque fields remain exact.
+// Supported receipt/derivation owners are qualified and remapped atomically;
+// unsupported active evidence throws without changing source. External source
+// references remain unchanged; the caller must admit the complete destination
+// through Document before publishing it.
+[[nodiscard]] Entity remap_boundary_owner_identity(
+    const Entity& source, std::string destination_id);
 [[nodiscard]] std::map<std::string, Entity, std::less<>> transformed_boundary_entities(
     const std::map<std::string, Entity, std::less<>>& source,
     const BoundaryTransformation& transformation);

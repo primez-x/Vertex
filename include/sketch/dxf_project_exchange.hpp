@@ -38,6 +38,39 @@ struct DxfProjectImportResult {
     bool complete() const noexcept { return diagnostics.empty(); }
 };
 
+// V2 carries one standalone boundary, not an appraisal/source dependency graph.
+// Document's generic reference vocabulary does not cover these consumer-owned
+// links. Both mapper and isolated-response admission must reject active links
+// rather than accidentally resolving a source ID in the destination project.
+[[nodiscard]] inline bool native_dxf_boundary_has_untransported_links(const Entity& entity) {
+    const auto& properties = entity.properties;
+    if (!properties.is_object() || properties.contains("parent_id") ||
+        properties.contains("wall_measurement_source") ||
+        entity.extensions.contains("measurement_linework_sources") ||
+        entity.extensions.contains("measurement_linework_group"))
+        return true;
+    const auto nonempty_ids = [](const nlohmann::json& object, const char* key) {
+        const auto value = object.find(key);
+        return value != object.end() && (!value->is_array() || !value->empty());
+    };
+    if (nonempty_ids(properties, "deduction_ids")) return true;
+    const auto facts = properties.find("appraisal_facts");
+    if (facts == properties.end()) return false;
+    if (!facts->is_object()) return true;
+    const auto ansi = facts->find("ansi");
+    if (ansi == facts->end()) return false;
+    if (!ansi->is_object()) return true;
+    const auto ceiling = ansi->find("ceiling");
+    if (ceiling == ansi->end()) return false;
+    if (!ceiling->is_object() || nonempty_ids(*ceiling, "below_5ft_deduction_ids")) return true;
+    for (const auto* key : {"room_boundary_id", "stair_from_floor_id"}) {
+        const auto value = ceiling->find(key);
+        if (value != ceiling->end() && (!value->is_string() || !value->get_ref<const std::string&>().empty()))
+            return true;
+    }
+    return false;
+}
+
 // Maps the snapshot's saved active design into the supported DXF R2013 drawing
 // model. Retained inactive owners, their hosted openings and bound annotations
 // are omitted with fidelity diagnostics; wall cuts and native hosted IDs use
@@ -51,9 +84,11 @@ struct DxfProjectImportResult {
 // measured quantity as a named text callout with an explicit fidelity diagnostic.
 // Angles retain their admitted vertex tangents as three-point angular DIMENSION;
 // area quantities retain named callouts with their association loss diagnosed.
-// Inline boundary/slab holes retain their analytical loops as ordinary curves;
-// native hole ownership is not represented. Boundary edge/vertex topology,
-// native boundary types and declared area classifications report their loss.
+// Valid closed standalone boundaries use a V2 native block: ordinary outer/hole
+// curves accompany bounded source properties, classifications and topology.
+// Organizational bindings detach on import; unavailable dependent source graphs
+// cannot activate. Other boundaries and slabs retain ordinary analytical loops
+// and diagnose unrepresented hole ownership, topology and classifications.
 // Polyline vertices require exact authored joins. Distinct consecutive endpoints
 // retain independent primitives with a connection-loss diagnostic; a merely
 // tolerance-close final endpoint remains an open polyline without snapping.
@@ -62,12 +97,15 @@ struct DxfProjectImportResult {
     const DxfExchangeLimits& limits = {});
 
 // Parses a bounded DXF R2013 drawing and reconstructs editable native
-// boundary/annotation entities and validated native wall/opening graphs. The
-// boundary candidates carry primitive classifications, not the source's native
-// area classifications, stable edge/vertex identities or outer/hole ownership.
-// Separate exported hole curves therefore reconstruct as independent candidates.
-// Native VERTEX_ENTITY_V1 block metadata requires matching plan primitives and metre
-// units with identity INSERTs. Manufactured opening blocks additionally require
+// boundary/annotation entities and validated native boundary/wall/opening graphs.
+// Foreign primitive candidates carry CAD classifications and separate hole loops.
+// The existing VERTEX_ENTITY_V1 XDATA carrier admits unchanged V1 wall/opening
+// JSON and V2 closed-boundary JSON with depiction BOUNDARY_PLAN_V1. V2 requires
+// full native document/geometry validation and exact regenerated outer/hole plan
+// agreement before retaining native classifications and local topology IDs.
+// Entity identities are fresh; organizational bindings remain source evidence.
+// Every native carrier requires metre units and identity INSERT/base placement.
+// Manufactured opening blocks additionally require
 // depiction MANUFACTURED_PLAN_V1 and an architecture-enabled mapper that admits
 // the host/assembly solids and regenerates their exact horizontal plan section.
 // Core-only builds retain symbolic visual fallback with explicit diagnostics;
