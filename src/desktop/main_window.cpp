@@ -20098,7 +20098,9 @@ public:
                 const bool reference_geometry = proposal.kind == AssistanceKind::tracing ||
                     proposal.kind == AssistanceKind::edge_tracing ||
                     proposal.kind == AssistanceKind::dimension_extraction;
-                const auto owner = reference_geometry || command == "add_label"
+                const bool owned_label = command == "add_label" &&
+                    proposal.kind == AssistanceKind::label_placement;
+                const auto owner = reference_geometry || owned_label
                     ? proposal.source.reference_id : m_active_layer_id.toStdString();
                 context = organization.drawing_context(owner);
                 if (!context || !context->complete())
@@ -20127,7 +20129,7 @@ public:
                         entities.emplace(probe.id, probe);
                         destination = resolve_site_presentation(entities, probe.id);
                     }
-                    if (reference_geometry || command == "add_label") {
+                    if (reference_geometry || owned_label) {
                         const auto origin = resolve_site_presentation(source, owner);
                         const auto source_to_destination = compose_site_transforms(destination.inverse, origin.forward);
                         const auto convert = [&](json& value) {
@@ -20228,7 +20230,8 @@ public:
                 throw std::invalid_argument("Enable assistance in the assistance dialog first.");
             }
             const auto snapshot = authoringSnapshot();
-            return stampAssistanceProposals(parse_natural_language(command.toStdString()), snapshot);
+            return stampAssistanceProposals(parse_natural_language(command.toStdString(),
+                m_metric_units ? Unit::metre : Unit::foot), snapshot);
         } catch (const std::exception& error) {
             setError(QStringLiteral("Assistance command: %1").arg(QString::fromUtf8(error.what())));
             return {};
@@ -42123,7 +42126,12 @@ public:
         controls->addWidget(kind);
         auto* command = new QLineEdit(&dialog);
         command->setObjectName(QStringLiteral("assistanceCommand"));
-        command->setPlaceholderText(QStringLiteral("label Entry at 1.25, 2.5"));
+        command->setPlaceholderText(m_metric_units
+            ? QStringLiteral("label Entry at 1.25 m, 2.5 m")
+            : QStringLiteral("label Entry at 8' 6\", 12'"));
+        command->setToolTip(m_metric_units
+            ? QStringLiteral("Bare lengths and coordinates use metres. Explicit units override the default. Example: draw rectangle 4 x 3.")
+            : QStringLiteral("Bare lengths and coordinates use feet. Explicit units override the default. Example: draw rectangle 12 x 10."));
         command->setVisible(false);
         controls->addWidget(command, 1);
         auto* generate = new QPushButton(QStringLiteral("Generate suggestions"), &dialog);

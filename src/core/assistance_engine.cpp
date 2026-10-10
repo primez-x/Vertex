@@ -569,22 +569,6 @@ std::vector<DimensionMatch> find_dimension_tokens(std::string_view text) {
     return result;
 }
 
-double parse_coordinate(std::string_view value) {
-    const auto trimmed = trim_copy(value);
-    if (trimmed.empty()) invalid("natural-language coordinate is empty");
-    std::size_t consumed = 0;
-    double result = 0.0;
-    try {
-        result = std::stod(trimmed, &consumed);
-    } catch (const std::exception&) {
-        invalid("natural-language coordinate is not numeric");
-    }
-    if (consumed != trimmed.size() || !std::isfinite(result)) {
-        invalid("natural-language coordinate is not finite");
-    }
-    return result;
-}
-
 }  // namespace
 
 Vec2 assistance_source_point_to_model(Vec2 source_pixel, std::size_t source_width,
@@ -962,6 +946,20 @@ std::vector<AssistanceProposal> suggest_label_placements(
 }
 
 std::vector<AssistanceProposal> parse_natural_language(std::string_view command) {
+    return parse_natural_language(command, Unit::metre);
+}
+
+std::vector<AssistanceProposal> parse_natural_language(std::string_view command,
+                                                     Unit default_unit) {
+    std::string_view unit_identity;
+    switch (default_unit) {
+        case Unit::metre: unit_identity = "m"; break;
+        case Unit::millimetre: unit_identity = "mm"; break;
+        case Unit::centimetre: unit_identity = "cm"; break;
+        case Unit::foot: unit_identity = "ft"; break;
+        case Unit::inch: unit_identity = "in"; break;
+        default: invalid("natural-language default unit is invalid");
+    }
     if (command.size() > 4096 || command.find_first_of("\r\n\t") != std::string_view::npos ||
         command.find('\0') != std::string_view::npos) {
         invalid("natural-language command is empty, oversized, or contains a control character");
@@ -969,9 +967,12 @@ std::vector<AssistanceProposal> parse_natural_language(std::string_view command)
     const auto original = trim_copy(command);
     if (original.empty()) invalid("natural-language command is empty");
     const auto lowered = lowercase(original);
+    // Retain historical metre identities while separating unit-dependent input.
+    const auto geometry_material = default_unit == Unit::metre ? original :
+        original + ":default-unit:" + std::string(unit_identity);
 
     static const std::regex label_pattern(
-        R"(^label\s+(.+?)\s+at\s+([+-]?(?:[0-9]+(?:\.[0-9]*)?|\.[0-9]+))\s*,\s*([+-]?(?:[0-9]+(?:\.[0-9]*)?|\.[0-9]+))$)",
+        R"(^label\s+(.+)\s+at\s+([^,]+),([^,]+)$)",
         std::regex_constants::icase);
     std::smatch label_match;
     if (std::regex_match(original, label_match, label_pattern)) {
@@ -981,9 +982,23 @@ std::vector<AssistanceProposal> parse_natural_language(std::string_view command)
             content.find('\0') != std::string::npos) {
             invalid("natural-language label content is empty or unsafe");
         }
-        const Vec2 position{parse_coordinate(label_match[2].str()),
-                            parse_coordinate(label_match[3].str())};
-        const auto id = stable_id("assist-language-label", original);
+        Vec2 position;
+        try {
+            position = {parse_quantity(label_match[2].str(), default_unit).metres,
+                        parse_quantity(label_match[3].str(), default_unit).metres};
+        } catch (const std::exception&) {
+            invalid("natural-language label coordinates are invalid");
+        }
+        if (!std::isfinite(position.x) || !std::isfinite(position.y)) {
+            invalid("natural-language label coordinates are not finite");
+        }
+        // Exact rational zero has no sign; retain decimal input's historical
+        // negative-zero coordinate payload after canonical conversion.
+        if (position.x == 0.0 && trim_copy(label_match[2].str()).starts_with('-'))
+            position.x = -0.0;
+        if (position.y == 0.0 && trim_copy(label_match[3].str()).starts_with('-'))
+            position.y = -0.0;
+        const auto id = stable_id("assist-language-label", geometry_material);
         return {proposal(
             id, AssistanceKind::natural_language,
             source_for("natural-language", original, 0.0, 0.0, 1.0, 1.0, 0.93),
@@ -1008,14 +1023,14 @@ std::vector<AssistanceProposal> parse_natural_language(std::string_view command)
         Quantity width;
         Quantity height;
         try {
-            width = parse_quantity(rectangle_match[1].str(), Unit::metre);
-            height = parse_quantity(rectangle_match[2].str(), Unit::metre);
+            width = parse_quantity(rectangle_match[1].str(), default_unit);
+            height = parse_quantity(rectangle_match[2].str(), default_unit);
         } catch (const std::exception&) {
             invalid("natural-language rectangle dimensions are invalid");
         }
         finite_positive(width.metres, "natural-language rectangle width is invalid");
         finite_positive(height.metres, "natural-language rectangle height is invalid");
-        const auto id = stable_id("assist-language-rectangle", original);
+        const auto id = stable_id("assist-language-rectangle", geometry_material);
         return {proposal(
             id, AssistanceKind::natural_language,
             source_for("natural-language", original, 0.0, 0.0, 1.0, 1.0, 0.94),

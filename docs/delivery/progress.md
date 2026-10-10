@@ -14,6 +14,30 @@ changed source does not acquire runtime acceptance without later qualification.
 
 ## Current delivery state
 
+### October 9 unit-aware assistance command source implementation
+
+Assistance language commands now use the canvas's current default input unit:
+bare rectangle sizes and label coordinates mean feet in Imperial and metres
+in Metric. Explicit suffixes remain authoritative. Signed label coordinates
+accept exact fractions and mixed feet/inches through the shared quantity
+parser, with finite values and the existing bounded command limits. Label
+text retains its final coordinate clause. The historical one-argument engine
+API keeps its metre default and ID seeds; other default units have distinct
+geometry proposal identities. Accepted geometry remains canonical metres.
+
+Natural-language label proposals now bind the actual active layer rather than
+attempting to resolve the literal producer name as a document owner. Named
+object label suggestions retain their real owner context and Site frame;
+language coordinates use the destination annotation frame. Preview, explicit
+acceptance and exact source/context fences remain unchanged. No persisted
+command types or project-format fields were added.
+
+Independent review identified the language-label ownership blocker and approved
+its correction and the integrated unit changes with no remaining actionable
+source finding. Root reviewed the integration. No builds, tests, probes,
+scripts, native jobs, launches, packages or installations ran.
+Compilation and runtime remain unverified; the installed candidate is unchanged.
+
 ### October 9 rigid room-callout and complete-selection source implementation
 
 Numeric Transform now carries independently selected current-room callouts

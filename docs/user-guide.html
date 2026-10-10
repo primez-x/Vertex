@@ -850,6 +850,14 @@
   the original source bytes. <strong>Assistance</strong> can suggest tracing,
   dimensions, labels, or commands; suggestions are marked unverified and require an
   explicit acceptance before they enter project history.</p>
+  <p><strong>Parse a command</strong> accepts <code>draw rectangle 12 x 10</code>
+  and <code>label Entry at 8' 6&quot;, 12'</code>, along with the workspace commands
+  <code>set workspace measurement</code> and <code>set workspace architectural</code>.
+  Bare sizes and coordinates use feet in Imperial and metres in Metric.
+  Explicit suffixes override that default, so <code>draw rectangle 4 m x 3 m</code>
+  keeps the same physical size in either unit system. Label coordinates also
+  accept negative values and fractions. Review each suggestion before accepting;
+  parsing a command does not change the drawing.</p>
   <p>In Site Plan, suggestions retain the reference's building, floor and layer.
   The preview and accepted outline use the building's current placement and
   rotation. If you change the drawing context while reviewing suggestions,

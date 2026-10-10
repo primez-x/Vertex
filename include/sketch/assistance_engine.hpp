@@ -2,6 +2,7 @@
 
 #include "sketch/assistance_contract.hpp"
 #include "sketch/geometry.hpp"
+#include "sketch/quantity.hpp"
 
 #include <cstddef>
 #include <cstdint>
@@ -80,6 +81,9 @@ void validate_assistance_raster(const AssistanceRaster&);
 [[nodiscard]] std::vector<AssistanceProposal> suggest_label_placements(
     std::span<const AssistanceAnchor>);
 [[nodiscard]] std::vector<AssistanceProposal> parse_natural_language(std::string_view command);
+// Bare dimensions and coordinates use default_unit; proposal geometry is metres.
+[[nodiscard]] std::vector<AssistanceProposal> parse_natural_language(
+    std::string_view command, Unit default_unit);
 
 // IDs supplied to AssistanceSession by a package loader after it has verified
 // the corresponding files and licenses. The engine itself does not inspect
