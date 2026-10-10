@@ -14,6 +14,43 @@ changed source does not acquire runtime acceptance without later qualification.
 
 ## Current delivery state
 
+### October 10 skylight group side resizing - source integration
+
+The preceding direct 3D transform batch is committed and pushed as 44b02441,
+with exact local/remote ref agreement. Current source adds four plan group side
+handles alongside uniform corner and rotation controls. A captured common pivot
+and axis define directional centre-layout resizing. Each actual projected mouth
+direction supplies its physical width/depth response, with dimensions rebased
+at the final facet. Individual rectangular mouths, angles, hosts and construction
+profiles remain intact. Equal factors retain the existing uniform arithmetic;
+identity authors no change. This operation does not promise affine shearing or
+a fixed opposite envelope edge.
+
+The controller transports captured axes through horizontal reflected plan views,
+validates positive finite factors, and includes both factors and their axis angle
+in exact preview/release equality. Manufactured candidate mouths, cuts, frames
+and glazing remain the admission authority. The manual list retains the 450
+original tasks plus forty-one focused tasks (491 total); the new side-resize
+task is Not tested. Independent source review approved the core/controller and
+side-handle paths, and identified an existing corner-snapping defect. The
+correction snaps dimension changes instead of the original span for both side
+and corner drags, preserving off-grid source dimensions at zero motion and
+rejecting raw pivot crossings before rounding. Root reviewed the integrated
+interfaces, source authority and evidence. Static inspection retains all 277
+requirements and changes only two delivery notes; the 491 task/result counts
+agree. Scoped commit, push and exact remote verification accompany this batch.
+Compilation, rendering, interaction and history remain unqualified.
+
+Next source gap: mixed ordinary-object/skylight selection and commands. Bounded
+discovery found that existing owner IDs double as internal child-host IDs, so
+simply removing rejection guards would incorrectly copy, delete or transform
+containing roofs. Implement explicit semantic selection authority and atomic
+mixed commands; clipboard and transform paths need their own coherent integration.
+Native directional group controls and whole-candidate preview performance also
+remain open. The complete production plan remains active. No builds, tests/new
+tests, probes, native jobs, UI launches, packages or installations run; installed
+candidate and acceptance remain unchanged, with all ten production gates open.
+
 ### October 10 direct 3D skylight transforms - source integration
 
 The plan group transform/clipboard batch is committed and pushed as 1ebefe1e;

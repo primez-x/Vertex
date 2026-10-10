@@ -90,6 +90,45 @@ Vec2 local(const Host& owner, Vec2 point) {
 Vec2 scales(const Host& owner, Vec2 point) {
     return std::visit([&](const auto& roof) { return roof_opening_reference_surface_scales(roof, point); }, owner.object);
 }
+RoofOpeningPlanFrame plan_frame(const Host& owner, const RoofOpening& opening) {
+    return std::visit([&](const auto& roof) { return roof_opening_plan_frame(roof, opening); }, owner.object);
+}
+Vec2 world_direction(const Host& owner, Vec2 direction) {
+    if (owner.yaw == 0.0) return direction;
+    const auto c = std::cos(owner.yaw), s = std::sin(owner.yaw);
+    const Vec2 result{c * direction.x - s * direction.y, s * direction.x + c * direction.y};
+    finite(result); return result;
+}
+struct AxisResize {
+    Vec2 scale;
+    double c;
+    double s;
+
+    Vec2 apply(Vec2 value) const {
+        if (c == 1.0 && s == 0.0) {
+            const Vec2 result{scale.x * value.x, scale.y * value.y};
+            finite(result); return result;
+        }
+        const Vec2 aligned{scale.x * (c * value.x + s * value.y),
+            scale.y * (-s * value.x + c * value.y)};
+        const Vec2 result{c * aligned.x - s * aligned.y, s * aligned.x + c * aligned.y};
+        finite(result); return result;
+    }
+
+    double dimension_factor(Vec2 direction, double uniform_scale) const {
+        finite(direction);
+        const auto length = std::hypot(direction.x, direction.y);
+        if (!std::isfinite(length) || length <= 0.0)
+            invalid("Skylight source projected direction must have positive finite length");
+        // A pitched facet's projected directions need not be unit length or
+        // orthogonal. Normalize each independently before measuring |A p|/|p|.
+        const auto resized = apply({direction.x / length, direction.y / length});
+        const auto factor = uniform_scale * std::hypot(resized.x, resized.y);
+        if (!std::isfinite(factor) || factor <= 0.0)
+            invalid("Skylight group dimension factors must be positive and finite");
+        return factor;
+    }
+};
 RoofOpeningQuantityInput quantity(double metres) {
     if (!std::isfinite(metres)) invalid("Skylight group dimensions must be finite");
     std::array<char, 64> buffer{};
@@ -104,12 +143,15 @@ RoofOpeningQuantityInput quantity(double metres) {
     }
     invalid("Skylight group position has no exact supported measurement");
 }
-Vec2 rebased_size(const RoofOpening& source, Vec2 before, Vec2 after, double scale) {
-    const Vec2 result{before.x == after.x ? source.width * scale : source.width * scale * (before.x / after.x),
-        before.y == after.y ? source.depth * scale : source.depth * scale * (before.y / after.y)};
+Vec2 rebased_size(const RoofOpening& source, Vec2 before, Vec2 after, Vec2 scale) {
+    const Vec2 result{before.x == after.x ? source.width * scale.x : source.width * scale.x * (before.x / after.x),
+        before.y == after.y ? source.depth * scale.y : source.depth * scale.y * (before.y / after.y)};
     finite(result);
     if (result.x <= 0.0 || result.y <= 0.0) invalid("Skylight group dimensions must remain positive");
     return result;
+}
+Vec2 rebased_size(const RoofOpening& source, Vec2 before, Vec2 after, double scale) {
+    return rebased_size(source, before, after, Vec2{scale, scale});
 }
 RoofOpeningEditIntent opening_intent(const Host& owner) {
     RoofOpeningEditIntent result;
@@ -189,8 +231,23 @@ std::vector<RoofEditIntent> prepare_roof_opening_group_transform(const Entities&
     finite(request.world_pivot); finite(request.world_translation);
     if (!std::isfinite(request.rotation_radians) || !std::isfinite(request.uniform_scale) || request.uniform_scale <= 0.0)
         invalid("Skylight group transform requires a finite angle and positive finite scale");
+    finite(request.axis_scale);
+    if (request.axis_scale.x <= 0.0 || request.axis_scale.y <= 0.0 ||
+        !std::isfinite(request.axis_rotation_radians))
+        invalid("Skylight group axis resize requires positive finite scales and a finite angle");
+    const bool directional = request.axis_scale.x != request.axis_scale.y;
+    // Identity axes retain the old arithmetic exactly, including its no-op and
+    // pure-translation paths. Equal axes are the same uniform operation.
+    const auto uniform_scale = !directional && request.axis_scale.x != 1.0
+        ? request.uniform_scale * request.axis_scale.x : request.uniform_scale;
+    if (!std::isfinite(uniform_scale) || uniform_scale <= 0.0)
+        invalid("Skylight group combined scale must be positive and finite");
+    const auto axis_angle = directional ? std::remainder(request.axis_rotation_radians, 2.0 * std::numbers::pi) : 0.0;
+    const AxisResize axes{request.axis_scale, axis_angle == 0.0 ? 1.0 : std::cos(axis_angle),
+        axis_angle == 0.0 ? 0.0 : std::sin(axis_angle)};
     const auto angle = std::remainder(request.rotation_radians, 2.0 * std::numbers::pi);
-    const bool identity = angle == 0.0 && request.uniform_scale == 1.0 &&
+    const bool translation_only = !directional && angle == 0.0 && uniform_scale == 1.0;
+    const bool identity = translation_only &&
         request.world_translation.x == 0.0 && request.world_translation.y == 0.0;
     const auto c = angle == 0.0 ? 1.0 : std::cos(angle), s = angle == 0.0 ? 0.0 : std::sin(angle);
     Hosts hosts;
@@ -206,24 +263,33 @@ std::vector<RoofEditIntent> prepare_roof_opening_group_transform(const Entities&
         if (!identity) {
             const auto old_center = center(source), old_world = world(owner, old_center);
             Vec2 new_world;
-            if (angle == 0.0 && request.uniform_scale == 1.0) {
+            if (translation_only) {
                 new_world = {old_world.x + request.world_translation.x, old_world.y + request.world_translation.y};
             } else {
-                const Vec2 delta{old_world.x - request.world_pivot.x, old_world.y - request.world_pivot.y};
+                Vec2 delta{old_world.x - request.world_pivot.x, old_world.y - request.world_pivot.y};
                 finite(delta);
-                new_world = {request.world_pivot.x + request.uniform_scale * (c * delta.x - s * delta.y) + request.world_translation.x,
-                    request.world_pivot.y + request.uniform_scale * (s * delta.x + c * delta.y) + request.world_translation.y};
+                if (directional) delta = axes.apply(delta);
+                new_world = {request.world_pivot.x + uniform_scale * (c * delta.x - s * delta.y) + request.world_translation.x,
+                    request.world_pivot.y + uniform_scale * (s * delta.x + c * delta.y) + request.world_translation.y};
             }
             finite(new_world);
             // Apply displacement to the actual local centre. Inverting an
             // absolute world position would introduce base/yaw roundoff even
             // in a pure translation's otherwise untouched local coordinate.
-            const auto displacement = angle == 0.0 && request.uniform_scale == 1.0
+            const auto displacement = translation_only
                 ? request.world_translation : Vec2{new_world.x - old_world.x, new_world.y - old_world.y};
             const auto delta = local_delta(owner, displacement);
             const Vec2 new_center{old_center.x + delta.x, old_center.y + delta.y};
             finite(new_center);
-            const auto size = rebased_size(source, scales(owner, old_center), scales(owner, new_center), request.uniform_scale);
+            const auto size = [&] {
+                if (!directional)
+                    return rebased_size(source, scales(owner, old_center), scales(owner, new_center), uniform_scale);
+                const auto frame = plan_frame(owner, source);
+                const Vec2 factors{axes.dimension_factor(world_direction(owner, frame.along), uniform_scale),
+                    axes.dimension_factor(world_direction(owner, frame.across), uniform_scale)};
+                return rebased_size(source, {frame.width_surface_scale, frame.depth_surface_scale},
+                    scales(owner, new_center), factors);
+            }();
             const auto x = source.x + (new_center.x - old_center.x) - (size.x - source.width) * .5;
             const auto y = source.y + (new_center.y - old_center.y) - (size.y - source.depth) * .5;
             if (x != source.x) row.x = quantity(x);

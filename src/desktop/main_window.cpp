@@ -62582,6 +62582,8 @@ private:
                     transform.world_pivot=capture.view ? unproject_plan_point(gesture.pivot,capture.view->frame) : gesture.pivot;
                     transform.world_translation=gesture.translation;
                     transform.rotation_radians=gesture.rotation_radians;
+                    transform.axis_scale=gesture.axis_scale;
+                    transform.axis_rotation_radians=gesture.axis_rotation_radians;
                     if (capture.view) {
                         const auto right=plan_view_right(capture.view->frame),up=plan_view_up(capture.view->frame);
                         transform.world_translation={gesture.translation.x*right.x+gesture.translation.y*up.x,
@@ -62590,6 +62592,9 @@ private:
                         if (!std::isfinite(determinant) || std::abs(determinant)<1e-9)
                             throw std::invalid_argument("Skylight group rotation needs a horizontal plan basis.");
                         transform.rotation_radians=gesture.rotation_radians*std::copysign(1.0,determinant);
+                        const auto axis_c=std::cos(gesture.axis_rotation_radians),axis_s=std::sin(gesture.axis_rotation_radians);
+                        transform.axis_rotation_radians=std::atan2(right.y*axis_c+up.y*axis_s,
+                            right.x*axis_c+up.x*axis_s);
                     }
                     transform.uniform_scale=gesture.uniform_scale;
                     edits=prepare_roof_opening_group_transform(capture.source->entities(),transform);
@@ -62786,7 +62791,9 @@ private:
             if (!std::isfinite(gesture.pivot.x) || !std::isfinite(gesture.pivot.y) ||
                 !std::isfinite(gesture.translation.x) || !std::isfinite(gesture.translation.y) ||
                 !std::isfinite(gesture.rotation_radians) || std::abs(gesture.rotation_radians)>std::numbers::pi ||
-                !std::isfinite(gesture.uniform_scale) || gesture.uniform_scale<=0.0)
+                !std::isfinite(gesture.uniform_scale) || gesture.uniform_scale<=0.0 ||
+                !std::isfinite(gesture.axis_scale.x) || !std::isfinite(gesture.axis_scale.y) ||
+                gesture.axis_scale.x<=0.0 || gesture.axis_scale.y<=0.0 || !std::isfinite(gesture.axis_rotation_radians))
                 throw std::invalid_argument("The skylight group transform needs finite geometry and a positive scale.");
             if (!canvas->markRoofOpeningGroupPreviewPending(serial)) return std::nullopt;
             PendingRoofOpeningCanvasPreview request;
@@ -62806,7 +62813,9 @@ private:
             const auto& admitted=*ready->group_gesture;
             if (gesture.targets!=admitted.targets || gesture.pivot.x!=admitted.pivot.x || gesture.pivot.y!=admitted.pivot.y ||
                 gesture.translation.x!=admitted.translation.x || gesture.translation.y!=admitted.translation.y ||
-                gesture.rotation_radians!=admitted.rotation_radians || gesture.uniform_scale!=admitted.uniform_scale)
+                gesture.rotation_radians!=admitted.rotation_radians || gesture.uniform_scale!=admitted.uniform_scale ||
+                gesture.axis_scale.x!=admitted.axis_scale.x || gesture.axis_scale.y!=admitted.axis_scale.y ||
+                gesture.axis_rotation_radians!=admitted.axis_rotation_radians)
                 throw std::invalid_argument("The skylight group release differs from its admitted preview.");
             if (!ready->result->no_op) publishPreparedCanvasEdit(ready->result->prepared,ready->capture->edit_source);
             auto targets=ready->result->targets;

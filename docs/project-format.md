@@ -316,8 +316,22 @@ width/depth resizing. Native admission validates the complete final roster.
 One source-derived command owns the full edit or placement, including alternative
 replacement/remapping and history. Manufactured previews carry complete actual
 child controls; neither a bounding rectangle nor a pending worker result grants
-commit authority. Nonuniform group scaling remains an unfinished workflow.
-Compilation/runtime qualification remains outstanding.
+commit authority. Compilation/runtime qualification remains outstanding.
+
+Directional plan side resizing is transient parametric editing state. Its
+positive axis factors and captured world XY axis angle define
+`A = R(axis_angle) diag(axis_factors) R(-axis_angle)`. Reference centres stretch
+about the captured common pivot. Each physical on-face width/depth scales by
+`|A p| / |p|`, where `p` is its actual projected mouth direction including roof
+yaw and opening angle. Final-centre facet scales rebase the stored dimensions.
+Physical rectangles, individual angles and construction profiles remain intact;
+the operation does not author a sheared mouth or promise a fixed opposite
+envelope edge. Equal axis factors use the existing uniform path; identity
+authors no change. Four side grips complement uniform corner grips. Exact
+preview/release authority includes both axis factors and their captured angle.
+Existing roof intents carry the result without a new document reader floor.
+Direct native 3D controls still offer uniform resizing; native directional
+controls and mixed owner/child editing remain separate gaps.
 
 Direct 3D child/cohort transforms are transient editing state, not new persisted
 roof fields. A neutral native manipulator supplies a common displayed world

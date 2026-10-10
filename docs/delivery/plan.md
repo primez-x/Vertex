@@ -189,8 +189,13 @@ polling timeout does not permit restarting it.
    release, source/camera/focus/selection retirement, practical unit magnets and
    complete remapped visibility need native interaction qualification. Source
    aliases for copied roof-hosted assemblies must follow their qualified new
-   catalog/row identities. Mixed owner/child selection and nonuniform group
-   scaling remain implementation gaps; uniform controls do not complete them.
+   catalog/row identities. Qualify the subsequent plan group side-resize source:
+   captured common-pivot directional resizing retains rectangular members,
+   their individual facet angles and construction profiles, with physical
+   dimension factors derived from each actual projected direction and rebased
+   at its final facet. Actual manufactured previews and exact axis proposals
+   govern release; no fixed opposite envelope edge is promised. Mixed owner/child
+   selection and native directional group controls remain implementation gaps.
 10. Implement observed native/vendor/device adapters through existing workers;
     complete declared IFC/DXF/Pinc fidelity and independently consumed output.
     Add offline OCR text regions/confidence feeding reviewed proposals. New

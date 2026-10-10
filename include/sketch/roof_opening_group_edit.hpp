@@ -15,6 +15,8 @@ struct RoofOpeningGroupTransform {
     Vec2 world_translation{};
     double rotation_radians{};
     double uniform_scale{1.0};
+    Vec2 axis_scale{1.0, 1.0};
+    double axis_rotation_radians{};
 };
 
 struct RoofOpeningGroupClone {
@@ -40,9 +42,14 @@ struct RoofOpeningGroupClonePlacement {
 [[nodiscard]] Vec2 roof_opening_group_clone_anchor_world(
     const std::vector<RoofOpeningGroupClone>& clones);
 
-// Transform each actual reference centre about the common world pivot, then
-// translate. Keep its host, scale physical facet dimensions and add the common
-// angle to its physical facet rotation. Rebase dimensions at its final centre.
+// In world XY, A = R(axis_rotation) diag(axis_scale) R(-axis_rotation).
+// Transform each actual reference centre about the common pivot by
+// uniform_scale * R(rotation) * A, then translate. Keep each rectangular mouth
+// and its host; scale each physical facet dimension by uniform_scale times
+// |A p| / |p| for its actual projected world width/depth direction p. Preserve
+// its physical facet angle except for the common rotation, and rebase physical
+// dimensions using the final centre's facet scales. This is a parametric
+// rectangular resize; the mouth itself does not undergo an affine shear.
 // Only changed scalars receive exact quantity inputs. Complete actual-map
 // replay admits the entire source/final cohort before any intent is returned.
 // Identity operations return an empty vector, without schema promotion.

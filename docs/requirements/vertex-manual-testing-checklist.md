@@ -3397,6 +3397,12 @@ Blocked / missing until testing a candidate that contains it.
   - Result: Not tested
   - Notes: ______________________________
 
+- [ ] **SKYLIGHT-GROUP-SIDE-RESIZE - Resize a skylight group using its side handles**
+  - Steps: Select several skylights in plan, including differently rotated members on sloping roofs. Drag each middle side handle outward, then inward. Compare the resulting physical face dimensions in Properties and the schedule. Repeat in a saved horizontal plan viewed from below and in a remodeling alternative. Try shrinking past the centre or enlarging across a ridge, roof edge or neighboring skylight. Cancel a drag, then undo/redo a valid edit and save/reopen.
+  - Expected: Four side handles complement the corner and rotation handles. Side resizing adjusts the layout about the captured common centre while preserving each rectangular skylight's angle, host and construction dimensions. A rotated member may change both physical dimensions; the preview shows its actual resulting cut, frame and glazing. One undo restores the entire group. Invalid, cancelled or outdated previews change nothing. The alternative preserves the baseline.
+  - Result: Not tested
+  - Notes: ______________________________
+
 ## Issue report template
 
 

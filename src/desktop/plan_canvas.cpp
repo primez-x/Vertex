@@ -195,6 +195,21 @@ Qt::CursorShape jamb_resize_cursor(const CanvasOpeningWidthControls& controls,
     }
 }
 
+Qt::CursorShape roof_opening_group_resize_cursor(const CanvasRoofOpeningFrame& frame,Vec2 handle) {
+    // Corners retain uniform scaling. Side grips follow the captured group
+    // axis in screen space, whose Y direction is reflected from model space.
+    if ((handle.x==0.0)==(handle.y==0.0)) return Qt::SizeFDiagCursor;
+    const auto angle=std::remainder(-frame.rotation_radians-(handle.x==0.0 ? pi*.5 : 0.0),2.0*pi);
+    if (!std::isfinite(angle)) return Qt::SizeFDiagCursor;
+    const auto direction=(static_cast<int>(std::lround(angle*4.0/pi))%4+4)%4;
+    switch (direction) {
+    case 1: return Qt::SizeFDiagCursor;
+    case 2: return Qt::SizeVerCursor;
+    case 3: return Qt::SizeBDiagCursor;
+    default: return Qt::SizeHorCursor;
+    }
+}
+
 bool corner_window_entity(const CanvasEntity& entity) {
     return entity.type == QStringLiteral("corner_window") || entity.corner_window_width_controls.has_value();
 }
@@ -3393,7 +3408,7 @@ void PlanCanvas::pointerPress(QPointF position, Qt::MouseButton button,
             catch (...) { if (guard) resetGesture(); return; }
             if (!guard || serial!=m_roof_opening_group_serial || !roofOpeningGroupCaptureCurrent()) return;
             setCursor(group_grip && group_grip->x==2.0 ? Qt::CrossCursor :
-                group_grip ? Qt::SizeFDiagCursor : Qt::SizeAllCursor);
+                group_grip ? roof_opening_group_resize_cursor(*group_frame,*group_grip) : Qt::SizeAllCursor);
             return;
         }
         const auto grip=roofOpeningHandleAt(position);
@@ -5810,13 +5825,16 @@ std::optional<Vec2> PlanCanvas::roofOpeningGroupHandleAt(QPointF point) const {
     const auto frame=selectedRoofOpeningGroupFrame();
     if (!frame) return std::nullopt;
     const auto polygon=roofOpeningFramePolygon(*frame,rect());
-    const std::array<Vec2,4> signs{Vec2{-1,-1},Vec2{1,-1},Vec2{1,1},Vec2{-1,1}};
+    const std::array<Vec2,8> signs{Vec2{-1,-1},Vec2{1,-1},Vec2{1,1},Vec2{-1,1},
+                                 Vec2{0,-1},Vec2{1,0},Vec2{0,1},Vec2{-1,0}};
     double nearest=13.0;
     std::optional<Vec2> hit;
-    for (int i=0;i<4;++i) {
-        const auto delta=point-polygon[i];
+    for (std::size_t i=0;i<signs.size();++i) {
+        const auto center=i<4 ? polygon[static_cast<int>(i)] :
+            (polygon[static_cast<int>(i-4)]+polygon[static_cast<int>((i-3)%4)])*.5;
+        const auto delta=point-center;
         const auto length=std::hypot(delta.x(),delta.y());
-        if (length<=nearest) { nearest=length;hit=signs[static_cast<std::size_t>(i)]; }
+        if (length<=nearest) { nearest=length;hit=signs[i]; }
     }
     const auto delta=point-roofOpeningRotationHandle(*frame,rect());
     if (std::hypot(delta.x(),delta.y())<=nearest) return Vec2{2,2};
@@ -5869,18 +5887,43 @@ void PlanCanvas::updateRoofOpeningGroupPreview(QPointF point,Qt::KeyboardModifie
         if (std::hypot(delta.x,delta.y)<=1e-12) edit.rotation_radians=std::numeric_limits<double>::quiet_NaN();
     } else if (m_roof_opening_group_handle.x==0.0 && m_roof_opening_group_handle.y==0.0) {
         edit.translation={snap(model.x-m_roof_opening_group_press_model.x),snap(model.y-m_roof_opening_group_press_model.y)};
+    } else if (m_roof_opening_group_handle.x==0.0 || m_roof_opening_group_handle.y==0.0) {
+        const auto& frame=*m_roof_opening_group_frame;
+        edit.axis_rotation_radians=frame.rotation_radians;
+        const auto c=std::cos(edit.axis_rotation_radians),s=std::sin(edit.axis_rotation_radians);
+        const auto press=m_roof_opening_group_press_model-edit.pivot;
+        const bool width=m_roof_opening_group_handle.x!=0.0;
+        const auto current_axis=width ? delta.x*c+delta.y*s : -delta.x*s+delta.y*c;
+        const auto press_axis=width ? press.x*c+press.y*s : -press.x*s+press.y*c;
+        const auto span=width ? frame.width_metres : frame.depth_metres;
+        const auto sign=width ? m_roof_opening_group_handle.x : m_roof_opening_group_handle.y;
+        // Compensate the grip's press offset, with both sides moving about the
+        // fixed pivot. Snap the full-span change so an off-grid source span
+        // stays exact at zero displacement. Manufacture supplies member mouths.
+        const auto span_change=2.0*sign*(current_axis-press_axis);
+        const auto raw_span=span+span_change;
+        // Crossing the pivot refuses even if snapping would round back outward.
+        const auto resized_span=raw_span>0.0 ? span+snap(span_change) : raw_span;
+        if (width) edit.axis_scale.x=resized_span/span;
+        else edit.axis_scale.y=resized_span/span;
     } else {
         // Project onto the pressed radial vector so a corner crossing the
         // common pivot refuses instead of reflecting or growing again.
         const auto press=m_roof_opening_group_press_model-edit.pivot;
         edit.uniform_scale=(delta.x*press.x+delta.y*press.y)/
             (m_roof_opening_group_press_radius*m_roof_opening_group_press_radius);
-        if (step>0.0) edit.uniform_scale=snap(edit.uniform_scale*m_roof_opening_group_frame->width_metres)/
-            m_roof_opening_group_frame->width_metres;
+        if (step>0.0 && edit.uniform_scale>0.0) {
+            const auto span=m_roof_opening_group_frame->width_metres;
+            // Preserve the source span when returning to the press position;
+            // a raw pivot crossing stays invalid before rounding.
+            edit.uniform_scale=1.0+snap((edit.uniform_scale-1.0)*span)/span;
+        }
     }
     m_roof_opening_group_edit=edit;
     if (!std::isfinite(edit.translation.x) || !std::isfinite(edit.translation.y) ||
         !std::isfinite(edit.rotation_radians) || !std::isfinite(edit.uniform_scale) || edit.uniform_scale<=1e-6 ||
+        !std::isfinite(edit.axis_scale.x) || !std::isfinite(edit.axis_scale.y) ||
+        edit.axis_scale.x<=0.0 || edit.axis_scale.y<=0.0 || !std::isfinite(edit.axis_rotation_radians) ||
         !m_roof_opening_group_preview_requested) { update();return; }
     const auto callback=m_roof_opening_group_preview_requested;
     const QPointer<PlanCanvas> guard(this);
@@ -5963,7 +6006,7 @@ void PlanCanvas::finishRoofOpeningGroupPreview(std::uint64_t serial) {
     const auto edit=m_roof_opening_group_edit;
     const auto callback=m_roof_opening_group_edit_requested;
     const bool changed=edit && (edit->translation.x!=0.0 || edit->translation.y!=0.0 ||
-        edit->rotation_radians!=0.0 || edit->uniform_scale!=1.0);
+        edit->rotation_radians!=0.0 || edit->uniform_scale!=1.0 || edit->axis_scale.x!=1.0 || edit->axis_scale.y!=1.0);
     const bool admitted=m_roof_opening_group_valid && changed && callback;
     const QPointer<PlanCanvas> guard(this);
     m_roof_opening_group_release_pending=false;m_gesture_button=Qt::NoButton;
@@ -6377,9 +6420,9 @@ void PlanCanvas::drawRoofOpeningGroupControls(QPainter& painter,const QRectF& vi
     painter.setPen(QPen(color,1.5));painter.drawPolygon(polygon);
     if (m_roof_opening_group_preview_requested && m_roof_opening_group_edit_requested) {
         painter.setBrush(QColor(255,255,255));
-        // Only uniform corner scaling is supported. Side grips would distort
-        // rotated in-facet rectangles and cannot express the child command.
-        for (int i=0;i<4;++i) painter.drawRect(QRectF(polygon[i]-QPointF(4,4),QSizeF(8,8)));
+        for (int i=0;i<4;++i)
+            for (const auto center:{polygon[i],(polygon[i]+polygon[(i+1)%4])*.5})
+                painter.drawRect(QRectF(center-QPointF(4,4),QSizeF(8,8)));
         const auto rotation=roofOpeningRotationHandle(*frame,viewport);
         painter.drawLine((polygon[2]+polygon[3])*.5,rotation);painter.drawEllipse(rotation,5.0,5.0);
     }
@@ -9233,7 +9276,9 @@ void PlanCanvas::updatePointerCursor(QPointF point) {
     } else if (!m_roof_opening_group_capture.empty() && m_left_dragging) {
         setCursor(!m_roof_opening_group_valid && !m_roof_opening_group_pending ? Qt::ForbiddenCursor :
             roof_opening_rotation_handle(m_roof_opening_group_handle) ? Qt::CrossCursor :
-            m_roof_opening_group_handle.x==0.0 ? Qt::ClosedHandCursor : Qt::SizeFDiagCursor);
+            m_roof_opening_group_handle.x==0.0 && m_roof_opening_group_handle.y==0.0 ? Qt::ClosedHandCursor :
+            m_roof_opening_group_frame ? roof_opening_group_resize_cursor(*m_roof_opening_group_frame,m_roof_opening_group_handle) :
+            Qt::SizeFDiagCursor);
     } else if (m_roof_opening_capture && m_left_dragging) {
         setCursor(!m_roof_opening_preview_valid && !m_roof_opening_preview_pending ? Qt::ForbiddenCursor :
             roof_opening_rotation_handle(m_roof_opening_handle) ? Qt::CrossCursor :
@@ -9246,7 +9291,9 @@ void PlanCanvas::updatePointerCursor(QPointF point) {
         setCursor(Qt::OpenHandCursor);
     } else if (selectionInteractionEnabled() && m_gesture_button == Qt::NoButton) {
         if (const auto grip=roofOpeningGroupHandleAt(point)) {
-            setCursor(roof_opening_rotation_handle(*grip) ? Qt::CrossCursor : Qt::SizeFDiagCursor);
+            const auto frame=selectedRoofOpeningGroupFrame();
+            setCursor(roof_opening_rotation_handle(*grip) ? Qt::CrossCursor :
+                frame ? roof_opening_group_resize_cursor(*frame,*grip) : Qt::SizeFDiagCursor);
             return;
         }
         if (roofOpeningGroupContains(point)) {

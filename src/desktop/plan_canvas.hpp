@@ -146,6 +146,10 @@ struct CanvasRoofOpeningGroupEdit {
     Vec2 translation{};
     double rotation_radians{};
     double uniform_scale{1.0};
+    // Directional parametric resizing about the captured common pivot. Member
+    // centres stretch along these axes; manufacture retains physical rectangles.
+    Vec2 axis_scale{1.0,1.0};
+    double axis_rotation_radians{};
 };
 
 // Semantic, screen-only opening controls. The jamb points lie on the host
