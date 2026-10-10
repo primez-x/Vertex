@@ -27,6 +27,7 @@
 #include "sketch/opening_assembly.hpp"
 #include "sketch/corner_window.hpp"
 #include "sketch/corner_window_transfer.hpp"
+#include "sketch/mixed_clipboard_transfer.hpp"
 #include "sketch/corner_window_edit.hpp"
 #include "sketch/dxf_architectural_source.hpp"
 #include "sketch/phase_corner_window_edit.hpp"
@@ -31321,9 +31322,12 @@ public:
         return changes;
     }
 
-    std::string clipboardSelectionPayload(const DocumentSnapshot& source_snapshot) const {
+    std::string clipboardSelectionPayload(const DocumentSnapshot& source_snapshot,
+        const QStringList* selection_override=nullptr) const {
         auto snapshot = source_snapshot;
-        auto copied_ids = m_selected_ids;
+        auto copied_ids = selection_override ? *selection_override : m_selected_ids;
+        if (copied_ids.isEmpty() || copied_ids.size()>kMaximumClipboardEntities)
+            throw std::invalid_argument("Choose a bounded selection for the ordinary clipboard graph.");
         std::map<std::string, Entity, std::less<>> catalogs;
         std::vector<EntityChange> detached_changes;
         std::map<std::string, std::string, std::less<>> copied_children;
@@ -31490,17 +31494,19 @@ public:
         });
     }
 
-    std::vector<CornerWindowTransfer> cornerWindowSelectionTransfers(const DocumentSnapshot& source) const {
-        if (m_selected_ids.isEmpty() || m_selected_ids.size() > 128 || !m_selected_roof_openings.empty())
+    std::vector<CornerWindowTransfer> cornerWindowSelectionTransfers(const DocumentSnapshot& source,
+        const QStringList* selection_override=nullptr) const {
+        const auto& selected=selection_override ? *selection_override : m_selected_ids;
+        if (selected.isEmpty() || selected.size() > 128 || (!selection_override && !m_selected_roof_openings.empty()))
             throw std::invalid_argument("Choose a bounded selection containing only corner windows.");
         // Admit the complete roster before collecting any portable subset.
-        for (const auto& id : m_selected_ids) {
+        for (const auto& id : selected) {
             const auto found = source.entities().find(id.toStdString());
             if (found == source.entities().end() || found->second.type != "corner_window")
                 throw std::invalid_argument("Clipboard transfer for the complete mixed corner-window and other-object selection is not yet available.");
         }
         std::vector<CornerWindowTransfer> result;
-        for (const auto& id : m_selected_ids) result.push_back(cornerWindowTransfer(source, source.entities().at(id.toStdString())));
+        for (const auto& id : selected) result.push_back(cornerWindowTransfer(source, source.entities().at(id.toStdString())));
         validate_corner_window_transfer_group(result);
         return result;
     }
@@ -34119,18 +34125,41 @@ public:
         return true;
     }
 
-    bool pasteSelection() {
+    struct OrdinaryClipboardPreparation {
+        std::optional<ApplyEntityChanges> command;
+        QStringList selected_roots;
+        std::map<QString,SiteAnnotationTarget> annotation_targets;
+        std::map<std::string,std::string,std::less<>> identity_mapping;
+        std::map<std::string,std::string,std::less<>> material_catalog_mapping;
+        std::set<std::string,std::less<>> reserved_identities;
+    };
+
+    // The mixed placement coordinator can prepare the ordinary partition on
+    // its immutable original destination without publishing a family fragment.
+    // It remains responsible for complete destination admission and one apply.
+    bool pasteSelection(const MixedClipboardTransfer* mixed=nullptr,
+        const DocumentSnapshot* destination=nullptr, OrdinaryClipboardPreparation* preparation=nullptr) {
         try {
-            auto* clipboard = QGuiApplication::clipboard();
-            if (clipboard == nullptr) {
-                throw std::runtime_error("The system clipboard is unavailable.");
+            std::optional<DrawingContext> prepared_context;
+            if (mixed || destination || preparation) {
+                if (!mixed || !destination || !preparation || !mixed->ordinary)
+                    throw std::invalid_argument("Mixed clipboard preparation requires its complete packet and destination.");
+                *preparation={};
+                validate_mixed_clipboard_transfer(*mixed);
+                if (!destination->is_editable() || fullSnapshotDigest(*destination)!=fullSnapshotDigest(authoringSnapshot()))
+                    throw std::invalid_argument("The mixed clipboard destination changed before graph preparation.");
+                prepared_context=requireDrawingContext(*destination);
+                if (!prepared_context) return false;
             }
-            const auto encoded = clipboard->text(QClipboard::Clipboard).toUtf8();
-            if (encoded.isEmpty() || static_cast<std::size_t>(encoded.size()) >
-                                         kMaximumClipboardBytes) {
-                throw std::invalid_argument("Clipboard data is empty or exceeds the local size limit.");
-            }
-            const auto payload = json::parse(encoded.constData(), encoded.constData() + encoded.size());
+            const auto payload=[&]() -> json {
+                if (mixed) return *mixed->ordinary;
+                auto* clipboard=QGuiApplication::clipboard();
+                if (!clipboard) throw std::runtime_error("The system clipboard is unavailable.");
+                const auto encoded=clipboard->text(QClipboard::Clipboard).toUtf8();
+                if (encoded.isEmpty() || static_cast<std::size_t>(encoded.size())>kMaximumClipboardBytes)
+                    throw std::invalid_argument("Clipboard data is empty or exceeds the local size limit.");
+                return json::parse(encoded.constData(),encoded.constData()+encoded.size());
+            }();
             if (payload.is_object() && payload.value("format", "") == kCornerWindowClipboardFormat) {
                 if (payload.value("version", 0) == 3) {
                     if (payload.size() != 4 || !payload.at("version").is_number_integer() ||
@@ -34214,16 +34243,47 @@ public:
                     if (!source_catalog_ids.contains(material.catalog_id))
                         throw std::invalid_argument("Clipboard material assignments require an assembly catalog in the copied graph.");
 
-            const auto source = authoringSnapshot();
+            const auto source = destination ? *destination : authoringSnapshot();
             if(siteCanvas(m_architecturalCanvas))requireSitePublicationCurrent();
             std::map<std::string, std::string, std::less<>> remap;
+            std::set<std::string,std::less<>> occupied;
+            if (preparation) {
+                occupied=retainedSlabIdentityNames(source,true);
+                const auto reserve_json=[&](const json& root) {
+                    std::vector<const json*> pending{&root};
+                    while (!pending.empty()) {
+                        const auto* value=pending.back(); pending.pop_back();
+                        if (value->is_string()) occupied.insert(value->get_ref<const std::string&>());
+                        else if (value->is_object()) for (const auto& [key,child]:value->items()) {
+                            occupied.insert(key); pending.push_back(&child);
+                        } else if (value->is_array()) for (const auto& child:*value) pending.push_back(&child);
+                    }
+                };
+                const auto reserve_entity=[&](const Entity& entity) {
+                    occupied.insert(entity.id); occupied.insert(entity.type);
+                    reserve_json(entity.properties); reserve_json(entity.extensions);
+                };
+                // Complete passive admission bounded this traversal already.
+                // Reserve every family before allocating any destination ID.
+                reserve_json(*mixed->ordinary);
+                for (const auto& corner:mixed->corners) {
+                    reserve_entity(corner.owner);
+                    for (const auto& host:corner.walls) reserve_entity(host);
+                    for (const auto& cut:corner.cuts) reserve_entity(cut);
+                    for (const auto& dimension:corner.dimensions) reserve_entity(dimension);
+                }
+                for (const auto& catalog:mixed->catalogs) reserve_entity(catalog);
+                for (const auto& skylight:mixed->skylights) {
+                    reserve_entity(skylight.roof); occupied.insert(skylight.opening_id);
+                }
+            }
             std::set<std::string> reused_catalogs;
             std::map<std::string,std::map<std::string,std::string,std::less<>>,std::less<>> annotation_remaps;
             const auto allocate = [&](std::string_view prefix) {
                 std::string id;
                 do {
                     id = new_id(prefix);
-                } while (source.entities().contains(id) ||
+                } while ((preparation && !occupied.insert(id).second) || source.entities().contains(id) ||
                          std::any_of(remap.begin(), remap.end(),
                                      [&](const auto& entry) { return entry.second == id; }));
                 return id;
@@ -34406,7 +34466,7 @@ public:
                 if (entity.type == "measurement_linework")
                     entity.extensions["measurement_linework_copy_scope"] = {{"version",1}};
                 if (entity.type == kAnnotationEntityType) {
-                    const auto context = requireDrawingContext();
+                    const auto context = preparation ? prepared_context : requireDrawingContext();
                     if (!context) return false;
                     // Preserve raw local placement and its explicit frame mode.
                     // Admit to a fresh destination carrier, never enroll a legacy
@@ -34433,11 +34493,14 @@ public:
                 if (placeable) {
                     for (const auto* key : {"property_id", "building_id", "floor_id", "layer_id"})
                         entity.properties.erase(key);
-                    if (!assignDrawingContext(entity.properties)) return false;
+                    if (preparation) {
+                        entity.properties["floor_id"]=prepared_context->floor_id;
+                        entity.properties["layer_id"]=prepared_context->layer_id;
+                    } else if (!assignDrawingContext(entity.properties)) return false;
                     // A copied stair can host copied railings. Both owners
                     // require complete explicit organization at admission.
                     if (entity.type=="measurement_linework" || multi_flight_stair(entity)) {
-                        const auto context=requireDrawingContext();
+                        const auto context=preparation ? prepared_context : requireDrawingContext();
                         if (!context) return false;
                         entity.properties["property_id"]=context->property_id;
                         entity.properties["building_id"]=context->building_id;
@@ -34474,9 +34537,21 @@ public:
                 else change.entity.properties.erase("phase_id");
                 change.entity.properties.erase("vertical_placement");
             }
-            const bool measured_placement=placeMeasuredClipboardGraph(source,changes);
-            const auto command = augmentAuthoredCommand(validateIndependentAreaCopy(source,ApplyEntityChanges{
-                source.revision(), std::move(changes), {}, "Paste selection"}), source);
+            const bool measured_placement=preparation ? false : placeMeasuredClipboardGraph(source,changes);
+            auto raw=ApplyEntityChanges{source.revision(),std::move(changes),{},"Paste selection"};
+            if (preparation) {
+                if (fullSnapshotDigest(source)!=fullSnapshotDigest(authoringSnapshot()) ||
+                    m_active_layer_id.toStdString()!=prepared_context->layer_id)
+                    throw std::invalid_argument("The mixed clipboard destination changed during graph preparation.");
+                preparation->command=std::move(raw);
+                preparation->selected_roots=std::move(pasted_roots);
+                preparation->annotation_targets=std::move(pasted_annotation_targets);
+                preparation->identity_mapping=std::move(remap);
+                preparation->material_catalog_mapping=std::move(material_catalog_mapping);
+                preparation->reserved_identities=std::move(occupied);
+                return true;
+            }
+            const auto command=augmentAuthoredCommand(validateIndependentAreaCopy(source,std::move(raw)),source);
             const auto candidate=Document::preview_command(source, command);
             auto targets=siteCanvas(m_architecturalCanvas) ? preparedSiteAnnotationTargets(candidate)
                 : std::map<QString,SiteAnnotationTarget>{};

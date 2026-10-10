@@ -14,6 +14,33 @@ changed source does not acquire runtime acceptance without later qualification.
 
 ## Current delivery state
 
+### October 10 mixed clipboard - source foundation in progress
+
+The actual phase corner cohort batch is committed and pushed as 704b52c8,
+with exact local/remote ref verification. Current source work adds a closed,
+bounded passive transfer for ordinary drawing/furniture graphs, corner-window
+assemblies/materials and roof-hosted skylight children. Shared source hosts and
+compatible material projections retain their raw content; conflicting identities
+refuse before destination authoring. The desktop ordinary-graph preparation seam
+captures one actual destination context, reserves all passive families and
+retained/undone names before allocating IDs, and returns raw changes/mappings
+without publishing or manufacturing a family fragment. Existing ordinary Paste
+continues through its original admission/publication path. Build/source-kit
+linkage includes the new codec. Root corrected a catalog-dialect length check
+that would have rejected valid shared material projections. Independent source
+review approves this bounded foundation with no remaining concrete P1/P2 finding.
+Root reviewed the preserved ordinary Paste path, preparation boundaries, passive
+budgets, shared identity reservation and source-kit linkage. Scoped whitespace
+checks are clean; this source checkpoint is backed up with commit/push/ref
+verification.
+
+This is internal foundation only: mixed Copy/Cut/Paste/Duplicate remains refused.
+Complete selection capture, selected-host dominance, destination placement,
+shared catalog resolution, typed whole-group admission, cancellation and one
+publication/Undo still require implementation. No build, test, probe, native job,
+UI launch, package or installation runs. Installed behavior is unchanged; no
+production gate closes. Do not count this codec as a completed user feature.
+
 ### October 10 actual phase corner cohorts - reviewed source integration
 
 Complete wall/corner source integration is committed and pushed as c16e05c0;

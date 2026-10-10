@@ -595,6 +595,27 @@ checks every passive source roster and the complete batch. Version 1 remains the
 single-child contract. This transient exchange form does not change the native
 document reader floor.
 
+The source-only mixed clipboard foundation uses the transient closed format
+`vertex-mixed-clipboard`, version 1, with exactly `format`, `version`, `ordinary`,
+`corners`, `catalogs`, and `skylights`. It requires at least two represented
+families. `ordinary` is null or the legacy version-one ordinary clipboard graph;
+corner members contain exactly `owner`, `walls`, `cuts`, and `dimensions`;
+skylight members contain exactly `roof` and `opening_id`. Catalogs are shared
+material projections for the corner lane. All passive entities retain their
+five-field envelopes. Exact shared hosts and compatible material subsets are
+permitted; conflicting definitions and duplicate selected identities refuse.
+Skylight identities are owner-local pairs, not globally unique child spellings.
+
+Admission bounds compact encoded content to 4 MiB, JSON depth to 64, values to
+100000, semantic members to 1000, and aggregate entity rows to 4096. Corner and
+ordinary/catalog limits remain 128, with at most 2048 corner dimensions. Byte
+accounting conservatively reserves 32 bytes per number and can refuse unusually
+dense numeric content near the limit. String parsing bounds wire bytes and parser
+complexity before passive materialization. This grants no placement, command,
+native fit or publication authority and changes no document reader floor.
+Mixed actions remain unavailable until the complete destination coordinator is
+implemented; the codec alone is not a completed Copy/Cut/Paste workflow.
+
 Group placement maps the source reference-centre centroid to the clicked roof
 anchor, retaining relative world XY centre offsets. Each destination facet
 supplies the reference scales needed to preserve physical on-face width/depth;

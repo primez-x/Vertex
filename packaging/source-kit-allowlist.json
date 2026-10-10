@@ -3659,6 +3659,10 @@
     },
     {
       "category": "source",
+      "path": "include/sketch/mixed_clipboard_transfer.hpp"
+    },
+    {
+      "category": "source",
       "path": "include/sketch/mixed_phase_wall_demolition.hpp"
     },
     {
@@ -4980,6 +4984,10 @@
     {
       "category": "source",
       "path": "src/core/measurement_linework_source.cpp"
+    },
+    {
+      "category": "source",
+      "path": "src/core/mixed_clipboard_transfer.cpp"
     },
     {
       "category": "source",
