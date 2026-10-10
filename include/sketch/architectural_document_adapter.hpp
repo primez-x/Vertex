@@ -11,6 +11,15 @@
 
 namespace sketch {
 
+// Stage one owner and both corner cuts, retaining child identities and opaque
+// payloads. The caller completes phase/view memberships, previews the complete
+// command through Document and validates architectural geometry before applying.
+// These producers do not publish a partial leg or infer registry enrollment.
+[[nodiscard]] ApplyEntityChanges corner_window_upsert_command(
+    const DocumentSnapshot& source, const Entity& replacement, Revision expected_revision);
+[[nodiscard]] ApplyEntityChanges corner_window_remove_command(
+    const DocumentSnapshot& source, const std::string& owner_id, Revision expected_revision);
+
 enum class RoomFootprintAnchor { first_corner, center, opposite_corner };
 
 enum class ArchitecturalJoinKind { wall, roof };

@@ -4,11 +4,16 @@
 #include "sketch/assembly_model.hpp"
 #include "sketch/door_operation.hpp"
 #include "sketch/opening_assembly.hpp"
+#include "sketch/corner_window.hpp"
+#include "sketch/document_wall.hpp"
+#include "sketch/project_organization.hpp"
+#include "sketch/constraint_phase_scope.hpp"
 #ifdef SKETCH_PHYSICAL_ROOMS
 #include "sketch/physical_wall_room.hpp"
 #endif
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <optional>
 #include <set>
@@ -99,6 +104,12 @@ void add_surface_kind(const Entity& entity, ScheduleRecord& record) {
 
 void add_opening(const Entity& entity, std::vector<ScheduleRecord>& records,
                  std::vector<std::string>& diagnostics) {
+    if (entity.properties.contains("corner_window_id")) {
+        if (entity.properties.contains("opening_assembly") || entity.properties.contains("door_operation") ||
+            text_field(entity, "opening_kind") != std::optional<std::string>{"opening"})
+            diagnostic(diagnostics, entity, "managed corner opening must be a bare wall void");
+        return;
+    }
     const auto opening_kind = text_field(entity, "opening_kind");
     const bool passage = opening_kind == std::optional<std::string>{"opening"};
     // A bare wall void has no assembly. An explicit passage profile schedules
@@ -224,6 +235,71 @@ void add_opening(const Entity& entity, std::vector<ScheduleRecord>& records,
         ScheduleQuantity{*width * *height, ScheduleUnit::square_metre},
         {{entity.id, "width"}, {entity.id, "height"}}, "Width multiplied by height"});
     records.push_back(std::move(record));
+}
+
+void add_corner_window(const Entity& entity, const DocumentSnapshot& document,
+    const std::map<std::string, std::vector<const Entity*>, std::less<>>& openings_by_wall,
+    std::vector<ScheduleRecord>& records, std::vector<std::string>& diagnostics) {
+    try {
+        const auto corner = parse_corner_window(entity);
+        std::array<Wall, 2> hosts;
+        for (std::size_t leg = 0; leg < hosts.size(); ++leg) {
+            const auto host = document.entities().find(corner.wall_ids[leg]);
+            if (host == document.entities().end() || host->second.type != "wall")
+                throw std::invalid_argument("corner host wall is missing: " + corner.wall_ids[leg]);
+            const auto roster = openings_by_wall.find(host->first);
+            const std::vector<const Entity*> empty;
+            std::string parse_error;
+            if (!read_document_wall(resolve_vertical_placement(document, host->second),
+                                    roster == openings_by_wall.end() ? empty : roster->second,
+                                    hosts[leg], parse_error))
+                throw std::invalid_argument(parse_error);
+        }
+        const auto cuts = corner_window_cuts(corner, hosts);
+        for (std::size_t leg = 0; leg < cuts.size(); ++leg) {
+            const auto child = document.entities().find(corner.opening_ids[leg]);
+            if (child == document.entities().end() || child->second.type != "opening")
+                throw std::invalid_argument("corner opening child is missing: " + corner.opening_ids[leg]);
+            const auto& properties = child->second.properties;
+            if (!properties.contains("opening_kind") || properties.at("opening_kind") != "opening" ||
+                properties.contains("opening_assembly") || properties.contains("door_operation") ||
+                !properties.contains("corner_window_id") || properties.at("corner_window_id") != entity.id ||
+                !properties.contains("corner_leg") || !properties.at("corner_leg").is_number_integer() ||
+                properties.at("corner_leg") != leg)
+                throw std::invalid_argument("corner opening child has an invalid owner, leg or fill");
+            if (std::find(hosts[leg].openings.begin(), hosts[leg].openings.end(), cuts[leg]) == hosts[leg].openings.end())
+                throw std::invalid_argument("corner opening child differs from the owner cut");
+        }
+        ScheduleRecord record;
+        record.object_id = entity.id;
+        record.kind = ScheduleRowKind::window;
+        record.mark = mark_for(entity, "W-", diagnostics);
+        record.properties.emplace("name", std::string{"Corner window"});
+        record.properties.emplace("count", std::int64_t{1});
+        record.properties.emplace("leg_1_width", ScheduleQuantity{corner.widths[0], ScheduleUnit::metre});
+        record.properties.emplace("leg_2_width", ScheduleQuantity{corner.widths[1], ScheduleUnit::metre});
+        record.properties.emplace("width", ScheduleQuantity{corner.widths[0] + corner.widths[1], ScheduleUnit::metre});
+        record.properties.emplace("height", ScheduleQuantity{corner.height, ScheduleUnit::metre});
+        record.properties.emplace("sill", ScheduleQuantity{corner.sill, ScheduleUnit::metre});
+        record.properties.emplace("wall_1_id", corner.wall_ids[0]);
+        record.properties.emplace("wall_2_id", corner.wall_ids[1]);
+        record.properties.emplace("assembly_kind", std::string{"window"});
+        record.properties.emplace("window_layout", std::string{"corner"});
+        record.properties.emplace("mechanism", std::string{"Fixed"});
+        record.properties.emplace("panel_count", std::int64_t{2});
+        record.properties.emplace("frame_width", ScheduleQuantity{corner.assembly.frame_width_m, ScheduleUnit::metre});
+        record.properties.emplace("frame_depth", ScheduleQuantity{corner.assembly.frame_depth_m, ScheduleUnit::metre});
+        record.properties.emplace("panel_thickness", ScheduleQuantity{corner.assembly.panel_thickness_m, ScheduleUnit::metre});
+        record.properties.emplace("glazing_thickness", ScheduleQuantity{corner.assembly.glazing_thickness_m, ScheduleUnit::metre});
+        record.properties.emplace("inset", ScheduleQuantity{corner.assembly.inset_m, ScheduleUnit::metre});
+        record.calculated.emplace("area", ScheduleCalculation{
+            ScheduleQuantity{(corner.widths[0] + corner.widths[1]) * corner.height, ScheduleUnit::square_metre},
+            {{entity.id, "leg_1_width"}, {entity.id, "leg_2_width"}, {entity.id, "height"}},
+            "Combined leg width multiplied by height; one manufactured corner window"});
+        records.push_back(std::move(record));
+    } catch (const std::exception& error) {
+        diagnostic(diagnostics, entity, error.what());
+    }
 }
 
 void add_room(const Entity& entity, std::vector<ScheduleRecord>& records,
@@ -410,12 +486,56 @@ DocumentScheduleProjection project_schedules(
     result.snapshot.revision = document.revision();
     std::vector<ScheduleRecord> records;
     std::map<std::string, AssemblyModel> catalogs;
+    std::set<std::string, std::less<>> inactive_corner_ids;
+    std::set<std::string, std::less<>> inactive_owner_ids;
+    bool corner_phase_valid = true;
+    const bool has_corners = std::any_of(document.entities().begin(), document.entities().end(),
+        [&](const auto& entry) { return entry.second.type == "corner_window" &&
+            (!visible_entity_ids || visible_entity_ids->contains(entry.first)); });
+    if (has_corners) {
+        try {
+            inactive_owner_ids = constraint_phase_scope(document.entities()).inactive_owner_ids;
+            for (const auto& [id, entity] : document.entities()) {
+                if (entity.type != "corner_window") continue;
+                try {
+                    const auto corner = parse_corner_window(entity);
+                    if (inactive_owner_ids.contains(id) ||
+                        std::any_of(corner.wall_ids.begin(), corner.wall_ids.end(),
+                            [&](const auto& member) { return inactive_owner_ids.contains(member); }) ||
+                        std::any_of(corner.opening_ids.begin(), corner.opening_ids.end(),
+                            [&](const auto& member) { return inactive_owner_ids.contains(member); })) {
+                        inactive_corner_ids.insert(id);
+                        inactive_owner_ids.insert(corner.opening_ids.begin(), corner.opening_ids.end());
+                    }
+                } catch (const std::exception&) {
+                    // Visible malformed owners get their own diagnostic below.
+                }
+            }
+        } catch (const std::exception& error) {
+            corner_phase_valid = false;
+            result.diagnostics.push_back("corner window phase scope: " + std::string(error.what()));
+        }
+    }
+    std::map<std::string, std::vector<const Entity*>, std::less<>> openings_by_wall;
+    if (has_corners && corner_phase_valid) {
+        for (const auto& [id, entity] : document.entities()) {
+            if (entity.type != "opening" || inactive_owner_ids.contains(id)) continue;
+            std::string host_id, error;
+            if (read_document_wall_id(entity, host_id, error)) openings_by_wall[host_id].push_back(&entity);
+        }
+    }
 #ifdef SKETCH_PHYSICAL_ROOMS
     const auto physical_rooms = physical_wall_room_checks(document);
 #endif
     for (const auto& [id, entity] : document.entities()) {
         if (visible_entity_ids && !visible_entity_ids->contains(id)) continue;
         if (entity.type == "opening") add_opening(entity, records, result.diagnostics);
+        else if (entity.type == "corner_window") {
+            if (!corner_phase_valid || inactive_corner_ids.contains(id) || inactive_owner_ids.contains(id)) continue;
+            const auto record_count = records.size();
+            add_corner_window(entity, document, openings_by_wall, records, result.diagnostics);
+            if (records.size() == record_count) continue;
+        }
         else if (entity.type == "room" || entity.type == "room_boundary") {
             if (entity.type == "room_boundary" && entity.extensions.contains("physical_wall_room")) {
 #ifdef SKETCH_PHYSICAL_ROOMS
@@ -449,7 +569,8 @@ DocumentScheduleProjection project_schedules(
         // Joined roof partitions and assembly profile materials are projected
         // by the architectural adapter from their complete derived solids.
         // A generic homogeneous assignment would duplicate those quantities.
-        if (entity.type != "roof_join" && entity.type != "assembly_instance")
+        if (entity.type != "roof_join" && entity.type != "assembly_instance" &&
+            !(entity.type == "opening" && entity.properties.contains("corner_window_id")))
             add_material(entity, document, catalogs, records, result.diagnostics);
     }
     try {
@@ -457,6 +578,28 @@ DocumentScheduleProjection project_schedules(
         // Stored room measurements are primitive provenance for gross_area,
         // but the schedule editor only authorizes room names and marks.
         for (auto& row : result.snapshot.rows) {
+            const auto source = document.entities().find(row.object_id);
+            if (source != document.entities().end() && source->second.type == "corner_window") {
+                // Dimensions and both host relationships change atomically via
+                // the corner workflow; a schedule cannot edit one leg alone.
+                for (auto& [key, cell] : row.cells) {
+                    if (key == "mark") continue;
+                    cell.editable = false;
+                    const auto* property = key == "leg_1_width" || key == "leg_2_width" || key == "width"
+                        ? "widths_m" : key == "height" ? "height_m" : key == "sill" ? "sill_m"
+                        : key == "wall_1_id" || key == "wall_2_id" ? "wall_ids"
+                        : key == "name" || key == "count" ? "opening_ids" : "opening_assembly";
+                    cell.sources = {{row.object_id, property}};
+                    cell.explanation = "One coordinated corner window and its two host wall cuts";
+                    if (key == "area") {
+                        cell.sources = {{row.object_id, "widths_m"}, {row.object_id, "height_m"}};
+                        cell.explanation = "Combined leg width multiplied by height; one manufactured corner window";
+                    } else if (key == "width") {
+                        cell.explanation = "Combined width of the two corner window legs";
+                    }
+                }
+                continue;
+            }
             const bool passage = row.kind == ScheduleRowKind::assembly && row.cells.contains("assembly_kind") &&
                 row.cells.at("assembly_kind").value == ScheduleValue{std::string{"opening"}};
             if (row.kind == ScheduleRowKind::door || row.kind == ScheduleRowKind::window || passage) {
@@ -609,6 +752,9 @@ ApplyEntityChanges make_document_schedule_edit(const DocumentSnapshot& document,
                    property != "fire_rated") {
             throw std::invalid_argument("Opening schedule property is not editable");
         }
+    } else if (entity->second.type == "corner_window") {
+        if (property != "mark")
+            throw std::invalid_argument("Corner window dimensions and hosts require a coordinated corner edit");
     } else if (entity->second.type != "room" && entity->second.type != "room_boundary") {
         throw std::invalid_argument("Schedule source entity type is not editable through schedules");
     } else if (property != "mark" && property != "name") {

@@ -241,7 +241,8 @@ public:
     // schema-aware scale/resize archives throughout retained history.
     // v169 adds explicit lossless roof-opening transfer authority in retained,
     // nested and undone history; existing schema-three roof values stay v168.
-    static constexpr std::uint32_t format_version = 169;
+    // v170 adds a corner-window owner with two coordinated hosted cut entities.
+    static constexpr std::uint32_t format_version = 170;
     static constexpr std::uint32_t recovery_format_version = 4;
     [[nodiscard]] static std::uint32_t required_format_version(const DocumentSnapshot& snapshot);
     static constexpr std::uint64_t maximum_file_bytes = 4ULL * 1024ULL * 1024ULL * 1024ULL;

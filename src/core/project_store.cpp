@@ -962,6 +962,9 @@ std::uint32_t required_format_version_internal(const DocumentSnapshot& snapshot,
         }
         if (revision.boundary_translations) required = std::max(required, 9U);
         for (const auto& [id, entity] : revision.entities) {
+            if (entity.type == "corner_window" ||
+                (entity.type == "opening" && entity.properties.contains("corner_window_id")))
+                required = std::max(required, 170U);
             if (entity.type == "roof" && entity.properties.is_object() && entity.properties.value("version", nlohmann::json()) == 3)
                 required = std::max(required, 168U);
             if (entity.type == "roof" && entity.extensions.is_object())
@@ -2865,6 +2868,7 @@ bool verify_sqlite_schema(sqlite3* database, bool allow_recovery = false) {
          sqlite3_column_int(user_version.get(), 0) != 166 &&
          sqlite3_column_int(user_version.get(), 0) != 167 &&
          sqlite3_column_int(user_version.get(), 0) != 168 &&
+         sqlite3_column_int(user_version.get(), 0) != 170 &&
          sqlite3_column_int(user_version.get(), 0) != 169 &&
          sqlite3_column_int(user_version.get(), 0) != 163 &&
          sqlite3_column_int(user_version.get(), 0) != 143 &&
@@ -3586,6 +3590,8 @@ DocumentSnapshot read_snapshot(sqlite3* database, RecoveryLedger* recovery = nul
     // here and authenticate the manifest with its stored version below.
     const auto required_format = required_format_version_internal(snapshot, format_number < 28);
     if (required_format > format_number) {
+        if (required_format>=170)
+            storage_error(StorageErrorCode::unsupported_format,"This project requires reader 170 for coordinated two-host corner windows and their retained history");
         if (required_format>=169)
             storage_error(StorageErrorCode::unsupported_format,"This project requires reader 169 for lossless roof-opening transfers and their retained edit history");
         if (required_format>=168)

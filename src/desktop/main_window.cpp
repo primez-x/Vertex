@@ -25,6 +25,7 @@
 
 #include "sketch/architecture.hpp"
 #include "sketch/opening_assembly.hpp"
+#include "sketch/corner_window.hpp"
 #include "sketch/hosted_opening_plan.hpp"
 #include "sketch/workspace_regeneration_queue.hpp"
 #include "sketch/roof_join_semantics.hpp"
@@ -33635,6 +33636,21 @@ public:
             if (m_selected_roof_opening) return deleteRoofOpeningSelection();
             const auto source = authoringSnapshot();
             if (!source.is_editable()) throw std::invalid_argument("This document is read-only.");
+            if (m_selected_ids.size() == 1) {
+                const auto selected = source.entities().find(m_selected_id.toStdString());
+                if (selected != source.entities().end() && selected->second.type == "corner_window") {
+                    const auto authority = captureSourceEditAuthority(source);
+                    const auto command = augmentRemovalCommand(Command{corner_window_remove_command(
+                        source, selected->first, source.revision())}, source);
+                    const auto candidate = Document::preview_command(source, command);
+                    validate_architectural_geometry_changes(source, candidate);
+                    if (!sourceEditAuthorityCurrent(authority))
+                        throw std::invalid_argument("The corner-window source changed before deletion");
+                    if (!applyAuthoredCommand(command)) return false;
+                    m_selected_id.clear(); m_selected_ids.clear(); clearError(); refresh();
+                    return true;
+                }
+            }
             if (hasOnlyHostedOpeningSelection(source)) return removeSelectedHostedOpenings(source,false);
             if (hasMixedPhysicalWallSelection(source)) return removeSelectedMixedPhysicalWalls(source,false);
             if (const auto removed=removeSelectedArchitecturalDrawing(source,false)) return *removed;
@@ -44558,6 +44574,10 @@ public:
              [this] { createOpeningFromDialog(QStringLiteral("door")); }},
             {QStringLiteral("Create window opening"),
              [this] { createOpeningFromDialog(QStringLiteral("window")); }},
+            {QStringLiteral("Create corner window between selected walls"),
+             [this] { showCornerWindowEditor(); }},
+            {QStringLiteral("Edit selected corner window"),
+             [this] { showCornerWindowEditor(); }},
             {QStringLiteral("Create slab from selected boundary"),
              [this] { createSlabFromDialog(); }},
             {QStringLiteral("Create horizontal assembly from selected boundary"),
@@ -45602,6 +45622,7 @@ private:
         for (const auto& change : changes->entity_changes) {
             if (!fresh(change) || memberships.contains(change.entity.id) ||
                 hosted_stair_railing(change.entity) || change.entity.type == "opening" ||
+                change.entity.type == "corner_window" ||
                 change.entity.type == "building" || change.entity.type == "floor") continue;
             if (!selected) {
                 if (!registry_entities.empty() || !registry_id.empty())
@@ -45609,6 +45630,29 @@ private:
                 continue;
             }
             enroll_current(*selected, change.entity.id);
+        }
+        for (const auto& change : changes->entity_changes) {
+            if (!fresh(change) || change.entity.type != "corner_window") continue;
+            const auto corner = parse_corner_window(change.entity);
+            const auto first = memberships.find(corner.wall_ids[0]);
+            const auto second = memberships.find(corner.wall_ids[1]);
+            if ((first == memberships.end()) != (second == memberships.end()) ||
+                (first != memberships.end() && first->second != second->second))
+                throw std::invalid_argument("Both corner-window hosts must share their actual design set.");
+            const auto own = memberships.find(corner.id);
+            if (own != memberships.end()) {
+                if (first == memberships.end() || own->second != first->second)
+                    throw std::invalid_argument("A corner window cannot belong to another design set.");
+                continue;
+            }
+            if (first == memberships.end()) continue; // Preserve legacy unregistered host ownership.
+            const auto& edit = registries.at(first->second);
+            const auto state = ModelPhases::create(edit.ids, edit.baseline, edit.alternatives,
+                edit.model.active_alternative()).active_state();
+            for (const auto& host : corner.wall_ids)
+                if (!state.contains(host) || state.at(host) == ModelPhase::demolished)
+                    throw std::invalid_argument("Choose two active walls before adding a corner window.");
+            enroll_current(first->second, corner.id);
         }
         for (const auto& change : changes->entity_changes) {
             if (!fresh(change)) continue;
@@ -45659,6 +45703,25 @@ private:
             }
             memberships.emplace(change.entity.id, host_membership->second);
             edit.changed = true;
+        }
+        for (const auto& change : changes->entity_changes) {
+            if (!fresh(change) || change.entity.type != "corner_window") continue;
+            const auto corner = parse_corner_window(change.entity);
+            const auto own = memberships.find(corner.id);
+            if (own == memberships.end()) continue;
+            auto& edit = registries.at(own->second);
+            if (std::find(edit.baseline.begin(), edit.baseline.end(), corner.id) == edit.baseline.end()) continue;
+            // A baseline assembly follows future demolition of either host.
+            // Retire its owner and both cuts together in every saved alternative.
+            for (auto& alternative : edit.alternatives) {
+                if (std::none_of(corner.wall_ids.begin(), corner.wall_ids.end(), [&](const auto& host) {
+                    return std::find(alternative.demolished_ids.begin(), alternative.demolished_ids.end(), host) != alternative.demolished_ids.end();
+                })) continue;
+                for (const auto& id : {corner.id, corner.opening_ids[0], corner.opening_ids[1]})
+                    if (std::find(alternative.demolished_ids.begin(), alternative.demolished_ids.end(), id) == alternative.demolished_ids.end())
+                        alternative.demolished_ids.push_back(id);
+                edit.changed = true;
+            }
         }
         for (auto& edit : registries) {
             if (!edit.changed) continue;
@@ -49756,6 +49819,8 @@ private:
                          [this] { createOpeningFromDialog(QStringLiteral("door")); });
         authoring_action("createWindow", QStringLiteral("Window in selected wall…"),
                          [this] { createOpeningFromDialog(QStringLiteral("window")); });
+        authoring_action("createCornerWindow", QStringLiteral("Corner window between two selected walls…"),
+                         [this] { showCornerWindowEditor(); });
         authoring_action("createOpening", QStringLiteral("Opening in selected wall…"), [this] {
             const auto context = captureModalContext();
             bool accepted = false;
@@ -51100,7 +51165,7 @@ private:
                     if (selected && selected->type=="assembly_instance") { editIndependentAssembly(selected->id); return; }
                     if (selected && selected->type=="roof_join") { showRoofJoinProperties(); return; }
                 }
-                positionContextEditor();
+                positionContextEditor(true);
             });
             m_nativeModelView->onTransformGestureStarted = [this](QString id) {
                 m_native_gesture_authority.reset();
@@ -51165,7 +51230,7 @@ private:
                         }
                         auto* properties = menu.addAction(QStringLiteral("Properties"));
                         QObject::connect(properties, &QAction::triggered, owner,
-                                         guarded([this] { if (m_selected_ids.size()!=1 || !editEmbeddedAssemblyFromDialog()) positionContextEditor(); }));
+                                         guarded([this] { if (m_selected_ids.size()!=1 || !editEmbeddedAssemblyFromDialog()) positionContextEditor(true); }));
                         if (const auto selected = selectedEntity(); single && selected && supportsObjectAppearance(selected->type)) {
                             auto* appearance = menu.addAction(QStringLiteral("Drawing appearance…"));
                             appearance->setObjectName(QStringLiteral("objectAppearanceContextAction"));
@@ -52537,7 +52602,7 @@ private:
                         return;
                     }
                 }
-                positionContextEditor();
+                positionContextEditor(true);
             } catch (const std::exception& error) {
                 setError(QStringLiteral("Object editor: %1").arg(QString::fromUtf8(error.what())));
             }
@@ -53087,6 +53152,8 @@ private:
                         QObject::connect(geometry,&QAction::triggered,owner,guarded([this]{showBoundaryGeometryEditor();}));
                     }
                     if (selected && (selected->type == "wall" || selected->type == "wall_join")) {
+                        if (selected->type == "wall" && m_selected_ids.size() == 2)
+                            add_command(owner->findChild<QAction*>(QStringLiteral("createCornerWindow")));
                         if (selected->type=="wall" && m_selected_ids.size()<=2)
                             add_command(owner->findChild<QAction*>(QStringLiteral("mergePhysicalWalls")));
                         if (m_selected_ids.size() > 1) add_command(owner->findChild<QAction*>(QStringLiteral("joinWalls")));
@@ -53098,7 +53165,7 @@ private:
                     }
                     auto* properties = menu.addAction(QStringLiteral("Properties"));
                     QObject::connect(properties, &QAction::triggered, owner,
-                                     guarded([this] { positionContextEditor(); }));
+                                     guarded([this] { positionContextEditor(true); }));
                     if (auto* transform=add_command(m_transform_action))
                         transform->setEnabled(m_transform_action->isEnabled() && m_document->is_editable());
                     add_command(m_copy_action);
@@ -53769,6 +53836,46 @@ private:
                 }
                 continue;
             }
+            if (entity.type == "corner_window") {
+                try {
+                    const auto corner = parse_corner_window(entity);
+                    std::array<Wall, 2> hosts;
+                    std::string key = "corner-window-plan-v1\n" + entity.properties.dump();
+                    for (std::size_t leg = 0; leg < 2; ++leg) {
+                        const auto& raw_host = snapshot.entities().at(corner.wall_ids[leg]);
+                        std::vector<const Entity*> cuts;
+                        for (const auto& [child_id, child] : snapshot.entities()) {
+                            if (child.type != "opening" || saved_design_reference_inactive(snapshot, phase_scope, child_id)) continue;
+                            if (read_string(child.properties, "wall_id") == std::optional<std::string>{raw_host.id}) {
+                                cuts.push_back(&child); key += '\n' + child.properties.dump();
+                            }
+                        }
+                        const auto resolved = resolve_vertical_placement(snapshot, raw_host);
+                        std::string error;
+                        if (!read_document_wall(resolved, cuts, hosts[leg], error)) throw std::invalid_argument(error);
+                        key += '\n' + resolved.properties.dump();
+                    }
+                    auto cached = caches.projections.find(id);
+                    if (cached == caches.projections.end() || cached->second.first != key) {
+                        auto lines = project_building_shape_plan(make_corner_window(hosts,
+                            corner_window_cuts(corner, hosts), corner.assembly));
+                        cached = caches.projections.insert_or_assign(id,
+                            std::make_pair(key, std::move(lines))).first;
+                    }
+                    CanvasEntity component{id_from(id), QStringLiteral("window"),
+                        cached->second.second, 0.0, id_from(id) == options.selected_id};
+                    component.stroke_color = QColor(35, 43, 52);
+                    component.dark_stroke_color = QColor(220, 232, 244);
+                    component.output_stroke_width_mm = 0.16;
+                    all_geometry.push_back(std::move(component));
+                } catch (const Standard_Failure& error) {
+                    append_geometry_error(QStringLiteral("Corner window %1: %2").arg(id_from(id),
+                        QString::fromUtf8(error.GetMessageString())));
+                } catch (const std::exception& error) {
+                    append_geometry_error(QStringLiteral("Corner window %1: %2").arg(id_from(id), QString::fromUtf8(error.what())));
+                }
+                continue;
+            }
             if (entity.type != "opening") {
                 continue;
             }
@@ -53796,6 +53903,9 @@ private:
         for (const auto& [id, entity] : snapshot.entities()) {
             if (saved_design_reference_inactive(snapshot, phase_scope, id)) continue;
             if (entity.type == "opening") {
+                // Keep both managed cuts in the host roster above, while their
+                // common manufactured owner remains the sole canvas hit target.
+                if (entity.properties.contains("corner_window_id")) continue;
                 try {
                     const auto host = snapshot.entities().find(entity.properties.at("wall_id").get<std::string>());
                     if(host == snapshot.entities().end()) throw std::invalid_argument("host wall is missing");
@@ -58033,7 +58143,10 @@ private:
             delete group;
         }
         m_navigator_annotation_groups.clear();
-        const auto presented = [](const OrganizationNode& node) {
+        const auto presented = [&snapshot](const OrganizationNode& node) {
+            const auto entity = snapshot.entities().find(node.id);
+            if (entity != snapshot.entities().end() && entity->second.type == "opening" &&
+                entity->second.properties.contains("corner_window_id")) return false;
             return node.type != kAnnotationEntityType && node.type != "constraint" &&
                 node.type != "model_phases" && node.type != "sheet_view_model";
         };
@@ -58070,8 +58183,7 @@ private:
             m_navigator_font != m_navigator->font();
         auto& items = m_navigator_items;
         for (const auto& [id, node] : organization.nodes) {
-            if (node.type == kAnnotationEntityType || node.type == "constraint" || node.type == "model_phases" ||
-                node.type == "sheet_view_model") continue;
+            if (!presented(node)) continue;
             const auto retained = items.find(id);
             auto* item = retained == items.end() ? new QTreeWidgetItem : retained->second;
             if (retained == items.end()) {
@@ -60153,8 +60265,13 @@ private:
         if (m_draw_subtract_action) m_draw_subtract_action->setEnabled(m_document->is_editable() && !m_boundary_session);
     }
 
-    void positionContextEditor() {
+    void positionContextEditor(bool open_corner = false) {
         if (m_selected_roof_opening) { showRoofOpeningQuickProperties(); return; }
+        if (const auto selected = selectedEntity(); selected && selected->type == "corner_window") {
+            if (m_inspector) m_inspector->hide();
+            if (open_corner) showCornerWindowEditor();
+            return;
+        }
         if (!m_inspector || !m_drawing_panel) return;
         if (m_selected_id.isEmpty()) {
             m_inspector->hide();
@@ -66445,6 +66562,128 @@ private:
             });
             dialog.exec();
         } catch(const std::exception& error) { setError(QString::fromUtf8(error.what())); }
+    }
+
+    void showCornerWindowEditor() {
+        try {
+            const auto source = authoringSnapshot();
+            const auto authority = captureSourceEditAuthority(source);
+            const auto context = captureModalContext();
+            if (!source.is_editable()) throw std::invalid_argument("This project is read-only.");
+            if (m_boundary_session || m_pending_wall_start || !m_pending_symbol_id.isEmpty() ||
+                !m_pending_opening_kind.isEmpty())
+                throw std::invalid_argument("Finish or cancel placement before editing a corner window.");
+            Entity owner_entity;
+            CornerWindow corner;
+            const auto selected = selectedEntity();
+            const bool editing = m_selected_ids.size() == 1 && selected && selected->type == "corner_window";
+            if (editing) { owner_entity = *selected; corner = parse_corner_window(owner_entity); }
+            else {
+                if (m_selected_ids.size() != 2)
+                    throw std::invalid_argument("Ctrl-click two adjoining walls, then choose Corner window.");
+                std::size_t leg = 0;
+                for (const auto& id : m_selected_ids) {
+                    const auto found = source.entities().find(id.toStdString());
+                    if (found == source.entities().end() || found->second.type != "wall")
+                        throw std::invalid_argument("Select two walls that meet at a corner.");
+                    corner.wall_ids[leg++] = found->first;
+                }
+                corner.id = new_id("corner-window");
+                corner.opening_ids = {new_id("opening"), new_id("opening")};
+                corner.widths = {1.0, 1.0}; corner.sill = 0.9; corner.height = 1.2;
+                corner.assembly = default_opening_assembly(OpeningAssemblyKind::window);
+                corner.assembly.glazing_thickness_m = 0.008;
+                owner_entity = Entity{corner.id, "corner_window", json::object(), false, json::object()};
+                const auto& first = source.entities().at(corner.wall_ids[0]);
+                for (const auto* key : {"property_id", "building_id", "floor_id", "layer_id", "level_id"})
+                    if (first.properties.contains(key)) owner_entity.properties[key] = first.properties.at(key);
+                owner_entity.properties["name"] = "Corner window";
+            }
+            std::array<Wall, 2> walls;
+            for (std::size_t leg = 0; leg < 2; ++leg) {
+                std::string error;
+                if (!read_document_wall(source.entities().at(corner.wall_ids[leg]), {}, walls[leg], error))
+                    throw std::invalid_argument(error);
+            }
+            if (!editing) {
+                std::size_t matches = 0;
+                for (const bool first_start : {true, false}) for (const bool second_start : {true, false}) {
+                    const auto a = first_start ? walls[0].baseline.start : walls[0].baseline.end;
+                    const auto b = second_start ? walls[1].baseline.start : walls[1].baseline.end;
+                    if (std::hypot(a.x-b.x, a.y-b.y) <= default_geometry_tolerance_metres) {
+                        corner.at_start = {first_start, second_start}; ++matches;
+                    }
+                }
+                if (matches != 1) throw std::invalid_argument("The walls must share one unambiguous endpoint.");
+                corner.assembly.frame_depth_m = std::min({0.12, walls[0].thickness, walls[1].thickness});
+                corner.assembly.panel_thickness_m = std::min(0.04, corner.assembly.frame_depth_m);
+            }
+            QDialog dialog(owner);
+            dialog.setObjectName(QStringLiteral("cornerWindowEditor"));
+            dialog.setWindowTitle(editing ? QStringLiteral("Corner window properties") : QStringLiteral("Create corner window"));
+            dialog.setMinimumWidth(340);
+            auto* layout = new QVBoxLayout(&dialog);
+            auto* form = new QFormLayout;
+            auto* name = new QLineEdit(QString::fromStdString(owner_entity.properties.value("name", std::string{"Corner window"})), &dialog);
+            form->addRow(QStringLiteral("Name"), name);
+            const std::array<double, 8> original{corner.widths[0], corner.widths[1], corner.sill, corner.height,
+                corner.assembly.frame_width_m, corner.assembly.frame_depth_m,
+                corner.assembly.panel_thickness_m, corner.assembly.glazing_thickness_m};
+            const std::array<QString, 8> labels{QStringLiteral("First wall width"), QStringLiteral("Second wall width"),
+                QStringLiteral("Sill height"), QStringLiteral("Window height"), QStringLiteral("Frame width"),
+                QStringLiteral("Frame depth"), QStringLiteral("Sash depth"), QStringLiteral("Glazing thickness")};
+            std::array<QLineEdit*, 8> fields{};
+            std::array<QString, 8> displayed;
+            for (std::size_t index = 0; index < fields.size(); ++index) {
+                displayed[index] = format_length(original[index], m_metric_units);
+                fields[index] = new QLineEdit(displayed[index], &dialog);
+                fields[index]->setAccessibleName(labels[index]);
+                fields[index]->setObjectName(QStringLiteral("cornerDimension%1").arg(static_cast<int>(index)));
+                form->addRow(labels[index], fields[index]);
+            }
+            layout->addLayout(form);
+            auto* status = new QLabel(&dialog); status->setWordWrap(true); status->hide(); layout->addWidget(status);
+            auto* buttons = new QDialogButtonBox(QDialogButtonBox::Save | QDialogButtonBox::Cancel, &dialog);
+            layout->addWidget(buttons);
+            QObject::connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
+            QObject::connect(buttons, &QDialogButtonBox::accepted, &dialog, [&] {
+                try {
+                    if (!modalContextUnchanged(context) || !sourceEditAuthorityUnchanged(authority))
+                        throw std::invalid_argument("The project, selected walls or view changed. Reopen the corner-window editor.");
+                    auto edited = corner;
+                    auto values = original;
+                    for (std::size_t index = 0; index < fields.size(); ++index)
+                        if (fields[index]->text() != displayed[index]) values[index] = parse_quantity(
+                            fields[index]->text().toStdString(), m_metric_units ? Unit::metre : Unit::foot).metres;
+                    edited.widths = {values[0], values[1]}; edited.sill = values[2]; edited.height = values[3];
+                    edited.assembly.frame_width_m = values[4]; edited.assembly.frame_depth_m = values[5];
+                    edited.assembly.panel_thickness_m = values[6]; edited.assembly.glazing_thickness_m = values[7];
+                    auto candidate = owner_entity;
+                    const auto generated = corner_window_properties(edited);
+                    for (const auto& [key, value] : generated.items()) {
+                        if (editing && key == "opening_assembly" && edited.assembly == corner.assembly) continue;
+                        if (!candidate.properties.contains(key) || candidate.properties.at(key) != value)
+                            candidate.properties[key] = value;
+                    }
+                    candidate.properties["name"] = name->text().trimmed().toStdString();
+                    if (editing && candidate.properties == owner_entity.properties) { dialog.accept(); return; }
+                    auto command = augmentAuthoredCommand(Command{corner_window_upsert_command(
+                        source, candidate, source.revision())}, source);
+                    const auto preview = Document::preview_command(source, command);
+                    validate_architectural_geometry_changes(source, preview, {corner.id});
+                    if (!sourceEditAuthorityUnchanged(authority))
+                        throw std::invalid_argument("The corner-window source changed before publication.");
+                    if (!applyAuthoredCommand(command)) { status->setText(lastError()); status->show(); return; }
+                    m_selected_id = id_from(corner.id); m_selected_ids = {m_selected_id};
+                    clearError(); refresh(); dialog.accept();
+                } catch (const Standard_Failure& error) {
+                    status->setText(QString::fromUtf8(error.GetMessageString())); status->show();
+                } catch (const std::exception& error) {
+                    status->setText(QString::fromUtf8(error.what())); status->show();
+                }
+            });
+            dialog.exec();
+        } catch (const std::exception& error) { setError(QStringLiteral("Corner window: %1").arg(QString::fromUtf8(error.what()))); }
     }
 
     void createOpeningFromDialog(const QString& kind) {

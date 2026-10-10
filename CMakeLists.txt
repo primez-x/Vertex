@@ -538,7 +538,7 @@ target_link_libraries(sketch_assistance_engine PUBLIC sketch_assistance_contract
 add_library(sketch_document_schedule_adapter src/core/document_schedule_adapter.cpp)
 target_include_directories(sketch_document_schedule_adapter PUBLIC include)
 target_link_libraries(sketch_document_schedule_adapter PUBLIC sketch_schedule_model sketch_document sketch_precision)
-target_link_libraries(sketch_document_schedule_adapter PUBLIC sketch_door_operation)
+target_link_libraries(sketch_document_schedule_adapter PUBLIC sketch_door_operation sketch_wall_semantics)
 if(SKETCH_BUILD_ARCHITECTURE OR SKETCH_BUILD_DESKTOP)
   target_link_libraries(sketch_document_schedule_adapter PUBLIC sketch_physical_wall_room)
   target_compile_definitions(sketch_document_schedule_adapter PRIVATE SKETCH_PHYSICAL_ROOMS=1)
@@ -602,9 +602,10 @@ endif()
 # The alias-aware decoder is shared by semantic document admission as well as
 # plan projection. It only consumes Entity values, so it belongs below Document
 # rather than introducing an admission-to-projection dependency cycle.
-add_library(sketch_wall_semantics src/core/wall_semantics.cpp src/core/document_wall.cpp)
+add_library(sketch_wall_semantics src/core/wall_semantics.cpp src/core/document_wall.cpp
+  src/core/corner_window.cpp)
 target_link_libraries(sketch_wall_semantics PUBLIC sketch_door_operation sketch_opening_assembly)
-target_link_libraries(sketch_wall_semantics PUBLIC sketch_precision sketch_json)
+target_link_libraries(sketch_wall_semantics PUBLIC sketch_precision sketch_json sketch_model_phases)
 add_library(sketch_roof_join_semantics src/core/roof_join_semantics.cpp)
 target_include_directories(sketch_roof_join_semantics PUBLIC include)
 target_link_libraries(sketch_roof_join_semantics PUBLIC sketch_json)

@@ -40,10 +40,10 @@ nlohmann::json retain_ids(const nlohmann::json& saved, const nlohmann::json& pro
 }  // namespace
 
 bool is_model_phase_entity_type(std::string_view type) noexcept {
-    static constexpr std::array<std::string_view,20> roles{
+    static constexpr std::array<std::string_view,21> roles{
         "building","floor","wall","opening","room","room_boundary","slab","roof","stair","railing",
         "column","beam","assembly_model","boundary","measurement_boundary","wall_join","roof_join",
-        "measurement_linework","assembly_instance","terrain_surface"};
+        "measurement_linework","assembly_instance","terrain_surface","corner_window"};
     return std::find(roles.begin(),roles.end(),type)!=roles.end();
 }
 

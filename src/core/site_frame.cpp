@@ -59,8 +59,8 @@ std::string reference(const Entity& entity, const char* key) {
     const auto* value=property(entity,key); return value ? text(*value) : std::string{};
 }
 bool architectural(std::string_view type) {
-    constexpr std::array<std::string_view,12> types{"boundary","measurement_boundary","room_boundary",
-        "room","wall","slab","roof","stair","railing","column","beam","opening"};
+    constexpr std::array<std::string_view,13> types{"boundary","measurement_boundary","room_boundary",
+        "room","wall","slab","roof","stair","railing","column","beam","opening","corner_window"};
     return std::find(types.begin(),types.end(),type)!=types.end();
 }
 bool container(std::string_view type) {
@@ -154,7 +154,7 @@ public:
             if (const auto* p=property(entity,"presentation_frame"))
                 require(decode_presentation_frame(*p)==result.placement.source_frame.mode,
                     "hosted object cannot override the host presentation frame");
-        } else if (entity.type=="wall_join" || entity.type=="roof_join") {
+        } else if (entity.type=="wall_join" || entity.type=="roof_join" || entity.type=="corner_window") {
             resolve_join(entity,result);
         } else {
             result.placement.drawing_context=own_context(entity,result);
@@ -314,8 +314,8 @@ private:
                     if (stair!=host->end()) edge(physical_dependents,entity,&stair.value(),"stair");
                 }
             }
-            if (entity.type=="wall_join" || entity.type=="roof_join") {
-                const bool wall=entity.type=="wall_join";
+            if (entity.type=="wall_join" || entity.type=="roof_join" || entity.type=="corner_window") {
+                const bool wall=entity.type!="roof_join";
                 const auto* members=property(entity,wall ? "wall_ids" : "roof_ids");
                 if (members && members->is_array()) {
                     // Count every inspected member, including unknown legacy
@@ -509,10 +509,12 @@ private:
         }
     }
     void resolve_join(const Entity& entity,Captured& result) {
-        const bool wall=entity.type=="wall_join";
+        const bool wall=entity.type!="roof_join";
         const auto* members=property(entity,wall ? "wall_ids" : "roof_ids");
         require(members && members->is_array() && members->size()>=2 &&
             members->size()<=limits_.maximum_join_members,"invalid site-frame join member count");
+        require(entity.type!="corner_window" || members->size()==2,
+            "corner window requires exactly two site-frame hosts");
         std::set<std::string,std::less<>> distinct;
         bool first=true;
         for (const auto& member:*members) {
@@ -523,7 +525,8 @@ private:
             if (first) { result.placement=captured.placement; first=false; }
             else require(result.placement.source_frame==captured.placement.source_frame &&
                 result.placement.drawing_context.building_id==captured.placement.drawing_context.building_id &&
-                result.placement.drawing_context.property_id==captured.placement.drawing_context.property_id,
+                result.placement.drawing_context.property_id==captured.placement.drawing_context.property_id &&
+                (entity.type!="corner_window" || result.placement.drawing_context.floor_id==captured.placement.drawing_context.floor_id),
                 "join '"+entity.id+"' members must share one building and source coordinate frame");
             merge(result,captured);
         }

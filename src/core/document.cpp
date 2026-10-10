@@ -5,6 +5,7 @@
 #include "sketch/document_wall.hpp"
 #include "sketch/door_operation.hpp"
 #include "sketch/opening_assembly.hpp"
+#include "sketch/corner_window.hpp"
 #include "sketch/assembly_model.hpp"
 #include "sketch/assembly_document_adapter.hpp"
 #include "sketch/site_frame.hpp"
@@ -471,16 +472,16 @@ void validate_entity(const Entity& entity) {
         }
     }
     if (entity.properties.contains("opening_assembly")) {
-        if (entity.type != "opening") {
+        if (entity.type != "opening" && entity.type != "corner_window") {
             document_error(DocumentErrorCode::invalid_entity,
-                           "Opening assembly requires an opening entity");
+                           "Opening assembly requires an opening or corner window entity");
         }
         try {
             const auto assembly = parse_opening_assembly(
                 entity.properties.at("opening_assembly"));
             const auto kind = entity.properties.find("opening_kind");
-            if (kind == entity.properties.end() || !kind->is_string() ||
-                kind->get<std::string>() != opening_assembly_kind_name(assembly.kind)) {
+            if (entity.type == "opening" && (kind == entity.properties.end() || !kind->is_string() ||
+                kind->get<std::string>() != opening_assembly_kind_name(assembly.kind))) {
                 document_error(DocumentErrorCode::invalid_entity,
                                "Opening assembly kind must match opening_kind");
             }
@@ -489,6 +490,12 @@ void validate_entity(const Entity& entity) {
         } catch (const std::exception& error) {
             document_error(DocumentErrorCode::invalid_entity,
                            std::string("Invalid opening assembly: ") + error.what());
+        }
+    }
+    if (entity.type == "corner_window") {
+        try { (void)parse_corner_window(entity); }
+        catch (const std::exception& error) {
+            document_error(DocumentErrorCode::invalid_entity, error.what());
         }
     }
     if (entity.type == "wall_join") {
@@ -642,7 +649,7 @@ struct EntityReference {
 };
 
 std::optional<std::optional<std::string_view>> reference_type_for_key(std::string_view key) {
-    static constexpr std::array<std::pair<std::string_view, std::string_view>, 19> typed{{
+    static constexpr std::array<std::pair<std::string_view, std::string_view>, 20> typed{{
         {"assembly_catalog_id", "assembly_model"},
         {"property_id", "property"},
         {"building_id", "building"},
@@ -651,6 +658,7 @@ std::optional<std::optional<std::string_view>> reference_type_for_key(std::strin
         {"boundary_id", "boundary"},
         {"wall_id", "wall"},
         {"opening_id", "opening"},
+        {"corner_window_id", "corner_window"},
         {"room_id", "room"},
         {"slab_id", "slab"},
         {"roof_id", "roof"},
@@ -1116,6 +1124,11 @@ std::optional<std::string> validate_state(const std::map<std::string, Entity, st
                            "entity map key does not match its stable id");
         }
     }
+    try {
+        validate_corner_window_state(entities);
+    } catch (const std::exception& error) {
+        document_error(DocumentErrorCode::invalid_entity, error.what());
+    }
     for (const auto& [id, asset] : assets) {
         validate_asset(asset);
         if (id != asset.id) {
@@ -1389,8 +1402,8 @@ std::optional<std::string> validate_state(const std::map<std::string, Entity, st
         }
         if (entity.properties.contains("material_assignment")) {
             try {
-                static constexpr std::array<std::string_view, 11> roles{
-                    "wall", "opening", "room", "room_boundary", "slab", "roof", "stair", "railing", "column", "beam", "roof_join"};
+                static constexpr std::array<std::string_view, 12> roles{
+                    "wall", "opening", "corner_window", "room", "room_boundary", "slab", "roof", "stair", "railing", "column", "beam", "roof_join"};
                 if (std::find(roles.begin(), roles.end(), entity.type) == roles.end())
                     document_error(DocumentErrorCode::invalid_entity, "Material assignment requires an architectural object");
                 const auto& assignment = entity.properties.at("material_assignment");
@@ -2112,9 +2125,9 @@ std::string sha256_hex(std::span<const std::byte> bytes) {
 }
 
 bool is_known_entity_type(std::string_view type) noexcept {
-    static constexpr std::array<std::string_view, 37> known{
+    static constexpr std::array<std::string_view, 38> known{
         "property",             "building", "floor",  "layer", "boundary",
-        "measurement_boundary", "room_boundary", "wall", "opening", "room",
+        "measurement_boundary", "room_boundary", "wall", "opening", "corner_window", "room",
         "slab",                 "roof",     "stair",  "railing", "column", "beam",
         "label",                "sheet",    "view",   "constraint", "dimension",
         "sheet_view_model",    "annotation_state", "reference_asset",
@@ -2347,6 +2360,7 @@ static bool supported_selection_entity(const Entity& entity) {
     if (entity.type == "slab") return p.contains("boundary");
     if (entity.type == "room") return !is_physical_wall_room(entity) && (p.contains("boundary") || p.contains("segments"));
     if (entity.type == "opening") return p.contains("wall_id");
+    if (entity.type == "corner_window") { (void)parse_corner_window(entity); return true; }
     if (entity.type == "roof_join") { (void)parse_roof_join(p, entity.id); return true; }
     return false;
 }
@@ -6015,7 +6029,7 @@ std::map<std::string, Entity, std::less<>> completed_boundary_constraint_entitie
                 // against that exact stage without granting physical edits.
                 validate_phase_constraint_composed_originals(source,reviewed_source,command);
                 const auto physical_owner = [](const Entity& entity) {
-                    return entity.type == "wall" || entity.type == "opening" || entity.type == "wall_join" ||
+                    return entity.type == "wall" || entity.type == "opening" || entity.type == "corner_window" || entity.type == "wall_join" ||
                         entity.type == "roof" || entity.type == "roof_join" || entity.type == "slab" ||
                         entity.type == "column" || entity.type == "beam" || entity.type == "stair" ||
                         entity.type == "railing" || entity.type == "assembly_model" || entity.type == "assembly_instance";

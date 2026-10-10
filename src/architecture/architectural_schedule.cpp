@@ -4,6 +4,7 @@
 #include "sketch/assembly_geometry.hpp"
 #include "sketch/building_entity.hpp"
 #include "sketch/constraint_phase_scope.hpp"
+#include "sketch/corner_window.hpp"
 #include "sketch/document_solid.hpp"
 #include "sketch/project_organization.hpp"
 #include "sketch/roof_entity_codec.hpp"
@@ -1195,6 +1196,19 @@ DocumentScheduleProjection augment(const DocumentSnapshot& document, DocumentSch
                 if (!read_document_wall(entity, openings[id], wall, error)) throw std::invalid_argument(error);
                 shape = make_wall(wall);
                 for (const auto* opening : openings[id]) sources.push_back({opening->id, "geometry"});
+            } else if (entity.type == "corner_window") {
+                const auto corner = parse_corner_window(entity);
+                std::array<Wall, 2> hosts;
+                for (std::size_t leg = 0; leg < hosts.size(); ++leg) {
+                    const auto& host = document.entities().at(corner.wall_ids[leg]);
+                    if (!read_document_wall(resolve_vertical_placement(document, host),
+                                            openings[host.id], hosts[leg], error))
+                        throw std::invalid_argument(error);
+                    sources.push_back({host.id, "geometry"});
+                    sources.push_back({host.id, "vertical_placement"});
+                    for (const auto* opening : openings[host.id]) sources.push_back({opening->id, "geometry"});
+                }
+                shape = make_corner_window(hosts, corner_window_cuts(corner, hosts), corner.assembly);
             } else if (entity.type == "slab") {
                 Slab slab;
                 if (!read_document_slab(entity, slab, error)) throw std::invalid_argument(error);

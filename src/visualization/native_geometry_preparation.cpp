@@ -12,6 +12,7 @@
 #include "sketch/assembly_geometry.hpp"
 #include "sketch/opening_assembly.hpp"
 #include "sketch/opening_host_geometry.hpp"
+#include "sketch/corner_window.hpp"
 #include "sketch/terrain_surface.hpp"
 #include <BRepBuilderAPI_Transform.hxx>
 #include <BRep_Builder.hxx>
@@ -26,6 +27,7 @@
 #include <gp_Vec.hxx>
 #include <QColor>
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <atomic>
 #include <condition_variable>
@@ -319,6 +321,25 @@ std::optional<PreparedNativeGeometry> prepare_native_geometry(
         append_unique(errors, "native phase scope: " + std::string(error.what()));
         return result;
     }
+    // One inactive leg cannot leave a half-window or a cut on the other host.
+    // Resolve the complete owner relationship before collecting wall rosters.
+    for (const auto& [id, entity] : entities) {
+        if (cancelled && cancelled()) return std::nullopt;
+        if (entity.type != "corner_window") continue;
+        try {
+            const auto corner = parse_corner_window(entity);
+            if (inactive_owner_ids.contains(id) ||
+                std::any_of(corner.wall_ids.begin(), corner.wall_ids.end(),
+                    [&](const auto& member) { return inactive_owner_ids.contains(member); }) ||
+                std::any_of(corner.opening_ids.begin(), corner.opening_ids.end(),
+                    [&](const auto& member) { return inactive_owner_ids.contains(member); })) {
+                inactive_owner_ids.insert(id);
+                inactive_owner_ids.insert(corner.opening_ids.begin(), corner.opening_ids.end());
+            }
+        } catch (const std::exception&) {
+            // Active malformed owners reach the diagnostic branch below.
+        }
+    }
     if (!inactive_owner_ids.empty()) {
         for (const auto& [id, entity] : entities) {
             if (cancelled && cancelled()) return std::nullopt;
@@ -361,7 +382,7 @@ std::optional<PreparedNativeGeometry> prepare_native_geometry(
         if (cancelled && cancelled()) return std::nullopt;
         if (inactive_owner_ids.contains(id)) continue;
         if (entity.type=="wall" || entity.type=="slab" || entity.type=="room" ||
-            entity.type=="terrain_surface" || entity.type=="opening" || entity.type=="wall_join" ||
+            entity.type=="terrain_surface" || entity.type=="opening" || entity.type=="corner_window" || entity.type=="wall_join" ||
             entity.type=="roof_join" || entity.type=="assembly_instance" ||
             can_recognize_building_entity_type(entity.type)) site_owner_ids.push_back(id);
     }
@@ -429,6 +450,88 @@ std::optional<PreparedNativeGeometry> prepare_native_geometry(
             (!visible_ids || visible_ids->contains(id)) &&
             !join_presentation_ids.contains(id)) {
 
+            continue;
+        }
+        if (entity.type == "corner_window") {
+            try {
+                const auto corner = parse_corner_window(entity);
+                std::array<Wall, 2> hosts;
+                auto content = entity_content(entity);
+                const auto& site_placement = site_placements.at(id);
+                append_site_placement_content(content, snapshot, site_placement);
+                for (std::size_t leg = 0; leg < hosts.size(); ++leg) {
+                    const auto host = entities.find(corner.wall_ids[leg]);
+                    if (host == entities.end() || host->second.type != "wall")
+                        throw std::invalid_argument("corner host wall is missing: " + corner.wall_ids[leg]);
+                    const auto resolved = resolve_vertical_placement(snapshot, host->second);
+                    std::string parse_error;
+                    if (!read_document_wall(resolved, openings_by_wall[host->first], hosts[leg], parse_error))
+                        throw std::invalid_argument(parse_error);
+                    content.append(entity_content(resolved, openings_by_wall[host->first]));
+                    append_placement_content(content, snapshot, host->second);
+                    const auto& host_placement = site_placements.at(host->first);
+                    if (host_placement.source_frame != site_placement.source_frame ||
+                        host_placement.forward.translation_m.x != site_placement.forward.translation_m.x ||
+                        host_placement.forward.translation_m.y != site_placement.forward.translation_m.y ||
+                        host_placement.forward.translation_m.z != site_placement.forward.translation_m.z ||
+                        host_placement.forward.rotation_radians != site_placement.forward.rotation_radians)
+                        throw std::invalid_argument("corner hosts and owner must share one site presentation frame");
+                    append_site_placement_content(content, snapshot, host_placement);
+                }
+                const auto cuts = corner_window_cuts(corner, hosts);
+                for (std::size_t leg = 0; leg < cuts.size(); ++leg) {
+                    const auto child = entities.find(corner.opening_ids[leg]);
+                    if (child == entities.end() || child->second.type != "opening")
+                        throw std::invalid_argument("corner opening child is missing: " + corner.opening_ids[leg]);
+                    const auto& properties = child->second.properties;
+                    if (!properties.contains("opening_kind") || properties.at("opening_kind") != "opening" ||
+                        properties.contains("opening_assembly") || properties.contains("door_operation") ||
+                        !properties.contains("corner_window_id") || properties.at("corner_window_id") != id ||
+                        !properties.contains("corner_leg") || !properties.at("corner_leg").is_number_integer() ||
+                        properties.at("corner_leg") != leg)
+                        throw std::invalid_argument("corner opening child has an invalid owner, leg or fill");
+                    const auto hosted = std::find(hosts[leg].openings.begin(), hosts[leg].openings.end(), cuts[leg]);
+                    if (hosted == hosts[leg].openings.end())
+                        throw std::invalid_argument("corner opening child differs from the owner cut");
+                }
+                std::optional<std::string> material_color;
+                if (entity.properties.contains("material_assignment")) {
+                    const auto& assignment = entity.properties.at("material_assignment");
+                    const auto found = material_colors.find({assignment.at("catalog_id").get<std::string>(),
+                                                            assignment.at("material_id").get<std::string>()});
+                    if (found != material_colors.end()) material_color = found->second;
+                }
+                auto presentation_color = Quantity_Color(0.30, 0.78, 0.88, Quantity_TOC_RGB);
+                if (material_color) {
+                    const QColor color(QString::fromStdString(*material_color));
+                    if (color.isValid()) presentation_color = Quantity_Color(color.redF(), color.greenF(),
+                                                                            color.blueF(), Quantity_TOC_sRGB);
+                }
+                const auto shape = place_native_shape(make_corner_window(hosts, cuts, corner.assembly), site_placement);
+                if (shape.IsNull() || !BRepCheck_Analyzer(shape).IsValid())
+                    throw std::invalid_argument("corner window produced an invalid native shape");
+                if (cancelled && cancelled()) return std::nullopt;
+                mesh_shape(shape);
+                const bool visible = !visible_ids || visible_ids->contains(id);
+                solids.emplace(id, PreparedNativeSolid{std::move(content), shape, presentation_color,
+                                material_color, visible, {}, {}, site_placement});
+                if (progress) progress(solids.size());
+            } catch (const std::exception& error) {
+                append_unique(errors, "corner window '" + id + "': " + error.what());
+            } catch (...) {
+                append_unique(errors, "corner window '" + id + "': unknown OCCT failure");
+            }
+            continue;
+        }
+        if (entity.type == "opening" && entity.properties.contains("corner_window_id")) {
+            // Managed children remain ordinary wall voids, never separate fills.
+            const auto& owner_id = entity.properties.at("corner_window_id");
+            const auto owner = owner_id.is_string() ? entities.find(owner_id.get<std::string>()) : entities.end();
+            if (owner == entities.end() || owner->second.type != "corner_window")
+                append_unique(errors, "corner opening '" + id + "': managed child has no corner window owner");
+            if (!entity.properties.contains("opening_kind") || entity.properties.at("opening_kind") != "opening" ||
+                entity.properties.contains("opening_assembly") || entity.properties.contains("door_operation"))
+                append_unique(errors, "corner opening '" + id + "': managed child must be a bare wall void");
             continue;
         }
         if (entity.type == "opening" && entity.properties.contains("opening_assembly")) {

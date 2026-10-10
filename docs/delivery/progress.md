@@ -14,6 +14,52 @@ changed source does not acquire runtime acceptance without later qualification.
 
 ## Current delivery state
 
+### October 10 coordinated corner windows - source integration
+
+One first-class corner-window owner now coordinates two ordinary wall cuts.
+Ctrl-selecting two straight walls that share an endpoint exposes creation through
+Tools/Architecture and Commands. The dimension editor supplies separate leg
+widths, a common sill/height and frame/sash/glazing dimensions. Double-click or
+Properties edits the owner; deletion stages the owner and both cuts together.
+Unchanged values retain their native representation and add no history edit.
+Managed cuts remain in complete wall rosters but have no separate canvas or
+navigator target. One actual HLR projection supplies the visible window.
+
+Global Document admission enforces exact reciprocal cut ownership, compatible
+host endpoints, dimensions, raw context/level placement and every saved phase
+membership. Fresh owners inherit their actual common host registry rather than
+an unrelated selected set; baseline owner/cuts retire together when either host
+is demolished in a saved alternative. Final source/context fences and phase
+completion precede full-map preview and physical admission. Child scalar aliases
+synchronize on change while unchanged numbers and opaque payloads remain intact.
+
+The physical factory derives one fused shared frame/corner post and two finite
+glazing solids, with analytical overlap for valid acute/obtuse corners and
+actual cut/remnant clearance. Native preparation captures both resolved hosts,
+complete rosters and common Site pose. Schedules count one window with both leg
+widths; assigned material volume uses the same actual geometry. Reader 170 and
+extraction 168 preserve the owner/children in current, retained and undone
+history. Existing payload tables and older family contracts remain intact.
+
+This first owner requires straight hosts, equal raw contexts/elevations and
+identical retained vertical placements. Physically impossible post/pane fits
+refuse. Library drag placement, canvas grips, clipboard/clone, coordinated host
+transforms/split/merge, active-baseline replacement, associative leg dimensions
+and IFC/DXF ownership transport remain implementation gaps. No part of that
+unfinished lifecycle is certified by this batch; complete production scope
+remains binding. Next work completes these corner-window lifecycle paths.
+
+No builds, tests/new tests, scripts/probes, native jobs, UI launches, packages or
+installations ran. The installed candidate is unchanged. Independent source
+review approved the bounded integration after correcting premature phase preview,
+host-derived membership, roster/target separation, alias retention, JSON proxy
+lifetime and material takeoff. Root reviewed interfaces and remaining limits.
+The checklist now contains 450 original scenarios plus eleven focused checks;
+the new corner check is Not tested. Compilation, kernel behavior/performance,
+rendering, interaction, history/migration and output remain unverified. All ten
+production gates remain open. Diff whitespace and registry parsing are static
+source checks only. The scoped commit is backed up on the delivery branch.
+
 ### October 10 individual skylight clipboard - source integration
 
 Selected skylights now route Copy/Cut and a dedicated right-click Duplicate

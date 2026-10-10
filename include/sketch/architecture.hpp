@@ -8,6 +8,7 @@
 #include "sketch/door_operation.hpp"
 #include <TopoDS_Shape.hxx>
 #include <TopoDS_Face.hxx>
+#include <array>
 #include <cstddef>
 #include <cstddef>
 #include <optional>
@@ -76,6 +77,15 @@ struct RoomVolume {
     const Wall& wall, const HostedOpening& opening,
     const OpeningAssembly& assembly,
     const std::optional<DoorOperation>& door_operation = std::nullopt);
+// Two endpoint cuts in adjacent straight walls form one fixed-window frame
+// with a fused common corner post and two separate glazing panes. The cuts
+// must share world sill/head and the profile must fit both full wall stacks.
+// Actual angle/inset clearance determines admission; no right-angle shortcut.
+// Native work is bounded to 128 openings, 32 layers and 256 recesses per host.
+// Throws on disconnected frames, consumed panes or collision with either host.
+[[nodiscard]] TopoDS_Shape make_corner_window(
+    const std::array<Wall, 2>& walls, const std::array<HostedOpening, 2>& cuts,
+    const OpeningAssembly& assembly);
 // The same admitted manufactured shape with its physical clear-leaf swing.
 // The arc uses the actual leaf hinge, inset and extent computed by the solid
 // factory, including the fitted planar leaf in a curved frame.

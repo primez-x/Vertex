@@ -5,6 +5,7 @@
 #include "sketch/roof_entity_codec.hpp"
 #include "sketch/constraint_phase_scope.hpp"
 #include "sketch/constraint_wall_edit.hpp"
+#include "sketch/corner_window.hpp"
 #include "sketch/document_solid.hpp"
 #include "sketch/model_phases.hpp"
 #include "sketch/phase_roof_transform.hpp"
@@ -1243,7 +1244,7 @@ void validate_architectural_geometry_changes(
     const auto& entities = candidate.entities();
     const auto source_scope = constraint_phase_scope(source.entities());
     const auto candidate_scope = constraint_phase_scope(entities);
-    std::set<std::string, std::less<>> host_ids, required_hosts, slab_ids, room_ids, full_room_ids, beam_ids, railing_ids;
+    std::set<std::string, std::less<>> host_ids, required_hosts, slab_ids, room_ids, full_room_ids, beam_ids, railing_ids, corner_ids;
     const auto include = [&](const Entity& entity, bool required, bool candidate_target) {
         if (candidate_target) {
             if (candidate_scope.inactive_owner_ids.contains(entity.id))
@@ -1269,6 +1270,11 @@ void validate_architectural_geometry_changes(
             }
             host_ids.insert(host_id);
             if (required) required_hosts.insert(std::move(host_id));
+        } else if (entity.type == "corner_window") {
+            const auto corner = parse_corner_window(entity);
+            host_ids.insert(corner.wall_ids.begin(), corner.wall_ids.end());
+            required_hosts.insert(corner.wall_ids.begin(), corner.wall_ids.end());
+            if (candidate_target) corner_ids.insert(entity.id);
         } else if (entity.type == "slab" && (required || p.contains("boundary"))) {
             slab_ids.insert(entity.id);
         } else if (entity.type == "room" &&
@@ -1306,6 +1312,8 @@ void validate_architectural_geometry_changes(
             physical_change = changed(before, entity, {"wall_id", "offset_m", "offset", "width_m",
                 "width", "sill_m", "sill", "height_m", "height", "opening_kind",
                 "opening_assembly", "door_operation"});
+        else if (entity.type == "corner_window")
+            physical_change = !before || before->type != entity.type || before->properties != entity.properties;
         else if (entity.type == "slab")
             physical_change = changed(before, entity, {"boundary", "holes", "thickness_m", "thickness",
                 "elevation_m", "elevation", "layers", "element_kind", "vertical_placement", "layer_id",
@@ -1334,11 +1342,23 @@ void validate_architectural_geometry_changes(
             throw std::invalid_argument("The edited physical object is missing: " + id);
         const auto& type = found->second.type;
         if (type != "wall" && type != "opening" && type != "slab" && type != "room" &&
-            type != "beam" && type != "railing")
+            type != "beam" && type != "railing" && type != "corner_window")
             throw std::invalid_argument("The edited object has no supported physical descriptor: " + id);
         include(found->second, true, true);
     }
 
+    // A host edit must regenerate the shared manufactured corner, even when
+    // its owner and the other wall are hidden or were not selected.
+    for (const auto& [id, entity] : entities) {
+        if (entity.type != "corner_window" || candidate_scope.inactive_owner_ids.contains(id)) continue;
+        const auto corner = parse_corner_window(entity);
+        if (corner_ids.contains(id) || std::any_of(corner.wall_ids.begin(), corner.wall_ids.end(),
+            [&](const auto& host) { return host_ids.contains(host); })) {
+            corner_ids.insert(id);
+            host_ids.insert(corner.wall_ids.begin(), corner.wall_ids.end());
+            required_hosts.insert(corner.wall_ids.begin(), corner.wall_ids.end());
+        }
+    }
     std::vector<WallJoin> affected_joins;
     for (const auto& [id, entity] : entities) {
         if (entity.type != "wall_join") continue;
@@ -1421,13 +1441,19 @@ void validate_architectural_geometry_changes(
                 operation = decode_door_operation(opening->properties.at("door_operation"));
             (void)make_opening_assembly(wall, *hosted, *assembly, operation);
         }
-        if (!affected_joins.empty()) admitted_join_walls.emplace(host_id, std::move(wall));
+        if (!affected_joins.empty() || !corner_ids.empty()) admitted_join_walls.emplace(host_id, std::move(wall));
     }
     for (const auto& join : affected_joins) {
         std::vector<Wall> members;
         members.reserve(join.wall_ids.size());
         for (const auto& member_id : join.wall_ids) members.push_back(admitted_join_walls.at(member_id));
         (void)make_wall_join(join, members);
+    }
+    for (const auto& id : corner_ids) {
+        const auto corner = parse_corner_window(entities.at(id));
+        const std::array<Wall, 2> walls{admitted_join_walls.at(corner.wall_ids[0]),
+                                      admitted_join_walls.at(corner.wall_ids[1])};
+        (void)make_corner_window(walls, corner_window_cuts(corner, walls), corner.assembly);
     }
     for (const auto& id : slab_ids) {
         const auto found = entities.find(id);
@@ -2227,6 +2253,89 @@ Revision apply_architectural_transaction(Document& document,
     const auto command = architectural_transaction_command(source, transaction, expected_revision);
     if (command.entity_changes.empty()) return document.revision();
     return document.apply(Command{command});
+}
+
+ApplyEntityChanges corner_window_upsert_command(const DocumentSnapshot& source,
+    const Entity& replacement, Revision expected_revision) {
+    if (!source.is_editable() || source.revision() != expected_revision)
+        throw std::invalid_argument("Corner-window source is read-only or stale");
+    const auto corner = parse_corner_window(replacement);
+    const auto previous = source.entities().find(corner.id);
+    if (previous != source.entities().end()) {
+        const auto old = parse_corner_window(previous->second);
+        if (old.opening_ids != corner.opening_ids)
+            throw std::invalid_argument("A corner edit must retain both cut identities");
+    }
+    std::array<Wall, 2> walls;
+    for (std::size_t leg = 0; leg < 2; ++leg) {
+        const auto host = source.entities().find(corner.wall_ids[leg]);
+        if (host == source.entities().end() || host->second.type != "wall")
+            throw std::invalid_argument("Corner window requires two actual walls");
+        std::string error;
+        // Raw baselines and station dimensions are persistent authority. Native
+        // admission below separately resolves the actual level elevation.
+        if (!read_document_wall(host->second, {}, walls[leg], error))
+            throw std::invalid_argument("Corner-window wall: " + error);
+    }
+    const auto cuts = corner_window_cuts(corner, walls);
+    std::vector<EntityChange> changes{EntityChange::upsert(replacement)};
+    for (std::size_t leg = 0; leg < 2; ++leg) {
+        Entity child{cuts[leg].id, "opening", nlohmann::json::object(), false, nlohmann::json::object()};
+        if (const auto found = source.entities().find(child.id); found != source.entities().end()) {
+            if (previous == source.entities().end() || found->second.type != "opening" ||
+                found->second.properties.value("corner_window_id", std::string{}) != corner.id)
+                throw std::invalid_argument("Corner-window cut identity is already owned");
+            child = found->second;
+            // Retained measured inputs need their own authored replay before a
+            // numerical change can be made; never silently stale a receipt.
+            const auto differs = [&](const char* canonical, const char* legacy, double expected) {
+                const auto key = child.properties.contains(canonical) ? canonical : legacy;
+                return !child.properties.contains(key) || child.properties.at(key).get<double>() != expected;
+            };
+            const bool dimensions_changed = differs("offset_m", "offset", cuts[leg].offset) ||
+                differs("width_m", "width", cuts[leg].width) || differs("sill_m", "sill", cuts[leg].sill) ||
+                differs("height_m", "height", cuts[leg].height);
+            if (dimensions_changed && child.properties.contains("quantity_entries"))
+                throw std::invalid_argument("Managed cut quantity receipts require coordinated replay");
+        }
+        auto& p = child.properties;
+        p["wall_id"] = corner.wall_ids[leg];
+        p["corner_window_id"] = corner.id;
+        if (!p.contains("corner_leg")) p["corner_leg"] = leg;
+        p["opening_kind"] = "opening";
+        const auto retain_dimension = [&](const char* canonical, const char* legacy, double value) {
+            const bool had_canonical = p.contains(canonical), had_legacy = p.contains(legacy);
+            if ((!had_canonical && !had_legacy) || (had_canonical && p.at(canonical).get<double>() != value))
+                p[canonical] = value;
+            if (had_legacy && p.at(legacy).get<double>() != value) p[legacy] = value;
+        };
+        retain_dimension("offset_m", "offset", cuts[leg].offset);
+        retain_dimension("width_m", "width", cuts[leg].width);
+        retain_dimension("sill_m", "sill", cuts[leg].sill);
+        retain_dimension("height_m", "height", cuts[leg].height);
+        for (const auto* key : {"property_id", "building_id", "floor_id", "layer_id", "level_id"}) {
+            if (replacement.properties.contains(key)) p[key] = replacement.properties.at(key);
+            else p.erase(key);
+        }
+        changes.push_back(EntityChange::upsert(std::move(child)));
+    }
+    ApplyEntityChanges command{expected_revision, std::move(changes), {},
+        previous == source.entities().end() ? "Create corner window" : "Edit corner window"};
+    // The caller completes actual saved-phase memberships before previewing
+    // this staged command. A premature preview would reject valid new owners
+    // against the unchanged hosts' registry, or deletion before registry cleanup.
+    return command;
+}
+
+ApplyEntityChanges corner_window_remove_command(const DocumentSnapshot& source,
+    const std::string& owner_id, Revision expected_revision) {
+    if (!source.is_editable() || source.revision() != expected_revision)
+        throw std::invalid_argument("Corner-window source is read-only or stale");
+    const auto corner = parse_corner_window(source.entities().at(owner_id));
+    ApplyEntityChanges command{expected_revision,
+        {EntityChange::erase(corner.id), EntityChange::erase(corner.opening_ids[0]),
+         EntityChange::erase(corner.opening_ids[1])}, {}, "Delete corner window"};
+    return command;
 }
 
 }  // namespace sketch

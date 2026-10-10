@@ -1661,6 +1661,254 @@ TopoDS_Shape make_opening_assembly(const Wall& wall, const HostedOpening& openin
     return make_opening_assembly_geometry(wall, opening, assembly, door_operation).shape;
 }
 
+TopoDS_Shape make_corner_window(const std::array<Wall, 2>& walls,
+                               const std::array<HostedOpening, 2>& cuts,
+                               const OpeningAssembly& assembly) {
+    validate_opening_assembly(assembly);
+    if (assembly.kind != OpeningAssemblyKind::window ||
+        assembly.window_layout != WindowLayoutKind::fixed)
+        throw std::invalid_argument("Corner windows require a fixed window profile");
+    if (walls[0].id.empty() || walls[1].id.empty() || walls[0].id == walls[1].id)
+        throw std::invalid_argument("Corner windows require two distinct hosts");
+
+    std::array<Wall, 2> hosts = walls;
+    std::array<double, 2> lengths{};
+    for (std::size_t index = 0; index < hosts.size(); ++index) {
+        auto& host = hosts[index];
+        const auto& opening = cuts[index];
+        if (host.openings.size() > 128 || host.layers.size() > 32 ||
+            host.pocket_recesses.size() > 256)
+            throw std::invalid_argument("Corner window host exceeds the geometry work limit");
+        const auto existing = std::find_if(host.openings.begin(), host.openings.end(),
+            [&](const auto& item) { return item.id == opening.id; });
+        if (existing == host.openings.end()) {
+            if (host.openings.size() == 128)
+                throw std::invalid_argument("Corner window cut exceeds the host opening limit");
+            host.openings.push_back(opening);
+        } else if (*existing != opening) {
+            throw std::invalid_argument("Corner window cut conflicts with its host opening");
+        }
+        validate_wall_semantics(host);
+        if (host.baseline.sweep_radians != 0.0)
+            throw std::invalid_argument("Corner windows require straight hosts");
+        if (std::any_of(host.pocket_recesses.begin(), host.pocket_recesses.end(),
+            [&](const auto& recess) { return recess.opening_id == opening.id; }))
+            throw std::invalid_argument("Corner window cuts cannot carry door pockets");
+        lengths[index] = segment_length(host.baseline);
+        if (assembly.frame_depth_m > host.thickness + tolerance ||
+            std::abs(assembly.inset_m) + assembly.frame_depth_m * 0.5 >
+                host.thickness * 0.5 + tolerance)
+            throw std::invalid_argument("Corner window profile does not fit both host thicknesses");
+    }
+    const double first_base = walls[0].elevation + cuts[0].sill;
+    const double second_base = walls[1].elevation + cuts[1].sill;
+    const double first_head = first_base + cuts[0].height;
+    const double second_head = second_base + cuts[1].height;
+    if (std::abs(walls[0].elevation - walls[1].elevation) > tolerance ||
+        std::abs(first_base - second_base) > tolerance ||
+        std::abs(first_head - second_head) > tolerance)
+        throw std::invalid_argument("Corner window hosts and cuts must share elevation, sill and head");
+    // Use their common vertical interval, so tolerance-sized input differences
+    // cannot place material beyond either actual cut.
+    const double base = std::max(first_base, second_base);
+    const double height = std::min(first_head, second_head) - base;
+    const double bar = assembly.frame_width_m;
+    const double clear_height = height - 2.0 * bar;
+    positive(clear_height, "Corner window frame leaves no clear height");
+
+    std::array<bool, 2> at_end{};
+    std::size_t junctions = 0;
+    for (int first = 0; first < 2; ++first) {
+        if (std::abs(first ? cuts[0].offset + cuts[0].width - lengths[0]
+                           : cuts[0].offset) > tolerance) continue;
+        for (int second = 0; second < 2; ++second) {
+            if (std::abs(second ? cuts[1].offset + cuts[1].width - lengths[1]
+                                : cuts[1].offset) > tolerance) continue;
+            const auto a = first ? walls[0].baseline.end : walls[0].baseline.start;
+            const auto b = second ? walls[1].baseline.end : walls[1].baseline.start;
+            if (endpoint_distance(a, b) <= tolerance) {
+                ++junctions;
+                at_end = {first != 0, second != 0};
+            }
+        }
+    }
+    if (junctions != 1)
+        throw std::invalid_argument("Corner window cuts must terminate at one shared host endpoint");
+
+    std::array<OpeningFrame, 2> frames;
+    std::array<double, 2> insets{};
+    for (std::size_t index = 0; index < frames.size(); ++index) {
+        const double station = cuts[index].offset + (at_end[index] ? cuts[index].width : 0.0);
+        frames[index] = opening_frame(walls[index].baseline, station / lengths[index]);
+        if (at_end[index]) {
+            frames[index].along.x *= -1.0; frames[index].along.y *= -1.0;
+            frames[index].left.x *= -1.0; frames[index].left.y *= -1.0;
+        }
+        insets[index] = at_end[index] ? -assembly.inset_m : assembly.inset_m;
+    }
+    const double turn = frames[0].along.x * frames[1].along.y -
+                        frames[0].along.y * frames[1].along.x;
+    if (!std::isfinite(turn) || std::abs(turn) <= 32.0 * std::numeric_limits<double>::epsilon())
+        throw std::invalid_argument("Corner window hosts must be noncollinear");
+
+    // Clip two exact finite rectangles in translated world XY. Their overlap
+    // defines the common post, including unequal insets after host reversal.
+    // Translation avoids area cancellation far from the document origin.
+    const Vec2 delta{frames[1].origin.x - frames[0].origin.x,
+                     frames[1].origin.y - frames[0].origin.y};
+    const double depth = assembly.frame_depth_m;
+    const auto local_point = [&](double station, double across) {
+        return Vec2{frames[0].along.x * station + frames[0].left.x * across,
+                    frames[0].along.y * station + frames[0].left.y * across};
+    };
+    std::vector<Vec2> overlap{
+        local_point(0.0, insets[0] - depth * 0.5),
+        local_point(cuts[0].width, insets[0] - depth * 0.5),
+        local_point(cuts[0].width, insets[0] + depth * 0.5),
+        local_point(0.0, insets[0] + depth * 0.5)};
+    const auto project = [&](Vec2 point, std::size_t index, bool across) {
+        if (index == 1) { point.x -= delta.x; point.y -= delta.y; }
+        const auto axis = across ? frames[index].left : frames[index].along;
+        return point.x * axis.x + point.y * axis.y;
+    };
+    for (int side = 0; side < 4 && !overlap.empty(); ++side) {
+        const auto distance = [&](Vec2 point) {
+            if (side == 0) return project(point, 1, false);
+            if (side == 1) return cuts[1].width - project(point, 1, false);
+            if (side == 2) return project(point, 1, true) - (insets[1] - depth * 0.5);
+            return insets[1] + depth * 0.5 - project(point, 1, true);
+        };
+        std::vector<Vec2> clipped;
+        auto previous = overlap.back();
+        double previous_distance = distance(previous);
+        for (const auto& current : overlap) {
+            const double current_distance = distance(current);
+            if (!std::isfinite(previous_distance) || !std::isfinite(current_distance))
+                throw std::invalid_argument("Corner window footprint exceeds the numeric range");
+            if ((previous_distance >= 0.0) != (current_distance >= 0.0)) {
+                const double denominator = previous_distance - current_distance;
+                if (!std::isfinite(denominator) || denominator == 0.0)
+                    throw std::invalid_argument("Corner window footprint intersection exceeds the numeric range");
+                const double fraction = previous_distance / denominator;
+                if (!std::isfinite(fraction))
+                    throw std::invalid_argument("Corner window footprint intersection is unresolved");
+                clipped.push_back({std::lerp(previous.x, current.x, fraction),
+                                   std::lerp(previous.y, current.y, fraction)});
+            }
+            if (current_distance >= 0.0) clipped.push_back(current);
+            previous = current; previous_distance = current_distance;
+        }
+        overlap = std::move(clipped);
+    }
+    if (overlap.size() < 3)
+        throw std::invalid_argument("Corner window frame legs do not share a physical post");
+    double twice_area = 0.0;
+    std::array<double, 2> post_reach{};
+    for (std::size_t vertex = 0; vertex < overlap.size(); ++vertex) {
+        const auto& p = overlap[vertex];
+        const auto& q = overlap[(vertex + 1) % overlap.size()];
+        twice_area += (p.x - overlap.front().x) * (q.y - overlap.front().y) -
+                      (p.y - overlap.front().y) * (q.x - overlap.front().x);
+        for (std::size_t index = 0; index < post_reach.size(); ++index)
+            post_reach[index] = std::max(post_reach[index], project(p, index, false));
+    }
+    if (!std::isfinite(twice_area) || twice_area <= tolerance * tolerance)
+        throw std::invalid_argument("Corner window frame overlap leaves no positive common post");
+
+    try {
+        const auto require_solids = [&](const TopoDS_Shape& shape, const char* message) {
+            if (shape.IsNull() || !BRepCheck_Analyzer(shape).IsValid())
+                throw std::invalid_argument(message);
+            const double total_volume = solid_volume(shape);
+            if (!std::isfinite(total_volume) || total_volume <= tolerance * tolerance * tolerance)
+                throw std::invalid_argument(message);
+            std::size_t count = 0;
+            for (TopExp_Explorer solids(shape, TopAbs_SOLID); solids.More(); solids.Next()) {
+                ++count;
+                const double volume = solid_volume(solids.Current());
+                if (!std::isfinite(volume) || volume <= tolerance * tolerance * tolerance)
+                    throw std::invalid_argument(message);
+            }
+            if (count == 0) throw std::invalid_argument(message);
+            return count;
+        };
+        TopoDS_Shape frame;
+        std::array<TopoDS_Shape, 2> panes;
+        const auto add_frame = [&](const TopoDS_Shape& part) {
+            require_solids(part, "Corner window contains an invalid frame part");
+            frame = frame.IsNull() ? part : fuse_shapes(frame, part,
+                "Corner window frame fusion failed");
+        };
+        for (std::size_t index = 0; index < frames.size(); ++index) {
+            // All envelope overlap belongs to the shared post. The extra bar
+            // leaves an attachment beyond that overlap for each separate sash.
+            post_reach[index] += bar;
+            const double width = cuts[index].width;
+            const double clear_width = width - post_reach[index] - bar;
+            positive(clear_width, "Corner window post leaves no clear leg width");
+            const double sash = std::min(bar * 0.6, clear_width * 0.2);
+            positive(sash, "Corner window leaves no positive sash bar");
+            const double pane_width = clear_width - 2.0 * sash - 4.0 * tolerance;
+            const double pane_height = clear_height - 2.0 * sash - 4.0 * tolerance;
+            positive(pane_width, "Corner window post leaves no clear glazing pane");
+            positive(pane_height, "Corner window frame leaves no clear glazing pane");
+            const auto box = [&](double start, double across, double length,
+                                 double part_depth, double rise, double z) {
+                return opening_box(frames[index], start, across, length, part_depth,
+                    rise, z, "Corner window material construction failed");
+            };
+            const double frame_across = insets[index] - depth * 0.5;
+            const double panel_across = insets[index] - assembly.panel_thickness_m * 0.5;
+            add_frame(box(0.0, frame_across, post_reach[index], depth, height, base));
+            add_frame(box(width - bar, frame_across, bar, depth, height, base));
+            add_frame(box(0.0, frame_across, width, depth, bar, base));
+            add_frame(box(0.0, frame_across, width, depth, bar, base + height - bar));
+            add_frame(box(post_reach[index], panel_across, sash,
+                assembly.panel_thickness_m, clear_height, base + bar));
+            add_frame(box(width - bar - sash, panel_across, sash,
+                assembly.panel_thickness_m, clear_height, base + bar));
+            add_frame(box(post_reach[index] + sash, panel_across,
+                clear_width - 2.0 * sash, assembly.panel_thickness_m, sash, base + bar));
+            add_frame(box(post_reach[index] + sash, panel_across,
+                clear_width - 2.0 * sash, assembly.panel_thickness_m, sash,
+                base + height - bar - sash));
+            panes[index] = box(post_reach[index] + sash + 2.0 * tolerance,
+                insets[index] - assembly.glazing_thickness_m * 0.5,
+                pane_width, assembly.glazing_thickness_m, pane_height,
+                base + bar + sash + 2.0 * tolerance);
+            if (require_solids(panes[index], "Corner window glazing is invalid") != 1)
+                throw std::invalid_argument("Corner window glazing must be one pane per leg");
+        }
+        if (require_solids(frame, "Corner window fused frame is invalid") != 1)
+            throw std::invalid_argument("Corner window frame must be one connected solid");
+        const double overlap_limit = tolerance * tolerance * std::max(1.0, height);
+        const auto require_clear = [&](const TopoDS_Shape& a, const TopoDS_Shape& b,
+                                       const char* message) {
+            const double volume = common_volume(a, b);
+            if (!std::isfinite(volume) || volume > overlap_limit)
+                throw std::invalid_argument(message);
+        };
+        require_clear(frame, panes[0], "Corner window frame intersects its first pane");
+        require_clear(frame, panes[1], "Corner window frame intersects its second pane");
+        require_clear(panes[0], panes[1], "Corner window panes intersect each other");
+        TopoDS_Compound result;
+        BRep_Builder builder; builder.MakeCompound(result);
+        builder.Add(result, frame);
+        for (const auto& pane : panes) builder.Add(result, pane);
+        if (require_solids(result, "Corner window assembly is invalid") != 3)
+            throw std::invalid_argument("Corner window must contain one frame and two glazing solids");
+        for (auto& host : hosts) {
+            // Layer interfaces do not change the occupied wall envelope. Avoid
+            // multiplying opening booleans by the layer count for clearance.
+            host.layers.clear();
+            require_clear(result, make_wall(host), "Corner window intersects a host wall remnant");
+        }
+        return result;
+    } catch (const Standard_Failure& error) {
+        throw std::invalid_argument(std::string("Corner window geometry failed: ") + error.what());
+    }
+}
+
 TopoDS_Shape make_wall_join(const WallJoin& join, std::span<const Wall> walls) {
     validate_wall_join_semantics(join);
     if (walls.size() != join.wall_ids.size()) {

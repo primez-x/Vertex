@@ -3210,6 +3210,17 @@ Blocked / missing until testing a candidate that contains it.
   - Result: Not tested
   - Notes: ______________________________
 
+## Additional corner-window check
+
+This source addition is not included in the installed candidate. Mark it
+Blocked / missing until testing a candidate that contains it.
+
+- [ ] **WINDOW-CORNER - Create one window across two walls**
+  - Steps: Draw two straight walls sharing a corner on the same layer. Ctrl-click both walls and choose Tools > Architecture > Corner window between two selected walls. Set a different width for each wall, a sill height and window height. Save, double-click the window, rename it and change either width and its frame/glazing dimensions. Apply unchanged values once. Inspect plan, 3D and the window schedule. Delete the window, undo/redo, then save/reopen. Repeat with reversed wall directions and an angled corner; try oversized widths, overlapping an existing opening and selecting two disconnected walls.
+  - Expected: One selected window spans both wall cuts, with a shared corner post/frame and two glazing legs. The schedule lists one window with both widths. Properties update both cuts together; unchanged Save adds no undo step. Delete removes the whole window and both cuts while retaining the walls. Invalid geometry leaves the project unchanged. Saved and reopened history retains the full window. Library drag placement, canvas grips, copying and phase replacement remain missing until their separate work is delivered.
+  - Result: Not tested
+  - Notes: ______________________________
+
 ## Issue report template
 
 - Task ID(s):

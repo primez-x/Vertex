@@ -119,7 +119,12 @@ polling timeout does not permit restarting it.
    output. Qualify the separate awning and double-hung source operations,
    including their angle/independent sash controls, complete physical assemblies,
    normal-side handing, visible SVG entries, schedules, history and export.
-   Corner windows still require coordinated multi-host semantics. Qualify the
+   Qualify the October 10 coordinated corner-window source owner, two real wall
+   cuts, shared frame/post, two glazing legs, creation/properties/deletion and
+   one schedule row. Complete its library placement, canvas grips, copy/clone,
+   host transforms/split/merge, active-baseline replacement, associative leg
+   dimensions and exchange; source integration does not close those lifecycles.
+   Qualify the
    roof-hosted fixed skylight source across both catalog entries, actual sloped
    frame/glazing, roster editing, scaling/resizing, cloning/removal, phases,
    history, material quantities and separate IFC roof/window relationships.

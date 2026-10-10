@@ -1,4 +1,33 @@
-# Vertex project formats v1 through v169
+# Vertex project formats v1 through v170
+
+## Coordinated corner windows (v170, source integration)
+
+Native reader 170 and JSON/assets extraction 168 preserve one `corner_window`
+owner and two ordinary `opening` cut entities, including retained and undone
+history. Owner version 1 requires `wall_ids`, `opening_ids`, `at_start` and
+`widths_m` arrays of exactly two entries, plus common `sill_m`, `height_m` and
+`opening_assembly`. The fixed window profile requires positive glazing. The
+owner ID, two host IDs and two cut IDs are distinct. Additional owner properties
+and extensions remain retained metadata; future owner versions refuse admission.
+
+Each cut retains its actual `wall_id`, `offset_m`, `width_m`, `sill_m` and
+`height_m`, `opening_kind: "opening"`, a `corner_window_id` backlink and integer
+`corner_leg` 0 or 1. Its dimensions derive from the selected shared endpoint
+and the owner's leg width; it has no separate manufactured assembly. Global
+document admission checks reciprocal ownership, straight noncollinear hosts,
+matching endpoints/elevations, full cut fit, coherent raw context/level bindings,
+and compatibility in every saved design alternative. Orphan or one-sided edits
+refuse atomically. Known retained scalar aliases synchronize on change while
+unchanged numeric representations remain intact.
+
+The actual geometry has one connected shared frame/corner post and two positive
+glazing solids. The frame fits the union of both cuts; impossible pane clearance,
+disconnected inset footprints or intersection with either host remnant refuses.
+One window schedule row carries both leg widths; the cuts add no extra windows.
+Storage keeps the v161 payload tables. Corner clipboard/clone, transforms,
+active-baseline replacement, wall split/merge, associative leg dimensions and
+IFC/DXF ownership transport remain further implementation/qualification work.
+Compilation, rendered behavior and migration/history are unverified.
 
 ## Individual roof skylight transfer (v169, source integration)
 
