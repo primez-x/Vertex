@@ -125,6 +125,9 @@ struct CanvasRoofOpeningFrame {
 struct CanvasRoofOpeningControls {
     CanvasRoofOpeningTarget target;
     CanvasRoofOpeningFrame frame;
+    // Presented roof or roof_join ink owning this mouth. The typed target
+    // retains the actual source roof identity; empty keeps legacy callers.
+    QString presentation_owner_id;
 };
 
 struct CanvasRoofOpeningEdit {
@@ -623,6 +626,10 @@ public:
     // first. Starting captures source authority; completion resolves the pick.
     // The shell owns cycling and admission; a drag still navigates.
     void setOverlapSelectionRequested(std::function<bool(bool, QStringList)> callback);
+    // Typed Alt overlap preserves every actual child mouth under the pointer.
+    // Starting receives empty hits; shell admission owns all selection changes.
+    void setSemanticOverlapSelectionRequested(
+        std::function<bool(bool, QStringList, std::vector<CanvasRoofOpeningTarget>)> callback);
     // Ctrl-drag rectangle selection adds to the retained selection.
     void setEntitiesSelected(std::function<void(QStringList, bool)> callback);
     // Commits one model-space move after the interactive preview ends. A hosted
@@ -732,13 +739,23 @@ public:
     // Screen-only horizontal mouth controls. Publish after setEntities, which
     // retires their source capture. Duplicate identities/invalid frames refuse.
     void setRoofOpeningControls(std::vector<CanvasRoofOpeningControls> controls);
+    void setSelectedRoofOpenings(std::vector<CanvasRoofOpeningTarget> targets);
     void setSelectedRoofOpening(std::optional<CanvasRoofOpeningTarget> target);
     [[nodiscard]] const std::vector<CanvasRoofOpeningControls>& roofOpeningControls() const noexcept {
         return m_roof_opening_controls;
     }
+    // Compatibility view is empty for zero or multiple selected children.
     [[nodiscard]] const std::optional<CanvasRoofOpeningTarget>& selectedRoofOpening() const noexcept {
         return m_selected_roof_opening;
     }
+    [[nodiscard]] const std::vector<CanvasRoofOpeningTarget>& selectedRoofOpenings() const noexcept {
+        return m_selected_roof_openings;
+    }
+    void setRoofOpeningSelectionClicked(std::function<bool(CanvasRoofOpeningTarget, bool)> callback);
+    // One authoritative selection decision receives all independent owner and
+    // typed child hits. Canvas never mutates the cohort before this callback.
+    void setRoofOpeningSelectionMarqueeRequested(
+        std::function<bool(QStringList, std::vector<CanvasRoofOpeningTarget>, bool)> callback);
     void setRoofOpeningSelectionRequested(std::function<bool(CanvasRoofOpeningTarget)> callback);
     void setRoofOpeningDoubleClicked(std::function<void(CanvasRoofOpeningTarget)> callback);
     void setRoofOpeningEditStarted(std::function<void(CanvasRoofOpeningTarget)> callback);
@@ -986,6 +1003,10 @@ private:
     void drawOpeningWidthHandles(QPainter& painter, const QRectF& viewport) const;
     [[nodiscard]] const CanvasRoofOpeningControls* selectedRoofOpeningControls() const;
     [[nodiscard]] std::optional<CanvasRoofOpeningControls> roofOpeningAt(QPointF point) const;
+    [[nodiscard]] std::vector<CanvasRoofOpeningTarget> roofOpeningTargetsAt(QPointF point) const;
+    [[nodiscard]] bool roofOpeningSelected(const CanvasRoofOpeningTarget& target) const;
+    [[nodiscard]] std::vector<CanvasRoofOpeningTarget> roofOpeningRectangleHits(
+        const QRectF& rectangle, bool crossing) const;
     // Local-axis signs in {-1,0,1}: zero leaves an axis unchanged; {0,0}
     // moves the body. The exclusive {2,2} sentinel rotates without resizing.
     [[nodiscard]] std::optional<Vec2> roofOpeningHandleAt(QPointF point) const;
@@ -1267,6 +1288,8 @@ private:
     QPointF m_left_start;
     bool m_left_dragging{false};
     std::vector<CanvasRoofOpeningControls> m_roof_opening_controls;
+    std::vector<CanvasRoofOpeningTarget> m_selected_roof_openings;
+    // Compatibility view: populated only for an exactly-one child cohort.
     std::optional<CanvasRoofOpeningTarget> m_selected_roof_opening;
     std::optional<CanvasRoofOpeningControls> m_roof_opening_capture;
     std::optional<CanvasRoofOpeningTarget> m_pressed_roof_opening;
@@ -1420,6 +1443,8 @@ private:
     std::function<void()> m_generated_label_move_canceled;
     std::function<void(QString, bool)> m_entity_selection_clicked;
     std::function<bool(bool, QStringList)> m_overlap_selection_requested;
+    std::function<bool(bool, QStringList, std::vector<CanvasRoofOpeningTarget>)>
+        m_semantic_overlap_selection_requested;
     std::function<void(QStringList, bool)> m_entities_selected;
     std::function<bool(QStringList, Vec2)> m_entities_move_requested;
     std::function<void(QStringList)> m_entities_move_started;
@@ -1447,6 +1472,9 @@ private:
         QString, std::size_t, double, std::uint64_t)> m_corner_window_width_preview_requested;
     std::function<bool(QString, std::size_t, double, std::uint64_t)> m_corner_window_width_resize_requested;
     std::function<bool(CanvasRoofOpeningTarget)> m_roof_opening_selection_requested;
+    std::function<bool(CanvasRoofOpeningTarget, bool)> m_roof_opening_selection_clicked;
+    std::function<bool(QStringList, std::vector<CanvasRoofOpeningTarget>, bool)>
+        m_roof_opening_selection_marquee_requested;
     std::function<void(CanvasRoofOpeningTarget)> m_roof_opening_double_clicked;
     std::function<void(CanvasRoofOpeningTarget)> m_roof_opening_edit_started_callback;
     std::function<std::optional<Boundary>(CanvasRoofOpeningEdit, std::uint64_t)>

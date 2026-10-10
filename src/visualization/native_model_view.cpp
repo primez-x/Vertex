@@ -250,7 +250,7 @@ public:
     std::map<std::string, CachedSolid, std::less<>> solids;
     QStringList selected_entity_ids;
     std::optional<std::string> selected_entity_id;
-    std::optional<NativeRoofOpeningTarget> selected_roof_opening;
+    std::vector<NativeRoofOpeningTarget> selected_roof_openings;
     std::optional<std::string> manipulator_entity_id;
     std::optional<gp_Trsf> manipulation_transform;
     std::uint64_t navigation_generation{};
@@ -262,7 +262,7 @@ public:
         QSize native_size;
         qreal pixel_ratio{};
         QStringList selection;
-        std::optional<NativeRoofOpeningTarget> roof_opening;
+        std::vector<NativeRoofOpeningTarget> roof_openings;
         std::uint64_t navigation_generation{};
     };
     std::optional<SelectionCapture> selection_capture;
@@ -889,7 +889,7 @@ public:
     }
 
     void attach_manipulator() {
-        if (selected_roof_opening || selected_entity_ids.size() != 1 || !selected_entity_id.has_value() || !supports_direct_transform(*selected_entity_id) ||
+        if (!selected_roof_openings.empty() || selected_entity_ids.size() != 1 || !selected_entity_id.has_value() || !supports_direct_transform(*selected_entity_id) ||
             !native_ready || !geometry_prepared || regenerator.is_pending() || prepared_geometry ||
             !geometry_status.isEmpty() || context.IsNull() || viewer.IsNull()) {
             detach_manipulator();
@@ -935,7 +935,7 @@ public:
     }
 
     bool begin_manipulation(const NativeInputPoint point) {
-        if (manipulator.IsNull() || !manipulator->IsAttached() ||
+        if (!selected_roof_openings.empty() || manipulator.IsNull() || !manipulator->IsAttached() ||
             manipulator_entity_id != selected_entity_id || context.IsNull() || view.IsNull())
             return false;
         try {
@@ -1102,7 +1102,7 @@ public:
         int width=0, height=0;
         if (!window.IsNull()) window->Size(width,height);
         return {published_snapshot,view->Camera()->WorldViewProjState(),owner->size(),
-                QSize(width,height),input_scale(),selected_entity_ids,selected_roof_opening,navigation_generation};
+                QSize(width,height),input_scale(),selected_entity_ids,selected_roof_openings,navigation_generation};
     }
 
     bool selection_current(const SelectionCapture& capture) const {
@@ -1111,7 +1111,7 @@ public:
             navigation_generation == std::numeric_limits<std::uint64_t>::max() ||
             view.IsNull() || view->Camera().IsNull() || owner->size() != capture.logical_size ||
             input_scale() != capture.pixel_ratio || selected_entity_ids != capture.selection ||
-            selected_roof_opening != capture.roof_opening ||
+            selected_roof_openings != capture.roof_openings ||
             view->Camera()->WorldViewProjState() != capture.camera) return false;
         int width=0, height=0;
         if (!window.IsNull()) window->Size(width,height);
@@ -1129,54 +1129,63 @@ public:
     QPoint keyboard_context_anchor(const SelectionCapture& capture, const QRect& visible) const {
         const auto fallback=visible.center();
         if (capture.native_size.isEmpty()) return fallback;
-        occ::handle<AIS_Shape> presentation;
-        if (capture.roof_opening) presentation=roof_opening_presentation(*capture.roof_opening);
-        else if (!capture.selection.isEmpty()) {
+        std::vector<occ::handle<AIS_Shape>> presentations;
+        if (!capture.roof_openings.empty()) {
+            for (const auto& target : capture.roof_openings) {
+                const auto presentation=roof_opening_presentation(target);
+                if (!presentation.IsNull()) presentations.push_back(presentation);
+            }
+        } else if (!capture.selection.isEmpty()) {
             const auto found=solids.find(capture.selection.back().toStdString());
-            if (found!=solids.end()) presentation=found->second.presentation;
+            if (found!=solids.end()) presentations.push_back(found->second.presentation);
         }
-        if (presentation.IsNull() || presentation->Shape().IsNull() ||
-            !context->IsDisplayed(presentation)) return fallback;
         // Use the displayed shape (including material-region compounds), not
         // document coordinates or a newly prepared solid. AIS shape bounds are
         // local; apply the presentation's complete parent/local transformation.
-        const auto& bounds=presentation->BoundingBox();
-        if (bounds.IsVoid() || bounds.IsOpen()) return fallback;
-        const auto low=bounds.CornerMin();
-        const auto high=bounds.CornerMax();
         double left=std::numeric_limits<double>::infinity();
         double top=left;
         double right=-left;
         double bottom=right;
-        for (int corner=0;corner<8;++corner) {
-            auto world=gp_Pnt((corner&1) ? high.X() : low.X(),
-                              (corner&2) ? high.Y() : low.Y(),
-                              (corner&4) ? high.Z() : low.Z());
-            world.Transform(presentation->Transformation());
-            if (!std::isfinite(world.X()) || !std::isfinite(world.Y()) || !std::isfinite(world.Z()))
-                return fallback;
-            const auto projected=view->Camera()->Project(world);
-            // V3d_View::Convert uses this top-left pixel projection internally.
-            // Keep it in floating point until visible clipping so far-offscreen
-            // geometry cannot overflow OCCT's integer pixel conversion.
-            const auto x=(projected.X()+1.0)*0.5*capture.native_size.width()/capture.pixel_ratio;
-            const auto y=(capture.native_size.height()-1.0-
-                (projected.Y()+1.0)*0.5*capture.native_size.height())/capture.pixel_ratio;
-            if (!std::isfinite(x) || !std::isfinite(y) || !std::isfinite(projected.Z()) ||
-                projected.Z() < -1.0 || projected.Z() > 1.0) return fallback;
-            left=std::min(left,x);
-            top=std::min(top,y);
-            right=std::max(right,x);
-            bottom=std::max(bottom,y);
+        for (const auto& presentation : presentations) {
+            if (presentation.IsNull() || presentation->Shape().IsNull() ||
+                !context->IsDisplayed(presentation)) continue;
+            const auto& bounds=presentation->BoundingBox();
+            if (bounds.IsVoid() || bounds.IsOpen()) return fallback;
+            const auto low=bounds.CornerMin();
+            const auto high=bounds.CornerMax();
+            double member_left=std::numeric_limits<double>::infinity();
+            double member_top=member_left;
+            double member_right=-member_left;
+            double member_bottom=member_right;
+            for (int corner=0;corner<8;++corner) {
+                auto world=gp_Pnt((corner&1) ? high.X() : low.X(),
+                                  (corner&2) ? high.Y() : low.Y(),
+                                  (corner&4) ? high.Z() : low.Z());
+                world.Transform(presentation->Transformation());
+                if (!std::isfinite(world.X()) || !std::isfinite(world.Y()) || !std::isfinite(world.Z()))
+                    return fallback;
+                const auto projected=view->Camera()->Project(world);
+                // Keep projection floating point until visible clipping so
+                // far-offscreen shapes cannot overflow integer conversion.
+                const auto x=(projected.X()+1.0)*0.5*capture.native_size.width()/capture.pixel_ratio;
+                const auto y=(capture.native_size.height()-1.0-
+                    (projected.Y()+1.0)*0.5*capture.native_size.height())/capture.pixel_ratio;
+                if (!std::isfinite(x) || !std::isfinite(y) || !std::isfinite(projected.Z()) ||
+                    projected.Z() < -1.0 || projected.Z() > 1.0) return fallback;
+                member_left=std::min(member_left,x);
+                member_top=std::min(member_top,y);
+                member_right=std::max(member_right,x);
+                member_bottom=std::max(member_bottom,y);
+            }
+            if (member_right<visible.left() || member_left>visible.right() ||
+                member_bottom<visible.top() || member_top>visible.bottom()) continue;
+            left=std::min(left,std::max(member_left,static_cast<double>(visible.left())));
+            right=std::max(right,std::min(member_right,static_cast<double>(visible.right())));
+            top=std::min(top,std::max(member_top,static_cast<double>(visible.top())));
+            bottom=std::max(bottom,std::min(member_bottom,static_cast<double>(visible.bottom())));
         }
-        if (right<visible.left() || left>visible.right() || bottom<visible.top() || top>visible.bottom())
-            return fallback;
-        // Center only the visible portion, including a partially offscreen
-        // selected object. Convert to Qt logical pixels before rounding.
-        left=std::max(left,static_cast<double>(visible.left()));
-        right=std::min(right,static_cast<double>(visible.right()));
-        top=std::max(top,static_cast<double>(visible.top()));
-        bottom=std::min(bottom,static_cast<double>(visible.bottom()));
+        if (!std::isfinite(left)) return fallback;
+        // Center the union of visible selected fills in Qt logical pixels.
         return QPoint(qBound(visible.left(),qRound(left+(right-left)*0.5),visible.right()),
                       qBound(visible.top(),qRound(top+(bottom-top)*0.5),visible.bottom()));
     }
@@ -1184,10 +1193,11 @@ public:
     void restore_selection_highlights(const std::map<std::string,CachedSolid,std::less<>>& scene) {
         if (context.IsNull()) return;
         context->ClearSelected(false);
-        if (selected_roof_opening) {
+        if (!selected_roof_openings.empty()) {
             for (const auto& [id,solid] : scene)
                 for (const auto& child : solid.roof_openings)
-                    if (child.target == *selected_roof_opening && context->IsDisplayed(child.presentation))
+                    if (std::find(selected_roof_openings.begin(),selected_roof_openings.end(),child.target)!=selected_roof_openings.end() &&
+                        context->IsDisplayed(child.presentation))
                         context->AddOrRemoveSelected(child.presentation,false);
             return;
         }
@@ -1223,7 +1233,9 @@ public:
                     if (!hit.empty() && std::find(targets.begin(),targets.end(),hit)==targets.end()) targets.push_back(hit);
                 }
                 if (!targets.empty()) {
-                    const PickTarget primary{capture.roof_opening || capture.selection.isEmpty() ? QString{} : capture.selection.back(),capture.roof_opening};
+                    const auto primary_child=capture.roof_openings.empty() ? std::optional<NativeRoofOpeningTarget>{}
+                        : std::optional<NativeRoofOpeningTarget>{capture.roof_openings.back()};
+                    const PickTarget primary{primary_child || capture.selection.isEmpty() ? QString{} : capture.selection.back(),primary_child};
                     const auto current=std::find(targets.begin(),targets.end(),primary);
                     target=current==targets.end() || std::next(current)==targets.end() ? targets.front() : *std::next(current);
                 }
@@ -1232,22 +1244,28 @@ public:
             if (!selection_current(capture)) return std::nullopt;
             if (target.roof_opening) {
                 const auto child=*target.roof_opening;
-                const bool retained=!toggle && !cycle && selected_roof_opening==target.roof_opening;
+                const bool retained=!toggle && !cycle &&
+                    std::find(selected_roof_openings.begin(),selected_roof_openings.end(),child)!=selected_roof_openings.end();
                 const auto clicked=owner->onRoofOpeningSelectionClicked;
+                const auto cycled=owner->onRoofOpeningSelectionCycled;
                 if (!retained) {
-                    const auto next=toggle && selected_roof_opening==target.roof_opening
-                        ? std::optional<NativeRoofOpeningTarget>{} : target.roof_opening;
-                    owner->setSelectedRoofOpening(next);
+                    auto next=toggle ? selected_roof_openings : std::vector<NativeRoofOpeningTarget>{};
+                    const auto member=std::find(next.begin(),next.end(),child);
+                    if (toggle && member!=next.end()) next.erase(member);
+                    else next.push_back(child);
+                    owner->setSelectedRoofOpenings(std::move(next));
                     if (!guard) return target;
                 }
-                if (clicked) clicked(child,toggle);
+                if (cycle && !toggle && cycled) cycled(child);
+                else if (clicked) clicked(child,toggle);
                 if (!guard) return target;
                 auto continuation=capture;
                 continuation.selection=selected_entity_ids;
-                continuation.roof_opening=selected_roof_opening;
+                continuation.roof_openings=selected_roof_openings;
                 if (!selection_current(continuation)) return std::nullopt;
                 if (editing &&
-                    selected_roof_opening==target.roof_opening && !roof_opening_presentation(child).IsNull()) {
+                    std::find(selected_roof_openings.begin(),selected_roof_openings.end(),child)!=selected_roof_openings.end() &&
+                    !roof_opening_presentation(child).IsNull()) {
                     const auto callback=owner->onRoofOpeningEditRequested;
                     if (callback) callback(child);
                 }
@@ -1257,7 +1275,7 @@ public:
             // Preserve selected groups on their first plain click, as Qt sends
             // that release before a possible double-click. Context uses this
             // same policy; its selected member never replaces the group.
-            const bool retained=!selected_roof_opening && !toggle && !cycle && !id.isEmpty() && selected_entity_ids.contains(id);
+            const bool retained=selected_roof_openings.empty() && !toggle && !cycle && !id.isEmpty() && selected_entity_ids.contains(id);
             if (!retained) {
                 auto next=toggle ? selected_entity_ids : QStringList{};
                 if (toggle && next.contains(id)) next.removeAll(id);
@@ -1272,9 +1290,9 @@ public:
             if (!guard) return target;
             auto continuation=capture;
             continuation.selection=selected_entity_ids;
-            continuation.roof_opening=selected_roof_opening;
+            continuation.roof_openings=selected_roof_openings;
             if (!selection_current(continuation)) return std::nullopt;
-            if (editing && !id.isEmpty() && !selected_roof_opening && selected_entity_ids.contains(id)) {
+            if (editing && !id.isEmpty() && selected_roof_openings.empty() && selected_entity_ids.contains(id)) {
                 const auto callback=owner->onEntityEditRequested;
                 if (callback) callback(id);
             }
@@ -1561,19 +1579,32 @@ void NativeModelView::setSelectedEntity(const QString& entity_id) {
 }
 
 void NativeModelView::setSelectedEntities(const QStringList& entity_ids) {
-    setSemanticSelection(entity_ids,std::nullopt);
+    setSemanticSelections(entity_ids,{});
 }
 
 void NativeModelView::setSemanticSelection(const QStringList& entity_ids,
     std::optional<NativeRoofOpeningTarget> target) {
+    std::vector<NativeRoofOpeningTarget> targets;
+    if (target) targets.push_back(std::move(*target));
+    setSemanticSelections(entity_ids,std::move(targets));
+}
+
+void NativeModelView::setSemanticSelections(const QStringList& entity_ids,
+    std::vector<NativeRoofOpeningTarget> targets) {
     QStringList normalized;
     for (const auto& raw : entity_ids) {
         const auto id=raw.trimmed();
         if (!id.isEmpty() && !normalized.contains(id)) normalized.append(id);
     }
-    if (target && (target->roof_id.isEmpty() || target->opening_id.isEmpty())) target.reset();
-    const bool changed=normalized!=m_impl->selected_entity_ids || m_impl->selected_roof_opening!=target;
-    m_impl->selected_roof_opening=std::move(target);
+    std::vector<NativeRoofOpeningTarget> normalized_targets;
+    normalized_targets.reserve(targets.size());
+    for (auto& target : targets) {
+        if (!target.roof_id.isEmpty() && !target.opening_id.isEmpty() &&
+            std::find(normalized_targets.begin(),normalized_targets.end(),target)==normalized_targets.end())
+            normalized_targets.push_back(std::move(target));
+    }
+    const bool changed=normalized!=m_impl->selected_entity_ids || m_impl->selected_roof_openings!=normalized_targets;
+    m_impl->selected_roof_openings=std::move(normalized_targets);
     m_impl->selected_entity_ids=normalized;
     m_impl->selected_entity_id=normalized.isEmpty() ? std::nullopt
         : std::optional<std::string>{normalized.back().toStdString()};
@@ -1607,8 +1638,12 @@ void NativeModelView::setSelectedRoofOpening(std::optional<NativeRoofOpeningTarg
     setSemanticSelection(m_impl->selected_entity_ids,std::move(target));
 }
 
+void NativeModelView::setSelectedRoofOpenings(std::vector<NativeRoofOpeningTarget> targets) {
+    setSemanticSelections(m_impl->selected_entity_ids,std::move(targets));
+}
+
 bool NativeModelView::transformControlsVisible() const noexcept {
-    return !m_impl->selected_roof_opening && m_impl->selected_entity_ids.size() == 1 && m_impl->selected_entity_id.has_value() &&
+    return m_impl->selected_roof_openings.empty() && m_impl->selected_entity_ids.size() == 1 && m_impl->selected_entity_id.has_value() &&
            m_impl->manipulator_entity_id == m_impl->selected_entity_id &&
            !m_impl->manipulator.IsNull() && m_impl->manipulator->IsAttached();
 }
@@ -1701,7 +1736,7 @@ void NativeModelView::setGeometryStatusChangedCallback(std::function<void(QStrin
 
 bool NativeModelView::beginMove(const QString& entity_id) {
     cancelInteraction();
-    if (m_impl->selected_roof_opening || m_impl->selected_entity_ids.size()>1 || !isReady() || !m_impl->supports_direct_translation(entity_id)) return false;
+    if (!m_impl->selected_roof_openings.empty() || m_impl->selected_entity_ids.size()>1 || !isReady() || !m_impl->supports_direct_translation(entity_id)) return false;
     const auto found = m_impl->solids.find(entity_id.toStdString());
     if (found == m_impl->solids.end() ||
         !m_impl->context->IsDisplayed(found->second.presentation)) return false;
@@ -1890,10 +1925,9 @@ void NativeModelView::contextMenuEvent(QContextMenuEvent* event) {
         if (!idle()) return;
         const auto callback=onContextMenuRequested;
         const auto child_callback=onRoofOpeningContextMenuRequested;
-        if (m_impl->selected_roof_opening ? !child_callback : !callback) return;
+        if (!m_impl->selected_roof_openings.empty() ? !child_callback : !callback) return;
         const auto capture=m_impl->capture_selection();
         if (!m_impl->selection_current(capture)) return;
-        if (capture.roof_opening && m_impl->roof_opening_presentation(*capture.roof_opening).IsNull()) return;
         if (!admitSceneInput(true) || !guard || !idle() || !m_impl->selection_current(capture)) return;
         const auto visible=visibleRegion().boundingRect().intersected(rect());
         if (visible.isEmpty()) return;
@@ -1901,7 +1935,7 @@ void NativeModelView::contextMenuEvent(QContextMenuEvent* event) {
         if (!m_impl->selection_current(capture)) return;
         const auto primary=capture.selection.isEmpty() ? QString{} : capture.selection.back();
         m_impl->commit_snapshot=capture.source;
-        if (capture.roof_opening) child_callback(*capture.roof_opening,anchor);
+        if (!capture.roof_openings.empty()) child_callback(capture.roof_openings.back(),anchor);
         else callback(primary,anchor);
     } catch (const Standard_Failure& error) {
         source_scope.restore();
@@ -2631,7 +2665,8 @@ void NativeModelView::pointerRelease(QSinglePointEvent* event) {
             }
             if (owner_guard && target && isReady() && m_impl->published_snapshot==capture->source) {
                 if (target->roof_opening) {
-                    if (child_callback && m_impl->selected_roof_opening==target->roof_opening &&
+                    if (child_callback && std::find(m_impl->selected_roof_openings.begin(),m_impl->selected_roof_openings.end(),
+                            *target->roof_opening)!=m_impl->selected_roof_openings.end() &&
                         !m_impl->roof_opening_presentation(*target->roof_opening).IsNull())
                         child_callback(*target->roof_opening,global_position);
                 } else if (callback) callback(target->entity_id,global_position);

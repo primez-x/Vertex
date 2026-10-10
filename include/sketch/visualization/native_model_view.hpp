@@ -80,10 +80,15 @@ public:
     // Synchronize a single semantic skylight child after its logical owners.
     // This emits no callback and disables whole-owner transform controls.
     void setSelectedRoofOpening(std::optional<NativeRoofOpeningTarget> target);
+    // Synchronize the complete typed child cohort while preserving owner IDs.
+    // The last distinct valid target is primary. No callback is emitted.
+    void setSelectedRoofOpenings(std::vector<NativeRoofOpeningTarget> targets);
     // Publish owner and child intent together, without an intermediate owner
     // manipulator or highlight. This emits no selection callback.
     void setSemanticSelection(const QStringList& entity_ids,
                               std::optional<NativeRoofOpeningTarget> target);
+    void setSemanticSelections(const QStringList& entity_ids,
+                               std::vector<NativeRoofOpeningTarget> targets);
     [[nodiscard]] bool transformControlsVisible() const noexcept;
     // Export the OCCT framebuffer directly. This deliberately does not use
     // QWidget::grab(), which cannot capture the native OCCT child surface.
@@ -142,6 +147,10 @@ public:
     // retain the group for subsequent double-click/context editing.
     std::function<void(QString, bool)> onEntitySelectionClicked;
     std::function<void(NativeRoofOpeningTarget, bool)> onRoofOpeningSelectionClicked;
+    // Explicit Alt replacement, including a hit already in the cohort. Falls
+    // back to onRoofOpeningSelectionClicked(target, false) when not installed.
+    // Ordinary plain member clicks retain the cohort and still notify the shell.
+    std::function<void(NativeRoofOpeningTarget)> onRoofOpeningSelectionCycled;
     std::function<void(NativeRoofOpeningTarget)> onRoofOpeningEditRequested;
     std::function<void(NativeRoofOpeningTarget, QPoint)> onRoofOpeningContextMenuRequested;
     // One atomic marquee notification, including distinct typed children. If

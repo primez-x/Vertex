@@ -14,6 +14,51 @@ changed source does not acquire runtime acceptance without later qualification.
 
 ## Current delivery state
 
+### October 10 skylight group selection and commands - source integration
+
+The actual native child picking batch is committed and pushed as b7152b7e.
+Current source work extends typed child selection to real cohorts in plan and
+3D. Separate writers own the two canvas/native-view areas; root owns controller,
+atomic commands, documentation and Git. Ctrl-click toggles individual children,
+plain member clicks retain the group, and Alt cycling explicitly replaces it in
+plan and 3D. Directional plan windows use actual affine mouth polygons. Joined child-only
+hits carry the real presentation owner; independent roof boundary/ridge hits
+remain independent. Transparent highlights do not expose whole-roof frames.
+
+The controller captures the complete cohort and source origin in transient edit
+authority. Publication and failure restoration retain every child; all generic
+owner edit/move/transform routes reject nonempty child selection. Shared context
+and double-click routes open single or group Properties. Bulk edits accept common
+physical on-face width/depth, angle and construction dimensions; blank values
+retain individual measurements. Each actual facet supplies its scale, each
+reference centre stays fixed, and whole-roster admission validates the result.
+Deletion and properties group edits by actual roof, replay one complete batch,
+and apply one source-derived command with existing alternative replacement,
+remapping, history and explicit room review. A failure cannot publish a partial
+group edit or substitute a containing-roof operation.
+
+Mixed ordinary-object/child selection, group Copy/Cut/Paste/Duplicate, shared
+direct group move/resize/rotate previews and direct 3D child transforms remain
+implementation gaps. Group clipboard commands refuse before changing project or
+clipboard; that protection is not capability completion. Next source work must
+implement actual grouped transfer and shared manufactured transformations.
+
+No document format or reader-floor change is introduced by transient selection
+or batches of existing edit intents. The manual checklist retains all 450
+original tasks plus thirty-six focused tasks (486 total); three new group tasks
+remain Not tested. Independent source review found the plan Alt route still
+cycled owner IDs; the correction adds actual child targets to the existing
+camera-fenced, captured-source protocol. Final bounded review accepted the
+integrated correction with no remaining concrete P1/P2 in the reviewed scope.
+Root reviewed interfaces, source authority, maintainability and evidence;
+scoped commit, push and exact remote identity verification accompany this batch.
+Static registry inspection retains all 277 requirements and changes only two
+delivery notes, without changing acceptance or source bindings.
+No builds, tests/new tests, probes, native jobs, UI launches, packages
+or installations have run. Compilation, native picking/interaction, geometry,
+history/alternatives, output and recovery remain unverified. Installed evidence
+and acceptance are unchanged; all ten production gates remain open.
+
 ### October 10 native skylight child selection - source integration
 
 The roof-face rotation batch is committed and pushed as 067af112; exact local

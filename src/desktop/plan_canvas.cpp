@@ -852,7 +852,8 @@ void PlanCanvas::setEntities(std::vector<CanvasEntity> entities) {
     }
     resetTouchInput();
     m_roof_opening_controls.clear();
-    m_selected_roof_opening.reset();
+    // Logical children survive projection changes. Only newly published,
+    // exactly revision-matching controls can capture an edit afterward.
     m_entities = std::move(entities);
     m_published_entity_geometry.clear();
     m_published_geometry_index_ready = false;
@@ -1014,8 +1015,8 @@ void PlanCanvas::setSelectedId(const QString& entity_id) {
 }
 
 void PlanCanvas::setSelectedIds(const QStringList& entity_ids) {
-    if (m_selected_roof_opening && !entity_ids.contains(m_selected_roof_opening->roof_id))
-        setSelectedRoofOpening(std::nullopt);
+    // Owner and child selections are published independently by the controller.
+    // A mixed cohort must not be truncated by an intermediate owner publication.
     bool changed = false;
     const auto assign_selected = [&](bool& selected, bool value) {
         changed = changed || selected != value;
@@ -2139,16 +2140,14 @@ void PlanCanvas::renderSceneWithTransform(QPainter& painter, const QRectF& viewp
                 painter.drawLine(QLineF(x, bottom - 3.0, x, bottom + 3.0));
             painter.restore();
         }
-        if (m_selection_controls_visible) {
-            if (selectedRoofOpeningControls()) {
-                drawRoofOpeningControls(painter, viewport);
-            } else {
-                drawSelectionFrame(painter, viewport, annotation_footprints);
-                drawVertexHandles(painter, viewport);
-                drawSelectionDimensions(painter, viewport, annotation_footprints, interactive);
-                drawOpeningWidthHandles(painter, viewport);
-                drawSelectionCaption(painter, viewport, background);
-            }
+        if (!m_selected_roof_openings.empty()) {
+            drawRoofOpeningControls(painter,viewport);
+        } else if (m_selection_controls_visible) {
+            drawSelectionFrame(painter, viewport, annotation_footprints);
+            drawVertexHandles(painter, viewport);
+            drawSelectionDimensions(painter, viewport, annotation_footprints, interactive);
+            drawOpeningWidthHandles(painter, viewport);
+            drawSelectionCaption(painter, viewport, background);
         } else if (interactive) {
             drawSelectionDimensions(painter, viewport, annotation_footprints, interactive);
         }
@@ -2512,6 +2511,12 @@ void PlanCanvas::setEntitySelectionClicked(std::function<void(QString, bool)> ca
 
 void PlanCanvas::setOverlapSelectionRequested(std::function<bool(bool, QStringList)> callback) {
     m_overlap_selection_requested = std::move(callback);
+}
+
+void PlanCanvas::setSemanticOverlapSelectionRequested(
+    std::function<bool(bool,QStringList,std::vector<CanvasRoofOpeningTarget>)> callback) {
+    if (m_overlap_selection) resetGesture();
+    m_semantic_overlap_selection_requested=std::move(callback);
 }
 
 void PlanCanvas::setEntitiesSelected(std::function<void(QStringList, bool)> callback) {
@@ -3312,6 +3317,8 @@ void PlanCanvas::pointerPress(QPointF position, Qt::MouseButton button,
         // A stationary Ctrl click retains the same press target as a plain
         // click; sub-threshold motion across another hit cannot retarget it.
         m_pressed_entity = hitTest(position);
+        if (!m_pressed_generated_label)
+            if (const auto child=roofOpeningAt(position)) m_pressed_roof_opening=child->target;
         m_left_gesture = LeftGesture::marquee;
         m_selection_start = position;
         m_selection_end = position;
@@ -3322,10 +3329,16 @@ void PlanCanvas::pointerPress(QPointF position, Qt::MouseButton button,
     m_left_start = position;
     m_left_dragging = false;
     if (modifiers.testFlag(Qt::AltModifier) && selectionInteractionEnabled() &&
-        m_overlap_selection_requested) {
+        (m_semantic_overlap_selection_requested || m_overlap_selection_requested)) {
+        const QPointer<PlanCanvas> guard(this);
+        const auto semantic=m_semantic_overlap_selection_requested;
+        const auto legacy=m_overlap_selection_requested;
+        bool accepted=false;
         try {
-            if (!m_overlap_selection_requested(true,{})) { resetGesture(); return; }
-        } catch (...) { resetGesture(); return; }
+            accepted=semantic ? semantic(true,{},{}) : legacy(true,{});
+        } catch (...) { if (guard) resetGesture(); return; }
+        if (!guard || m_gesture_button!=button) return;
+        if (!accepted) { resetGesture(); return; }
         m_overlap_selection = true;
         m_overlap_view_scale = m_scale;
         m_overlap_view_size = size();
@@ -3363,6 +3376,8 @@ void PlanCanvas::pointerPress(QPointF position, Qt::MouseButton button,
                 setCursor(grip && grip->x==2.0 && grip->y==2.0 ? Qt::CrossCursor :
                     grip ? Qt::SizeFDiagCursor : Qt::SizeAllCursor);
             } else {
+                // Cohort body drags navigate until a real group child command
+                // exists. They never enter the owner's movement/transform path.
                 m_pressed_roof_opening=child->target;
                 m_left_gesture=LeftGesture::canvas_pan;
                 m_pan_start=position;
@@ -3527,13 +3542,13 @@ void PlanCanvas::pointerPress(QPointF position, Qt::MouseButton button,
     const auto retained_selection = selectedIds();
     const bool corner_selected = std::any_of(m_selected_entity_indices.begin(), m_selected_entity_indices.end(),
         [&](const auto index) { return corner_window_entity(m_entities[index]); });
-    const bool inside_frame = !selectedRoofOpeningControls() && selectionFrameContains(position, QRectF(rect()));
+    const bool inside_frame = m_selected_roof_openings.empty() && selectionFrameContains(position, QRectF(rect()));
     // A selected annotation can paint away from its same-ID guide geometry.
     // Its painted hit still owns movement of the retained selection.
     const bool selected_hit = !m_pressed_entity.isEmpty() && retained_selection.contains(m_pressed_entity);
-    m_clear_selection_on_click = !m_selected_generated_labels.empty() && !selected_hit &&
+    m_clear_selection_on_click = (!m_selected_generated_labels.empty() || !m_selected_roof_openings.empty()) && !selected_hit &&
         (retained_selection.isEmpty() || !inside_frame);
-    if (selectionInteractionEnabled() && !selectedRoofOpeningControls() && !corner_selected && !retained_selection.isEmpty() &&
+    if (selectionInteractionEnabled() && m_selected_roof_openings.empty() && !corner_selected && !retained_selection.isEmpty() &&
         (selected_hit || inside_frame)) {
         m_left_gesture = LeftGesture::object_move;
         m_move_ids = retained_selection;
@@ -3850,7 +3865,7 @@ void PlanCanvas::pointerRelease(QPointF position, Qt::MouseButton button,
             if (!m_roof_opening_preview_pending) finishRoofOpeningPreview(m_roof_opening_preview_serial);
             return;
         }
-        if (m_pressed_roof_opening) {
+        if (m_pressed_roof_opening && m_left_gesture!=LeftGesture::marquee) {
             const auto target=*m_pressed_roof_opening;
             const QPointer<PlanCanvas> guard(this);
             pointerMove(position,modifiers);
@@ -3858,8 +3873,15 @@ void PlanCanvas::pointerRelease(QPointF position, Qt::MouseButton button,
             const auto hit=roofOpeningAt(position);
             const bool clicked=!m_left_dragging && hit && hit->target==target;
             const auto callback=m_roof_opening_selection_requested;
+            const auto selection_clicked=m_roof_opening_selection_clicked;
+            const bool retained=roofOpeningSelected(target);
             resetGesture();
-            if (clicked && callback) {
+            // A stationary plain click on a cohort member preserves the cohort
+            // for contextual actions and the following double-click.
+            if (clicked && retained) return;
+            if (clicked && selection_clicked) {
+                try { (void)selection_clicked(target,false); } catch (...) {}
+            } else if (clicked && callback) {
                 bool accepted=false;
                 try { accepted=callback(target); } catch (...) {}
                 if (guard && accepted && std::any_of(m_roof_opening_controls.begin(),m_roof_opening_controls.end(),
@@ -3930,6 +3952,10 @@ void PlanCanvas::pointerRelease(QPointF position, Qt::MouseButton button,
         const auto pressed_entity = m_pressed_entity;
         const auto pressed_occupied = m_pressed_occupied;
         const auto pressed_generated_label = m_pressed_generated_label;
+        const auto pressed_roof_opening = m_pressed_roof_opening;
+        const auto roof_opening_hit = pressed_roof_opening ? roofOpeningAt(position) : std::nullopt;
+        const bool roof_opening_click_current = roof_opening_hit && pressed_roof_opening &&
+            roof_opening_hit->target==*pressed_roof_opening;
         const bool generated_label_click_current = pressed_generated_label &&
             labelPresentationAt(position) == pressed_generated_label &&
             labelPresentation(*pressed_generated_label).has_value();
@@ -4003,9 +4029,74 @@ void PlanCanvas::pointerRelease(QPointF position, Qt::MouseButton button,
         resetGesture();
         if (gesture == LeftGesture::marquee && selection_start) {
             if (dragging) {
-                const auto ids = rectangleHits(QRectF(*selection_start, position).normalized(),
-                                               position.x() < selection_start->x());
-                if (m_entities_selected) m_entities_selected(ids, true);
+                const auto rectangle=QRectF(*selection_start,position).normalized();
+                const bool crossing=position.x()<selection_start->x();
+                auto children=roofOpeningRectangleHits(rectangle,crossing);
+                auto ids=rectangleHits(rectangle,crossing);
+                if (m_roof_opening_selection_marquee_requested) {
+                    // A containing roof fill or the child's own mouth strokes
+                    // cannot turn every child marquee into an ancestor pick.
+                    // Retain an owner when its independent body boundary is hit.
+                    const auto presentation_owner=[](const auto& control) {
+                        return control.presentation_owner_id.isEmpty()
+                            ? control.target.roof_id : control.presentation_owner_id;
+                    };
+                    QStringList processed_owners;
+                    for (const auto& child:children) {
+                        const auto control=std::find_if(m_roof_opening_controls.begin(),m_roof_opening_controls.end(),
+                            [&](const auto& item) { return item.target==child; });
+                        const auto owner=control==m_roof_opening_controls.end()
+                            ? child.roof_id : presentation_owner(*control);
+                        if (!ids.contains(owner) || processed_owners.contains(owner)) continue;
+                        processed_owners.push_back(owner);
+                        bool body_hit=false;
+                        bool body_evaluated=false;
+                        for (const auto& entity:m_entities) {
+                            if (entity.id!=owner || (entity.type!=QStringLiteral("roof") &&
+                                entity.type!=QStringLiteral("roof_join"))) continue;
+                            body_evaluated=true;
+                            QPainterPath body;
+                            append_boundary_strokes(body,entity.segments);
+                            append_boundary_strokes(body,entity.hit_segments);
+                            QTransform transform;
+                            const auto origin=toScreen({0,0},rect());
+                            transform.translate(origin.x(),origin.y());
+                            transform.scale(m_scale,-m_scale);
+                            QPainterPathStroker stroker;
+                            stroker.setWidth(std::max(3.0,entity_screen_stroke_width(entity,m_scale,logicalDpiX()/25.4)));
+                            stroker.setCapStyle(Qt::RoundCap);
+                            stroker.setJoinStyle(Qt::RoundJoin);
+                            auto footprint=stroker.createStroke(transform.map(body));
+                            for (const auto& mouth:m_roof_opening_controls) {
+                                if (presentation_owner(mouth)!=owner) continue;
+                                QPainterPath path;
+                                path.addPolygon(roofOpeningFramePolygon(mouth.frame,rect()));
+                                path.closeSubpath();
+                                footprint=footprint.subtracted(stroker.createStroke(path));
+                            }
+                            body_hit=body_hit || (!footprint.isEmpty() && (crossing
+                                ? footprint.intersects(rectangle) : rectangle.contains(footprint.boundingRect())));
+                        }
+                        if (body_evaluated && !body_hit) ids.removeAll(owner);
+                    }
+                    const auto callback=m_roof_opening_selection_marquee_requested;
+                    try { (void)callback(std::move(ids),std::move(children),true); } catch (...) {}
+                } else if (m_entities_selected) m_entities_selected(ids,true);
+            } else if (pressed_roof_opening) {
+                if (roof_opening_click_current) {
+                    const auto clicked=m_roof_opening_selection_clicked;
+                    const auto legacy=m_roof_opening_selection_requested;
+                    try {
+                        if (clicked) (void)clicked(*pressed_roof_opening,true);
+                        else if (legacy) {
+                            const QPointer<PlanCanvas> guard(this);
+                            const bool accepted=legacy(*pressed_roof_opening);
+                            if (guard && accepted && std::any_of(m_roof_opening_controls.begin(),m_roof_opening_controls.end(),
+                                [&](const auto& item) { return item.target==*pressed_roof_opening; }))
+                                setSelectedRoofOpening(*pressed_roof_opening);
+                        }
+                    } catch (...) {}
+                }
             } else if (pressed_generated_label) {
                 if (generated_label_click_current && m_generated_label_selection_clicked)
                     m_generated_label_selection_clicked(*pressed_generated_label, true);
@@ -4013,10 +4104,21 @@ void PlanCanvas::pointerRelease(QPointF position, Qt::MouseButton button,
                 m_entity_selection_clicked(pressed_entity, true);
             }
         } else if (gesture == LeftGesture::canvas_pan && !dragging) {
-            if (overlap_selection && m_overlap_selection_requested) {
+            if (overlap_selection && (m_semantic_overlap_selection_requested || m_overlap_selection_requested)) {
                 QStringList overlapping;
-                if (overlap_view_current) (void)hitTest(position,true,&overlapping);
-                (void)m_overlap_selection_requested(false,std::move(overlapping));
+                std::vector<CanvasRoofOpeningTarget> children;
+                if (overlap_view_current) {
+                    (void)hitTest(position,true,&overlapping);
+                    if (m_semantic_overlap_selection_requested) children=roofOpeningTargetsAt(position);
+                }
+                const auto semantic=m_semantic_overlap_selection_requested;
+                const auto legacy=m_overlap_selection_requested;
+                const QPointer<PlanCanvas> guard(this);
+                try {
+                    if (semantic) (void)semantic(false,std::move(overlapping),std::move(children));
+                    else (void)legacy(false,std::move(overlapping));
+                } catch (...) {}
+                if (!guard) return;
             } else if (pressed_generated_label) {
                 if (generated_label_click_current && m_generated_label_selection_clicked)
                     m_generated_label_selection_clicked(*pressed_generated_label, false);
@@ -4035,7 +4137,7 @@ void PlanCanvas::pointerRelease(QPointF position, Qt::MouseButton button,
                 else if (m_entity_clicked) m_entity_clicked({});
             } else if (selectionInteractionEnabled() &&
                        (!selectedIds().isEmpty() || !m_selected_generated_labels.empty() ||
-                        m_selected_roof_opening)) {
+                        !m_selected_roof_openings.empty())) {
                 // An empty click outside the retained selection is an explicit
                 // deselect. Do not also interpret it as the first drawing node;
                 // the next empty click begins authoring once selection is clear.
@@ -4297,7 +4399,7 @@ void PlanCanvas::mouseDoubleClickEvent(QMouseEvent* event) {
     if (event->button() == Qt::LeftButton && event->source() == Qt::MouseEventNotSynthesized &&
         !m_point_placement_requested && event->modifiers().testFlag(Qt::AltModifier) &&
         !event->modifiers().testFlag(Qt::ControlModifier) && selectionInteractionEnabled() &&
-        m_overlap_selection_requested) {
+        (m_semantic_overlap_selection_requested || m_overlap_selection_requested)) {
         pointerPress(event->position(), event->button(), event->modifiers());
         event->accept();
         return;
@@ -4499,7 +4601,7 @@ std::optional<QRectF> PlanCanvas::computeSelectionBounds(const QRectF& viewport)
 std::optional<QRectF> PlanCanvas::selectionFrame(const QRectF& viewport) const {
     // Child controls own the selected skylight. Its containing roof remains a
     // logical owner, never a second editable selection frame.
-    if (m_selected_roof_opening) return std::nullopt;
+    if (!m_selected_roof_openings.empty()) return std::nullopt;
     if (hasInteractivePresentation()) return computeSelectionFrame(viewport);
     const auto key = retainedSelectionKey(viewport);
     if (m_selection_frame_cache.key != key) {
@@ -5265,7 +5367,7 @@ QPointF PlanCanvas::selectionRotationPoint(
 
 PlanCanvas::SelectionHandle PlanCanvas::selectionHandleAt(
     QPointF point, const QRectF& viewport) const {
-    if (selectedRoofOpeningControls() || selectedOpening()) return SelectionHandle::none;
+    if (!m_selected_roof_openings.empty() || selectedOpening()) return SelectionHandle::none;
     const bool group = selectedIds().size() > 1;
     if (selectedIds().size() != 1 && !wallGroupRotationAxes()) return SelectionHandle::none;
     if (!selectionFrame(viewport)) return SelectionHandle::none;
@@ -5318,6 +5420,7 @@ PlanCanvas::SelectionHandle PlanCanvas::selectionHandleAt(
 }
 
 const CanvasEntity* PlanCanvas::selectedOpening() const {
+    if (!m_selected_roof_openings.empty()) return nullptr;
     if (selectedIds().size() != 1) return nullptr;
     for (const auto index : m_selected_entity_indices) {
         const auto& entity = m_entities[index];
@@ -5473,19 +5576,53 @@ void PlanCanvas::setRoofOpeningControls(std::vector<CanvasRoofOpeningControls> c
         }) == 1) admitted.push_back(control);
     }
     m_roof_opening_controls = std::move(admitted);
-    if (m_selected_roof_opening && !selectedRoofOpeningControls()) m_selected_roof_opening.reset();
+    // Control absence is a projection restriction, not logical retirement.
+    if (m_last_mouse_position) updatePointerCursor(*m_last_mouse_position);
     update();
 }
 
-void PlanCanvas::setSelectedRoofOpening(std::optional<CanvasRoofOpeningTarget> target) {
-    if (target == m_selected_roof_opening) return;
-    if (m_roof_opening_capture || m_pressed_roof_opening) resetGesture();
-    m_selected_roof_opening = std::move(target);
+void PlanCanvas::setSelectedRoofOpenings(std::vector<CanvasRoofOpeningTarget> targets) {
+    std::vector<CanvasRoofOpeningTarget> admitted;
+    for (const auto& target:targets) {
+        if (target.roof_id.isEmpty() || target.opening_id.isEmpty()) continue;
+        // Conflicting captured revisions for one child are ambiguous.
+        if (std::any_of(targets.begin(),targets.end(),[&](const auto& other) {
+            return target.roof_id==other.roof_id && target.opening_id==other.opening_id &&
+                target.source_revision!=other.source_revision;
+        })) continue;
+        if (std::find(admitted.begin(),admitted.end(),target)==admitted.end()) admitted.push_back(target);
+    }
+    if (admitted==m_selected_roof_openings) return;
+    // Retire both child capture and any generic edit that preceded publication.
+    if (m_gesture_button!=Qt::NoButton || m_roof_opening_capture || m_pressed_roof_opening ||
+        m_move_release_pending || m_transform_frame_start || m_opening_width_handle || m_vertex_move_handle)
+        resetGesture();
+    ++m_roof_opening_preview_serial;
+    m_selected_roof_openings=std::move(admitted);
+    m_selected_roof_opening=m_selected_roof_openings.size()==1
+        ? std::optional<CanvasRoofOpeningTarget>{m_selected_roof_openings.front()} : std::nullopt;
     // A valid logical child can be selected in 3D while this plan is cropped,
     // vertical or read-only. Absence of complete mouth controls disables grips
     // rather than exposing the owner's generic transform frame.
     if (m_last_mouse_position) updatePointerCursor(*m_last_mouse_position);
     update();
+}
+
+void PlanCanvas::setSelectedRoofOpening(std::optional<CanvasRoofOpeningTarget> target) {
+    setSelectedRoofOpenings(target ? std::vector<CanvasRoofOpeningTarget>{*target}
+        : std::vector<CanvasRoofOpeningTarget>{});
+}
+
+void PlanCanvas::setRoofOpeningSelectionClicked(
+    std::function<bool(CanvasRoofOpeningTarget,bool)> callback) {
+    if (m_pressed_roof_opening) resetGesture();
+    m_roof_opening_selection_clicked=std::move(callback);
+}
+
+void PlanCanvas::setRoofOpeningSelectionMarqueeRequested(
+    std::function<bool(QStringList,std::vector<CanvasRoofOpeningTarget>,bool)> callback) {
+    if (m_left_gesture==LeftGesture::marquee) resetGesture();
+    m_roof_opening_selection_marquee_requested=std::move(callback);
 }
 
 void PlanCanvas::setRoofOpeningSelectionRequested(std::function<bool(CanvasRoofOpeningTarget)> callback) {
@@ -5518,6 +5655,31 @@ const CanvasRoofOpeningControls* PlanCanvas::selectedRoofOpeningControls() const
     const auto found = std::find_if(m_roof_opening_controls.begin(), m_roof_opening_controls.end(),
         [&](const auto& control) { return control.target == *m_selected_roof_opening; });
     return found == m_roof_opening_controls.end() ? nullptr : &*found;
+}
+
+bool PlanCanvas::roofOpeningSelected(const CanvasRoofOpeningTarget& target) const {
+    return std::find(m_selected_roof_openings.begin(),m_selected_roof_openings.end(),target)!=
+        m_selected_roof_openings.end();
+}
+
+std::vector<CanvasRoofOpeningTarget> PlanCanvas::roofOpeningRectangleHits(
+    const QRectF& rectangle,bool crossing) const {
+    std::vector<CanvasRoofOpeningTarget> hits;
+    if (!selectionInteractionEnabled() ||
+        (m_selection_filter!=CanvasSelectionFilter::all && m_selection_filter!=CanvasSelectionFilter::objects) ||
+        m_wall_preview || !m_boundary_preview.empty() || !m_area_class_caption.isEmpty()) return hits;
+    for (const auto& control:m_roof_opening_controls) {
+        const auto polygon=roofOpeningFramePolygon(control.frame,rect());
+        QPainterPath footprint;
+        footprint.addPolygon(polygon);
+        footprint.closeSubpath();
+        // Full affine mouth: containment includes every vertex; crossing uses
+        // the polygon's actual interior rather than its enclosing screen box.
+        const bool hit=crossing ? footprint.intersects(rectangle) :
+            std::all_of(polygon.begin(),polygon.end(),[&](const auto& point) { return rectangle.contains(point); });
+        if (hit) hits.push_back(control.target);
+    }
+    return hits;
 }
 
 Vec2 PlanCanvas::roofOpeningLocalPoint(QPointF point, const CanvasRoofOpeningFrame& frame) const {
@@ -5576,10 +5738,26 @@ std::optional<CanvasRoofOpeningControls> PlanCanvas::roofOpeningAt(QPointF point
         return std::abs(local.x) <= control.frame.width_metres*.5 &&
                std::abs(local.y) <= control.frame.depth_metres*.5;
     };
-    if (const auto* selected = selectedRoofOpeningControls(); selected && contains(*selected)) return *selected;
+    for (auto it=m_roof_opening_controls.rbegin(); it!=m_roof_opening_controls.rend(); ++it)
+        if (roofOpeningSelected(it->target) && contains(*it)) return *it;
     for (auto it=m_roof_opening_controls.rbegin(); it!=m_roof_opening_controls.rend(); ++it)
         if (contains(*it)) return *it;
     return std::nullopt;
+}
+
+std::vector<CanvasRoofOpeningTarget> PlanCanvas::roofOpeningTargetsAt(QPointF point) const {
+    std::vector<CanvasRoofOpeningTarget> hits;
+    if (!m_selection_controls_visible || !selectionInteractionEnabled() ||
+        (m_selection_filter!=CanvasSelectionFilter::all && m_selection_filter!=CanvasSelectionFilter::objects) ||
+        m_wall_preview || !m_boundary_preview.empty() || !m_area_class_caption.isEmpty()) return hits;
+    // Reverse presentation order supplies all overlapping mouths, including
+    // unselected siblings; selected-child precedence must not hide candidates.
+    for (auto it=m_roof_opening_controls.rbegin(); it!=m_roof_opening_controls.rend(); ++it) {
+        const auto local=roofOpeningLocalPoint(point,it->frame);
+        if (std::abs(local.x)<=it->frame.width_metres*.5 && std::abs(local.y)<=it->frame.depth_metres*.5)
+            hits.push_back(it->target);
+    }
+    return hits;
 }
 
 std::optional<Vec2> PlanCanvas::roofOpeningHandleAt(QPointF point) const {
@@ -5766,6 +5944,24 @@ void PlanCanvas::finishRoofOpeningPreview(std::uint64_t serial) {
 
 void PlanCanvas::drawRoofOpeningControls(QPainter& painter, const QRectF& viewport) const {
     const auto* selected=selectedRoofOpeningControls();
+    // Every visible cohort member gets its true projected footprint, with an
+    // empty interior. A group has no synthetic frame, grips, or owner readout.
+    painter.save();
+    painter.setClipRect(viewport,Qt::IntersectClip);
+    painter.setRenderHint(QPainter::Antialiasing,true);
+    painter.setBrush(Qt::NoBrush);
+    for (const auto& control:m_roof_opening_controls) {
+        if (!roofOpeningSelected(control.target)) continue;
+        // The single-child renderer owns its admitted preview, so never leave
+        // an additional source-mouth outline underneath its moving preview.
+        if (selected && m_selection_controls_visible && control.target==selected->target) continue;
+        const auto polygon=roofOpeningFramePolygon(control.frame,viewport);
+        painter.setPen(QPen(QColor(255,255,255,235),4.0));
+        painter.drawPolygon(polygon);
+        painter.setPen(QPen(QColor(37,99,235),1.5));
+        painter.drawPolygon(polygon);
+    }
+    painter.restore();
     if (!selected || !m_selection_controls_visible) return;
     const auto frame=m_roof_opening_edit_preview && valid_roof_opening_frame(m_roof_opening_edit_preview->frame)
         ? m_roof_opening_edit_preview->frame : selected->frame;
@@ -6335,7 +6531,7 @@ void PlanCanvas::finishBoundaryVertexPreview(std::uint64_t serial) {
 
 std::optional<PlanCanvas::VertexHandleHit> PlanCanvas::vertexHandleAt(
     QPointF point, const QRectF& viewport) const {
-    if (selectedRoofOpeningControls() || selectedOpening()) return std::nullopt;
+    if (!m_selected_roof_openings.empty() || selectedOpening()) return std::nullopt;
     if (selectedIds().size() != 1) return std::nullopt;
     constexpr qreal hit_radius = 13.0;
     for (const auto& entity : m_entities) {
@@ -6352,7 +6548,7 @@ std::optional<PlanCanvas::VertexHandleHit> PlanCanvas::vertexHandleAt(
 }
 
 void PlanCanvas::drawVertexHandles(QPainter& painter, const QRectF& viewport) const {
-    if (selectedRoofOpeningControls() || selectedOpening()) return;
+    if (!m_selected_roof_openings.empty() || selectedOpening()) return;
     if (!selectionInteractionEnabled() || selectedIds().size() != 1) return;
     painter.save();
     painter.setClipRect(viewport, Qt::IntersectClip);
@@ -6567,7 +6763,7 @@ void PlanCanvas::drawSelectionFrame(QPainter& painter, const QRectF& viewport,
 
 void PlanCanvas::drawSelectionDimensions(QPainter& painter, const QRectF& viewport,
     const std::vector<QRectF>& annotation_footprints, bool placement_preview) const {
-    if (selectedRoofOpeningControls()) return;
+    if (!m_selected_roof_openings.empty()) return;
     // The vertex readout supplies live coordinates, area, and perimeter. Avoid
     // obscuring it with a second bounding-box readout during the same gesture.
     if (m_left_gesture == LeftGesture::vertex_move && m_left_dragging) return;
@@ -8621,10 +8817,10 @@ QString PlanCanvas::contextTarget(QPointF point) const {
             if (std::find(m_selected_generated_labels.begin(), m_selected_generated_labels.end(), *identity) !=
                 m_selected_generated_labels.end()) return identity->id;
         }
-        if (m_selected_roof_opening) {
+        if (!m_selected_roof_openings.empty()) {
             const auto child=roofOpeningAt(point);
-            if ((child && child->target==*m_selected_roof_opening) || roofOpeningHandleAt(point))
-                return m_selected_roof_opening->roof_id;
+            if (child && roofOpeningSelected(child->target)) return child->target.roof_id;
+            if (m_selected_roof_opening && roofOpeningHandleAt(point)) return m_selected_roof_opening->roof_id;
         }
         const auto ids = selectedIds();
         if (!ids.isEmpty() && selectionFrameContains(point, QRectF(rect())) && matchesSelectionFilter(ids.back()))
@@ -8667,8 +8863,8 @@ void PlanCanvas::updatePointerCursor(QPointF point) {
             return;
         }
         if (const auto child=roofOpeningAt(point)) {
-            setCursor(m_selected_roof_opening && child->target==*m_selected_roof_opening
-                ? Qt::SizeAllCursor : Qt::ArrowCursor);
+            setCursor(roofOpeningSelected(child->target)
+                ? m_selected_roof_openings.size()==1 ? Qt::SizeAllCursor : Qt::OpenHandCursor : Qt::ArrowCursor);
             return;
         }
         if (const auto identity = labelPresentationAt(point)) {
@@ -8696,7 +8892,7 @@ void PlanCanvas::updatePointerCursor(QPointF point) {
         }
         const bool corner_selected = std::any_of(m_selected_entity_indices.begin(), m_selected_entity_indices.end(),
             [&](const auto index) { return corner_window_entity(m_entities[index]); });
-        if (!selectedRoofOpeningControls() && !corner_selected && selectionFrameContains(point, QRectF(rect()))) {
+        if (m_selected_roof_openings.empty() && !corner_selected && selectionFrameContains(point, QRectF(rect()))) {
             setCursor(Qt::SizeAllCursor);
             return;
         }

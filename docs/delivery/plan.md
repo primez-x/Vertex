@@ -173,10 +173,15 @@ polling timeout does not permit restarting it.
    Plan/3D logical selection, double-click Properties, copy/cut/delete and context
    actions share the exact child source; a child cannot invoke a roof transform.
    Joined and Site-placed roof selection need actual native qualification.
-   Grouped/mixed child selection, shared group commands and direct 3D child
-   movement/rotation/scale controls remain implementation gaps; Properties,
-   plan grips and safe cohort/owner-transform refusals are not completion of
-   those workflows.
+   Qualify the subsequent typed skylight cohort source: Ctrl-click/window
+   selection across plan/3D, transparent per-mouth highlights, retained member
+   context, atomic multi-roof deletion and common on-face dimensions/rotation/
+   construction edits. Source-bound batch commands retain baseline/proposed
+   replacement, child remapping and one undo. Joined presentation provenance
+   distinguishes child-only hits from independent owner boundaries. Mixed
+   owner/child selection, grouped clipboard/paste, shared direct group transforms
+   and direct 3D child movement/rotation/scale controls remain implementation
+   gaps. Properties, plan grips and safe refusals do not complete those workflows.
 10. Implement observed native/vendor/device adapters through existing workers;
     complete declared IFC/DXF/Pinc fidelity and independently consumed output.
     Add offline OCR text regions/confidence feeding reviewed proposals. New

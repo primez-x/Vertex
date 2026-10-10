@@ -1,6 +1,6 @@
 # Vertex user testing checklist
 
-450 practical tasks, grouped by how you use the app (U001–U449 plus U100a), plus thirty-three focused drawing and architectural checks below (483 total). This replaces the earlier engineering-oriented checklist. The old 130-item list is preserved separately as engineering-requirements-checklist.md.
+450 practical tasks, grouped by how you use the app (U001–U449 plus U100a), plus thirty-six focused drawing and architectural checks below (486 total). This replaces the earlier engineering-oriented checklist. The old 130-item list is preserved separately as engineering-requirements-checklist.md.
 
 This is a user acceptance list for the intended app, not a claim that every listed action is implemented or working in the current preview. If you cannot find a control, or a feature is absent, mark **Blocked / missing** and describe it. Specialized sections can be skipped if you do not use them or lack the device or sample files.
 
@@ -3350,6 +3350,26 @@ Blocked / missing until testing a candidate that contains it.
 - [ ] **SKYLIGHT-3D-JOINED - Select skylights on joined roofs and placed buildings**
   - Steps: Join compatible roof objects containing skylights, then click each skylight in 3D and change one through Properties. Repeat with a building placed in the site using a translated or rotated placement. Hide and show its layer, then switch floors or design alternatives. Try reopening a context menu after the project or view changes.
   - Expected: Each clicked skylight remains attached to its actual source roof and edits only that child. Joined roofs retain their complete visible geometry. Site placement affects the display without changing the roof-local measurements in Properties. Hidden objects are not pickable. A menu from an outdated project or view cannot apply its action to another object.
+  - Result: Not tested
+  - Notes: ______________________________
+
+## Skylight group selection and properties
+
+- [ ] **SKYLIGHT-GROUP-SELECT - Select several skylights together**
+  - Steps: Place three skylights on one roof and one on another roof. Select one in plan, Ctrl-click two more, then Ctrl-click a selected member to remove it. Use Ctrl-drag from left to right to enclose their mouths, then from right to left across their mouths. Repeat in 3D. Click a selected member and right-click it. Click outside the group, then click again to begin drawing.
+  - Expected: Each selected skylight has its own transparent highlight and the canvas shows the selected count. Ctrl-click removes only that member. A left-to-right window requires complete containment; a right-to-left window selects intersected mouths. A plain member click and its context menu retain the group. The first empty click deselects without placing a drawing node. Including roof boundaries or unrelated objects currently reports the missing mixed-selection workflow and preserves the previous selection.
+  - Result: Not tested
+  - Notes: ______________________________
+
+- [ ] **SKYLIGHT-GROUP-PROPERTIES - Change several skylights in one edit**
+  - Steps: Select skylights on roofs with different slopes. Double-click a member and enter a common Width on roof face, Depth on roof face and rotation. Leave construction fields blank, apply, and compare the results in plan, 3D and the schedule. Undo once, redo, save and reopen. Try a size that crosses a roof edge or another opening; cancel the editor.
+  - Expected: Each skylight keeps its centre and uses the requested physical size on its own roof face. Blank fields preserve individual values. Cut, frame and glazing agree. One undo restores the whole edit. An invalid or cancelled edit changes none of the selected skylights. Direct group drag and transform handles remain a separate missing workflow.
+  - Result: Not tested
+  - Notes: ______________________________
+
+- [ ] **SKYLIGHT-GROUP-DELETE - Delete a group while preserving its roofs**
+  - Steps: Select skylights on more than one roof and right-click a member. Choose Delete skylights, then undo once. Repeat within a remodeling alternative, switch back to the baseline, undo/redo and save/reopen. Try Copy and Cut with the group selected.
+  - Expected: The selected skylights and their cuts are removed together; containing roofs and unselected skylights remain. One undo restores the complete operation. An alternative retains the baseline and edits its proposed roofs together. Group Copy/Cut currently reports that grouped clipboard placement is unavailable and leaves the project and clipboard unchanged.
   - Result: Not tested
   - Notes: ______________________________
 
