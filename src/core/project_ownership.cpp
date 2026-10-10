@@ -114,6 +114,31 @@ std::uint64_t filetime_ticks(const FILETIME& value) noexcept {
     combined.HighPart = value.dwHighDateTime;
     return combined.QuadPart;
 }
+
+class StableProjectPublicationRead final {
+public:
+    explicit StableProjectPublicationRead(const std::filesystem::path& path) {
+        const auto native_path = windows_project_path(path);
+        handle_ = CreateFileW(native_path.c_str(), GENERIC_READ, FILE_SHARE_READ, nullptr,
+                              OPEN_EXISTING,
+                              FILE_ATTRIBUTE_NORMAL | FILE_FLAG_OPEN_REPARSE_POINT, nullptr);
+        if (handle_ == INVALID_HANDLE_VALUE) {
+            const auto error = GetLastError();
+            throw std::system_error(static_cast<int>(error), std::system_category(),
+                                    "cannot lock published project for identity refresh");
+        }
+    }
+
+    ~StableProjectPublicationRead() {
+        if (handle_ != INVALID_HANDLE_VALUE) CloseHandle(handle_);
+    }
+
+    StableProjectPublicationRead(const StableProjectPublicationRead&) = delete;
+    StableProjectPublicationRead& operator=(const StableProjectPublicationRead&) = delete;
+
+private:
+    HANDLE handle_ = INVALID_HANDLE_VALUE;
+};
 #endif
 
 ProjectFileIdentity inspect_identity(const std::filesystem::path& path) {
@@ -297,14 +322,49 @@ ProjectOwnershipResult ProjectOwnershipSession::note_published(std::string file_
     if (!CanonicalSha256::parse(file_digest))
         return result(ProjectOwnershipStatus::backend_failure, "published project digest is invalid");
     try {
+#ifdef _WIN32
+        [[maybe_unused]] StableProjectPublicationRead stable_file(identity_.path);
+#endif
         auto current = inspect_identity(identity_.path);
         if (!current.exists || current.file_digest != file_digest) {
             return result(ProjectOwnershipStatus::external_change,
                           "published project identity or digest could not be verified");
         }
+
+        const auto current_file_key = file_key(current);
+        const auto refreshed = broker_->ensure(
+            *reservation_, WorkspaceOwnershipBundle(
+                std::vector<WorkspaceOwnershipKey>{current_file_key}));
+        if (!refreshed.ok()) {
+            const auto status = refreshed.status == WorkspaceOwnershipStatus::conflict
+                ? ProjectOwnershipStatus::conflict : ProjectOwnershipStatus::backend_failure;
+            return result(status,
+                          refreshed.message.empty() ? status_message(status) : refreshed.message,
+                          refreshed.abandonment_observed);
+        }
+        bool abandonment_observed = refreshed.abandonment_observed;
+
+        if (identity_.exists) {
+            const auto previous_file_key = file_key(identity_);
+            if (previous_file_key != current_file_key) {
+                const auto released = broker_->release_keys(
+                    *reservation_, WorkspaceOwnershipBundle(
+                        std::vector<WorkspaceOwnershipKey>{previous_file_key}));
+                if (!released.ok()) {
+                    return result(ProjectOwnershipStatus::backend_failure,
+                                  released.message.empty()
+                                      ? status_message(ProjectOwnershipStatus::backend_failure)
+                                      : released.message,
+                                  abandonment_observed || released.abandonment_observed);
+                }
+                abandonment_observed = abandonment_observed || released.abandonment_observed;
+            }
+        }
+
         current.file_digest = std::move(file_digest);
         identity_ = std::move(current);
-        return result(ProjectOwnershipStatus::acquired, status_message(ProjectOwnershipStatus::acquired));
+        return result(ProjectOwnershipStatus::acquired, status_message(ProjectOwnershipStatus::acquired),
+                      abandonment_observed);
     } catch (const std::exception& error) {
         return result(ProjectOwnershipStatus::external_change, error.what());
     }

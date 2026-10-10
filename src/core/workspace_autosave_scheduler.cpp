@@ -1,6 +1,7 @@
 #include "sketch/workspace_autosave_scheduler.hpp"
 
 #include <algorithm>
+#include <limits>
 #include <stdexcept>
 
 namespace sketch {
@@ -33,8 +34,19 @@ void WorkspaceAutosaveScheduler::observe(TimePoint now, std::uint64_t edited_gen
     }
 }
 
+void WorkspaceAutosaveScheduler::invalidate_source(TimePoint now) {
+    last_change_ = now;
+    if (!dirty_since_) dirty_since_ = now;
+    if (source_generation_ == std::numeric_limits<std::uint64_t>::max()) {
+        source_generation_exhausted_ = true;
+        throw std::overflow_error("autosave source generation exhausted");
+    }
+    ++source_generation_;
+}
+
 bool WorkspaceAutosaveScheduler::dirty() const noexcept {
-    return checkpoint_generation_ > autosaved_checkpoint_generation_;
+    return checkpoint_generation_ > autosaved_checkpoint_generation_ ||
+        source_generation_ > autosaved_source_generation_ || source_generation_exhausted_;
 }
 
 bool WorkspaceAutosaveScheduler::in_flight() const noexcept {
@@ -48,7 +60,7 @@ bool WorkspaceAutosaveScheduler::due(TimePoint now) const {
 
 std::optional<WorkspaceAutosaveScheduler::Capture> WorkspaceAutosaveScheduler::capture(TimePoint now) {
     if (!due(now)) return std::nullopt;
-    Capture result{next_sequence_++, edited_generation_, checkpoint_generation_};
+    Capture result{next_sequence_++, edited_generation_, checkpoint_generation_, source_generation_};
     in_flight_capture_ = result;
     return result;
 }
@@ -58,10 +70,12 @@ void WorkspaceAutosaveScheduler::complete(const Capture& capture, bool success, 
         throw std::invalid_argument("autosave completion does not match in-flight capture");
     in_flight_capture_.reset();
     if (success) {
-        // Workspace counters are monotonic, so this also handles a stale
-        // completion that finished after a newer pointer or semantic change.
+        // Persisted and transient counters are monotonic, so this also handles
+        // a completion after a newer pointer, semantic or source replacement.
         autosaved_checkpoint_generation_ = std::max(
             autosaved_checkpoint_generation_, capture.checkpoint_generation);
+        autosaved_source_generation_ = std::max(
+            autosaved_source_generation_, capture.source_generation);
     }
     if (!dirty()) {
         dirty_since_.reset();

@@ -14,6 +14,42 @@ changed source does not acquire runtime acceptance without later qualification.
 
 ## Current delivery state
 
+### October 9 replaced-source recovery scheduling and published file leases
+
+The source audit confirmed a second autosave gap after successful
+acknowledgement: a supported mutable Document replacement could keep the same
+ID/revision while changing retained history. The existing scheduler saw no new
+counter and never queued that replacement. A cached immutable-source comparison
+now detects it without hashing or allocating on unchanged idle polls. A
+separate transient source generation schedules recovery and is sealed in each
+capture; stale or failed completions cannot cover a later replacement.
+Acknowledged explicit Save starts scheduling from its exact saved source, with
+observation storage allocated before filesystem publication. Stored document
+and workspace generations remain unchanged. Recovered-workspace mismatches
+continue to refuse publication and preserve the original ledger.
+
+The ownership audit also found new or atomically replaced files retained only
+the old file-identity lease, or a path-only lease for a new file. Publication
+now acquires the actual new file-identity lease before releasing the old one.
+Lease conflict or backend failure refuses acknowledgement. A Windows read
+handle denies write/delete sharing from before identity inspection through
+both broker operations and identity publication. This corrects the independent
+review's replacement-during-broker-wait race for the opened leaf file.
+Path leases, abandonment reporting and existing broker cleanup remain in
+place. Ancestor-path changes are outside this guard's protection.
+
+Recovery discovery/adoption inspection found no additional confirmed
+data-loss or wrong-source adoption defect within the examined paths. The
+global recovery picker still uses explicit file selection; no speculative
+provenance requirement was added.
+
+Root integration review and independent source reviews approved both
+corrections. Scoped `git diff --check` passed. No builds, tests, probes,
+scripts, native jobs, launches, packages or installations ran. Compilation,
+actual Windows alias exclusion, recovery timing and failure cleanup remain
+unverified; the installed candidate is unchanged. Production acceptance
+remains open.
+
 ### October 9 complete transient save-history source binding
 
 Source review found two supported boundary edit histories can produce the same

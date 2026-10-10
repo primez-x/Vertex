@@ -8445,6 +8445,12 @@ DocumentSnapshot Document::snapshot() const {
     return snapshot;
 }
 
+bool Document::shares_authoring_source_with(const DocumentSnapshot& source) const noexcept {
+    return snapshot_history_cache_ && snapshot_history_cache_ == source.history_ &&
+        document_id_ == source.document_id_ && head_revision_ == source.revision_ &&
+        named_revisions_ == source.named_revisions_;
+}
+
 Document Document::fork(const DocumentSnapshot& source) {
     return restore(source);
 }

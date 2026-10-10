@@ -75,8 +75,9 @@ public:
     // publication.  A mismatch is an explicit external-change result.
     [[nodiscard]] ProjectOwnershipResult verify_current() const;
 
-    // Records a successful atomic publication.  The path lease remains the
-    // same, while an atomic replace may legitimately produce a new file ID.
+    // Records a successful atomic publication. If replacement changes the
+    // file ID, its identity lease is acquired before the previous lease is
+    // released; the path lease remains unchanged.
     [[nodiscard]] ProjectOwnershipResult note_published(std::string file_digest);
 
     [[nodiscard]] ProjectOwnershipResult release();

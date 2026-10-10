@@ -14,6 +14,23 @@ state stays dirty and is scheduled again. A failed publication remains dirty
 and retryable. Generation regressions, mismatched completions, and invalid
 intervals fail closed.
 
+Authoring-source replacement can retain the same document ID, revision and
+workspace counters. `invalidate_source()` therefore advances a separate,
+transient source generation. A capture seals it alongside the persisted
+generations, and only a successful completion of that capture covers it. An
+older completion cannot clear a newer source replacement. This generation is
+not written into project or recovery metadata. Exhaustion fails closed rather
+than wrapping.
+
+The desktop tracks the last observed immutable authoring source. Unchanged
+idle polls compare its cached history identity without hashing or allocating a
+snapshot. A changed source is captured once and invalidates recovery coverage;
+the worker still validates its complete authoring digest before publication.
+An acknowledged explicit Save resets this transient coverage to the exact
+saved source after pending publications have drained. Out-of-band changes to a
+recovered workspace continue to refuse publication rather than discard its
+ledger.
+
 The scheduler deliberately does not start threads, serialize archives, mutate
 saved markers, or choose a recovery path. The Windows desktop owner combines
 it with `ProjectWorkspace`, `WorkspaceSaveQueue`, and

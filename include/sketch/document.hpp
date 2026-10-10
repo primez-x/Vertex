@@ -589,6 +589,10 @@ public:
     // snapshots and must not capture or access the editable Document.
     [[nodiscard]] DocumentSnapshot snapshot() const;
 
+    // Allocation-free sufficient authoring-source equality against a captured
+    // snapshot. An absent history cache fails the proof without creating one.
+    [[nodiscard]] bool shares_authoring_source_with(const DocumentSnapshot& source) const noexcept;
+
     // A private working copy with the same identity and complete validated
     // history. This is not an independent project copy or a way around
     // read-only/history rules; workspace publication still requires its CAS.

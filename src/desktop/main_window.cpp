@@ -47468,6 +47468,7 @@ private:
         // document ID can remain stable across reopen, so session state must
         // be reset explicitly rather than inferred from identity alone.
         m_autosave_scheduler = WorkspaceAutosaveScheduler{};
+        m_autosave_observed_source.reset();
         m_autosave_document_id.clear();
         ++m_autosave_session;
         for (auto& entry : m_authoring_digests) entry.reset();
@@ -47588,6 +47589,7 @@ private:
                 for (auto& entry : m_authoring_digests) entry.reset();
                 for (auto& entry:m_snapshot_digests) entry.reset();
                 m_autosave_scheduler = WorkspaceAutosaveScheduler{};
+                m_autosave_observed_source.reset();
                 m_autosave_document_id = document_id;
                 // Legacy projects use the document revision as their
                 // monotonic recovery generation. A clean open starts at its
@@ -47600,6 +47602,17 @@ private:
                 m_autosave_archive_id = make_stable_id();
                 m_autosave_path = autosaveDirectoryForCurrentProject() /
                     ("recovery-" + m_autosave_archive_id + ".bldproj");
+            }
+            // A supported mutable Document replacement can retain ID/revision
+            // while changing history. Compare immutable source identity without
+            // hashing or allocating on unchanged idle polls. Capture only when
+            // it changes, and invalidate transient coverage independently of
+            // the persisted document/workspace generations.
+            if (!m_autosave_observed_source ||
+                !m_document->shares_authoring_source_with(*m_autosave_observed_source)) {
+                auto observed_source = m_document->snapshot();
+                if (m_autosave_observed_source) m_autosave_scheduler.invalidate_source(now);
+                m_autosave_observed_source = std::move(observed_source);
             }
             const auto edited_generation = recovery_project
                 ? m_project_workspace->edited_generation() : m_document->revision();
@@ -47734,6 +47747,9 @@ private:
             const auto previous_autosave_archive_id = m_autosave_archive_id;
             const auto previous_autosave_document_id = m_autosave_document_id;
             const auto snapshot = m_document->snapshot();
+            // Allocate observation before storage publication. Authoring
+            // equality deliberately ignores the saved marker changed later.
+            auto saved_source_observation = snapshot;
             const auto source_digest = authoringSourceDigest(snapshot);
             if (!matchesWorkspaceAuthoringSource(snapshot)) {
                 // The public mutable Document API remains supported for legacy projects.
@@ -47822,6 +47838,11 @@ private:
             // acknowledged this exact destination and workspace state.
             m_autosaved_checkpoint = m_recovery_ledger.empty()
                 ? m_document->revision() : m_project_workspace->checkpoint_generation();
+            // The barrier drained pending publications, and this exact source
+            // has now been explicitly saved. Start scheduling from that covered
+            // source without carrying an earlier transient invalidation.
+            m_autosave_scheduler = WorkspaceAutosaveScheduler{};
+            m_autosave_observed_source = std::move(saved_source_observation);
             if (refresh_draft_source) m_boundary_source = m_document->snapshot();
             m_file_path = path;
             m_file_sha256 = receipt.file_sha256;
@@ -64058,6 +64079,7 @@ private:
     QPointer<PlanCanvas> m_vertex_preview_canvas;
     PerformanceTelemetry m_performance_telemetry;
     WorkspaceAutosaveScheduler m_autosave_scheduler;
+    std::optional<DocumentSnapshot> m_autosave_observed_source;
     struct CachedAuthoringDigest {
         DocumentSnapshot source;
         std::string digest;
