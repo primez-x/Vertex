@@ -30,6 +30,10 @@ void validate_completed_architectural_retirement_references(
 // The separate complete proposed-opening opt-in also admits a sole active
 // proposed opening on its same-registry active existing wall. The opening and
 // wall remain exact; this grants no physical or baseline-opening authority.
+// The final independent opt-in admits actual corner-window owners and derives
+// their two managed cuts and supported attached dimensions. A saved-active
+// baseline aggregate retains exact physical bodies and is demolished only in
+// that alternative. Historical callers keep their original family authority.
 [[nodiscard]] std::map<std::string, Entity, std::less<>> replay_architectural_object_removal(
     const std::map<std::string, Entity, std::less<>>& actual,
     const std::vector<std::string>& selected_object_ids,
@@ -37,7 +41,8 @@ void validate_completed_architectural_retirement_references(
     bool allow_manufactured_opening_hosts = false,
     std::size_t reserved_native_work = 0,
     bool complete_hosted_catalog_consequences = false,
-    bool complete_proposed_opening_catalog_consequences = false);
+    bool complete_proposed_opening_catalog_consequences = false,
+    bool complete_corner_window_removal = false);
 
 // Source-only analytical admission for the opt-in opening-host lane. Includes
 // both complete supported source/candidate inventories and component work in
@@ -48,7 +53,8 @@ void preflight_architectural_object_removal(
     const std::vector<std::pair<std::string, std::string>>& explicit_components,
     std::size_t reserved_native_work = 0,
     bool complete_hosted_catalog_consequences = false,
-    bool complete_proposed_opening_catalog_consequences = false);
+    bool complete_proposed_opening_catalog_consequences = false,
+    bool complete_corner_window_removal = false);
 
 // Analytical protected-row eligibility for an already actual-source candidate.
 // Requires the real saved choice, an absent qualified row, exact raw carrier

@@ -263,6 +263,18 @@ polling timeout does not permit restarting it.
    fallback is removed from current wall Delete/Cut preparation. Qualify these
    current routes with mixed skylights and preserved baseline/history; no
    historical raw/phase command gains broader authority.
+   The next source adds explicit coordinated corner-window deletion with
+   reader180/extraction178 and mixed intent dialect five. Actual selected owners
+   derive their two managed cuts; active-baseline demolition retains physical
+   originals, hosts and baseline presentation. Ordinary/proposed retirement
+   derives known cleanup. Multiple corners, other supported ordinary roots,
+   components, drawing rows and selected skylights compose from the same
+   original source before one publication. Selected drawing dependents cannot
+   remove a baseline dimension bound to a newly demolished corner. Qualify this
+   source addition and retained/undone history. Corner combinations with wall,
+   opening and other baseline-family producers, legacy catalog host-copy rows,
+   aggregate clipboard, mixed Properties/transforms and directional group
+   controls remain required implementation gaps.
 10. Implement observed native/vendor/device adapters through existing workers;
     complete declared IFC/DXF/Pinc fidelity and independently consumed output.
     Add offline OCR text regions/confidence feeding reviewed proposals. New

@@ -7,6 +7,7 @@
 #include "sketch/constraint_entity.hpp"
 #include "sketch/constraint_integrity.hpp"
 #include "sketch/constraint_phase_scope.hpp"
+#include "sketch/corner_selection_removal.hpp"
 #include "sketch/measurement_linework.hpp"
 #include "sketch/model_phases.hpp"
 #include "sketch/hosted_opening_removal.hpp"
@@ -938,5 +939,18 @@ DrawingSelectionRemovalEntities replay_drawing_selection_removal_with_phase(
         Document::validate_phase_drawing_removal_dependents(source.entities(),stage.entities(),result);
         return result;
     } catch (const Json::exception& error) { reject(std::string("malformed actual/phase deletion source: ")+error.what()); }
+}
+DrawingSelectionRemovalEntities replay_drawing_selection_removal_with_corners(
+    const DrawingSelectionRemovalEntities& actual, const DrawingSelectionRemovalIntent& drawing,
+    const CornerSelectionRemovalIntent& corners, bool active_phase_constraints) {
+    try {
+        (void)replay(actual,actual,drawing,active_phase_constraints);
+        const auto stage=replay_corner_selection_removal_architectural(actual,corners,active_phase_constraints);
+        auto result=replay(actual,stage,drawing,active_phase_constraints,&stage);
+        Document::validate_phase_drawing_removal_dependents(actual,stage,result);
+        return result;
+    } catch (const Json::exception& error) {
+        reject(std::string("malformed actual/corner deletion source: ")+error.what());
+    }
 }
 } // namespace sketch

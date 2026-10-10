@@ -1,11 +1,25 @@
 #pragma once
 
 #include "sketch/architectural_drawing_removal.hpp"
+#include "sketch/corner_selection_removal.hpp"
 #include "sketch/ordinary_selection_removal.hpp"
 #include "sketch/phase_selection_removal.hpp"
 #include "sketch/roof_opening_group_edit.hpp"
 
 namespace sketch {
+
+// Dialect five retains independently reconstructed coordinated corner owners,
+// their physical/phase consequences, and explicit ordinary/drawing selections.
+[[nodiscard]] DocumentSnapshot prepare_mixed_selection_removal_stage(
+    const DocumentSnapshot& source, const CornerSelectionRemovalIntent& ordinary,
+    const Command& ordinary_command);
+[[nodiscard]] std::vector<RoofOpeningGroupMember> mixed_selection_removal_remaining_children(
+    const DocumentSnapshot& source, const CornerSelectionRemovalIntent& ordinary,
+    const std::vector<RoofOpeningGroupMember>& members);
+[[nodiscard]] nlohmann::json make_mixed_selection_removal_intent(
+    const DocumentSnapshot& source, const CornerSelectionRemovalIntent& ordinary,
+    const Command& ordinary_command, const std::vector<RoofOpeningGroupMember>& members,
+    const std::optional<Command>& child_command);
 
 // Operation/thread-local memoization of independently admitted replay results.
 // This token grants no source-validation authority and never survives an

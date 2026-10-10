@@ -1,5 +1,13 @@
 # Portable project extraction
 
+Exchange version 178 requires native reader180 for coordinated corner-window
+mixed deletion. Closed mixed intent dialect five retains explicit corner
+owners, independently admitted physical retirement or retained-baseline
+demolition, complete ordinary/drawing authority and exact staged skylight
+removal. Retained and undone command history preserves the floor and source,
+save and stage bindings. Historical dialects and asset tables remain unchanged.
+Source integration does not establish compilation or round-trip acceptance.
+
 Exchange version 174 requires native reader 176 for atomic ordinary-object and
 skylight removal. Command envelope 45 retains the actual ordinary selection,
 actual child roster, independently qualified ordinary command, and exact

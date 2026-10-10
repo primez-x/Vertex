@@ -866,6 +866,8 @@ if(SKETCH_BUILD_ARCHITECTURE OR SKETCH_BUILD_DESKTOP)
     src/core/structural_clone.cpp
     src/core/model_copy_composition.cpp
     src/core/architectural_object_removal.cpp
+    src/core/corner_window_removal.cpp
+    src/core/corner_selection_removal.cpp
     src/core/architectural_selection_removal.cpp
     src/core/hosted_opening_removal.cpp src/core/opening_host_geometry.cpp
     src/core/wall_join_removal.cpp

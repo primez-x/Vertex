@@ -259,7 +259,7 @@ Json validate_mixed_selection_removal_intent(const Json& value) {
         if (value.dump().size()>1024*1024) reject("intent exceeds one MiB");
         fields(value,{"version","ordinary","ordinary_command","members","child_command","source_snapshot_digest",
             "source_authoring_digest","source_entities_digest","source_saved_revision","stage_snapshot_digest","stage_authoring_digest"});
-        if (!value.at("version").is_number_integer() || (value.at("version")!=1 && value.at("version")!=2 && value.at("version")!=3 && value.at("version")!=4))
+        if (!value.at("version").is_number_integer() || (value.at("version")!=1 && value.at("version")!=2 && value.at("version")!=3 && value.at("version")!=4 && value.at("version")!=5))
             reject("unsupported intent version");
         const auto members=decode_members(value.at("members"));
         std::size_t count=0;
@@ -284,7 +284,7 @@ Json validate_mixed_selection_removal_intent(const Json& value) {
                 if (completed.at("selection").dump()!=value.at("ordinary").dump())
                     reject("completed ordinary command differs from the mixed selection intent");
             }
-        } else {
+        } else if (value.at("version")==4) {
             const auto ordinary=decode_phase_selection_removal_intent(value.at("ordinary"));
             const auto authority=phase_selection_removal_authority(ordinary);
             count=authority.architectural.object_ids.size()+authority.architectural.components.size()+
@@ -296,6 +296,12 @@ Json validate_mixed_selection_removal_intent(const Json& value) {
                 if (completed.at("selection").dump()!=value.at("ordinary").dump())
                     reject("completed phase deletion differs from the mixed selection intent");
             }
+        } else {
+            const auto ordinary=decode_corner_selection_removal_intent(value.at("ordinary"));
+            const auto authority=corner_selection_removal_authority(ordinary);
+            count=authority.architectural.object_ids.size()+authority.architectural.components.size()+
+                authority.drawing.owner_ids.size()+authority.drawing.annotations.size();
+            (void)closed_command(value.at("ordinary_command"),false);
         }
         if (count>1000-members.size()) reject("mixed selection exceeds 1000 aggregate members");
         if (!value.at("child_command").is_null()) (void)closed_command(value.at("child_command"),true);
@@ -309,7 +315,7 @@ Json validate_mixed_selection_removal_intent(const Json& value) {
 }
 bool mixed_selection_removal_active_phase_policy(const Json& value) {
     (void)validate_mixed_selection_removal_intent(value);
-    return value.at("version")==2 || value.at("version")==4 ||
+    return value.at("version")==2 || value.at("version")==4 || value.at("version")==5 ||
         (!value.at("child_command").is_null() && value.at("child_command").at("version")==34);
 }
 std::optional<Revision> mixed_selection_removal_source_saved_revision(const Json& value) {
@@ -383,15 +389,19 @@ Entities replay_mixed_selection_removal(const DocumentSnapshot& source,const Jso
     const auto phase=value.at("version")==2;
     const auto complete=value.at("version")==3;
     const auto phase_drawing=value.at("version")==4;
-    const auto ordinary=phase || complete || phase_drawing ? ArchitecturalDrawingRemovalIntent{} : decode_architectural_drawing_removal_intent(value.at("ordinary"));
+    const auto corners=value.at("version")==5;
+    const auto ordinary=phase || complete || phase_drawing || corners ? ArchitecturalDrawingRemovalIntent{} : decode_architectural_drawing_removal_intent(value.at("ordinary"));
     const auto phase_selection=phase ? decode_phase_selection(value.at("ordinary")) : ArchitecturalSelectionRemovalIntent{};
     const auto complete_selection=complete ? decode_ordinary_selection_removal_intent(value.at("ordinary")) : OrdinarySelectionRemovalIntent{};
     const auto phase_drawing_selection=phase_drawing ? decode_phase_selection_removal_intent(value.at("ordinary")) : PhaseSelectionRemovalIntent{};
-    const auto remaining=phase_drawing ? mixed_selection_removal_remaining_children(source,phase_drawing_selection,members) :
+    const auto corner_selection=corners ? decode_corner_selection_removal_intent(value.at("ordinary")) : CornerSelectionRemovalIntent{};
+    const auto remaining=corners ? mixed_selection_removal_remaining_children(source,corner_selection,members) :
+        phase_drawing ? mixed_selection_removal_remaining_children(source,phase_drawing_selection,members) :
         complete ? mixed_selection_removal_remaining_children(source,complete_selection,members) :
         phase ? mixed_selection_removal_remaining_children(source,phase_selection,members) :
         mixed_selection_removal_remaining_children(source,ordinary,members);
-    const auto stage=phase_drawing ? prepare_mixed_selection_removal_stage(source,phase_drawing_selection,closed_phase_drawing_deletion_command(value.at("ordinary_command"))) :
+    const auto stage=corners ? prepare_mixed_selection_removal_stage(source,corner_selection,closed_command(value.at("ordinary_command"),false)) :
+        phase_drawing ? prepare_mixed_selection_removal_stage(source,phase_drawing_selection,closed_phase_drawing_deletion_command(value.at("ordinary_command"))) :
         complete ? prepare_mixed_selection_removal_stage(source,complete_selection,closed_ordinary_deletion_command(value.at("ordinary_command"))) :
         phase ? prepare_mixed_selection_removal_stage(source,phase_selection,closed_phase_removal_command(value.at("ordinary_command"))) :
         prepare_mixed_selection_removal_stage(source,ordinary,closed_command(value.at("ordinary_command"),false));
@@ -499,6 +509,38 @@ Json make_mixed_selection_removal_intent(const DocumentSnapshot& source,const Ph
     const Command& ordinary_command,const std::vector<RoofOpeningGroupMember>& members,const std::optional<Command>& child_command) {
     const auto stage=prepare_mixed_selection_removal_stage(source,ordinary,ordinary_command);
     Json value={{"version",4},{"ordinary",encode_phase_selection_removal_intent(ordinary)},
+        {"ordinary_command",command_to_json(ordinary_command)},{"members",encode_members(members)},
+        {"child_command",child_command ? command_to_json(*child_command) : Json(nullptr)},
+        {"source_snapshot_digest",document_snapshot_digest(source)},
+        {"source_authoring_digest",document_authoring_source_digest_v2(source)},
+        {"source_entities_digest",entity_map_digest(source.entities())},
+        {"source_saved_revision",source.saved_revision_optional() ? Json(*source.saved_revision_optional()) : Json(nullptr)},
+        {"stage_snapshot_digest",document_snapshot_digest(stage)},
+        {"stage_authoring_digest",document_authoring_source_digest_v2(stage)}};
+    (void)replay_mixed_selection_removal(source,value);
+    return value;
+}
+DocumentSnapshot prepare_mixed_selection_removal_stage(const DocumentSnapshot& source,
+    const CornerSelectionRemovalIntent& ordinary,const Command& ordinary_command) {
+    const auto canonical=closed_command(command_to_json(ordinary_command),false);
+    if (std::visit([&](const auto& typed){return typed.expected_revision!=source.revision();},canonical))
+        reject("corner removal source revision changed");
+    const auto expected=replay_corner_selection_removal(source,ordinary);
+    const auto stage=Document::preview_command(source,canonical);metadata(source,stage);
+    if (!exact(stage.entities(),expected)) reject("corner command differs from complete actual-source reconstruction");
+    if (stage.history().size()!=source.history().size()+1 || stage.revision()!=source.history().size())
+        reject("corner removal must create exactly one detached history event");
+    return stage;
+}
+std::vector<RoofOpeningGroupMember> mixed_selection_removal_remaining_children(const DocumentSnapshot& source,
+    const CornerSelectionRemovalIntent& ordinary,const std::vector<RoofOpeningGroupMember>& members) {
+    const auto authority=corner_selection_removal_authority(ordinary);
+    return mixed_selection_removal_remaining_children(source,authority.architectural,members);
+}
+Json make_mixed_selection_removal_intent(const DocumentSnapshot& source,const CornerSelectionRemovalIntent& ordinary,
+    const Command& ordinary_command,const std::vector<RoofOpeningGroupMember>& members,const std::optional<Command>& child_command) {
+    const auto stage=prepare_mixed_selection_removal_stage(source,ordinary,ordinary_command);
+    Json value={{"version",5},{"ordinary",encode_corner_selection_removal_intent(ordinary)},
         {"ordinary_command",command_to_json(ordinary_command)},{"members",encode_members(members)},
         {"child_command",child_command ? command_to_json(*child_command) : Json(nullptr)},
         {"source_snapshot_digest",document_snapshot_digest(source)},

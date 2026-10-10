@@ -1,4 +1,35 @@
-# Vertex project formats v1 through v179
+# Vertex project formats v1 through v180
+
+## Coordinated corner-window mixed deletion (v180, source integration)
+
+Reader180 adds mixed-removal intent dialect five inside unchanged envelope45.
+The ordinary lane retains a closed corner-selection intent: `version:1`,
+`kind:"corner_removal"`, sorted explicit `corner_ids`, and `other` containing
+the unchanged architectural/drawing codec or null. The complete original raw
+command must independently match reconstruction from the captured source.
+Hosts and managed cuts remain derived consequences, never selection roots.
+
+Active-baseline corner owners and both cuts retain exact physical envelopes;
+only their real active alternative gains demolition membership. Their two
+hosts, baseline dimensions, annotations, views and catalog rows remain intact.
+Ordinary and sole-active proposed corners physically retire through complete
+source-derived cleanup. Protected, foreign, unsupported and opaque references
+refuse the complete operation.
+
+Corner and other architectural leaves independently admit the same original
+source. Selected drawing rows compose through the internally reconstructed
+stage. Actual selected roof children retain removal-only authority, and an
+explicitly selected roof dominates its own children. The existing full source,
+save and detached-stage bindings, one-event publication and bounded replay
+memoization remain. Retained and undone dialect-five history requires
+reader180/extraction178. Historical raw commands and mixed dialects retain
+their meanings; no asset-storage schema changes.
+
+The current corner cohort lane covers other roofs, stairs, railings, slabs,
+columns, beams, qualified components and drawing rows. Corner combinations
+with wall/opening/other baseline-family producers, aggregate clipboard
+transport, shared Properties and transforms remain required work. This source
+integration does not establish compilation, interaction or migration acceptance.
 
 ## Phase deletion with drawing and reviewed rooms (v179, source integration)
 

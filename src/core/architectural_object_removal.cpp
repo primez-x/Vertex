@@ -6,19 +6,23 @@
 #include "sketch/boundary_dimension.hpp"
 #include "sketch/building_entity.hpp"
 #include "sketch/constraint_phase_scope.hpp"
+#include "sketch/constraint_integrity.hpp"
 #include "sketch/constraint_wall_edit.hpp"
+#include "sketch/corner_window.hpp"
 #include "sketch/document_solid.hpp"
 #include "sketch/document_wall.hpp"
 #include "sketch/model_phases.hpp"
 #include "sketch/opening_host_geometry.hpp"
 #include "sketch/phase_hosted_opening_edit.hpp"
 #include "sketch/phase_slab_profile_edit.hpp"
+#include "sketch/phase_wall_profile_edit.hpp"
 #include "sketch/project_organization.hpp"
 #include "sketch/sheet_view_entity_codec.hpp"
 #include "sketch/slab_geometry_edit.hpp"
 #include "sketch/slab_layer_stack_edit.hpp"
 #include "sketch/stair_attachment_integrity.hpp"
 #include "sketch/structural_object_edit.hpp"
+#include "sketch/room_relationships.hpp"
 
 #include <Standard_Failure.hxx>
 
@@ -248,6 +252,64 @@ void retire_phases(Entities& result, const Entities& source, const Phases& phase
             remove_ids(row.at("proposed_ids"), members);
         if (ModelPhases::from_json(raw).to_json() != expected) reject("raw registry retirement differs from typed preservation: " + registry);
         result.at(registry).properties.at("model") = std::move(raw);
+    }
+}
+struct CornerRemoval {
+    Ids parked, retained_bodies, hosts, physical_owners;
+};
+void context(const Entities& source, const ProjectOrganization& organization, const Entity& entity);
+void classify_corner_removal(const Entities& source, const Phases& phase,
+    const ProjectOrganization& organization, const std::string& id, CornerRemoval& corners, Ids& retired) {
+    const auto& entity = source.at(id);
+    const auto corner = parse_corner_window(entity);
+    const auto owner = phase.owners.find(id);
+    bool park = false;
+    if (owner != phase.owners.end()) {
+        const auto& model = phase.models.at(owner->second);
+        const bool baseline = contains(model.baseline_ids(), id);
+        park = baseline && model.active_alternative().has_value();
+        if (baseline && !model.active_alternative() && !model.alternatives().empty())
+            reject("baseline corner is protected by retained alternatives without a saved demolition destination: " + id);
+    }
+    for (const auto& participant : {id, corner.opening_ids[0], corner.opening_ids[1]}) {
+        const auto& actual = source.at(participant);
+        if (actual.required || phase.scope.inactive_owner_ids.contains(participant))
+            reject("corner participant is required or inactive: " + participant);
+        context(source, organization, actual);
+        if (park) corners.parked.insert(participant);
+        else { removable(phase, participant); retired.insert(participant); }
+    }
+    for (const auto& wall_id : corner.wall_ids) {
+        const auto& wall = source.at(wall_id);
+        if (wall.required || phase.scope.inactive_owner_ids.contains(wall_id))
+            reject("corner host is required or inactive: " + wall_id);
+        context(source, organization, wall);
+        corners.hosts.insert(wall_id);
+    }
+    if (park) {
+        corners.retained_bodies.insert(id);
+        corners.retained_bodies.insert(corner.opening_ids.begin(), corner.opening_ids.end());
+        corners.retained_bodies.insert(corner.wall_ids.begin(), corner.wall_ids.end());
+    } else corners.physical_owners.insert(id);
+}
+void demolish_corners(Entities& result, const Phases& phase, const CornerRemoval& corners) {
+    for (const auto& [registry, model] : phase.models) {
+        Ids members;
+        for (const auto& id : corners.parked)
+            if (phase.owners.at(id) == registry) members.insert(id);
+        if (members.empty()) continue;
+        const auto actual = ModelPhases::from_json(result.at(registry).properties.at("model"));
+        auto alternatives = actual.alternatives();
+        const auto row = std::find_if(alternatives.begin(), alternatives.end(), [&](const auto& value) {
+            return value.id == *model.active_alternative();
+        });
+        if (row == alternatives.end()) reject("corner demolition destination is absent: " + registry);
+        row->demolished_ids.insert(row->demolished_ids.end(), members.begin(), members.end());
+        std::sort(row->demolished_ids.begin(), row->demolished_ids.end());
+        row->demolished_ids.erase(std::unique(row->demolished_ids.begin(), row->demolished_ids.end()), row->demolished_ids.end());
+        const auto proposed = actual.with_updated_alternative(*row);
+        auto& raw = result.at(registry).properties.at("model");
+        raw = retain_model_phase_source(raw, proposed);
     }
 }
 bool supported_catalog(const Json& model) {
@@ -492,6 +554,30 @@ Entity global_reference_remainder(Entity entity,bool completed) {
     }
     return scratch;
 }
+Entity corner_consequence_remainder(Entity entity) {
+    if (entity.type == kAnnotationEntityType) {
+        validate_annotation_entity(entity);
+        for (auto& row : entity.properties.at("state").at("overrides"))
+            if (row.at("target_kind") == "object" || row.at("target_kind") == "wall_dimension") row.erase("target_id");
+        return declaration_remainder(std::move(entity), false);
+    }
+    if (entity.type == "constraint") {
+        const auto decoded = decode_constraint_entity(entity);
+        if (!decoded.supported()) reject("affected constraint has unsupported schema: " + entity.id);
+        entity.properties.erase("wall_ids"); entity.properties.erase("entity_ids");
+        for (auto& row : entity.properties.at("bindings")) {
+            row.erase("owner_id"); row.erase("wall_id"); row.erase("segment_id"); row.erase("vertex_id");
+        }
+        return entity;
+    }
+    if (entity.type == "room_relationships") {
+        (void)RoomRelationshipSnapshot::from_json(entity.properties.at("model"));
+        for (auto& row : entity.properties.at("model").at("references")) { row.erase("id"); row.erase("wall_members"); }
+        for (auto& row : entity.properties.at("model").at("relations")) { row.erase("source_id"); row.erase("target_id"); }
+        return entity;
+    }
+    return global_reference_remainder(std::move(entity), false);
+}
 
 // Bound analytical physical work before any native building codec/builder.
 std::map<std::string, std::size_t, std::less<>> physical_bounds(const Entities& source, const Ids& owners,
@@ -673,6 +759,48 @@ struct OpeningNativeBudget {
         used += count;
     }
 };
+// Corner admission also rebuilds joined hosts and other manufactured siblings.
+// Reserve the complete saved-active wall inventory in each map, including
+// layer/cut products, assembly work and every join contact pair. This is only
+// an analytical charge; the factory still receives the actual affected hosts.
+void charge_corner_geometry(const Entities& source, const Phases& phase, OpeningNativeBudget& native) {
+    Ids walls; std::map<std::string, std::size_t, std::less<>> manufactured;
+    for (const auto& [id, entity] : source) {
+        if (phase.scope.inactive_owner_ids.contains(id)) continue;
+        if (entity.type == "wall") walls.insert(id);
+        else if (entity.type == "opening") {
+            const auto owner = field(entity.properties, "wall_id"), kind = field(entity.properties, "opening_kind");
+            if (owner && owner->is_string() &&
+                (entity.properties.contains("opening_assembly") ||
+                 (kind && kind->is_string() && parse_opening_assembly_kind(kind->get<std::string>()))))
+                ++manufactured[owner->get<std::string>()];
+        } else if (entity.type == "corner_window") {
+            const auto corner = parse_corner_window(entity);
+            for (const auto& owner : corner.wall_ids) ++manufactured[owner];
+            native.add(32);
+        }
+    }
+    const auto costs = physical_bounds(source, walls, true);
+    for (const auto& [id, cost] : costs) {
+        const auto factor = 2 * (1 + 32 * manufactured[id]);
+        if (factor > opening_native_limit / cost) reject("corner sibling/layer geometry budget exceeded: " + id);
+        native.add(cost * factor);
+    }
+    for (const auto& [id, entity] : source) {
+        if (entity.type != "wall_join" || phase.scope.inactive_owner_ids.contains(id)) continue;
+        const auto members = field(entity.properties, "wall_ids");
+        if (!members || !members->is_array() || members->empty() || members->size() > 128)
+            reject("corner wall-join inventory is unsupported or unbounded: " + id);
+        const auto ids = members->get<std::vector<std::string>>();
+        if (std::any_of(ids.begin(), ids.end(), [&](const auto& owner) { return phase.scope.inactive_owner_ids.contains(owner); })) continue;
+        native.add(ids.size() * ids.size());
+        for (const auto& owner : ids) {
+            const auto cost = costs.find(owner);
+            if (cost == costs.end()) reject("corner wall-join member is not an actual wall: " + owner);
+            native.add(cost->second);
+        }
+    }
+}
 // The opt-in lane reserves source and candidate supported host inventories,
 // not just removed rows. Analytical expansion is already bounded per map;
 // both inventories and local factories share one conservative native allowance.
@@ -718,13 +846,19 @@ Entities derive(const Entities& source, const std::vector<std::string>& selectio
     const std::vector<std::pair<std::string, std::string>>& components,
     bool allow_manufactured_opening_hosts, std::size_t reserved_native_work = 0, bool analytical_only = false,
     bool complete_hosted_catalog_consequences = false,
-    bool complete_proposed_opening_catalog_consequences = false) {
+    bool complete_proposed_opening_catalog_consequences = false,
+    bool complete_corner_window_removal = false) {
     if (!allow_manufactured_opening_hosts && reserved_native_work)
         reject("external native reservation requires opening-host admission");
     bounds(source);
     if ((selection.empty() && components.empty()) || selection.size() > selection_limit || components.size() > closure_limit)
         reject("selection requires bounded actual physical roots or qualified components");
     const auto phase = phases(source); const auto organization = organize_project(source);
+    CornerRemoval corners;
+    if (complete_corner_window_removal) {
+        validate_corner_window_state(source);
+        if (const auto error = validate_active_phase_constraint_integrity(source)) reject(*error);
+    }
     Ids sole_active_proposals, protected_carriers;
     if (complete_hosted_catalog_consequences) for (const auto& [registry, model] : phase.models) {
         (void)registry;
@@ -749,20 +883,46 @@ Entities derive(const Entities& source, const std::vector<std::string>& selectio
         const auto catalog = source.find(key.first);
         if (catalog == source.end() || catalog->second.type != "assembly_model") reject("selected component requires actual catalog: " + key.first);
     }
-    Ids retired; std::optional<std::string> selected_registry;
+    Ids retired, selected; std::optional<std::string> selected_registry;
     for (const auto& id : selection) {
         identity(id);
-        if (!retired.insert(id).second) reject("duplicate selected owner: " + id);
+        if (!selected.insert(id).second) reject("duplicate selected owner: " + id);
         const auto owner = source.find(id);
         if (owner == source.end()) reject("selected actual owner is missing: " + id);
-        if (!physical(owner->second)) reject("selected family requires a dedicated removal path: " + id);
+        const bool corner = complete_corner_window_removal && owner->second.type == "corner_window";
+        if (!physical(owner->second) && !corner) reject("selected family requires a dedicated removal path: " + id);
         if (owner->second.required) reject("selected physical owner is required: " + id);
-        removable(phase, id); context(source, organization, owner->second);
+        if (corner) classify_corner_removal(source, phase, organization, id, corners, retired);
+        else { removable(phase, id); context(source, organization, owner->second); retired.insert(id); }
+        if (retired.size() + corners.parked.size() > closure_limit) reject("corner/physical closure budget exceeded");
         const auto member = phase.owners.find(id);
         if (member != phase.owners.end()) {
             if (selected_registry && *selected_registry != member->second) reject("selected owners span foreign phase registries: " + id);
             selected_registry = member->second;
         }
+    }
+    if (complete_corner_window_removal) for (const auto& [id, entity] : source) {
+        if (!corners.parked.contains(id) && !corners.retained_bodies.contains(id) &&
+            (touches(entity.properties, corners.parked) || touches(entity.extensions, corners.parked))) {
+            const auto member = phase.owners.find(id);
+            if (member != phase.owners.end() && selected_registry && member->second != *selected_registry)
+                reject("retained baseline corner dependent belongs to a foreign registry: " + id);
+            if (phase.scope.inactive_owner_ids.contains(id))
+                reject("retained baseline corner dependent is inactive: " + id);
+            if (entity.type == kAnnotationEntityType) validate_annotation_entity(entity);
+            else if (entity.type == kSheetViewEntityType) validate_sheet_view_entity(entity);
+        }
+        if (!can_recognize_boundary_dimension_entity_type(entity.type)) continue;
+        const auto target = field(entity.properties, "target");
+        const auto owner_id = target ? field(*target, "entity_id") : nullptr;
+        if (!owner_id || !owner_id->is_string()) continue;
+        const auto& owner = owner_id->get_ref<const std::string&>();
+        if (!corners.physical_owners.contains(owner) &&
+            !(corners.parked.contains(owner) && source.at(owner).type == "corner_window")) continue;
+        const auto decoded = decode_boundary_dimension_entity(entity);
+        if (!decoded.supported() || decoded.dimension->kind != BoundaryDimensionKind::corner_window_leg_length)
+            reject("attached corner dimension requires a supported leg target: " + id);
+        (void)decoded.dimension->resolve(source);
     }
     // The host relation is decoded from actual rows. Unsupported hosted forms
     // retain no rewrite authority and will be refused by the reference scan.
@@ -776,9 +936,22 @@ Entities derive(const Entities& source, const std::vector<std::string>& selectio
     AssemblyExpansionBudget source_assembly_admission, candidate_assembly_admission;
     assembly_integrity(source, allow_manufactured_opening_hosts ? &source_assembly_admission : nullptr);
     const auto aliases = embedded_assembly_presentation_ids(source);
-    Entities result = source; retire_phases(result, source, phase, retired);
+    Entities result = source;
     Ids retained_baseline_catalogs, retained_opening_bodies;
     const auto retained_baseline_catalog_row = [&](const Entity& catalog, const std::string& host_id) {
+        if (complete_corner_window_removal && retired.contains(host_id) &&
+            (source.at(host_id).type == "corner_window" ||
+             (source.at(host_id).type == "opening" && source.at(host_id).properties.contains("corner_window_id")))) {
+            const auto carrier = phase.owners.find(catalog.id), member = phase.owners.find(host_id);
+            if (carrier == phase.owners.end()) return false;
+            const auto& model = phase.models.at(carrier->second);
+            if (!contains(model.baseline_ids(), catalog.id)) return false;
+            if (catalog.required || !model.active_alternative() || member == phase.owners.end() ||
+                member->second != carrier->second || !sole_active_proposal(model, host_id) ||
+                !unprotected_baseline(model, catalog.id))
+                reject("corner catalog consequence requires an unprotected same-registry retained carrier: " + catalog.id);
+            return true;
+        }
         if (!complete_hosted_catalog_consequences) return false;
         const auto host = source.find(host_id);
         if (host != source.end() && host->second.type != "wall" && host->second.type != "opening")
@@ -819,6 +992,8 @@ Entities derive(const Entities& source, const std::vector<std::string>& selectio
         return true;
     };
     Keys instances; Ids names = retired, geometry_owners = retired, opening_hosts;
+    if (complete_corner_window_removal) for (const auto& id : retired)
+        if (source.at(id).type == "corner_window" || source.at(id).type == "opening") geometry_owners.erase(id);
     OpeningAdmission source_opening_admission, candidate_opening_admission;
     for (const auto& [id, entity] : source) if (entity.type == "assembly_model") {
         const auto& raw = entity.properties.at("model");
@@ -834,9 +1009,16 @@ Entities derive(const Entities& source, const std::vector<std::string>& selectio
             if (row.placement) {
                 const auto& owner_id = row.placement->host_entity_id;
                 const auto owner = source.find(owner_id);
-                if (owner == source.end() || !component_host(owner->second, allow_manufactured_opening_hosts)) reject("selected hosted component lacks a supported actual physical host: " + id + "/" + row.id);
+                const bool corner_consequence = owner != source.end() && complete_corner_window_removal && retired.contains(owner_id) &&
+                    (owner->second.type == "corner_window" || (owner->second.type == "opening" && owner->second.properties.contains("corner_window_id")));
+                if (owner == source.end() || (!component_host(owner->second, allow_manufactured_opening_hosts) && !corner_consequence)) reject("selected hosted component lacks a supported actual physical host: " + id + "/" + row.id);
                 removable(phase, owner_id);
-                if (owner->second.type == "opening") {
+                if (corner_consequence) {
+                    if (entity.required) reject("corner catalog consequence is required: " + id);
+                    if (!retained_carrier) removable(phase, id);
+                    AssemblyExpansionBudget row_budget;
+                    if (model.expand(row, row_budget).profiles.empty()) reject("corner catalog consequence has no independent supported body: " + id + "/" + row.id);
+                } else if (owner->second.type == "opening") {
                     if (!explicit_keys.contains({id, row.id})) reject("opening host admission requires a qualified selected component: " + id + "/" + row.id);
                     if (entity.required || owner->second.required) reject("opening component has a required catalog or opening owner: " + id + "/" + row.id);
                     if (!retained_carrier) removable(phase, id);
@@ -901,19 +1083,70 @@ Entities derive(const Entities& source, const std::vector<std::string>& selectio
         if (!decoded.supported()) reject("affected associative dimension has unsupported schema: " + id);
         if (names.contains(decoded.dimension->boundary_id)) {
             if (entity.required) reject("associative dimension owner is required: " + id);
+            if (complete_corner_window_removal) {
+                removable(phase, id);
+                const auto member = phase.owners.find(id);
+                if (member != phase.owners.end() && selected_registry && member->second != *selected_registry)
+                    reject("attached dimension belongs to a foreign registry: " + id);
+                if (corners.physical_owners.contains(decoded.dimension->boundary_id)) {
+                    if (decoded.dimension->kind != BoundaryDimensionKind::corner_window_leg_length)
+                        reject("corner dimension has unsupported target kind: " + id);
+                    (void)decoded.dimension->resolve(source);
+                }
+                auto scratch = entity; scratch.properties.erase("target");
+                if (touches(scratch.properties, names) || touches(scratch.extensions, names))
+                    reject("attached dimension has opaque retired references: " + id);
+            }
             dimension_ids.insert(id);
         }
     }
     names.insert(dimension_ids.begin(), dimension_ids.end());
+    if (complete_corner_window_removal) {
+        bool changed = true; std::size_t work{};
+        while (changed) {
+            changed = false;
+            for (const auto& [id, entity] : source) {
+                if (++work > phase_limit) reject("corner dependent closure work budget exceeded");
+                if (entity.type != "constraint" || retired.contains(id) ||
+                    (!touches(entity.properties, names) && !touches(entity.extensions, names))) continue;
+                const auto decoded = decode_constraint_entity(entity);
+                if (!decoded.supported()) reject("affected constraint has unsupported schema: " + id);
+                if (!std::any_of(decoded.constraint->bindings.begin(), decoded.constraint->bindings.end(),
+                    [&](const auto& binding) { return names.contains(binding.owner_id); })) continue;
+                if (entity.required || !constraint_participates(*decoded.constraint, phase.scope))
+                    reject("affected constraint is required or belongs to retained inactive geometry: " + id);
+                removable(phase, id);
+                const auto member = phase.owners.find(id);
+                if (member != phase.owners.end() && selected_registry && member->second != *selected_registry)
+                    reject("affected constraint belongs to a foreign registry: " + id);
+                const auto scratch = corner_consequence_remainder(entity);
+                if (touches(scratch.properties, names) || touches(scratch.extensions, names))
+                    reject("affected constraint has opaque retired references: " + id);
+                retired.insert(id); names.insert(id); changed = true;
+                if (retired.size() + dimension_ids.size() > closure_limit) reject("corner dependent closure budget exceeded");
+            }
+        }
+        auto phase_retired = retired; phase_retired.insert(dimension_ids.begin(), dimension_ids.end());
+        retire_phases(result, source, phase, phase_retired);
+        demolish_corners(result, phase, corners);
+    } else retire_phases(result, source, phase, retired);
     // Deleted overlay identities stay local to the actual saved view. They are
     // never appended to the global physical/presentation retirement namespace.
     OverlayChildren overlays;
     for (const auto& [id, original] : source) {
         if (retired.contains(id) || (!touches(original.properties, names) && !touches(original.extensions, names))) continue;
-        const auto scratch = global_reference_remainder(original,false);
+        const auto scratch = complete_corner_window_removal ? corner_consequence_remainder(original) : global_reference_remainder(original,false);
         if (touches(scratch.properties, names) || touches(scratch.extensions, names))
             reject("affected opaque/reference data lacks qualified retirement codec: " + id);
         auto& changed = result.at(id);
+        if (complete_corner_window_removal &&
+            (original.type == kSheetViewEntityType || original.type == kAnnotationEntityType || original.type == "room_relationships")) {
+            if (original.required) reject("affected presentation/relationship is required: " + id);
+            removable(phase, id);
+            const auto member = phase.owners.find(id);
+            if (member != phase.owners.end() && selected_registry && member->second != *selected_registry)
+                reject("affected presentation/relationship belongs to a foreign registry: " + id);
+        }
         if (original.type == kSheetViewEntityType) {
             for (auto& view : changed.properties.at("model").at("views")) {
                 auto& ids = view.at("object_ids"); const bool restricted = !ids.empty() || view.value("restrict_to_objects", false);
@@ -929,9 +1162,22 @@ Entities derive(const Entities& source, const std::vector<std::string>& selectio
             validate_sheet_view_entity(changed);
         } else if (original.type == kAnnotationEntityType) {
             filter(changed.properties.at("state").at("overrides"), [&](const Json& row) {
-                return row.at("target_kind") != "object" || !names.contains(row.at("target_id").get<std::string>());
+                const bool owned = row.at("target_kind") == "object" ||
+                    (complete_corner_window_removal && row.at("target_kind") == "wall_dimension");
+                return !owned || !names.contains(row.at("target_id").get<std::string>());
             });
             validate_annotation_entity(changed);
+        } else if (complete_corner_window_removal && original.type == "room_relationships") {
+            const auto model = RoomRelationshipSnapshot::from_json(original.properties.at("model"));
+            for (const auto& row : model.relations())
+                if ((names.contains(row.source_id) || names.contains(row.target_id)) && row.kind != RoomRelationKind::independent)
+                    reject("dependent room relationship requires explicit review: " + id);
+            auto& raw = changed.properties.at("model");
+            filter(raw.at("references"), [&](const Json& row) { return !names.contains(row.at("id").get<std::string>()); });
+            filter(raw.at("relations"), [&](const Json& row) {
+                return !names.contains(row.at("source_id").get<std::string>()) && !names.contains(row.at("target_id").get<std::string>());
+            });
+            (void)RoomRelationshipSnapshot::from_json(raw);
         }
     }
     for (const auto& id : retired) result.erase(id);
@@ -969,8 +1215,21 @@ Entities derive(const Entities& source, const std::vector<std::string>& selectio
     validate_stair_attachment_state(result);
     assembly_integrity(result, allow_manufactured_opening_hosts ? &candidate_assembly_admission : nullptr);
     const auto after = phases(result);
-    if (after.scope.inactive_owner_ids != phase.scope.inactive_owner_ids)
+    auto expected_inactive = phase.scope.inactive_owner_ids;
+    expected_inactive.insert(corners.parked.begin(), corners.parked.end());
+    if (after.scope.inactive_owner_ids != expected_inactive)
         reject("removal changed inactive baseline/other-alternative ownership");
+    if (complete_corner_window_removal) {
+        validate_corner_window_state(result);
+        if (const auto error = validate_active_phase_constraint_integrity(result)) reject(*error);
+        for (const auto& id : corners.retained_bodies) {
+            const auto retained = result.find(id);
+            if (retained == result.end() || retained->second != source.at(id) ||
+                retained->second.properties.dump() != source.at(id).properties.dump() ||
+                retained->second.extensions.dump() != source.at(id).extensions.dump())
+                reject("corner demolition changed an exact retained owner/cut/host body: " + id);
+        }
+    }
     for (const auto& id : retained_opening_bodies) {
         const auto retained = result.find(id);
         if (retained == result.end() || retained->second != source.at(id) ||
@@ -1014,12 +1273,16 @@ Entities derive(const Entities& source, const std::vector<std::string>& selectio
     std::size_t native_work{};
     for (const auto& [id, cost] : costs) { (void)id; native_work += cost; }
     OpeningNativeBudget shared_native;
+    if (complete_corner_window_removal) {
+        charge_corner_geometry(source, phase, shared_native);
+        charge_corner_geometry(result, after, shared_native);
+    }
     if (allow_manufactured_opening_hosts) {
         shared_native.add(reserved_native_work);
         charge_candidate_geometry(source, phase, source_assembly_admission, shared_native, source_opening_admission);
         charge_candidate_geometry(result, after, candidate_assembly_admission, shared_native, candidate_opening_admission);
         shared_native.add(native_work);
-    }
+    } else if (complete_corner_window_removal) shared_native.add(native_work);
     Ids legacy_opening_hosts;
     for (const auto& [catalog, local] : instances) {
         const auto model = AssemblyModel::from_json(source.at(catalog).properties.at("model"));
@@ -1046,10 +1309,14 @@ Entities derive(const Entities& source, const std::vector<std::string>& selectio
         }
         // A typed metadata-only unhosted row has no native body to admit.
     }
-    if (allow_manufactured_opening_hosts) {
+    if (allow_manufactured_opening_hosts || complete_corner_window_removal) {
         shared_native.add(budget.consumed_nodes); shared_native.add(budget.consumed_profile_segments);
     }
     if (analytical_only) return result;
+    if (complete_corner_window_removal) {
+        validate_active_wall_physical_dependencies(source, corners.hosts, true);
+        validate_active_wall_physical_dependencies(result, corners.hosts, true);
+    }
     admit_physical(source, geometry_owners);
     for (const auto& expansion : expansions) (void)make_assembly_geometry(expansion);
     std::map<std::string, TopoDS_Shape, std::less<>> opening_shapes;
@@ -1091,9 +1358,10 @@ std::map<std::string, Entity, std::less<>> replay_architectural_object_removal(
     const std::vector<std::string>& selected_object_ids,
     const std::vector<std::pair<std::string, std::string>>& explicit_components,
     bool allow_manufactured_opening_hosts, std::size_t reserved_native_work, bool complete_hosted_catalog_consequences,
-    bool complete_proposed_opening_catalog_consequences) {
+    bool complete_proposed_opening_catalog_consequences, bool complete_corner_window_removal) {
     try { return derive(actual, selected_object_ids, explicit_components, allow_manufactured_opening_hosts,
-        reserved_native_work, false, complete_hosted_catalog_consequences, complete_proposed_opening_catalog_consequences); }
+        reserved_native_work, false, complete_hosted_catalog_consequences, complete_proposed_opening_catalog_consequences,
+        complete_corner_window_removal); }
     catch (const Json::exception& error) { reject(std::string("malformed actual source: ") + error.what()); }
     catch (const Standard_Failure& error) {
         const auto* message = error.GetMessageString();
@@ -1104,9 +1372,9 @@ void preflight_architectural_object_removal(const Entities& actual,
     const std::vector<std::string>& selected_object_ids,
     const std::vector<std::pair<std::string, std::string>>& explicit_components,
     std::size_t reserved_native_work, bool complete_hosted_catalog_consequences,
-    bool complete_proposed_opening_catalog_consequences) {
+    bool complete_proposed_opening_catalog_consequences, bool complete_corner_window_removal) {
     try { (void)derive(actual, selected_object_ids, explicit_components, true, reserved_native_work, true,
-        complete_hosted_catalog_consequences, complete_proposed_opening_catalog_consequences); }
+        complete_hosted_catalog_consequences, complete_proposed_opening_catalog_consequences, complete_corner_window_removal); }
     catch (const Json::exception& error) { reject(std::string("malformed actual source: ") + error.what()); }
 }
 std::vector<std::pair<std::string, std::string>> complete_proposed_opening_catalog_consequence_keys(

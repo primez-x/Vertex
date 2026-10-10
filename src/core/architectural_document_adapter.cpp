@@ -7,6 +7,7 @@
 #include "sketch/constraint_wall_edit.hpp"
 #include "sketch/corner_window.hpp"
 #include "sketch/corner_window_edit.hpp"
+#include "sketch/corner_window_removal.hpp"
 #include "sketch/boundary_dimension.hpp"
 #include "sketch/document_solid.hpp"
 #include "sketch/model_phases.hpp"
@@ -2366,7 +2367,20 @@ ApplyEntityChanges corner_window_remove_command(const DocumentSnapshot& source,
     const std::string& owner_id, Revision expected_revision) {
     if (!source.is_editable() || source.revision() != expected_revision)
         throw std::invalid_argument("Corner-window source is read-only or stale");
+#ifdef VERTEX_HAS_HORIZONTAL_AUTHORING
+    return prepare_corner_window_removal(source, {owner_id}, "Delete corner window");
+#else
     const auto corner = parse_corner_window(source.entities().at(owner_id));
+    // The minimal core has no complete phase retirement kernel. Retained
+    // alternatives require that producer; never erase their corner originals.
+    for (const auto& [id, entity] : source.entities()) {
+        (void)id;
+        if (entity.type != "model_phases") continue;
+        const auto model = ModelPhases::from_json(entity.properties.at("model"));
+        if (std::binary_search(model.entity_ids().begin(), model.entity_ids().end(), owner_id) &&
+            !model.alternatives().empty())
+            throw std::invalid_argument("Registered corner-window removal requires complete architectural authoring");
+    }
     ApplyEntityChanges command{expected_revision,
         {EntityChange::erase(corner.id), EntityChange::erase(corner.opening_ids[0]),
          EntityChange::erase(corner.opening_ids[1])}, {}, "Delete corner window"};
@@ -2382,8 +2396,6 @@ ApplyEntityChanges corner_window_remove_command(const DocumentSnapshot& source,
         (void)decoded.dimension->resolve(source.entities());
         retired.insert(id); command.entity_changes.push_back(EntityChange::erase(id));
     }
-    // Consume only the closed typed owner target. Opaque metadata and other
-    // dimensions cannot silently retain references to the retired aggregate.
     for (const auto& [id,entity]:source.entities()) {
         if (!can_recognize_boundary_dimension_entity_type(entity.type)) continue;
         auto properties=entity.properties;
@@ -2404,6 +2416,7 @@ ApplyEntityChanges corner_window_remove_command(const DocumentSnapshot& source,
             throw std::invalid_argument("Corner-window removal has an opaque retired dimension reference: "+id);
     }
     return command;
+#endif
 }
 
 }  // namespace sketch

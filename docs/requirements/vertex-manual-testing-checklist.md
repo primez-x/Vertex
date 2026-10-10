@@ -3445,8 +3445,19 @@ Blocked / missing until testing a candidate that contains it.
   - Result: Not tested
   - Notes: ______________________________
 
-## Issue report template
+- [ ] **CORNER-REMODEL-DELETE - Remove an existing corner window in an alternative**
+  - Steps: Place a corner window across two joined walls and add dimensions to both window legs. Create a remodeling alternative, select the window and press Delete. Inspect the alternative and the existing view. Undo once, redo, then save and reopen. Repeat with two corner windows selected together and with a newly proposed corner window.
+  - Expected: An existing corner window disappears from the alternative and both wall openings close there. The original window, walls, dimensions and presentation remain available in the existing view. Removing a newly proposed window removes only that proposal. One Undo restores the entire operation.
+  - Result: Not tested
+  - Notes: ______________________________
 
+- [ ] **CORNER-MIXED-DELETE - Delete corner windows with furniture, drawing items and skylights**
+  - Steps: Ctrl-select a corner window, a furniture component, a drawing label and a skylight on another roof. Press Delete, Undo once and redo. Repeat with several corner windows, then in a remodeling alternative. Save and reopen. Try selecting a corner window with a wall as well.
+  - Expected: Supported selections are removed together and one Undo restores every selected item and its physical openings. Remodeling retains the existing baseline. Any combination whose integration is still missing preserves the entire selection and identifies the unavailable workflow, without deleting only part of it.
+  - Result: Not tested
+  - Notes: ______________________________
+
+## Issue report template
 
 - Task ID(s):
 - What I did:

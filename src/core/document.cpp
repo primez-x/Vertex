@@ -3350,7 +3350,7 @@ static std::map<std::string,Entity,std::less<>> checked_phase_selection_removal_
 static void validate_phase_mixed_removal_dependents(const DocumentSnapshot& source,
     const std::map<std::string,Entity,std::less<>>& result,const nlohmann::json& encoded) {
     const auto intent=validate_mixed_selection_removal_intent(encoded);
-    if (intent.at("version")!=4) return;
+    if (intent.at("version")!=4 && intent.at("version")!=5) return;
     validate_active_design_preserved_dependents(source.entities(),result,false,true);
 }
 #endif
@@ -3536,7 +3536,14 @@ static PhaseConstraintLifetimeProofs phase_constraint_lifetime_proofs(const Appl
         }
         else if (version==45) {
             const auto intent=validate_mixed_selection_removal_intent(proof.at("mixed_selection_removal_intent"));
-            if (intent.at("version")==4) {
+            if (intent.at("version")==5) {
+                const auto ordinary=corner_selection_removal_authority(
+                    decode_corner_selection_removal_intent(intent.at("ordinary")));
+                for (const auto& [original,ids]:ordinary.architectural.roof_additional_identities) {
+                    (void)original;
+                    result.ordinary_roof_destinations.insert(ids.begin(),ids.end());
+                }
+            } else if (intent.at("version")==4) {
                 self(self,intent.at("ordinary_command"),depth);
                 const auto ordinary=phase_selection_removal_authority(
                     decode_phase_selection_removal_intent(intent.at("ordinary")));
@@ -3597,9 +3604,9 @@ static void validate_phase_constraint_fresh_lifetime(const std::map<std::string,
     std::set<std::string,std::less<>> fresh;
     std::set<std::string,std::less<>> nested_fresh;
     const auto lifetime_proofs=phase_constraint_lifetime_proofs(command);
-    const bool phase_completion=has_phase_selection_removal(command) ||
-        (has_mixed_selection_removal(command) &&
-            validate_mixed_selection_removal_intent(command.mixed_selection_removal_intent).at("version")==4);
+    const auto mixed_dialect=has_mixed_selection_removal(command)
+        ? validate_mixed_selection_removal_intent(command.mixed_selection_removal_intent).at("version").get<int>() : 0;
+    const bool phase_completion=has_phase_selection_removal(command) || mixed_dialect==4 || mixed_dialect==5;
     const auto current_phase_proofs=phase_completion ? lifetime_proofs.phase_proofs : phase_constraint_authoring_proofs(command);
     const bool phase_drawing_enclosure=phase_completion ||
         (has_independent_drawing_removal(command) && has_phase_constraint_authoring(command));

@@ -76,6 +76,7 @@
 #include "sketch/model_copy_composition.hpp"
 #include "sketch/architectural_selection_removal.hpp"
 #include "sketch/architectural_drawing_removal.hpp"
+#include "sketch/corner_selection_removal.hpp"
 #include "sketch/mixed_selection_removal.hpp"
 #include "sketch/ordinary_selection_removal.hpp"
 #include "sketch/phase_removal_selection.hpp"
@@ -31190,6 +31191,7 @@ public:
         std::optional<MixedWallOpeningRemovalIntent> wall_opening_intent;
         std::optional<DrawingSelectionRemovalIntent> drawing_intent;
         std::optional<ArchitecturalDrawingRemovalIntent> architectural_drawing_intent;
+        std::optional<CornerSelectionRemovalIntent> corner_intent;
         json geometry_proof=nullptr;
         std::function<void()> require_current;
     };
@@ -34335,25 +34337,53 @@ public:
                 if (prepared) prepared->require_current=source_guard;
                 return prepared;
             };
-            if (ordinarySelectionIDs().size() == 1) {
-                const auto selected = source.entities().find(ordinarySelectionIDs().front().toStdString());
-                if (selected != source.entities().end() && selected->second.type == "corner_window") {
-                    const auto authority = captureSourceEditAuthority(source);
-                    const auto command = augmentRemovalCommand(Command{corner_window_remove_command(
-                        source, selected->first, source.revision())}, source);
-                    const auto candidate = Document::preview_command(source, command);
-                    std::set<std::string,std::less<>> retired;
-                    for (const auto& [id,entity]:source.entities()) {
-                        (void)entity;
-                        if (!candidate.entities().contains(id)) retired.insert(id);
-                    }
-                    validate_completed_architectural_retirement_references(candidate.entities(),retired);
-                    validate_architectural_geometry_changes(source, candidate);
-                    if (!sourceEditAuthorityCurrent(authority))
-                        throw std::invalid_argument("The corner-window source changed before deletion");
-                    finalizeSelectionRemoval(command,&prepared);
-                    return finish_preparation();
+            const auto& ordinary_selection=ordinarySelectionIDs();
+            const bool has_corner=std::any_of(ordinary_selection.begin(),ordinary_selection.end(),[&](const auto& id) {
+                const auto actual=source.entities().find(id.toStdString());
+                return actual!=source.entities().end() && actual->second.type=="corner_window";
+            });
+            if (has_corner) {
+                const auto authority=captureSourceEditAuthority(source);
+                if (authority.ordinary_selection.isEmpty() || authority.ordinary_selection.size()>1000 ||
+                    (authority.roof_opening_cohort.empty() && !authority.ordinary_selection.contains(authority.context.selected_id)))
+                    throw std::invalid_argument("The corner-window selection changed. Select the objects again.");
+                // Capture every actual selected owner/component/drawing row before
+                // partitioning. Corner cuts, child hosts and derived cleanup do
+                // not manufacture additional selection authority.
+                CornerSelectionRemovalIntent intent;
+                intent.other=captureExplicitSelectionRemoval(source,authority.ordinary_selection);
+                std::vector<std::string> other_ids;
+                for (const auto& id:intent.other.architectural.object_ids) {
+                    const auto& actual=source.entities().at(id);
+                    if (actual.type=="corner_window") intent.corner_ids.push_back(id);
+                    else if (actual.type=="roof" || actual.type=="stair" || actual.type=="railing" ||
+                        actual.type=="slab" || structuralObject(actual)) other_ids.push_back(id);
+                    else throw std::invalid_argument("Corner-window deletion with this object family requires unsupported removal integration: "+
+                        actual.type+"/"+id+". The complete selection has been preserved.");
                 }
+                intent.other.architectural=captureArchitecturalSelectionRemoval(source,std::move(other_ids),
+                    std::move(intent.other.architectural.components));
+                intent.other.allow_manufactured_opening_hosts=!intent.other.architectural.components.empty();
+                source_guard();
+                // The helper owns the complete source-derived candidate, including
+                // retained baseline demolition. Qt registry augmentation must not
+                // reinterpret that result as physical retirement.
+                const Command command=prepare_corner_selection_removal(source,intent,"Delete selected corner windows and objects");
+                const auto candidate=Document::preview_command(source,command);
+                std::set<std::string,std::less<>> retired;
+                for (const auto& [id,entity]:source.entities()) {
+                    (void)entity;
+                    if (!candidate.entities().contains(id)) retired.insert(id);
+                }
+                validate_completed_architectural_retirement_references(candidate.entities(),retired);
+                validate_architectural_geometry_changes(source,candidate);
+                validate_document_assembly_instances(candidate.entities());
+                preserveSurvivingRemovalAliases(source.entities(),candidate.entities());
+                source_guard();
+                PreparedSelectionRemoval details;
+                details.corner_intent=std::move(intent);
+                finalizeSelectionRemoval(command,&prepared,nullptr,{},std::move(details));
+                return finish_preparation();
             }
             if (hasOnlyHostedOpeningSelection(source)) {
                 removeSelectedHostedOpenings(source,false,&prepared);
@@ -34475,6 +34505,10 @@ public:
                     phase_ordinary=std::move(intent.architectural);
                 else phase_selection=std::move(intent);
             }
+        } else if (prepared->corner_intent) {
+            // The corner dialect retains the complete original ordinary command
+            // and selection authority before any child-roof stage is prepared.
+            (void)encode_corner_selection_removal_intent(*prepared->corner_intent);
         } else if (!prepared->architectural_drawing_intent) {
             if (prepared->opening_intent || !prepared->hosted_opening_ids.empty()) {
                 ordinary.emplace();
@@ -34496,7 +34530,8 @@ public:
             }
             if (ordinary && prepared->drawing_intent) ordinary->drawing=*prepared->drawing_intent;
         }
-        const auto expected=ordinary ? ordinary_selection_removal_authority(*ordinary)
+        const auto expected=prepared->corner_intent ? corner_selection_removal_authority(*prepared->corner_intent)
+            : ordinary ? ordinary_selection_removal_authority(*ordinary)
             : phase_selection ? phase_selection_removal_authority(*phase_selection)
             : phase_ordinary ? ArchitecturalDrawingRemovalIntent{*phase_ordinary,{},{}}
             : *prepared->architectural_drawing_intent;
@@ -34505,14 +34540,18 @@ public:
             throw std::invalid_argument("The removal proof does not cover the exact ordinary selection. The selection has been preserved.");
         std::vector<RoofOpeningGroupMember> members;
         for (const auto& target:targets) members.push_back({target.roof_id.toStdString(),target.opening_id.toStdString()});
-        const auto remaining=ordinary
+        const auto remaining=prepared->corner_intent
+            ? mixed_selection_removal_remaining_children(*source,*prepared->corner_intent,members)
+            : ordinary
             ? mixed_selection_removal_remaining_children(*source,*ordinary,members)
             : phase_selection
             ? mixed_selection_removal_remaining_children(*source,*phase_selection,members)
             : phase_ordinary
             ? mixed_selection_removal_remaining_children(*source,*phase_ordinary,members)
             : mixed_selection_removal_remaining_children(*source,*prepared->architectural_drawing_intent,members);
-        const auto stage=ordinary
+        const auto stage=prepared->corner_intent
+            ? prepare_mixed_selection_removal_stage(*source,*prepared->corner_intent,prepared->command)
+            : ordinary
             ? prepare_mixed_selection_removal_stage(*source,*ordinary,prepared->command)
             : phase_selection
             ? prepare_mixed_selection_removal_stage(*source,*phase_selection,prepared->command)
@@ -34544,7 +34583,9 @@ public:
         ApplyBoundaryConstraintChanges command;
         command.expected_revision=source->revision();command.message="Delete objects and skylights";
         command.mixed_selection_removal_completion=true;
-        command.mixed_selection_removal_intent=ordinary
+        command.mixed_selection_removal_intent=prepared->corner_intent
+            ? make_mixed_selection_removal_intent(*source,*prepared->corner_intent,prepared->command,members,children)
+            : ordinary
             ? make_mixed_selection_removal_intent(*source,*ordinary,prepared->command,members,children)
             : phase_selection
             ? make_mixed_selection_removal_intent(*source,*phase_selection,prepared->command,members,children)
@@ -56816,6 +56857,8 @@ private:
                             ? ordinary_selection_removal_authority(decode_ordinary_selection_removal_intent(intent.at("ordinary")))
                             : intent.at("version")==4
                             ? phase_selection_removal_authority(decode_phase_selection_removal_intent(intent.at("ordinary")))
+                            : intent.at("version")==5
+                            ? corner_selection_removal_authority(decode_corner_selection_removal_intent(intent.at("ordinary")))
                             : decode_architectural_drawing_removal_intent(intent.at("ordinary"));
                         targets.insert(ordinary.architectural.object_ids.begin(),ordinary.architectural.object_ids.end());
                         for (const auto& key:ordinary.architectural.components) {
@@ -56827,9 +56870,9 @@ private:
                         }
                     }
                     for (const auto& child:intent.at("members")) {
-                        // Dialect four keeps child-only authority separate from
+                        // Completed dialects keep child-only authority separate from
                         // any roof independently present in the ordinary roster.
-                        if (intent.at("version")!=4) targets.insert(child.at("roof_id").get<std::string>());
+                        if (intent.at("version")!=4 && intent.at("version")!=5) targets.insert(child.at("roof_id").get<std::string>());
                         targets.insert(child.at("opening_id").get<std::string>());
                     }
                 }

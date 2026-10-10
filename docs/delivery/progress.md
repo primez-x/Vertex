@@ -14,6 +14,59 @@ changed source does not acquire runtime acceptance without later qualification.
 
 ## Current delivery state
 
+### October 10 coordinated corner-window deletion - source integration
+
+The preceding redraw/baseline-wall dispatch is committed and pushed as
+2c93cf25. Source diagnosis found that current single-corner Delete/Cut could
+physically erase a saved baseline corner owner and its two managed wall cuts.
+The new actual-source kernel classifies the complete aggregate before physical
+retirement. In an active saved alternative it preserves exact owner, cuts and
+both hosts and adds only owner/cuts to that alternative's demolition roster.
+Original dimensions, annotations, views and catalog rows remain. A baseline-only
+registry without alternatives retains ordinary physical removal; saved
+alternatives without an active destination refuse. Ordinary/sole-active proposed
+corners derive complete cuts, supported dimensions, constraints, known catalog
+and presentation cleanup. Required, inactive, foreign and opaque affected data
+remain protected. The old architectural removal defaults and historical raw
+commands keep their original meanings.
+
+A new closed corner-selection lane admits multiple explicit corner owners,
+other supported architectural roots/qualified components and independent drawing
+rows from the same original source. Current ordinary Delete captures the full
+roster before partitioning and no longer runs Qt registry augmentation afterward.
+Mixed intent dialect five retains the complete raw ordinary command and explicit
+corner authority before actual selected skylight removal. Roof dominance,
+source/selection fences, detached source/save/history bindings, bounded replay,
+one live publication, Site target authority and retained roof destinations remain.
+Reader180/extraction178 fence retained and undone dialect-five history.
+
+Source review identified and corrected loss of an explicitly selected dimension
+bound to a newly demolished baseline corner. The drawing helper now validates
+preserved dependents against both original and internally admitted stages before
+returning. Independent bounded source review confirms that correction and finds
+no remaining concrete P1/P2 defect in this integration. Runtime behavior is not
+established. Root integration includes CMake and all four
+new source-kit entries, plus ten previously omitted existing corner/skylight
+headers/implementations. The manual checklist adds two practical corner deletion
+tasks; all 500 task/result pairs remain Not tested.
+
+No builds, tests/new tests, scripts, probes, native jobs, UI launches, packages or
+installations run. Compilation, actual canvas interaction, Undo/reopen, migration
+and performance remain unqualified; the installed candidate is unchanged. Scoped
+commit, push and exact remote-ref verification back up this source batch.
+Root reviewed the integrated interfaces, baseline/ordinary classification,
+source-owned drawing guards, current controller/Site dispatch, retained history
+and format floors. Static inspection finds zero tracked source/header omissions
+and 500 matching task/Not-tested result rows; `git diff --check` is clean.
+All ten production gates remain open.
+
+Next required work includes corner combinations with walls, hosted openings and
+other baseline-family producers; catalog corner host-copy rows without independent
+profile geometry; aggregate corner/mixed clipboard transport; mixed Properties
+and shared transforms; native directional group controls and the other full
+production packages. Unsupported combinations preserve the entire selection and
+remain gaps. This batch is not complete production delivery.
+
 ### October 10 independent redraw correspondence and baseline wall dispatch
 
 The preceding phase/drawing composition is committed and pushed as 7d0f0cce.

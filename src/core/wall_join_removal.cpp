@@ -323,6 +323,7 @@ void reserve_join_envelope_names(LifetimeReservations& reservations) {
         "other", "geometry_proof", "hosted_opening", "wall_geometry",
         "ordinary_selection_removal_completion", "ordinary_selection_removal_intent", "selection", "base_command",
         "phase_selection_removal_completion", "phase_selection_removal_intent", "phase_deletion", "object_ids", "components",
+        "corner_ids", "corner_removal",
         "members", "roof_id", "opening_id", "child_command", "source_snapshot_digest", "source_authoring_digest",
         "source_entities_digest", "source_saved_revision", "stage_snapshot_digest", "stage_authoring_digest",
         "target_id", "target_length_metres", "move_connected", "new_vertex_id", "new_segment_id", "new_dimension_id",

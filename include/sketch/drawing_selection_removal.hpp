@@ -8,6 +8,7 @@ namespace sketch {
 
 struct ArchitecturalSelectionRemovalIntent;
 struct OpeningArchitecturalRemovalIntent;
+struct CornerSelectionRemovalIntent;
 
 using DrawingSelectionRemovalEntities = std::map<std::string, Entity, std::less<>>;
 
@@ -89,5 +90,11 @@ struct DrawingSelectionRemovalIntent {
     const DocumentSnapshot& source, const DrawingSelectionRemovalIntent& drawing,
     const ArchitecturalSelectionRemovalIntent& architectural,
     const Command& pure_phase_deletion_command);
+
+// Corner retirement/demolition is reconstructed from its explicit actual-owner
+// authority. Only that independently admitted stage supplies override changes.
+[[nodiscard]] DrawingSelectionRemovalEntities replay_drawing_selection_removal_with_corners(
+    const DrawingSelectionRemovalEntities& actual, const DrawingSelectionRemovalIntent& drawing,
+    const CornerSelectionRemovalIntent& corners, bool active_phase_constraints = true);
 
 } // namespace sketch
