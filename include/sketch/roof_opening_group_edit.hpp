@@ -57,6 +57,13 @@ struct RoofOpeningGroupClonePlacement {
     const std::map<std::string, Entity, std::less<>>& actual,
     const RoofOpeningGroupTransform& request);
 
+// Removal-only actual-source authority. Every named member must be a real
+// profiled child of its named roof; containing roofs are never selected roots.
+// Complete replay admits the whole roster before returning any removal intent.
+[[nodiscard]] std::vector<RoofEditIntent> prepare_roof_opening_group_removal(
+    const std::map<std::string, Entity, std::less<>>& actual,
+    const std::vector<RoofOpeningGroupMember>& members);
+
 // Map the passive source-centre centroid to the destination anchor, retaining
 // relative world XY centres, physical facet sizes and source facet angles.
 // The existing transfer replay preserves passive row/receipt opaque content,

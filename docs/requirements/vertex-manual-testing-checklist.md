@@ -3357,7 +3357,7 @@ Blocked / missing until testing a candidate that contains it.
 
 - [ ] **SKYLIGHT-GROUP-SELECT - Select several skylights together**
   - Steps: Place three skylights on one roof and one on another roof. Select one in plan, Ctrl-click two more, then Ctrl-click a selected member to remove it. Use Ctrl-drag from left to right to enclose their mouths, then from right to left across their mouths. Repeat in 3D. Click a selected member and right-click it. Click outside the group, then click again to begin drawing.
-  - Expected: Each selected skylight has its own transparent highlight and the canvas shows the selected count. Ctrl-click removes only that member. A left-to-right window requires complete containment; a right-to-left window selects intersected mouths. A plain member click and its context menu retain the group. The first empty click deselects without placing a drawing node. Including roof boundaries or unrelated objects currently reports the missing mixed-selection workflow and preserves the previous selection.
+  - Expected: Each selected skylight has its own transparent highlight and the canvas shows the selected count. Ctrl-click removes only that member. A left-to-right window requires complete containment; a right-to-left window selects intersected mouths. A plain member click and its context menu retain the group. The first empty click deselects without placing a drawing node. Including roof boundaries or other objects selects those actual objects alongside the skylights; a containing roof is selected only when explicitly picked.
   - Result: Not tested
   - Notes: ______________________________
 
@@ -3400,6 +3400,12 @@ Blocked / missing until testing a candidate that contains it.
 - [ ] **SKYLIGHT-GROUP-SIDE-RESIZE - Resize a skylight group using its side handles**
   - Steps: Select several skylights in plan, including differently rotated members on sloping roofs. Drag each middle side handle outward, then inward. Compare the resulting physical face dimensions in Properties and the schedule. Repeat in a saved horizontal plan viewed from below and in a remodeling alternative. Try shrinking past the centre or enlarging across a ridge, roof edge or neighboring skylight. Cancel a drag, then undo/redo a valid edit and save/reopen.
   - Expected: Four side handles complement the corner and rotation handles. Side resizing adjusts the layout about the captured common centre while preserving each rectangular skylight's angle, host and construction dimensions. A rotated member may change both physical dimensions; the preview shows its actual resulting cut, frame and glazing. One undo restores the entire group. Invalid, cancelled or outdated previews change nothing. The alternative preserves the baseline.
+  - Result: Not tested
+  - Notes: ______________________________
+
+- [ ] **SKYLIGHT-MIXED-SELECT - Select a skylight together with other objects**
+  - Steps: Select a skylight, Ctrl-click a wall or furniture symbol, then Ctrl-click the skylight's surrounding roof. Remove the roof from the selection with another Ctrl-click; the skylight should remain selected. Repeat in reverse order and with a selection window, then in 3D. Plain-click a selected member, remove the most recently clicked member with Ctrl-click, and use Alt-click to choose one overlapping object. Click empty space once, then again to begin drawing.
+  - Expected: Objects and skylights have independent highlights and the selected count includes both kinds. Selecting a skylight alone never selects its containing roof. Ctrl-click changes only the picked target; plain-clicking a selected member retains the group. Removing the primary member returns focus to the previously selected remaining member. Alt-click replaces the selection with the chosen target. The first empty click clears selection without placing a node. Mixed commands that are still missing report that gap without editing only part of the selection.
   - Result: Not tested
   - Notes: ______________________________
 

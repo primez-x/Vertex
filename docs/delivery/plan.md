@@ -195,7 +195,17 @@ polling timeout does not permit restarting it.
    dimension factors derived from each actual projected direction and rebased
    at its final facet. Actual manufactured previews and exact axis proposals
    govern release; no fixed opposite envelope edge is promised. Mixed owner/child
-   selection and native directional group controls remain implementation gaps.
+   commands and native directional group controls remain implementation gaps.
+   Qualify the subsequent mixed selection source: explicit ordinary IDs and
+   actual typed children retain independent highlights, cross-family order and
+   typed primary through source-bound adoption, Ctrl/window selection, Alt
+   cycling, refresh and rollback. Internal child-host IDs are a compatibility
+   projection, never ordinary command authority. Complete mixed Delete, Cut,
+   Copy/Paste/Duplicate and shared transforms across both rosters; subset guards
+   do not complete these workflows. Atomic mixed removal must independently
+   reconstruct ordinary deletion closure, admit removal-only child authority,
+   respect physical and phase-semantic roof dominance and retain exact staged
+   history/source proofs before one final publication.
 10. Implement observed native/vendor/device adapters through existing workers;
     complete declared IFC/DXF/Pinc fidelity and independently consumed output.
     Add offline OCR text regions/confidence feeding reviewed proposals. New

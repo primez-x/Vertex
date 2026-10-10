@@ -13060,6 +13060,7 @@ public:
     }
 
     void showArchitecturalObjectTransformEditor() {
+        if (rejectMixedSelectionCommand(QStringLiteral("Transform"))) return;
         if (!m_selected_roof_openings.empty()) { showRoofOpeningQuickProperties(); return; }
         const auto context = captureModalContext();
         const auto source = authoringSnapshot();
@@ -13271,6 +13272,7 @@ public:
     }
 
     void showBoundaryTransformEditor() {
+        if (rejectMixedSelectionCommand(QStringLiteral("Transform"))) return;
         if (!m_selected_roof_openings.empty()) { showRoofOpeningQuickProperties(); return; }
         const auto selection = m_selected_ids;
         const auto primary_render_id = m_selected_id;
@@ -24869,175 +24871,115 @@ public:
         }
     }
 
+    struct SemanticSelectionMember {
+        QString ordinary_id;
+        std::optional<CanvasRoofOpeningTarget> child;
+        bool operator==(const SemanticSelectionMember&) const = default;
+    };
+
+    std::vector<SemanticSelectionMember> semanticSelectionOrder() const {
+        if (!m_selected_roof_openings.empty()) return m_selected_semantic_order;
+        std::vector<SemanticSelectionMember> order;
+        for (const auto& id:m_selected_ids) order.push_back({id,std::nullopt});
+        return order;
+    }
+
     bool selectEntity(const QString& entity_id, bool toggle = false) {
-        const auto previous_children=m_selected_roof_openings;
-        const auto previous_native_child=m_roof_opening_native_selection;
-        const auto previous_id=m_selected_id;
-        const auto previous_ids=m_selected_ids;
-        const auto previous_labels=m_selected_generated_labels;
-        const auto previous_layer=m_active_layer_id;
+        try { return selectOrdinaryFromSource(std::make_shared<DocumentSnapshot>(authoringSnapshot()),entity_id,toggle,false,true); }
+        catch (const std::exception& error) { setError(QStringLiteral("Selection: %1").arg(QString::fromUtf8(error.what()))); return false; }
+    }
+
+    bool selectOrdinaryFromSource(const std::shared_ptr<const DocumentSnapshot>& source,
+        const QString& entity_id,bool toggle,bool native,bool replace=false) {
         try {
-            if (toggle && !m_selected_roof_openings.empty())
-                throw std::invalid_argument("Mixed skylight and object selection is not yet available.");
-            clearRoofOpeningSelection();
-            // Resolve every identity/layer against one authoritative source
-            // before publishing selection; source failure keeps prior state.
-            const auto snapshot = authoringSnapshot();
-            const auto publication=captureRetainedSelectionPublication(snapshot);
-            const auto refresh_selection=[&] {
-                if (!refreshRetainedSelection(publication)) refresh();
-            };
+            if (!source || fullSnapshotDigest(*source)!=fullSnapshotDigest(authoringSnapshot()))
+                throw std::invalid_argument("The displayed source changed before selection.");
+            auto ordinary=ordinarySelectionIDs();
+            auto children=m_selected_roof_openings;
+            auto order=semanticSelectionOrder();
             if (entity_id.isEmpty()) {
                 if (toggle) return true;
-                m_selected_id.clear();
-                m_selected_ids.clear();
-                m_selected_generated_labels.clear();
-                refresh_selection();
-                return true;
+                return adoptSemanticSelection(source,{}, {},native,std::nullopt);
             }
-
-            if (siteCanvas(m_architecturalCanvas)) {
-                const auto child=m_site_annotation_targets.find(entity_id);
-                if (child!=m_site_annotation_targets.end()) {
-                    const auto state=decode_annotation_entity(snapshot.entities().at(child->second.owner_entity_id));
-                    std::string layer;
-                    for (const auto& item : state.labels) if(item.id==child->second.child_id) layer=item.placement.layer_id;
-                    for (const auto& item : state.symbols) if(item.id==child->second.child_id) layer=item.placement.layer_id;
-                    m_selected_generated_labels.clear();
-                    if (!toggle) m_selected_ids.clear();
-                    if (toggle && m_selected_ids.contains(entity_id)) m_selected_ids.removeAll(entity_id);
-                    else m_selected_ids.push_back(entity_id);
-                    m_selected_id=m_selected_ids.isEmpty() ? QString{} : m_selected_ids.back();
-                    if (!layer.empty()) m_active_layer_id=id_from(layer);
-                    refresh_selection(); return true;
-                }
-            }
-            QString selection_id = entity_id;
-            const auto assembly_catalog = assembly_root_catalog_for_child(snapshot, entity_id.toStdString());
-            bool annotation_child = false;
-            std::string annotation_layer;
-            if (!snapshot.entities().contains(selection_id.toStdString())) {
-                const auto identity=annotation_child_identity(snapshot, selection_id.toStdString());
-                annotation_child=identity.exists;
-                // A diagnostic selection must not adopt an arbitrary owner's layer.
-                if (identity.owner_id) {
-                    const auto state=decode_annotation_entity(snapshot.entities().at(*identity.owner_id));
-                    const auto wanted=selection_id.toStdString();
-                    for (const auto& label : state.labels) if (label.id==wanted) annotation_layer=label.placement.layer_id;
-                    for (const auto& symbol : state.symbols) if (symbol.id==wanted) annotation_layer=symbol.placement.layer_id;
-                }
-            }
-            if (!snapshot.entities().contains(selection_id.toStdString()) && !annotation_child) {
-                if (const auto host = assembly_host_for_child(snapshot, selection_id.toStdString())) {
-                    selection_id = id_from(*host);
-                }
-            }
-            if (!snapshot.entities().contains(selection_id.toStdString()) && !annotation_child && !assembly_catalog) {
-                throw std::invalid_argument("No entity named "+entity_id.toStdString()+" exists in this document.");
-            }
-            m_selected_generated_labels.clear();
-            if (!toggle) m_selected_ids.clear();
-            if (toggle && m_selected_ids.contains(selection_id)) {
-                m_selected_ids.removeAll(selection_id);
-                m_selected_id = m_selected_ids.isEmpty() ? QString{} : m_selected_ids.back();
-                refresh_selection();
-                return true;
-            }
-            m_selected_ids.push_back(selection_id);
-            m_selected_id = selection_id;
-            const auto organization = organize_project(snapshot);
-            if (assembly_catalog) {
-                if (const auto context = organization.drawing_context(*assembly_catalog))
-                    m_active_layer_id = id_from(context->layer_id);
-                refresh_selection();
-                return true;
-            }
-            if (annotation_child) {
-                if (!annotation_layer.empty() && organization.drawing_context(annotation_layer))
-                    m_active_layer_id = id_from(annotation_layer);
-                refresh_selection();
-                return true;
-            }
-            if (const auto context = organization.drawing_context(selection_id.toStdString())) {
-                m_active_layer_id = id_from(context->layer_id);
+            const auto id=normalizeOrdinarySelection(*source,entity_id,true);
+            const bool removing=toggle && ordinary.contains(id);
+            std::erase_if(order,[&](const auto& member) { return !member.child && member.ordinary_id==id; });
+            if (toggle) {
+                if (ordinary.contains(id)) ordinary.removeAll(id);
+                else ordinary.push_back(id);
+            } else if (replace || !ordinary.contains(id)) {
+                ordinary={id}; children.clear(); order.clear();
             } else {
-                const auto& node = organization.nodes.at(selection_id.toStdString());
-                if (node.type == "property" || node.type == "building" || node.type == "floor") {
-                    m_active_layer_id.clear();
-                    for (const auto& [id, candidate] : organization.nodes) {
-                        if (candidate.type != "layer") continue;
-                        const auto layer_context = organization.drawing_context(id);
-                        if (layer_context && (layer_context->property_id == node.id ||
-                                              layer_context->building_id == node.id || layer_context->floor_id == node.id)) {
-                            if (!m_active_layer_id.isEmpty()) {
-                                m_active_layer_id.clear();
-                                break;
-                            }
-                            m_active_layer_id = id_from(id);
-                        }
-                    }
-                }
+                ordinary.removeAll(id); ordinary.push_back(id);
             }
-            refresh_selection();
-            return true;
+            if (!removing) order.push_back({id,std::nullopt});
+            return adoptSemanticSelection(source,std::move(ordinary),std::move(children),native,std::nullopt,!removing,std::move(order));
         } catch (const std::exception& error) {
-            m_selected_id=previous_id;
-            m_selected_ids=previous_ids;
-            m_selected_generated_labels=previous_labels;
-            m_active_layer_id=previous_layer;
-            setRoofOpeningSelectionState(previous_children,previous_native_child);
-            if (m_measurementCanvas) m_measurementCanvas->setSelectedRoofOpenings(previous_children);
-            if (m_architecturalCanvas) m_architecturalCanvas->setSelectedRoofOpenings(previous_children);
             synchronizeNativeSelection();
             setError(QStringLiteral("Selection: %1").arg(QString::fromUtf8(error.what())));
             return false;
         }
     }
 
+    QString normalizeOrdinarySelection(const DocumentSnapshot& snapshot,const QString& entity_id,bool strict) const {
+        if (siteCanvas(m_architecturalCanvas) && m_site_annotation_targets.contains(entity_id)) {
+            if (!historySelectionExists(snapshot,entity_id))
+                throw std::invalid_argument("The selected annotation source changed.");
+            return entity_id;
+        }
+        auto id=entity_id;
+        if (!snapshot.entities().contains(id.toStdString()) && !annotation_child_exists(snapshot,id.toStdString()))
+            if (const auto host=assembly_host_for_child(snapshot,id.toStdString())) id=id_from(*host);
+        if (snapshot.entities().contains(id.toStdString()) || annotation_child_exists(snapshot,id.toStdString()) ||
+            assembly_root_catalog_for_child(snapshot,id.toStdString())) return id;
+        if (strict) throw std::invalid_argument("No entity named "+entity_id.toStdString()+" exists in this document.");
+        return {};
+    }
+
+    void adoptOrdinarySelectionLayer(const DocumentSnapshot& snapshot,const QString& id) {
+        if (id.isEmpty()) return;
+        const auto organization=organize_project(snapshot);
+        auto annotation_id=id.toStdString();
+        std::optional<std::string> owner;
+        if (siteCanvas(m_architecturalCanvas)) {
+            if (const auto found=m_site_annotation_targets.find(id);found!=m_site_annotation_targets.end()) {
+                owner=found->second.owner_entity_id; annotation_id=found->second.child_id;
+            }
+        }
+        if (!owner && !snapshot.entities().contains(annotation_id)) owner=annotation_child_identity(snapshot,annotation_id).owner_id;
+        if (owner) {
+            const auto state=decode_annotation_entity(snapshot.entities().at(*owner));
+            std::string layer;
+            for (const auto& item:state.labels) if (item.id==annotation_id) layer=item.placement.layer_id;
+            for (const auto& item:state.symbols) if (item.id==annotation_id) layer=item.placement.layer_id;
+            if (!layer.empty() && organization.drawing_context(layer)) m_active_layer_id=id_from(layer);
+            return;
+        }
+        const auto catalog=assembly_root_catalog_for_child(snapshot,id.toStdString());
+        if (const auto context=organization.drawing_context(catalog ? *catalog : id.toStdString())) {
+            m_active_layer_id=id_from(context->layer_id); return;
+        }
+        const auto node=organization.nodes.find(id.toStdString());
+        if (node==organization.nodes.end()) return;
+        if (node->second.type=="property" || node->second.type=="building" || node->second.type=="floor") {
+            m_active_layer_id.clear();
+            for (const auto& [candidate_id,candidate]:organization.nodes) {
+                if (candidate.type!="layer") continue;
+                const auto context=organization.drawing_context(candidate_id);
+                if (context && (context->property_id==node->second.id || context->building_id==node->second.id || context->floor_id==node->second.id)) {
+                    if (!m_active_layer_id.isEmpty()) { m_active_layer_id.clear(); break; }
+                    m_active_layer_id=id_from(candidate_id);
+                }
+            }
+        }
+    }
+
     bool selectEntities(const QStringList& ids, bool additive) {
-        const auto previous_children=m_selected_roof_openings;
-        const auto previous_native_child=m_roof_opening_native_selection;
-        const auto previous_id=m_selected_id;
-        const auto previous_ids=m_selected_ids;
-        const auto previous_labels=m_selected_generated_labels;
-        const auto previous_layer=m_active_layer_id;
         try {
-            if (additive && !m_selected_roof_openings.empty()) {
-                if (ids.isEmpty()) return true;
-                throw std::invalid_argument("Mixed skylight and object selection is not yet available.");
-            }
-            clearRoofOpeningSelection();
-            const auto snapshot=authoringSnapshot();
-            const auto publication=captureRetainedSelectionPublication(snapshot);
-            m_selected_generated_labels.clear();
-            if (!additive) m_selected_ids.clear();
-            for (auto id : ids) {
-                const auto wanted=id.toStdString();
-                const bool direct=snapshot.entities().contains(wanted) ||
-                    annotation_child_exists(snapshot,wanted) ||
-                    (siteCanvas(m_architecturalCanvas) && m_site_annotation_targets.contains(id));
-                if (!direct)
-                    if (const auto host=assembly_host_for_child(snapshot,wanted)) id=id_from(*host);
-                if ((snapshot.entities().contains(id.toStdString()) ||
-                     annotation_child_exists(snapshot,id.toStdString()) ||
-                     (siteCanvas(m_architecturalCanvas) && m_site_annotation_targets.contains(id)) ||
-                     assembly_root_catalog_for_child(snapshot,id.toStdString())) &&
-                    !m_selected_ids.contains(id)) m_selected_ids.push_back(id);
-            }
-            m_selected_id=m_selected_ids.isEmpty() ? QString{} : m_selected_ids.back();
-            if (!refreshRetainedSelection(publication)) refresh();
-            return true;
+            const auto source=std::make_shared<DocumentSnapshot>(authoringSnapshot());
+            return selectRoofOpeningMarquee(source,ids,{},additive,false);
         } catch (const std::exception& error) {
-            m_selected_id=previous_id;
-            m_selected_ids=previous_ids;
-            m_selected_generated_labels=previous_labels;
-            m_active_layer_id=previous_layer;
-            setRoofOpeningSelectionState(previous_children,previous_native_child);
-            if (m_measurementCanvas) m_measurementCanvas->setSelectedRoofOpenings(previous_children);
-            if (m_architecturalCanvas) m_architecturalCanvas->setSelectedRoofOpenings(previous_children);
-            synchronizeNativeSelection();
-            setError(QStringLiteral("Selection: %1").arg(QString::fromUtf8(error.what())));
-            return false;
+            setError(QStringLiteral("Selection: %1").arg(QString::fromUtf8(error.what()))); return false;
         }
     }
 
@@ -25081,6 +25023,8 @@ public:
     SelectionTranslationParts prepareSelectionTranslation(const DocumentSnapshot& source,
         const QStringList& ids, Vec2 delta, PlanCanvas* canvas,
         const std::optional<BuildingViewFrame>* captured_frame = nullptr) {
+        if (mixedSemanticSelection())
+            throw std::invalid_argument("Move for the complete mixed object and skylight selection is not yet available.");
         if (!m_selected_roof_openings.empty())
             throw std::invalid_argument("Move the selected skylight using its plan grips or Properties, not the containing roof.");
         auto model_delta=delta;
@@ -30655,6 +30599,7 @@ public:
     bool resizeSelectionAxesFromCanvas(const QString& requested_id, double scale_x,
                                        double scale_y, Vec2 anchor) {
         try {
+            if (rejectMixedSelectionCommand(QStringLiteral("Resize"))) return false;
             if (!m_selected_roof_openings.empty())
                 throw std::invalid_argument("Use the selected skylight's own size grips.");
             if (m_presentation_transform_capture)
@@ -30867,6 +30812,7 @@ public:
 
     bool transformSelectionFromCanvas(const QString& requested_id, double relative_scale,
                                       double rotation_radians) {
+        if (rejectMixedSelectionCommand(QStringLiteral("Transform"))) return false;
         if (!m_selected_roof_openings.empty()) {
             setError(QStringLiteral("Use the selected skylight's own rotation or size grips."));
             return false;
@@ -31556,6 +31502,7 @@ public:
 
     bool copySelection() {
         try {
+            if (rejectMixedSelectionCommand(QStringLiteral("Copy"))) return false;
             if (!m_selected_roof_openings.empty()) return copyRoofOpeningSelection(false);
             if (const auto selected = selectedEntity(); m_selected_ids.size() == 1 && selected && selected->type == "corner_window")
                 return copyCornerWindowSelection(false);
@@ -33625,6 +33572,7 @@ public:
 
     bool cutSelection() {
         try {
+            if (rejectMixedSelectionCommand(QStringLiteral("Cut"))) return false;
             if (!m_selected_roof_openings.empty()) return copyRoofOpeningSelection(true);
             if (const auto selected = selectedEntity(); m_selected_ids.size() == 1 && selected && selected->type == "corner_window")
                 return copyCornerWindowSelection(true);
@@ -34222,6 +34170,7 @@ public:
 
     bool deleteSelection() {
         try {
+            if (rejectMixedSelectionCommand(QStringLiteral("Delete"))) return false;
             if (!m_selected_roof_openings.empty()) return deleteRoofOpeningSelection();
             const auto source = authoringSnapshot();
             if (!source.is_editable()) throw std::invalid_argument("This document is read-only.");
@@ -38511,7 +38460,8 @@ public:
             // cannot remain the authority for subsequent plan child actions.
             try {
                 const auto source=captureCanvasGeometrySource(canvas,m_selected_roof_openings.front().source_revision,false);
-                (void)adoptRoofOpeningSelection(source,m_selected_roof_openings,false);
+                (void)adoptSemanticSelection(source,ordinarySelectionIDs(),m_selected_roof_openings,false,
+                    m_selected_primary_roof_opening,false,m_selected_semantic_order);
             } catch (const std::exception& error) {
                 setError(QStringLiteral("Skylight selection: %1").arg(QString::fromUtf8(error.what())));
             }
@@ -49774,6 +49724,20 @@ private:
             if (!selected.contains(mapped)) selected.push_back(mapped);
         }
         m_selected_ids=std::move(selected);
+        if (!m_selected_roof_openings.empty()) {
+            const auto remap=[&](QString& id) {
+                if (const auto found=proposed_ids.find(id.toStdString());found!=proposed_ids.end()) id=id_from(found->second);
+            };
+            for (auto& id:m_selected_ordinary_ids) remap(id);
+            for (auto& target:m_selected_roof_openings) { remap(target.roof_id); remap(target.opening_id); }
+            for (auto& member:m_selected_semantic_order) {
+                if (member.child) { remap(member.child->roof_id); remap(member.child->opening_id); }
+                else remap(member.ordinary_id);
+            }
+            if (m_selected_primary_roof_opening) { remap(m_selected_primary_roof_opening->roof_id); remap(m_selected_primary_roof_opening->opening_id); }
+            setRoofOpeningSelectionState(m_selected_roof_openings,m_roof_opening_native_selection,true);
+            rebuildSemanticSelectionUnion();
+        }
     }
 
     bool applyAuthoredCommand(const Command& requested, bool opening_lifecycle_already_captured = false) {
@@ -51964,34 +51928,29 @@ private:
             m_nativeModelView->setEntitySelectionClickedCallback(
                 [this](QString id, bool toggle) {
                     const auto source=m_nativeModelView->gestureSourceSnapshot();
-                    if (toggle && !m_selected_roof_openings.empty()) {
-                        synchronizeNativeSelection();
-                        setError(QStringLiteral("Mixed skylight and object selection is not yet available. Click the object without Ctrl to select it."));
-                        return;
-                    }
-                    if (!admitNativeSceneInput(false) || !selectEntity(id,toggle)) {
+                    if (!admitNativeSceneInput(false) || !selectOrdinaryFromSource(source,id,toggle,true)) {
                         synchronizeNativeSelection();
                         return;
                     }
-                    completeNativeSelectionAuthority(source);
                 });
             m_nativeModelView->setEntitiesSelectedCallback(
                 [this](QStringList ids, bool additive) {
                     const auto source=m_nativeModelView->gestureSourceSnapshot();
-                    if (additive && !m_selected_roof_openings.empty()) {
-                        synchronizeNativeSelection();
-                        if (!ids.isEmpty()) setError(QStringLiteral("Mixed skylight and object selection is not yet available."));
-                        return;
-                    }
-                    if (!admitNativeSceneInput(false) || !selectEntities(ids,additive)) {
+                    if (!admitNativeSceneInput(false) || !selectRoofOpeningMarquee(source,ids,{},additive,true)) {
                         synchronizeNativeSelection();
                         return;
                     }
-                    completeNativeSelectionAuthority(source);
                 });
+            m_nativeModelView->setEntitySelectionCycledCallback([this](QString id) {
+                const auto source=m_nativeModelView->gestureSourceSnapshot();
+                if (!admitNativeSceneInput(false) || !selectOrdinaryFromSource(source,id,false,true,true))
+                    synchronizeNativeSelection();
+            });
             m_nativeModelView->setEntityEditRequestedCallback([this](QString id) {
                 if (!admitNativeSceneInput(false)) return;
-                if (!m_selected_ids.contains(id) && !selectEntity(id,false)) return;
+                const auto source=m_nativeModelView->gestureSourceSnapshot();
+                if (!selectOrdinaryFromSource(source,id,false,true)) return;
+                if (rejectMixedSelectionCommand(QStringLiteral("Properties"))) return;
                 if (m_selected_ids.size()==1) {
                     if (editEmbeddedAssemblyFromDialog()) return;
                     const auto selected=selectedEntity();
@@ -53371,7 +53330,10 @@ private:
             try { if (siteCanvas(canvas)) requireSitePublicationCurrent(false); }
             catch (const std::exception& error) { cancelSymbolPlacement();clearSitePublication(); setError(QString::fromUtf8(error.what())); return; }
             if (placeArmedCanvasSymbol(canvas)) return;
-            selectEntity(id, toggle);
+            try {
+                const auto source=captureCanvasGeometrySource(canvas,std::nullopt,false);
+                (void)selectOrdinaryFromSource(source,id,toggle,false);
+            } catch (const std::exception& error) { setError(QString::fromUtf8(error.what())); }
         });
         canvas->setRoofOpeningSelectionRequested([this,canvas](CanvasRoofOpeningTarget target) {
             if (hasPendingPlacementEdit() || m_text_placement_context || m_plan_label_context || m_armed_area_class) return false;
@@ -53459,8 +53421,8 @@ private:
                 const auto count=static_cast<qsizetype>(child_targets.size())+targets.size();
                 if (count==0) return true;
                 qsizetype current=-1;
-                if (!m_selected_roof_openings.empty()) {
-                    const auto found=std::find(child_targets.begin(),child_targets.end(),m_selected_roof_openings.back());
+                if (m_selected_primary_roof_opening) {
+                    const auto found=std::find(child_targets.begin(),child_targets.end(),*m_selected_primary_roof_opening);
                     if (found!=child_targets.end()) current=static_cast<qsizetype>(std::distance(child_targets.begin(),found));
                 } else {
                     const auto owner_index=targets.indexOf(m_selected_id);
@@ -53469,7 +53431,7 @@ private:
                 const auto next=current<0 ? qsizetype{0} : (current+1)%count;
                 if (next<static_cast<qsizetype>(child_targets.size()))
                     return selectRoofOpeningFromSource(source,child_targets.at(static_cast<std::size_t>(next)),false,true,false);
-                return selectEntity(targets.at(next-static_cast<qsizetype>(child_targets.size())),false);
+                return selectOrdinaryFromSource(source,targets.at(next-static_cast<qsizetype>(child_targets.size())),false,false,true);
             } catch (const Standard_Failure& error) {
                 setError(QStringLiteral("Selection: %1").arg(QString::fromUtf8(error.GetMessageString())));
             } catch (const std::exception& error) {
@@ -53507,7 +53469,9 @@ private:
                 // Preserve a retained group when the double-clicked item already
                 // belongs to it. A target outside the group becomes the sole
                 // selection before opening the same editor used by Properties.
-                if (!m_selected_ids.contains(id) && !selectEntity(id, false)) return;
+                const auto source=captureCanvasGeometrySource(canvas,std::nullopt,false);
+                if (!selectOrdinaryFromSource(source,id,false,false)) return;
+                if (rejectMixedSelectionCommand(QStringLiteral("Properties"))) return;
                 if (m_selected_ids.size() == 1) {
                     if (editEmbeddedAssemblyFromDialog()) return;
                     const auto selected = selectedEntity();
@@ -53559,7 +53523,8 @@ private:
                             QStringLiteral("Click once to place the component; drag does not change selection while placement is active."));
                     return;
                 }
-                (void)selectEntities(ids,additive);
+                const auto source=captureCanvasGeometrySource(canvas,std::nullopt,false);
+                (void)selectRoofOpeningMarquee(source,ids,{},additive,false);
             } catch (const std::exception& error) {
                 setError(QStringLiteral("Selection: %1").arg(QString::fromUtf8(error.what())));
             }
@@ -53892,7 +53857,10 @@ private:
                 const auto label_hit=keyboard ? std::optional<CanvasLabelPresentationIdentity>{}
                     : canvas->labelPresentationAtModelPoint(point);
                 const auto label=label_hit ? canvas->labelPresentation(*label_hit) : std::nullopt;
-                if (!m_selected_roof_openings.empty() &&
+                const auto retained_child=keyboard || label_hit ? std::optional<CanvasRoofOpeningTarget>{}
+                    : canvas->selectedRoofOpeningAtModelPoint(point);
+                if (retained_child && !selectRoofOpening(canvas,*retained_child)) return;
+                if (!m_selected_roof_openings.empty() && !mixedSemanticSelection() &&
                     (keyboard || (!label_hit && m_selected_ids.contains(target)))) {
                     showRoofOpeningContextMenu(global_position);
                     return;
@@ -53936,8 +53904,9 @@ private:
                     });
                     label_menu.exec(global_position);return;
                 }
-                if (!keyboard && !target.isEmpty() && !m_selected_ids.contains(target)) {
-                    if (!selectEntity(target, false)) return;
+                if (!keyboard && !retained_child && !target.isEmpty() && !ordinarySelectionIDs().contains(target)) {
+                    const auto source=captureCanvasGeometrySource(canvas,std::nullopt,false);
+                    if (!selectOrdinaryFromSource(source,target,false,false,true)) return;
                 }
                 const auto menu_source=captureCanvasGeometrySource(canvas,std::nullopt,false);
                 const auto menu_authority=captureSourceEditAuthority(*menu_source);
@@ -54218,6 +54187,13 @@ private:
             }
             // Legacy single-object authoring commands still set the primary ID.
             // Reconcile that deliberate replacement before presenting selection.
+            if (!m_selected_roof_openings.empty() &&
+                (m_selected_id.isEmpty() || m_selected_ids.isEmpty() || m_selected_ids.back()!=m_selected_id)) {
+                const auto replacement=m_selected_id;
+                clearRoofOpeningSelection();
+                m_selected_id=replacement;
+                m_selected_ids=replacement.isEmpty() ? QStringList{} : QStringList{replacement};
+            }
             if (m_generated_label_selection_document.lock()!=m_document || !m_selected_id.isEmpty())
                 m_selected_generated_labels.clear();
             if (m_selected_id.isEmpty()) m_selected_ids.clear();
@@ -54234,6 +54210,23 @@ private:
                     !assembly_root_catalog_for_child(snapshot, id.toStdString());
             });
             m_selected_id = m_selected_ids.isEmpty() ? QString{} : m_selected_ids.back();
+            if (!m_selected_roof_openings.empty()) {
+                for (auto& member:m_selected_semantic_order) if (member.child) member.child->source_revision=snapshot.revision();
+                m_selected_ordinary_ids.removeIf([&](const QString& id) { return !m_selected_ids.contains(id); });
+                auto children=m_selected_roof_openings;
+                for (auto& child:children) child.source_revision=snapshot.revision();
+                std::erase_if(children,[&](const auto& child) {
+                    try { (void)roofCanvasChild(snapshot,child); return false; }
+                    catch (const std::exception&) { return true; }
+                });
+                if (m_selected_primary_roof_opening) {
+                    m_selected_primary_roof_opening->source_revision=snapshot.revision();
+                    if (std::find(children.begin(),children.end(),*m_selected_primary_roof_opening)==children.end())
+                        m_selected_primary_roof_opening.reset();
+                }
+                setRoofOpeningSelectionState(std::move(children),m_roof_opening_native_selection,true);
+                rebuildSemanticSelectionUnion();
+            }
             m_refreshing = true;
             capture_diagnostic_stage("refresh.refreshCanvases.begin");
             refreshCanvases();
@@ -58620,8 +58613,8 @@ private:
         }
         m_plan_error_banner->setText(m_plan_geometry_error);
         m_plan_error_banner->setVisible(!m_plan_geometry_error.isEmpty());
-        m_measurementCanvas->setSelectedIds(m_selected_ids);
-        m_architecturalCanvas->setSelectedIds(m_selected_ids);
+        m_measurementCanvas->setSelectedIds(ordinarySelectionIDs());
+        m_architecturalCanvas->setSelectedIds(ordinarySelectionIDs());
         const auto* selected_canvas=m_workspace==Workspace::measurement ? m_measurementCanvas : m_architecturalCanvas;
         if (!siteCanvas(selected_canvas)) retainGeneratedLabelSelection(selected_canvas->labels());
         m_measurementCanvas->setSelectedGeneratedLabelPresentations(m_selected_generated_labels);
@@ -58643,11 +58636,20 @@ private:
                     throw std::invalid_argument("The Site Plan source changed during scene preparation.");
                 // Rebase presentation aliases by captured typed identity before
                 // capturing the authority that accompanies the new canvas.
-                m_selected_ids=remapSiteAnnotationSelection(m_selected_ids,previous_site_annotation_targets,local.annotation_targets);
-                m_selected_id=m_selected_ids.isEmpty() ? QString{} : m_selected_ids.back();
-                for(auto& item:local.geometry)item.selected=m_selected_ids.contains(item.id);
-                for(auto& item:local.labels)item.selected=!item.plan_only && m_selected_ids.contains(item.id);
-                for(auto& item:local.references)item.selected=m_selected_ids.contains(item.id);
+                if (m_selected_roof_openings.empty()) {
+                    m_selected_ids=remapSiteAnnotationSelection(m_selected_ids,previous_site_annotation_targets,local.annotation_targets);
+                    m_selected_id=m_selected_ids.isEmpty() ? QString{} : m_selected_ids.back();
+                } else {
+                    m_selected_ordinary_ids=remapSiteAnnotationSelection(m_selected_ordinary_ids,previous_site_annotation_targets,local.annotation_targets);
+                    for (auto& member:m_selected_semantic_order) if (!member.child) {
+                        const auto remapped=remapSiteAnnotationSelection({member.ordinary_id},previous_site_annotation_targets,local.annotation_targets);
+                        member.ordinary_id=remapped.isEmpty() ? QString{} : remapped.front();
+                    }
+                    rebuildSemanticSelectionUnion();
+                }
+                for(auto& item:local.geometry)item.selected=ordinarySelectionIDs().contains(item.id);
+                for(auto& item:local.labels)item.selected=!item.plan_only && ordinarySelectionIDs().contains(item.id);
+                for(auto& item:local.references)item.selected=ordinarySelectionIDs().contains(item.id);
                 retainGeneratedLabelSelection(local.labels);
                 const auto authority=captureSourceEditAuthority(*source);
                 auto site=local;
@@ -58664,8 +58666,8 @@ private:
                 m_architecturalCanvas->setLabels(std::move(site.labels));
                 m_architecturalCanvas->setReferences(std::move(site.references));
                 m_architecturalCanvas->setReferenceGrids(std::move(site.grids));
-                m_architecturalCanvas->setSelectedIds(m_selected_ids);
-                m_measurementCanvas->setSelectedIds(m_selected_ids);
+                m_architecturalCanvas->setSelectedIds(ordinarySelectionIDs());
+                m_measurementCanvas->setSelectedIds(ordinarySelectionIDs());
                 m_architecturalCanvas->setSelectedGeneratedLabelPresentations(m_selected_generated_labels);
                 m_measurementCanvas->setSelectedGeneratedLabelPresentations(m_selected_generated_labels);
                 m_architecturalCanvas->clearFloorGhost();
@@ -58738,6 +58740,9 @@ private:
             authority.roof_opening_selection=m_selected_roof_opening;
             authority.native_roof_opening_selection=m_roof_opening_native_selection;
             authority.roof_opening_cohort=m_selected_roof_openings;
+            authority.ordinary_selection=ordinarySelectionIDs();
+            authority.primary_roof_opening=m_selected_primary_roof_opening;
+            authority.semantic_selection_order=m_selected_semantic_order;
             if (sourceEditAuthorityCurrent(authority,false)) m_site_publication_authority=std::move(authority);
         }
     }
@@ -60242,6 +60247,13 @@ private:
 
     void refreshInspector() {
         m_opening_property_context.reset();
+        if (mixedSemanticSelection()) {
+            m_dimension_edit_context.reset(); m_dimension_edit_source.reset();
+            m_roof_edit_context.reset(); m_roof_edit_source.reset();
+            m_building_edit_context.reset(); m_building_edit_source.reset();
+            if (m_inspector) m_inspector->hide();
+            return;
+        }
         if (m_opening_classification_choices) {
             QSignalBlocker blocker(m_classification_combo);
             m_classification_combo->clear();
@@ -61230,6 +61242,7 @@ private:
     }
 
     void positionContextEditor(bool open_corner = false) {
+        if (rejectMixedSelectionCommand(QStringLiteral("Properties"))) return;
         if (!m_selected_roof_openings.empty()) { showRoofOpeningQuickProperties(); return; }
         if (const auto selected = selectedEntity(); selected && selected->type == "corner_window") {
             if (m_inspector) m_inspector->hide();
@@ -61274,6 +61287,7 @@ private:
     }
 
     [[nodiscard]] std::pair<bool, bool> selectionTransformCapabilities() const {
+        if (!m_selected_roof_openings.empty()) return {false,false};
         if (m_selected_ids.size() != 1 || !m_document->is_editable()) return {false, false};
         const auto wanted = m_selected_ids.front().toStdString();
         const auto snapshot = authoringSnapshot();
@@ -61313,8 +61327,17 @@ private:
     }
 
     [[nodiscard]] QString selectionCaption() const {
-        if (m_selected_roof_openings.size()>1) return QStringLiteral("%1 skylights selected").arg(m_selected_roof_openings.size());
-        if (m_selected_roof_opening) return QStringLiteral("Selected: Skylight");
+        const auto actual_count=ordinarySelectionIDs().size()+static_cast<qsizetype>(m_selected_roof_openings.size());
+        if (actual_count>1) return QStringLiteral("%1 selected").arg(actual_count);
+        if (m_selected_roof_opening) {
+            try {
+                const auto source=authoringSnapshot();
+                const auto& child=roofCanvasChild(source,*m_selected_roof_opening);
+                const auto name=child.value("name",std::string{});
+                if (!name.empty()) return QStringLiteral("Selected: %1").arg(QString::fromStdString(name));
+            } catch (const std::exception&) {}
+            return QStringLiteral("Selected: Skylight");
+        }
         if (!m_selected_generated_labels.empty()) {
             if (m_selected_generated_labels.size()>1)
                 return QStringLiteral("%1 labels selected").arg(static_cast<qulonglong>(m_selected_generated_labels.size()));
@@ -61458,6 +61481,7 @@ private:
                 resize_selection=true;rotate_selection=true;
             }
         }
+        if (!m_selected_roof_openings.empty()) { axis_resize=false; resize_selection=false; rotate_selection=false; }
         if (m_measurementCanvas) m_measurementCanvas->setSelectionAxisResizeEnabled(axis_resize);
         if (m_architecturalCanvas) m_architecturalCanvas->setSelectionAxisResizeEnabled(
             axis_resize && (m_site_plan_active || m_architectural_view_kind == BuildingViewKind::plan));
@@ -61466,7 +61490,8 @@ private:
         if (m_architecturalCanvas)
             m_architecturalCanvas->setSelectionTransformEnabled(resize_selection, rotate_selection);
         const bool architectural = m_workspace == Workspace::architectural;
-        if (m_site_placement_action) m_site_placement_action->setEnabled(m_document->is_editable() && !hasPendingPlacementEdit());
+        if (m_site_placement_action) m_site_placement_action->setEnabled(m_document->is_editable() &&
+            !hasPendingPlacementEdit() && m_selected_roof_openings.empty());
         if (m_phase_heading) m_phase_heading->setVisible(architectural);
         if (m_phase_registry_combo) m_phase_registry_combo->setVisible(architectural && m_phase_registry_combo->count() > 1);
         if (m_model_phase_combo) m_model_phase_combo->setVisible(architectural);
@@ -62256,6 +62281,13 @@ private:
     }
 
     void clearRoofOpeningSelection() {
+        if (!m_selected_roof_openings.empty()) {
+            m_selected_ids=m_selected_ordinary_ids;
+            m_selected_id=m_selected_ids.isEmpty() ? QString{} : m_selected_ids.back();
+        }
+        m_selected_ordinary_ids.clear();
+        m_selected_primary_roof_opening.reset();
+        m_selected_semantic_order.clear();
         cancelRoofOpeningCanvasPreview();
         cancelNativeRoofOpeningPreview();
         m_selected_roof_openings.clear();
@@ -62266,11 +62298,60 @@ private:
         if (m_nativeModelView && !m_native_selection_sync_deferred) m_nativeModelView->setSelectedRoofOpenings({});
     }
 
-    void setRoofOpeningSelectionState(std::vector<CanvasRoofOpeningTarget> children,bool native) {
+    void setRoofOpeningSelectionState(std::vector<CanvasRoofOpeningTarget> children,bool native,bool preserve_ordinary=false) {
+        if (!preserve_ordinary) {
+            m_selected_semantic_order.clear();
+            for (const auto& child:children) m_selected_semantic_order.push_back({{},child});
+            m_selected_ordinary_ids.clear();
+            m_selected_primary_roof_opening=children.empty() ? std::nullopt : std::optional{children.back()};
+        }
         m_selected_roof_openings=std::move(children);
         m_selected_roof_opening=m_selected_roof_openings.size()==1 ?
             std::optional{m_selected_roof_openings.front()} : std::nullopt;
         m_roof_opening_native_selection=native && !m_selected_roof_openings.empty();
+    }
+
+    const QStringList& ordinarySelectionIDs() const {
+        return m_selected_roof_openings.empty() ? m_selected_ids : m_selected_ordinary_ids;
+    }
+
+    bool mixedSemanticSelection() const {
+        return !m_selected_roof_openings.empty() && !m_selected_ordinary_ids.isEmpty();
+    }
+
+    bool rejectMixedSelectionCommand(const QString& command) {
+        if (!mixedSemanticSelection()) return false;
+        setError(QStringLiteral("%1 for the complete mixed object and skylight selection is not yet available.").arg(command));
+        return true;
+    }
+
+    void rebuildSemanticSelectionUnion() {
+        std::erase_if(m_selected_semantic_order,[&](const auto& member) {
+            return member.child ? std::find(m_selected_roof_openings.begin(),m_selected_roof_openings.end(),*member.child)==m_selected_roof_openings.end() :
+                !m_selected_ordinary_ids.contains(member.ordinary_id);
+        });
+        if (!m_selected_semantic_order.empty()) {
+            const auto& primary=m_selected_semantic_order.back();
+            m_selected_primary_roof_opening=primary.child;
+            if (!primary.child) {
+                m_selected_ordinary_ids.removeAll(primary.ordinary_id); m_selected_ordinary_ids.push_back(primary.ordinary_id);
+            }
+        }
+        if (m_selected_roof_openings.empty()) {
+            m_selected_ids=m_selected_ordinary_ids;
+            m_selected_ordinary_ids.clear();
+            m_selected_primary_roof_opening.reset();
+            m_selected_semantic_order.clear();
+        } else {
+            m_selected_ids=m_selected_ordinary_ids;
+            for (const auto& id:roofOpeningOwnerSelection(m_selected_roof_openings))
+                if (!m_selected_ids.contains(id)) m_selected_ids.push_back(id);
+        }
+        const auto primary=m_selected_primary_roof_opening ? m_selected_primary_roof_opening->roof_id :
+            (!ordinarySelectionIDs().isEmpty() ? ordinarySelectionIDs().back() :
+                (m_selected_roof_openings.empty() ? QString{} : m_selected_roof_openings.back().roof_id));
+        if (!primary.isEmpty()) { m_selected_ids.removeAll(primary); m_selected_ids.push_back(primary); }
+        m_selected_id=primary;
     }
 
     void synchronizeNativeSelection() {
@@ -62278,10 +62359,14 @@ private:
         std::vector<visualization::NativeRoofOpeningTarget> children;
         for (const auto& child:m_selected_roof_openings)
             children.push_back({child.roof_id,child.opening_id});
-        m_nativeModelView->setSemanticSelections(m_selected_ids,std::move(children));
+        const auto primary=m_selected_primary_roof_opening ?
+            std::optional{visualization::NativeRoofOpeningTarget{m_selected_primary_roof_opening->roof_id,m_selected_primary_roof_opening->opening_id}} : std::nullopt;
+        m_nativeModelView->setSemanticSelections(ordinarySelectionIDs(),std::move(children),primary);
     }
 
     std::shared_ptr<const DocumentSnapshot> selectedRoofOpeningCohortSource(bool require_editable=true) {
+        if (require_editable && mixedSemanticSelection())
+            throw std::invalid_argument("This skylight command cannot apply to the complete mixed object and skylight selection yet.");
         if (m_selected_roof_openings.empty()) throw std::invalid_argument("Select a skylight first.");
         const auto revision=m_selected_roof_openings.front().source_revision;
         std::shared_ptr<const DocumentSnapshot> source;
@@ -62303,6 +62388,7 @@ private:
             (void)roofCanvasChild(*source,target);
             if (!owners.contains(target.roof_id)) owners.push_back(target.roof_id);
         }
+        for (const auto& id:ordinarySelectionIDs()) if (!owners.contains(id)) owners.push_back(id);
         auto selected=m_selected_ids;
         std::sort(owners.begin(),owners.end()); std::sort(selected.begin(),selected.end());
         if (owners!=selected)
@@ -62326,8 +62412,10 @@ private:
         return owners;
     }
 
-    bool adoptRoofOpeningSelection(const std::shared_ptr<const DocumentSnapshot>& source,
-        std::vector<CanvasRoofOpeningTarget> children,bool native) {
+    bool adoptSemanticSelection(const std::shared_ptr<const DocumentSnapshot>& source,
+        QStringList ordinary,std::vector<CanvasRoofOpeningTarget> children,bool native,
+        std::optional<CanvasRoofOpeningTarget> primary_child,bool adopt_layer=true,
+        std::vector<SemanticSelectionMember> order={}) {
         if (!source || fullSnapshotDigest(*source)!=fullSnapshotDigest(authoringSnapshot()))
             throw std::invalid_argument("The displayed source changed before skylight selection.");
         std::vector<CanvasRoofOpeningTarget> unique;
@@ -62343,22 +62431,49 @@ private:
         const auto previous_ids=m_selected_ids;
         const auto previous_layer=m_active_layer_id;
         const auto previous_labels=m_selected_generated_labels;
+        const auto previous_ordinary=m_selected_ordinary_ids;
+        const auto previous_primary=m_selected_primary_roof_opening;
+        const auto previous_order=m_selected_semantic_order;
+        const auto previous_plan_authority=m_plan_publication_authority;
+        const auto previous_site_authority=m_site_publication_authority;
+        const auto previous_native_authority=m_native_input_authority;
+        const auto previous_plan_source=m_plan_publication_source;
+        const auto previous_site_source=m_site_publication_source;
+        const auto previous_site_generation=m_site_publication_generation;
+        const auto previous_native_source=m_nativeModelView ? m_nativeModelView->preparationSourceSnapshot() : nullptr;
         try {
+            QStringList normalized;
+            for (const auto& id:ordinary) {
+                const auto resolved=normalizeOrdinarySelection(*source,id,true);
+                if (!normalized.contains(resolved)) normalized.push_back(resolved);
+            }
+            if (primary_child && std::find(unique.begin(),unique.end(),*primary_child)==unique.end()) primary_child.reset();
             const auto publication=captureRetainedSelectionPublication(*source);
             {
                 const QScopedValueRollback<bool> defer_native(m_native_selection_sync_deferred,true);
                 cancelRoofOpeningCanvasPreview();
-                m_selected_ids=roofOpeningOwnerSelection(unique);
-                m_selected_id=unique.empty() ? QString{} : unique.back().roof_id;
+                cancelNativeRoofOpeningPreview();
+                m_selected_ordinary_ids=std::move(normalized);
+                m_selected_primary_roof_opening=primary_child;
+                setRoofOpeningSelectionState(std::move(unique),native,true);
+                if (order.empty()) {
+                    for (const auto& id:m_selected_ordinary_ids) order.push_back({id,std::nullopt});
+                    for (const auto& child:m_selected_roof_openings) order.push_back({{},child});
+                    if (!primary_child && !m_selected_ordinary_ids.isEmpty()) {
+                        const SemanticSelectionMember primary{m_selected_ordinary_ids.back(),std::nullopt};
+                        std::erase(order,primary); order.push_back(primary);
+                    }
+                }
+                m_selected_semantic_order=std::move(order);
+                rebuildSemanticSelectionUnion();
                 m_selected_generated_labels.clear();
                 // Child owners remain internal identities. Do not call ordinary
                 // selection and expose a transient containing-roof frame.
-                if (!unique.empty()) {
-                    const auto context=organize_project(*source).drawing_context(unique.back().roof_id.toStdString());
+                if (adopt_layer && m_selected_primary_roof_opening) {
+                    const auto context=organize_project(*source).drawing_context(m_selected_primary_roof_opening->roof_id.toStdString());
                     if (!context) throw std::invalid_argument("The skylight has no drawing layer.");
                     m_active_layer_id=id_from(context->layer_id);
-                }
-                setRoofOpeningSelectionState(std::move(unique),native);
+                } else if (adopt_layer) adoptOrdinarySelectionLayer(*source,m_selected_id);
                 if (m_inspector) m_inspector->hide();
                 refreshRoofOpeningControls(*source);
                 if (!refreshRetainedSelection(publication)) refresh();
@@ -62369,9 +62484,23 @@ private:
         } catch (...) {
             m_selected_id=previous_id; m_selected_ids=previous_ids;
             m_active_layer_id=previous_layer; m_selected_generated_labels=previous_labels;
-            setRoofOpeningSelectionState(previous,previous_native);
+            m_selected_ordinary_ids=previous_ordinary;
+            m_selected_primary_roof_opening=previous_primary;
+            m_selected_semantic_order=previous_order;
+            setRoofOpeningSelectionState(previous,previous_native,true);
+            m_plan_publication_authority=previous_plan_authority;
+            m_site_publication_authority=previous_site_authority;
+            m_native_input_authority=previous_native_authority;
+            // A full refresh can publish a different layer/alias frame before
+            // failing. Restored selection cannot grant that frame old authority.
+            if (previous_plan_source!=m_plan_publication_source) m_plan_publication_authority.reset();
+            if (previous_site_source!=m_site_publication_source || previous_site_generation!=m_site_publication_generation)
+                m_site_publication_authority.reset();
+            if (m_nativeModelView && previous_native_source!=m_nativeModelView->preparationSourceSnapshot()) m_native_input_authority.reset();
             if (m_measurementCanvas) m_measurementCanvas->setSelectedRoofOpenings(previous);
             if (m_architecturalCanvas) m_architecturalCanvas->setSelectedRoofOpenings(previous);
+            if (m_measurementCanvas) m_measurementCanvas->setSelectedIds(ordinarySelectionIDs());
+            if (m_architecturalCanvas) m_architecturalCanvas->setSelectedIds(ordinarySelectionIDs());
             synchronizeNativeSelection();
             throw;
         }
@@ -62380,21 +62509,25 @@ private:
     bool selectRoofOpeningFromSource(const std::shared_ptr<const DocumentSnapshot>& source,
         CanvasRoofOpeningTarget target,bool toggle,bool replace,bool native) {
         (void)roofCanvasChild(*source,target);
+        auto ordinary=ordinarySelectionIDs();
+        auto order=semanticSelectionOrder();
         auto children=m_selected_roof_openings;
         const auto found=std::find(children.begin(),children.end(),target);
+        const bool removing=toggle && found!=children.end();
+        std::erase_if(order,[&](const auto& member) { return member.child==std::optional{target}; });
         if (toggle) {
-            if (children.empty() && !m_selected_ids.isEmpty())
-                throw std::invalid_argument("Mixed skylight and object selection is not yet available.");
             if (!children.empty() && fullSnapshotDigest(*selectedRoofOpeningCohortSource(false))!=fullSnapshotDigest(*source))
                 throw std::invalid_argument("The displayed skylight group changed. Select it again.");
             if (found!=children.end()) children.erase(found);
             else children.push_back(target);
-        } else if (replace || found==children.end()) children={target};
+        } else if (replace || found==children.end()) { children={target}; ordinary.clear(); order.clear(); }
         else {
             // Retain the group and make the actual clicked member primary.
             children.erase(found); children.push_back(target);
         }
-        return adoptRoofOpeningSelection(source,std::move(children),native);
+        const auto primary=children.empty() ? std::nullopt : std::optional{children.back()};
+        if (!removing) order.push_back({{},target});
+        return adoptSemanticSelection(source,std::move(ordinary),std::move(children),native,primary,true,std::move(order));
     }
 
     bool selectNativeRoofOpening(visualization::NativeRoofOpeningTarget child,bool toggle,bool replace=false) {
@@ -62415,19 +62548,24 @@ private:
         try {
             if (!source || fullSnapshotDigest(*source)!=fullSnapshotDigest(authoringSnapshot()))
                 throw std::invalid_argument("The displayed source changed during selection.");
-            if (children.empty() && (!additive || m_selected_roof_openings.empty())) {
-                if (!selectEntities(owners,additive)) return false;
-                if (native) completeNativeSelectionAuthority(source);
-                return true;
+            auto ordinary=additive ? ordinarySelectionIDs() : QStringList{};
+            auto order=additive ? semanticSelectionOrder() : std::vector<SemanticSelectionMember>{};
+            for (const auto& id:owners) {
+                const auto resolved=normalizeOrdinarySelection(*source,id,false);
+                if (!resolved.isEmpty() && !ordinary.contains(resolved)) { ordinary.push_back(resolved); order.push_back({resolved,std::nullopt}); }
             }
-            if (!owners.isEmpty() || (additive && m_selected_roof_openings.empty() && !m_selected_ids.isEmpty()))
-                throw std::invalid_argument("Mixed skylight and object selection is not yet available. Select the skylights without including roof boundaries or other objects.");
             auto selected=additive ? m_selected_roof_openings : std::vector<CanvasRoofOpeningTarget>{};
             if (additive && !selected.empty() &&
                 fullSnapshotDigest(*selectedRoofOpeningCohortSource(false))!=fullSnapshotDigest(*source))
                 throw std::invalid_argument("The displayed skylight group changed during selection.");
             selected.insert(selected.end(),children.begin(),children.end());
-            return adoptRoofOpeningSelection(source,std::move(selected),native);
+            for (const auto& child:children) {
+                const SemanticSelectionMember member{{},child};
+                if (std::find(order.begin(),order.end(),member)==order.end()) order.push_back(member);
+            }
+            const auto primary=!children.empty() ? std::optional{children.back()} :
+                (owners.isEmpty() && additive ? m_selected_primary_roof_opening : std::nullopt);
+            return adoptSemanticSelection(source,std::move(ordinary),std::move(selected),native,primary,false,std::move(order));
         } catch (const std::exception& error) {
             synchronizeNativeSelection();
             setError(QStringLiteral("Skylight selection: %1").arg(QString::fromUtf8(error.what())));
@@ -62517,7 +62655,9 @@ private:
                     target.source_revision=source.revision();
                     (void)roofCanvasChild(source,target);
                 }
-                setRoofOpeningSelectionState(std::move(current),m_roof_opening_native_selection);
+                if (m_selected_primary_roof_opening) m_selected_primary_roof_opening->source_revision=source.revision();
+                for (auto& member:m_selected_semantic_order) if (member.child) member.child->source_revision=source.revision();
+                setRoofOpeningSelectionState(std::move(current),m_roof_opening_native_selection,true);
             } catch (const std::exception&) { clearRoofOpeningSelection(); }
         }
         synchronizeNativeSelection();
@@ -62988,6 +63128,7 @@ private:
     }
 
     bool copyRoofOpeningSelection(bool cut) {
+        if (rejectMixedSelectionCommand(cut ? QStringLiteral("Cut") : QStringLiteral("Copy"))) return false;
         try {
             if (m_selected_roof_openings.empty()) return false;
             const auto targets=m_selected_roof_openings;
@@ -63113,7 +63254,8 @@ private:
         replacement.opening_id=id_from(alternativeReplacementTargetID(command,target.opening_id.toStdString()));
         replacement.source_revision=authoringSnapshot().revision();
         cancelRoofOpeningCanvasPreview();
-        m_selected_id=replacement.roof_id; m_selected_ids={m_selected_id};
+        m_selected_id=removed ? QString{} : replacement.roof_id;
+        m_selected_ids=removed ? QStringList{} : QStringList{m_selected_id};
         setRoofOpeningSelectionState(removed ? std::vector<CanvasRoofOpeningTarget>{} :
             std::vector<CanvasRoofOpeningTarget>{replacement},m_roof_opening_native_selection);
         clearError(); refresh(); return true;
@@ -63152,23 +63294,15 @@ private:
             if (m_selected_roof_openings.empty()) return false;
             const auto targets=m_selected_roof_openings;
             const auto source=selectedRoofOpeningCohortSource();
-            std::map<std::string,RoofEditIntent,std::less<>> grouped;
-            for (const auto& target:targets) {
-                const auto id=target.roof_id.toStdString();
-                auto& edit=grouped[id]; edit.roof_id=id; edit.coordinate_world_hosted_geometry=true;
-                if (!edit.openings) edit.openings=RoofOpeningEditIntent{};
-                auto& intent=*edit.openings;
-                intent.roof_id=id; intent.uses_skylight_schema=true;
-                intent.uses_rotation_schema=source->entities().at(id).properties.at("version")==4;
-                intent.removed_opening_ids.push_back(target.opening_id.toStdString());
-            }
-            std::vector<RoofEditIntent> edits;
-            for (auto& [id,edit]:grouped) edits.push_back(std::move(edit));
+            std::vector<RoofOpeningGroupMember> members;
+            for (const auto& target:targets) members.push_back({target.roof_id.toStdString(),target.opening_id.toStdString()});
+            const auto edits=prepare_roof_opening_group_removal(source->entities(),members);
             return applyRoofOpeningCohortIntents(source,targets,edits,true);
         } catch (const std::exception& error) { setError(QString::fromUtf8(error.what())); return false; }
     }
 
     void showRoofOpeningGroupProperties() {
+        if (rejectMixedSelectionCommand(QStringLiteral("Properties"))) return;
         try {
             if (m_selected_roof_openings.size()<2) return;
             const auto targets=m_selected_roof_openings;
@@ -63263,6 +63397,7 @@ private:
     }
 
     void showRoofOpeningContextMenu(QPoint global_position) {
+        if (rejectMixedSelectionCommand(QStringLiteral("Skylight actions"))) return;
         try {
             if (m_selected_roof_openings.empty()) return;
             const auto captured=m_selected_roof_openings;
@@ -63308,6 +63443,7 @@ private:
     }
 
     void showRoofOpeningQuickProperties() {
+        if (rejectMixedSelectionCommand(QStringLiteral("Properties"))) return;
         try {
             if (m_selected_roof_openings.size()>1) { showRoofOpeningGroupProperties(); return; }
             if (!m_selected_roof_opening) return;
@@ -65325,6 +65461,9 @@ private:
         std::optional<CanvasRoofOpeningTarget> roof_opening_selection;
         bool native_roof_opening_selection;
         std::vector<CanvasRoofOpeningTarget> roof_opening_cohort;
+        QStringList ordinary_selection;
+        std::optional<CanvasRoofOpeningTarget> primary_roof_opening;
+        std::vector<SemanticSelectionMember> semantic_selection_order;
     };
 
     struct RetainedSelectionPublication {
@@ -65372,7 +65511,8 @@ private:
         return {captureModalContext(), m_workspace, m_selected_ids, m_view_filter,
                 m_architectural_view_kind, m_active_named_view, m_active_named_view_owner,
                 fullSnapshotDigest(source), workspaceAuthorityToken(), !m_recovery_ledger.empty(),
-                m_selected_roof_opening,m_roof_opening_native_selection,m_selected_roof_openings};
+                m_selected_roof_opening,m_roof_opening_native_selection,m_selected_roof_openings,
+                ordinarySelectionIDs(),m_selected_primary_roof_opening,m_selected_semantic_order};
     }
 
     bool sourceEditAuthorityContextCurrent(const SourceEditAuthority& authority, bool require_editable=true) const {
@@ -65389,6 +65529,9 @@ private:
             authority.roof_opening_selection==m_selected_roof_opening &&
             authority.native_roof_opening_selection==m_roof_opening_native_selection &&
             authority.roof_opening_cohort==m_selected_roof_openings &&
+            authority.ordinary_selection==ordinarySelectionIDs() &&
+            authority.primary_roof_opening==m_selected_primary_roof_opening &&
+            authority.semantic_selection_order==m_selected_semantic_order &&
             authority.recovery_authority==!m_recovery_ledger.empty();
     }
 
@@ -65453,24 +65596,27 @@ private:
         authority.roof_opening_selection=m_selected_roof_opening;
         authority.native_roof_opening_selection=m_roof_opening_native_selection;
         authority.roof_opening_cohort=m_selected_roof_openings;
+        authority.ordinary_selection=ordinarySelectionIDs();
+        authority.primary_roof_opening=m_selected_primary_roof_opening;
+        authority.semantic_selection_order=m_selected_semantic_order;
         if (!publication_current() || !sourceEditAuthorityCurrent(authority,false)) return false;
         const auto renewed=std::make_shared<const SourceEditAuthority>(authority);
         const QScopedValueRollback<bool> refreshing(m_refreshing,true);
         try {
-            m_measurementCanvas->setSelectedIds(m_selected_ids);
-            m_architecturalCanvas->setSelectedIds(m_selected_ids);
+            m_measurementCanvas->setSelectedIds(ordinarySelectionIDs());
+            m_architecturalCanvas->setSelectedIds(ordinarySelectionIDs());
             m_measurementCanvas->setSelectedGeneratedLabelPresentations(m_selected_generated_labels);
             m_architecturalCanvas->setSelectedGeneratedLabelPresentations(m_selected_generated_labels);
             if (retained.site) {
                 // Later gesture previews take local ink from this publication,
                 // so its transient selection flags must match the visible ink.
-                for (auto& item:m_site_publication_local_geometry) item.selected=m_selected_ids.contains(item.id);
-                for (auto& item:m_site_publication_local_references) item.selected=m_selected_ids.contains(item.id);
+                for (auto& item:m_site_publication_local_geometry) item.selected=ordinarySelectionIDs().contains(item.id);
+                for (auto& item:m_site_publication_local_references) item.selected=ordinarySelectionIDs().contains(item.id);
                 for (auto& item:m_site_publication_local_labels)
                     item.selected=item.avoid_components
                         ? std::find(m_selected_generated_labels.begin(),m_selected_generated_labels.end(),
                             CanvasLabelPresentationIdentity{item.id,item.callout_role,item.selection_type})!=m_selected_generated_labels.end()
-                        : !item.plan_only && m_selected_ids.contains(item.id);
+                        : !item.plan_only && ordinarySelectionIDs().contains(item.id);
             }
             {
                 const QSignalBlocker tree_blocker(m_navigator);
@@ -65515,6 +65661,9 @@ private:
 
     bool showSitePlacement() {
         try {
+            if (rejectMixedSelectionCommand(QStringLiteral("Site placement"))) return false;
+            if (!m_selected_roof_openings.empty())
+                throw std::invalid_argument("Site placement requires an explicitly selected object, not a skylight's containing roof.");
             if (hasPendingPlacementEdit())
                 throw std::invalid_argument("Finish or cancel the pending drawing or placement before editing site coordinates.");
             const auto source = authoringSnapshot();
@@ -65603,6 +65752,8 @@ private:
     }
 
     void captureNativeRoofOpeningGesture(std::vector<visualization::NativeRoofOpeningTarget> targets) {
+        if (mixedSemanticSelection())
+            throw std::invalid_argument("Transform for the complete mixed object and skylight selection is not yet available.");
         cancelNativeRoofOpeningPreview();
         const auto source=m_nativeModelView->gestureSourceSnapshot();
         if (!source || !admitNativeSceneInput(false) || targets.empty() ||
@@ -69204,6 +69355,11 @@ private:
     std::optional<PendingOpeningPlacementPreview> m_pending_opening_placement_preview;
     std::optional<CanvasRoofOpeningTarget> m_selected_roof_opening;
     std::vector<CanvasRoofOpeningTarget> m_selected_roof_openings;
+    // Populated only while typed children exist; roof owners in the legacy
+    // union are not implicitly ordinary selections.
+    QStringList m_selected_ordinary_ids;
+    std::optional<CanvasRoofOpeningTarget> m_selected_primary_roof_opening;
+    std::vector<SemanticSelectionMember> m_selected_semantic_order;
     bool m_roof_opening_native_selection{};
     bool m_native_selection_sync_deferred{};
     std::optional<RoofOpeningCloneSource> m_pending_roof_opening_clone;

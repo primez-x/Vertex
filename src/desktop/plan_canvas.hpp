@@ -487,6 +487,8 @@ public:
     // any explicit output background passed to renderScene(...).
     void setCanvasBackground(QColor background);
     void setSelectedId(const QString& entity_id);
+    // Publish explicit ordinary IDs separately from typed roof-opening targets.
+    // Invisible ordinary members still prevent partial child transform controls.
     void setSelectedIds(const QStringList& entity_ids);
     // Transient generated callout roles are independent of their owner bodies.
     void setSelectedGeneratedLabelPresentations(std::vector<CanvasLabelPresentationIdentity> identities);
@@ -765,6 +767,9 @@ public:
     [[nodiscard]] const std::vector<CanvasRoofOpeningTarget>& selectedRoofOpenings() const noexcept {
         return m_selected_roof_openings;
     }
+    // Exact painted child provenance for context actions; a roof owner ID
+    // alone cannot distinguish its body from a selected hosted child.
+    [[nodiscard]] std::optional<CanvasRoofOpeningTarget> selectedRoofOpeningAtModelPoint(Vec2 point) const;
     void setRoofOpeningSelectionClicked(std::function<bool(CanvasRoofOpeningTarget, bool)> callback);
     // One authoritative selection decision receives all independent owner and
     // typed child hits. Canvas never mutates the cohort before this callback.
@@ -1042,6 +1047,9 @@ private:
     bool applyOpeningWidthPreview(std::uint64_t serial,
         std::optional<std::vector<CanvasEntity>> result, std::vector<CanvasLabel> labels = {});
     void drawOpeningWidthHandles(QPainter& painter, const QRectF& viewport) const;
+    [[nodiscard]] bool hasMixedSemanticSelection() const noexcept {
+        return !m_selected_ids.isEmpty() && !m_selected_roof_openings.empty();
+    }
     [[nodiscard]] const CanvasRoofOpeningControls* selectedRoofOpeningControls() const;
     [[nodiscard]] std::optional<CanvasRoofOpeningControls> roofOpeningAt(QPointF point) const;
     [[nodiscard]] std::vector<CanvasRoofOpeningTarget> roofOpeningTargetsAt(QPointF point) const;
@@ -1338,6 +1346,9 @@ private:
     QPointF m_left_start;
     bool m_left_dragging{false};
     std::vector<CanvasRoofOpeningControls> m_roof_opening_controls;
+    // Explicit ordinary intent is independent of visible projection flags and
+    // of the host identities carried by typed child targets.
+    QStringList m_selected_ids;
     std::vector<CanvasRoofOpeningTarget> m_selected_roof_openings;
     // Compatibility view: populated only for an exactly-one child cohort.
     std::optional<CanvasRoofOpeningTarget> m_selected_roof_opening;

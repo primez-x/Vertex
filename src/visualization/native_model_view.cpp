@@ -85,6 +85,18 @@
 namespace sketch::visualization {
 namespace {
 
+std::vector<NativeRoofOpeningTarget> normalized_roof_opening_targets(
+    std::vector<NativeRoofOpeningTarget> targets) {
+    std::vector<NativeRoofOpeningTarget> normalized;
+    normalized.reserve(targets.size());
+    for (auto& target : targets) {
+        if (!target.roof_id.isEmpty() && !target.opening_id.isEmpty() &&
+            std::find(normalized.begin(),normalized.end(),target)==normalized.end())
+            normalized.push_back(std::move(target));
+    }
+    return normalized;
+}
+
 bool same_snapshot_content(const DocumentSnapshot& left, const DocumentSnapshot& right) {
     // Snapshots own their history by value; there is no shared immutable storage
     // token to compare. Compare the retained head directly, without hashing asset
@@ -252,6 +264,7 @@ public:
     QStringList selected_entity_ids;
     std::optional<std::string> selected_entity_id;
     std::vector<NativeRoofOpeningTarget> selected_roof_openings;
+    std::optional<NativeRoofOpeningTarget> selected_primary_roof_opening;
     std::optional<std::string> manipulator_entity_id;
     std::optional<gp_Trsf> manipulation_transform;
     std::uint64_t navigation_generation{};
@@ -264,6 +277,8 @@ public:
         qreal pixel_ratio{};
         QStringList selection;
         std::vector<NativeRoofOpeningTarget> roof_openings;
+        // Null means the ordinary family; its primary is selection.back().
+        std::optional<NativeRoofOpeningTarget> primary_roof_opening;
         std::uint64_t navigation_generation{};
     };
     std::optional<SelectionCapture> selection_capture;
@@ -928,7 +943,8 @@ public:
     void attach_manipulator() {
         if (roof_transform_capture) return;
         const bool children = !selected_roof_openings.empty();
-        if ((!children && (selected_entity_ids.size() != 1 || !selected_entity_id.has_value() || !supports_direct_transform(*selected_entity_id))) ||
+        if ((children && !selected_entity_ids.isEmpty()) ||
+            (!children && (selected_entity_ids.size() != 1 || !selected_entity_id.has_value() || !supports_direct_transform(*selected_entity_id))) ||
             !native_ready || !geometry_prepared || regenerator.is_pending() || prepared_geometry ||
             !geometry_status.isEmpty() || context.IsNull() || viewer.IsNull()) {
             detach_manipulator();
@@ -1002,7 +1018,8 @@ public:
     }
 
     bool begin_manipulation(const NativeInputPoint point) {
-        if (roof_release_pending || manipulator.IsNull() || !manipulator->IsAttached() ||
+        if ((!selected_entity_ids.isEmpty() && !selected_roof_openings.empty()) ||
+            roof_release_pending || manipulator.IsNull() || !manipulator->IsAttached() ||
             (selected_roof_openings.empty() && manipulator_entity_id != selected_entity_id) || context.IsNull() || view.IsNull())
             return false;
         try {
@@ -1178,7 +1195,8 @@ public:
         int width=0, height=0;
         if (!window.IsNull()) window->Size(width,height);
         return {published_snapshot,view->Camera()->WorldViewProjState(),owner->size(),
-                QSize(width,height),input_scale(),selected_entity_ids,selected_roof_openings,navigation_generation};
+                QSize(width,height),input_scale(),selected_entity_ids,selected_roof_openings,
+                selected_primary_roof_opening,navigation_generation};
     }
 
     bool selection_current(const SelectionCapture& capture) const {
@@ -1188,6 +1206,7 @@ public:
             view.IsNull() || view->Camera().IsNull() || owner->size() != capture.logical_size ||
             input_scale() != capture.pixel_ratio || selected_entity_ids != capture.selection ||
             selected_roof_openings != capture.roof_openings ||
+            selected_primary_roof_opening != capture.primary_roof_opening ||
             view->Camera()->WorldViewProjState() != capture.camera) return false;
         int width=0, height=0;
         if (!window.IsNull()) window->Size(width,height);
@@ -1432,7 +1451,7 @@ public:
         const auto fallback=visible.center();
         if (capture.native_size.isEmpty()) return fallback;
         std::vector<occ::handle<AIS_Shape>> presentations;
-        if (!capture.roof_openings.empty()) {
+        if (capture.primary_roof_opening) {
             for (const auto& target : capture.roof_openings) {
                 const auto presentation=roof_opening_presentation(target);
                 if (!presentation.IsNull()) presentations.push_back(presentation);
@@ -1495,21 +1514,18 @@ public:
     void restore_selection_highlights(const std::map<std::string,CachedSolid,std::less<>>& scene) {
         if (context.IsNull()) return;
         context->ClearSelected(false);
-        if (!selected_roof_openings.empty()) {
-            for (const auto& [id,solid] : scene)
-                for (const auto& child : solid.roof_openings)
-                    if (std::find(selected_roof_openings.begin(),selected_roof_openings.end(),child.target)!=selected_roof_openings.end() &&
-                        context->IsDisplayed(child.presentation))
-                        context->AddOrRemoveSelected(child.presentation,false);
-            return;
-        }
-        for (const auto& id : selected_entity_ids) {
-            const auto found=scene.find(id.toStdString());
-            if (found!=scene.end() && !found->second.presentation.IsNull() &&
-                context->IsDisplayed(found->second.presentation)) {
-                context->AddOrRemoveSelected(found->second.presentation,false);
-                for (const auto& child : found->second.roof_openings)
-                    if (context->IsDisplayed(child.presentation)) context->AddOrRemoveSelected(child.presentation,false);
+        for (const auto& [id,solid] : scene) {
+            const bool ordinary=selected_entity_ids.contains(QString::fromStdString(id));
+            if (ordinary && !solid.presentation.IsNull() && context->IsDisplayed(solid.presentation))
+                context->AddOrRemoveSelected(solid.presentation,false);
+            for (const auto& child : solid.roof_openings) {
+                const bool explicit_child=std::find(selected_roof_openings.begin(),selected_roof_openings.end(),child.target)!=
+                    selected_roof_openings.end();
+                // An ordinary roof includes its owned fills visually. A child
+                // selected separately never suppresses ordinary body highlights
+                // or toggles the same fill off a second time.
+                if ((ordinary || explicit_child) && !child.presentation.IsNull() && context->IsDisplayed(child.presentation))
+                    context->AddOrRemoveSelected(child.presentation,false);
             }
         }
     }
@@ -1535,8 +1551,7 @@ public:
                     if (!hit.empty() && std::find(targets.begin(),targets.end(),hit)==targets.end()) targets.push_back(hit);
                 }
                 if (!targets.empty()) {
-                    const auto primary_child=capture.roof_openings.empty() ? std::optional<NativeRoofOpeningTarget>{}
-                        : std::optional<NativeRoofOpeningTarget>{capture.roof_openings.back()};
+                    const auto primary_child=capture.primary_roof_opening;
                     const PickTarget primary{primary_child || capture.selection.isEmpty() ? QString{} : capture.selection.back(),primary_child};
                     const auto current=std::find(targets.begin(),targets.end(),primary);
                     target=current==targets.end() || std::next(current)==targets.end() ? targets.front() : *std::next(current);
@@ -1550,7 +1565,9 @@ public:
                     std::find(selected_roof_openings.begin(),selected_roof_openings.end(),child)!=selected_roof_openings.end();
                 const auto clicked=owner->onRoofOpeningSelectionClicked;
                 const auto cycled=owner->onRoofOpeningSelectionCycled;
-                if (!retained) {
+                if (cycle && !toggle && cycled) cycled(child);
+                else if (clicked) clicked(child,toggle);
+                else if (!retained) {
                     auto next=toggle ? selected_roof_openings : std::vector<NativeRoofOpeningTarget>{};
                     const auto member=std::find(next.begin(),next.end(),child);
                     if (toggle && member!=next.end()) next.erase(member);
@@ -1558,12 +1575,11 @@ public:
                     owner->setSelectedRoofOpenings(std::move(next));
                     if (!guard) return target;
                 }
-                if (cycle && !toggle && cycled) cycled(child);
-                else if (clicked) clicked(child,toggle);
                 if (!guard) return target;
                 auto continuation=capture;
                 continuation.selection=selected_entity_ids;
                 continuation.roof_openings=selected_roof_openings;
+                continuation.primary_roof_opening=selected_primary_roof_opening;
                 if (!selection_current(continuation)) return std::nullopt;
                 if (editing &&
                     std::find(selected_roof_openings.begin(),selected_roof_openings.end(),child)!=selected_roof_openings.end() &&
@@ -1577,13 +1593,16 @@ public:
             // Preserve selected groups on their first plain click, as Qt sends
             // that release before a possible double-click. Context uses this
             // same policy; its selected member never replaces the group.
-            const bool retained=selected_roof_openings.empty() && !toggle && !cycle && !id.isEmpty() && selected_entity_ids.contains(id);
-            if (!retained) {
+            const bool retained=!toggle && !cycle && !id.isEmpty() && selected_entity_ids.contains(id);
+            const auto clicked=owner->onEntitySelectionClicked;
+            const auto cycled=owner->onEntitySelectionCycled;
+            const auto legacy=owner->onEntitySelected;
+            if (cycle && !toggle && cycled) cycled(id);
+            else if (clicked && (!cycle || toggle)) clicked(id,toggle);
+            else if (!retained) {
                 auto next=toggle ? selected_entity_ids : QStringList{};
                 if (toggle && next.contains(id)) next.removeAll(id);
                 else if (!id.isEmpty()) next.append(id);
-                const auto clicked=owner->onEntitySelectionClicked;
-                const auto legacy=owner->onEntitySelected;
                 owner->setSelectedEntities(next);
                 if (!guard) return target;
                 if (clicked) clicked(id,toggle);
@@ -1593,8 +1612,9 @@ public:
             auto continuation=capture;
             continuation.selection=selected_entity_ids;
             continuation.roof_openings=selected_roof_openings;
+            continuation.primary_roof_opening=selected_primary_roof_opening;
             if (!selection_current(continuation)) return std::nullopt;
-            if (editing && !id.isEmpty() && selected_roof_openings.empty() && selected_entity_ids.contains(id)) {
+            if (editing && !id.isEmpty() && selected_entity_ids.contains(id)) {
                 const auto callback=owner->onEntityEditRequested;
                 if (callback) callback(id);
             }
@@ -1888,6 +1908,11 @@ void NativeModelView::setSelectedEntities(const QStringList& entity_ids) {
     setSemanticSelections(entity_ids,{});
 }
 
+void NativeModelView::setEntitySelectionCycledCallback(std::function<void(QString)> callback) {
+    cancelInteraction();
+    onEntitySelectionCycled=std::move(callback);
+}
+
 void NativeModelView::setSemanticSelection(const QStringList& entity_ids,
     std::optional<NativeRoofOpeningTarget> target) {
     std::vector<NativeRoofOpeningTarget> targets;
@@ -1897,19 +1922,28 @@ void NativeModelView::setSemanticSelection(const QStringList& entity_ids,
 
 void NativeModelView::setSemanticSelections(const QStringList& entity_ids,
     std::vector<NativeRoofOpeningTarget> targets) {
+    auto normalized_targets=normalized_roof_opening_targets(std::move(targets));
+    const auto primary=normalized_targets.empty() ? std::optional<NativeRoofOpeningTarget>{}
+        : std::optional<NativeRoofOpeningTarget>{normalized_targets.back()};
+    setSemanticSelections(entity_ids,std::move(normalized_targets),primary);
+}
+
+void NativeModelView::setSemanticSelections(const QStringList& entity_ids,
+    std::vector<NativeRoofOpeningTarget> targets,
+    std::optional<NativeRoofOpeningTarget> primary_child) {
     QStringList normalized;
     for (const auto& raw : entity_ids) {
         const auto id=raw.trimmed();
         if (!id.isEmpty() && !normalized.contains(id)) normalized.append(id);
     }
-    std::vector<NativeRoofOpeningTarget> normalized_targets;
-    normalized_targets.reserve(targets.size());
-    for (auto& target : targets) {
-        if (!target.roof_id.isEmpty() && !target.opening_id.isEmpty() &&
-            std::find(normalized_targets.begin(),normalized_targets.end(),target)==normalized_targets.end())
-            normalized_targets.push_back(std::move(target));
-    }
-    const bool changed=normalized!=m_impl->selected_entity_ids || m_impl->selected_roof_openings!=normalized_targets;
+    auto normalized_targets=normalized_roof_opening_targets(std::move(targets));
+    if (primary_child && std::find(normalized_targets.begin(),normalized_targets.end(),*primary_child)==normalized_targets.end())
+        throw std::invalid_argument("The primary skylight must belong to the selected typed roster.");
+    if (!primary_child && normalized.isEmpty() && !normalized_targets.empty())
+        throw std::invalid_argument("A child-only selection requires an explicit primary skylight.");
+    const bool changed=normalized!=m_impl->selected_entity_ids || m_impl->selected_roof_openings!=normalized_targets ||
+        m_impl->selected_primary_roof_opening!=primary_child;
+    m_impl->selected_primary_roof_opening=std::move(primary_child);
     m_impl->selected_roof_openings=std::move(normalized_targets);
     m_impl->selected_entity_ids=normalized;
     m_impl->selected_entity_id=normalized.isEmpty() ? std::nullopt
@@ -1950,7 +1984,7 @@ void NativeModelView::setSelectedRoofOpenings(std::vector<NativeRoofOpeningTarge
 }
 
 bool NativeModelView::transformControlsVisible() const noexcept {
-    return ((!m_impl->selected_roof_openings.empty() && !m_impl->roof_transform_proxy.IsNull()) ||
+    return ((m_impl->selected_entity_ids.isEmpty() && !m_impl->selected_roof_openings.empty() && !m_impl->roof_transform_proxy.IsNull()) ||
            (m_impl->selected_roof_openings.empty() && m_impl->selected_entity_ids.size() == 1 && m_impl->selected_entity_id.has_value() &&
            m_impl->manipulator_entity_id == m_impl->selected_entity_id)) &&
            !m_impl->manipulator.IsNull() && m_impl->manipulator->IsAttached();
@@ -2313,7 +2347,7 @@ void NativeModelView::contextMenuEvent(QContextMenuEvent* event) {
         if (!idle()) return;
         const auto callback=onContextMenuRequested;
         const auto child_callback=onRoofOpeningContextMenuRequested;
-        if (!m_impl->selected_roof_openings.empty() ? !child_callback : !callback) return;
+        if (m_impl->selected_primary_roof_opening ? !child_callback : !callback) return;
         const auto capture=m_impl->capture_selection();
         if (!m_impl->selection_current(capture)) return;
         if (!admitSceneInput(true) || !guard || !idle() || !m_impl->selection_current(capture)) return;
@@ -2323,7 +2357,7 @@ void NativeModelView::contextMenuEvent(QContextMenuEvent* event) {
         if (!m_impl->selection_current(capture)) return;
         const auto primary=capture.selection.isEmpty() ? QString{} : capture.selection.back();
         m_impl->commit_snapshot=capture.source;
-        if (!capture.roof_openings.empty()) child_callback(capture.roof_openings.back(),anchor);
+        if (capture.primary_roof_opening) child_callback(*capture.primary_roof_opening,anchor);
         else callback(primary,anchor);
     } catch (const Standard_Failure& error) {
         source_scope.restore();

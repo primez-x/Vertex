@@ -315,6 +315,34 @@ std::vector<RoofEditIntent> prepare_roof_opening_group_transform(const Entities&
     return result;
 }
 
+std::vector<RoofEditIntent> prepare_roof_opening_group_removal(const Entities& actual,
+    const std::vector<RoofOpeningGroupMember>& members) {
+    bounded_group(members.size());
+    Hosts hosts;
+    std::set<std::pair<std::string,std::string>> selected;
+    std::map<std::string,RoofOpeningEditIntent,std::less<>> grouped;
+    for (const auto& member:members) {
+        if (!selected.emplace(member.roof_id,member.opening_id).second)
+            invalid("Skylight removal contains a duplicate source child");
+        const auto& owner=actual_host(actual,hosts,member.roof_id);
+        (void)skylight(owner,member.opening_id);
+        auto [entry,inserted]=grouped.try_emplace(member.roof_id,opening_intent(owner));
+        (void)inserted;
+        entry->second.removed_opening_ids.push_back(member.opening_id);
+    }
+    std::vector<RoofEditIntent> result;
+    result.reserve(grouped.size());
+    for (auto& [id,intent]:grouped) {
+        (void)id;
+        std::sort(intent.removed_opening_ids.begin(),intent.removed_opening_ids.end());
+        auto edit=composite(std::move(intent));
+        edit.coordinate_world_hosted_geometry=true;
+        result.push_back(std::move(edit));
+    }
+    (void)replay_roof_edit_entities(actual,result);
+    return result;
+}
+
 RoofEditIntent prepare_roof_opening_group_clone_placement(const Entities& actual,
     const RoofOpeningGroupClonePlacement& request) {
     bounded_group(request.clones.size());

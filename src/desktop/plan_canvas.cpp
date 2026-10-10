@@ -1033,26 +1033,32 @@ void PlanCanvas::setSelectedId(const QString& entity_id) {
 void PlanCanvas::setSelectedIds(const QStringList& entity_ids) {
     // Owner and child selections are published independently by the controller.
     // A mixed cohort must not be truncated by an intermediate owner publication.
-    bool changed = false;
+    QStringList normalized;
+    for (const auto& raw : entity_ids) {
+        const auto id=raw.trimmed();
+        if (!id.isEmpty() && !normalized.contains(id)) normalized.append(id);
+    }
+    bool changed = m_selected_ids!=normalized;
     const auto assign_selected = [&](bool& selected, bool value) {
         changed = changed || selected != value;
         selected = value;
     };
     const bool cancel_gesture = (m_gesture_button != Qt::NoButton || m_move_release_pending ||
          m_opening_width_handle || m_vertex_move_handle || m_opening_move_active ||
-         m_transform_frame_start || !m_roof_opening_group_capture.empty()) &&
-        selectedIds() != entity_ids;
+         m_transform_frame_start || m_roof_opening_capture || !m_roof_opening_group_capture.empty()) &&
+        (m_selected_ids != normalized || selectedIds() != normalized);
     if (cancel_gesture) resetGesture();
+    m_selected_ids=normalized;
     for (auto& entity : m_entities) {
-        assign_selected(entity.selected, entity_ids.contains(entity.id));
+        assign_selected(entity.selected, normalized.contains(entity.id));
     }
     for (auto& label : m_labels)
         assign_selected(label.selected, generated_area_callout(label)
             ? std::find(m_selected_generated_labels.begin(), m_selected_generated_labels.end(),
                         label_identity(label)) != m_selected_generated_labels.end()
-            : !label.plan_only && entity_ids.contains(label.id));
+            : !label.plan_only && normalized.contains(label.id));
     for (auto& reference : m_references)
-        assign_selected(reference.selected, entity_ids.contains(reference.id));
+        assign_selected(reference.selected, normalized.contains(reference.id));
     if (!changed && !cancel_gesture) return;
     invalidateRetainedSelection();
     if (m_last_mouse_position) updatePointerCursor(*m_last_mouse_position);
@@ -2160,6 +2166,8 @@ void PlanCanvas::renderSceneWithTransform(QPainter& painter, const QRectF& viewp
         }
         if (!m_selected_roof_openings.empty()) {
             drawRoofOpeningControls(painter,viewport);
+            if (hasMixedSemanticSelection() && m_selection_controls_visible)
+                drawSelectionCaption(painter,viewport,background);
         } else if (m_selection_controls_visible) {
             drawSelectionFrame(painter, viewport, annotation_footprints);
             drawVertexHandles(painter, viewport);
@@ -3389,6 +3397,9 @@ void PlanCanvas::pointerPress(QPointF position, Qt::MouseButton button,
             }
             m_roof_opening_group_frame=group_frame;
             m_roof_opening_group_handle=group_grip.value_or(Vec2{});
+            if (!group_grip)
+                if (const auto hit=roofOpeningAt(position); hit && roofOpeningSelected(hit->target))
+                    m_pressed_roof_opening=hit->target;
             m_roof_opening_group_press_model=toModel(position,rect());
             const auto delta=m_roof_opening_group_press_model-group_frame->center;
             m_roof_opening_group_press_angle=std::atan2(delta.y,delta.x);
@@ -3416,7 +3427,8 @@ void PlanCanvas::pointerPress(QPointF position, Qt::MouseButton button,
             ? std::optional<CanvasRoofOpeningControls>{*selectedRoofOpeningControls()}
             : m_pressed_generated_label ? std::nullopt : roofOpeningAt(position);
         if (child) {
-            if ((grip || (m_selected_roof_opening && child->target==*m_selected_roof_opening)) &&
+            if (!hasMixedSemanticSelection() &&
+                (grip || (m_selected_roof_opening && child->target==*m_selected_roof_opening)) &&
                 m_roof_opening_preview_requested && m_roof_opening_edit_requested) {
                 m_left_gesture=LeftGesture::roof_opening_edit;
                 m_roof_opening_capture=*child;
@@ -3451,7 +3463,7 @@ void PlanCanvas::pointerPress(QPointF position, Qt::MouseButton button,
         m_area_class_caption.isEmpty()) {
         const auto identity = m_pressed_generated_label;
         const auto label = identity ? labelPresentation(*identity) : std::nullopt;
-        if (label && (label->selected || selectedIds().contains(label->id))) {
+        if (!hasMixedSemanticSelection() && label && (label->selected || selectedIds().contains(label->id))) {
             // Capture the actual painted anchor, including automatic placement.
             // It owns this press ahead of body/frame controls and never falls
             // back to moving the boundary if the host refuses admission.
@@ -3929,7 +3941,20 @@ void PlanCanvas::pointerRelease(QPointF position, Qt::MouseButton button,
                 m_roof_opening_group_fine!=(modifiers.testFlag(Qt::ShiftModifier) ||
                     (m_roof_opening_group_handle.x!=2.0 && !m_snap_enabled))) pointerMove(position,modifiers);
             if (!guard || m_left_gesture!=LeftGesture::roof_opening_group_edit) return;
-            if (!roofOpeningGroupCaptureCurrent() || !m_left_dragging) { resetGesture(); return; }
+            if (!roofOpeningGroupCaptureCurrent()) { resetGesture(); return; }
+            if (!m_left_dragging) {
+                const auto target=m_pressed_roof_opening;
+                const auto hit=roofOpeningAt(position);
+                const bool clicked=target && hit && hit->target==*target && roofOpeningSelected(*target);
+                const auto callback=m_roof_opening_selection_clicked;
+                resetGesture();
+                // A body press may become a drag of the whole cohort. A
+                // stationary press promotes only the actual clicked member.
+                if (clicked && callback) {
+                    try { (void)callback(*target,false); } catch (...) {}
+                }
+                return;
+            }
             m_roof_opening_group_release_pending=true;
             m_gesture_button=Qt::NoButton;
             if (!m_roof_opening_group_pending) finishRoofOpeningGroupPreview(m_roof_opening_group_serial);
@@ -3960,7 +3985,7 @@ void PlanCanvas::pointerRelease(QPointF position, Qt::MouseButton button,
             resetGesture();
             // A stationary plain click on a cohort member preserves the cohort
             // for contextual actions and the following double-click.
-            if (clicked && retained) return;
+            if (clicked && retained && !selection_clicked) return;
             if (clicked && selection_clicked) {
                 try { (void)selection_clicked(target,false); } catch (...) {}
             } else if (clicked && callback) {
@@ -4239,10 +4264,10 @@ void PlanCanvas::pointerRelease(QPointF position, Qt::MouseButton button,
                 // Empty space within that frame is outside the painted object,
                 // so the first click clears the retained selection without
                 // also creating a drawing node.
-                if (!pressed_entity.isEmpty() && !move_ids.contains(pressed_entity)) {
+                if (!pressed_entity.isEmpty()) {
                     if (m_entity_selection_clicked)
                         m_entity_selection_clicked(pressed_entity, false);
-                    else if (m_entity_clicked)
+                    else if (!move_ids.contains(pressed_entity) && m_entity_clicked)
                         m_entity_clicked(pressed_entity);
                 } else if (pressed_entity.isEmpty() && m_entity_selection_clicked) {
                     m_entity_selection_clicked({}, false);
@@ -4696,8 +4721,8 @@ std::optional<QRectF> PlanCanvas::computeSelectionBounds(const QRectF& viewport)
 }
 
 std::optional<QRectF> PlanCanvas::selectionFrame(const QRectF& viewport) const {
-    // Child controls own the selected skylight. Its containing roof remains a
-    // logical owner, never a second editable selection frame.
+    // A child-only cohort owns its specialized controls. A mixed cohort has
+    // no common transform implementation yet; do not expose a subset frame.
     if (!m_selected_roof_openings.empty()) return std::nullopt;
     if (hasInteractivePresentation()) return computeSelectionFrame(viewport);
     const auto key = retainedSelectionKey(viewport);
@@ -5806,7 +5831,7 @@ std::optional<CanvasRoofOpeningFrame> PlanCanvas::roofOpeningGroupFrame(
 }
 
 std::optional<CanvasRoofOpeningFrame> PlanCanvas::selectedRoofOpeningGroupFrame() const {
-    if (m_selected_roof_openings.size()<2) return std::nullopt;
+    if (hasMixedSemanticSelection() || m_selected_roof_openings.size()<2) return std::nullopt;
     std::vector<CanvasRoofOpeningControls> controls;
     for (const auto& target:m_selected_roof_openings) {
         const auto found=std::find_if(m_roof_opening_controls.begin(),m_roof_opening_controls.end(),
@@ -5852,7 +5877,7 @@ bool PlanCanvas::roofOpeningGroupContains(QPointF point) const {
 }
 
 bool PlanCanvas::roofOpeningGroupCaptureCurrent() const {
-    if (m_left_gesture!=LeftGesture::roof_opening_group_edit || !m_roof_opening_group_frame ||
+    if (hasMixedSemanticSelection() || m_left_gesture!=LeftGesture::roof_opening_group_edit || !m_roof_opening_group_frame ||
         !m_selection_controls_visible || m_boundary_draft_preview || m_wall_preview ||
         !m_boundary_preview.empty() || !m_area_class_caption.isEmpty() || m_point_placement_requested ||
         m_component_placement_preview || m_component_placement_preview_pending || m_symbol_drag_active || m_symbol_drag_preview ||
@@ -6100,6 +6125,12 @@ QPointF PlanCanvas::roofOpeningRotationHandle(const CanvasRoofOpeningFrame& fram
     return edge_center+(length>0.0 ? outward*(28.0/length) : QPointF(0,-28));
 }
 
+std::optional<CanvasRoofOpeningTarget> PlanCanvas::selectedRoofOpeningAtModelPoint(Vec2 point) const {
+    if (!std::isfinite(point.x) || !std::isfinite(point.y) || !selectionInteractionEnabled()) return std::nullopt;
+    const auto hit=roofOpeningAt(toScreen(point,QRectF(rect())));
+    return hit && roofOpeningSelected(hit->target) ? std::optional{hit->target} : std::nullopt;
+}
+
 std::optional<CanvasRoofOpeningControls> PlanCanvas::roofOpeningAt(QPointF point) const {
     if (!m_selection_controls_visible || !selectionInteractionEnabled() ||
         (m_selection_filter!=CanvasSelectionFilter::all && m_selection_filter!=CanvasSelectionFilter::objects) ||
@@ -6134,7 +6165,7 @@ std::vector<CanvasRoofOpeningTarget> PlanCanvas::roofOpeningTargetsAt(QPointF po
 
 std::optional<Vec2> PlanCanvas::roofOpeningHandleAt(QPointF point) const {
     const auto* selected = selectedRoofOpeningControls();
-    if (!selected || !m_selection_controls_visible || !selectionInteractionEnabled() ||
+    if (hasMixedSemanticSelection() || !selected || !m_selection_controls_visible || !selectionInteractionEnabled() ||
         (m_selection_filter!=CanvasSelectionFilter::all && m_selection_filter!=CanvasSelectionFilter::objects) ||
         m_wall_preview || !m_boundary_preview.empty() || !m_area_class_caption.isEmpty() ||
         !m_roof_opening_preview_requested || !m_roof_opening_edit_requested) return std::nullopt;
@@ -6155,6 +6186,7 @@ std::optional<Vec2> PlanCanvas::roofOpeningHandleAt(QPointF point) const {
 }
 
 void PlanCanvas::updateRoofOpeningPreview(QPointF point, Qt::KeyboardModifiers modifiers) {
+    if (hasMixedSemanticSelection()) { resetGesture();return; }
     if (!m_roof_opening_capture || !m_roof_opening_edit_started) return;
     const auto serial = ++m_roof_opening_preview_serial;
     m_roof_opening_preview_pointer = point;
@@ -6222,7 +6254,7 @@ void PlanCanvas::updateRoofOpeningPreview(QPointF point, Qt::KeyboardModifiers m
 }
 
 bool PlanCanvas::markRoofOpeningPreviewPending(std::uint64_t serial) {
-    if (serial!=m_roof_opening_preview_serial || !m_roof_opening_preview_request_in_progress ||
+    if (hasMixedSemanticSelection() || serial!=m_roof_opening_preview_serial || !m_roof_opening_preview_request_in_progress ||
         !m_roof_opening_capture || !m_roof_opening_edit_preview ||
         m_left_gesture!=LeftGesture::roof_opening_edit ||
         !valid_roof_opening_frame(m_roof_opening_edit_preview->frame)) return false;
@@ -6232,7 +6264,7 @@ bool PlanCanvas::markRoofOpeningPreviewPending(std::uint64_t serial) {
 
 bool PlanCanvas::completeRoofOpeningPreview(std::uint64_t serial, std::optional<Boundary> result,
     std::optional<CanvasRoofOpeningFrame> admitted_frame) {
-    if (!m_roof_opening_preview_pending || serial!=m_roof_opening_preview_serial ||
+    if (hasMixedSemanticSelection() || !m_roof_opening_preview_pending || serial!=m_roof_opening_preview_serial ||
         !m_roof_opening_capture || !m_roof_opening_edit_preview ||
         m_left_gesture!=LeftGesture::roof_opening_edit) return false;
     if (admitted_frame) {
@@ -6247,7 +6279,7 @@ bool PlanCanvas::completeRoofOpeningPreview(std::uint64_t serial, std::optional<
 }
 
 bool PlanCanvas::applyRoofOpeningPreview(std::uint64_t serial, std::optional<Boundary> result) {
-    if (serial!=m_roof_opening_preview_serial || !m_roof_opening_capture ||
+    if (hasMixedSemanticSelection() || serial!=m_roof_opening_preview_serial || !m_roof_opening_capture ||
         !m_roof_opening_edit_preview || m_left_gesture!=LeftGesture::roof_opening_edit) return false;
     m_roof_opening_preview_pending=false;
     m_roof_opening_preview_request_in_progress=false;
@@ -6286,6 +6318,7 @@ bool PlanCanvas::applyRoofOpeningPreview(std::uint64_t serial, std::optional<Bou
 }
 
 void PlanCanvas::finishRoofOpeningPreview(std::uint64_t serial) {
+    if (hasMixedSemanticSelection()) { resetGesture();return; }
     if (serial!=m_roof_opening_preview_serial || !m_roof_opening_capture ||
         m_left_gesture!=LeftGesture::roof_opening_edit || m_roof_opening_preview_pending) return;
     const auto edit=m_roof_opening_edit_preview;
@@ -6328,7 +6361,7 @@ void PlanCanvas::drawRoofOpeningControls(QPainter& painter, const QRectF& viewpo
         if (!roofOpeningSelected(control.target)) continue;
         // The single-child renderer owns its admitted preview, so never leave
         // an additional source-mouth outline underneath its moving preview.
-        if (selected && m_selection_controls_visible && control.target==selected->target) continue;
+        if (!hasMixedSemanticSelection() && selected && m_selection_controls_visible && control.target==selected->target) continue;
         const auto polygon=roofOpeningFramePolygon(control.frame,viewport);
         painter.setPen(QPen(QColor(255,255,255,235),4.0));
         painter.drawPolygon(polygon);
@@ -6336,6 +6369,7 @@ void PlanCanvas::drawRoofOpeningControls(QPainter& painter, const QRectF& viewpo
         painter.drawPolygon(polygon);
     }
     painter.restore();
+    if (hasMixedSemanticSelection()) return;
     if (m_selected_roof_openings.size()>1) {
         drawRoofOpeningGroupControls(painter,viewport);
         return;
@@ -6397,7 +6431,7 @@ void PlanCanvas::drawRoofOpeningControls(QPainter& painter, const QRectF& viewpo
 }
 
 void PlanCanvas::drawRoofOpeningGroupControls(QPainter& painter,const QRectF& viewport) const {
-    if (!m_selection_controls_visible) return;
+    if (hasMixedSemanticSelection() || !m_selection_controls_visible) return;
     const auto frame=m_roof_opening_group_valid
         ? roofOpeningGroupFrame(m_roof_opening_group_preview_controls) : selectedRoofOpeningGroupFrame();
     if (!frame) return;
@@ -9307,7 +9341,8 @@ void PlanCanvas::updatePointerCursor(QPointF point) {
         }
         if (const auto child=roofOpeningAt(point)) {
             setCursor(roofOpeningSelected(child->target)
-                ? m_selected_roof_openings.size()==1 ? Qt::SizeAllCursor : Qt::OpenHandCursor : Qt::ArrowCursor);
+                ? !hasMixedSemanticSelection() && m_selected_roof_openings.size()==1
+                    ? Qt::SizeAllCursor : Qt::OpenHandCursor : Qt::ArrowCursor);
             return;
         }
         if (const auto identity = labelPresentationAt(point)) {

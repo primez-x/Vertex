@@ -86,13 +86,14 @@ public:
     // Synchronize complete logical selection; IDs without a displayed solid
     // still count toward multi-selection. The last supplied ID is primary.
     // Highlights cover valid visible semantic presentations only. Whole-owner
-    // manipulators require one logical member; typed children share a pivot.
+    // manipulators require one logical member; child-only cohorts share a pivot.
+    // Mixed ordinary/child selections retain highlights without subset controls.
     // Replaces a typed child selection.
     void setSelectedEntities(const QStringList& entity_ids);
     // Backward-compatible replacement with one ID (empty clears selection).
     void setSelectedEntity(const QString& entity_id);
     // Synchronize a single semantic skylight child after its logical owners.
-    // This emits no callback and replaces whole-owner controls with child controls.
+    // This emits no callback and preserves the separately published ordinary IDs.
     void setSelectedRoofOpening(std::optional<NativeRoofOpeningTarget> target);
     // Synchronize the complete typed child cohort while preserving owner IDs.
     // The last distinct valid target is primary. No callback is emitted.
@@ -103,6 +104,12 @@ public:
                               std::optional<NativeRoofOpeningTarget> target);
     void setSemanticSelections(const QStringList& entity_ids,
                                std::vector<NativeRoofOpeningTarget> targets);
+    // Explicit primary: null selects the last ordinary ID (or an empty cohort).
+    // A child primary must belong to the normalized typed roster. Invalid
+    // primaries throw std::invalid_argument before changing the selection.
+    void setSemanticSelections(const QStringList& entity_ids,
+                               std::vector<NativeRoofOpeningTarget> targets,
+                               std::optional<NativeRoofOpeningTarget> primary_child);
     [[nodiscard]] bool transformControlsVisible() const noexcept;
     std::function<void(std::vector<NativeRoofOpeningTarget>)> onRoofOpeningTransformStarted;
     std::function<void(NativeRoofOpeningTransform, std::uint64_t)> onRoofOpeningTransformPreviewRequested;
@@ -173,7 +180,13 @@ public:
     // Alt click emits nothing. Alt drag pans without changing selection.
     // A plain background click supplies an empty ID. Selected group members
     // retain the group for subsequent double-click/context editing.
+    // Installed semantic handlers receive the captured selection unchanged and
+    // publish the complete accepted result through setSemanticSelections.
     std::function<void(QString, bool)> onEntitySelectionClicked;
+    // Explicit Alt replacement. The controller publishes the complete accepted
+    // selection before any local mutation; fallback replaces ordinary selection.
+    void setEntitySelectionCycledCallback(std::function<void(QString)> callback);
+    std::function<void(QString)> onEntitySelectionCycled;
     std::function<void(NativeRoofOpeningTarget, bool)> onRoofOpeningSelectionClicked;
     // Explicit Alt replacement, including a hit already in the cohort. Falls
     // back to onRoofOpeningSelectionClicked(target, false) when not installed.

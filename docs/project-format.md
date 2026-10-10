@@ -350,6 +350,26 @@ their admitted candidate identities while preserving the captured visibility
 mask. Cancellation restores the original scene and permanently retires the
 proposal. This source addition does not change the document reader floor.
 
+Mixed object/skylight selection is also transient. Explicit ordinary identities
+and typed `(roof_id, opening_id, source_revision)` children remain separate
+authoritative rosters. A cross-family order identifies the actual primary target;
+the legacy union of ordinary IDs and child-host IDs is only a compatibility
+projection. It cannot authorize a containing-roof edit, deletion or copy.
+Captured editing and publication authority includes both rosters, primary kind,
+order and source origin. The views receive only explicit ordinary IDs alongside
+typed children, and highlight both kinds independently. Ctrl toggles one exact
+target; plain selected-member clicks retain the group; Alt replaces it.
+
+Mixed removal, clipboard and transformation require complete command authority
+across both rosters. The selection addition does not complete those commands.
+A removal-only skylight producer validates every actual source child and admits
+the complete roof roster before returning intents. A future mixed-removal
+enclosure must reconstruct the ordinary deletion closure, respect physical and
+phase-semantic roof dominance, retain exact staged source/history bindings and
+publish one final event. Flattening typed phase/review commands into raw payloads
+does not supply that authority. Mixed controls currently suppress subset edits;
+the full mixed command lifecycles remain production requirements.
+
 ## Roof-hosted fixed skylights (v168, source integration)
 
 Native reader 168 and JSON/assets extraction 166 carry roof schema 3. Its

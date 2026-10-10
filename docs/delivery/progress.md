@@ -14,6 +14,44 @@ changed source does not acquire runtime acceptance without later qualification.
 
 ## Current delivery state
 
+### October 10 mixed object/skylight selection - source integration
+
+The skylight group side-resize batch is committed and pushed as dd30b59d,
+with exact local/remote ref agreement. Current source separates ordinary object
+IDs from typed skylight children and records cross-family selection order and
+the actual primary member. Containing roof IDs remain a compatibility projection,
+not authority to select or edit the roof. Shared source-bound adoption handles
+Ctrl toggles and additive windows, retained plain-click selection, explicit Alt
+replacement, refresh/remaps and rollback. Both plan and native views receive the
+ordinary roster separately, highlight both families and report the combined
+count. Native publication carries explicit primary identity for Alt cycling and
+keyboard context actions. Pure skylight deletion uses the removal-only core
+producer, which validates the complete actual-source roster before replay.
+
+Mixed Delete, Cut, Copy/Paste/Duplicate, properties and transforms remain required
+implementation work. Current refusal guards prevent partial edits; they do not
+complete those workflows. The next command integration must reconstruct ordinary
+deletion closure, retain removal-only child authority, honor physical and
+phase-semantic roof dominance, and bind exact staged source/history proofs before
+one final publication. Native directional group controls also remain open.
+
+Independent integrated source review identified three selection defects: pure
+cohort stationary clicks failed to promote the actual member; a mixed plan
+child context hit could become ordinary roof selection; and Site placement
+could treat an internal child-host ID as a single selected object. Root corrected
+the click callbacks, added exact painted-child context provenance, and blocked
+the unsupported Site entry before source preparation. These are source fixes;
+user-observed resolution remains unverified. The checklist retains the 450
+original tasks plus forty-two focused tasks (492 total); mixed selection is Not
+tested. Static inspection preserves all 277 requirements and changes only two
+delivery notes. This batch changes no project-format floor. No builds, tests/new
+tests, probes, native jobs, UI launches, packages or installations run. The
+installed candidate and acceptance remain unchanged, with all ten production
+gates open. Independent review approved the corrected bounded source integration;
+root reviewed the integrated interfaces and evidence. Scoped commit, push and
+exact remote-ref verification accompany the batch. Source inspection and backup
+do not qualify runtime behavior.
+
 ### October 10 skylight group side resizing - source integration
 
 The preceding direct 3D transform batch is committed and pushed as 44b02441,
