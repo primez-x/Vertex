@@ -11,7 +11,7 @@
 
 namespace sketch {
 
-enum class BoundaryDimensionFormat { supported_v1, supported_v2, supported_v3, unsupported_version, supported_v4 };
+enum class BoundaryDimensionFormat { supported_v1, supported_v2, supported_v3, unsupported_version, supported_v4, supported_v5 };
 
 struct BoundaryDimensionVersion {
     BoundaryDimensionFormat format{};
@@ -27,7 +27,9 @@ enum class BoundaryDimensionPlacement { manual, automatic };
 // reference the complete closed boundary. Wall axis length references only a
 // physical wall owner and measures its current straight or curved centreline.
 // It does not represent an appraisal exterior-face measurement.
-enum class BoundaryDimensionKind { segment_length, angle, area, wall_axis_length };
+// Corner-window leg length references its manufactured owner and measures one
+// actual shared host endpoint-to-outer-jamb span from both retained hosts/cuts.
+enum class BoundaryDimensionKind { segment_length, angle, area, wall_axis_length, corner_window_leg_length };
 
 [[nodiscard]] std::string_view boundary_dimension_kind_name(BoundaryDimensionKind kind);
 
@@ -67,7 +69,8 @@ struct BoundaryDimensionPresentation {
 struct BoundaryDimension {
     std::string id;
     // Stable owner identity; v4 wall_axis_length uses the actual physical wall
-    // ID here and leaves all segment/vertex/chain fields empty.
+    // ID here and leaves all segment/vertex/chain fields empty. v5 corner-window
+    // leg length uses the actual corner_window owner ID with corner_leg.
     std::string boundary_id;
     std::string segment_id;
     Vec2 text_position;
@@ -81,6 +84,9 @@ struct BoundaryDimension {
     // edges, with segment_id == front() for existing C++ callers. Persisted
     // v3 target.segment_ids is canonical and omits target.segment_id.
     std::vector<std::string> segment_chain_ids;
+    // Only corner_window_leg_length uses this zero-based leg selector. No
+    // synthetic boundary edge or owned cut ID is part of its target.
+    std::optional<std::uint32_t> corner_leg;
 
     bool operator==(const BoundaryDimension& other) const noexcept {
         return id == other.id && boundary_id == other.boundary_id &&
@@ -89,12 +95,13 @@ struct BoundaryDimension {
                automatic_placement_version == other.automatic_placement_version &&
                presentation == other.presentation && kind == other.kind &&
                vertex_id == other.vertex_id && secondary_segment_id == other.secondary_segment_id &&
-               segment_chain_ids == other.segment_chain_ids;
+               segment_chain_ids == other.segment_chain_ids && corner_leg == other.corner_leg;
     }
 
     // Resolves stable analytical targets from identified boundaries or replayed
     // measured strokes, or a physical wall axis for wall_axis_length. Area
-    // dimensions require an identified boundary owner.
+    // dimensions require an identified boundary owner. Corner-window legs
+    // require the complete authoritative map or snapshot overload.
     [[nodiscard]] BoundaryDimensionResolution resolve(const Entity& boundary_entity) const;
     [[nodiscard]] BoundaryDimensionResolution resolve(
         const std::map<std::string, Entity, std::less<>>& entities) const;
@@ -102,8 +109,9 @@ struct BoundaryDimension {
 };
 
 // Unsupported future versions or dimension kinds remain opaque and retain
-// their complete source entity. Only v4/wall_axis_length adds new support;
-// v4 prior kinds remain opaque. Malformed known v1/v2/v3 and typed v4 data throws
+// their complete source entity. v4 adds only wall_axis_length and v5 adds only
+// corner_window_leg_length; other kinds at those versions remain opaque.
+// Malformed known v1/v2/v3 and typed v4/v5 data throws
 // std::invalid_argument rather than being partially decoded.
 struct BoundaryDimensionDecodeResult {
     std::optional<BoundaryDimension> dimension;
@@ -128,19 +136,28 @@ struct BoundaryDimensionDecodeResult {
 // stable vertex IDs. This view does not confer closed-area semantics on strokes.
 // Unsupported or malformed owners throw std::invalid_argument.
 [[nodiscard]] IdentifiedBoundary resolve_dimension_geometry_owner(const Entity& entity);
-// Current supported physical wall centreline only. Reuses native wall decoding
+// Current supported physical wall centreline only. Reuses shared wall decoding
 // and validates authored geometry/provenance; never supplies boundary/area IDs.
 // Malformed or unsupported owners throw std::invalid_argument.
 [[nodiscard]] Segment resolve_dimension_wall_axis_owner(const Entity& entity);
+// Complete retained-map corner admission, including inactive alternatives.
+// Returns the actual host endpoint-to-outer-jamb leg in local plan coordinates.
+// Entity-only resolution cannot certify a corner's two hosts and owned cuts.
+[[nodiscard]] Segment resolve_dimension_corner_window_leg_owner(
+    const BoundaryDimension& dimension,
+    const std::map<std::string, Entity, std::less<>>& entities);
 // Structural retained-target admission only: verifies identified edges/vertices,
 // chains and topology without certifying current physical-room source geometry
-// or returning a quantity. Stale physical rooms may remain stored and editable.
+// or returning a quantity. For corner windows this checks only owner structure
+// and the leg selector. Stale physical rooms may remain stored and editable.
 void validate_boundary_dimension_target(
     const BoundaryDimension& dimension, const Entity& boundary_entity);
 [[nodiscard]] BoundaryDimensionResolution resolve_boundary_dimension(
     const BoundaryDimension& dimension, const Entity& boundary_entity);
 // Authoritative retained-map/snapshot resolution also qualifies source-bound
 // physical rooms from current walls and returns net clear area including holes.
+// Corner-window legs qualify the complete retained cohort, including valid
+// inactive alternatives, and use actual host/cut geometry in local coordinates.
 // Stale, malformed or unsupported sources throw without changing stored data.
 [[nodiscard]] BoundaryDimensionResolution resolve_boundary_dimension(
     const BoundaryDimension& dimension,
@@ -154,6 +171,8 @@ void validate_boundary_dimension_target(
 // A physical room may retain its original phase bookkeeping only when its
 // admitted physical inventory, context/plane and exact clear geometry remain
 // unchanged. Historical command replay retains the strict overloads above.
+// A corner-window leg requires its owner, both hosts and both cuts to be active
+// and undemolished in the saved phase selection.
 [[nodiscard]] BoundaryDimensionResolution resolve_current_boundary_dimension(
     const BoundaryDimension& dimension,
     const std::map<std::string, Entity, std::less<>>& entities);

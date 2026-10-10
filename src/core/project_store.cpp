@@ -1081,6 +1081,8 @@ std::uint32_t required_format_version_internal(const DocumentSnapshot& snapshot,
                 if (decoded.supported()) {
                     if (decoded.dimension->kind == BoundaryDimensionKind::wall_axis_length)
                         required = std::max(required, 55U);
+                    if (decoded.dimension->kind == BoundaryDimensionKind::corner_window_leg_length)
+                        required = std::max(required, 172U);
                     const auto owner=revision.entities.find(decoded.dimension->boundary_id);
                     if (owner!=revision.entities.end() && owner->second.type=="room_boundary" &&
                         owner->second.extensions.contains("physical_wall_room")) required=std::max(required,50U);
@@ -1225,6 +1227,10 @@ std::uint32_t required_format_version_internal(const DocumentSnapshot& snapshot,
                     model->contains("version") && model->at("version").is_number_integer() &&
                     model->at("version") == 8)
                     required = std::max(required, 61U);
+                if (model != entity.properties.end() && model->is_object() &&
+                    model->contains("version") && model->at("version").is_number_integer() &&
+                    model->at("version") == 9)
+                    required = std::max(required, 172U);
             }
             if (entity.type == "constraint") {
                 const auto decoded = decode_constraint_entity(entity);
@@ -2874,6 +2880,7 @@ bool verify_sqlite_schema(sqlite3* database, bool allow_recovery = false) {
          sqlite3_column_int(user_version.get(), 0) != 168 &&
          sqlite3_column_int(user_version.get(), 0) != 170 &&
          sqlite3_column_int(user_version.get(), 0) != 171 &&
+         sqlite3_column_int(user_version.get(), 0) != 172 &&
          sqlite3_column_int(user_version.get(), 0) != 169 &&
          sqlite3_column_int(user_version.get(), 0) != 163 &&
          sqlite3_column_int(user_version.get(), 0) != 143 &&
@@ -3595,6 +3602,8 @@ DocumentSnapshot read_snapshot(sqlite3* database, RecoveryLedger* recovery = nul
     // here and authenticate the manifest with its stored version below.
     const auto required_format = required_format_version_internal(snapshot, format_number < 28);
     if (required_format > format_number) {
+        if (required_format>=172)
+            storage_error(StorageErrorCode::unsupported_format,"This project requires reader 172 for associative corner-window leg dimensions and their retained history");
         if (required_format>=171)
             storage_error(StorageErrorCode::unsupported_format,"This project requires reader 171 for coordinated corner-window edits in saved design alternatives and their retained history");
         if (required_format>=170)

@@ -1615,6 +1615,14 @@ std::optional<std::string> validate_boundary_integrity(
         }
         const auto& dimension = *decoded.dimension;
         const auto owner = entities.find(dimension.boundary_id);
+        if (dimension.kind == BoundaryDimensionKind::corner_window_leg_length) {
+            if (owner == entities.end() || owner->second.type != "corner_window")
+                throw std::invalid_argument("Dimension " + id + ": missing or invalid corner-window owner");
+            // Complete retained admission qualifies both hosts and actual cuts
+            // without requiring an inactive saved alternative to be displayed.
+            (void)resolve_dimension_corner_window_leg_owner(dimension, entities);
+            continue;
+        }
         if (dimension.kind == BoundaryDimensionKind::wall_axis_length) {
             if (owner == entities.end() || owner->second.type != "wall")
                 throw std::invalid_argument("Dimension " + id + ": missing or invalid physical wall owner");

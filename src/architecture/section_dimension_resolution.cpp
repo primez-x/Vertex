@@ -2,6 +2,8 @@
 #include "sketch/assembly_document_adapter.hpp"
 #include "sketch/assembly_geometry.hpp"
 #include "sketch/building_entity.hpp"
+#include "sketch/boundary_dimension.hpp"
+#include "sketch/corner_window.hpp"
 #include "sketch/roof_entity_codec.hpp"
 #include "sketch/constraint_phase_scope.hpp"
 #include "sketch/document_solid.hpp"
@@ -28,22 +30,28 @@ namespace sketch {
 namespace {
 constexpr double tolerance = default_geometry_tolerance_metres;
 
-const Entity& entity(const DocumentSnapshot& source, const std::string& id,
+using Entities = std::map<std::string, Entity, std::less<>>;
+
+const Entity& entity(const Entities& source, const std::string& id,
                      const std::string& type = {}) {
-    const auto found = source.entities().find(id);
-    if (found == source.entities().end()) throw std::invalid_argument("source object is missing: " + id);
+    const auto found = source.find(id);
+    if (found == source.end()) throw std::invalid_argument("source object is missing: " + id);
     if (!type.empty() && found->second.type != type)
         throw std::invalid_argument("source object has the wrong semantic type: " + id);
     return found->second;
 }
+const Entity& entity(const DocumentSnapshot& source, const std::string& id,
+                     const std::string& type = {}) {
+    return entity(source.entities(), id, type);
+}
 
-void require_active_source(const DocumentSnapshot& source, const std::string& id,
+void require_active_source(const Entities& source, const std::string& id,
                            const ConstraintPhaseScope& scope) {
     if (scope.inactive_owner_ids.contains(id))
         throw std::invalid_argument("source object is inactive in the saved design: " + id);
     if (scope.inactive_owner_ids.empty()) return;
-    const auto found = source.entities().find(id);
-    if (found == source.entities().end()) return;
+    const auto found = source.find(id);
+    if (found == source.end()) return;
     const auto& input = found->second;
     if (input.type == "opening") {
         std::string host_id, error;
@@ -52,12 +60,16 @@ void require_active_source(const DocumentSnapshot& source, const std::string& id
             throw std::invalid_argument("source opening host is inactive in the saved design: " + host_id);
     }
 }
+void require_active_source(const DocumentSnapshot& source, const std::string& id,
+                           const ConstraintPhaseScope& scope) {
+    require_active_source(source.entities(), id, scope);
+}
 
-Wall resolved_wall(const DocumentSnapshot& source, const Entity& input,
+Wall resolved_wall(const Entities& source, const Entity& input,
                    const ConstraintPhaseScope& scope) {
     require_active_source(source, input.id, scope);
     std::vector<const Entity*> openings;
-    for (const auto& [id, candidate] : source.entities()) {
+    for (const auto& [id, candidate] : source) {
         if (candidate.type != "opening" || scope.inactive_owner_ids.contains(id)) continue;
         std::string host_id, error;
         if (read_document_wall_id(candidate, host_id, error) && host_id == input.id)
@@ -68,6 +80,10 @@ Wall resolved_wall(const DocumentSnapshot& source, const Entity& input,
     if (!read_document_wall(resolve_vertical_placement(source, input), openings, wall, error))
         throw std::invalid_argument(error);
     return wall;
+}
+Wall resolved_wall(const DocumentSnapshot& source, const Entity& input,
+                   const ConstraintPhaseScope& scope) {
+    return resolved_wall(source.entities(), input, scope);
 }
 
 // Shared line/arc semantic parameterization, independent of BRep edge order.
@@ -96,9 +112,43 @@ Vec2 point_at(const Segment& segment, double fraction) {
     return {arc.center.x + arc.radius * std::cos(angle), arc.center.y + arc.radius * std::sin(angle)};
 }
 
+struct ResolvedCorner {
+    CornerWindow owner;
+    std::array<Wall, 2> hosts;
+    std::array<HostedOpening, 2> cuts;
+    TopoDS_Shape shape;
+};
+ResolvedCorner resolved_corner(const Entities& source, const Entity& input,
+                              const ConstraintPhaseScope& scope) {
+    // Admission includes retained owner/child backlinks, raw context and every
+    // saved alternative, before deriving current native geometry.
+    validate_corner_window_state(source);
+    ResolvedCorner result;
+    result.owner = parse_corner_window(input);
+    require_active_source(source, input.id, scope);
+    for (std::size_t leg = 0; leg < result.hosts.size(); ++leg) {
+        require_active_source(source, result.owner.wall_ids[leg], scope);
+        require_active_source(source, result.owner.opening_ids[leg], scope);
+        (void)entity(source, result.owner.opening_ids[leg], "opening");
+        result.hosts[leg] = resolved_wall(source,
+            entity(source, result.owner.wall_ids[leg], "wall"), scope);
+        // Complete actual sibling cuts must remain admissible, not just the
+        // selected leg or its manufactured frame.
+        (void)make_wall(result.hosts[leg]);
+    }
+    result.cuts = corner_window_cuts(result.owner, result.hosts);
+    for (std::size_t leg = 0; leg < result.hosts.size(); ++leg)
+        if (std::find(result.hosts[leg].openings.begin(), result.hosts[leg].openings.end(),
+                      result.cuts[leg]) == result.hosts[leg].openings.end())
+            throw std::invalid_argument("corner window cut is absent from its actual host");
+    result.shape = make_corner_window(result.hosts, result.cuts, result.owner.assembly);
+    return result;
+}
+
 TopoDS_Shape source_shape(const DocumentSnapshot& source, const Entity& input,
                          const ConstraintPhaseScope& scope) {
     require_active_source(source, input.id, scope);
+    if (input.type == "corner_window") return resolved_corner(source.entities(), input, scope).shape;
     if (input.type == "wall") return make_wall(resolved_wall(source, input, scope));
     if (input.type == "opening") {
         std::string host_id, error;
@@ -180,6 +230,19 @@ TopoDS_Shape in_view_frame(const TopoDS_Shape& shape, const CoordinatedView& vie
     if (!operation.IsDone() || operation.Shape().IsNull())
         throw std::invalid_argument("source geometry could not be transformed to the owning view frame");
     return operation.Shape();
+}
+
+std::array<double, 2> point_in_view_frame(Vec3 point, const CoordinatedView& view) {
+    // Like native source geometry and in_view_frame, these coordinates are
+    // source local. The caller supplies the actual projection frame, including
+    // section displacement; do not apply Site placement or cut depth again.
+    const Vec3 normal{-view.direction[0], -view.direction[1], -view.direction[2]};
+    const Vec3 right{view.up[1] * normal.z - view.up[2] * normal.y,
+        view.up[2] * normal.x - view.up[0] * normal.z,
+        view.up[0] * normal.y - view.up[1] * normal.x};
+    point.x -= view.origin_m[0]; point.y -= view.origin_m[1]; point.z -= view.origin_m[2];
+    return {point.x * right.x + point.y * right.y + point.z * right.z,
+        point.x * view.up[0] + point.y * view.up[1] + point.z * view.up[2]};
 }
 
 bool horizontal_plan_frame(const CoordinatedView& view) {
@@ -299,6 +362,53 @@ void finite_coordinates(const std::array<double, 2>& point) {
 }
 } // namespace
 
+SectionDimensionResolution resolve_corner_window_leg_view_dimension(
+    const std::map<std::string, Entity, std::less<>>& actual_entities,
+    const CoordinatedView& view, const SectionDimensionBinding& binding) {
+    try {
+        (void)SheetViewModel::create({view}, {});
+        SectionOverlay overlay;
+        overlay.id = "corner-leg-dimension";
+        overlay.kind = SectionOverlayKind::dimension;
+        overlay.object_id = binding.object_id;
+        overlay.dimension_binding = binding;
+        auto candidate = view; candidate.overlays = {std::move(overlay)};
+        (void)SheetViewModel::create({std::move(candidate)}, {});
+        if (!binding.corner_leg || binding.axis != SectionDimensionAxis::aligned)
+            throw std::invalid_argument("corner leg resolution requires an aligned owner-plus-leg binding");
+        const auto scope = constraint_phase_scope(actual_entities);
+        const auto& input = entity(actual_entities, binding.object_id, "corner_window");
+        const auto corner = resolved_corner(actual_entities, input, scope);
+        BoundaryDimension target;
+        target.id = "corner-leg-dimension";
+        target.boundary_id = binding.object_id;
+        target.kind = BoundaryDimensionKind::corner_window_leg_length;
+        target.corner_leg = binding.corner_leg;
+        const auto span = resolve_dimension_corner_window_leg_owner(target, actual_entities);
+        // The native assembly uses the common actual cut interval; level
+        // placement is resolved once on each host, never on the owner.
+        const auto elevation = std::max(corner.hosts[0].elevation + corner.cuts[0].sill,
+            corner.hosts[1].elevation + corner.cuts[1].sill);
+        const auto start = point_in_view_frame({span.start.x, span.start.y, elevation}, view);
+        const auto end = point_in_view_frame({span.end.x, span.end.y, elevation}, view);
+        const auto dx = end[0] - start[0], dy = end[1] - start[1];
+        const auto measured = std::hypot(dx, dy);
+        if (!std::isfinite(measured) || measured <= tolerance)
+            throw std::invalid_argument("corner leg has a degenerate projected jamb span");
+        const std::array<double, 2> offset{-dy / measured * binding.line_offset_m,
+            dx / measured * binding.line_offset_m};
+        const std::array<double, 2> line_start{start[0] + offset[0], start[1] + offset[1]};
+        const std::array<double, 2> line_end{end[0] + offset[0], end[1] + offset[1]};
+        for (const auto& point : {start, end, line_start, line_end}) finite_coordinates(point);
+        return {ResolvedSectionDimension{start, end, line_start, line_end, measured, true}, {}};
+    } catch (const Standard_Failure& error) {
+        return {std::nullopt, "coordinated corner leg dimension source " + binding.object_id + ": " +
+            (error.what() ? std::string(error.what()) : std::string("architectural geometry failed"))};
+    } catch (const std::exception& error) {
+        return {std::nullopt, "coordinated corner leg dimension source " + binding.object_id + ": " + error.what()};
+    }
+}
+
 SectionDimensionResolution resolve_section_dimension(const DocumentSnapshot& source,
     const CoordinatedView& view, const SectionOverlay& overlay) {
     try {
@@ -322,6 +432,8 @@ SectionDimensionResolution resolve_section_dimension(const DocumentSnapshot& sou
         const auto& binding = *overlay.dimension_binding;
         require_active_source(source, binding.object_id, scope);
         const auto& input = entity(source, binding.object_id);
+        if (binding.corner_leg)
+            return resolve_corner_window_leg_view_dimension(source.entities(), view, binding);
         std::optional<Boundary> analytical_boundary;
         TopoDS_Shape shape;
         if (input.type == "room" && !has_document_room_volume_fields(input) && horizontal_plan_frame(view))

@@ -3,9 +3,18 @@
 #include "sketch/document.hpp"
 
 #include <cstddef>
+#include <set>
 #include <utility>
 
 namespace sketch {
+
+// After typed relationship/phase/presentation cleanup, reject surviving opaque
+// references to retired identities with the same masking policy as coordinated
+// object removal. This validates the actual candidate; it grants no retirement
+// or replacement authority and never rewrites opaque payloads.
+void validate_completed_architectural_retirement_references(
+    const std::map<std::string, Entity, std::less<>>& candidate,
+    const std::set<std::string, std::less<>>& retired_ids);
 
 // Pure actual-source removal for known stairs/railings, columns/beams and slabs.
 // Derives attached rails, hosted catalog rows and known presentation dependents;

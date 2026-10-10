@@ -936,12 +936,8 @@ Entities derive(const Entities& source, const std::vector<std::string>& selectio
         if (remaining == remaining_aliases.end() || remaining->second != alias)
             reject("removal would change surviving computed presentation alias: " + key.first + "/" + key.second);
     }
+    validate_completed_architectural_retirement_references(result,names);
     for (const auto& [id, entity] : result) {
-        if (touches(entity.properties, names) || touches(entity.extensions, names)) {
-        const auto scratch = global_reference_remainder(entity,true);
-            if (touches(scratch.properties, names) || touches(scratch.extensions, names))
-                reject("retained owner/component reference requires qualified retirement codec: " + id);
-        }
         if (qualified_instance_reference(entity.properties, instances) || qualified_instance_reference(entity.extensions, instances))
             reject("retained owner/component reference requires qualified retirement codec: " + id);
         if (qualified_overlay_reference(entity.properties, id, overlays) || qualified_overlay_reference(entity.extensions, id, overlays))
@@ -1071,6 +1067,17 @@ Entities derive(const Entities& source, const std::vector<std::string>& selectio
     return result;
 }
 } // namespace
+
+void validate_completed_architectural_retirement_references(
+    const std::map<std::string, Entity, std::less<>>& candidate,
+    const std::set<std::string, std::less<>>& retired_ids) {
+    for (const auto& [id,entity]:candidate) {
+        if (!touches(entity.properties,retired_ids) && !touches(entity.extensions,retired_ids)) continue;
+        const auto scratch=global_reference_remainder(entity,true);
+        if (touches(scratch.properties,retired_ids) || touches(scratch.extensions,retired_ids))
+            reject("retained owner/component reference requires qualified retirement codec: "+id);
+    }
+}
 
 std::map<std::string, Entity, std::less<>> replay_architectural_object_removal(
     const std::map<std::string, Entity, std::less<>>& actual,

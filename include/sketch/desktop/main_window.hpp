@@ -530,6 +530,11 @@ public:
                                                const QStringList& segment_ids,
                                                Vec2 text_position,
                                                std::optional<Revision> expected_revision = std::nullopt);
+    // Persistent width of an actual corner-window leg (0 or 1), with placement
+    // in the owner's local drawing plane. The full host/cut cohort is resolved.
+    [[nodiscard]] QString createCornerWindowLegDimension(const QString& owner_id,
+        std::uint32_t leg, Vec2 text_position,
+        std::optional<Revision> expected_revision = std::nullopt);
     // Creates a semantic angle dimension from two boundary or measured-stroke edges
     // and their shared vertex. The analytical angle is resolved from current
     // geometry; the text position is stored in model metres.

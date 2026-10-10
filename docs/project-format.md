@@ -1,4 +1,39 @@
-# Vertex project formats v1 through v171
+# Vertex project formats v1 through v172
+
+## Associative corner-window leg dimensions (v172, source integration)
+
+BoundaryDimension version five supports only `corner_window_leg_length`. Its
+closed target is `{entity_id, corner_leg}`, where `entity_id` is the actual
+corner-window owner and `corner_leg` is integer zero or one. Segment, vertex and
+chain fields do not identify this target. Other versions retain their codecs;
+unsupported versions or kinds remain opaque. Entity-only admission checks the
+owner and leg; value resolution requires the complete authoritative map or
+snapshot. Both actual hosts and cuts, saved alternatives, raw context and
+resolved vertical placement must agree. The measured segment runs from the
+shared wall endpoint to that leg's actual outer cut jamb, in local drawing XY.
+Current-value resolution additionally requires the complete cohort to be active.
+
+Sheet/view schema nine adds optional `corner_leg` to a dimension binding and
+pairs it with the new `aligned` axis. The original three-field binding remains
+unchanged for horizontal/vertical whole-object extents. Schemas one through
+eight reject leg fields and aligned axes. A linked leg dimension uses the two
+actual jamb points at the common resolved sill, validates the complete native
+wall/window assembly, and measures their distance projected into the supplied
+view frame. Line offset follows the projected left normal. A collapsed
+projection reports an unresolved dimension; it cannot substitute a silhouette
+or a cached quantity. Site and section-origin conversion remain caller-owned.
+
+Corner-window clipboard version two adds a nonempty bounded `dimensions` array
+to the passive owner/hosts/cuts/catalogs payload. Version one remains unchanged
+when no dimensions are transported. Only supported owner-bound leg dimensions
+are carried. Paste reserves explicit fresh identities through retained/undone
+history and clones all entities atomically; text offsets and rotation follow
+the actual destination leg frame while metadata is retained.
+
+Reader 172 and extraction 170 follow these forms through current and retained
+history, including undone/deleted rows. Payload tables remain v161. Source
+integration does not establish compilation, migration, interaction or output
+acceptance; the installed candidate is unchanged.
 
 ## Corner-window design-alternative edits (v171, source integration)
 

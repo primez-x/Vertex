@@ -7,6 +7,7 @@
 #include "sketch/constraint_wall_edit.hpp"
 #include "sketch/corner_window.hpp"
 #include "sketch/corner_window_edit.hpp"
+#include "sketch/boundary_dimension.hpp"
 #include "sketch/document_solid.hpp"
 #include "sketch/model_phases.hpp"
 #include "sketch/phase_roof_transform.hpp"
@@ -2365,6 +2366,39 @@ ApplyEntityChanges corner_window_remove_command(const DocumentSnapshot& source,
     ApplyEntityChanges command{expected_revision,
         {EntityChange::erase(corner.id), EntityChange::erase(corner.opening_ids[0]),
          EntityChange::erase(corner.opening_ids[1])}, {}, "Delete corner window"};
+    std::set<std::string,std::less<>> retired{corner.id,corner.opening_ids[0],corner.opening_ids[1]};
+    for (const auto& [id,entity]:source.entities()) {
+        if (!can_recognize_boundary_dimension_entity_type(entity.type)) continue;
+        const auto target=entity.properties.find("target");
+        if (target==entity.properties.end() || !target->is_object() ||
+            target->value("entity_id",nlohmann::json())!=corner.id) continue;
+        const auto decoded=decode_boundary_dimension_entity(entity);
+        if (!decoded.supported() || decoded.dimension->kind!=BoundaryDimensionKind::corner_window_leg_length || entity.required)
+            throw std::invalid_argument("Corner-window removal has a protected or unsupported attached dimension: "+id);
+        (void)decoded.dimension->resolve(source.entities());
+        retired.insert(id); command.entity_changes.push_back(EntityChange::erase(id));
+    }
+    // Consume only the closed typed owner target. Opaque metadata and other
+    // dimensions cannot silently retain references to the retired aggregate.
+    for (const auto& [id,entity]:source.entities()) {
+        if (!can_recognize_boundary_dimension_entity_type(entity.type)) continue;
+        auto properties=entity.properties;
+        if (retired.contains(id)) properties.erase("target");
+        const auto touches=[&](const nlohmann::json& root) {
+            std::vector<const nlohmann::json*> pending{&root};
+            while (!pending.empty()) {
+                const auto* value=pending.back(); pending.pop_back();
+                if (value->is_string() && retired.contains(value->get_ref<const std::string&>())) return true;
+                if (value->is_object()) for (const auto& [key,child]:value->items()) {
+                    if (retired.contains(key)) return true;
+                    pending.push_back(&child);
+                } else if (value->is_array()) for (const auto& child:*value) pending.push_back(&child);
+            }
+            return false;
+        };
+        if (touches(properties) || touches(entity.extensions))
+            throw std::invalid_argument("Corner-window removal has an opaque retired dimension reference: "+id);
+    }
     return command;
 }
 

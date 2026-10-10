@@ -74,6 +74,7 @@
 #include "sketch/structural_clone.hpp"
 #include "sketch/model_copy_composition.hpp"
 #include "sketch/architectural_selection_removal.hpp"
+#include "sketch/architectural_object_removal.hpp"
 #include "sketch/slab_layer_stack_edit.hpp"
 #include "sketch/roof_clone.hpp"
 #include "sketch/slab_clone.hpp"
@@ -2334,7 +2335,8 @@ DimensionCanvasProjection project_boundary_dimension(const BoundaryDimension& di
     const auto resolved=resolve_current_boundary_dimension(dimension, snapshot);
     QString text;
     std::optional<Boundary> overlay;
-    if (resolved.kind==BoundaryDimensionKind::segment_length || resolved.kind==BoundaryDimensionKind::wall_axis_length) {
+    if (resolved.kind==BoundaryDimensionKind::segment_length || resolved.kind==BoundaryDimensionKind::wall_axis_length ||
+        resolved.kind==BoundaryDimensionKind::corner_window_leg_length) {
         text=format_boundary_length(resolved.segment_length_metres,metric,ansi);
         overlay=dimension_overlay(resolved.segment,dimension.text_position);
     } else if (resolved.kind==BoundaryDimensionKind::angle) {
@@ -2356,7 +2358,7 @@ DimensionCanvasProjection project_boundary_dimension(const BoundaryDimension& di
     if (overlay) {
         result.line=CanvasEntity{id_from(dimension.id),QStringLiteral("dimension_line"),*overlay,0.0,selected};
         result.line->dimension_end_ticks=resolved.kind==BoundaryDimensionKind::segment_length ||
-            resolved.kind==BoundaryDimensionKind::wall_axis_length;
+            resolved.kind==BoundaryDimensionKind::wall_axis_length || resolved.kind==BoundaryDimensionKind::corner_window_leg_length;
     }
     return result;
 }
@@ -31301,6 +31303,18 @@ public:
         CornerWindowTransfer transfer{owner_entity,
             {source.entities().at(corner.wall_ids[0]), source.entities().at(corner.wall_ids[1])},
             {source.entities().at(corner.opening_ids[0]), source.entities().at(corner.opening_ids[1])}};
+        const auto scope=constraint_phase_scope(source.entities());
+        for (const auto& [id,entity]:source.entities()) {
+            if (!can_recognize_boundary_dimension_entity_type(entity.type) || scope.inactive_owner_ids.contains(id)) continue;
+            const auto target=entity.properties.find("target");
+            if (target==entity.properties.end() || !target->is_object() ||
+                target->value("entity_id",json())!=corner.id) continue;
+            const auto decoded=decode_boundary_dimension_entity(entity);
+            if (!decoded.supported() || decoded.dimension->kind!=BoundaryDimensionKind::corner_window_leg_length)
+                throw std::invalid_argument("The corner window has an unsupported attached dimension. Resolve it before copying.");
+            (void)resolve_current_boundary_dimension(*decoded.dimension,source);
+            transfer.dimensions.push_back(entity);
+        }
         validate_corner_window_transfer(transfer);
         return transfer;
     }
@@ -31330,11 +31344,15 @@ public:
         const auto authority = captureSourceEditAuthority(source);
         if (m_selected_ids.size() != 1) throw std::invalid_argument("Select one corner window to copy.");
         const auto transfer = cornerWindowTransfer(source, source.entities().at(m_selected_id.toStdString()));
-        json payload{{"format", std::string(kCornerWindowClipboardFormat)}, {"version", 1},
+        json payload{{"format", std::string(kCornerWindowClipboardFormat)}, {"version", transfer.dimensions.empty() ? 1 : 2},
             {"owner", clipboard_entity_json(transfer.owner)}, {"walls", json::array()},
             {"cuts", json::array()}, {"catalogs", json::array()}};
         for (const auto& wall : transfer.walls) payload["walls"].push_back(clipboard_entity_json(wall));
         for (const auto& opening : transfer.cuts) payload["cuts"].push_back(clipboard_entity_json(opening));
+        if (!transfer.dimensions.empty()) {
+            payload["dimensions"]=json::array();
+            for (const auto& dimension:transfer.dimensions) payload["dimensions"].push_back(clipboard_entity_json(dimension));
+        }
         for (const auto& catalog : cornerWindowMaterialCatalogs(source, transfer)) payload["catalogs"].push_back(clipboard_entity_json(catalog));
         const auto encoded = payload.dump();
         if (encoded.size() > kMaximumClipboardBytes) throw std::invalid_argument("The corner-window clipboard exceeds the local size limit.");
@@ -32393,24 +32411,26 @@ public:
             const auto source = authoringSnapshot();
             const auto found = source.entities().find(dimension.boundary_id);
             const bool wall_axis = dimension.kind == BoundaryDimensionKind::wall_axis_length;
+            const bool corner_leg = dimension.kind == BoundaryDimensionKind::corner_window_leg_length;
             if (found == source.entities().end() ||
                 (wall_axis ? found->second.type != "wall" :
+                    corner_leg ? found->second.type != "corner_window" :
                     (!can_recognize_boundary_entity_type(found->second.type) && found->second.type!="measurement_linework"))) {
-                throw std::invalid_argument("Choose a supported wall axis, identified boundary or measured line as the dimension source.");
+                throw std::invalid_argument("Choose a supported window leg, wall axis, identified boundary or measured line as the dimension source.");
             }
             auto target = found->second;
             const auto original_target = target;
-            if (!wall_axis && target.type!="measurement_linework" && inspect_boundary_entity_version(target).format == BoundaryEntityFormat::anonymous_legacy) {
+            if (!wall_axis && !corner_leg && target.type!="measurement_linework" && inspect_boundary_entity_version(target).format == BoundaryEntityFormat::anonymous_legacy) {
                 target = upgrade_legacy_boundary_entity(target);
                 dimension.boundary_id = target.id;
             }
             dimension.id = new_id("dimension");
             // Resolve before committing so an invalid edge pair, shared vertex,
             // or open area boundary cannot create a dangling presentation row.
-            if (is_physical_wall_room(target)) (void)resolve_current_boundary_dimension(dimension, source);
+            if (corner_leg || is_physical_wall_room(target)) (void)resolve_current_boundary_dimension(dimension, source);
             else (void)dimension.resolve(target);
             auto encoded = encode_boundary_dimension_entity(dimension);
-            for (const auto* key : {"property_id", "building_id", "floor_id", "layer_id"}) {
+            for (const auto* key : {"property_id", "building_id", "floor_id", "layer_id", "level_id"}) {
                 if (target.properties.contains(key)) encoded.properties[key] = target.properties.at(key);
             }
             std::vector<EntityChange> changes;
@@ -32478,6 +32498,96 @@ public:
         if (!dimension.segment_chain_ids.empty()) dimension.segment_id = dimension.segment_chain_ids.front();
         dimension.text_position = text_position;
         return createSemanticBoundaryDimension(std::move(dimension), "Create chain dimension", expected_revision);
+    }
+
+    QString createCornerWindowLegDimension(const QString& owner_id, std::uint32_t leg,
+        Vec2 text_position, std::optional<Revision> expected_revision) {
+        BoundaryDimension dimension;
+        dimension.boundary_id=owner_id.trimmed().toStdString();
+        dimension.kind=BoundaryDimensionKind::corner_window_leg_length;
+        dimension.corner_leg=leg;
+        dimension.text_position=text_position;
+        return createSemanticBoundaryDimension(std::move(dimension), "Create corner-window leg dimension", expected_revision);
+    }
+
+    void showCornerWindowDimensionCreator(const QString& owner_id) {
+        try {
+            if (!m_document->is_editable() || hasPendingPlacementEdit() || m_boundary_session)
+                throw std::invalid_argument("Finish or cancel drawing before adding a window dimension.");
+            const auto source=authoringSnapshot();
+            const auto authority=captureSourceEditAuthority(source);
+            const auto& target=source.entities().at(owner_id.toStdString());
+            const auto corner=parse_corner_window(target);
+            validate_active_wall_physical_dependencies(source.entities(),
+                {corner.wall_ids[0],corner.wall_ids[1]},true);
+            QDialog dialog(owner); styleDialog(dialog);
+            dialog.setObjectName(QStringLiteral("cornerWindowDimensionDialog"));
+            dialog.setWindowTitle(QStringLiteral("Add window dimension"));
+            auto* layout=new QVBoxLayout(&dialog);
+            auto* form=new QFormLayout;
+            auto* leg=new QComboBox(&dialog);
+            leg->setObjectName(QStringLiteral("cornerWindowDimensionLeg"));
+            leg->addItem(QStringLiteral("Leg 1 width"),0);
+            leg->addItem(QStringLiteral("Leg 2 width"),1);
+            auto* offset=new QLineEdit(m_metric_units ? QStringLiteral("0.3 m") : QStringLiteral("1 ft"),&dialog);
+            offset->setObjectName(QStringLiteral("cornerWindowDimensionOffset"));
+            auto* measured=new QLabel(&dialog);
+            measured->setObjectName(QStringLiteral("cornerWindowDimensionValue"));
+            form->addRow(QStringLiteral("Window"),new QLabel(QString::fromStdString(target.properties.value("name",corner.id)),&dialog));
+            form->addRow(QStringLiteral("Dimension"),leg);
+            form->addRow(QStringLiteral("Offset from wall"),offset);
+            form->addRow(QStringLiteral("Length"),measured);
+            layout->addLayout(form);
+            auto* error=new QLabel(&dialog); error->setWordWrap(true); layout->addWidget(error);
+            auto* buttons=new QDialogButtonBox(QDialogButtonBox::Save|QDialogButtonBox::Cancel,&dialog);
+            buttons->button(QDialogButtonBox::Save)->setText(QStringLiteral("Add dimension"));
+            layout->addWidget(buttons);
+            const auto candidate=[&] {
+                BoundaryDimension model;
+                model.id="dimension-preview"; model.boundary_id=corner.id;
+                model.kind=BoundaryDimensionKind::corner_window_leg_length;
+                model.corner_leg=static_cast<std::uint32_t>(leg->currentData().toUInt());
+                const auto resolved=resolve_current_boundary_dimension(model,source);
+                const auto& span=resolved.segment;
+                const auto length=resolved.segment_length_metres;
+                const auto distance=parse_quantity(offset->text().trimmed().toStdString(),m_metric_units ? Unit::metre : Unit::foot).metres;
+                if (!std::isfinite(distance) || std::abs(distance)>1e6)
+                    throw std::invalid_argument("Enter a finite dimension offset.");
+                Wall host; std::string host_error;
+                if (!read_document_wall(source.entities().at(corner.wall_ids[*model.corner_leg]),{},host,host_error))
+                    throw std::invalid_argument(host_error);
+                const auto placement=distance+(distance<0 ? -0.5 : 0.5)*host.thickness;
+                model.text_position={std::midpoint(span.start.x,span.end.x)-(span.end.y-span.start.y)/length*placement,
+                    std::midpoint(span.start.y,span.end.y)+(span.end.x-span.start.x)/length*placement};
+                return model;
+            };
+            const auto update=[&] {
+                try {
+                    const auto model=candidate();
+                    measured->setText(PlanCanvas::drawingLengthText(resolve_current_boundary_dimension(model,source).segment_length_metres,m_metric_units));
+                    error->clear(); buttons->button(QDialogButtonBox::Save)->setEnabled(true);
+                } catch (const std::exception& failure) {
+                    measured->clear(); error->setText(QString::fromUtf8(failure.what()));
+                    buttons->button(QDialogButtonBox::Save)->setEnabled(false);
+                }
+            };
+            QObject::connect(leg,qOverload<int>(&QComboBox::currentIndexChanged),&dialog,update);
+            QObject::connect(offset,&QLineEdit::textChanged,&dialog,update);
+            QObject::connect(buttons,&QDialogButtonBox::rejected,&dialog,&QDialog::reject);
+            QObject::connect(buttons,&QDialogButtonBox::accepted,&dialog,[&] {
+                try {
+                    if (!sourceEditAuthorityCurrent(authority))
+                        throw std::invalid_argument("The project or selection changed. Reopen Add window dimension.");
+                    const auto model=candidate();
+                    const auto id=createCornerWindowLegDimension(owner_id,*model.corner_leg,model.text_position,source.revision());
+                    if (id.isEmpty()) throw std::invalid_argument(lastError().toStdString());
+                    dialog.accept();
+                } catch (const std::exception& failure) { error->setText(QString::fromUtf8(failure.what())); }
+            });
+            update(); dialog.exec();
+        } catch (const std::exception& failure) {
+            setError(QStringLiteral("Window dimension: %1").arg(QString::fromUtf8(failure.what())));
+        }
     }
 
     QString createAreaDimension(const QString& boundary_id, Vec2 text_position,
@@ -33621,14 +33731,21 @@ public:
             }
             const auto payload = json::parse(encoded.constData(), encoded.constData() + encoded.size());
             if (payload.is_object() && payload.value("format", "") == kCornerWindowClipboardFormat) {
-                if (payload.size() != 6 || payload.value("version", 0) != 1 || !payload.contains("owner") ||
+                const bool dimensional=payload.value("version",0)==2;
+                if (payload.size() != (dimensional ? 7 : 6) || !payload.contains("version") ||
+                    !payload.at("version").is_number_integer() || (!dimensional && payload.at("version")!=1) || !payload.contains("owner") ||
                     !payload.contains("walls") || !payload.at("walls").is_array() || payload.at("walls").size() != 2 ||
                     !payload.contains("cuts") || !payload.at("cuts").is_array() || payload.at("cuts").size() != 2 ||
                     !payload.contains("catalogs") || !payload.at("catalogs").is_array() || payload.at("catalogs").size() > kMaximumClipboardEntities)
                     throw std::invalid_argument("Clipboard corner window has an unsupported contract.");
+                if (dimensional && (!payload.contains("dimensions") || !payload.at("dimensions").is_array() ||
+                    payload.at("dimensions").empty() || payload.at("dimensions").size()>2048))
+                    throw std::invalid_argument("Clipboard corner dimensions have an unsupported contract.");
                 CornerWindowTransfer transfer{clipboard_entity_from_json(payload.at("owner"), true),
                     {clipboard_entity_from_json(payload.at("walls")[0], true), clipboard_entity_from_json(payload.at("walls")[1], true)},
                     {clipboard_entity_from_json(payload.at("cuts")[0], true), clipboard_entity_from_json(payload.at("cuts")[1], true)}};
+                if (dimensional) for (const auto& row:payload.at("dimensions"))
+                    transfer.dimensions.push_back(clipboard_entity_from_json(row,true));
                 std::vector<Entity> catalogs;
                 for (const auto& entry : payload.at("catalogs")) catalogs.push_back(clipboard_entity_from_json(entry));
                 return beginCornerWindowClone(std::move(transfer), std::move(catalogs));
@@ -33969,6 +34086,12 @@ public:
                     const auto command = augmentRemovalCommand(Command{corner_window_remove_command(
                         source, selected->first, source.revision())}, source);
                     const auto candidate = Document::preview_command(source, command);
+                    std::set<std::string,std::less<>> retired;
+                    for (const auto& [id,entity]:source.entities()) {
+                        (void)entity;
+                        if (!candidate.entities().contains(id)) retired.insert(id);
+                    }
+                    validate_completed_architectural_retirement_references(candidate.entities(),retired);
                     validate_architectural_geometry_changes(source, candidate);
                     if (!sourceEditAuthorityCurrent(authority))
                         throw std::invalid_argument("The corner-window source changed before deletion");
@@ -41169,6 +41292,11 @@ public:
             axis->setObjectName(QStringLiteral("objectViewDimensionAxis"));
             axis->addItem(QStringLiteral("Horizontal extent"), static_cast<int>(SectionDimensionAxis::horizontal));
             axis->addItem(QStringLiteral("Vertical extent"), static_cast<int>(SectionDimensionAxis::vertical));
+            if (object->second.type=="corner_window") {
+                axis->addItem(QStringLiteral("Leg 1 width"),2);
+                axis->addItem(QStringLiteral("Leg 2 width"),3);
+                axis->setCurrentIndex(2);
+            }
             auto* offset = new QLineEdit(m_metric_units ? QStringLiteral("0.3 m") : QStringLiteral("1 ft"), &dialog);
             offset->setObjectName(QStringLiteral("objectViewDimensionOffset"));
             auto* measured = new QLabel(&dialog);
@@ -41194,9 +41322,11 @@ public:
                 overlay.minimum_detail = ViewDetail::coarse;
                 overlay.object_id = object->first;
                 overlay.dimension_binding = SectionDimensionBinding{object->first,
-                    static_cast<SectionDimensionAxis>(axis->currentData().toInt()),
+                    axis->currentData().toInt()>=2 ? SectionDimensionAxis::aligned : static_cast<SectionDimensionAxis>(axis->currentData().toInt()),
                     parse_quantity(offset->text().trimmed().toStdString(),
                         m_metric_units ? Unit::metre : Unit::foot).metres};
+                if (axis->currentData().toInt()>=2)
+                    overlay.dimension_binding->corner_leg=static_cast<std::uint32_t>(axis->currentData().toInt()-2);
                 if ((candidate.restrict_to_objects || !candidate.object_ids.empty()) &&
                     std::find(candidate.object_ids.begin(), candidate.object_ids.end(), object->first) == candidate.object_ids.end())
                     candidate.object_ids.push_back(object->first);
@@ -41204,7 +41334,8 @@ public:
                 return candidate;
             };
             const auto update_value = [&] {
-                offset_label->setText(axis->currentData().toInt() == static_cast<int>(SectionDimensionAxis::horizontal)
+                offset_label->setText(axis->currentData().toInt()>=2 ? QStringLiteral("Offset from leg") :
+                    axis->currentData().toInt() == static_cast<int>(SectionDimensionAxis::horizontal)
                     ? QStringLiteral("Offset above object") : QStringLiteral("Offset right of object"));
                 try {
                     const auto candidate = candidate_view();
@@ -41310,7 +41441,7 @@ public:
             QStringLiteral("End Y m"), QStringLiteral("Text"), QStringLiteral("Minimum detail"),
             QStringLiteral("Measure object"), QStringLiteral("Extent"), QStringLiteral("Offset m")});
         overlays->setToolTip(QStringLiteral("Coordinates are metres in this view. Kind: text, detail_line, dimension. "
-            "Detail: coarse, medium, fine. Choose an object and a horizontal or vertical extent for a dimension that follows model edits. "
+            "Detail: coarse, medium, fine. Choose an object extent or a corner-window leg width for a dimension that follows model edits. "
             "Offset positions its dimension line; Detached uses the explicit endpoint coordinates. "
             "Coarse sections omit hatching; higher levels include overlays at or below that detail."));
         form->addRow(QStringLiteral("View annotations"), overlays);
@@ -41338,7 +41469,8 @@ public:
                 if (entity.type != "wall" && entity.type != "opening" && entity.type != "room" &&
                     entity.type != "slab" && entity.type != "roof" && entity.type != "stair" &&
                     entity.type != "railing" && entity.type != "column" && entity.type != "beam" &&
-                    entity.type != "wall_join" && entity.type != "roof_join" && entity.type != "assembly_instance") continue;
+                    entity.type != "wall_join" && entity.type != "roof_join" && entity.type != "assembly_instance" &&
+                    entity.type != "corner_window") continue;
                 const auto label = entity.properties.value("name", id);
                 source->addItem(QStringLiteral("%1 (%2)").arg(QString::fromStdString(label),
                     QString::fromStdString(entity.type)), QString::fromStdString(id));
@@ -41346,6 +41478,21 @@ public:
             auto* axis = new QComboBox(overlays);
             axis->addItem(QStringLiteral("Horizontal extent"), static_cast<int>(SectionDimensionAxis::horizontal));
             axis->addItem(QStringLiteral("Vertical extent"), static_cast<int>(SectionDimensionAxis::vertical));
+            const auto update_axes=[source,axis,&annotation_source] {
+                const auto desired=axis->currentData();
+                const QSignalBlocker blocker(axis);
+                axis->clear();
+                axis->addItem(QStringLiteral("Horizontal extent"),0);
+                axis->addItem(QStringLiteral("Vertical extent"),1);
+                const auto found=annotation_source.entities().find(source->currentData().toString().toStdString());
+                if (found!=annotation_source.entities().end() && found->second.type=="corner_window") {
+                    axis->addItem(QStringLiteral("Leg 1 width"),2);
+                    axis->addItem(QStringLiteral("Leg 2 width"),3);
+                }
+                const auto index=axis->findData(desired);
+                axis->setCurrentIndex(index<0 ? 0 : index);
+            };
+            QObject::connect(source,qOverload<int>(&QComboBox::currentIndexChanged),&dialog,update_axes);
             overlays->setCellWidget(row, 8, source);
             overlays->setCellWidget(row, 9, axis);
             overlays->setItem(row, 10, new QTableWidgetItem(QString::number(
@@ -41354,7 +41501,10 @@ public:
                 const auto id = QString::fromStdString(overlay.dimension_binding->object_id);
                 if (source->findData(id) < 0) source->addItem(QStringLiteral("Missing: %1").arg(id), id);
                 source->setCurrentIndex(source->findData(id));
-                axis->setCurrentIndex(axis->findData(static_cast<int>(overlay.dimension_binding->axis)));
+                update_axes();
+                const auto choice=overlay.dimension_binding->corner_leg
+                    ? 2+static_cast<int>(*overlay.dimension_binding->corner_leg) : static_cast<int>(overlay.dimension_binding->axis);
+                axis->setCurrentIndex(axis->findData(choice));
             }
             overlays->item(row, 0)->setFlags(overlays->item(row, 0)->flags() & ~Qt::ItemIsEditable);
         };
@@ -41476,7 +41626,9 @@ public:
                         if (overlay.kind != SectionOverlayKind::dimension)
                             throw std::invalid_argument("Choose dimension as the annotation kind before linking an object.");
                         overlay.dimension_binding = SectionDimensionBinding{target,
-                            static_cast<SectionDimensionAxis>(axis->currentData().toInt()), scalar(cell(10))};
+                            axis->currentData().toInt()>=2 ? SectionDimensionAxis::aligned : static_cast<SectionDimensionAxis>(axis->currentData().toInt()), scalar(cell(10))};
+                        if (axis->currentData().toInt()>=2)
+                            overlay.dimension_binding->corner_leg=static_cast<std::uint32_t>(axis->currentData().toInt()-2);
                         overlay.object_id = target;
                         if ((value.restrict_to_objects || !value.object_ids.empty()) &&
                             std::find(value.object_ids.begin(), value.object_ids.end(), target) == value.object_ids.end())
@@ -43445,6 +43597,10 @@ public:
     }
 
     void showDimensionCreator() {
+        if (const auto selected=selectedEntity(); selected && selected->type=="corner_window") {
+            showCornerWindowDimensionCreator(m_selected_id);
+            return;
+        }
         QDialog dialog(owner);
         styleDialog(dialog);
         dialog.setObjectName(QStringLiteral("dimensionCreatorDialog"));
@@ -53588,7 +53744,8 @@ private:
                             (entity->type == "wall" || entity->type == "opening" || entity->type == "room" ||
                              entity->type == "slab" || entity->type == "roof" || entity->type == "stair" ||
                              entity->type == "railing" || entity->type == "column" || entity->type == "beam" ||
-                             entity->type == "wall_join" || entity->type == "roof_join" || entity->type == "assembly_instance")) {
+                             entity->type == "wall_join" || entity->type == "roof_join" || entity->type == "assembly_instance" ||
+                             entity->type == "corner_window")) {
                             auto* dimension = menu.addAction(QStringLiteral("Add view dimension…"));
                             dimension->setObjectName(QStringLiteral("addObjectViewDimensionContextAction"));
                             dimension->setEnabled(m_document->is_editable());
@@ -53596,9 +53753,12 @@ private:
                             QObject::connect(dimension, &QAction::triggered, owner,
                                 guarded([this, selected_id] { showObjectViewDimension(selected_id); }));
                         }
-                        if(entity && (entity->type=="measurement_linework" || can_recognize_boundary_entity_type(entity->type))) {
+                        if(entity && (entity->type=="measurement_linework" || entity->type=="corner_window" || can_recognize_boundary_entity_type(entity->type))) {
                             auto* dimension=owner->findChild<QAction*>(QStringLiteral("dimensionCreator"));
-                            if(auto* item=add_command(dimension)) item->setEnabled(dimension->isEnabled() && m_document->is_editable());
+                            if(auto* item=add_command(dimension)) {
+                                item->setEnabled(dimension->isEnabled() && m_document->is_editable());
+                                if (entity->type=="corner_window") item->setText(QStringLiteral("Add leg dimension…"));
+                            }
                         }
                     }
                     const auto selected = selectedEntity();
@@ -62399,8 +62559,16 @@ private:
             const auto value = cornerWindowPlacementValue(input, *hosts, id, child_ids);
             ApplyEntityChanges staged;
             if (m_pending_corner_window_clone) {
+                auto occupied=retainedSlabIdentityNames(*input.source);
+                occupied.insert(id); occupied.insert(child_ids.begin(),child_ids.end());
+                std::map<std::string,std::string,std::less<>> dimension_ids;
+                for (const auto& dimension:m_pending_corner_window_clone->dimensions) {
+                    auto fresh=new_id("dimension");
+                    while (!occupied.insert(fresh).second) fresh=new_id("dimension");
+                    dimension_ids.emplace(dimension.id,std::move(fresh));
+                }
                 staged = corner_window_clone_command(*input.source, *m_pending_corner_window_clone, id, child_ids,
-                    value.wall_ids, value.at_start, input.source->revision());
+                    value.wall_ids, value.at_start, input.source->revision(),dimension_ids);
                 for (const auto& catalog : m_pending_corner_window_catalogs) staged.entity_changes.push_back(EntityChange::upsert(catalog));
             } else {
                 Entity entity{id, "corner_window", corner_window_properties(value), false, json::object()};
@@ -65680,7 +65848,8 @@ public:
                         }
                     }
                     const auto dimension_text = [&](const BoundaryDimensionResolution& resolved) {
-                        if (resolved.kind == BoundaryDimensionKind::segment_length || resolved.kind == BoundaryDimensionKind::wall_axis_length)
+                        if (resolved.kind == BoundaryDimensionKind::segment_length || resolved.kind == BoundaryDimensionKind::wall_axis_length ||
+                            resolved.kind == BoundaryDimensionKind::corner_window_leg_length)
                             return format_boundary_length(resolved.segment_length_metres, context.metric_units, ansi);
                         if (resolved.kind == BoundaryDimensionKind::angle)
                             return format_dimension_angle(resolved.angle_radians);
@@ -65692,7 +65861,8 @@ public:
                         const auto resolved = resolve_current_boundary_dimension(dimension, dimension_snapshot);
                         const auto& boundary_entity = dimension_snapshot.entities().at(dimension.boundary_id);
                         std::optional<Boundary> overlay;
-                        if (resolved.kind == BoundaryDimensionKind::segment_length || resolved.kind == BoundaryDimensionKind::wall_axis_length)
+                        if (resolved.kind == BoundaryDimensionKind::segment_length || resolved.kind == BoundaryDimensionKind::wall_axis_length ||
+                            resolved.kind == BoundaryDimensionKind::corner_window_leg_length)
                             overlay = dimension_overlay(resolved.segment, dimension.text_position);
                         else if (resolved.kind == BoundaryDimensionKind::angle)
                             overlay = angle_dimension_overlay(resolve_dimension_geometry_owner(boundary_entity), dimension);
@@ -65701,7 +65871,7 @@ public:
                                 *overlay, color);
                             line.type = QStringLiteral("dimension_line");
                             line.dimension_end_ticks = resolved.kind == BoundaryDimensionKind::segment_length ||
-                                resolved.kind == BoundaryDimensionKind::wall_axis_length;
+                                resolved.kind == BoundaryDimensionKind::wall_axis_length || resolved.kind == BoundaryDimensionKind::corner_window_leg_length;
                             geometry.push_back(std::move(line));
                         }
                         if (text.isEmpty()) return;
@@ -68735,6 +68905,11 @@ QString MainWindow::createLengthDimension(const QString& boundary_id,
     std::optional<Revision> expected_revision) {
     return m_impl->createLengthDimension(boundary_id, segment_id, text_position,
                                          expected_revision);
+}
+
+QString MainWindow::createCornerWindowLegDimension(const QString& owner_id,
+    std::uint32_t leg, Vec2 text_position, std::optional<Revision> expected_revision) {
+    return m_impl->createCornerWindowLegDimension(owner_id,leg,text_position,expected_revision);
 }
 
 QString MainWindow::createChainDimension(const QString& boundary_id,

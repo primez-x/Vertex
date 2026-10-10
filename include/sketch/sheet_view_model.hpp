@@ -2,6 +2,7 @@
 
 #include <nlohmann/json.hpp>
 #include <array>
+#include <cstdint>
 #include <optional>
 #include <string>
 #include <vector>
@@ -13,17 +14,23 @@ struct AssemblyTransform;
 enum class CoordinatedViewKind { plan, elevation, section };
 enum class ViewDetail { coarse, medium, fine };
 enum class SectionOverlayKind { text, detail_line, dimension };
-enum class SectionDimensionAxis { horizontal, vertical };
+enum class SectionDimensionAxis { horizontal, vertical, aligned };
 // The legacy Section names also serve plan and elevation view overlays.
-// Stable semantic handles are the minimum and maximum of the full source
-// silhouette along this axis in the owning view's frame. No BRep topology
-// identity, cached geometry or measured quantity is persisted.
+// Horizontal/vertical semantic handles are the full source silhouette's
+// minimum and maximum along the axis in the owning view's frame. Aligned
+// handles identify one actual corner-window leg. No BRep topology identity,
+// cached geometry or measured quantity is persisted.
 struct SectionDimensionBinding {
     std::string object_id;
     SectionDimensionAxis axis{SectionDimensionAxis::horizontal};
     // Dimension-line placement from the maximum perpendicular silhouette
-    // coordinate, in view-plane metres; independent of the measured extent.
+    // coordinate for horizontal/vertical axes, in view-plane metres;
+    // independent of the measured extent.
     double line_offset_m{0.5};
+    // Aligned corner-window cut width, from its shared endpoint to outer jamb.
+    // The actual owner ID and leg are semantic; no generated topology is saved.
+    // For aligned dimensions the offset is along the view-plane left normal.
+    std::optional<std::uint32_t> corner_leg;
     bool operator==(const SectionDimensionBinding&) const = default;
 };
 // Detached view-plane coordinates in metres, never analytical model geometry.

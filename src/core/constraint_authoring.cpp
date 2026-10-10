@@ -1172,6 +1172,8 @@ ConstraintAuthoringPreview ConstraintAuthoringBuilder::build(Source snapshot,con
                 admit_owner(decoded.dimension->boundary_id);
                 if (move.physical_room_dimension_completion)
                     (void)resolve_current_boundary_dimension(*decoded.dimension, snapshot.entities());
+                else if (decoded.dimension->kind==BoundaryDimensionKind::corner_window_leg_length)
+                    (void)resolve_current_boundary_dimension(*decoded.dimension,snapshot.entities());
                 else (void)decoded.dimension->resolve(snapshot.entities().at(decoded.dimension->boundary_id));
             }
         }

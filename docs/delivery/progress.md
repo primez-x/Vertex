@@ -14,6 +14,56 @@ changed source does not acquire runtime acceptance without later qualification.
 
 ## Current delivery state
 
+### October 10 persistent corner-window dimensions - source integration
+
+Corner-window leg widths now have persistent owner-plus-leg targets. The new
+BoundaryDimension v5 codec uses the actual owner and leg zero/one, with no fake
+segment IDs. Retained-map resolution validates both actual hosts and cuts,
+context, saved phases and effective vertical placement. Current calculations
+require the complete cohort active. Entity-only value resolution refuses;
+structural admission can inspect the owner without certifying a quantity.
+
+The Add dimensions command and corner context actions expose a leg selector,
+measured width and editable line offset. Existing dimension properties retain
+position, color, font, visibility and rotation editing. Creation preserves the
+owner's level/context and shared host decoding supports thickness aliases.
+Length rendering, typed selected-dimension movement and phase previews use the
+new target. Manual text placement stays at its authored drawing-plane point;
+the measured segment always resolves the current actual leg.
+
+Linked plan/elevation/section dimensions and the saved-view editor expose both
+leg widths. Sheet/view schema 9 pairs an owner/leg with aligned projection.
+The complete actual native assembly is admitted before projection; actual jamb
+points and resolved sill feed the supplied projection frame. A collapsed
+projection reports unresolved. Existing whole-object extents retain their
+semantics. Alternative previews use the actual edited map and retain typed
+owner/leg bindings, avoiding fabricated snapshots and silhouette fallback.
+
+Copy/Cut/Duplicate captures supported active attached dimensions. Clipboard v2
+adds bounded passive dimension rows; v1 without rows retains its contract.
+Paste clones owner/cuts/dimensions atomically with reserved fresh IDs and moves
+dimension placement through each actual source/destination leg frame. Unknown
+attached dimensions or unsupported external references refuse explicitly.
+Reader 172/extraction 170 retain the new targets across historical revisions.
+
+Coordinated window deletion now retires attached supported leg dimensions in
+the same command. Required/unsupported bindings and opaque retired references
+refuse. The complete augmented candidate uses the established all-envelope
+reference masking after typed constraint, sheet and phase cleanup. Mixed
+wall/callout placement resolves actual source/candidate maps and preserves the
+owner/leg identity. The manual checklist retains 450 original scenarios plus
+twenty focused scenarios; these new dimension scenarios are Not tested.
+
+Independent source review approved the integration after correcting level and
+legacy-thickness authoring, dimensioned-window deletion, mixed callout placement,
+the all-envelope retirement guard and its direct controller include. Root
+reviewed the integrated interfaces and declared limits. Scoped Git backup
+accompanies this batch. No builds,
+tests/new tests, scripts/probes, native jobs, UI launches, packages or installs
+ran. The installed candidate and historical acceptance bindings remain unchanged.
+IFC/DXF corner-owner transport is still an implementation gap; runtime, history,
+migration, printed/exported dimensions and all ten production gates remain open.
+
 ### October 10 corner-window design-alternative editing - source integration
 
 Active baseline corner-window name, dimension and physical-profile edits now

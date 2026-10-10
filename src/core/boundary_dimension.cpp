@@ -3,11 +3,15 @@
 #include "sketch/document_wall.hpp"
 #include "sketch/constraint_wall_edit.hpp"
 #include "sketch/physical_wall_room_data.hpp"
+#include "sketch/corner_window.hpp"
+#include "sketch/model_phases.hpp"
+#include "sketch/project_organization.hpp"
 #ifdef VERTEX_HAS_PHYSICAL_ROOM_REVIEW
 #include "sketch/physical_room_dimension_source.hpp"
 #endif
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstdint>
 #include <limits>
@@ -176,6 +180,7 @@ std::optional<BoundaryDimensionKind> kind_from_name(std::string_view name) {
     if (name == "angle") return BoundaryDimensionKind::angle;
     if (name == "area") return BoundaryDimensionKind::area;
     if (name == "wall_axis_length") return BoundaryDimensionKind::wall_axis_length;
+    if (name == "corner_window_leg_length") return BoundaryDimensionKind::corner_window_leg_length;
     return std::nullopt;
 }
 
@@ -215,6 +220,12 @@ void validate_model(const BoundaryDimension& dimension) {
     if (!valid_identifier(dimension.boundary_id)) {
         invalid("dimension target entity id is empty or invalid");
     }
+    if (dimension.kind == BoundaryDimensionKind::corner_window_leg_length) {
+        if (!dimension.corner_leg || *dimension.corner_leg > 1)
+            invalid("corner-window dimension requires corner_leg zero or one");
+    } else if (dimension.corner_leg) {
+        invalid("only corner-window leg dimensions can contain corner_leg");
+    }
     if (!dimension.segment_chain_ids.empty()) {
         if (dimension.kind != BoundaryDimensionKind::segment_length ||
             dimension.segment_chain_ids.size() < 2 || dimension.segment_chain_ids.size() > 128 ||
@@ -246,6 +257,7 @@ void validate_model(const BoundaryDimension& dimension) {
             break;
         case BoundaryDimensionKind::area:
         case BoundaryDimensionKind::wall_axis_length:
+        case BoundaryDimensionKind::corner_window_leg_length:
             if (!dimension.segment_id.empty() || !dimension.vertex_id.empty() ||
                 !dimension.secondary_segment_id.empty()) {
                 invalid("owner-only dimension cannot contain segment or vertex target fields");
@@ -362,6 +374,7 @@ std::string_view boundary_dimension_kind_name(BoundaryDimensionKind kind) {
         case BoundaryDimensionKind::angle: return "angle";
         case BoundaryDimensionKind::area: return "area";
         case BoundaryDimensionKind::wall_axis_length: return "wall_axis_length";
+        case BoundaryDimensionKind::corner_window_leg_length: return "corner_window_leg_length";
     }
     invalid("unknown dimension kind");
 }
@@ -397,6 +410,11 @@ BoundaryDimensionVersion inspect_boundary_dimension_version(const Entity& entity
         if (kind != entity.properties.end() && kind->is_string() && *kind == "wall_axis_length")
             return {BoundaryDimensionFormat::supported_v4, version, {}};
     }
+    if (version == 5) {
+        const auto kind = entity.properties.find("dimension_kind");
+        if (kind != entity.properties.end() && kind->is_string() && *kind == "corner_window_leg_length")
+            return {BoundaryDimensionFormat::supported_v5, version, {}};
+    }
     return {BoundaryDimensionFormat::unsupported_version, version,
             "unsupported boundary dimension version " + std::to_string(version)};
 }
@@ -417,7 +435,8 @@ BoundaryDimensionDecodeResult decode_boundary_dimension_entity(const Entity& ent
                                   "dimension kind must be a string");
     const auto parsed_kind = kind_from_name(kind);
     if (!parsed_kind.has_value() ||
-        (*parsed_kind == BoundaryDimensionKind::wall_axis_length && version != 4)) {
+        (*parsed_kind == BoundaryDimensionKind::wall_axis_length && version != 4) ||
+        (*parsed_kind == BoundaryDimensionKind::corner_window_leg_length && version != 5)) {
         return unsupported_result(entity, version, kind,
                                   "unsupported boundary dimension kind " + kind);
     }
@@ -434,6 +453,16 @@ BoundaryDimensionDecodeResult decode_boundary_dimension_entity(const Entity& ent
     std::string vertex_id;
     std::string secondary_segment_id;
     std::vector<std::string> segment_chain_ids;
+    std::optional<std::uint32_t> corner_leg;
+    if (version == 5) {
+        if (target.size() != 2 || !target.contains("entity_id") || !target.contains("corner_leg"))
+            invalid("corner-window dimension target must contain exactly entity_id and corner_leg");
+        corner_leg = json_uint32(required_property(target, "corner_leg"),
+                                 "corner-window dimension corner_leg must be zero or one");
+        if (*corner_leg > 1) invalid("corner-window dimension corner_leg must be zero or one");
+    } else if (target.contains("corner_leg")) {
+        invalid("dimension corner_leg requires version five");
+    }
     if (version != 3 && target.contains("segment_ids"))
         invalid("dimension segment chain requires version three");
     if (*parsed_kind == BoundaryDimensionKind::segment_length) {
@@ -503,8 +532,9 @@ BoundaryDimensionDecodeResult decode_boundary_dimension_entity(const Entity& ent
         .vertex_id = vertex_id,
         .secondary_segment_id = secondary_segment_id,
         .segment_chain_ids = std::move(segment_chain_ids),
+        .corner_leg = corner_leg,
     };
-    if (version == 2 || ((version == 3 || version == 4) && entity.properties.contains("presentation")))
+    if (version == 2 || ((version == 3 || version == 4 || version == 5) && entity.properties.contains("presentation")))
         result.presentation = decode_presentation(required_property(entity.properties, "presentation"));
     validate_model(result);
     return BoundaryDimensionDecodeResult{
@@ -531,10 +561,11 @@ Entity encode_boundary_dimension_entity(const BoundaryDimension& dimension,
         if (!previous.supported()) {
             invalid("cannot encode over unsupported dimension semantics");
         }
-        if ((previous.version == 2 || ((previous.version == 3 || previous.version == 4) && previous.dimension->presentation)) && !dimension.presentation)
+        if ((previous.version == 2 || ((previous.version == 3 || previous.version == 4 || previous.version == 5) && previous.dimension->presentation)) && !dimension.presentation)
             invalid("cannot remove version two dimension presentation");
         if (previous.version == 1 && (dimension.presentation || !dimension.segment_chain_ids.empty() ||
-            dimension.kind == BoundaryDimensionKind::wall_axis_length) &&
+            dimension.kind == BoundaryDimensionKind::wall_axis_length ||
+            dimension.kind == BoundaryDimensionKind::corner_window_leg_length) &&
             original->properties.contains("presentation"))
             invalid("dimension presentation upgrade would overwrite opaque version one metadata");
         preserve_presentation = dimension.presentation == previous.dimension->presentation;
@@ -544,8 +575,9 @@ Entity encode_boundary_dimension_entity(const BoundaryDimension& dimension,
     }
 
     auto& properties = result.properties;
-    properties["dimension_version"] = dimension.kind == BoundaryDimensionKind::wall_axis_length
-        ? 4 : (!dimension.segment_chain_ids.empty() ? 3 : (dimension.presentation ? 2 : 1));
+    properties["dimension_version"] = dimension.kind == BoundaryDimensionKind::corner_window_leg_length
+        ? 5 : (dimension.kind == BoundaryDimensionKind::wall_axis_length
+        ? 4 : (!dimension.segment_chain_ids.empty() ? 3 : (dimension.presentation ? 2 : 1)));
     if (dimension.presentation && !preserve_presentation) {
         const auto& value = *dimension.presentation;
         properties["presentation"] = {{"text_height_mm", value.text_height_mm}, {"color", value.color},
@@ -562,6 +594,7 @@ Entity encode_boundary_dimension_entity(const BoundaryDimension& dimension,
         target = *previous_target;
     }
     target["entity_id"] = dimension.boundary_id;
+    if (dimension.kind != BoundaryDimensionKind::corner_window_leg_length) target.erase("corner_leg");
     switch (dimension.kind) {
         case BoundaryDimensionKind::segment_length:
             if (dimension.segment_chain_ids.empty()) {
@@ -586,6 +619,17 @@ Entity encode_boundary_dimension_entity(const BoundaryDimension& dimension,
             target.erase("segment_id");
             target.erase("second_segment_id");
             target.erase("vertex_id");
+            break;
+        case BoundaryDimensionKind::corner_window_leg_length:
+            // Upgrading known semantics must not silently discard opaque
+            // target metadata to manufacture the new closed v5 contract.
+            for (const auto& [key, ignored] : target.items()) {
+                (void)ignored;
+                if (key != "entity_id" && key != "corner_leg" && key != "segment_id" &&
+                    key != "segment_ids" && key != "second_segment_id" && key != "vertex_id")
+                    invalid("corner-window dimension upgrade would discard opaque target metadata");
+            }
+            target = {{"entity_id", dimension.boundary_id}, {"corner_leg", *dimension.corner_leg}};
             break;
     }
     properties["target"] = std::move(target);
@@ -645,6 +689,89 @@ Segment resolve_dimension_wall_axis_owner(const Entity& entity) {
         invalid("dimension wall source provenance is malformed: " + std::string(exception.what()));
     }
     return wall.baseline;
+}
+
+static CornerWindow validate_corner_dimension_owner(
+    const BoundaryDimension& dimension, const Entity& entity) {
+    validate_model(dimension);
+    if (dimension.kind != BoundaryDimensionKind::corner_window_leg_length)
+        invalid("corner-window leg resolution requires a corner-window leg dimension");
+    if (entity.id != dimension.boundary_id)
+        invalid("dimension source corner-window id does not match target entity id");
+    if (!entity.properties.is_object() || !entity.extensions.is_object())
+        invalid("dimension corner-window source properties and extensions must be JSON objects");
+    std::size_t count = 0;
+    validate_json_tree(entity.properties, 0, count);
+    validate_json_tree(entity.extensions, 0, count);
+    return parse_corner_window(entity);
+}
+
+Segment resolve_dimension_corner_window_leg_owner(const BoundaryDimension& dimension,
+    const std::map<std::string, Entity, std::less<>>& entities) {
+    validate_model(dimension);
+    const auto owner = entities.find(dimension.boundary_id);
+    if (owner == entities.end()) invalid("dimension source corner-window owner is missing from the authoritative map");
+    const auto corner = validate_corner_dimension_owner(dimension, owner->second);
+    // Complete saved-state admission includes both real cuts, context, every
+    // phase alternative and potentially coexisting ordinary hosted siblings.
+    // It deliberately does not require this retained owner to be active.
+    try {
+        validate_corner_window_state(entities);
+        std::array<Wall, 2> walls;
+        for (std::size_t leg = 0; leg < 2; ++leg) {
+            const auto& host = entities.at(corner.wall_ids[leg]);
+            (void)resolve_dimension_wall_axis_owner(host);
+            // Resolve supported vertical placement from this same authoritative
+            // map before checking the effective shared physical plane. Plan XY
+            // stays local, as it does for physical-wall axis dimensions.
+            const auto placed_host = resolve_vertical_placement(entities, host);
+            const auto& cut = entities.at(corner.opening_ids[leg]);
+            std::string error;
+            if (!read_document_wall(placed_host, {&cut}, walls[leg], error))
+                invalid("dimension corner-window host or cut is malformed: " + error);
+            validate_wall_semantics(walls[leg]);
+        }
+        // This confirms the actual decoded cuts against both legs and the
+        // shared endpoint; owner widths alone never supply measured geometry.
+        (void)corner_window_cuts(corner, walls);
+        const auto leg = *dimension.corner_leg;
+        const auto& wall = walls[leg];
+        const auto& cut = wall.openings.front();
+        const auto length = segment_length(wall.baseline);
+        const auto endpoint = corner.at_start[leg] ? wall.baseline.start : wall.baseline.end;
+        const auto jamb_station = corner.at_start[leg] ? cut.offset + cut.width : cut.offset;
+        const Vec2 jamb{
+            wall.baseline.start.x + (wall.baseline.end.x - wall.baseline.start.x) * jamb_station / length,
+            wall.baseline.start.y + (wall.baseline.end.y - wall.baseline.start.y) * jamb_station / length};
+        const Segment result{endpoint, jamb, 0.0};
+        if (!std::isfinite(jamb.x) || !std::isfinite(jamb.y) ||
+            segment_length(result) <= default_geometry_tolerance_metres)
+            invalid("dimension corner-window leg has no finite measurable host-to-jamb span");
+        return result;
+    } catch (const Json::exception& exception) {
+        invalid("dimension corner-window source is malformed: " + std::string(exception.what()));
+    }
+}
+
+static void validate_current_corner_dimension_phase(
+    const BoundaryDimension& dimension,
+    const std::map<std::string, Entity, std::less<>>& entities) {
+    const auto corner = validate_corner_dimension_owner(dimension, entities.at(dimension.boundary_id));
+    const std::array<std::string, 5> participants{corner.id, corner.wall_ids[0], corner.wall_ids[1],
+        corner.opening_ids[0], corner.opening_ids[1]};
+    for (const auto& [id, entity] : entities) {
+        (void)id;
+        if (entity.type != "model_phases") continue;
+        const auto phases = ModelPhases::from_json(required_property(entity.properties, "model"));
+        const auto active = phases.active_state();
+        for (const auto& participant : participants) {
+            if (std::find(phases.entity_ids().begin(), phases.entity_ids().end(), participant) ==
+                phases.entity_ids().end()) continue;
+            const auto state = active.find(participant);
+            if (state == active.end() || state->second == ModelPhase::demolished)
+                invalid("dimension corner-window participant is inactive in the semantic phase: " + participant);
+        }
+    }
 }
 
 static BoundaryDimensionResolution resolve_identified_dimension(
@@ -723,6 +850,8 @@ static BoundaryDimensionResolution resolve_retained_dimension_target(
         const auto axis = resolve_dimension_wall_axis_owner(boundary_entity);
         return {axis, segment_length(axis), BoundaryDimensionKind::wall_axis_length, 0.0, 0.0};
     }
+    if (dimension.kind == BoundaryDimensionKind::corner_window_leg_length)
+        invalid("Corner-window leg dimensions require both actual hosts and cuts; use authoritative map or snapshot resolution");
     if (dimension.kind == BoundaryDimensionKind::area && boundary_entity.type == "measurement_linework")
         invalid("area dimensions cannot target measured strokes");
     return resolve_identified_dimension(dimension, resolve_dimension_geometry_owner(boundary_entity));
@@ -730,6 +859,12 @@ static BoundaryDimensionResolution resolve_retained_dimension_target(
 
 void validate_boundary_dimension_target(const BoundaryDimension& dimension,
                                        const Entity& boundary_entity) {
+    if (dimension.kind == BoundaryDimensionKind::corner_window_leg_length) {
+        // Entity-only structural admission can check the owner and leg, but
+        // cannot certify either host, cut, placement or current leg value.
+        (void)validate_corner_dimension_owner(dimension, boundary_entity);
+        return;
+    }
     // Any analytical work here is discarded. This admits stable retained
     // targets, including stale physical rooms, without publishing their values
     // or changing the source-bound marker to bypass currentness checks.
@@ -753,6 +888,10 @@ BoundaryDimensionResolution resolve_boundary_dimension(const BoundaryDimension& 
     if (owner == entities.end()) invalid("dimension source owner is missing from the authoritative map");
     if (owner->second.id != dimension.boundary_id)
         invalid("dimension source owner identity differs from its authoritative map key");
+    if (dimension.kind == BoundaryDimensionKind::corner_window_leg_length) {
+        const auto leg = resolve_dimension_corner_window_leg_owner(dimension, entities);
+        return {leg, segment_length(leg), BoundaryDimensionKind::corner_window_leg_length, 0.0, 0.0};
+    }
     if (!is_physical_wall_room(owner->second)) return resolve_boundary_dimension(dimension, owner->second);
 #ifdef VERTEX_HAS_PHYSICAL_ROOM_REVIEW
     const auto current = resolve_physical_room_dimension_source(owner->second, entities);
@@ -774,6 +913,11 @@ BoundaryDimensionResolution resolve_current_boundary_dimension(const BoundaryDim
     if (owner == entities.end()) invalid("dimension source owner is missing from the authoritative map");
     if (owner->second.id != dimension.boundary_id)
         invalid("dimension source owner identity differs from its authoritative map key");
+    if (dimension.kind == BoundaryDimensionKind::corner_window_leg_length) {
+        const auto leg = resolve_dimension_corner_window_leg_owner(dimension, entities);
+        validate_current_corner_dimension_phase(dimension, entities);
+        return {leg, segment_length(leg), BoundaryDimensionKind::corner_window_leg_length, 0.0, 0.0};
+    }
     if (!is_physical_wall_room(owner->second)) return resolve_boundary_dimension(dimension, owner->second);
 #ifdef VERTEX_HAS_PHYSICAL_ROOM_REVIEW
     const auto current = resolve_current_physical_room_dimension_source(owner->second, entities);

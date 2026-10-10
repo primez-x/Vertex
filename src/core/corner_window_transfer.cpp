@@ -1,5 +1,6 @@
 #include "sketch/corner_window_transfer.hpp"
 
+#include "sketch/boundary_dimension.hpp"
 #include "sketch/corner_window.hpp"
 #include "sketch/constraint_entity.hpp"
 #include "sketch/document_wall.hpp"
@@ -25,6 +26,7 @@ constexpr double tolerance = default_geometry_tolerance_metres;
 constexpr std::size_t json_byte_limit = 1024 * 1024;
 constexpr std::size_t json_value_limit = 100'000;
 constexpr std::size_t json_depth_limit = 64;
+constexpr std::size_t dimension_row_limit = 2048;
 constexpr std::array context_keys{"property_id", "building_id", "floor_id", "layer_id", "level_id"};
 using Ids = std::set<std::string, std::less<>>;
 using Remap = std::map<std::string, std::pair<std::string, std::string_view>, std::less<>>;
@@ -270,6 +272,7 @@ void reserve_identities(const DocumentSnapshot& destination, const CornerWindowT
     reservation.entity(transfer.owner);
     for (const auto& host : transfer.walls) reservation.entity(host);
     for (const auto& cut : transfer.cuts) reservation.entity(cut);
+    for (const auto& dimension : transfer.dimensions) reservation.entity(dimension);
     // Scan every saved record, including records beyond the current Undo head.
     // Ordinary ApplyEntityChanges retains resulting maps rather than commands;
     // typed change lanes and raw intents may also carry retired source envelopes.
@@ -398,9 +401,80 @@ void replay_changed_quantity_entries(const Entity& before, Entity& after) {
     }
     after.properties["quantity_entries"] = std::move(retained);
 }
+
+BoundaryDimension decode_corner_dimension(const Entity& entity, const Entity& owner) {
+    validate_envelope(entity, "dimension");
+    const auto decoded = decode_boundary_dimension_entity(entity);
+    if (!decoded.supported() || decoded.dimension->kind != BoundaryDimensionKind::corner_window_leg_length ||
+        decoded.dimension->boundary_id != owner.id)
+        reject("transported dimensions must have a supported corner-leg target bound to the actual owner");
+    // This checks the model and actual owner identity without pretending the
+    // passive five-part packet contains an authoritative floor/phase graph.
+    validate_boundary_dimension_target(*decoded.dimension, owner);
+    return *decoded.dimension;
+}
+
+std::array<Segment, 2> actual_leg_segments(const Entity& owner,
+    const std::array<Entity, 2>& hosts, const std::array<Entity, 2>& children) {
+    const auto corner = parse_corner_window(owner);
+    std::array<Wall, 2> walls;
+    for (std::size_t leg = 0; leg < 2; ++leg) {
+        std::string error;
+        if (!read_document_wall(hosts[leg], {&children[leg]}, walls[leg], error)) reject(error);
+        validate_wall_semantics(walls[leg]);
+    }
+    // Derive from real source envelopes and decoded cuts, never owner widths
+    // alone or synthetic boundary IDs. Raw XY needs no imported level graph.
+    (void)corner_window_cuts(corner, walls);
+    std::array<Segment, 2> result;
+    for (std::size_t leg = 0; leg < 2; ++leg) {
+        const auto& wall = walls[leg];
+        if (wall.openings.size() != 1 || wall.openings.front().id != corner.opening_ids[leg])
+            reject("dimension leg requires its actual ordered owned cut");
+        const auto& cut = wall.openings.front();
+        const auto length = segment_length(wall.baseline);
+        const auto station = corner.at_start[leg] ? cut.offset + cut.width : cut.offset;
+        const Vec2 jamb{
+            wall.baseline.start.x + (wall.baseline.end.x - wall.baseline.start.x) * station / length,
+            wall.baseline.start.y + (wall.baseline.end.y - wall.baseline.start.y) * station / length};
+        result[leg] = {corner.at_start[leg] ? wall.baseline.start : wall.baseline.end, jamb, 0.0};
+        const auto span = segment_length(result[leg]);
+        if (!std::isfinite(jamb.x) || !std::isfinite(jamb.y) || !std::isfinite(span) || span <= tolerance)
+            reject("dimension leg has no finite measurable endpoint-to-jamb span");
+    }
+    return result;
+}
+
+void carry_dimension_placement(BoundaryDimension& dimension, const Segment& source,
+                               const Segment& destination) {
+    if (source.start.x == destination.start.x && source.start.y == destination.start.y &&
+        source.end.x == destination.end.x && source.end.y == destination.end.y) return;
+    const auto source_length = segment_length(source);
+    const auto destination_length = segment_length(destination);
+    const Vec2 from{(source.end.x - source.start.x) / source_length,
+                    (source.end.y - source.start.y) / source_length};
+    const Vec2 to{(destination.end.x - destination.start.x) / destination_length,
+                  (destination.end.y - destination.start.y) / destination_length};
+    const Vec2 offset{dimension.text_position.x - source.start.x,
+                      dimension.text_position.y - source.start.y};
+    const auto along = offset.x * from.x + offset.y * from.y;
+    const auto normal = -offset.x * from.y + offset.y * from.x;
+    dimension.text_position = {destination.start.x + along * to.x - normal * to.y,
+                               destination.start.y + along * to.y + normal * to.x};
+    const auto rotation = std::atan2(from.x * to.y - from.y * to.x, from.x * to.x + from.y * to.y);
+    if (rotation != 0.0) {
+        if (!dimension.presentation) dimension.presentation = BoundaryDimensionPresentation{};
+        dimension.presentation->rotation_radians += rotation;
+    }
+    if (!std::isfinite(dimension.text_position.x) || !std::isfinite(dimension.text_position.y) ||
+        (dimension.presentation && !std::isfinite(dimension.presentation->rotation_radians)))
+        reject("dimension placement cannot be represented in the destination leg frame");
+}
 } // namespace
 
 void validate_corner_window_transfer(const CornerWindowTransfer& transfer) {
+    if (transfer.dimensions.size() > dimension_row_limit)
+        reject("dimension transport exceeds the row limit");
     validate_envelope(transfer.owner, "corner_window");
     const auto value = parse_corner_window(transfer.owner);
     validate_supported_quantity_entries(transfer.owner, {"/widths_m/0", "/widths_m/1", "/sill_m", "/height_m",
@@ -434,30 +508,51 @@ void validate_corner_window_transfer(const CornerWindowTransfer& transfer) {
     // Copy/Cut uses this admission before publishing or deleting its source.
     // Exercise the same canonical transport policy with an identity map, so
     // unsupported external bindings cannot create an unpasteable clipboard.
-    const Remap self{{transfer.owner.id, {transfer.owner.id, "corner_window"}},
+    Remap self{{transfer.owner.id, {transfer.owner.id, "corner_window"}},
         {transfer.cuts[0].id, {transfer.cuts[0].id, "opening"}},
         {transfer.cuts[1].id, {transfer.cuts[1].id, "opening"}},
         {transfer.walls[0].id, {transfer.walls[0].id, "wall"}},
         {transfer.walls[1].id, {transfer.walls[1].id, "wall"}}};
+    for (const auto& dimension : transfer.dimensions) {
+        (void)decode_corner_dimension(dimension, transfer.owner);
+        validate_context(dimension, transfer.walls[0]);
+        if (!self.emplace(dimension.id, std::pair{dimension.id, std::string_view{"dimension"}}).second)
+            reject("transported entity identities must be distinct");
+    }
+    if (!transfer.dimensions.empty())
+        (void)actual_leg_segments(transfer.owner, transfer.walls, transfer.cuts);
     auto owner = transfer.owner;
     retarget_references(owner, self);
     for (auto child : transfer.cuts) retarget_references(child, self);
+    for (auto dimension : transfer.dimensions) retarget_references(dimension, self);
 }
 
 ApplyEntityChanges corner_window_clone_command(const DocumentSnapshot& destination,
     const CornerWindowTransfer& transfer, const std::string& owner_id,
     const std::array<std::string, 2>& opening_ids, const std::array<std::string, 2>& wall_ids,
-    const std::array<bool, 2>& at_start, Revision expected_revision) {
+    const std::array<bool, 2>& at_start, Revision expected_revision,
+    const std::map<std::string, std::string, std::less<>>& dimension_ids) {
     if (!destination.is_editable() || destination.revision() != expected_revision)
         reject("destination is read-only or stale");
     validate_corner_window_transfer(transfer);
-    const std::set<std::string, std::less<>> passive_ids{transfer.owner.id,
+    std::set<std::string, std::less<>> passive_ids{transfer.owner.id,
         transfer.walls[0].id, transfer.walls[1].id, transfer.cuts[0].id, transfer.cuts[1].id};
+    for (const auto& dimension : transfer.dimensions) passive_ids.insert(dimension.id);
+    if (dimension_ids.size() != transfer.dimensions.size())
+        reject("dimension identities must cover exactly the transported dimensions");
     std::set<std::string, std::less<>> fresh_ids;
     for (const auto& id : {owner_id, opening_ids[0], opening_ids[1]})
         if (!valid_id(id) || !fresh_ids.insert(id).second || passive_ids.contains(id) ||
             destination.entities().contains(id) || id == wall_ids[0] || id == wall_ids[1])
             reject("owner and cuts require distinct fresh destination identities");
+    for (const auto& dimension : transfer.dimensions) {
+        const auto found = dimension_ids.find(dimension.id);
+        if (found == dimension_ids.end()) reject("transported dimension lacks its explicit fresh identity");
+        const auto& id = found->second;
+        if (!valid_id(id) || !fresh_ids.insert(id).second || passive_ids.contains(id) ||
+            destination.entities().contains(id) || id == wall_ids[0] || id == wall_ids[1])
+            reject("dimensions require distinct fresh destination identities");
+    }
     reserve_identities(destination, transfer, fresh_ids);
     std::array<Entity, 2> host_entities;
     for (std::size_t leg = 0; leg < host_entities.size(); ++leg) {
@@ -468,9 +563,11 @@ ApplyEntityChanges corner_window_clone_command(const DocumentSnapshot& destinati
         host_entities[leg] = found->second;
     }
     const auto walls = decode_hosts(host_entities);
-    const Remap remap{{transfer.owner.id, {owner_id, "corner_window"}},
+    Remap remap{{transfer.owner.id, {owner_id, "corner_window"}},
         {transfer.cuts[0].id, {opening_ids[0], "opening"}}, {transfer.cuts[1].id, {opening_ids[1], "opening"}},
         {transfer.walls[0].id, {wall_ids[0], "wall"}}, {transfer.walls[1].id, {wall_ids[1], "wall"}}};
+    for (const auto& [source_id, fresh_id] : dimension_ids)
+        remap.emplace(source_id, std::pair{fresh_id, std::string_view{"dimension"}});
     Entity owner = transfer.owner;
     retarget_references(owner, remap);
     owner.id = owner_id;
@@ -482,7 +579,7 @@ ApplyEntityChanges corner_window_clone_command(const DocumentSnapshot& destinati
     const auto cuts = corner_window_cuts(value, walls);
     validate_profile_fit(value, walls);
     ApplyEntityChanges command{expected_revision, {}, {}, "Clone corner window"};
-    command.entity_changes.reserve(3);
+    command.entity_changes.reserve(3 + transfer.dimensions.size());
     command.entity_changes.push_back(EntityChange::upsert(std::move(owner)));
     for (std::size_t leg = 0; leg < cuts.size(); ++leg) {
         Entity child = transfer.cuts[leg];
@@ -497,6 +594,40 @@ ApplyEntityChanges corner_window_clone_command(const DocumentSnapshot& destinati
         retain_dimension(child.properties, "height_m", "height", cuts[leg].height);
         replay_changed_quantity_entries(transfer.cuts[leg], child);
         command.entity_changes.push_back(EntityChange::upsert(std::move(child)));
+    }
+    if (!transfer.dimensions.empty()) {
+        const auto source_legs = actual_leg_segments(transfer.owner, transfer.walls, transfer.cuts);
+        const std::array<Entity, 2> destination_cuts{command.entity_changes[1].entity,
+                                                   command.entity_changes[2].entity};
+        const auto destination_legs = actual_leg_segments(command.entity_changes[0].entity,
+                                                          host_entities, destination_cuts);
+        for (const auto& source : transfer.dimensions) {
+            auto dimension = decode_corner_dimension(source, transfer.owner);
+            const auto source_dimension = dimension;
+            const auto leg = *dimension.corner_leg;
+            dimension.id = dimension_ids.at(source.id);
+            dimension.boundary_id = owner_id;
+            carry_dimension_placement(dimension, source_legs[leg], destination_legs[leg]);
+            Entity retained = source;
+            retained.id = dimension.id;
+            retarget_references(retained, remap);
+            inherit_context(retained, host_entities[0]);
+            auto child = encode_boundary_dimension_entity(dimension, &retained);
+            // The typed encoder validates changed semantics. Preserve exact
+            // retained numeric forms for unchanged target/presentation fields,
+            // including integer height/rotation spellings in existing v5 data.
+            child.properties["dimension_version"] = source.properties.at("dimension_version");
+            child.properties["target"]["corner_leg"] = source.properties.at("target").at("corner_leg");
+            if (source_dimension.automatic_placement_version)
+                child.properties["automatic_placement_version"] = source.properties.at("automatic_placement_version");
+            if (source_dimension.presentation) {
+                child.properties["presentation"] = source.properties.at("presentation");
+                if (dimension.presentation->rotation_radians != source_dimension.presentation->rotation_radians)
+                    child.properties["presentation"]["rotation_radians"] = dimension.presentation->rotation_radians;
+            }
+            (void)decode_corner_dimension(child, command.entity_changes[0].entity);
+            command.entity_changes.push_back(EntityChange::upsert(std::move(child)));
+        }
     }
     return command;
 }

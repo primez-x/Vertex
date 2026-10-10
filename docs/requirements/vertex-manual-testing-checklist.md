@@ -3251,7 +3251,32 @@ Blocked / missing until testing a candidate that contains it.
   - Result: Not tested
   - Notes: ______________________________
 
+- [ ] **WINDOW-LEG-DIMENSION - Add a saved width dimension to each window leg**
+  - Steps: Place a corner window. Select it, right-click and choose Add leg dimension. Add a Leg 1 width dimension, then repeat for Leg 2. Change the offset to move a dimension to the opposite side. Double-click a dimension and change its position, color, text size and visibility.
+  - Expected: Each dimension identifies the chosen leg and shows its actual endpoint-to-jamb width in the selected units. Formatting and placement changes keep the dimension attached to that leg.
+  - Result: Not tested
+  - Notes: ______________________________
+
+- [ ] **WINDOW-LEG-DIMENSION-EDIT - Keep window dimensions through edits and saved files**
+  - Steps: Dimension both legs. Resize one leg using its handle, then edit its width in Properties. Move or rotate the connected host walls. Undo/redo each change, save, close and reopen the project. Repeat a width edit in a design alternative.
+  - Expected: The correct leg value follows every committed edit. The dimension's manually placed text remains editable. Undo restores the earlier measurement; reopen preserves the owner/leg attachment. Baseline dimensions remain with the baseline and the alternative receives its correctly attached proposed dimensions.
+  - Result: Not tested
+  - Notes: ______________________________
+
+- [ ] **WINDOW-LEG-VIEW-DIMENSION - Add and edit window-leg dimensions in a saved view**
+  - Steps: In a saved plan, select a corner window and choose Add view dimension. Add both leg widths. Reopen the saved-view editor and change one dimension's leg and offset. Resize the window and view its plan, elevation and section. Print or export a sheet containing the view.
+  - Expected: The selected leg and line offset persist in the editor. Each linked dimension uses the actual jamb points projected into that view. A leg viewed end-on reports unresolved instead of displaying another leg's width or a cached value. Visible dimensions agree between the canvas and output.
+  - Result: Not tested
+  - Notes: ______________________________
+
+- [ ] **WINDOW-LEG-DIMENSION-COPY - Copy, duplicate, cut and delete a dimensioned window**
+  - Steps: Add dimensions to both legs and give them distinct colors and offsets. Copy/paste or duplicate the window onto a differently oriented compatible corner. Cut/paste another copy. Delete a dimensioned window, then undo and redo.
+  - Expected: Each new window has its own attached dimensions, preserving styles and offsets relative to the destination legs. Editing the copy does not change the original. Delete removes the window, cuts and its dimensions together; undo restores the complete group. Cancelled placement preserves the source.
+  - Result: Not tested
+  - Notes: ______________________________
+
 ## Issue report template
+
 
 - Task ID(s):
 - What I did:

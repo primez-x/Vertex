@@ -142,8 +142,13 @@ void validate_view(const CoordinatedView& view) {
                 "view dimension references object outside owning view");
             require(overlay.object_id.empty() || overlay.object_id == binding.object_id,
                 "view dimension source references disagree");
-            require(binding.axis == SectionDimensionAxis::horizontal || binding.axis == SectionDimensionAxis::vertical,
+            require(binding.axis == SectionDimensionAxis::horizontal || binding.axis == SectionDimensionAxis::vertical ||
+                binding.axis == SectionDimensionAxis::aligned,
                 "unknown view dimension axis");
+            require(binding.corner_leg.has_value() == (binding.axis == SectionDimensionAxis::aligned),
+                "aligned view dimensions require a corner leg and other axes cannot select a leg");
+            require(!binding.corner_leg || *binding.corner_leg <= 1,
+                "view dimension corner leg must be zero or one");
             require(std::isfinite(binding.line_offset_m) && std::abs(binding.line_offset_m) <= 1e6,
                 "view dimension offset outside finite bounds");
         }
@@ -346,15 +351,38 @@ void to_json(nlohmann::json& value, const SectionDimensionAxis& axis) {
     switch (axis) {
     case SectionDimensionAxis::horizontal: value = "horizontal"; return;
     case SectionDimensionAxis::vertical: value = "vertical"; return;
+    case SectionDimensionAxis::aligned: value = "aligned"; return;
     }
     throw std::invalid_argument("unknown view dimension axis");
 }
 void from_json(const nlohmann::json& value, SectionDimensionAxis& axis) {
     if (value == "horizontal") axis = SectionDimensionAxis::horizontal;
     else if (value == "vertical") axis = SectionDimensionAxis::vertical;
+    else if (value == "aligned") axis = SectionDimensionAxis::aligned;
     else throw std::invalid_argument("unknown view dimension axis");
 }
-NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(SectionDimensionBinding, object_id, axis, line_offset_m)
+void to_json(nlohmann::json& value, const SectionDimensionBinding& binding) {
+    value = {{"object_id", binding.object_id}, {"axis", binding.axis},
+        {"line_offset_m", binding.line_offset_m}};
+    if (binding.corner_leg) value["corner_leg"] = *binding.corner_leg;
+}
+void from_json(const nlohmann::json& value, SectionDimensionBinding& binding) {
+    require(value.is_object() && value.size() == (value.contains("corner_leg") ? 4 : 3) &&
+        value.contains("object_id") && value.contains("axis") && value.contains("line_offset_m"),
+        "invalid view dimension binding fields");
+    value.at("object_id").get_to(binding.object_id);
+    value.at("axis").get_to(binding.axis);
+    value.at("line_offset_m").get_to(binding.line_offset_m);
+    binding.corner_leg.reset();
+    if (value.contains("corner_leg")) {
+        const auto& leg = value.at("corner_leg");
+        require(leg.is_number_integer() && (leg == 0 || leg == 1),
+            "view dimension corner leg must be zero or one");
+        binding.corner_leg = leg.get<std::uint32_t>();
+    }
+    require(binding.corner_leg.has_value() == (binding.axis == SectionDimensionAxis::aligned),
+        "aligned view dimensions require a corner leg and other axes cannot select a leg");
+}
 void to_json(nlohmann::json& value, const SectionOverlay& overlay) {
     value = {{"id", overlay.id}, {"kind", overlay.kind}, {"start_m", overlay.start_m},
         {"end_m", overlay.end_m}, {"text", overlay.text}, {"text_height_mm", overlay.text_height_mm},
@@ -636,11 +664,16 @@ SheetViewModel SheetViewModel::with_removed_callout(const std::string& sheet_id,
 }
 
 nlohmann::json SheetViewModel::to_json() const {
+    const auto corner_dimensions = std::any_of(views_.begin(), views_.end(),
+        [](const auto& view) { return std::any_of(view.overlays.begin(), view.overlays.end(),
+            [](const auto& overlay) { return overlay.dimension_binding &&
+                (overlay.dimension_binding->corner_leg ||
+                 overlay.dimension_binding->axis == SectionDimensionAxis::aligned); }); });
     const auto non_section_overlays = std::any_of(views_.begin(), views_.end(),
         [](const auto& view) { return view.kind != CoordinatedViewKind::section && !view.overlays.empty(); });
     const auto explicit_appearance = std::any_of(views_.begin(), views_.end(),
         [](const auto& view) { return view.presentation.appearance.has_value(); });
-    const auto version = non_section_overlays ? 8 : (explicit_appearance ? 7 : 6);
+    const auto version = corner_dimensions ? 9 : (non_section_overlays ? 8 : (explicit_appearance ? 7 : 6));
     return {{"schema", "sketch.sheet_view_model"}, {"version", version}, {"views", views_},
         {"sheets", sheets_}, {"schedule_ids", schedule_ids_}, {"sheet_order", sheet_order_}};
 }
@@ -650,7 +683,8 @@ SheetViewModel SheetViewModel::from_json(const nlohmann::json& value) {
             value.at("version").is_number_integer() &&
             (value.at("version") == 1 || value.at("version") == 2 ||
              value.at("version") == 3 || value.at("version") == 4 || value.at("version") == 5 ||
-             value.at("version") == 6 || value.at("version") == 7 || value.at("version") == 8),
+             value.at("version") == 6 || value.at("version") == 7 || value.at("version") == 8 ||
+             value.at("version") == 9),
             "unsupported sheet/view schema");
         auto normalized = value;
         if (value.at("version") < 7)
@@ -696,6 +730,14 @@ SheetViewModel SheetViewModel::from_json(const nlohmann::json& value) {
                     if (!overlay.contains("dimension_binding")) overlay["dimension_binding"] = nullptr;
             }
         }
+        if (value.at("version") < 9)
+            for (const auto& view : normalized.at("views"))
+                for (const auto& overlay : view.at("overlays")) {
+                    const auto& binding = overlay.at("dimension_binding");
+                    if (binding.is_null()) continue;
+                    require(!binding.contains("corner_leg") && binding.at("axis") != "aligned",
+                        "corner leg dimensions require sheet/view schema 9");
+                }
         auto views = normalized.at("views").get<std::vector<CoordinatedView>>();
         if (value.at("version") < 8)
             for (const auto& view : views)

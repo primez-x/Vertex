@@ -20,6 +20,7 @@
 #include "sketch/physical_wall_room_data.hpp"
 #include "sketch/plan_axis_resize.hpp"
 #include "sketch/project_organization.hpp"
+#include "sketch/section_dimension_resolution.hpp"
 #include "sketch/sheet_view_entity_codec.hpp"
 #include "sketch/wall_measurement.hpp"
 
@@ -1212,10 +1213,12 @@ PhaseWallCanvasProjection project_phase_wall_canvas(const DocumentSnapshot& sour
                 if (!horizontal_plan) throw std::invalid_argument("Phase wall canvas preview analytical dimension requires a horizontal plan: "+id);
                 const auto resolved=decoded.resolve(stage);
                 if (decoded.presentation && !decoded.presentation->visible) projected.segments.clear();
-                else if (resolved.kind==BoundaryDimensionKind::segment_length || resolved.kind==BoundaryDimensionKind::wall_axis_length)
+                else if (resolved.kind==BoundaryDimensionKind::segment_length || resolved.kind==BoundaryDimensionKind::wall_axis_length ||
+                    resolved.kind==BoundaryDimensionKind::corner_window_leg_length)
                     projected.segments=dimension_overlay(resolved.segment,decoded.text_position);
                 else if (resolved.kind==BoundaryDimensionKind::angle) projected.segments=angle_overlay(owner,decoded);
-                projected.dimension_end_ticks=resolved.kind==BoundaryDimensionKind::segment_length || resolved.kind==BoundaryDimensionKind::wall_axis_length;
+                projected.dimension_end_ticks=resolved.kind==BoundaryDimensionKind::segment_length || resolved.kind==BoundaryDimensionKind::wall_axis_length ||
+                    resolved.kind==BoundaryDimensionKind::corner_window_leg_length;
             }
         } else throw std::invalid_argument("Phase wall canvas preview has unsupported affected geometry: "+id+" ("+entity.type+").");
         if (view_context && world) project_entity(projected,*view_context,prototype.type==QStringLiteral("dimension_line"));
@@ -1273,7 +1276,8 @@ PhaseWallCanvasProjection project_phase_wall_canvas(const DocumentSnapshot& sour
                 if (!horizontal_plan) throw std::invalid_argument("Phase wall preview analytical dimension label requires a horizontal plan: "+id);
                 const auto resolved=decoded.resolve(stage);
                 if (decoded.presentation && !decoded.presentation->visible) projected.text.clear();
-                else if (resolved.kind==BoundaryDimensionKind::segment_length || resolved.kind==BoundaryDimensionKind::wall_axis_length)
+                else if (resolved.kind==BoundaryDimensionKind::segment_length || resolved.kind==BoundaryDimensionKind::wall_axis_length ||
+                    resolved.kind==BoundaryDimensionKind::corner_window_leg_length)
                     projected.text=length_text(resolved.segment_length_metres,metric_units,ansi_dimensions(stage,owner));
                 else if (resolved.kind==BoundaryDimensionKind::angle) projected.text=QStringLiteral("%1°").arg(resolved.angle_radians*180/std::numbers::pi,0,'f',1);
                 else projected.text=area_text(resolved.area_square_metres,metric_units,ansi_dimensions(stage,owner));
@@ -1363,6 +1367,44 @@ PhaseWallCanvasProjection project_phase_wall_canvas(const DocumentSnapshot& sour
         }
         const auto& binding=*staged->dimension_binding;
         const auto target=proposed_id(binding.object_id);
+        if (binding.corner_leg) {
+            if (binding.axis!=SectionDimensionAxis::aligned)
+                throw std::invalid_argument("Corner-window view dimension lost its aligned leg target.");
+            CoordinatedView dimension_view;
+            dimension_view.id=view_context->view_id.empty() ? "phase-dimension-preview" : view_context->view_id;
+            dimension_view.name="Dimension preview";
+            dimension_view.kind=horizontal_plan ? CoordinatedViewKind::plan : CoordinatedViewKind::elevation;
+            const auto& frame=view_context->frame;
+            dimension_view.origin_m={frame.origin.x,frame.origin.y,frame.origin.z};
+            dimension_view.direction={frame.direction.x,frame.direction.y,frame.direction.z};
+            dimension_view.up={frame.up.x,frame.up.y,frame.up.z};
+            dimension_view.presentation=view_context->presentation;
+            dimension_view.restrict_to_objects=view_context->restrict_to_objects;
+            for (const auto& owner:view_context->object_ids) dimension_view.object_ids.push_back(proposed_id(owner));
+            auto proposed_binding=binding; proposed_binding.object_id=target;
+            const auto measured=resolve_corner_window_leg_view_dimension(stage,dimension_view,proposed_binding);
+            if (!measured.dimension) throw std::invalid_argument(measured.diagnostic);
+            const auto& value=*measured.dimension;
+            const Vec2 first{value.start_m[0],value.start_m[1]},last{value.end_m[0],value.end_m[1]};
+            const Vec2 line_start{value.line_start_m[0],value.line_start_m[1]},line_end{value.line_end_m[0],value.line_end_m[1]};
+            const auto render_id=QString::fromStdString(view_context->view_id+"/overlay/"+overlay.id);
+            const auto prototype=std::find_if(prototypes.begin(),prototypes.end(),[&](const auto& value){return value.second.id==render_id && value.second.type==QStringLiteral("section_overlay");});
+            if (prototype!=prototypes.end()) {
+                auto line=prototype->second; clear_geometry(line);
+                if (first.x!=line_start.x || first.y!=line_start.y) line.segments.push_back({first,line_start,0});
+                if (last.x!=line_end.x || last.y!=line_end.y) line.segments.push_back({last,line_end,0});
+                line.segments.push_back({line_start,line_end,0}); line.dimension_end_ticks=true;
+                result.entities.push_back(std::move(line));
+            }
+            const auto label=std::find_if(labels.begin(),labels.end(),[&](const auto& value){return value.id==render_id;});
+            if (label!=labels.end()) {
+                auto projected=*label;
+                projected.position={std::midpoint(line_start.x,line_end.x),std::midpoint(line_start.y,line_end.y)};
+                projected.text=length_text(value.measured_metres,metric_units);
+                result.labels.push_back(std::move(projected));
+            }
+            continue;
+        }
         Boundary support;
         if (const auto component=staged_component_owners.find(target);component!=staged_component_owners.end()) {
             const auto& [catalog_id,instance_id]=component->second;
