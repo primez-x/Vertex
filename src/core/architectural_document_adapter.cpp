@@ -6,6 +6,7 @@
 #include "sketch/constraint_phase_scope.hpp"
 #include "sketch/constraint_wall_edit.hpp"
 #include "sketch/corner_window.hpp"
+#include "sketch/corner_window_edit.hpp"
 #include "sketch/document_solid.hpp"
 #include "sketch/model_phases.hpp"
 #include "sketch/phase_roof_transform.hpp"
@@ -557,11 +558,28 @@ void scale_property(nlohmann::json& properties, const char* canonical,
 }
 
 Entity transform_wall_entity(EntityState& entities, const Entity& source,
-                             const ArchitecturalTransform& transform) {
+                             const ArchitecturalTransform& transform,
+                             double managed_cut_source_scale) {
+    // Managed cuts remain source-owned until both final hosts are staged.
+    // Reconstruct their temporary roster at the host's cumulative prior scale
+    // so repeated transforms do not reload original dimensions into a scaled
+    // wall. Ordinary cuts already track each operation in entities.
+    std::vector<Entity> managed_openings;
+    const auto opening_ids = hosted_opening_ids(entities, source.id);
+    managed_openings.reserve(opening_ids.size());
     std::vector<const Entity*> openings;
-    for (const auto& id : hosted_opening_ids(entities, source.id)) {
+    for (const auto& id : opening_ids) {
         const auto found = entities.find(id);
-        if (found != entities.end()) openings.push_back(&found->second);
+        if (found == entities.end()) continue;
+        if (found->second.properties.contains("corner_window_id")) {
+            managed_openings.push_back(found->second);
+            auto& cut = managed_openings.back();
+            scale_property(cut.properties, "offset_m", "offset", managed_cut_source_scale);
+            scale_property(cut.properties, "width_m", "width", managed_cut_source_scale);
+            scale_property(cut.properties, "sill_m", "sill", managed_cut_source_scale);
+            scale_property(cut.properties, "height_m", "height", managed_cut_source_scale);
+            openings.push_back(&cut);
+        } else openings.push_back(&found->second);
     }
     Wall wall;
     std::string error;
@@ -634,6 +652,9 @@ Entity transform_wall_entity(EntityState& entities, const Entity& source,
         // translation and rotation act on the host baseline, while a positive
         // uniform scale updates all station/height quantities.
         auto& opening = entities.at(opening_id);
+        // The coordinated owner derives managed cut stations from both final
+        // hosts and replays their retained quantities once, after this loop.
+        if (opening.properties.contains("corner_window_id")) continue;
         scale_property(opening.properties, "offset_m", "offset", transform.scale);
         scale_property(opening.properties, "width_m", "width", transform.scale);
         scale_property(opening.properties, "sill_m", "sill", transform.scale);
@@ -755,14 +776,15 @@ Entity transform_room_entity(const Entity& source, const ArchitecturalTransform&
 
 std::optional<Entity> try_transform_shared_solid(EntityState& entities,
                                                  const Entity& source,
-                                                 const ArchitecturalTransform& transform) {
+                                                 const ArchitecturalTransform& transform,
+                                                 double managed_cut_source_scale) {
     // Incomplete generic architectural descriptors are still allowed to carry
     // a transport-level transform for compatibility with the existing
     // transaction contract. Once a canonical footprint is present, malformed
     // data fails closed instead of silently accepting a stale marker.
     if (source.type == "wall") {
         if (!source.properties.contains("baseline")) return std::nullopt;
-        return transform_wall_entity(entities, source, transform);
+        return transform_wall_entity(entities, source, transform, managed_cut_source_scale);
     }
     if (source.type == "slab") {
         if (!source.properties.contains("boundary")) return std::nullopt;
@@ -978,6 +1000,7 @@ EntityState apply_operations(const DocumentSnapshot& source,
         if (operation.action==ArchitecturalAction::transform)
             transforms[operation.object_id].push_back(*operation.transform);
     std::set<std::string,std::less<>> cascade_deleted_rails;
+    std::map<std::string,double,std::less<>> wall_scales;
     std::map<std::string,std::string,std::less<>> selected_rail_clones;
     std::map<std::string,std::size_t,std::less<>> stair_clone_counts;
     for (const auto& operation : transaction.operations()) {
@@ -1021,6 +1044,9 @@ EntityState apply_operations(const DocumentSnapshot& source,
             auto found = entities.find(operation.object_id);
             if (found == entities.end() || !operation.transform)
                 throw std::invalid_argument("architectural transform target is missing");
+            if (found->second.type == "corner_window" ||
+                (found->second.type == "opening" && found->second.properties.contains("corner_window_id")))
+                throw std::invalid_argument("Corner-window placement follows both actual wall hosts");
             if (canonical_hosted_railing(found->second)) {
                 const auto railing=decode_railing_properties(found->first,found->second.properties);
                 const auto host=transforms.find(railing.host?railing.host->stair_id:railing.landing_host->stair_id);
@@ -1043,6 +1069,14 @@ EntityState apply_operations(const DocumentSnapshot& source,
                     invalidate_changed_receipts(before,rail);
                 }
             }
+            double managed_cut_source_scale = 1.0;
+            if (found->second.type == "wall") {
+                const auto scale = wall_scales.try_emplace(found->first,1.0).first;
+                managed_cut_source_scale = scale->second;
+                scale->second *= operation.transform->scale;
+                if (!std::isfinite(scale->second) || scale->second <= 0.0)
+                    throw std::invalid_argument("Architectural wall scale exceeds the supported range");
+            }
             if (found->second.type == "assembly_instance") {
                 auto value = decode_document_assembly_instance(found->second);
                 const auto& movement = *operation.transform;
@@ -1055,7 +1089,8 @@ EntityState apply_operations(const DocumentSnapshot& source,
             } else if (can_recognize_building_entity_type(found->second.type)) {
                 found->second = transform_building_entity(entities, found->second, *operation.transform);
             } else if (const auto transformed =
-                           try_transform_shared_solid(entities, found->second, *operation.transform)) {
+                           try_transform_shared_solid(entities, found->second, *operation.transform,
+                               managed_cut_source_scale)) {
                 found->second = *transformed;
             } else {
                 // Generic entities without a canonical solid descriptor retain
@@ -1143,6 +1178,8 @@ EntityState apply_operations(const DocumentSnapshot& source,
         }
         }
     }
+    std::erase_if(wall_scales,[](const auto& item) { return item.second == 1.0; });
+    complete_corner_window_geometry(source.entities(),entities,wall_scales);
     return entities;
 }
 
@@ -2265,6 +2302,14 @@ ApplyEntityChanges corner_window_upsert_command(const DocumentSnapshot& source,
         const auto old = parse_corner_window(previous->second);
         if (old.opening_ids != corner.opening_ids)
             throw std::invalid_argument("A corner edit must retain both cut identities");
+        auto candidate = copy_entities(source);
+        candidate.at(corner.id) = replacement;
+        complete_corner_window_geometry(source.entities(),candidate);
+        std::vector<EntityChange> changes{EntityChange::upsert(candidate.at(corner.id))};
+        for (const auto& id : corner.opening_ids)
+            changes.push_back(EntityChange::upsert(candidate.at(id)));
+        // The caller completes actual saved-phase memberships before preview.
+        return {expected_revision,std::move(changes),{},"Edit corner window"};
     }
     std::array<Wall, 2> walls;
     for (std::size_t leg = 0; leg < 2; ++leg) {
@@ -2281,23 +2326,8 @@ ApplyEntityChanges corner_window_upsert_command(const DocumentSnapshot& source,
     std::vector<EntityChange> changes{EntityChange::upsert(replacement)};
     for (std::size_t leg = 0; leg < 2; ++leg) {
         Entity child{cuts[leg].id, "opening", nlohmann::json::object(), false, nlohmann::json::object()};
-        if (const auto found = source.entities().find(child.id); found != source.entities().end()) {
-            if (previous == source.entities().end() || found->second.type != "opening" ||
-                found->second.properties.value("corner_window_id", std::string{}) != corner.id)
-                throw std::invalid_argument("Corner-window cut identity is already owned");
-            child = found->second;
-            // Retained measured inputs need their own authored replay before a
-            // numerical change can be made; never silently stale a receipt.
-            const auto differs = [&](const char* canonical, const char* legacy, double expected) {
-                const auto key = child.properties.contains(canonical) ? canonical : legacy;
-                return !child.properties.contains(key) || child.properties.at(key).get<double>() != expected;
-            };
-            const bool dimensions_changed = differs("offset_m", "offset", cuts[leg].offset) ||
-                differs("width_m", "width", cuts[leg].width) || differs("sill_m", "sill", cuts[leg].sill) ||
-                differs("height_m", "height", cuts[leg].height);
-            if (dimensions_changed && child.properties.contains("quantity_entries"))
-                throw std::invalid_argument("Managed cut quantity receipts require coordinated replay");
-        }
+        if (source.entities().contains(child.id))
+            throw std::invalid_argument("Corner-window cut identity is already owned");
         auto& p = child.properties;
         p["wall_id"] = corner.wall_ids[leg];
         p["corner_window_id"] = corner.id;
@@ -2320,7 +2350,7 @@ ApplyEntityChanges corner_window_upsert_command(const DocumentSnapshot& source,
         changes.push_back(EntityChange::upsert(std::move(child)));
     }
     ApplyEntityChanges command{expected_revision, std::move(changes), {},
-        previous == source.entities().end() ? "Create corner window" : "Edit corner window"};
+        "Create corner window"};
     // The caller completes actual saved-phase memberships before previewing
     // this staged command. A premature preview would reject valid new owners
     // against the unchanged hosts' registry, or deletion before registry cleanup.

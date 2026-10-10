@@ -195,6 +195,48 @@ Qt::CursorShape jamb_resize_cursor(const CanvasOpeningWidthControls& controls,
     }
 }
 
+bool corner_window_entity(const CanvasEntity& entity) {
+    return entity.type == QStringLiteral("corner_window") || entity.corner_window_width_controls.has_value();
+}
+
+bool valid_corner_window_width_controls(const CanvasEntity& entity) {
+    if (entity.type != QStringLiteral("corner_window") || entity.opening_width_controls ||
+        !entity.corner_window_width_controls) return false;
+    const auto& corner = *entity.corner_window_width_controls;
+    std::array<Vec2, 2> pins;
+    std::array<Vec2, 2> directions;
+    constexpr double tolerance = 1e-6;
+    try {
+        for (std::size_t leg = 0; leg < corner.legs.size(); ++leg) {
+            const auto& controls = corner.legs[leg];
+            if (!controls.host_baseline || controls.host_baseline->sweep_radians != 0.0 ||
+                !std::isfinite(controls.width_metres) || controls.width_metres <= tolerance ||
+                !std::isfinite(controls.height_metres) || controls.height_metres <= 0.0 ||
+                !std::isfinite(controls.offset_metres) ||
+                !std::isfinite(controls.start_jamb.x) || !std::isfinite(controls.start_jamb.y) ||
+                !std::isfinite(controls.end_jamb.x) || !std::isfinite(controls.end_jamb.y)) return false;
+            const auto& host = *controls.host_baseline;
+            const auto length = segment_length(host);
+            if (!std::isfinite(host.start.x) || !std::isfinite(host.start.y) ||
+                !std::isfinite(host.end.x) || !std::isfinite(host.end.y) ||
+                !std::isfinite(length) || length <= tolerance) return false;
+            (void)hosted_opening_span(host, controls.offset_metres, controls.width_metres);
+            if (distance(controls.start_jamb, point_at_host_station(host, controls.offset_metres)) > tolerance ||
+                distance(controls.end_jamb, point_at_host_station(host,
+                    controls.offset_metres + controls.width_metres)) > tolerance) return false;
+            const auto at_start = corner.at_start[leg];
+            pins[leg] = at_start ? controls.start_jamb : controls.end_jamb;
+            const auto outer = at_start ? controls.end_jamb : controls.start_jamb;
+            if (distance(pins[leg], at_start ? host.start : host.end) > tolerance) return false;
+            directions[leg] = {(outer.x - pins[leg].x) / controls.width_metres,
+                               (outer.y - pins[leg].y) / controls.width_metres};
+        }
+    } catch (const std::exception&) { return false; }
+    return corner.legs[0].source_revision == corner.legs[1].source_revision &&
+        distance(pins[0], pins[1]) <= tolerance &&
+        std::abs(directions[0].x * directions[1].y - directions[0].y * directions[1].x) > tolerance;
+}
+
 bool drawable_label(const CanvasLabel& label) {
     return !label.text.isEmpty() && std::isfinite(label.position.x) &&
            std::isfinite(label.position.y);
@@ -2503,14 +2545,15 @@ void PlanCanvas::captureOpeningMove(QPointF point) {
         const auto& entity = m_entities[index];
         if (entity.type == QStringLiteral("opening") || entity.type == QStringLiteral("window") ||
             entity.type == QStringLiteral("door") || entity.type == QStringLiteral("doorway") ||
-            entity.opening_width_controls) {
+            entity.opening_width_controls || corner_window_entity(entity)) {
             m_opening_move_active = true;
             break;
         }
     }
     if (!m_opening_move_active) return;
     const auto* entity = selectedOpening();
-    if (!entity || !entity->opening_width_controls->host_baseline) return;
+    if (!entity || !entity->opening_width_controls || !entity->opening_width_controls->host_baseline ||
+        corner_window_entity(*entity)) return;
     const auto source = *entity->opening_width_controls;
     try {
         const auto& host = *source.host_baseline;
@@ -3368,7 +3411,16 @@ void PlanCanvas::pointerPress(QPointF position, Qt::MouseButton button,
         if (const auto jamb = openingWidthHandleAt(position, QRectF(rect()))) {
             m_left_gesture = LeftGesture::opening_width_resize;
             m_opening_width_handle = *jamb;
-            if (m_entity_edit_gesture_started) m_entity_edit_gesture_started(jamb->entity_id);
+            const QPointer<PlanCanvas> guard(this);
+            const auto serial = m_opening_width_preview_serial;
+            try {
+                if (m_entity_edit_gesture_started) m_entity_edit_gesture_started(jamb->entity_id);
+            } catch (...) {
+                if (guard) resetGesture();
+                return;
+            }
+            if (!guard || serial != m_opening_width_preview_serial ||
+                m_left_gesture != LeftGesture::opening_width_resize || !m_opening_width_handle) return;
             m_opening_width_jamb_preview = jamb->keep_start_jamb
                 ? jamb->source.end_jamb : jamb->source.start_jamb;
             m_opening_width_scale_preview = 1.0;
@@ -3467,13 +3519,15 @@ void PlanCanvas::pointerPress(QPointF position, Qt::MouseButton button,
     m_pressed_entity = hitTest(position);
     m_pressed_occupied = !m_pressed_entity.isEmpty() || !hitTest(position, false).isEmpty();
     const auto retained_selection = selectedIds();
+    const bool corner_selected = std::any_of(m_selected_entity_indices.begin(), m_selected_entity_indices.end(),
+        [&](const auto index) { return corner_window_entity(m_entities[index]); });
     const bool inside_frame = !selectedRoofOpeningControls() && selectionFrameContains(position, QRectF(rect()));
     // A selected annotation can paint away from its same-ID guide geometry.
     // Its painted hit still owns movement of the retained selection.
     const bool selected_hit = !m_pressed_entity.isEmpty() && retained_selection.contains(m_pressed_entity);
     m_clear_selection_on_click = !m_selected_generated_labels.empty() && !selected_hit &&
         (retained_selection.isEmpty() || !inside_frame);
-    if (selectionInteractionEnabled() && !selectedRoofOpeningControls() && !retained_selection.isEmpty() &&
+    if (selectionInteractionEnabled() && !selectedRoofOpeningControls() && !corner_selected && !retained_selection.isEmpty() &&
         (selected_hit || inside_frame)) {
         m_left_gesture = LeftGesture::object_move;
         m_move_ids = retained_selection;
@@ -4004,10 +4058,22 @@ void PlanCanvas::pointerRelease(QPointF position, Qt::MouseButton button,
                 }
             }
         } else if (gesture == LeftGesture::opening_width_resize && dragging &&
-                   opening_handle && opening_valid && m_opening_width_resize_requested &&
+                   opening_handle && opening_valid &&
                    std::abs(opening_scale - 1.0) > 1e-12) {
-            (void)m_opening_width_resize_requested(opening_handle->entity_id, opening_scale,
-                opening_handle->keep_start_jamb, opening_handle->source.source_revision);
+            if (opening_handle->corner_leg) {
+                const QPointer<PlanCanvas> guard(this);
+                const auto callback = m_corner_window_width_resize_requested;
+                if (callback) {
+                    try {
+                        (void)callback(opening_handle->entity_id,
+                            *opening_handle->corner_leg, opening_scale, opening_handle->source.source_revision);
+                    } catch (...) {}
+                }
+                if (!guard) return;
+            } else if (m_opening_width_resize_requested) {
+                (void)m_opening_width_resize_requested(opening_handle->entity_id, opening_scale,
+                    opening_handle->keep_start_jamb, opening_handle->source.source_revision);
+            }
         } else if (gesture == LeftGesture::selection_axis_resize && dragging &&
                    move_ids.size() == 1 && m_entity_axis_resize_requested) {
             (void)m_entity_axis_resize_requested(move_ids.front(), axis_scale_x,
@@ -4595,6 +4661,7 @@ std::optional<CanvasSelectionFrame> PlanCanvas::wallGroupRotationAxes() const {
             // into a physical wall body. The semantic host performs full admission.
             if (wall || !entity.selected || entity.type != QStringLiteral("wall") ||
                 !entity.endpoint_baseline || entity.svg_symbol || entity.opening_width_controls ||
+                entity.corner_window_width_controls ||
                 !entity.presentation_key.isEmpty() || entity.segments.empty()) return std::nullopt;
             wall = &entity;
         }
@@ -5230,7 +5297,7 @@ const CanvasEntity* PlanCanvas::selectedOpening() const {
     if (selectedIds().size() != 1) return nullptr;
     for (const auto index : m_selected_entity_indices) {
         const auto& entity = m_entities[index];
-        if (entity.opening_width_controls) return &entity;
+        if (entity.opening_width_controls || corner_window_entity(entity)) return &entity;
     }
     return nullptr;
 }
@@ -5280,7 +5347,26 @@ const CanvasEntity& PlanCanvas::interactiveEntity(const CanvasEntity& entity) co
 std::optional<PlanCanvas::OpeningWidthHandleHit> PlanCanvas::openingWidthHandleAt(
     QPointF point, const QRectF& viewport) const {
     const auto* entity = selectedOpening();
-    if (!entity || !m_opening_width_preview_requested || !m_opening_width_resize_requested)
+    if (!entity) return std::nullopt;
+    if (corner_window_entity(*entity)) {
+        if (!m_corner_window_width_preview_requested || !m_corner_window_width_resize_requested ||
+            !valid_corner_window_width_controls(*entity)) return std::nullopt;
+        const auto& corner = *entity->corner_window_width_controls;
+        std::array<double, 2> distances;
+        for (std::size_t leg = 0; leg < corner.legs.size(); ++leg) {
+            const auto& controls = corner.legs[leg];
+            const auto outer = corner.at_start[leg] ? controls.end_jamb : controls.start_jamb;
+            distances[leg] = QLineF(point, toScreen(outer, viewport)).length();
+        }
+        // Equal proximity cannot choose a leg, including coincident projected
+        // handles at small zoom. The halo is measured in logical screen pixels.
+        if (!std::isfinite(distances[0]) || !std::isfinite(distances[1]) ||
+            std::min(distances[0], distances[1]) > 13.0 ||
+            std::abs(distances[0] - distances[1]) <= 1e-6) return std::nullopt;
+        const std::size_t leg = distances[0] < distances[1] ? 0 : 1;
+        return OpeningWidthHandleHit{entity->id, corner.legs[leg], corner.at_start[leg], leg};
+    }
+    if (!entity->opening_width_controls || !m_opening_width_preview_requested || !m_opening_width_resize_requested)
         return std::nullopt;
     const auto& controls = *entity->opening_width_controls;
     const auto length = std::hypot(controls.end_jamb.x - controls.start_jamb.x,
@@ -5656,14 +5742,21 @@ void PlanCanvas::updateOpeningWidthPreview(QPointF point, Qt::KeyboardModifiers 
     }
     // Crossing the fixed jamb is invalid; do not silently clamp or fabricate
     // stretched opening artwork. Document validation owns further constraints.
-    if (!std::isfinite(width) || width <= 1e-6 || !m_opening_width_preview_requested) return;
+    if (!std::isfinite(width) || width <= 1e-6 ||
+        (handle.corner_leg ? !m_corner_window_width_preview_requested : !m_opening_width_preview_requested)) return;
     std::optional<std::vector<CanvasEntity>> preview;
+    const QPointer<PlanCanvas> guard(this);
+    const auto corner_callback = m_corner_window_width_preview_requested;
+    const auto opening_callback = m_opening_width_preview_requested;
     m_opening_width_preview_request_in_progress = true;
     try {
-        preview = m_opening_width_preview_requested(handle.entity_id,
-            m_opening_width_scale_preview, handle.keep_start_jamb, source.source_revision);
-    } catch (const std::exception&) {
-        if (m_opening_width_preview_serial == serial) {
+        preview = handle.corner_leg
+            ? corner_callback(handle.entity_id, *handle.corner_leg,
+                m_opening_width_scale_preview, source.source_revision)
+            : opening_callback(handle.entity_id,
+                m_opening_width_scale_preview, handle.keep_start_jamb, source.source_revision);
+    } catch (...) {
+        if (guard && m_opening_width_preview_serial == serial) {
             m_opening_width_preview_request_in_progress = false;
             m_opening_width_preview_pending = false;
             m_opening_width_preview_valid = false;
@@ -5675,7 +5768,7 @@ void PlanCanvas::updateOpeningWidthPreview(QPointF point, Qt::KeyboardModifiers 
     }
     // A projection callback may synchronously replace the scene or selection.
     // Such replacement cancels the gesture; never revive its stale overrides.
-    if (m_opening_width_preview_serial != serial || !m_opening_width_preview_request_in_progress)
+    if (!guard || m_opening_width_preview_serial != serial || !m_opening_width_preview_request_in_progress)
         return;
     m_opening_width_preview_request_in_progress = false;
     if (!preview && m_opening_width_preview_pending) return;
@@ -5770,8 +5863,47 @@ bool PlanCanvas::applyOpeningWidthPreview(std::uint64_t serial,
 void PlanCanvas::drawOpeningWidthHandles(QPainter& painter, const QRectF& viewport) const {
     if (!selectionInteractionEnabled()) return;
     const auto* retained = selectedOpening();
-    if (!retained || !m_opening_width_preview_requested || !m_opening_width_resize_requested) return;
+    if (!retained) return;
     const auto& entity = interactiveEntity(*retained);
+    if (corner_window_entity(*retained)) {
+        if (!m_corner_window_width_preview_requested || !m_corner_window_width_resize_requested ||
+            !valid_corner_window_width_controls(entity)) return;
+        const auto& corner = *entity.corner_window_width_controls;
+        const bool invalid = m_opening_width_handle && m_left_dragging &&
+            !m_opening_width_preview_valid && !m_opening_width_preview_pending;
+        const auto color = invalid ? QColor(220, 38, 38) : QColor(37, 99, 235);
+        painter.save();
+        painter.setClipRect(viewport, Qt::IntersectClip);
+        painter.setRenderHint(QPainter::Antialiasing, true);
+        painter.setPen(QPen(color, 1.5));
+        for (std::size_t leg = 0; leg < corner.legs.size(); ++leg) {
+            auto start = corner.legs[leg].start_jamb;
+            auto end = corner.legs[leg].end_jamb;
+            bool at_start = corner.at_start[leg];
+            if (m_opening_width_handle && m_opening_width_handle->entity_id == entity.id &&
+                m_opening_width_handle->corner_leg == leg) {
+                // Preview geometry supplies the whole owner, but the captured
+                // shared jamb remains the gesture's authoritative fixed point.
+                const auto& source = m_opening_width_handle->source;
+                at_start = m_opening_width_handle->keep_start_jamb;
+                if (at_start) {
+                    start = source.start_jamb;
+                    if (m_opening_width_jamb_preview) end = *m_opening_width_jamb_preview;
+                } else {
+                    end = source.end_jamb;
+                    if (m_opening_width_jamb_preview) start = *m_opening_width_jamb_preview;
+                }
+            }
+            painter.setBrush(Qt::NoBrush);
+            painter.drawLine(toScreen(start, viewport), toScreen(end, viewport));
+            const auto outer = toScreen(at_start ? end : start, viewport);
+            painter.setBrush(QColor(255, 255, 255, 245));
+            painter.drawRect(QRectF(outer.x() - 5.0, outer.y() - 5.0, 10.0, 10.0));
+        }
+        painter.restore();
+        return;
+    }
+    if (!m_opening_width_preview_requested || !m_opening_width_resize_requested) return;
     if (!entity.opening_width_controls) return;
     const auto& controls = *entity.opening_width_controls;
     auto start = controls.start_jamb;
@@ -6195,6 +6327,7 @@ void PlanCanvas::drawVertexHandles(QPainter& painter, const QRectF& viewport) co
 
 void PlanCanvas::drawSelectionFrame(QPainter& painter, const QRectF& viewport,
                                     const std::vector<QRectF>& annotation_footprints) const {
+    if (const auto* opening = selectedOpening(); opening && corner_window_entity(*opening)) return;
     if (!selectionFrame(viewport)) return;
     const auto frame = selectionControlRect(viewport);
     const auto transform = selectionControlTransform(viewport);
@@ -6315,7 +6448,7 @@ void PlanCanvas::drawSelectionDimensions(QPainter& painter, const QRectF& viewpo
     std::vector<QRectF> occupied_panels;
     const auto draw = [&](CanvasSelectionFrame axes, const QString& id, bool sizes_presented = false,
                           std::optional<CanvasOpeningWidthControls> opening = std::nullopt,
-                          bool placing = false) {
+                          bool placing = false, std::optional<std::size_t> corner_leg = std::nullopt) {
         if (!std::isfinite(axes.center.x) || !std::isfinite(axes.center.y) ||
             !std::isfinite(axes.rotation_radians) || !std::isfinite(axes.width_metres) ||
             !std::isfinite(axes.depth_metres) || axes.width_metres < 0 || axes.depth_metres < 0)
@@ -6347,14 +6480,16 @@ void PlanCanvas::drawSelectionDimensions(QPainter& painter, const QRectF& viewpo
             center.y += m_move_preview_delta->y;
         }
         const bool editing_opening = opening && m_opening_width_handle &&
-                                     m_opening_width_handle->entity_id == id;
+                                     m_opening_width_handle->entity_id == id &&
+                                     m_opening_width_handle->corner_leg == corner_leg;
         const bool moving_opening=opening && m_opening_move_active && m_left_dragging &&
             m_move_ids==QStringList{id};
         const bool invalid_opening = (editing_opening && m_left_dragging &&
                                      !m_opening_width_preview_valid && !m_opening_width_preview_pending) ||
             (moving_opening && !m_move_preview_valid && !m_move_preview_pending);
-        const auto dimension_width = opening ? opening->width_metres *
-            (editing_opening ? m_opening_width_scale_preview : 1.0) : width;
+        const auto dimension_width = opening ? (editing_opening
+            ? m_opening_width_handle->source.width_metres * m_opening_width_scale_preview
+            : opening->width_metres) : width;
         const auto dimension_depth = opening ? opening->height_metres : depth;
         const bool curved_opening = opening && opening->host_baseline &&
                                     opening->host_baseline->sweep_radians != 0;
@@ -6362,6 +6497,8 @@ void PlanCanvas::drawSelectionDimensions(QPainter& painter, const QRectF& viewpo
                        : opening ? QStringLiteral("W %1  ×  H %2") : QStringLiteral("W %1  ×  D %2"))
             .arg(drawingLengthText(dimension_width, m_metric_units),
                  drawingLengthText(dimension_depth, m_metric_units));
+        if (corner_leg) text = QStringLiteral("Leg %1  ·  %2")
+            .arg(static_cast<qulonglong>(*corner_leg + 1)).arg(text);
         if (moving_opening && m_opening_move_preview_intent) {
             text+=QStringLiteral("  ·  Along wall %1").arg(
                 drawingLengthText(m_opening_move_preview_intent->offset_metres,m_metric_units));
@@ -6371,6 +6508,7 @@ void PlanCanvas::drawSelectionDimensions(QPainter& painter, const QRectF& viewpo
             text+=QStringLiteral("  ·  Along wall %1").arg(
                 drawingLengthText(opening->offset_metres,m_metric_units));
         if (invalid_opening) text += QStringLiteral("  ·  Invalid");
+        else if (editing_opening && m_opening_width_preview_pending) text += QStringLiteral("  ·  Checking");
         if (transforming && m_transform_preview_exact) {
             if (m_transform_preview_pending) text += QStringLiteral("  ·  Checking");
             else if (!m_transform_preview_valid) text += QStringLiteral("  ·  Invalid");
@@ -6488,6 +6626,29 @@ void PlanCanvas::drawSelectionDimensions(QPainter& painter, const QRectF& viewpo
             if (entity.selected && entity.type != QStringLiteral("dimension_line") &&
                 !measured_entities.contains(entity.id)) {
                 measured_entities.insert(entity.id);
+                if (corner_window_entity(entity)) {
+                    const auto& interactive = interactiveEntity(entity);
+                    if (!valid_corner_window_width_controls(interactive)) continue;
+                    const auto& corner = *interactive.corner_window_width_controls;
+                    for (std::size_t leg = 0; leg < corner.legs.size(); ++leg) {
+                        auto start = corner.legs[leg].start_jamb;
+                        auto end = corner.legs[leg].end_jamb;
+                        if (m_opening_width_handle && m_opening_width_handle->entity_id == entity.id &&
+                            m_opening_width_handle->corner_leg == leg) {
+                            const auto& source = m_opening_width_handle->source;
+                            if (m_opening_width_handle->keep_start_jamb) {
+                                start = source.start_jamb;
+                                if (m_opening_width_jamb_preview) end = *m_opening_width_jamb_preview;
+                            } else {
+                                end = source.end_jamb;
+                                if (m_opening_width_jamb_preview) start = *m_opening_width_jamb_preview;
+                            }
+                        }
+                        draw({(start + end) * .5, std::atan2(end.y-start.y, end.x-start.x),
+                              distance(start, end), 0.0}, entity.id, true, corner.legs[leg], false, leg);
+                    }
+                    continue;
+                }
                 const auto axes = !entity.presentation_key.isEmpty() && selectedIds().size()==1
                     ? selectionAxes() : entitySelectionAxes(interactiveEntity(entity));
                 if (axes)
@@ -8390,7 +8551,9 @@ void PlanCanvas::updatePointerCursor(QPointF point) {
                         ? Qt::SizeHorCursor : Qt::SizeVerCursor);
             return;
         }
-        if (!selectedRoofOpeningControls() && selectionFrameContains(point, QRectF(rect()))) {
+        const bool corner_selected = std::any_of(m_selected_entity_indices.begin(), m_selected_entity_indices.end(),
+            [&](const auto index) { return corner_window_entity(m_entities[index]); });
+        if (!selectedRoofOpeningControls() && !corner_selected && selectionFrameContains(point, QRectF(rect()))) {
             setCursor(Qt::SizeAllCursor);
             return;
         }
@@ -8584,6 +8747,7 @@ bool PlanCanvas::applyEntityTransformPreview(std::uint64_t serial,
                 // label/reference or a different same-ID generated profile.
                 if (wall || proposed.presentation_key != identity.presentation_key ||
                     proposed.type != identity.type || proposed.svg_symbol || proposed.opening_width_controls ||
+                    proposed.corner_window_width_controls ||
                     proposed.segments.empty() || !valid_boundary(proposed.segments) ||
                     !valid_boundary(proposed.hit_segments) ||
                     (proposed.stroke_segments && !valid_boundary(*proposed.stroke_segments)) ||
@@ -8712,6 +8876,21 @@ void PlanCanvas::setOpeningWidthResizeRequested(
     std::function<bool(QString, double, bool, std::uint64_t)> callback) {
     if (m_opening_width_handle) resetGesture();
     m_opening_width_resize_requested = std::move(callback);
+    update();
+}
+
+void PlanCanvas::setCornerWindowWidthPreviewRequested(
+    std::function<std::optional<std::vector<CanvasEntity>>(
+        QString, std::size_t, double, std::uint64_t)> callback) {
+    if (m_opening_width_handle) resetGesture();
+    m_corner_window_width_preview_requested = std::move(callback);
+    update();
+}
+
+void PlanCanvas::setCornerWindowWidthResizeRequested(
+    std::function<bool(QString, std::size_t, double, std::uint64_t)> callback) {
+    if (m_opening_width_handle) resetGesture();
+    m_corner_window_width_resize_requested = std::move(callback);
     update();
 }
 

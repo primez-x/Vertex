@@ -39,6 +39,9 @@ std::size_t entity_geometry_entries(const CanvasEntity& entity,
     add(entity.drawing_alignment_segments.size());
     if (entity.endpoint_baseline) add(1);
     if (entity.opening_width_controls && entity.opening_width_controls->host_baseline) add(1);
+    if (entity.corner_window_width_controls)
+        for (const auto& leg : entity.corner_window_width_controls->legs)
+            if (leg.host_baseline) add(1);
     return count;
 }
 
@@ -193,6 +196,17 @@ CanvasEntity site_presented_canvas_entity(
         if (source.opening_width_controls->host_baseline)
             result.opening_width_controls->host_baseline = presented_segment(
                 *source.opening_width_controls->host_baseline, placement.forward);
+    }
+    if (source.corner_window_width_controls) {
+        for (std::size_t i = 0; i < source.corner_window_width_controls->legs.size(); ++i) {
+            const auto& source_leg = source.corner_window_width_controls->legs[i];
+            auto& result_leg = result.corner_window_width_controls->legs[i];
+            result_leg.start_jamb = site_presented_plan_point(source_leg.start_jamb, placement);
+            result_leg.end_jamb = site_presented_plan_point(source_leg.end_jamb, placement);
+            if (source_leg.host_baseline)
+                result_leg.host_baseline = presented_segment(
+                    *source_leg.host_baseline, placement.forward);
+        }
     }
     if (source.svg_symbol) {
         result.svg_symbol->position = site_presented_plan_point(

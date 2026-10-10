@@ -6,6 +6,7 @@
 #include "sketch/door_operation.hpp"
 #include "sketch/opening_assembly.hpp"
 #include "sketch/corner_window.hpp"
+#include "sketch/corner_window_edit.hpp"
 #include "sketch/assembly_model.hpp"
 #include "sketch/assembly_document_adapter.hpp"
 #include "sketch/site_frame.hpp"
@@ -4989,6 +4990,8 @@ std::map<std::string, Entity, std::less<>> boundary_constraint_entities(
         try { validate_boundary_transition(before_ordinary, result); }
         catch (const std::exception& error) { document_error(DocumentErrorCode::invalid_entity, error.what()); }
     }
+    try { complete_corner_window_geometry(source,result); }
+    catch (const std::exception& error) { document_error(DocumentErrorCode::invalid_entity,error.what()); }
     for (const auto& edit : command.wall_edits) {
         try { validate_constraint_wall_host(edit.wall_id, result); }
         catch (const std::exception& error) { document_error(DocumentErrorCode::invalid_entity,error.what()); }
@@ -6182,6 +6185,7 @@ std::map<std::string, Entity, std::less<>> completed_boundary_constraint_entitie
             }
             if (rigid_joint) complete_joint_rigid_sources(source, actual, *command.joint_translation);
             if (rigid_joint) complete_joint_rigid_consequences(source, actual, *command.joint_translation);
+            if (rigid_joint) complete_corner_window_geometry(source,actual);
             if (rigid_joint) validate_joint_rigid_topology(source, actual, *command.joint_translation);
             retain_joint_callout_placement(source, actual, *command.joint_translation);
             auto expected_relations = source;
@@ -7407,6 +7411,9 @@ static void complete_joint_rigid_consequences_impl(const std::map<std::string, E
                 throw std::invalid_argument("Rigid joint completion overlaps a persisted relation edit");
             candidate.at(id) = replacement;
         } else if (original.type == "opening") {
+            // A corner owner's two cuts are derived together from the final
+            // pair of hosts. Single-wall replay must not overwrite that cohort.
+            if (original.properties.contains("corner_window_id")) continue;
             std::string host, diagnostic;
             if (!read_document_wall_id(original, host, diagnostic)) throw std::invalid_argument(diagnostic);
             if (scope && scope->inactive_owner_ids.contains(host)) continue;

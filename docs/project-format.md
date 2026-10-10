@@ -24,10 +24,27 @@ The actual geometry has one connected shared frame/corner post and two positive
 glazing solids. The frame fits the union of both cuts; impossible pane clearance,
 disconnected inset footprints or intersection with either host remnant refuses.
 One window schedule row carries both leg widths; the cuts add no extra windows.
-Storage keeps the v161 payload tables. Corner transforms, canvas grips,
-active-baseline replacement, associative leg dimensions and
-IFC/DXF ownership transport remain further implementation/qualification work.
+Storage keeps the v161 payload tables. Active-baseline replacement,
+associative leg dimensions and IFC/DXF ownership transport remain further
+implementation/qualification work.
 Compilation, rendered behavior and migration/history are unverified.
+
+Same-identity geometry completion now supports owner dimension/profile edits,
+canvas leg resizing and coordinated host movement/rotation. Existing typed wall
+history replay derives both cuts after final host geometry. Architectural
+transactions declare an equal positive uniform scale for both hosts; owner and
+cut dimensions derive from the captured source. Partial/different host scales
+and independent managed-cut/owner transforms refuse. These additions introduce
+no storage floor, command dialect or payload table.
+
+Supported version-one quantity cores must match their source scalars. Changed
+dimension receipts replay a bounded exact metre expression while preserving
+opaque receipt and nested rational siblings. Unchanged numbers, scalar aliases,
+profile metadata and extensions remain retained. Repeated completion accepts
+only unchanged source receipts or its exact source-derived replay. Affected
+future/core-free/stale or unrepresentable receipt bindings refuse. The caller
+still completes saved phases and full-map/native admission; this helper alone
+does not grant snapshot authority. Runtime/history qualification remains open.
 
 The separate clipboard envelope `vertex.corner-window.clipboard`, version 1,
 has exactly `format`, `version`, `owner`, `walls`, `cuts` and `catalogs`. The two

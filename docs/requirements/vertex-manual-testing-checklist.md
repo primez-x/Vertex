@@ -1,6 +1,6 @@
 # Vertex user testing checklist
 
-450 practical tasks, grouped by how you use the app (U001–U449 plus U100a), plus eight focused door/window checks below. This replaces the earlier engineering-oriented checklist. The old 130-item list is preserved separately as engineering-requirements-checklist.md.
+450 practical tasks, grouped by how you use the app (U001–U449 plus U100a), plus fifteen focused door/window checks below. This replaces the earlier engineering-oriented checklist. The old 130-item list is preserved separately as engineering-requirements-checklist.md.
 
 This is a user acceptance list for the intended app, not a claim that every listed action is implemented or working in the current preview. If you cannot find a control, or a feature is absent, mark **Blocked / missing** and describe it. Specialized sections can be skipped if you do not use them or lack the device or sample files.
 
@@ -3217,7 +3217,7 @@ Blocked / missing until testing a candidate that contains it.
 
 - [ ] **WINDOW-CORNER - Create one window across two walls**
   - Steps: Draw two straight walls sharing a corner on the same layer. Ctrl-click both walls and choose Tools > Architecture > Corner window between two selected walls. Set a different width for each wall, a sill height and window height. Save, double-click the window, rename it and change either width and its frame/glazing dimensions. Apply unchanged values once. Inspect plan, 3D and the window schedule. Delete the window, undo/redo, then save/reopen. Repeat with reversed wall directions and an angled corner; try oversized widths, overlapping an existing opening and selecting two disconnected walls.
-  - Expected: One selected window spans both wall cuts, with a shared corner post/frame and two glazing legs. The schedule lists one window with both widths. Properties update both cuts together; unchanged Save adds no undo step. Delete removes the whole window and both cuts while retaining the walls. Invalid geometry leaves the project unchanged. Saved and reopened history retains the full window. Canvas grips and active-baseline phase replacement remain missing until their separate work is delivered.
+  - Expected: One selected window spans both wall cuts, with a shared corner post/frame and two glazing legs. The schedule lists one window with both widths. Properties update both cuts together; unchanged Save adds no undo step. Delete removes the whole window and both cuts while retaining the walls. Invalid geometry leaves the project unchanged. Saved and reopened history retains the full window. Active-baseline phase replacement remains missing until its separate work is delivered.
   - Result: Not tested
   - Notes: ______________________________
 
@@ -3230,6 +3230,18 @@ Blocked / missing until testing a candidate that contains it.
 - [ ] **WINDOW-CORNER-HOST-TOPOLOGY - Split and merge walls beside a corner window**
   - Steps: Place a corner window at the end of a long wall. Split that wall outside the window cut, keeping the outer corner intact. Select the resulting collinear wall pieces and merge them. Repeat with reversed wall direction and the window at the other endpoint. Inspect both widths, plan, 3D and the window schedule. Try splitting through the window, then undo/redo the valid operations and save/reopen.
   - Expected: The same window stays at the outer corner and retains its two leg widths, name, material and one schedule row. Its host references follow the surviving wall pieces. Valid split/merge is undoable in one step. A split through the window or a merge that removes its corner refuses without changing the project.
+  - Result: Not tested
+  - Notes: ______________________________
+
+- [ ] **WINDOW-CORNER-GRIPS - Resize either leg of a corner window**
+  - Steps: Place a corner window with different leg widths. Select it and drag each outer-end handle along its wall. Read both displayed widths/heights. Try Shift while dragging for finer adjustment. Try extending through another opening or crossing the shared corner. Cancel a drag with Esc. Repeat with reversed wall directions, an angled corner and a rotated/reflected Site placement. Inspect the result in plan and 3D, then undo/redo and save/reopen.
+  - Expected: Each handle changes only its leg width while the common corner remains fixed. Both wall cuts and the actual window update together. The other leg, common height and frame dimensions remain unchanged. Invalid or cancelled edits leave the project unchanged. Selection stays transparent. A cropped/depth-limited view does not offer a handle for an invisible or partial window; Properties remains available.
+  - Result: Not tested
+  - Notes: ______________________________
+
+- [ ] **WINDOW-CORNER-HOST-MOVE - Move and rotate walls with a corner window**
+  - Steps: Place a corner window between two walls. Ctrl-select both host walls and move the wall group, then rotate it. Check the window position, both widths and schedule. Open a named plan, elevation and section containing both walls. Hide one host, then restore it. Undo/redo the valid moves and rotations and save/reopen. Try a host edit that disconnects the corner.
+  - Expected: The same window follows the two walls and retains its leg widths, frame, name, material and single schedule row. Both cuts stay at the common endpoint. Views containing both visible hosts include the actual corner assembly; hiding a host hides the assembly. An edit that disconnects its required corner refuses without partial changes. Reopened history preserves the coordinated result.
   - Result: Not tested
   - Notes: ______________________________
 

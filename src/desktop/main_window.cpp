@@ -27,6 +27,7 @@
 #include "sketch/opening_assembly.hpp"
 #include "sketch/corner_window.hpp"
 #include "sketch/corner_window_transfer.hpp"
+#include "sketch/corner_window_edit.hpp"
 #include "sketch/hosted_opening_plan.hpp"
 #include "sketch/workspace_regeneration_queue.hpp"
 #include "sketch/roof_join_semantics.hpp"
@@ -4697,6 +4698,12 @@ std::set<std::string, std::less<>> architectural_view_references(
     // Match production host/child visibility closure without admitting a
     // hidden owner or treating a view crop as an explicit visibility rule.
     for (const auto& [id, entity] : entities) {
+        if (entity.type != "corner_window" || !referenced.contains(id)) continue;
+        const auto corner = parse_corner_window(entity);
+        for (const auto& host : corner.wall_ids)
+            if (!unavailable.contains(host)) referenced.insert(host);
+    }
+    for (const auto& [id, entity] : entities) {
         if (entity.type != "opening" || !referenced.contains(id)) continue;
         const auto host = read_string(entity.properties, "wall_id");
         if (host && !unavailable.contains(*host)) referenced.insert(*host);
@@ -4705,6 +4712,13 @@ std::set<std::string, std::less<>> architectural_view_references(
         if (entity.type == "opening" && !unavailable.contains(id) &&
             referenced.contains(read_string(entity.properties, "wall_id").value_or("")))
             referenced.insert(id);
+    }
+    for (const auto& [id, entity] : entities) {
+        if (entity.type != "corner_window" || unavailable.contains(id)) continue;
+        const auto corner = parse_corner_window(entity);
+        if (std::all_of(corner.wall_ids.begin(), corner.wall_ids.end(), [&](const auto& host) {
+                return referenced.contains(host) && !unavailable.contains(host);
+            })) referenced.insert(id);
     }
     for (const auto& [id,entity] : entities) {
         if (entity.type!=kAnnotationEntityType || !referenced.contains(id)) continue;
@@ -4923,6 +4937,83 @@ void retain_opening_plan_controls(CanvasEntity& entity,const HostedOpeningResize
     const auto y=std::midpoint(bounds.minimum.y,bounds.maximum.y);
     entity.resize_frame=CanvasSelectionFrame{{c*x-s*y,s*x+c*y},frame.angle_radians,
         bounds.maximum.x-bounds.minimum.x,bounds.maximum.y-bounds.minimum.y};
+}
+
+std::array<Wall,2> corner_window_plan_hosts(const DocumentSnapshot& source, const CornerWindow& corner) {
+    const auto scope=constraint_phase_scope(source.entities());
+    if (scope.inactive_owner_ids.contains(corner.id))
+        throw std::invalid_argument("The corner window is inactive in the saved design.");
+    std::array<Wall,2> hosts;
+    for (std::size_t leg=0;leg<2;++leg) {
+        if (scope.inactive_owner_ids.contains(corner.wall_ids[leg]) ||
+            scope.inactive_owner_ids.contains(corner.opening_ids[leg]))
+            throw std::invalid_argument("The corner-window host or cut is inactive.");
+        std::vector<const Entity*> cuts;
+        for (const auto& [id,entity]:source.entities())
+            if (entity.type=="opening" && !scope.inactive_owner_ids.contains(id) &&
+                entity.properties.value("wall_id",std::string{})==corner.wall_ids[leg]) cuts.push_back(&entity);
+        std::string error;
+        const auto resolved=resolve_vertical_placement(source,source.entities().at(corner.wall_ids[leg]));
+        if (!read_document_wall(resolved,cuts,hosts[leg],error)) throw std::invalid_argument(error);
+    }
+    return hosts;
+}
+
+void retain_corner_window_plan_controls(CanvasEntity& entity, const CornerWindow& corner,
+    const std::array<Wall,2>& hosts, std::uint64_t revision) {
+    CanvasCornerWindowWidthControls controls;
+    const auto cuts=corner_window_cuts(corner,hosts);
+    controls.at_start=corner.at_start;
+    for (std::size_t leg=0;leg<2;++leg) {
+        const auto span=hosted_opening_span(hosts[leg].baseline,cuts[leg].offset,cuts[leg].width);
+        controls.legs[leg]={span.start,span.end,cuts[leg].width,cuts[leg].height,revision,
+            hosts[leg].baseline,cuts[leg].offset};
+    }
+    entity.corner_window_width_controls=std::move(controls);
+}
+
+void project_horizontal_corner_window_plan(CanvasEntity& entity, const CornerWindow& corner,
+    const std::array<Wall,2>& hosts, const ArchitecturalViewContext& context) {
+    // A partial solid projection cannot authorize dragging invisible jambs.
+    // Keep the typed Properties route available in cropped/depth-limited views.
+    const auto bottom=hosts[0].elevation+corner.sill;
+    const auto top=bottom+corner.height;
+    const auto depth_at=[&](double z) {
+        return (z-context.depth.origin.z)*context.depth.direction.z;
+    };
+    const bool unbounded_depth=std::isinf(context.depth.far_depth_m) && context.depth.far_depth_m>0.0;
+    const bool full_depth=horizontal_plan_frame(context.frame) && (unbounded_depth ||
+        (context.depth.direction.x==0.0 && context.depth.direction.y==0.0 &&
+         std::abs(context.depth.direction.z)==1.0 && std::isfinite(depth_at(bottom)) &&
+         std::isfinite(depth_at(top)) && std::max(depth_at(bottom),depth_at(top))<=context.depth.far_depth_m));
+    if (!full_depth) {
+        entity.segments=project_architectural_view_shape(make_corner_window(hosts,
+            corner_window_cuts(corner,hosts),corner.assembly),BuildingViewKind::plan,context).value_or(Boundary{});
+        entity.corner_window_width_controls.reset();
+        return;
+    }
+    entity.segments=project_plan_path(std::move(entity.segments),context.frame);
+    if (entity.corner_window_width_controls)
+        for (auto& leg:entity.corner_window_width_controls->legs) {
+            leg.start_jamb=project_plan_point(leg.start_jamb,context.frame);
+            leg.end_jamb=project_plan_point(leg.end_jamb,context.frame);
+            if (leg.host_baseline) leg.host_baseline=project_plan_path({*leg.host_baseline},context.frame).front();
+        }
+    if (context.crop) {
+        const auto& crop=*context.crop;
+        const Bounds2 bounds{{crop.min_horizontal_m,crop.min_vertical_m},{crop.max_horizontal_m,crop.max_vertical_m}};
+        const auto inside=[&](Vec2 point) {
+            return point.x>=bounds.minimum.x && point.y>=bounds.minimum.y &&
+                point.x<=bounds.maximum.x && point.y<=bounds.maximum.y;
+        };
+        const auto footprint=entity.segments.empty() ? std::optional<Bounds2>{} : std::optional{boundary_bounds(entity.segments)};
+        bool full=footprint && inside(footprint->minimum) && inside(footprint->maximum);
+        if (entity.corner_window_width_controls)
+            for (const auto& leg:entity.corner_window_width_controls->legs)
+                full=full && inside(leg.start_jamb) && inside(leg.end_jamb);
+        if (!full) entity.corner_window_width_controls.reset();
+        clip_plan_entity(entity,bounds);
+    }
 }
 
 // Full semantic opening support is required before offering analytical jamb
@@ -26422,6 +26513,28 @@ public:
                         proposed.segments = footprint.boundary;
                         proposed.holes = footprint.holes;
                     }
+                } else if (entity.type=="corner_window") {
+                    const auto corner=parse_corner_window(entity);
+                    const auto old=source.entities().find(entity.id);
+                    if (old!=source.entities().end() && entity==old->second &&
+                        std::none_of(corner.wall_ids.begin(),corner.wall_ids.end(),[&](const auto& id) {
+                            return candidate.at(id)!=source.entities().at(id) || changed_walls.contains(id);
+                        }) && std::none_of(corner.opening_ids.begin(),corner.opening_ids.end(),[&](const auto& id) {
+                            return candidate.at(id)!=source.entities().at(id);
+                        })) continue;
+                    const auto hosts=corner_window_plan_hosts(candidate_snapshot,corner);
+                    proposed.segments=project_building_shape_plan(make_corner_window(hosts,
+                        corner_window_cuts(corner,hosts),corner.assembly));
+                    proposed.stroke_segments.reset(); proposed.holes.clear(); proposed.hit_segments.clear();
+                    proposed.snap_points.clear(); proposed.snap_segments.clear(); proposed.vertex_handles.clear();
+                    proposed.resize_frame.reset(); proposed.opening_width_controls.reset();
+                    proposed.corner_window_width_controls.reset();
+                    if (item.corner_window_width_controls && source.is_editable())
+                        retain_corner_window_plan_controls(proposed,corner,hosts,source.revision());
+                    if (view_context) {
+                        project_horizontal_corner_window_plan(proposed,corner,hosts,*view_context);
+                        world_paths=false;
+                    }
                 } else if (entity.type == "assembly_instance") {
                     const auto binding=decode_document_assembly_instance(entity);
                     if (entity == source.entities().at(entity.id) &&
@@ -28025,7 +28138,7 @@ public:
         std::shared_ptr<const DocumentSnapshot> source) {
         clearOpeningWidthCapture();
         const auto& entity=source->entities().at(id.toStdString());
-        if (entity.type!="opening") return;
+        if (entity.type!="opening" && entity.type!="corner_window") return;
         const bool site=siteCanvas(canvas);
         const auto view=site ? std::optional<ArchitecturalViewContext>{}
             : boundaryVertexViewContext(canvas,*source);
@@ -30155,6 +30268,33 @@ public:
         const std::shared_ptr<const CanvasEditSourceCapture>& edit_source={},PreparedCanvasEdit* prepared=nullptr,
         const std::vector<CanvasLabel>* retained_labels=nullptr) {
         try {
+            if (source.entities().at(requested_id.toStdString()).type=="corner_window") {
+                auto command=augmentAuthoredCommand(Command{corner_window_leg_resize_command(source,
+                    requested_id.toStdString(),keep_start_jamb ? 1u : 0u,scale)},source);
+                const auto candidate=prepared ? prepareCanvasEdit(source,command,edit_source,*prepared)
+                    : Document::preview_command(source,command);
+                validate_architectural_geometry_changes(source,candidate,{requested_id.toStdString()});
+                const std::vector<CanvasLabel> no_labels;
+                auto projection=computeConstraintGeometryProjection(source,candidate,retained_scene,{},
+                    retained_labels ? *retained_labels : no_labels,metric_units,{}, {},{},
+                    view_context ? std::optional{*view_context} : std::nullopt,QFont{});
+                if (!projection) return std::nullopt;
+                // An exact no-op keeps the captured owner's presentation. It
+                // must still complete the same admission/serial fence.
+                if (std::none_of(projection->entities.begin(),projection->entities.end(),[&](const auto& entity) {
+                    return entity.id==requested_id;
+                })) {
+                    if (scale!=1.0) return std::nullopt;
+                    const auto original=std::find_if(retained_scene.begin(),retained_scene.end(),[&](const auto& entity) {
+                        return entity.id==requested_id && entity.corner_window_width_controls;
+                    });
+                    if (original==retained_scene.end()) return std::nullopt;
+                    projection->entities.push_back(*original);
+                }
+                if (proposed_labels) *proposed_labels=std::move(projection->labels);
+                if (admitted_command) *admitted_command=std::move(command);
+                return std::move(projection->entities);
+            }
             return computeHostedOpeningPreview(source,retained_scene,requested_id,
                 openingProfileGeometryCommand(source,requested_id.toStdString(),std::nullopt,scale,keep_start_jamb),
                 view_context,admitted_command,metric_units,proposed_labels,edit_source,prepared,retained_labels);
@@ -52697,7 +52837,8 @@ private:
             m_vertex_preview_source.reset(); m_vertex_preview_authority.reset();
             try {
                 const auto source=captureCanvasGeometrySource(canvas);
-                if (source->entities().at(id.toStdString()).type == "opening")
+                if (const auto& type=source->entities().at(id.toStdString()).type;
+                    type=="opening" || type=="corner_window")
                     captureOpeningWidthEdit(canvas,id,source);
                 else captureConstraintGeometryPreview(canvas,source->revision());
                 capturePlanEndpointEdit(canvas,id,source);
@@ -53156,6 +53297,21 @@ private:
         canvas->setOpeningWidthResizeRequested(
             [this,canvas](QString id, double scale, bool keep_start, std::uint64_t revision) {
                 return resizeOpeningWidthFromCanvas(canvas, id, scale, keep_start, revision);
+            });
+        canvas->setCornerWindowWidthPreviewRequested(
+            [this,canvas](QString id,std::size_t leg,double scale,std::uint64_t revision) {
+                // The retained request lane stores the selected leg in its
+                // bool slot for corner owners; ordinary openings retain jamb pins.
+                if (leg>1) return std::optional<std::vector<CanvasEntity>>{std::vector<CanvasEntity>{}};
+                try { return previewOpeningWidthFromCanvas(canvas,id,scale,leg==1,revision); }
+                catch (const std::exception& error) {
+                    setError(QString::fromUtf8(error.what()));
+                    return std::optional<std::vector<CanvasEntity>>{std::vector<CanvasEntity>{}};
+                }
+            });
+        canvas->setCornerWindowWidthResizeRequested(
+            [this,canvas](QString id,std::size_t leg,double scale,std::uint64_t revision) {
+                return leg<=1 && resizeOpeningWidthFromCanvas(canvas,id,scale,leg==1,revision);
             });
         canvas->setBoundaryVertexMoveRequested(
             [this,canvas](QString id, QString vertex_id, Vec2 position,
@@ -54151,11 +54307,13 @@ private:
                         cached = caches.projections.insert_or_assign(id,
                             std::make_pair(key, std::move(lines))).first;
                     }
-                    CanvasEntity component{id_from(id), QStringLiteral("window"),
+                    CanvasEntity component{id_from(id), QStringLiteral("corner_window"),
                         cached->second.second, 0.0, id_from(id) == options.selected_id};
                     component.stroke_color = QColor(35, 43, 52);
                     component.dark_stroke_color = QColor(220, 232, 244);
                     component.output_stroke_width_mm = 0.16;
+                    if (options.interactive && snapshot.is_editable())
+                        retain_corner_window_plan_controls(component,corner,hosts,snapshot.revision());
                     all_geometry.push_back(std::move(component));
                 } catch (const Standard_Failure& error) {
                     append_geometry_error(QStringLiteral("Corner window %1: %2").arg(id_from(id),
@@ -56890,7 +57048,7 @@ private:
                 const auto state = disposition(item.id); if (prior && state == 0) continue;
                 item.id = renamed(item.id); item.selected = false; item.vertex_handles.clear();
                 item.endpoint_baseline.reset();
-                item.resize_frame.reset(); item.opening_width_controls.reset();
+                item.resize_frame.reset(); item.opening_width_controls.reset(); item.corner_window_width_controls.reset();
                 if (state) {
                     item.stroke_color = color(state); item.dark_stroke_color = {};
                     item.fill_color = QColor(color(state).red(), color(state).green(), color(state).blue(), 38);
@@ -57200,6 +57358,10 @@ private:
                             project_horizontal_opening_plan(retained,opening_owner->second,wall,
                                 read_hosted_opening(opening_owner->second).value(),view_context);
                             if(retained.segments.empty()) continue;
+                        } else if (opening_owner!=snapshot.entities().end() && opening_owner->second.type=="corner_window") {
+                            const auto corner=parse_corner_window(opening_owner->second);
+                            project_horizontal_corner_window_plan(retained,corner,corner_window_plan_hosts(snapshot,corner),view_context);
+                            if (retained.segments.empty()) continue;
                         }
                         project_model_plan_symbol(retained,frame);
                         const bool annotation =
@@ -57303,7 +57465,32 @@ private:
                     continue;
                 }
                 try {
+                    if (entity.type=="corner_window") {
+                        const auto corner=parse_corner_window(entity);
+                        if (std::any_of(corner.wall_ids.begin(),corner.wall_ids.end(),[&](const auto& host) {
+                            return architectural_hidden_ids.contains(host);
+                        })) continue;
+                        const auto hosts=corner_window_plan_hosts(snapshot,corner);
+                        if (kind==BuildingViewKind::plan && horizontal_plan_frame(frame)) {
+                            const auto canonical=std::find_if(all_geometry.begin(),all_geometry.end(),[&](const auto& item) {
+                                return item.id==id_from(id) && item.presentation_key.isEmpty();
+                            });
+                            if (canonical!=all_geometry.end()) {
+                                auto retained=*canonical;
+                                project_horizontal_corner_window_plan(retained,corner,hosts,view_context);
+                                if (!retained.segments.empty()) result.push_back(decorate_projection(std::move(retained)));
+                                continue;
+                            }
+                        }
+                        const auto projection=cached_projection(id,[&] {
+                            return make_corner_window(hosts,corner_window_cuts(corner,hosts),corner.assembly);
+                        });
+                        if (projection && !projection->empty()) result.push_back(decorate_projection(CanvasEntity{
+                            id_from(id),QStringLiteral("corner_window"),*projection,0.0,id_from(id)==m_selected_id}));
+                        continue;
+                    }
                     if (entity.type == "opening") {
+                        if (entity.properties.contains("corner_window_id")) continue;
                         const auto wall_id = read_string(entity.properties, "wall_id");
                         const auto host = wall_id ? snapshot.entities().find(*wall_id)
                                                   : snapshot.entities().end();
@@ -67026,7 +67213,14 @@ private:
                     auto candidate = owner_entity;
                     const auto generated = corner_window_properties(edited);
                     for (const auto& [key, value] : generated.items()) {
-                        if (editing && key == "opening_assembly" && edited.assembly == corner.assembly) continue;
+                        if (editing && key == "opening_assembly") {
+                            if (edited.assembly == corner.assembly) continue;
+                            auto& retained = candidate.properties.at(key);
+                            for (const auto& [profile_key, profile_value] : value.items())
+                                if (!retained.contains(profile_key) || retained.at(profile_key) != profile_value)
+                                    retained[profile_key] = profile_value;
+                            continue;
+                        }
                         if (!candidate.properties.contains(key) || candidate.properties.at(key) != value)
                             candidate.properties[key] = value;
                     }

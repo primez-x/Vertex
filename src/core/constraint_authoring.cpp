@@ -4,6 +4,7 @@
 #include "sketch/constraint_phase_scope.hpp"
 #include "sketch/phase_constraint_authoring.hpp"
 #include "sketch/constraint_wall_edit.hpp"
+#include "sketch/corner_window_edit.hpp"
 #include "sketch/boundary_integrity.hpp"
 #include "sketch/document_digest.hpp"
 #include "sketch/constraint_tolerances.hpp"
@@ -1944,7 +1945,6 @@ ConstraintAuthoringPreview ConstraintAuthoringBuilder::build(Source snapshot,con
                 // Keep the source-qualified replay intact, including receipt-only
                 // changes. Do not rebase its construction through an endpoint proof.
                 candidate.at(wall_id) = *constructed_wall;
-                validate_constraint_wall_host(wall_id, candidate);
                 if (candidate.at(wall_id) != snapshot.entities().at(wall_id))
                     result.changed_walls_.push_back({wall_id, old, intent.wall_curve_construction->edit.baseline});
                 continue;
@@ -2006,7 +2006,6 @@ ConstraintAuthoringPreview ConstraintAuthoringBuilder::build(Source snapshot,con
             else wall_entity = replay_constraint_wall_edit(
                 original_wall, {wall_id, proposed, length_entry, proof_version,proof_rigid_transform});
             if (rigid_transform) selected_rigid_ids.insert(wall_id);
-            validate_constraint_wall_host(wall_id, candidate);
             result.changed_walls_.push_back({wall_id, old, proposed});
         }
 
@@ -2107,6 +2106,11 @@ ConstraintAuthoringPreview ConstraintAuthoringBuilder::build(Source snapshot,con
             candidate = complete_stroke_sources(candidate);
         }
         if (rigid_joint) complete_rigid_sources(candidate,*intent.joint_translation);
+        // Managed corner cuts read both final hosts. Checking either host
+        // before this completion can reject a valid end-anchored station.
+        complete_corner_window_geometry(snapshot.entities(),candidate);
+        for (const auto& wall_id : affected_walls)
+            validate_constraint_wall_host(wall_id,candidate);
         for (const auto& [id, before] : boundaries) {
             const auto after = decode_identified_boundary_entity(candidate.at(id));
             if (after != before) result.changed_boundaries_.push_back({before, after});
@@ -2270,6 +2274,7 @@ ConstraintAuthoringPreview ConstraintAuthoringBuilder::build(Source snapshot,con
             }
             if (intent.joint_translation && intent.joint_translation->per_owner_rigid_completion)
                 complete_rigid_consequences(result.candidate_entities_,*intent.joint_translation);
+            complete_corner_window_geometry(snapshot.entities(),result.candidate_entities_);
             if (intent.exterior_segment_arc)
                 validate_exterior_segment_arc_result(snapshot.entities(),result.candidate_entities_,*intent.exterior_segment_arc);
             if (result.saved_active_phase_policy_) (void)validate_active_phase_constraint_integrity(result.candidate_entities_);

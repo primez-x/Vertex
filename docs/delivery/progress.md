@@ -14,6 +14,49 @@ changed source does not acquire runtime acceptance without later qualification.
 
 ## Current delivery state
 
+### October 10 corner-window canvas grips and host transforms - source integration
+
+Selected corner windows now have separate outer-jamb width handles for the two
+legs, with the shared corner pinned and both leg widths/heights displayed.
+The existing zoom-relative measurement magnets and Shift fine adjustment apply.
+Preview and release use the captured document, actual manufactured geometry and
+the existing deferred admission/cancellation fences. Partial depth/cropped views
+withhold handles and retain Properties. Generic free-object movement/rotation
+does not detach the window from its actual hosts.
+
+The shared completion helper derives the owner and both cuts together after
+final host geometry is staged. Typed connected wall movement/rotation and saved
+command replay use that completion. Architectural transactions can uniformly
+scale both actual hosts with the same explicit factor; scaling one host or
+combining scale with an independent owner dimension edit refuses. Existing wall
+group UI scaling and measured/curved-host restrictions are not closed by this
+source addition. Temporary managed-cut rosters use the cumulative prior host
+scale, so repeated transforms do not reload original cuts into scaled walls.
+
+Properties and canvas leg edits replay supported quantity cores while retaining
+opaque receipt/profile siblings, aliases and unchanged numeric representations.
+Stale, future/core-free affected bindings and unrepresentable bounded quantities
+refuse. Same-source completion recognizes only its exact generated receipt replay.
+Independent owner/cut transforms and partial aggregate deletion refuse.
+
+Both handle legs follow Site poses. Plans, depth/crop-limited views, elevations
+and sections project the actual common assembly. Restricted view references
+include the corner owner when both available hosts are included; its managed
+cuts remain host roster data without independent canvas targets.
+
+Active-baseline replacement, associative leg dimensions and IFC/DXF ownership
+transport remain corner-window gaps. The entire production plan and all ten
+gates remain open. The manual list retains 450 original scenarios plus fifteen
+focused checks; the new checks are Not tested and unavailable in the installed
+candidate. No builds, tests/new tests, scripts/probes, native jobs, UI launches,
+packages or installations ran. The installed candidate is unchanged. Static
+source review does not establish compilation, interaction, native rendering,
+history/migration or output acceptance. Independent integration review approved
+the source after correcting restricted-view owner closure, retained Properties
+profile metadata and cumulative temporary cut rosters for repeated host scales.
+Root reviewed the integrated interfaces and declared limits. Scoped Git backup
+is completed on the delivery branch after that review.
+
 ### October 10 corner-window placement, transfer and host topology - source integration
 
 The visible corner-window library entry now has a distinct two-host placement

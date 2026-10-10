@@ -278,6 +278,7 @@ add_library(sketch_document src/core/document.cpp src/core/document_digest.cpp s
   src/core/dxf_phase_asset_source.cpp src/core/dxf_phase_asset_carrier.cpp src/core/dxf_source_receipt.cpp src/core/imported_source.cpp
   src/core/constraint_integrity.cpp src/core/constraint_phase_scope.cpp src/core/boundary_entity.cpp src/core/boundary_integrity.cpp
   src/core/boundary_geometry_edit.cpp src/core/constraint_wall_edit.cpp src/core/wall_split.cpp src/core/wall_merge.cpp
+  src/core/corner_window_edit.cpp
   src/core/boundary_dimension.cpp src/core/sheet_view_entity_codec.cpp
   src/core/annotation_entity_codec.cpp src/core/presentation_transform.cpp src/core/georeferencing_entity_codec.cpp
   src/core/vertical_level_document_adapter.cpp src/core/project_organization.cpp src/core/survey_source_version.cpp

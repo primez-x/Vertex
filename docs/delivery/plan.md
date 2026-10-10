@@ -123,9 +123,13 @@ polling timeout does not permit restarting it.
    cuts, shared frame/post, two glazing legs, creation/properties/deletion and
    one schedule row. Qualify the subsequent two-host library click/drag placement,
    source-preserving clipboard/duplicate transfers and outer-endpoint host
-   split/merge. Complete canvas grips, coordinated host transforms,
-   active-baseline replacement, associative leg dimensions and exchange; source
-   integration does not close those lifecycles. Qualify the roof-hosted fixed
+   split/merge. Qualify subsequent two-leg outer-jamb canvas grips, exact
+   manufactured previews, retained quantity/profile edits and coordinated host
+   movement/rotation replay. Equal explicit host scaling is implemented in
+   architectural transactions, with cumulative temporary hosted rosters for
+   repeated transforms; wall group UI scaling remains. Complete active-baseline replacement,
+   associative leg dimensions and exchange; source integration does not close
+   those lifecycles. Qualify the roof-hosted fixed
    skylight source across both catalog entries, actual sloped
    frame/glazing, roster editing, scaling/resizing, cloning/removal, phases,
    history, material quantities and separate IFC roof/window relationships.

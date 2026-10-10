@@ -131,6 +131,13 @@ struct CanvasOpeningWidthControls {
     double offset_metres{};
 };
 
+// Two semantic wall-hosted spans belonging to one corner-window owner. The
+// shared corner is fixed; at_start identifies that corner on each host.
+struct CanvasCornerWindowWidthControls {
+    std::array<CanvasOpeningWidthControls, 2> legs{};
+    std::array<bool, 2> at_start{};
+};
+
 // Absolute semantic station for one opening body move along its captured host.
 // The host consumes this during the ordinary exact move-preview callback.
 struct CanvasOpeningMoveIntent {
@@ -207,6 +214,8 @@ struct CanvasEntity {
     // Read-only comparison previews retain semantic ink (for example red
     // demolition marks) while the normal selection frame indicates focus.
     bool preserve_selected_stroke{false};
+    // Screen-only controls, appended to preserve aggregate initialization.
+    std::optional<CanvasCornerWindowWidthControls> corner_window_width_controls;
 };
 
 // A geometry presentation is distinct from its semantic model owner. Embedded
@@ -694,6 +703,12 @@ public:
         std::optional<std::vector<CanvasEntity>> result, std::vector<CanvasLabel> labels = {});
     void setOpeningWidthResizeRequested(
         std::function<bool(QString, double, bool, std::uint64_t)> callback);
+    // Same deferred serial protocol as ordinary opening widths. Leg is 0 or 1;
+    // its shared-corner jamb stays pinned and the scale is source-relative.
+    void setCornerWindowWidthPreviewRequested(std::function<std::optional<std::vector<CanvasEntity>>(
+        QString, std::size_t, double, std::uint64_t)> callback);
+    void setCornerWindowWidthResizeRequested(
+        std::function<bool(QString, std::size_t, double, std::uint64_t)> callback);
     // Screen-only horizontal mouth controls. Publish after setEntities, which
     // retires their source capture. Duplicate identities/invalid frames refuse.
     void setRoofOpeningControls(std::vector<CanvasRoofOpeningControls> controls);
@@ -917,6 +932,7 @@ private:
         QString entity_id;
         CanvasOpeningWidthControls source;
         bool keep_start_jamb{};
+        std::optional<std::size_t> corner_leg;
     };
     [[nodiscard]] const CanvasEntity* selectedOpening() const;
     [[nodiscard]] std::optional<OpeningWidthHandleHit> openingWidthHandleAt(
@@ -1395,6 +1411,9 @@ private:
     std::function<std::optional<std::vector<CanvasEntity>>(
         QString, double, bool, std::uint64_t)> m_opening_width_preview_requested;
     std::function<bool(QString, double, bool, std::uint64_t)> m_opening_width_resize_requested;
+    std::function<std::optional<std::vector<CanvasEntity>>(
+        QString, std::size_t, double, std::uint64_t)> m_corner_window_width_preview_requested;
+    std::function<bool(QString, std::size_t, double, std::uint64_t)> m_corner_window_width_resize_requested;
     std::function<bool(CanvasRoofOpeningTarget)> m_roof_opening_selection_requested;
     std::function<void(CanvasRoofOpeningTarget)> m_roof_opening_double_clicked;
     std::function<void(CanvasRoofOpeningTarget)> m_roof_opening_edit_started_callback;
