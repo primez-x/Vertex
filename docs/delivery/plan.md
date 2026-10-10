@@ -71,9 +71,10 @@ polling timeout does not permit restarting it.
 
 ## Remaining behavior and interfaces
 
-1. Finish retained parked drawing snapshot fences and qualify the existing
-   fast-input/inline-label work. Reject same-ID/same-revision head replacement
-   without geometry/history mutation; legitimate park/resume still works.
+1. Qualify the existing retained parked drawing snapshot fences and
+   fast-input/inline-label work. Source review found current geometry, assets,
+   units, layer and phase guards; verify same-ID/same-revision head replacement
+   is rejected without mutation and legitimate park/resume still works.
 2. Qualify the existing combined rigid/partial hard-connected solve and persisted
    tangent constraints; close remaining lifecycle gaps in curve propagation,
    exact travel/offset/walking, bay construction, reopen/redefine/clone and

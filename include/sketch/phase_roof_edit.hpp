@@ -22,6 +22,8 @@ struct RoofEditIntent {
     std::optional<RoofRigidTransformIntent> transform;
     std::optional<RoofPlanResizeIntent> resize;
     std::optional<RoofUniformTransformIntent> uniform_transform;
+    // Explicit new replay authority; historical v1-v5 never move catalogs.
+    bool coordinate_world_hosted_geometry{false};
 };
 
 // Strict version one: version, roof_id, profile, openings, pose. At least one
@@ -34,11 +36,20 @@ struct RoofEditIntent {
 // resize is exclusive and derives native footprint dimensions from source.
 // Uniform XYZ scaling uses strict version five: the eight v4 fields plus
 // uniform_transform, exclusively nonnull. Actual-map replay supplies its datum.
+// Hosted coordination opts into strict version six: all nine v5 keys plus
+// coordinate_world_hosted_geometry:true. Component combinations retain v1-v5
+// exclusivity and require an actual component. Only actual-map replay may
+// coordinate affected catalogs, retaining untouched rows. Composite/plan-resize
+// edits keep type-owned profile dimensions and fixed local offsets from the
+// roof base, following only its admitted base/yaw change. Form/pitch changes
+// do not infer roof-surface anchoring. Explicit uniform transforms still scale.
 [[nodiscard]] nlohmann::json encode_roof_edit_intent(const RoofEditIntent& intent);
 [[nodiscard]] RoofEditIntent decode_roof_edit_intent(const nlohmann::json& value);
 
 // Source-admitted component deltas compose before final native admission.
 // A resize and cut move/removal therefore need not fit a transient envelope.
+// Single-owner replay refuses hosted coordination. Opted-in actual-map replay
+// returns roof and catalog consequences together without changing inventory.
 [[nodiscard]] Entity replay_roof_edit_entity(const Entity& source, const RoofEditIntent& intent);
 [[nodiscard]] std::map<std::string, Entity, std::less<>> replay_roof_edit_entities(
     const std::map<std::string, Entity, std::less<>>& source,

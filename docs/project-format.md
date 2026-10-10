@@ -1,4 +1,32 @@
-# Vertex project formats v1 through v162
+# Vertex project formats v1 through v163
+
+## Coordinated roof-hosted components (v163, source integration)
+
+Native reader 163 and JSON/assets extraction 161 preserve roof-edit intent v6
+and roof-replacement authoring v9. Roof edit v6 retains explicit null component
+slots and adds `coordinate_world_hosted_geometry:true`. Actual-source map replay
+coordinates the roof and its supported hosted catalog placements in one change.
+Historical roof edit v1–v5 keeps its original meaning.
+
+Rigid and uniform operations use the same mathematical transform for the host
+and components, resolving Site frames for type-owned profiles. Authored pose
+changes and plan/profile resize retain the component's physical size and fixed
+local offset while following the roof's base and orientation. They do not stretch
+a fixture nonuniformly or infer an attachment to a changed roof surface.
+
+Replacement v9 adds `include_hosted_instances:true` and the exact qualified
+`hosted_instance_identities` roster to the phase-qualified combined v6 replacement
+fields. Each row identifies `catalog_id`, `instance_id` and
+`proposed_instance_id`. Fresh proposed catalogs retain definitions and only the
+copied roof-hosted rows. Baseline objects and unrelated original rows stay exact;
+independently admitted ordinary hosted edits may update their actual rows.
+Generated presentation aliases remap only codec-qualified views and annotations.
+Unknown reference siblings remain blocking. Replacement v1–v8 stays unchanged.
+
+The reader floor scans nested proofs across every retained revision, including
+undone edits. V163 retains the v161 payload tables; it adds replay semantics, not
+another asset schema. Compilation, migration, save/reopen and Undo/Redo remain
+unqualified under the current source-only instruction.
 
 ## Reviewed room relationship replacements (v162, source integration)
 

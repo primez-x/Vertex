@@ -7202,7 +7202,7 @@
         "binding": null
       },
       "qualification_history": [],
-      "delivery_notes": null,
+      "delivery_notes": "October 10 source integration: roof-edit v6 coordinates actual hosted catalog placements for rigid/uniform transforms and authored pose/footprint edits; type-owned profiles retain physical size/local offset during footprint resize. Opt-in roof copy closure and replacement v9 create fresh catalog/instance ownership and remap qualified presentation aliases while retaining originals. Native reader163/extraction161 fences retained nested proofs. Compilation, history round trips, presentation/schedule output and user-observed lifecycle remain unqualified; no production acceptance.",
       "source_snapshot": {
         "id": "ARCH-MOD-005",
         "area": "architecture",

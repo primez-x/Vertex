@@ -3515,9 +3515,17 @@ static void validate_phase_constraint_fresh_lifetime(const std::map<std::string,
             roof_mixed_asset_reservation=roof_mixed_asset_reservation ||
                 !replacement.ordinary_roof_edits.empty() || replacement.phase_qualified_joins;
             complete_envelope_reservation=complete_envelope_reservation ||
-                !replacement.roof_opening_edits.empty() || !replacement.roof_edits.empty() || replacement.demolition;
+                !replacement.roof_opening_edits.empty() || !replacement.roof_edits.empty() || replacement.demolition ||
+                replacement.include_hosted_instances;
+            hosted_slab_asset_reservation=hosted_slab_asset_reservation || replacement.include_hosted_instances;
             for (const auto& [original,id]:replacement.identities) {
                 (void)original;fresh.insert(id);nested_fresh.insert(id);
+            }
+            for (const auto& [original,id]:replacement.hosted_instance_identities) {
+                if (!fresh.insert(id).second)
+                    throw std::invalid_argument("A proposed roof-hosted component overlaps another fresh identity: "+id);
+                nested_fresh.insert(id);
+                proposed_hosted_instances.emplace(replacement.identities.at(original.first),id);
             }
             for (const auto& [original, ids] : replacement.demolition_additional_identities) {
                 (void)original;
@@ -3736,6 +3744,7 @@ static void validate_phase_constraint_fresh_lifetime(const std::map<std::string,
                 if (!intent.roof_replacement.is_null()) {
                     const auto roof=decode_phase_roof_replacement_authoring(intent.roof_replacement);
                     require_unused(roof.identities);
+                    require_unused(roof.hosted_instance_identities);
                     for (const auto& [original, ids] : roof.demolition_additional_identities) {
                         (void)original;
                         for (const auto& id : ids) if (fresh.contains(id))

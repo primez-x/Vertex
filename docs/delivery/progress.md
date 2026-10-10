@@ -14,6 +14,43 @@ changed source does not acquire runtime acceptance without later qualification.
 
 ## Current delivery state
 
+### October 10 roof-hosted lifecycle and actionable checklist — source integration
+
+Independent source review established two implementation defects: supported
+geometric hosted components could remain at their previous world pose after a
+roof moved, and qualified catalog dependencies blocked ordinary copying and
+baseline alternative edits. New roof-edit v6 coordinates the actual roof and
+catalog placement changes, including position/orientation entered in Properties
+and footprint resizing. Type-owned profiles follow the admitted base/orientation
+while keeping physical size and local offset during footprint edits; explicit
+uniform transforms scale them. No roof-surface attachment is inferred.
+
+Opt-in roof copy closure creates fresh catalogs containing only the selected
+hosted rows, retains source definitions/overrides and original objects, and
+remaps actual component presentation aliases, views and annotations. Replacement
+v9 supplies qualified fresh instance identities, keeps baseline objects and
+unrelated catalog rows, and enrolls the proposed catalog with its copied roof.
+Controller and architectural group routes publish complete catalog consequences;
+shared catalogs compose disjoint actual placement rows while rejecting overlap.
+Native reader163/extraction161 scans retained nested proofs, including undone
+changes. Historical roof-edit v1–v5 and replacement v1–v8 retain their meanings.
+
+The manual checklist previously had 198 scenarios without Steps. All 450 now
+have concrete Steps, Expected, Result and Notes fields. Two existing missing
+Result/Notes slots were completed without changing user results. External
+compatibility tasks retain their prerequisites and explicit Blocked result.
+Existing parked drawing source guards were confirmed rather than rebuilt;
+their runtime qualification remains open.
+
+Root and independent corrective source review closed the concrete pose/resize
+and mixed shared-catalog integration findings; no remaining concrete P1/P2 was
+identified in this bounded batch. The checklist has 450 Steps/Result/Notes fields
+without duplicate Steps, and the delivery registry parses. Scoped diff checks
+passed. No build, test, new test, script/probe, native job, UI launch, package or installation ran. The
+installed candidate is unchanged. Compilation, migration/history/recovery,
+actual plan/3D/output and human interaction remain unqualified. All ten
+production gates stay open; this record supplies no overall percentage or ETA.
+
 ### October 10 idle Wall pointer precedence — source integration
 
 Current-source canvas review found explicit Wall tool state bypassed the shared

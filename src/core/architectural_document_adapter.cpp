@@ -298,36 +298,9 @@ Entity merge_group_hosted_catalog(const Entity& source, const Entity& accumulate
         !exact_json(actual.properties,left.properties) || !exact_json(actual.properties,right.properties) ||
         !exact_json(actual.extensions,left.extensions) || !exact_json(actual.extensions,right.extensions))
         throw std::invalid_argument("Architectural hosted producers disagree on the actual catalog envelope");
-    const auto& original=source.properties.at("model");
-    const auto& existing=accumulated.properties.at("model");
-    const auto& added=incoming.properties.at("model");
-    const auto remainder=[](nlohmann::json model) {
-        model.erase("schema"); model.erase("instances"); return model;
-    };
-    if (!exact_json(remainder(original),remainder(existing)) ||
-        !exact_json(remainder(original),remainder(added)))
-        throw std::invalid_argument("Architectural hosted producers changed actual catalog definitions");
-    for (const auto* model : {&existing,&added})
-        if (model->at("schema")!=original.at("schema") && model->at("schema")!="sketch.assemblies.v7")
-            throw std::invalid_argument("Architectural hosted composition requires row-local catalog semantics");
-    const auto& rows=original.at("instances");
-    if (!rows.is_array() || existing.at("instances").size()!=rows.size() || added.at("instances").size()!=rows.size())
-        throw std::invalid_argument("Architectural hosted producers changed the actual row inventory");
     auto result=accumulated;
-    auto& model=result.properties.at("model");
-    if (added.at("schema")=="sketch.assemblies.v7") model["schema"]="sketch.assemblies.v7";
-    for (std::size_t i=0;i<rows.size();++i) {
-        const auto& before=rows.at(i);
-        const auto& old=existing.at("instances").at(i);
-        const auto& next=added.at("instances").at(i);
-        if (old.at("id")!=before.at("id") || next.at("id")!=before.at("id"))
-            throw std::invalid_argument("Architectural hosted producers changed actual row identities or order");
-        if (exact_json(before,next)) continue;
-        if (!exact_json(before,old))
-            throw std::invalid_argument("Architectural hosted producers overlap one actual instance row");
-        model.at("instances").at(i)=next;
-    }
-    (void)AssemblyModel::from_json(model);
+    result.properties.at("model")=merge_disjoint_hosted_assembly_models(
+        source.properties.at("model"),accumulated.properties.at("model"),incoming.properties.at("model"));
     return result;
 }
 
@@ -1897,6 +1870,7 @@ ApplyEntityChanges architectural_group_transform_command(const DocumentSnapshot&
         if (found->second.type == "roof") {
             RoofEditIntent edit;
             edit.roof_id = id;
+            edit.coordinate_world_hosted_geometry = true;
             if (target.transform.scale == 1.0)
                 edit.transform = RoofRigidTransformIntent{id, target.transform};
             else edit.uniform_transform = RoofUniformTransformIntent{id, target.transform};
@@ -2030,6 +2004,15 @@ ApplyEntityChanges architectural_group_transform_command(const DocumentSnapshot&
             const auto& before = source.entities().at(id);
             if (after == before && after.properties.dump() == before.properties.dump() &&
                 after.extensions.dump() == before.extensions.dump()) continue;
+            if (after.id==id && before.type=="assembly_model" && after.type=="assembly_model") {
+                const auto& accumulated=candidate.at(id);
+                if (accumulated==before && accumulated.properties.dump()==before.properties.dump() &&
+                    accumulated.extensions.dump()==before.extensions.dump()) candidate.at(id)=after;
+                else candidate.at(id)=merge_group_hosted_catalog(before,accumulated,after);
+                if (std::find(transaction_targets.begin(),transaction_targets.end(),id)==transaction_targets.end())
+                    transaction_targets.push_back(id);
+                continue;
+            }
             if (!selected.contains(id) || after.type != "roof" || before.type != "roof" || after.id != id)
                 throw std::invalid_argument("Architectural roof replay changed an unrelated source owner.");
             candidate.at(id) = after;

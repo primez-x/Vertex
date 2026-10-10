@@ -227,7 +227,9 @@ public:
     // usual semantic format floor and legacy inline BLOB schema.
     // Explicit relationship endpoint retargets in physical-room review v5
     // require v162, including nested proofs and retained Undo branches.
-    static constexpr std::uint32_t format_version = 162;
+    // Roof-edit v6 and roof-replacement v9 coordinate actual hosted components
+    // and require v163, including nested proofs and retained Undo branches.
+    static constexpr std::uint32_t format_version = 163;
     static constexpr std::uint32_t recovery_format_version = 4;
     [[nodiscard]] static std::uint32_t required_format_version(const DocumentSnapshot& snapshot);
     static constexpr std::uint64_t maximum_file_bytes = 4ULL * 1024ULL * 1024ULL * 1024ULL;

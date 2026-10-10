@@ -3,6 +3,7 @@
 #include "sketch/phase_roof_profile_edit.hpp"
 #include "sketch/phase_roof_opening_edit.hpp"
 #include "sketch/phase_roof_edit.hpp"
+#include "sketch/roof_clone.hpp"
 
 #include <map>
 #include <optional>
@@ -13,6 +14,8 @@ namespace sketch {
 
 using PhaseRoofReplacementEntities = std::map<std::string, Entity, std::less<>>;
 using PhaseRoofReplacementIdentityMap = std::map<std::string, std::string, std::less<>>;
+using PhaseRoofReplacementHostedInstanceKey = RoofCloneHostedInstanceKey;
+using PhaseRoofReplacementHostedInstanceIdentityMap = RoofCloneHostedInstanceIdentityMap;
 
 struct PhaseRoofReplacementDiagnostic {
     std::string entity_id;
@@ -34,6 +37,10 @@ struct PhaseRoofReplacementPlan {
     // role authority from the caller's identity map.
     bool phase_qualified_joins{};
     std::vector<std::string> retained_join_roof_ids;
+    // Opt-in actual hosted closure. Catalogs are copied with selected rows only;
+    // local instance identities are qualified by their original catalog owner.
+    bool include_hosted_instances{};
+    std::vector<PhaseRoofReplacementHostedInstanceKey> required_hosted_instance_ids;
     [[nodiscard]] bool ready() const noexcept;
     bool operator==(const PhaseRoofReplacementPlan&) const = default;
 };
@@ -43,12 +50,13 @@ struct PhaseRoofReplacementResult {
     PhaseRoofReplacementIdentityMap original_to_proposed;
     // Includes every mapped identity and each explicitly authored new opening.
     std::vector<std::string> fresh_identity_ids;
+    PhaseRoofReplacementHostedInstanceIdentityMap original_to_hosted_instance_proposed;
 };
 
 [[nodiscard]] PhaseRoofReplacementPlan inspect_phase_roof_replacement_plan(
     const PhaseRoofReplacementEntities& source, const std::vector<std::string>& seed_roof_ids,
     const std::string& registry_id, const std::string& alternative_id,
-    bool phase_qualified_joins = false);
+    bool phase_qualified_joins = false, bool include_hosted_instances = false);
 
 // Reinspects the full retained map, independently replays typed edits on source
 // owners, then derives copies. Registry and qualified presentation owners change
@@ -65,7 +73,9 @@ struct PhaseRoofReplacementResult {
     const std::vector<RoofOpeningEditIntent>& roof_opening_edits = {},
     const std::vector<RoofEditIntent>& roof_edits = {},
     const std::vector<RoofEditIntent>& ordinary_roof_edits = {},
-    bool phase_qualified_joins = false);
+    bool phase_qualified_joins = false,
+    const PhaseRoofReplacementHostedInstanceIdentityMap& hosted_instance_identities = {},
+    bool include_hosted_instances = false);
 
 struct PhaseRoofReplacementAuthoring {
     std::string registry_id;
@@ -89,6 +99,11 @@ struct PhaseRoofReplacementAuthoring {
     bool phase_qualified_joins{};
     // Version eight preserves singleton material relationships during demolition.
     bool preserve_singleton_material{};
+    // Version nine includes source-derived hosted catalog dependencies and
+    // permits coordinated world-hosted roof edit intents. Originals stay exact
+    // except for independently admitted ordinary hosted movement.
+    bool include_hosted_instances{};
+    PhaseRoofReplacementHostedInstanceIdentityMap hosted_instance_identities;
 };
 
 // Version 1 retains exactly its six profile fields. Version 2 adds only
@@ -103,6 +118,9 @@ struct PhaseRoofReplacementAuthoring {
 // Its ordinary list may be empty; its baseline combined list remains nonempty.
 // Version 7 has version four's seven fields plus phase_qualified_joins:true.
 // Version 8 adds only preserve_singleton_material:true to version 7.
+// Version 9 adds include_hosted_instances:true and hosted_instance_identities
+// to version 6. Qualified rows are {catalog_id, instance_id, proposed_instance_id}.
+// The exact roster is discovered from actual copied baseline roof hosts.
 [[nodiscard]] nlohmann::json encode_phase_roof_replacement_authoring(
     const PhaseRoofReplacementAuthoring& authoring);
 [[nodiscard]] PhaseRoofReplacementAuthoring decode_phase_roof_replacement_authoring(

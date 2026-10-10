@@ -123,6 +123,13 @@ struct AssemblyPlacement {
 [[nodiscard]] nlohmann::json transform_hosted_assembly_model(const nlohmann::json& actual_model,
     const std::map<std::string, AssemblyTransform, std::less<>>& instance_transforms,
     bool preserve_untouched_rows = false);
+// Compose independently derived changes to disjoint existing hosted rows.
+// Definitions, row identities/order and unmodified numeric representations
+// remain exact; only an existing dialect or a row-local v7 upgrade is admitted.
+// Overlapping changes, appended/removed rows and arbitrary catalog edits fail.
+[[nodiscard]] nlohmann::json merge_disjoint_hosted_assembly_models(
+    const nlohmann::json& actual_model, const nlohmann::json& accumulated_model,
+    const nlohmann::json& incoming_model);
 // Retain an existing XYZ/vertical placement dialect after canonical edits or
 // catalog closure, supplying only its required envelope fields. Saved v7 keeps
 // row-local optional envelopes and unchanged raw rows without adding defaults.

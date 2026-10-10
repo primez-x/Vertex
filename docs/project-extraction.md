@@ -1,5 +1,12 @@
 # Portable project extraction
 
+Exchange version 161 requires native reader 163 for coordinated roof-hosted
+components. Roof edit v6 and roof replacement v9 retain explicit actual-source
+placement/copy authority in nested, retained and undone history. Historical
+roof dialects retain their original meaning. Asset payload tables stay on the
+v161 storage schema. See [project-format.md](project-format.md) for the hosted
+profile resize policy; source integration is not runtime qualification.
+
 Exchange version 155 requires native reader 157 for current physical-room
 callouts in connected moves. Closed nested joint dialects five through eight
 retain the prior respective operator shapes with explicit inventory-qualified

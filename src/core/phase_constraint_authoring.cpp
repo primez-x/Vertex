@@ -901,6 +901,9 @@ void coordinated_map_budget(const Entities& entities) {
 Entities replay_coordinated(const Entities& source,const PhaseConstraintAuthoringIntent& enclosing,
     const Entities* inspected_wall=nullptr,const std::vector<std::string>* inspected_wall_fresh=nullptr) {
     const auto lanes=coordinated(enclosing.coordinated_replacements,enclosing);
+    const bool coordinated_roof_hosted=(lanes.roof && lanes.roof->include_hosted_instances) ||
+        std::any_of(lanes.ordinary_roofs.begin(),lanes.ordinary_roofs.end(),
+            [](const auto& edit) { return edit.coordinate_world_hosted_geometry; });
     coordinated_map_budget(source);
     std::vector<Entities> candidates;
     std::vector<std::vector<std::string>> family_fresh;
@@ -932,9 +935,10 @@ Entities replay_coordinated(const Entities& source,const PhaseConstraintAuthorin
     if (lanes.roof) {
         const auto& leaf=*lanes.roof;
         const auto plan=inspect_phase_roof_replacement_plan(source,leaf.seed_roof_ids,leaf.registry_id,
-            leaf.alternative_id,leaf.phase_qualified_joins);
+            leaf.alternative_id,leaf.phase_qualified_joins,leaf.include_hosted_instances);
         auto replay=replay_phase_roof_replacement(source,plan,leaf.identities,leaf.roof_profiles,
-            leaf.roof_opening_edits,leaf.roof_edits,leaf.ordinary_roof_edits,leaf.phase_qualified_joins);
+            leaf.roof_opening_edits,leaf.roof_edits,leaf.ordinary_roof_edits,leaf.phase_qualified_joins,
+            leaf.hosted_instance_identities,leaf.include_hosted_instances);
         candidates.push_back(std::move(replay.entities)); family_fresh.push_back(std::move(replay.fresh_identity_ids));
         retained_baselines.insert(plan.required_entity_ids.begin(),plan.required_entity_ids.end());
     } else if (!lanes.ordinary_roofs.empty()) {
@@ -1077,8 +1081,10 @@ Entities replay_coordinated(const Entities& source,const PhaseConstraintAuthorin
         } else if (changes.size()==1) result.at(key)=lanes.version>=3 && original.type=="assembly_model" ?
             merge_hosted_instance_placements(original,changes,permitted) : *changes.front();
         else if (changes.size()>1)
-            result.at(key)=lanes.version==1 ? merge_append_container(original,*changes[0],*changes[1]) :
-                lanes.version>=3 ? compose_source_container(original,changes,permitted) : merge_source_row_container(original,changes);
+            result.at(key)=lanes.version==1 && !(coordinated_roof_hosted && original.type=="assembly_model")
+                ? merge_append_container(original,*changes[0],*changes[1]) :
+                (lanes.version>=3 || (coordinated_roof_hosted && original.type=="assembly_model"))
+                    ? compose_source_container(original,changes,permitted) : merge_source_row_container(original,changes);
     }
     for (std::size_t lane=0;lane<candidates.size();++lane) {
         const std::set<std::string,std::less<>> destinations(family_fresh[lane].begin(),family_fresh[lane].end());
@@ -1095,10 +1101,10 @@ Entities replay_coordinated(const Entities& source,const PhaseConstraintAuthorin
     }
     for (const auto& key:retained_baselines) {
         if (!result.contains(key)) invalid("Coordinated replacement removed a retained baseline owner");
-        if (lanes.version>=3 && source.at(key).type=="assembly_model") continue;
+        if ((lanes.version>=3 || coordinated_roof_hosted) && source.at(key).type=="assembly_model") continue;
         if (!exact(source.at(key),result.at(key))) invalid("Coordinated replacement changed a retained baseline envelope");
     }
-    if (lanes.version>=3) {
+    if (lanes.version>=3 || coordinated_roof_hosted) {
         for (const auto& [key,entity]:source) if (entity.type=="assembly_model") {
             const auto& before=entity.properties.at("model").at("instances");
             const auto& after=result.at(key).properties.at("model").at("instances");

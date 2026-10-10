@@ -889,6 +889,52 @@ nlohmann::json transform_hosted_assembly_model(const nlohmann::json& actual_mode
     (void)AssemblyModel::from_json(result);
     return result;
 }
+nlohmann::json merge_disjoint_hosted_assembly_models(const nlohmann::json& actual_model,
+    const nlohmann::json& accumulated_model, const nlohmann::json& incoming_model) {
+    const auto exact_json=[](const nlohmann::json& a,const nlohmann::json& b) {
+        return a==b && a.dump()==b.dump();
+    };
+    const auto remainder=[](nlohmann::json model) {
+        model.erase("schema"); model.erase("instances"); return model;
+    };
+    (void)AssemblyModel::from_json(actual_model);
+    (void)AssemblyModel::from_json(accumulated_model);
+    (void)AssemblyModel::from_json(incoming_model);
+    require(exact_json(remainder(actual_model),remainder(accumulated_model)) &&
+        exact_json(remainder(actual_model),remainder(incoming_model)),
+        "hosted composition changed actual catalog definitions");
+    for(const auto* model:{&accumulated_model,&incoming_model})
+        require(model->at("schema")==actual_model.at("schema") ||
+            model->at("schema")=="sketch.assemblies.v7",
+            "hosted composition requires the actual or row-local catalog dialect");
+    const auto& rows=actual_model.at("instances");
+    require(accumulated_model.at("instances").size()==rows.size() &&
+        incoming_model.at("instances").size()==rows.size(),
+        "hosted composition changed the actual instance inventory");
+    auto result=accumulated_model;
+    if(incoming_model.at("schema")=="sketch.assemblies.v7")result["schema"]="sketch.assemblies.v7";
+    for(std::size_t i=0;i<rows.size();++i) {
+        const auto& before=rows.at(i);
+        const auto& existing=accumulated_model.at("instances").at(i);
+        const auto& incoming=incoming_model.at("instances").at(i);
+        require(existing.at("id")==before.at("id") && incoming.at("id")==before.at("id"),
+            "hosted composition changed actual row identities or order");
+        for(const auto* row:{&existing,&incoming}) {
+            if(exact_json(before,*row))continue;
+            require(before.contains("placement") && row->contains("placement") &&
+                exact_json(before.at("placement").at("host_entity_id"),row->at("placement").at("host_entity_id")),
+                "hosted composition changed an unhosted row or placement host");
+            auto retained_row=*row;
+            retained_row.at("placement")=before.at("placement");
+            require(exact_json(before,retained_row),"hosted composition changed fields outside placement authority");
+        }
+        if(exact_json(before,incoming))continue;
+        require(exact_json(before,existing),"hosted composition overlaps one actual instance row");
+        result.at("instances").at(i)=incoming;
+    }
+    (void)AssemblyModel::from_json(result);
+    return result;
+}
 nlohmann::json retain_assembly_catalog_dialect(
     const nlohmann::json& actual_model, nlohmann::json generated_model) {
     const auto saved=actual_model.value("schema", nlohmann::json{});

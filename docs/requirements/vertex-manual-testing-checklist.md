@@ -74,36 +74,43 @@ Start with the workspace, draw a room, close it with the mouse, drag-select it, 
 ## Start a project and arrange the workspace
 
 - [ ] **U001 — Start a blank residential project**
+  - Steps: Press Ctrl+N to open a blank project and inspect the initial building, active floor and drawing layer without adding geometry.
   - Expected: A usable empty drawing opens with a clear active floor and layer.
   - Result: Not tested
   - Notes / steps to reproduce: ____________________
 
 - [ ] **U002 — Start a blank light-commercial project**
+  - Steps: Press Ctrl+N, open the Architectural workspace, and inspect the initial building, floor and layer before drawing a short line.
   - Expected: You can start drawing and enter the commercial project's details.
   - Result: Not tested
   - Notes / steps to reproduce: ____________________
 
 - [ ] **U003 — Enter the property's name, address and reference number**
+  - Steps: Select the project property in the navigator, press Ctrl+K, and run Edit project details. Enter the name, address and reference number, then save and reopen the project.
   - Expected: The values remain after saving and reopening and are available on output sheets.
   - Result: Not tested
   - Notes / steps to reproduce: ____________________
 
 - [ ] **U004 — Switch between 2D and 3D**
+  - Steps: Draw one wall, click the toolbar's 3D workspace button, and then click its 2D workspace button to return to the plan without closing the project.
   - Expected: The same project stays open; the mode and available tools are clear.
   - Result: Not tested
   - Notes / steps to reproduce: ____________________
 
 - [ ] **U005 — Work entirely in 2D**
+  - Steps: Press Ctrl+K, choose Measurement workspace, and draw, select and edit a short wall without opening a 3D view.
   - Expected: Architectural and 3D controls do not crowd the simple drawing workflow.
   - Result: Not tested
   - Notes / steps to reproduce: ____________________
 
 - [ ] **U006 — Resize and collapse the left panel**
+  - Steps: Drag the divider beside the left panel, collapse the panel with its edge control, then restore it and reopen the Library tab.
   - Expected: The canvas gains space and the panel can be restored without losing your work.
   - Result: Not tested
   - Notes / steps to reproduce: ____________________
 
 - [ ] **U007 — Select an object and inspect its properties**
+  - Steps: Draw a wall and click it once, then double-click it and inspect the floating Properties panel. Close the panel and open it again from the wall's right-click menu.
   - Expected: One click selects without opening a panel. Double-clicking the object or choosing Properties from its right-click menu opens the same compact contextual properties panel once. Double-clicking empty canvas does nothing.
   - Result: Not tested
   - Notes / steps to reproduce: ____________________
@@ -115,46 +122,55 @@ Start with the workspace, draw a room, close it with the mouse, drag-select it, 
   - Notes / steps to reproduce: ____________________
 
 - [ ] **U009 — Use New, Open, Save and Save As**
+  - Steps: Use Ctrl+N to create a project, Ctrl+S to save it, Ctrl+Shift+S to save a separate copy, and Ctrl+O to reopen each file. Make an unsaved edit before New or Open and inspect the prompt.
   - Expected: Each command is identifiable; New/Open ask how to handle unsaved work.
   - Result: Not tested
   - Notes / steps to reproduce: ____________________
 
 - [ ] **U010 — Use the app at a smaller window size**
+  - Steps: Restore the app from maximized view, drag a window edge inward, and use the Layers, Library and primary drawing controls at the smaller size.
   - Expected: Drawing, primary commands and panels remain usable without overlapping or clipped controls.
   - Result: Not tested
   - Notes / steps to reproduce: ____________________
 
 - [ ] **U011 — Switch light, dark and high-contrast themes**
+  - Steps: Press Ctrl+K and run Light theme, Dark theme and High contrast theme in turn. Inspect the drawing, selection, grid, dimensions and left-panel text in each view.
   - Expected: Text, selection, grid, dimensions and icons stay readable.
   - Result: Not tested
   - Notes / steps to reproduce: ____________________
 
 - [ ] **U012 — Save and restore a workspace layout**
+  - Steps: Open Workspace profiles, save the current panel and view arrangement, change the arrangement, then restore the saved profile.
   - Expected: Panel arrangement and chosen view settings return as expected.
   - Result: Not tested
   - Notes / steps to reproduce: ____________________
 
 - [ ] **U013 — Search for a command by name**
+  - Steps: Press Ctrl+K, type a visible action such as Fit view, and run it from the results list.
   - Expected: You can find and run the command without hunting through unrelated menus.
   - Result: Not tested
   - Notes / steps to reproduce: ____________________
 
 - [ ] **U014 — Customize a shortcut and use it**
+  - Steps: Open More > Keyboard shortcuts, assign an unused key to an action, and press that key in the drawing. Try a key already assigned elsewhere and read the conflict message.
   - Expected: The chosen key runs the intended action; conflicts are explained.
   - Result: Not tested
   - Notes / steps to reproduce: ____________________
 
 - [ ] **U015 — Choose the Apex shortcut preset**
+  - Steps: Open More > Keyboard shortcuts, choose the Apex-compatible subset, and inspect the resulting bindings. Use one listed shortcut in a drawing and confirm the active choice remains visible when the dialog is reopened.
   - Expected: Familiar commands work and the active preset is identifiable.
   - Result: Not tested
   - Notes / steps to reproduce: ____________________
 
 - [ ] **U016 — Find and run a command**
+  - Steps: Press Ctrl+K, search for Fit view, run it, then search for Measurement workspace and run that action. Compare the result with its direct workspace control.
   - Expected: Commands finds and runs supported actions without duplicating New, Open, Save, Undo, or Redo in another toolbar menu.
   - Result: Not tested
   - Notes / steps to reproduce: ____________________
 
 - [ ] **U017 — Open local help**
+  - Steps: Open More > User guide, then use its drawing, keyboard-entry, library and project-saving sections with networking unavailable.
   - Expected: Help explains drawing completion, keyboard entry, symbols and saving without an internet connection.
   - Result: Not tested
   - Notes / steps to reproduce: ____________________
@@ -163,56 +179,67 @@ Start with the workspace, draw a room, close it with the mouse, drag-select it, 
 ## Buildings, floors, layers and visibility
 
 - [ ] **U018 — Add a second building**
+  - Steps: Press Ctrl+K, run Add building, enter a distinct name and confirm. Expand the project tree and select the new building.
   - Expected: It appears with its chosen name and can have its own floors.
   - Result: Not tested
   - Notes / steps to reproduce: ____________________
 
 - [ ] **U019 — Add a floor to a building**
+  - Steps: Select a building in the project tree, run Add floor from Ctrl+K, enter a floor name and elevation, then expand that building.
   - Expected: It appears under the correct building.
   - Result: Not tested
   - Notes / steps to reproduce: ____________________
 
 - [ ] **U020 — Add a drawing layer to a floor**
+  - Steps: Select the intended floor in Layers, run Add drawing layer from Ctrl+K, name the layer and select it as the active drawing destination.
   - Expected: It appears under the correct floor and can be selected as the drawing destination.
   - Result: Not tested
   - Notes / steps to reproduce: ____________________
 
 - [ ] **U021 — Rename a building, floor and layer**
+  - Steps: Select each item in the project tree in turn, run Rename selected property, building, floor or layer from Ctrl+K, and enter a new name.
   - Expected: The new names appear consistently in the tree and destination controls.
   - Result: Not tested
   - Notes / steps to reproduce: ____________________
 
 - [ ] **U022 — Choose where new geometry will be drawn**
+  - Steps: In Layers, select a building, floor and layer; draw a short wall, then change the active layer and draw a second wall.
   - Expected: The complete destination is understandable and new objects belong there.
   - Result: Not tested
   - Notes / steps to reproduce: ____________________
 
 - [ ] **U023 — Draw on two different layers**
+  - Steps: Select the first layer in Layers and draw one wall. Select a different layer, draw another wall, then select each layer to inspect its objects.
   - Expected: Objects remain separately organized and selectable.
   - Result: Not tested
   - Notes / steps to reproduce: ____________________
 
 - [ ] **U024 — Hide and show one layer with its eye control**
+  - Steps: Draw separate objects on two layers, click the eye beside one layer, and click it again to restore visibility.
   - Expected: Only the intended layer's contents disappear and reappear.
   - Result: Not tested
   - Notes / steps to reproduce: ____________________
 
 - [ ] **U025 — Hide and show one floor**
+  - Steps: Add a second floor and place one object on each floor. Use the floor visibility control in Layers to hide and show the second floor.
   - Expected: Its drawing disappears and returns without deleting it or changing calculated totals.
   - Result: Not tested
   - Notes / steps to reproduce: ____________________
 
 - [ ] **U026 — Identify hidden content**
+  - Steps: Hide one drawing layer and one floor using their eye controls, then inspect the tree and restore each hidden item from its eye control.
   - Expected: Eye states make it clear what is hidden without redundant status labels.
   - Result: Not tested
   - Notes / steps to reproduce: ____________________
 
 - [ ] **U027 — Inspect the project tree**
+  - Steps: Expand the property, building, floor and layer rows in Layers, then select a visible drawing object from the tree and locate it on the canvas.
   - Expected: Real drawing objects are accessible; internal storage records do not appear as unexplained objects.
   - Result: Not tested
   - Notes / steps to reproduce: ____________________
 
 - [ ] **U028 — Save and reopen a multi-building, multi-floor project**
+  - Steps: Add two buildings, give each two floors and a named layer, and draw one object on each. Save, close, reopen, and expand the tree again.
   - Expected: Names, ownership and geometry remain correct.
   - Result: Not tested
   - Notes / steps to reproduce: ____________________
@@ -225,61 +252,73 @@ drawing below. **Wall** draws physical walls and is the default for a new
 drawing; switching modes does not change existing geometry.
 
 - [ ] **U029 — Draw a rectangular room using node clicks**
+  - Steps: In Measurement, choose Wall in Draw, set wall thickness and height in Library, and click four corners followed by the first corner. Select a wall, press Ctrl+K, run Create room boundary from selected geometry, and name the room.
   - Expected: Click the four corners in order, then click the first corner; the final click closes and retains the room.
   - Result: Not tested
   - Notes / steps to reproduce: ____________________
 
 - [ ] **U030 — Draw an irregular room with more than four corners**
+  - Steps: Choose Wall in Draw and click at least five corners, closing at the first point. Select a wall and use Ctrl+K > Create room boundary from selected geometry to name the room.
   - Expected: Every clicked node is retained and the final closed shape matches the clicked outline.
   - Result: Not tested
   - Notes / steps to reproduce: ____________________
 
 - [ ] **U031 — Draw a triangle**
+  - Steps: Choose Wall in Draw, click three corners and close at the first point. Select a wall and use Ctrl+K > Create room boundary from selected geometry.
   - Expected: Three clicked corners and a final click on the first corner form a valid closed area.
   - Result: Not tested
   - Notes / steps to reproduce: ____________________
 
 - [ ] **U032 — Finish an unfinished polygon with Enter**
+  - Steps: Choose Area in Draw and click three points without closing the outline. Press Enter and inspect the proposed closing edge before continuing.
   - Expected: A valid closing edge is previewed or added and the completed area persists.
   - Result: Not tested
   - Notes / steps to reproduce: ____________________
 
 - [ ] **U033 — Cancel pending drawing with right-click**
+  - Steps: Start a Wall chain, place one segment, then stationary right-click to finish the open chain; start another pending segment and right-click to cancel it. Repeat with a right-drag to pan.
   - Expected: A stationary right-click cancels the pending segment or unplaced object without adding a node. Committed walls and measured segments persist; a completed area remains. Right-drag pans without cancelling.
   - Result: Not tested
   - Notes / steps to reproduce: ____________________
 
 - [ ] **U034 — Approach the first corner while drawing**
+  - Steps: Choose Area in Draw, place several corners, and move the pointer toward the first corner until the closing cue appears; click to close.
   - Expected: A clear closing snap target appears as the pointer approaches the first corner.
   - Result: Not tested
   - Notes / steps to reproduce: ____________________
 
 - [ ] **U035 — Press Escape after completing a room**
+  - Steps: Draw and close a Wall loop, then press Escape. Select a wall and create a named room boundary from the selected geometry.
   - Expected: The completed room remains in the project.
   - Result: Not tested
   - Notes / steps to reproduce: ____________________
 
 - [ ] **U036 — Cancel an unfinished drawing**
+  - Steps: Draw one wall segment and begin another, then press Escape before placing its endpoint. Inspect the committed segment and start a fresh outline.
   - Expected: Cancellation is understandable and does not silently erase completed objects.
   - Result: Not tested
   - Notes / steps to reproduce: ____________________
 
 - [ ] **U037 — Undo the last corner while drawing**
+  - Steps: Start a Wall chain and place two segments. Press Ctrl+Z once, inspect the retained endpoint, then press Ctrl+Z again.
   - Expected: Only the last drawing step is removed; earlier corners remain.
   - Result: Not tested
   - Notes / steps to reproduce: ____________________
 
 - [ ] **U038 — Redo an undone drawing step**
+  - Steps: Start a Wall chain, place two segments, press Ctrl+Z once, then press Ctrl+Y and inspect the restored segment and endpoint.
   - Expected: The same corner and segment return.
   - Result: Not tested
   - Notes / steps to reproduce: ____________________
 
 - [ ] **U039 — Draw first, then assign an area classification**
+  - Steps: Choose Area in Draw, close an outline, then use Library > Area classes to select a classification for it.
   - Expected: The area is retained with the selected classification.
   - Result: Not tested
   - Notes / steps to reproduce: ____________________
 
 - [ ] **U040 — Choose a classification before drawing**
+  - Steps: In Library > Area classes, select a classification before choosing Area in Draw. Draw and close an outline, then inspect its saved class.
   - Expected: The completed area receives that classification without a second unrelated workflow.
   - Result: Not tested
   - Notes / steps to reproduce: ____________________
@@ -291,36 +330,43 @@ drawing; switching modes does not change existing geometry.
   - Notes / steps to reproduce: ____________________
 
 - [ ] **U042 — Enter feet and fractional inches**
+  - Steps: In an Imperial project, start a Wall chain and enter `12 ft 6 1/2 in` in the floating length control. Apply the value with its direction key and inspect the resulting edge.
   - Expected: A value such as 12 ft 6 1/2 in is accepted and retained accurately.
   - Result: Not tested
   - Notes / steps to reproduce: ____________________
 
 - [ ] **U043 — Enter metric lengths**
+  - Steps: Start a Wall chain and enter `3.25 m` in the floating length control, then apply it with a direction key and inspect the measured edge.
   - Expected: Values such as 3.25 m produce the intended measured geometry.
   - Result: Not tested
   - Notes / steps to reproduce: ____________________
 
 - [ ] **U044 — Switch displayed units**
+  - Steps: Use the toolbar's Imperial/Metric selector to switch units, then inspect the same saved edge and its displayed length in each setting.
   - Expected: The physical drawing size remains unchanged.
   - Result: Not tested
   - Notes / steps to reproduce: ____________________
 
 - [ ] **U045 — Use the on-screen measurement keypad while drawing**
+  - Steps: Start a Wall chain, open the floating length control's 123 keypad, enter a length, choose a direction and apply it to the active segment.
   - Expected: It is clear which edge or value receives the entry and how to apply it.
   - Result: Not tested
   - Notes / steps to reproduce: ____________________
 
 - [ ] **U046 — Enter a rise and run**
+  - Steps: Choose Measured lines in Draw, press D on the canvas, select rise/run input, and enter values for one side. Apply it and inspect the resulting endpoints.
   - Expected: The resulting angled segment matches both components.
   - Result: Not tested
   - Notes / steps to reproduce: ____________________
 
 - [ ] **U047 — Enter an absolute angle**
+  - Steps: Choose Measured lines, press D, select length/heading input, and enter a length with an explicit angle such as `45 deg`. Apply and inspect the side direction.
   - Expected: The line points in the intended direction.
   - Result: Not tested
   - Notes / steps to reproduce: ____________________
 
 - [ ] **U048 — Enter a turn relative to the previous line**
+  - Steps: Choose Measured lines and draw a first side, then press D and select relative turn for the next side. Enter a turn and length, apply, and compare it with the previous side's direction.
   - Expected: The turn is applied from the correct preceding direction.
   - Result: Not tested
   - Notes / steps to reproduce: ____________________
@@ -388,11 +434,13 @@ drawing; switching modes does not change existing geometry.
   - Notes / steps to reproduce: ____________________
 
 - [ ] **U057 — Add objects to a selection with the modifier key**
+  - Steps: Draw two walls, click one, then Ctrl-click the other and inspect the selection frame. Ctrl-click one selected wall again to toggle it out.
   - Expected: Previously selected objects remain selected.
   - Result: Not tested
   - Notes / steps to reproduce: ____________________
 
 - [ ] **U058 — Clear the selection**
+  - Steps: Select one or more walls, then click empty canvas once and inspect the selection frame and object-specific controls.
   - Expected: Highlights and object-specific properties clear predictably.
   - Result: Not tested
   - Notes / steps to reproduce: ____________________
@@ -475,6 +523,7 @@ drawing; switching modes does not change existing geometry.
   - Notes / steps to reproduce: ____________________
 
 - [ ] **U068 — Duplicate an object**
+  - Steps: Select a wall or symbol, copy and paste it with Ctrl+C and Ctrl+V, then move the new object and inspect both instances.
   - Expected: The copy can be edited independently.
   - Result: Not tested
   - Notes / steps to reproduce: ____________________
@@ -529,16 +578,19 @@ drawing; switching modes does not change existing geometry.
   - Notes / steps to reproduce: ____________________
 
 - [ ] **U073 — Undo a completed edit**
+  - Steps: Select a wall and change its length, then press Ctrl+Z and inspect the length and connected geometry.
   - Expected: The prior geometry, properties and calculations return.
   - Result: Not tested
   - Notes / steps to reproduce: ____________________
 
 - [ ] **U074 — Redo a completed edit**
+  - Steps: After changing and undoing a wall length, press Ctrl+Y and inspect the restored length and connected geometry.
   - Expected: The same result is restored.
   - Result: Not tested
   - Notes / steps to reproduce: ____________________
 
 - [ ] **U075 — Try an invalid or self-crossing boundary edit**
+  - Steps: Draw a closed Area, open Edit boundary geometry, and move one vertex across a non-adjacent edge. Review the preview and attempt to apply it.
   - Expected: A clear message explains rejection and the last valid drawing remains intact.
   - Result: Not tested
   - Notes / steps to reproduce: ____________________
@@ -547,21 +599,25 @@ drawing; switching modes does not change existing geometry.
 ## Curves, alignment and constraints
 
 - [ ] **U076 — Draw a curved boundary using chord and height**
+  - Steps: Choose Measured lines, press D, select chord/height input, and enter two endpoints and a signed arc height. Apply, add straight sides to close the outline, then run Detect closed areas from walls or measured lines.
   - Expected: The curve passes through the expected endpoints and has the requested bulge.
   - Result: Not tested
   - Notes / steps to reproduce: ____________________
 
 - [ ] **U077 — Draw a curve using arc length**
+  - Steps: Choose Measured lines, press D, select a chord-based arc method with arc length, and enter the chord and curve measurements. Apply, add straight sides to close the outline, then run Detect closed areas from walls or measured lines.
   - Expected: The measured arc length matches your input.
   - Result: Not tested
   - Notes / steps to reproduce: ____________________
 
 - [ ] **U078 — Draw a curve using an angle**
+  - Steps: Choose Measured lines, press D, select chord/angle input, and enter the chord and a unit-marked sweep such as `90 deg`. Apply, add straight sides to close the outline, then run Detect closed areas from walls or measured lines.
   - Expected: The curve's sweep matches the entered angle.
   - Result: Not tested
   - Notes / steps to reproduce: ____________________
 
 - [ ] **U079 — Edit an existing curve**
+  - Steps: Select a curved Area edge, choose Edit curve, change its signed height or arc length, and review the preview before applying.
   - Expected: Geometry, dimensions and area update together.
   - Result: Not tested
   - Notes / steps to reproduce: ____________________
@@ -595,17 +651,20 @@ drawing; switching modes does not change existing geometry.
   - Notes / steps to reproduce: ____________________
 
 - [ ] **U084 — Align objects horizontally or vertically**
+  - Steps: Select two objects and use Ctrl+Left/Right or Ctrl+Up/Down to align them to the chosen side; inspect their positions on the canvas.
   - Expected: The resulting alignment matches the chosen reference.
   - Result: Not tested
   - Notes / steps to reproduce: ____________________
 
 - [ ] **U085 — Make two lines parallel**
+  - Steps: Select two measured lines, open Dimensions and constraints from Ctrl+K, add a parallel relationship, then edit one line's length.
   - Also test: Choose endpoints on curved walls or boundary edges. Their endpoint chords become parallel while their curved outlines remain curved.
   - Expected: They remain parallel after a supported dimension edit.
   - Result: Not tested
   - Notes / steps to reproduce: ____________________
 
 - [ ] **U086 — Make two lines perpendicular**
+  - Steps: Select two measured lines, open Dimensions and constraints from Ctrl+K, add a perpendicular relationship, then edit one line's length.
   - Also test: Choose endpoint pairs on a curved wall and a straight wall. Their chords form a right angle; the curve retains its sweep rather than becoming a straight line.
   - Expected: The right angle is maintained.
   - Result: Not tested
@@ -629,11 +688,13 @@ drawing; switching modes does not change existing geometry.
   - Notes / steps to reproduce: ____________________
 
 - [ ] **U089 — Apply conflicting dimensions or relationships**
+  - Steps: Open Dimensions and constraints for two measured lines, add incompatible fixed lengths or relationships, and try to apply the edit.
   - Expected: The app identifies the conflict without silently changing locked measurements.
   - Result: Not tested
   - Notes / steps to reproduce: ____________________
 
 - [ ] **U090 — Undo a constraint or dimension change**
+  - Steps: Add or edit a constraint on two measured lines, apply it, then press Ctrl+Z and inspect their original geometry and relationship list.
   - Expected: The prior shape and relationships return.
   - Result: Not tested
   - Notes / steps to reproduce: ____________________
@@ -660,31 +721,37 @@ drawing; switching modes does not change existing geometry.
   - Notes / steps to reproduce: ____________________
 
 - [ ] **U094 — Classify areas as living, garage or another available class**
+  - Steps: Draw separate closed Area outlines, open Library > Area classes, and choose a different available class for each. Inspect Details totals.
   - Expected: Each area appears in the correct totals.
   - Result: Not tested
   - Notes / steps to reproduce: ____________________
 
 - [ ] **U095 — Measure a 10 ft by 12 ft rectangle**
+  - Steps: In Imperial units, choose Area in Draw and enter exact 10 ft and 12 ft sides with the floating measurement control. Close the rectangle and inspect Details.
   - Expected: Area is 120 sq ft and perimeter is 44 ft, allowing only display rounding.
   - Result: Not tested
   - Notes / steps to reproduce: ____________________
 
 - [ ] **U096 — Measure a 3 m by 4 m rectangle**
+  - Steps: Choose Area in Draw, enter exact 3 m and 4 m sides using the floating measurement control, close the outline, and inspect Details.
   - Expected: Area is 12 square metres and perimeter is 14 metres.
   - Result: Not tested
   - Notes / steps to reproduce: ____________________
 
 - [ ] **U097 — Inspect the calculation behind an area total**
+  - Steps: Select a closed Area and inspect its contribution in Details. Expand the floor and select the area to read its edge lengths, gross area, deductions and net area.
   - Expected: The relevant boundary, factors and deductions can be understood.
   - Result: Not tested
   - Notes / steps to reproduce: ____________________
 
 - [ ] **U098 — Apply an area factor**
+  - Steps: Select a closed Area, open its contextual properties, change the Factor value, and compare the displayed base and adjusted areas.
   - Expected: The displayed adjusted value matches base area multiplied by the factor.
   - Result: Not tested
   - Notes / steps to reproduce: ____________________
 
 - [ ] **U099 — Subtract a smaller area or opening**
+  - Steps: Draw an outer Area and a contained inner Area, right-click the inner boundary, choose Subtract from area, select the compatible parent and apply.
   - Expected: The net area reflects the intended deduction exactly once.
   - Result: Not tested
   - Notes / steps to reproduce: ____________________
@@ -702,16 +769,19 @@ drawing; switching modes does not change existing geometry.
   - Notes / steps to reproduce: ____________________
 
 - [ ] **U101 — Combine multiple areas into a total**
+  - Steps: Draw two separate Area outlines, assign both the same available classification, and inspect that class total in Details.
   - Expected: Each intended area is counted once.
   - Result: Not tested
   - Notes / steps to reproduce: ____________________
 
 - [ ] **U102 — Check perimeter after editing an edge**
+  - Steps: Draw and close an Area, record its perimeter in Details, edit one edge or vertex, and compare the updated perimeter.
   - Expected: The perimeter changes by the expected amount.
   - Result: Not tested
   - Notes / steps to reproduce: ____________________
 
 - [ ] **U103 — Check building and living-area totals**
+  - Steps: Create two buildings, draw and classify one Area in each, and inspect the property, building and floor totals in Details.
   - Expected: Grouping and classifications produce the expected separate totals.
   - Result: Not tested
   - Notes / steps to reproduce: ____________________
@@ -724,21 +794,25 @@ drawing; switching modes does not change existing geometry.
   - Notes / steps to reproduce: ____________________
 
 - [ ] **U105 — Change a measurement profile**
+  - Steps: Open More > Calculation profile, choose another available measurement profile, and inspect the displayed area classifications and totals.
   - Expected: The profile's effect on classifications and totals is visible and understandable.
   - Result: Not tested
   - Notes / steps to reproduce: ____________________
 
 - [ ] **U106 — Undo a classification, factor or deduction**
+  - Steps: Change an Area classification, change its factor or add a deduction, then press Ctrl+Z after each accepted edit and inspect the totals.
   - Expected: The previous totals return.
   - Result: Not tested
   - Notes / steps to reproduce: ____________________
 
 - [ ] **U107 — Find a gap, overlap or duplicate segment**
+  - Steps: In a copy of a drawing, create one small gap, overlap and duplicate segment. Press Ctrl+K and search for the available geometry diagnostics; if the drawing offers no matching diagnostic, record Blocked.
   - Expected: The app highlights the relevant location and explains the issue.
   - Result: Not tested
   - Notes / steps to reproduce: ____________________
 
 - [ ] **U108 — Review a proposed geometry repair**
+  - Steps: In a copy of a drawing with a known geometry issue, use Ctrl+K to search for a repair or review action and open any offered preview. If no repair review is available for that issue, record Blocked.
   - Expected: Nothing changes until you accept; accepted repairs can be undone.
   - Result: Not tested
   - Notes / steps to reproduce: ____________________
@@ -747,16 +821,19 @@ drawing; switching modes does not change existing geometry.
 ## Symbols, furniture and component library
 
 - [ ] **U109 — Open the visible component library**
+  - Steps: Open the left Library tab, search for base cabinet, wall cabinet and fridge, then browse its visible categories and previews.
   - Expected: The left-panel Library tab opens without a modal. Search for base cabinet, wall cabinet, and fridge; each has recognizable artwork and a useful physical size. Browse all categories and verify distinct useful families. Old procedural compatibility definitions do not clutter the placement list; aliases and resized duplicates do not count as new artwork.
   - Result: Not tested
   - Notes / steps to reproduce: ____________________
 
 - [ ] **U110 — Search for a toilet, bed, sofa or table**
+  - Steps: In Library, search for Toilet, Bed, Sofa and Table one at a time. Search `Sofa Three Seat` and inspect the displayed artwork preview.
   - Expected: Relevant human names and recognizable detailed previews appear. Searching `Sofa Three Seat` returns a sofa with visible arms, back and three distinct cushions rather than a rectangle or generic line motif.
   - Result: Not tested
   - Notes / steps to reproduce: ____________________
 
 - [ ] **U111 — Browse library categories**
+  - Steps: Open Library and expand each available category, including bathroom, bedroom, living, kitchen, office, doors/windows and structure. Read the category and item names shown in the placement list.
   - Expected: Source categories use readable names without numeric filename prefixes. Bathroom, bedroom, living, kitchen, office, electrical, HVAC/plumbing, doors/windows, structure, circulation, site and commercial equipment are easy to distinguish.
   - Result: Not tested
   - Notes / steps to reproduce: ____________________
@@ -776,6 +853,7 @@ drawing; switching modes does not change existing geometry.
   - Notes / steps to reproduce: ____________________
 
 - [ ] **U114 — Place several copies of one symbol**
+  - Steps: Choose a furniture item in Library and place it twice on the plan. Select and move one instance, then select the other.
   - Expected: Each instance can be selected independently.
   - Result: Not tested
   - Notes / steps to reproduce: ____________________
@@ -804,6 +882,7 @@ drawing; switching modes does not change existing geometry.
   - Notes / steps to reproduce: ____________________
 
 - [ ] **U118 — Move a symbol after placing it**
+  - Steps: Place a furniture symbol, select it, and drag from inside its selection frame rather than a resize handle. Release it at a new position.
   - Expected: It moves without changing size or rotation.
   - Result: Not tested
   - Notes / steps to reproduce: ____________________
@@ -815,31 +894,37 @@ drawing; switching modes does not change existing geometry.
   - Notes / steps to reproduce: ____________________
 
 - [ ] **U120 — Duplicate a resized and rotated symbol**
+  - Steps: Place a symbol, resize it with a corner handle and rotate it with its rotation handle. Copy and paste it, then select and edit the duplicate.
   - Expected: The duplicate retains those settings and is independently editable.
   - Result: Not tested
   - Notes / steps to reproduce: ____________________
 
 - [ ] **U121 — Delete and undo deletion of a symbol**
+  - Steps: Place two symbols, select one and press Delete, then press Ctrl+Z. Inspect which instance is restored and which remains in place.
   - Expected: The correct instance disappears and is restored.
   - Result: Not tested
   - Notes / steps to reproduce: ____________________
 
 - [ ] **U122 — Place symbols on different floors or layers**
+  - Steps: Select one floor and layer in Layers, place a symbol, then change the destination and place another. Toggle each layer's eye control to inspect visibility.
   - Expected: They follow the intended organization and visibility settings.
   - Result: Not tested
   - Notes / steps to reproduce: ____________________
 
 - [ ] **U123 — Save and reopen a furnished plan**
+  - Steps: Place and resize a detailed SVG symbol, rotate it, and save the project. Close and reopen it, then inspect the symbol in the plan and Library.
   - Expected: Symbol type, detailed artwork, placement, size, rotation and visibility survive. Reopened SVG symbols do not degrade to compatibility rectangles.
   - Result: Not tested
   - Notes / steps to reproduce: ____________________
 
 - [ ] **U124 — Print or export a furnished plan**
+  - Steps: Place a three-seat sofa, then export a sheet PDF, draft SVG and PNG image using the current output actions. Open each file and inspect the sofa artwork and sheet scale where applicable.
   - Expected: PDF, SVG and image exports retain the detailed component artwork and correct physical scale. Compare the three-seat sofa cushions and arms with the canvas preview.
   - Result: Not tested
   - Notes / steps to reproduce: ____________________
 
 - [ ] **U125 — Create or edit a reusable library item**
+  - Steps: Open Library and inspect its item controls, then press Ctrl+K and search for a command to create or edit a reusable library item. If no such action is offered, record Blocked.
   - Expected: The revised item is available for future placement without unexpectedly changing unrelated instances.
   - Result: Not tested
   - Notes / steps to reproduce: ____________________
@@ -848,16 +933,19 @@ drawing; switching modes does not change existing geometry.
 ## Text, labels and dimensions
 
 - [ ] **U126 — Add a room label**
+  - Steps: Create a room or closed Area, press Ctrl+K, run Add labels and symbols, choose a text label and click where it should appear.
   - Expected: The text appears where you place it.
   - Result: Not tested
   - Notes / steps to reproduce: ____________________
 
 - [ ] **U127 — Edit label text**
+  - Steps: Double-click a placed text label, replace its wording and apply the edit. Save, close and reopen the project to read it again.
   - Expected: The new wording remains after saving and reopening.
   - Result: Not tested
   - Notes / steps to reproduce: ____________________
 
 - [ ] **U128 — Change text size, color and style**
+  - Steps: Select a placed label, open its Properties or drawing-appearance controls, change size, color and style, then save and inspect sheet output.
   - Expected: The selected label updates and output matches.
   - Result: Not tested
   - Notes / steps to reproduce: ____________________
@@ -877,6 +965,7 @@ drawing; switching modes does not change existing geometry.
   - Notes / steps to reproduce: ____________________
 
 - [ ] **U131 — Add a dimension to an edge**
+  - Steps: Select a closed boundary, press Ctrl+K, run Add length, chain, angle or area dimension, choose an edge and place its length label.
   - Expected: It shows the correct measured value and units.
   - Result: Not tested
   - Notes / steps to reproduce: ____________________
@@ -900,11 +989,13 @@ drawing; switching modes does not change existing geometry.
   - Notes / steps to reproduce: ____________________
 
 - [ ] **U135 — Edit geometry that has dimensions**
+  - Steps: Add a dimension to a boundary edge, then edit that edge with Change length or Edit boundary geometry. Inspect the label and value before and after applying.
   - Expected: Associated dimensions update rather than showing stale values.
   - Result: Not tested
   - Notes / steps to reproduce: ____________________
 
 - [ ] **U136 — Delete and undo a label or dimension**
+  - Steps: Select a text label and press Delete, then Ctrl+Z to restore it. Repeat with an edge dimension, leaving other annotations in place.
   - Expected: Only the intended annotation is removed and restored.
   - Result: Not tested
   - Notes / steps to reproduce: ____________________
@@ -913,21 +1004,25 @@ drawing; switching modes does not change existing geometry.
 ## Reference plans and tracing
 
 - [ ] **U137 — Import a raster plan or photo**
+  - Steps: Open More > Reference image, choose a PNG or JPEG file, and place it on the plan. Select the reference and move it clear of the drawing area.
   - Expected: The image appears and can be positioned without blocking drawing.
   - Result: Not tested
   - Notes / steps to reproduce: ____________________
 
 - [ ] **U138 — Import a selected page from a PDF**
+  - Steps: Open More > Reference image, select a multi-page PDF, choose the page requested for the drawing, and inspect the placed image at a readable zoom.
   - Expected: The intended page appears with legible detail.
   - Result: Not tested
   - Notes / steps to reproduce: ____________________
 
 - [ ] **U139 — Calibrate a reference against a known length**
+  - Steps: Select an imported reference, press Ctrl+K, choose Calibrate selected reference image, mark both ends of a known distance and enter its length. Check a second known distance on the plan.
   - Expected: A second known measurement agrees with the chosen scale.
   - Result: Not tested
   - Notes / steps to reproduce: ____________________
 
 - [ ] **U140 — Trace a room over the reference**
+  - Steps: Calibrate and select the reference, run Trace selected reference from Ctrl+K, and draw a closed Area or Wall loop over one room. Toggle the reference visibility to inspect the saved geometry separately.
   - Expected: New measured geometry remains separate from the image.
   - Result: Not tested
   - Notes / steps to reproduce: ____________________
@@ -946,21 +1041,25 @@ drawing; switching modes does not change existing geometry.
   - Notes / steps to reproduce: ____________________
 
 - [ ] **U143 — Adjust reference intensity**
+  - Steps: Select the imported image, change Intensity in its Reference image properties and click Apply reference. Compare the drawing against the image before and after the change.
   - Expected: The drawing remains readable over the image.
   - Result: Not tested
   - Notes / steps to reproduce: ____________________
 
 - [ ] **U144 — Hide and show a reference**
+  - Steps: Select the reference image, clear Visible and click Apply reference, then check Visible and apply again. Inspect the tracing while the image is hidden and restored.
   - Expected: The tracing remains visible and unchanged.
   - Result: Not tested
   - Notes / steps to reproduce: ____________________
 
 - [ ] **U145 — Move a reference**
+  - Steps: Select the reference image and drag it to another position, or edit X/Y in Reference image properties and click Apply reference. Inspect the drawing objects underneath it.
   - Expected: Only the selected background moves.
   - Result: Not tested
   - Notes / steps to reproduce: ____________________
 
 - [ ] **U146 — Save and reopen a project containing references**
+  - Steps: Import a reference image, calibrate it, trace one edge and save. Reopen the project and inspect the image and traced geometry with the original source file unavailable.
   - Expected: Images remain available without needing the original external file path.
   - Result: Not tested
   - Notes / steps to reproduce: ____________________
@@ -981,21 +1080,25 @@ drawing; switching modes does not change existing geometry.
   - Notes / steps to reproduce: ____________________
 
 - [ ] **U149 — Fit the drawing to the canvas**
+  - Steps: Zoom away from a drawing until it is partly off-screen, press Ctrl+K and run Fit view. Inspect whether the relevant geometry is visible at a useful scale.
   - Expected: All relevant geometry becomes visible at a useful scale.
   - Result: Not tested
   - Notes / steps to reproduce: ____________________
 
 - [ ] **U150 — Show and hide the overview map**
+  - Steps: Press Ctrl+K and run Toggle overview map, inspect the canvas corner, then run it again to hide the map.
   - Expected: There is an obvious visible change.
   - Result: Not tested
   - Notes / steps to reproduce: ____________________
 
 - [ ] **U151 — Click or drag in the overview map**
+  - Steps: Show the overview map and draw several objects across the canvas. Click a distant region in the map, then drag its viewport rectangle to another region.
   - Expected: The main view moves to the corresponding drawing region.
   - Result: Not tested
   - Notes / steps to reproduce: ____________________
 
 - [ ] **U152 — Use keyboard focus to reach commands and properties**
+  - Steps: Use Tab and Shift+Tab to move from the canvas into the command search and selected-object controls. Type in a focused field, then press Escape and inspect which control has focus.
   - Expected: Focus is visible and typing affects the intended field.
   - Result: Not tested
   - Notes / steps to reproduce: ____________________
@@ -1016,6 +1119,7 @@ drawing; switching modes does not change existing geometry.
   - Notes / steps to reproduce: ____________________
 
 - [ ] **U155 — Use the app at 150% or 200% Windows display scaling**
+  - Steps: In Windows Settings > System > Display, change Scale to 150%, then 200%, return to Vertex and use the drawing, left panel and command search at each setting.
   - Expected: Controls and text remain legible and usable.
   - Result: Not tested
   - Notes / steps to reproduce: ____________________
@@ -1040,6 +1144,7 @@ drawing; switching modes does not change existing geometry.
   - Notes / steps to reproduce: ____________________
 
 - [ ] **U158 — Join two walls at a corner**
+  - Steps: In Architectural workspace, draw two walls that meet at an endpoint, Ctrl-select them and run Join selected walls from Ctrl+K. Inspect the fused 3D view and source walls.
   - Expected: The corner has no unintended visible gap or overlap.
   - Result: Not tested
   - Notes / steps to reproduce: ____________________
@@ -1070,6 +1175,7 @@ drawing; switching modes does not change existing geometry.
   - Notes / steps to reproduce: ____________________
 
 - [ ] **U162 — Change a door's width and height**
+  - Steps: Choose Door in Library, set its width and height, and place it on a wall. Double-click the opening, change both dimensions, and inspect it in plan and 3D.
   - Canvas check: Select a door in the plan and drag either jamb handle. The opposite jamb stays fixed, the wall cut and circular swing update together, and the width/height readout follows the edit. Undo and Redo restore it. Use quick properties to change height.
   - Linked dimension check: In an Architectural plan, right-click the door and add a view dimension. Drag a jamb again. The dimension line, witnesses and value update with the proposed width before release. Cancel restores the previous value; accepting, Undo/Redo and save/reopen retain the corresponding value. Repeat in Metric and a rotated saved plan.
   - Plan check: Repeat in shifted, rotated and reflected horizontal plans. Crop around both jambs, then crop one out; narrow the depth until it cuts the opening. Both visible jambs offer handles when the full opening survives the depth limit. Partially clipped openings offer quick properties instead. Roll the wheel out and back during a jamb drag, then release: that cancelled drag must not change the door. Start a fresh drag and confirm one Undo restores it.
@@ -1080,6 +1186,7 @@ drawing; switching modes does not change existing geometry.
   - Notes / steps to reproduce: ____________________
 
 - [ ] **U163 — Change door swing or handing**
+  - Steps: Double-click a hosted door and inspect its operation, hinge and side controls in the opening properties. Change the handing or swing, apply, and inspect the plan and 3D views.
   - Expected: Plan graphics and the hosted door agree.
   - Result: Not tested
   - Notes / steps to reproduce: ____________________
@@ -1104,6 +1211,7 @@ drawing; switching modes does not change existing geometry.
   - Notes / steps to reproduce: ____________________
 
 - [ ] **U166 — Change window size and sill height**
+  - Steps: Choose Window in Library, set its width, height and sill, and place it on a wall. Double-click the window, change those values, and inspect plan, elevation and 3D.
   - Properties check: Double-click a window. Change Width, Height, Position on wall and Sill height individually using feet/inches or metric expressions. Position is measured from the wall's start to the first jamb; sill is above the wall base. Repeat with a door at zero sill. The frame and wall cut follow each accepted value; values that overlap another opening or extend outside the wall must explain the conflict and preserve the drawing.
   - Canvas check: Select a window in the plan and drag either jamb handle. Its width changes along the wall while height and sill remain. Dragging into another opening or beyond the host wall is rejected without changing the saved geometry.
   - Linked dimension check: Add a view dimension to the window in an Architectural plan, then drag each jamb. Its witnesses and value follow the proposal together with the frame and wall cut. Cancel restores the original value; one accepted drag is one undoable edit. Output during a pending drag uses committed geometry and dimensions.
@@ -1115,6 +1223,7 @@ drawing; switching modes does not change existing geometry.
   - Notes / steps to reproduce: ____________________
 
 - [ ] **U167 — Edit a door or window frame, panel or glazing**
+  - Steps: Select a hosted door or window, open its Opening assembly controls, and change frame width/depth plus panel or glazing depth. Apply and inspect the visible opening.
   - Expected: The visible assembly and properties update consistently.
   - Result: Not tested
   - Notes / steps to reproduce: ____________________
@@ -1130,6 +1239,7 @@ drawing; switching modes does not change existing geometry.
   - Notes / steps to reproduce: ____________________
 
 - [ ] **U169 — Delete a hosted opening and undo**
+  - Steps: Place a door or window in a wall, select the opening and press Delete. Press Ctrl+Z and inspect the restored wall cut and hosted object.
   - Expected: Wall and hosted geometry are restored consistently.
   - Result: Not tested
   - Notes / steps to reproduce: ____________________
@@ -1144,16 +1254,19 @@ drawing; switching modes does not change existing geometry.
   - Notes / steps to reproduce: ____________________
 
 - [ ] **U171 — Create a ceiling**
+  - Steps: Draw a closed boundary and select it, then press Ctrl+K and run Create ceiling from selected boundary. Enter the ceiling dimensions and level in its properties.
   - Expected: It appears at the intended level and has editable properties.
   - Result: Not tested
   - Notes / steps to reproduce: ____________________
 
 - [ ] **U172 — Create a foundation**
+  - Steps: Draw and select a closed boundary, press Ctrl+K, and run Create foundation from selected boundary. Enter its shape, dimensions and level in the dialog.
   - Expected: Its shape, dimensions and level match the entered values.
   - Result: Not tested
   - Notes / steps to reproduce: ____________________
 
 - [ ] **U173 — Create and resize a column**
+  - Steps: In Architectural workspace, press Ctrl+K and run Create column, beam, stair or roof. Choose Column, enter a section and height, place it, then resize it with a plan handle.
   - Canvas move check: Select the column in a plan, then drag from inside its selection boundary. The proposed column follows the pointer; Escape restores it. Accept a move, check its plan and 3D location, then Undo and Redo. Repeat in a shifted or rotated Architectural plan, including a crop. Leaving the crop removes the preview from that view; it must not leave a ghost at its old position.
   - Side-handle check: Select a rectangular column, rotate it, then drag its width and depth handles separately. The opposite side stays fixed and the on-canvas dimensions agree with Properties. Repeat in a cropped saved plan and Site Plan. Release while the preview is still being prepared; only that final proposal may be accepted. Cancel with Escape, switch views before it finishes, then Undo and Redo a valid edit. Height and level stay unchanged, and the committed body agrees with the preview.
   - Expected: Plan and 3D reflect the selected section and height.
@@ -1167,13 +1280,16 @@ drawing; switching modes does not change existing geometry.
   - Notes / steps to reproduce: ____________________
 
 - [ ] **U175 — Create a flat roof**
+  - Steps: In Architectural workspace, run Create column, beam, stair or roof from Ctrl+K and choose Roof. Set the roof form to flat or its rise to zero, enter the footprint and level, and apply.
   - Canvas move check: Move an independent roof by dragging its selected plan boundary. The preview and final location agree in ordinary and rotated plans. Cancel and Undo restore the original; save/reopen retains the accepted location.
   - Side-handle check: Drag the roof's width and depth handles in a saved plan with a crop. Check that its physical body, roof openings and linked view dimensions update together, including portions entering or leaving the crop. The accepted edit agrees with the preview and keeps its elevation and thickness. Escape and Undo restore the original roof and its dependent geometry.
+  - Hosted component check: In Reusable assemblies, add a geometric instance and assign its placement host to this roof. Move and rotate the roof, then edit its base position and orientation in Properties. The component should follow each edit. Resize from a side and corner: the component keeps its physical size and local distance from the roof base while following any base shift. Cancel once, then Undo/Redo, save and reopen an accepted edit. If the editor provides no way to assign a roof host, record that missing workflow as a failure.
   - Expected: The roof footprint, elevation and material are editable.
   - Result: Not tested
   - Notes / steps to reproduce: ____________________
 
 - [ ] **U176 — Create a shed roof**
+  - Steps: Run Create column, beam, stair or roof, choose Roof and select the shed form. Enter its footprint, span and rise, place it, then drag one visible roof corner and inspect the preview.
   - Corner resize: Select the roof and drag a round corner grip. Change width and depth separately during the same drag. Check that the opposite corner stays fixed and the live Plan area reflects the footprint. Repeat after rotating the roof, in a shifted or reflected saved plan, and in Site view. Cancel once with Escape; accept another edit, then Undo and Redo. Save and reopen. Try crossing an opposite edge and inspect an existing roof opening after a valid resize.
   - Dimension magnets: Watch W and D while dragging a corner with Snap on. Both should use practical increments along the roof's own axes, even after rotation. Zoom in for finer choices, then hold Shift for a free position. Change Shift just before releasing at the same mouse position; the final edit must use that final precision choice. Repeat in Imperial and Metric. Return exactly to the starting grip and release; no history entry should be added.
   - Expected: The slope runs in the chosen direction.
@@ -1182,6 +1298,7 @@ drawing; switching modes does not change existing geometry.
   - Notes / steps to reproduce: ____________________
 
 - [ ] **U177 — Create a gable roof**
+  - Steps: Run Create column, beam, stair or roof, choose Roof and select the gable form. Enter its footprint and ridge dimensions, place it, then inspect both slopes in 3D.
   - Corner resize: Select the roof, rotate it, then drag each visible round corner grip. Repeat in a cropped or reflected saved plan and Site view. Check the fixed opposite corner, Plan area and ridge orientation. Cancel one edit; accept another, Undo/Redo, then save and reopen. Inspect roof openings and any joined roof afterward.
   - Expected: Both slopes and ridge match the intended form.
   - Resize expected: The roof stays gabled and retains rise, overhang, thickness, levels and valid openings. The preview matches release; an invalid join or a crossed opposite edge leaves the original unchanged. Hidden corners have no grip.
@@ -1189,6 +1306,7 @@ drawing; switching modes does not change existing geometry.
   - Notes / steps to reproduce: ____________________
 
 - [ ] **U178 — Create a hip roof**
+  - Steps: Run Create column, beam, stair or roof, choose Roof and select the hip form. Enter its footprint and rise, place it, and inspect all slopes in 3D.
   - Corner resize: Drag a visible round corner to change the footprint. Repeat after rotating the roof and in a cropped saved plan or Site view. Check the fixed opposite corner and Plan area. Try an invalid resize that puts an opening outside the roof, then cancel, accept, Undo/Redo and save/reopen a valid edit.
   - Expected: The roof form and slopes match the intended footprint.
   - Resize expected: The roof keeps its hip form, rise, overhang, thickness and levels. Valid openings follow the admitted geometry. Invalid or cancelled proposals change nothing; one accepted drag is one Undo step.
@@ -1202,6 +1320,7 @@ drawing; switching modes does not change existing geometry.
   - Notes / steps to reproduce: ____________________
 
 - [ ] **U180 — Create stairs between levels**
+  - Steps: Open More > Levels and define two connected levels, then run Create column, beam, stair or roof from Ctrl+K and choose Stair. Set its run, width and level connection, and place it between the levels.
   - Canvas move check: Select a stair and drag it in a plan. A valid proposal follows the pointer and accepts as one move; Cancel restores it. Repeat in a saved plan. Hosted rails must follow their supported host geometry. A move that breaks a required landing or support is refused and retains the original stair and railing.
   - Side-handle check: Create U-shaped and L-shaped stairs with connecting landings. Drag each plan side handle separately. Check that the flight runs and widths, landing, return gap and hosted rails follow the preview while floor connections, total rise and riser counts stay fixed. Inspect the individual flight dimensions after an unequal L-shaped resize. Repeat with a straight stair and a return stair with several flights; Cancel and Undo restore the full layout. A change that breaks landing contact or railing support must explain the conflict and retain the original.
   - Flight dimensions check: Enter a different Going and Width for the second flight using exact unit expressions. Preview and Cancel once, then Apply. Clear only its Going to use the default while retaining its Width; then clear its Width too. Reorder the flights and verify their measurements and entered expressions follow the intended flight. Duplicate, rotate, save and reopen; inspect the plan, 3D, railings and schedule quantities. Undo and Redo each accepted edit.
@@ -1210,11 +1329,13 @@ drawing; switching modes does not change existing geometry.
   - Notes / steps to reproduce: ____________________
 
 - [ ] **U181 — Edit stair width, rise or run**
+  - Steps: Select a stair and open its object properties. Change its flight width, going or rise, review the preview, and apply the edit.
   - Expected: The stair updates consistently in plan and 3D.
   - Result: Not tested
   - Notes / steps to reproduce: ____________________
 
 - [ ] **U182 — Add a landing and railing**
+  - Steps: Create or edit a stair, enable Add top landing and enter its depth and thickness. Use Create column, beam, stair or roof to choose a stair-flight or landing railing and attach it to the stair.
   - Canvas move check: Select an independent railing and drag it in a plan, then cancel once and accept a valid move. Its geometry follows the proposal; Undo/Redo and save/reopen retain the correct location. A hosted stair railing follows its host's admitted placement and does not silently become an independent rail.
   - Expected: They appear in the intended locations and can be edited.
   - Result: Not tested
@@ -1228,39 +1349,47 @@ drawing; switching modes does not change existing geometry.
   - Notes / steps to reproduce: ____________________
 
 - [ ] **U184 — Align geometry between floors**
+  - Steps: Open More > Levels, choose the floors to compare and inspect their level elevations or floor-to-floor link. Select the same reference point on each floor; if no cross-floor alignment action is offered, record Blocked.
   - Expected: The same reference position aligns across the chosen floors.
   - Result: Not tested
   - Notes / steps to reproduce: ____________________
 
 - [ ] **U185 — Add and edit reference grids**
+  - Steps: Open More > Reference grids, add a grid to the active building, floor and layer, and enter its spacing and labels. Reopen the grid controls to change one value.
   - Expected: Grid lines and labels appear in relevant views.
   - Result: Not tested
   - Notes / steps to reproduce: ____________________
 
 - [ ] **U186 — Create a basic site or terrain surface**
+  - Steps: Draw and select a closed boundary, then press Ctrl+K and run Create terrain surface from selected boundary. Enter elevations for the surface and inspect its plan preview.
   - Expected: Entered elevations produce the intended surface.
   - Result: Not tested
   - Notes / steps to reproduce: ____________________
 
 - [ ] **U187 — Create a reusable building assembly**
+  - Steps: Open More > Assemblies, add an assembly type with a usable profile and dimensions, save it, then place an instance from the assembly catalog.
   - Expected: It can be placed again with its intended type properties.
   - Result: Not tested
   - Notes / steps to reproduce: ____________________
 
 - [ ] **U188 — Edit one assembly instance**
+  - Steps: Place an assembly twice, select one instance and open its instance properties. Change one dimension or material override, apply, and inspect the other instance.
   - Expected: Instance changes do not unexpectedly change every copy.
   - Result: Not tested
   - Notes / steps to reproduce: ____________________
 
 - [ ] **U189 — Duplicate, rotate and delete a building object**
+  - Steps: Place a column, roof or stair, copy and paste it, rotate the copy with its rotation handle, then delete it and press Ctrl+Z.
   - Rotation steps: In Measurement, select a column, roof, stair, independent railing, beam with a visible plan axis, or placed assembly. Drag its rotation handle to 45, 90 and 180 degrees, releasing between turns. Hold Shift for an angle between the snapping points. Return to the starting angle, cancel another turn with Escape, then accept one rotation and Undo/Redo it. Repeat in a shifted, rotated or reflected horizontal Architectural plan and with a cropped view. Save and reopen.
   - Assembly profile check: Select a placed geometric assembly containing one or more profiles. Rotate it and resize it proportionally, checking its preview before release. Its profiles, dimensions, dependent labels and retained selection frame must match the accepted result. Release while its final preview is pending, then Undo and Redo. Return to the original size and angle without releasing in between; this must add no edit. Repeat in Site Plan: the grips must keep the assembly's saved orientation through successive edits, and the frame must enclose the whole assembly. Repeat from a recovery copy, then save and reopen.
+  - Roof component copy check: Assign a geometric assembly instance to a roof in Reusable assemblies. Copy the roof with an offset, then rotate the copy. Both roofs should retain their own editable components; moving the copy must leave the original in place. Add a component label or callout to a saved view before copying and inspect its copied target and position. Undo the copy, redo, save and reopen. Repeat a roof edit in a proposed design alternative and compare it with the preserved baseline.
   - Rotation check: The handle retains the object's saved orientation, the degree readout agrees with Properties, and the preview matches the accepted plan and 3D geometry. Width, depth, height, rise and level assignments stay unchanged. Hosted stair rails follow their stair. A connected configuration that cannot support the edit explains the conflict and leaves the original geometry intact. A vertical beam uses its physical transform controls rather than a plan-axis rotation grip.
   - Expected: The object and its relationships remain valid; undo restores it.
   - Result: Not tested
   - Notes / steps to reproduce: ____________________
 
 - [ ] **U190 — Create a room separately from an appraisal area**
+  - Steps: Draw physical walls and create a named room boundary from selected wall geometry. Draw a separate closed Area inside or beside it and classify the Area from Library > Area classes.
   - Expected: Both can represent different boundaries without forcing identical geometry.
   - Result: Not tested
   - Notes / steps to reproduce: ____________________
@@ -1287,6 +1416,7 @@ drawing; switching modes does not change existing geometry.
   - Notes / steps to reproduce: ____________________
 
 - [ ] **U193 — Switch between two remodeling alternatives**
+  - Steps: Open More > Design phases and alternatives, create two named alternatives, and select each in turn. Draw a proposed wall in one alternative and inspect the other.
   - Unchanged-room check: Define a clear room from physical walls, create an alternative with no wall changes, then switch between it and the baseline. The room's area remains available without redefining the room. Change or demolish a supporting wall: the previous area must not be presented as current until its room consequences are reviewed.
   - Expected: Only the intended alternative's changes appear.
   - Editing check: With reviewed proposed rooms displayed, edit or move a supporting wall and complete its room review. The room list includes the active design's rooms, not preserved inactive baseline rooms or another design's rooms. New room definitions stay in the displayed design. Switch to baseline and confirm its original room facts and outlines remain intact.
@@ -1301,6 +1431,7 @@ drawing; switching modes does not change existing geometry.
   - Notes / steps to reproduce: ____________________
 
 - [ ] **U194 — Compare alternatives**
+  - Steps: Save a baseline revision, make a different change in each alternative, and open Design phases and alternatives to compare the displayed drawings. Switch between options without changing the baseline.
   - Expected: Differences are identifiable without losing the shared baseline.
   - Result: Not tested
   - Notes / steps to reproduce: ____________________
@@ -1349,16 +1480,19 @@ drawing; switching modes does not change existing geometry.
   - Notes / steps to reproduce: ____________________
 
 - [ ] **U200 — Switch between plan, elevation and section**
+  - Steps: Open Saved plans, elevations and sections from command search, select a plan, elevation and section in turn, and inspect the same building objects in each view.
   - Expected: Views show the same project from the intended direction.
   - Result: Not tested
   - Notes / steps to reproduce: ____________________
 
 - [ ] **U201 — Move a section or change its cut depth**
+  - Steps: In Saved plans, elevations and sections, select a saved section, change its origin or cut depth, and apply. Compare the section view before and after.
   - Expected: The visible cut changes as expected.
   - Result: Not tested
   - Notes / steps to reproduce: ____________________
 
 - [ ] **U202 — Change section line treatment and material hatching**
+  - Steps: Open Architectural view settings for a saved section and change its line treatment or material appearance. Apply and inspect the section and its sheet output.
   - Expected: The section remains legible and output matches.
   - Result: Not tested
   - Notes / steps to reproduce: ____________________
@@ -1371,6 +1505,7 @@ drawing; switching modes does not change existing geometry.
   - Notes / steps to reproduce: ____________________
 
 - [ ] **U204 — Use side-by-side plan and 3D views**
+  - Steps: Open a plan and a 3D view of the same project and inspect the available view controls for a side-by-side arrangement. If the app offers no split-view control, record Blocked.
   - Expected: Edits remain coordinated and both views remain usable.
   - Result: Not tested
   - Notes / steps to reproduce: ____________________
@@ -1379,6 +1514,7 @@ drawing; switching modes does not change existing geometry.
 ## Schedules and quantities
 
 - [ ] **U205 — Open a door and window schedule**
+  - Steps: Place a door and a window in separate walls, press Ctrl+K and run Open schedules, then select the door and window schedule.
   - Expected: Marks, counts and dimensions match the placed objects.
   - Result: Not tested
   - Notes / steps to reproduce: ____________________
@@ -1390,6 +1526,7 @@ drawing; switching modes does not change existing geometry.
   - Notes / steps to reproduce: ____________________
 
 - [ ] **U207 — Open material quantities**
+  - Steps: Create a wall, a hosted opening and a floor or slab, then open Schedules from command search. Choose material quantities and expand a row to inspect its source.
   - Expected: Gross values, deductions and net values are understandable.
   - Result: Not tested
   - Notes / steps to reproduce: ____________________
@@ -1401,6 +1538,7 @@ drawing; switching modes does not change existing geometry.
   - Notes / steps to reproduce: ____________________
 
 - [ ] **U209 — Try editing a calculated schedule value**
+  - Steps: Open a schedule and double-click one calculated count, dimension or quantity cell. Try typing a new value, then open the listed source object to inspect its editable properties.
   - Expected: It is read-only or directs you to the source input.
   - Result: Not tested
   - Notes / steps to reproduce: ____________________
@@ -1415,46 +1553,55 @@ drawing; switching modes does not change existing geometry.
 ## Sheets, printing and export
 
 - [ ] **U211 — Create a second drawing sheet**
+  - Steps: Open Sheet settings, click Add sheet, and enter a distinct title or number. Select the new sheet and confirm it appears in the sheet list.
   - Expected: It belongs to the same project and can show different views.
   - Result: Not tested
   - Notes / steps to reproduce: ____________________
 
 - [ ] **U212 — Edit sheet title, number and project information**
+  - Steps: Open Sheet settings, select a sheet, change its sheet number, project, title, author or issue date, and click Apply sheet metadata. Inspect the title block in the sheet output.
   - Expected: Title-block values appear correctly.
   - Result: Not tested
   - Notes / steps to reproduce: ____________________
 
 - [ ] **U213 — Choose Letter, Legal, Tabloid, A4, A3 or an architectural page size**
+  - Steps: Open Edit drawing sheet settings, select each available page size in turn, and inspect the page dimensions and output preview. Record any requested size that is not offered.
   - Expected: Preview and export use the selected dimensions.
   - Result: Not tested
   - Notes / steps to reproduce: ____________________
 
 - [ ] **U214 — Place a plan view on a sheet**
+  - Steps: Open Edit sheet layout, choose a sheet and horizontal plan in the view list, then add it as a viewport. Set its position and size and inspect the sheet preview.
   - Expected: It appears within the intended viewport.
   - Result: Not tested
   - Notes / steps to reproduce: ____________________
 
 - [ ] **U215 — Place an elevation, section or 3D view on a sheet**
+  - Steps: Open Edit sheet layout, choose an elevation, section or 3D view from the view list, and add it to a sheet as a viewport. Inspect its content in the preview.
   - Expected: The chosen view appears with the correct content.
   - Result: Not tested
   - Notes / steps to reproduce: ____________________
 
 - [ ] **U216 — Set a viewport's print scale**
+  - Steps: In Edit sheet layout, select a plan viewport and enter a print scale. Zoom the canvas without changing the sheet layout, then inspect the viewport scale again.
   - Expected: Its scale changes independently of canvas zoom.
   - Result: Not tested
   - Notes / steps to reproduce: ____________________
 
 - [ ] **U217 — Place a schedule on a sheet**
+  - Steps: Open Edit sheet layout, choose a registered schedule for the selected sheet and add it. Adjust its placement and inspect row text and columns in the preview.
   - Expected: The intended table fits and remains readable.
   - Result: Not tested
   - Notes / steps to reproduce: ____________________
 
 - [ ] **U218 — Add a revision entry**
+  - Steps: Open Sheet settings, select a sheet and use Revisions > Add. Enter a date or issue identifier and description, then inspect the revision list.
   - Expected: Its date and description appear on the intended sheet.
   - Result: Not tested
   - Notes / steps to reproduce: ____________________
 
 - [ ] **U219 — Add a callout to another sheet/view**
+  - Steps: Open Sheet settings, select a sheet and use Callouts > Add. Enter a label, choose another sheet and viewport, then enter the callout position.
   - Expected: It points to the correct destination.
   - Result: Not tested
   - Notes / steps to reproduce: ____________________
@@ -1472,11 +1619,13 @@ drawing; switching modes does not change existing geometry.
   - Notes / steps to reproduce: ____________________
 
 - [ ] **U222 — Export an image**
+  - Steps: Frame the intended drawing on the canvas and run Export image from command search. Choose a PNG destination and inspect the saved image dimensions and content.
   - Expected: The complete intended drawing appears at the chosen size.
   - Result: Not tested
   - Notes / steps to reproduce: ____________________
 
 - [ ] **U223 — Export SVG**
+  - Steps: Open a sheet or drawing with text and dimensions, run Export draft SVG from the output actions, and open the file in an SVG viewer.
   - Expected: The drawing opens with the expected lines, text and styles.
   - Result: Not tested
   - Notes / steps to reproduce: ____________________
@@ -1488,16 +1637,19 @@ drawing; switching modes does not change existing geometry.
   - Notes / steps to reproduce: ____________________
 
 - [ ] **U225 — Export multiple sheets**
+  - Steps: Add at least two sheets, open the drawing-set output action, and export the set to PDF. Open the PDF and inspect page count and order.
   - Expected: Every intended page is included in the correct order.
   - Result: Not tested
   - Notes / steps to reproduce: ____________________
 
 - [ ] **U226 — Zoom the canvas and export again**
+  - Steps: Set a viewport's print scale in Edit sheet layout and export the sheet. Zoom the drawing canvas, export it again, and compare the page size and viewport scale.
   - Expected: Print scale and page layout remain unchanged.
   - Result: Not tested
   - Notes / steps to reproduce: ____________________
 
 - [ ] **U227 — Remove or invalidate a required reference before output**
+  - Steps: Import a reference image and use it to position a drawing view, then remove or hide the image in a project copy. Open sheet preview and output controls and inspect any missing-reference warning before exporting.
   - Expected: The app explains the issue instead of silently producing misleading final output.
   - Result: Not tested
   - Notes / steps to reproduce: ____________________
@@ -1506,51 +1658,61 @@ drawing; switching modes does not change existing geometry.
 ## Saving, revisions and recovery
 
 - [ ] **U228 — Save, close and reopen your drawing**
+  - Steps: Create a drawing with a wall, label, symbol and dimension, save it, close the project and reopen it. Inspect each item and its appearance.
   - Expected: Geometry, labels, symbols, colors and measurements remain intact.
   - Result: Not tested
   - Notes / steps to reproduce: ____________________
 
 - [ ] **U229 — Use Save As to create a separate copy**
+  - Steps: Save a project, make a visible edit and use Save As to create a second file. Reopen both files and compare the edit and original.
   - Expected: The new file opens correctly and the original is unchanged.
   - Result: Not tested
   - Notes / steps to reproduce: ____________________
 
 - [ ] **U230 — Save to a long folder path**
+  - Steps: Use Save As to save a project inside several nested folders with a long name, close it and reopen it from that path. Keep the prior file available for comparison.
   - Expected: The project saves and reopens without losing the previous file on failure.
   - Result: Not tested
   - Notes / steps to reproduce: ____________________
 
 - [ ] **U231 — Create a named revision**
+  - Steps: Open Named revisions from Tools or command search, create a named revision of the current drawing, make a change and create a second revision.
   - Expected: You can identify and return to the intended saved state.
   - Result: Not tested
   - Notes / steps to reproduce: ____________________
 
 - [ ] **U232 — Compare two revisions**
+  - Steps: Open Named revisions, choose the two saved states in From and To, and compare them. Select a floor and inspect its overlay or side-by-side comparison.
   - Expected: Changes to geometry and relevant properties are visible.
   - Result: Not tested
   - Notes / steps to reproduce: ____________________
 
 - [ ] **U233 — Recover an autosaved copy after an interrupted session**
+  - Steps: After a real interrupted session, reopen Vertex and open its recovery choices. Select the identified autosaved copy, inspect its date and contents, and save it under a new name.
   - Expected: You can identify and open the recovered work without overwriting the original unknowingly.
   - Result: Not tested
   - Notes / steps to reproduce: ____________________
 
 - [ ] **U234 — Open the same project twice**
+  - Steps: Open a saved project in Vertex, start a second Vertex process and open the same file there. Inspect the notice and whether the second copy can edit or save.
   - Expected: The app clearly offers safe read-only or independent-copy behavior.
   - Result: Not tested
   - Notes / steps to reproduce: ____________________
 
 - [ ] **U235 — Create a reusable project template**
+  - Steps: Press Ctrl+K and search for a project-template creation action, then inspect the New project choices. If no reusable template action is offered, record Blocked.
   - Expected: A new project starts with the intended settings and resources.
   - Result: Not tested
   - Notes / steps to reproduce: ____________________
 
 - [ ] **U236 — Package a project and open it from another folder or PC**
+  - Steps: Press Ctrl+K and search for a project-packaging action, then inspect the project resource controls for a portable copy. If the app offers no package workflow, record Blocked.
   - Expected: Included references, symbols and settings remain available.
   - Result: Not tested
   - Notes / steps to reproduce: ____________________
 
 - [ ] **U237 — Try opening a damaged or unsupported file copy**
+  - Steps: Make a separate copy of a project file and use a text editor to damage only that copy. Use Ctrl+O to open it, then verify the original project remains available.
   - Expected: The app explains the problem without destroying or replacing your current work.
   - Result: Not tested
   - Notes / steps to reproduce: ____________________
@@ -1559,16 +1721,19 @@ drawing; switching modes does not change existing geometry.
 ## Import, exchange and connected devices — when available
 
 - [ ] **U238 — Import an Apex v5 project copy**
+  - Steps: Acquire an original Apex v5 file copy, its edition/modules and the matching Apex application or caller version. If any prerequisite or an explicit Apex v5 import route is unavailable, record Blocked; do not substitute another file type.
   - Expected: Supported geometry, curves, labels, symbols, classifications and images are retained; losses are reported.
   - Result: Not tested
   - Notes / steps to reproduce: ____________________
 
 - [ ] **U239 — Import an Apex v7 project copy**
+  - Steps: Acquire an original Apex v7 file copy, its edition/modules and the matching Apex application or caller version. If any prerequisite or an explicit Apex v7 import route is unavailable, record Blocked; do not substitute another file type.
   - Expected: The drawing is editable and compares correctly with the original output.
   - Result: Not tested
   - Notes / steps to reproduce: ____________________
 
 - [ ] **U240 — Export a supported legacy Apex version**
+  - Steps: Acquire the exact target Apex version, a known test project and the matching Apex application or caller. If no supported target and explicit export route are available, record Blocked; test only with a copy.
   - Expected: The target Apex application opens it and any omitted content is identified.
   - Result: Not tested
   - Notes / steps to reproduce: ____________________
@@ -1581,17 +1746,20 @@ drawing; switching modes does not change existing geometry.
   - Notes / steps to reproduce: ____________________
 
 - [ ] **U242 — Export DXF and open it in another viewer**
+  - Steps: Draw walls, labels and dimensions, press Ctrl+K and run Export DXF, then open the saved file in a separate DXF viewer. Check its units and visible geometry.
   - Expected: Supported geometry and annotations appear at the correct scale.
   - Result: Not tested
   - Notes / steps to reproduce: ____________________
 
 - [ ] **U243 — Import an IFC model**
+  - Steps: Acquire a known IFC model copy, press Ctrl+K and run Import IFC, then inspect its imported objects and retained source notes. Keep the original file unchanged.
   - Original-file check: Edit a supported imported object, save and reopen. Open **Tools > Imported sources**, select the IFC file and export its original. Compare it with the file you imported and inspect the retained import notes. Your later object edits should be absent from the recovered original. Cancel another export and confirm the destination stays unchanged.
   - Expected: Supported objects are editable or clearly identified as reference-only.
   - Result: Not tested
   - Notes / steps to reproduce: ____________________
 
 - [ ] **U244 — Export IFC and open it in another viewer**
+  - Steps: Create or import a small building model, press Ctrl+K and run Export IFC, then open the saved file in a separate IFC viewer and inspect units and object types.
   - Expected: The supported model content and units are correct.
   - Result: Not tested
   - Notes / steps to reproduce: ____________________
@@ -1603,6 +1771,7 @@ drawing; switching modes does not change existing geometry.
   - Notes / steps to reproduce: ____________________
 
 - [ ] **U246 — Send project information to a supported appraisal application**
+  - Steps: Acquire the named appraisal application, its exact version and a sample project with known fields. Search the current output actions for an explicit route to that application; if the consumer, route or sample is unavailable, record Blocked.
   - Expected: Chosen fields and sketch output arrive correctly and failures are understandable.
   - Result: Not tested
   - Notes / steps to reproduce: ____________________
@@ -1617,36 +1786,43 @@ drawing; switching modes does not change existing geometry.
   - Notes / steps to reproduce: ____________________
 
 - [ ] **U247 — Enter survey bearings and distances**
+  - Steps: Open More > Survey traverse, add several courses with their bearings and distances, and inspect the resulting traverse drawing.
   - Expected: The traverse follows the entered course sequence.
   - Result: Not tested
   - Notes / steps to reproduce: ____________________
 
 - [ ] **U248 — Close a survey traverse**
+  - Steps: In Survey traverse, enter a closed course sequence, then edit the final course to introduce a small closure error. Inspect the reported error before applying any proposed adjustment.
   - Expected: Closure error is shown and a bad traverse is not silently adjusted.
   - Result: Not tested
   - Notes / steps to reproduce: ____________________
 
 - [ ] **U249 — Calculate acreage**
+  - Steps: Complete a closed traverse with known dimensions, open its calculated area, and read the acreage value alongside the traverse area.
   - Expected: The value agrees with the closed survey area.
   - Result: Not tested
   - Notes / steps to reproduce: ____________________
 
 - [ ] **U250 — Export or print the survey**
+  - Steps: Complete a survey traverse with courses and labels, add its visible view to a sheet or use the current drawing output, then export a PDF and inspect its readability.
   - Expected: Courses, labels and acreage are readable.
   - Result: Not tested
   - Notes / steps to reproduce: ____________________
 
 - [ ] **U251 — Choose a coordinate reference system**
+  - Steps: Open More > Pro georeferencing, choose an available coordinate reference system and units, and inspect the selected system in the workflow.
   - Expected: The selected system and units are clear.
   - Result: Not tested
   - Notes / steps to reproduce: ____________________
 
 - [ ] **U252 — Add control points and align a drawing**
+  - Steps: Open Pro georeferencing for a copied drawing, add known control points and their coordinates, then review the proposed alignment and residual errors before applying.
   - Expected: The resulting position and any residual errors can be inspected.
   - Result: Not tested
   - Notes / steps to reproduce: ____________________
 
 - [ ] **U253 — Use georeferencing without an internet connection**
+  - Steps: With network access disabled, open Pro georeferencing and choose an installed coordinate resource for a copied drawing. If the required resource is absent, record Blocked and note its name.
   - Expected: Installed coordinate resources work; missing resources produce a clear message.
   - Result: Not tested
   - Notes / steps to reproduce: ____________________
@@ -1668,26 +1844,31 @@ drawing; switching modes does not change existing geometry.
   - Notes / steps to reproduce: ____________________
 
 - [ ] **U256 — Reject a suggested trace**
+  - Steps: Import and select a reference image, open More > Assistance, request a trace suggestion and reject it. Inspect the project history and canvas afterward.
   - Expected: The existing drawing remains unchanged.
   - Result: Not tested
   - Notes / steps to reproduce: ____________________
 
 - [ ] **U257 — Extract dimensions from a reference**
+  - Steps: Import and calibrate a reference image, open Assistance and request dimension suggestions. Review the proposed measurements without accepting them into the drawing.
   - Expected: Proposed measurements can be checked before acceptance.
   - Result: Not tested
   - Notes / steps to reproduce: ____________________
 
 - [ ] **U258 — Request assisted label placement**
+  - Steps: Select a room or area, open Assistance and request a label placement suggestion. Review the proposed position, then accept it once and undo it.
   - Expected: Suggested positions can be reviewed, accepted or rejected.
   - Result: Not tested
   - Notes / steps to reproduce: ____________________
 
 - [ ] **U259 — Try a supported plain-language drawing command**
+  - Steps: Open Assistance > Parse a command, enter `draw rectangle 12 x 10`, review the proposal and accept it. Undo the new drawing and try a label command.
   - Expected: The proposed action is understandable and changes can be undone.
   - Result: Not tested
   - Notes / steps to reproduce: ____________________
 
 - [ ] **U260 — Turn assistance off**
+  - Steps: Open Assistance and turn off optional suggestions. Draw, edit, save and export a small project using the regular tools.
   - Expected: Manual drawing, editing, saving and output still work normally.
   - Result: Not tested
   - Notes / steps to reproduce: ____________________
@@ -1696,26 +1877,31 @@ drawing; switching modes does not change existing geometry.
 ## Complete a real job
 
 - [ ] **U261 — Draw and furnish a small residential floor plan from start to finish**
+  - Steps: Create a project, draw and name a closed wall room, add a door, window and furniture, then save and reopen it. Add a plan viewport to a sheet and export or print that sheet.
   - Expected: You can measure, edit, label, calculate, save, reopen and print without getting stuck.
   - Result: Not tested
   - Notes / steps to reproduce: ____________________
 
 - [ ] **U262 — Prepare a residential remodeling option**
+  - Steps: Open Design phases and alternatives, create a proposed alternative, and change a wall or opening in it. Add the plan and a schedule to a sheet, then switch back to baseline and compare.
   - Expected: Existing/proposed work, views, schedules and sheets agree.
   - Result: Not tested
   - Notes / steps to reproduce: ____________________
 
 - [ ] **U263 — Prepare a small commercial layout with more than one floor**
+  - Steps: Add a building with at least two floors, draw and furnish a small layout on each, and add a stair between levels. Open schedules and place plan views on a sheet.
   - Expected: Organization, symbols, quantities and output remain consistent.
   - Result: Not tested
   - Notes / steps to reproduce: ____________________
 
 - [ ] **U264 — Repeat your normal job with networking disabled**
+  - Steps: Disconnect the computer from the network, open a local project, draw or edit a copy, save and reopen it, then print or export its output.
   - Expected: Drawing, editing, saving, reopening, printing and exporting remain usable without account prompts.
   - Result: Not tested
   - Notes / steps to reproduce: ____________________
 
 - [ ] **U265 — Open, edit and save a larger real project**
+  - Steps: Make a backup copy of a larger project you normally use, open the copy and make a small visible edit. Save, close and reopen it, noting any long operation or progress message.
   - Expected: The app remains responsive enough for practical work and clearly indicates any lengthy operation.
   - Result: Not tested
   - Notes / steps to reproduce: ____________________
@@ -1724,27 +1910,32 @@ drawing; switching modes does not change existing geometry.
 ## Appraisal square-foot workflow
 
 - [ ] **U266 — Switch an area project from measurement to appraisal workflow**
+  - Steps: Select a measured boundary, open its properties and choose Appraisal. Inspect the category choices and square-foot summary, then verify the boundary remains in place.
   - Expected: Select a measured boundary, open its properties and choose Appraisal. The category list changes to appraisal categories and a square-foot summary appears without changing the drawn geometry.
   - Result: Not tested
   - Notes / steps to reproduce: ____________________
 
 - [ ] **U267 — Derive above-grade finished area automatically**
+  - Steps: Draw a 10 ft by 10 ft Area, open Edit appraisal facts, choose a residential policy and eligible property/measurement basis, then set Above grade, Finished, Direct interior access and Standard ceiling.
   - Expected: For a 10 ft × 10 ft boundary, open **Edit appraisal facts**, choose the residential policy, compatible property and measurement basis, Above grade, Finished, Direct interior access, Standard ceiling and Dwelling use. Vertex shows **Qualified**, derives Above-grade finished area, and reports 100.00 ft² without a separate calculate command or manual category choice.
   - Result: Not tested
   - Notes / steps to reproduce: ____________________
 
 - [ ] **U268 — Derive below-grade finished area from the floor declaration**
+  - Steps: Open Edit appraisal facts for a qualified finished Area and change its floor grade to Below grade. Apply and compare the above-grade and below-grade totals in Details.
   - Expected: Change the selected floor to Below grade while keeping the area finished and otherwise eligible. Vertex derives Below-grade finished, moves its square feet to that separate bucket, and removes them from Above-grade finished area. The floor name and elevation do not override the declaration.
   - Result: Not tested
   - Notes / steps to reproduce: ____________________
 
 - [ ] **U269 — Derive garage, carport, porch, patio and deck from area use**
+  - Steps: Create separate Areas for a garage, carport, porch, patio and deck, then choose each Area use in Edit appraisal facts. Inspect the derived category and totals in Details.
   - Expected: Set each boundary's Area use in **Edit appraisal facts**. Each area appears only in its derived named bucket; none silently becomes finished dwelling area.
   - Display check: Start with a manually classified dwelling area, then declare Garage in the facts editor. The selected category must read Garage and be read-only; its default outline/fill becomes the garage style. Open Area appearance and check its defaults agree with the canvas. Change the use back to Dwelling and check both update. An undeclared legacy area's manual classification remains editable.
   - Result: Not tested
   - Notes / steps to reproduce: ____________________
 
 - [ ] **U270 — Review appraisal totals by floor, building and property**
+  - Steps: Add two buildings and create qualified areas of 100 ft² and 200 ft², one in each building. Select each area in Details and compare its floor, building and property totals.
   - Expected: Create a 100 ft² area in Building 1 and a 200 ft² area in Building 2. Selecting the first shows 100 ft² for its floor and building while the property remains 300 ft²; selecting the second shows 200 ft² for its floor and building while the property remains 300 ft².
   - Result: Not tested
   - Notes / steps to reproduce: ____________________
@@ -1764,31 +1955,37 @@ drawing; switching modes does not change existing geometry.
   - Notes / steps to reproduce: ____________________
 
 - [ ] **U273 — Save and reopen a declared appraisal project**
+  - Steps: Enter a project's appraisal policy, property kind, measurement basis, floor grade and area facts, and define any deductions. Save, close and reopen it, then inspect the facts and totals in Details.
   - Expected: Appraisal workflow, policy, property kind, measurement basis, floor grade, area facts, deduction roles and derived square-foot buckets return unchanged. Vertex recalculates them from the saved facts rather than trusting a cached category.
   - Result: Not tested
   - Notes / steps to reproduce: ____________________
 
 - [ ] **U274 — Return to measurement workflow**
+  - Steps: In a project with a saved measurement profile and appraisal declarations, switch to Measurement workflow. Inspect its calculation profile and building/living totals.
   - Expected: Switching back restores the project's prior measurement profile and its building/living calculations without reclassifying appraisal categories heuristically.
   - Result: Not tested
   - Notes / steps to reproduce: ____________________
 
 - [ ] **U275 — Withhold automatic totals when facts are incomplete or incompatible**
+  - Steps: Remove one required appraisal fact or enter a policy/property combination that is incompatible. Inspect the status and area values in Details, then restore the original fact.
   - Expected: Leave a required fact undeclared, choose an incompatible policy/property/basis combination, or apply a factor other than 1. Vertex shows Unqualified with specific reasons. Physical and adjusted area remain inspectable, but the adjusted value is not presented as qualified appraisal square footage.
   - Result: Not tested
   - Notes / steps to reproduce: ____________________
 
 - [ ] **U276 — Calculate light-commercial area by use**
+  - Steps: Choose the light-commercial appraisal policy and create separate Areas for Occupiable, Common and Service use. Inspect each bucket and the measured property total in Details.
   - Expected: Select the light-commercial declared policy and assign separate boundaries as Occupiable, Common and Service. Vertex derives each bucket and reports their sum as the property measured total without mixing residential finished-area buckets into the result.
   - Result: Not tested
   - Notes / steps to reproduce: ____________________
 
 - [ ] **U277 — Keep site and survey outlines outside building appraisal totals**
+  - Steps: Qualify a building Area, add a separate site or survey outline and select it in Details. Inspect building totals, then try to use the site boundary as a building deduction.
   - Expected: Add a site or survey boundary to a project with a qualified building. The building remains Qualified and its floor, building and property totals remain unchanged without entering appraisal facts for the site outline. Selecting the site explains that it is excluded. Attempting to use the site boundary as a building deduction is blocked.
   - Result: Not tested
   - Notes / steps to reproduce: ____________________
 
 - [ ] **U278 — Print the automatic appraisal area summary**
+  - Steps: Qualify a 10 ft by 10 ft above-grade finished dwelling Area, open Edit sheet layout and add an appraisal area summary. Export the drawing set PDF, remove one required fact and export again.
   - Expected: Create and qualify a 10 ft × 10 ft above-grade finished dwelling boundary. Open **Sheet layout manager…**, add **Appraisal area summary**, and use **Export drawing set PDF**. The sheet shows Qualified under the declared Vertex policy, Above-grade finished (GLA) at 100.00 ft², and matching property/building/floor totals. Remove a required appraisal fact and export again; the sheet says **Unqualified - automatic totals withheld** and contains no appraisal area values.
   - Result: Not tested
   - Notes / steps to reproduce: ____________________
@@ -1803,16 +2000,19 @@ drawing; switching modes does not change existing geometry.
 ## Architectural joins and named views
 
 - [ ] **U279 — Join and unjoin connected walls**
+  - Steps: In Architectural workspace, draw three connected walls, Ctrl-select them and run Join selected walls from Ctrl+K. Undo and redo the join, then unjoin it and inspect the source walls.
   - Expected: In Architectural workspace, draw three connected walls, Ctrl-click all three and choose **Join selected walls**. The 3D view shows one fused result while the source walls remain editable. Undo and redo each change the join in one step; save/reopen preserves it. Unjoin from either a source wall or the fused join and confirm no source wall or hosted opening is deleted. Repeating the command with two separate connected wall pairs is rejected without changing the project.
   - Result: Not tested
   - Notes / steps to reproduce: ____________________
 
 - [ ] **U280 — Join and unjoin touching roofs**
+  - Steps: Create two touching roofs, select them and run Join selected roofs from Ctrl+K. Undo and redo the join, then unjoin it and inspect each roof source.
   - Expected: Create touching roof panels, select them and choose **Join selected roofs**. The 3D view shows one fused roof while the original roof parameters and openings remain editable. Undo, redo and save/reopen preserve the result. Unjoin keeps every source roof. Attempting to join two disconnected roof groups is rejected without changing the project.
   - Result: Not tested
   - Notes / steps to reproduce: ____________________
 
 - [ ] **U281 — Create and edit named elevations and sections**
+  - Steps: Open Saved plans, elevations and sections, create named elevations and a vertical section with different directions and crop extents, then edit one view's frame. Place the views on a sheet and reopen the project.
   - Expected: Open **Saved plans, elevations and sections...**, create at least two elevations and one vertical section with distinct names, origins, directions, depth limits and model crop extents. Confirm model geometry crossing the left/right/bottom/top crop is clipped while geometry outside it is absent; doors/windows inside or crossing the crop retain appropriate view detail. Plan-only area labels must not appear in elevation or section sheet viewports. Place the views on sheets, edit one frame/crop, and confirm its other sheet references stay linked. Undo/redo and save/reopen preserve every named view and the same cropped geometry on canvas, print and export.
   - Result: Not tested
   - Notes / steps to reproduce: ____________________
@@ -1823,10 +2023,14 @@ drawing; switching modes does not change existing geometry.
   - Steps: Draw a closed rectangular wall layout, finish it with Escape, then select a wall. Right-click and choose **Measure exterior from walls…**. Check the blue exterior outline and area in the preview, cancel once, then reopen and create it. If there are interior partitions, check that the review excludes them from the exterior perimeter.
   - Expected: Cancellation changes nothing. Creation adds one measurement area and keeps the physical walls. The area includes half the stored wall thickness outside each baseline. Repeating the command with the same walls selects the existing measurement instead of creating a duplicate.
   - Appraisal check: Select the area, use the Appraisal workflow, and enter the observed property/floor/area facts with **Edit appraisal facts…**. Check its category and net square feet on the plan and in the totals. Add a contained garage deduction and check the living total decreases while the garage remains separately classified.
+  - Result: Not tested
+  - Notes / steps to reproduce: ____________________
 
 - [ ] **U285 — Refresh area after changing wall thickness**
   - Steps: Name the exterior measurement, change its appearance, and add an area dimension. Change a source wall's thickness. Select the area, right-click and choose **Refresh exterior measurement…**; review and apply. Undo, redo, save, and reopen.
   - Expected: Before refresh, the old outline is marked stale and qualified appraisal totals are withheld. Refresh changes the exterior outline and area while keeping its name, appearance, facts, deduction links and dimension bindings. Undo restores the previous outline; redo restores the refreshed area. An open perimeter, missing source wall or read-only project is refused without a partial change.
+  - Result: Not tested
+  - Notes / steps to reproduce: ____________________
 
 ## Wall drawing and connected edits
 
