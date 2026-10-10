@@ -80,8 +80,12 @@ bool same_skylight(const Json* before, const Json* after) {
     return true;
 }
 bool skylight_schema(const RoofOpeningEditIntent& intent) {
-    return intent.uses_skylight_schema || std::any_of(intent.upserts.begin(), intent.upserts.end(),
-        [](const auto& upsert) { return upsert.skylight.has_value(); });
+    return intent.uses_skylight_schema || intent.uses_clone_schema || std::any_of(intent.upserts.begin(), intent.upserts.end(),
+        [](const auto& upsert) { return upsert.skylight.has_value() || upsert.clone_source.has_value(); });
+}
+bool clone_schema(const RoofOpeningEditIntent& intent) {
+    return intent.uses_clone_schema || std::any_of(intent.upserts.begin(), intent.upserts.end(),
+        [](const auto& upsert) { return upsert.clone_source.has_value(); });
 }
 const char* unit_name(Unit value) {
     switch (value) {
@@ -156,7 +160,7 @@ constexpr std::array dimensions{
     Dimension{"width", "width_m", true, &RoofOpeningUpsertIntent::width},
     Dimension{"depth", "depth_m", true, &RoofOpeningUpsertIntent::depth}};
 bool any(const RoofOpeningUpsertIntent& value) {
-    return value.skylight || std::any_of(dimensions.begin(), dimensions.end(), [&](const auto& d) { return (value.*(d.member)).has_value(); });
+    return value.skylight || value.clone_source || std::any_of(dimensions.begin(), dimensions.end(), [&](const auto& d) { return (value.*(d.member)).has_value(); });
 }
 bool all(const RoofOpeningUpsertIntent& value) {
     return std::all_of(dimensions.begin(), dimensions.end(), [&](const auto& d) { return (value.*(d.member)).has_value(); });
@@ -346,6 +350,7 @@ void write_child_receipt(Entity& entity, const std::string& id, const Dimension&
     auto& entries = extension->at("entries");
     auto child = entries.find(id);
     if (child == entries.end()) { entries[id] = Json::object(); child = entries.find(id); }
+    if (entries.size() > collection_limit) invalid("Roof opening input entry budget exceeded");
     if (!known_raw(*child)) invalid("Roof opening edit cannot replace opaque child receipt data");
     auto receipt = child->find(dimension.scalar);
     if (receipt == child->end()) { (*child)[dimension.scalar] = Json::object(); receipt = child->find(dimension.scalar); }
@@ -553,6 +558,135 @@ void indexed_receipts(const Entity& source, Entity& result, const RoofOpeningEdi
     }
     result.properties["quantity_entries"] = std::move(rebuilt);
 }
+
+Json clone_envelope(const Entity& roof) {
+    (void)identity(roof.id);
+    if (roof.type != "roof" || !roof.properties.is_object() || !roof.extensions.is_object())
+        invalid("Roof opening clone requires an actual roof envelope");
+    Strings budget; budget.read(roof);
+    Json result{{"id", roof.id}, {"type", roof.type}, {"properties", roof.properties},
+        {"required", roof.required}, {"extensions", roof.extensions}};
+    if (result.dump().size() > proof_limit) invalid("Roof opening clone envelope byte budget exceeded");
+    return result;
+}
+Entity clone_envelope(const Json& value) {
+    keys(value, {"id", "type", "properties", "required", "extensions"});
+    if (!value.at("type").is_string() || !value.at("required").is_boolean())
+        invalid("Roof opening clone envelope fields are invalid");
+    Entity result{identity(value.at("id")), value.at("type").get<std::string>(),
+        value.at("properties"), value.at("required").get<bool>(), value.at("extensions")};
+    (void)clone_envelope(result);
+    return result;
+}
+struct CloneContent {
+    Json row;
+    std::optional<Json> child;
+    // Keys are the understood scalar suffix, independent of either row index.
+    Json indexed = Json::object();
+};
+CloneContent clone_content(const RoofOpeningUpsertIntent& upsert) {
+    if (!upsert.clone_source) invalid("Roof opening clone source is missing");
+    if (!all(upsert) || !upsert.skylight || upsert.skylight->is_null())
+        invalid("Roof opening clone requires all four inputs and an actual skylight profile");
+    const auto& source = *upsert.clone_source;
+    (void)clone_envelope(source.roof);
+    (void)identity(source.opening_id);
+    admit(source.roof);
+    const auto rows = roster(source.roof);
+    const auto children = positions(rows);
+    const auto found = children.find(source.opening_id);
+    if (found == children.end()) invalid("Roof opening clone requires an actual source child");
+    CloneContent result{rows.at(found->second), std::nullopt, Json::object()};
+    const auto profile = field(result.row, "skylight");
+    if (!profile || !exact(*profile, *upsert.skylight))
+        invalid("Roof opening clone must retain its actual source skylight profile");
+    skylight_profile(*profile);
+    if (const auto extension = field(source.roof.extensions, "roof_opening_input")) {
+        if (!known_extension(*extension)) invalid("Roof opening clone cannot bind a future input envelope");
+        const auto& entries = extension->at("entries");
+        if (const auto child = field(entries, source.opening_id)) {
+            if (!known_raw(*child)) invalid("Roof opening clone cannot bind future child receipts");
+            for (const auto& d : dimensions)
+                if (const auto raw = field(*child, d.scalar)) {
+                    if (!known_raw(*raw)) invalid("Roof opening clone cannot bind a future child receipt");
+                    if (receipt_core(*raw, true)) (void)raw_input(*raw, number(result.row.at(d.scalar)), d.positive);
+                }
+            if (const auto receipts = field(*child, "skylight")) {
+                if (!known_raw(*receipts)) invalid("Roof opening clone cannot bind future profile receipts");
+                for (const auto& d : skylight_dimensions)
+                    if (const auto raw = field(*receipts, d.scalar)) {
+                        if (!known_raw(*raw)) invalid("Roof opening clone cannot bind a future profile receipt");
+                        if (receipt_core(*raw, true)) (void)raw_input(*raw, number(profile->at(d.scalar)), d.positive);
+                    }
+            }
+            result.child = *child;
+        }
+    }
+    if (const auto values = field(source.roof.properties, "quantity_entries")) {
+        constexpr std::string_view prefix = "/roof_openings/";
+        for (const auto& [pointer, raw] : values->items()) {
+            const std::string_view path(pointer);
+            if (!path.starts_with(prefix)) continue;
+            const auto tail = path.substr(prefix.size());
+            const auto slash = tail.find('/');
+            const auto token = tail.substr(0, slash);
+            std::size_t index = 0;
+            const auto parsed = std::from_chars(token.data(), token.data() + token.size(), index);
+            if (token.empty() || (token.size() > 1 && token.front() == '0') || parsed.ec != std::errc{} ||
+                parsed.ptr != token.data() + token.size() || index >= rows.size())
+                invalid("Roof opening clone cannot resolve an opaque indexed binding");
+            if (index != found->second) continue;
+            const auto suffix = slash == std::string_view::npos ? std::string_view{} : tail.substr(slash + 1);
+            const auto dimension = std::find_if(dimensions.begin(), dimensions.end(), [&](const auto& d) { return suffix == d.scalar; });
+            const auto profile_dimension = std::find_if(skylight_dimensions.begin(), skylight_dimensions.end(),
+                [&](const auto& d) { return suffix == std::string("skylight/") + d.scalar; });
+            if (dimension == dimensions.end() && profile_dimension == skylight_dimensions.end())
+                invalid("Roof opening clone cannot retarget an opaque indexed row binding");
+            if (!raw.is_object() || (receipt_core(raw) && !known_receipt(raw)))
+                invalid("Roof opening clone cannot retarget a future indexed receipt");
+            auto receipt = raw;
+            if (receipt_core(receipt)) {
+                const bool positive = dimension != dimensions.end() ? dimension->positive : profile_dimension->positive;
+                const double metres = dimension != dimensions.end() ? number(result.row.at(dimension->scalar))
+                    : number(profile->at(profile_dimension->scalar));
+                if (quantity(receipt, positive, false).metres != metres)
+                    invalid("Roof opening clone indexed receipt is stale");
+                if (dimension != dimensions.end() &&
+                    metres != (upsert.*(dimension->member))->quantity.metres)
+                    merge_quantity_core(receipt, *(upsert.*(dimension->member)), positive);
+            }
+            result.indexed[std::string(suffix)] = std::move(receipt);
+        }
+    }
+    return result;
+}
+void clone_child_receipts(Entity& result, const std::string& id, const CloneContent& content) {
+    if (!content.child) return;
+    auto extension = result.extensions.find("roof_opening_input");
+    if (extension == result.extensions.end()) {
+        result.extensions["roof_opening_input"] = {{"version", 1}, {"entries", Json::object()}};
+        extension = result.extensions.find("roof_opening_input");
+    }
+    if (!known_extension(*extension)) invalid("Roof opening clone cannot affect an opaque destination input envelope");
+    auto& entries = extension->at("entries");
+    if (entries.contains(id)) invalid("Roof opening clone destination receipt identity is occupied");
+    entries[id] = *content.child;
+    if (entries.size() > collection_limit) invalid("Roof opening clone child receipt budget exceeded");
+}
+void clone_indexed_receipts(Entity& result, const std::vector<std::pair<std::string, CloneContent>>& clones, const Json& after) {
+    const auto children = positions(after);
+    for (const auto& [id, content] : clones) {
+        if (content.indexed.empty()) continue;
+        if (!result.properties.contains("quantity_entries")) result.properties["quantity_entries"] = Json::object();
+        auto& values = result.properties.at("quantity_entries");
+        for (const auto& [suffix, receipt] : content.indexed.items()) {
+            const auto pointer = "/roof_openings/" + std::to_string(children.at(id)) + "/" + suffix;
+            if (values.contains(pointer)) invalid("Roof opening clone indexed receipt binding is occupied");
+            values[pointer] = receipt;
+        }
+        if (values.size() > collection_limit) invalid("Roof opening clone indexed receipt budget exceeded");
+    }
+}
 RoofOpeningQuantityInput captured_input(const Entity& candidate, const std::string& id,
     const Dimension& d, double metres) {
     const auto receipts = child_receipts(candidate, id);
@@ -567,7 +701,8 @@ nlohmann::json encode_roof_opening_edit_intent(const RoofOpeningEditIntent& inte
     if (intent.upserts.size() > opening_limit || intent.removed_opening_ids.size() > opening_limit ||
         (intent.upserts.empty() && intent.removed_opening_ids.empty())) invalid("Roof opening edit roster budget is invalid");
     const bool profiles = skylight_schema(intent);
-    Json result{{"version", profiles ? 2 : 1}, {"roof_id", intent.roof_id}, {"upserts", Json::array()}, {"removed_opening_ids", Json::array()}};
+    const bool clones = clone_schema(intent);
+    Json result{{"version", clones ? 3 : profiles ? 2 : 1}, {"roof_id", intent.roof_id}, {"upserts", Json::array()}, {"removed_opening_ids", Json::array()}};
     Ids children;
     for (const auto& upsert : intent.upserts) {
         (void)identity(upsert.opening_id);
@@ -584,6 +719,14 @@ nlohmann::json encode_roof_opening_edit_intent(const RoofOpeningEditIntent& inte
                 entry["skylight_edit"] = Json{{"value", *upsert.skylight}};
             }
         }
+        if (clones) {
+            entry["clone_source"] = nullptr;
+            if (upsert.clone_source) {
+                (void)clone_content(upsert);
+                entry["clone_source"] = Json{{"roof", clone_envelope(upsert.clone_source->roof)},
+                    {"opening_id", upsert.clone_source->opening_id}};
+            }
+        }
         result["upserts"].push_back(std::move(entry));
     }
     for (const auto& id : intent.removed_opening_ids) {
@@ -597,8 +740,10 @@ nlohmann::json encode_roof_opening_edit_intent(const RoofOpeningEditIntent& inte
 RoofOpeningEditIntent decode_roof_opening_edit_intent(const nlohmann::json& value) {
     if (value.dump().size() > proof_limit) invalid("Roof opening edit proof byte budget exceeded");
     keys(value, {"version", "roof_id", "upserts", "removed_opening_ids"});
-    const bool profiles = (value.at("version").is_number_integer() || value.at("version").is_number_unsigned()) &&
-        value.at("version") == 2;
+    const bool clones = (value.at("version").is_number_integer() || value.at("version").is_number_unsigned()) &&
+        value.at("version") == 3;
+    const bool profiles = clones || ((value.at("version").is_number_integer() || value.at("version").is_number_unsigned()) &&
+        value.at("version") == 2);
     if (!profiles && !version_one(value.at("version"))) invalid("Roof opening edit version is unsupported");
     const auto& upserts = value.at("upserts");
     const auto& removed = value.at("removed_opening_ids");
@@ -607,8 +752,10 @@ RoofOpeningEditIntent decode_roof_opening_edit_intent(const nlohmann::json& valu
     RoofOpeningEditIntent result;
     result.roof_id = identity(value.at("roof_id"));
     result.uses_skylight_schema = profiles;
+    result.uses_clone_schema = clones;
     for (const auto& entry : upserts) {
-        if (profiles) keys(entry, {"opening_id", "x", "y", "width", "depth", "skylight_edit"});
+        if (clones) keys(entry, {"opening_id", "x", "y", "width", "depth", "skylight_edit", "clone_source"});
+        else if (profiles) keys(entry, {"opening_id", "x", "y", "width", "depth", "skylight_edit"});
         else keys(entry, {"opening_id", "x", "y", "width", "depth"});
         RoofOpeningUpsertIntent upsert;
         upsert.opening_id = identity(entry.at("opening_id"));
@@ -619,6 +766,11 @@ RoofOpeningEditIntent decode_roof_opening_edit_intent(const nlohmann::json& valu
             keys(edit, {"value"});
             if (!edit.at("value").is_null()) skylight_profile(edit.at("value"));
             upsert.skylight = edit.at("value");
+        }
+        if (clones && !entry.at("clone_source").is_null()) {
+            const auto& clone = entry.at("clone_source");
+            keys(clone, {"roof", "opening_id"});
+            upsert.clone_source = RoofOpeningCloneSource{clone_envelope(clone.at("roof")), identity(clone.at("opening_id"))};
         }
         result.upserts.push_back(std::move(upsert));
     }
@@ -638,27 +790,41 @@ Entity stage_roof_opening_entity(const Entity& source, const RoofOpeningEditInte
     for (const auto& id : removed)
         if (!children.contains(id)) invalid("Roof opening removal requires an actual existing child");
     Strings occupied; occupied.read(source);
+    for (const auto& upsert : intent.upserts)
+        if (upsert.clone_source) occupied.read(upsert.clone_source->roof);
     auto result = source;
     auto after = Json::array();
     for (const auto& row : before)
         if (!removed.contains(row.at("id").get<std::string>())) after.push_back(row);
     auto final_positions = positions(after);
+    std::vector<std::pair<std::string, CloneContent>> clones;
     bool changed = !removed.empty();
     for (const auto& upsert : intent.upserts) {
         const auto existing = final_positions.find(upsert.opening_id);
+        if (upsert.clone_source && children.contains(upsert.opening_id))
+            invalid("Roof opening clone requires a new destination child identity");
         if (existing == final_positions.end()) {
             if (!all(upsert)) invalid("A new roof opening requires all four exact dimensions");
             if (occupied.values.contains(upsert.opening_id)) invalid("A new roof opening aliases retained source identity data");
             if (after.size() >= opening_limit) invalid("Roof opening result exceeds the roster budget");
-            after.push_back({{"id", upsert.opening_id}});
+            if (upsert.clone_source) {
+                auto content = clone_content(upsert);
+                auto row = content.row;
+                row["id"] = upsert.opening_id;
+                after.push_back(std::move(row));
+                clone_child_receipts(result, upsert.opening_id, content);
+                clones.emplace_back(upsert.opening_id, std::move(content));
+            } else after.push_back({{"id", upsert.opening_id}});
             final_positions.emplace(upsert.opening_id, after.size() - 1);
             occupied.values.insert(upsert.opening_id);
+            changed = true;
         }
         auto& row = after.at(final_positions.at(upsert.opening_id));
         const bool fresh = !children.contains(upsert.opening_id);
         for (const auto& d : dimensions) {
             const auto& value = upsert.*(d.member);
-            if (!value || (!fresh && number(row.at(d.scalar)) == value->quantity.metres)) continue;
+            if (!value || ((!fresh || upsert.clone_source) &&
+                number(row.at(d.scalar)) == value->quantity.metres)) continue;
             row[d.scalar] = value->quantity.metres;
             write_child_receipt(result, upsert.opening_id, d, *value);
             changed = true;
@@ -686,6 +852,7 @@ Entity stage_roof_opening_entity(const Entity& source, const RoofOpeningEditInte
     result.properties["version"] = source.properties.at("version") == 3 || has_profile ? 3 : 2;
     result.properties["roof_openings"] = after;
     indexed_receipts(source, result, intent, before, after);
+    clone_indexed_receipts(result, clones, after);
     return result;
 }
 Entity replay_roof_opening_entity(const Entity& source, const RoofOpeningEditIntent& intent) {
@@ -699,6 +866,11 @@ std::vector<std::string> new_roof_opening_identity_ids(const Entities& source,
     if (intents.empty()) return {};
     Strings occupied;
     for (const auto& [id, entity] : source) { occupied.values.insert(id); occupied.read(entity); }
+    // Passive source payloads also occupy the namespace: a destination cannot
+    // acquire a copied opaque reference or another transfer's source identity.
+    for (const auto& intent : intents)
+        for (const auto& upsert : intent.upserts)
+            if (upsert.clone_source) occupied.read(upsert.clone_source->roof);
     Ids targets, fresh;
     std::size_t proof_bytes = 0;
     for (const auto& intent : intents) {
@@ -715,7 +887,10 @@ std::vector<std::string> new_roof_opening_identity_ids(const Entities& source,
         for (const auto& id : intent.removed_opening_ids)
             if (!children.contains(id)) invalid("Roof opening removal requires an actual existing child");
         for (const auto& upsert : intent.upserts) {
-            if (children.contains(upsert.opening_id)) continue;
+            if (children.contains(upsert.opening_id)) {
+                if (upsert.clone_source) invalid("Roof opening clone requires a new destination child identity");
+                continue;
+            }
             if (!all(upsert)) invalid("A new roof opening requires all four exact dimensions");
             if (occupied.values.contains(upsert.opening_id) || !fresh.insert(upsert.opening_id).second)
                 invalid("A new roof opening aliases current or authored identity data");
@@ -801,6 +976,30 @@ std::optional<RoofOpeningEditIntent> infer_roof_opening_edit(const Entity& origi
         const auto after_profile = field(row, "skylight");
         if (!same_skylight(before_profile, after_profile))
             upsert.skylight = after_profile ? *after_profile : Json(nullptr);
+        if (old == old_positions.end()) {
+            // Ordinary inference has only dimension/profile authority. A new
+            // row carrying passive source metadata must name that source in a
+            // typed v3 intent rather than have its content silently omitted.
+            Json ordinary_row{{"id", id}}, ordinary_receipts = Json::object();
+            for (const auto& d : dimensions) {
+                const auto& entered = *(upsert.*(d.member));
+                ordinary_row[d.scalar] = entered.quantity.metres;
+                ordinary_receipts[d.scalar] = Json::object();
+                write_raw_core(ordinary_receipts[d.scalar], entered);
+            }
+            if (after_profile) ordinary_row["skylight"] = *after_profile;
+            const auto receipts = child_receipts(candidate, id);
+            if (!exact(row, ordinary_row) || !receipts || !exact(*receipts, ordinary_receipts))
+                invalid("Roof opening transfer metadata requires an explicit version-three clone source intent");
+            if (const auto values = field(candidate.properties, "quantity_entries")) {
+                const auto prefix = "/roof_openings/" + std::to_string(i) + "/";
+                for (const auto& [pointer, receipt] : values->items()) {
+                    (void)receipt;
+                    if (pointer.starts_with(prefix))
+                        invalid("Roof opening transfer indexed metadata requires an explicit version-three clone source intent");
+                }
+            }
+        }
         if (any(upsert)) intent.upserts.push_back(std::move(upsert));
     }
     if (intent.upserts.empty() && intent.removed_opening_ids.empty()) return std::nullopt;

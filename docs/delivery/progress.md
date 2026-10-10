@@ -14,6 +14,41 @@ changed source does not acquire runtime acceptance without later qualification.
 
 ## Current delivery state
 
+### October 10 individual skylight clipboard - source integration
+
+Selected skylights now route Copy/Cut and a dedicated right-click Duplicate
+through their child identity. Paste arms roof-face placement in the current
+horizontal plan, with a manufactured background preview and source-bound final
+replay; it never copies the containing roof. Right-click/Esc cancellation retires
+the copied placement. Width/depth remain editable during placement, while the
+captured construction profile transfers exactly and can be edited afterward.
+
+Opening proof v3, composite v8 and standalone ordinary-roof authoring v17 retain
+the explicit passive clone source. Replay preserves opaque row/receipt data,
+unchanged number representations and original quantity cores, retargets known
+child/indexed bindings, and independently validates destination geometry and
+saved phase policy. Document admission reserves fresh children against the full
+source and retained history. Native reader 169/extraction 167 retains nested and
+undone transfer authority; historical codecs and payload tables remain intact.
+
+Future receipts and ambiguous indexed data refuse rather than disappear. Cut
+still refuses annotation remnants that cannot safely lose their child owner.
+Independent rotation, grouped child selection, partial-view grips and 3D child
+picking remain gaps. Coordinated corner windows remain the next architectural
+implementation: source discovery confirmed single-wall openings cannot supply
+their two-host semantics. This batch does not close the wider production plan.
+
+Source-only implementation continues: no builds, tests/new tests, scripts/probes,
+native jobs, UI launches, packages or installations ran. The installed candidate
+is unchanged. The manual list retains 450 original scenarios plus ten focused
+door/window checks, all new checks Not tested. All ten production gates remain
+open. The independent source review approved the bounded integration after
+correcting unchanged quantity-core rewriting, passive required-roof admission,
+and current/retained passive-source identity reservation. Root reviewed the
+integrated interfaces and remaining limits. Diff whitespace checking and
+registry JSON parsing passed. This supplies no compilation or runtime
+acceptance. The scoped source commit is backed up on the delivery branch.
+
 ### October 10 skylight canvas editing - source integration
 
 Roof skylights now have explicit nested canvas targets, independent of their

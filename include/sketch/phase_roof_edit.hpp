@@ -46,6 +46,8 @@ struct RoofEditIntent {
 // Skylight roster edits use strict version seven with the same ten keys as
 // version six and a boolean coordination flag. Its openings component must be
 // version two; historical composite versions cannot admit that new authority.
+// Opening transfer uses strict version eight with those same ten fields and a
+// version-three openings component. Earlier composites cannot admit transfers.
 [[nodiscard]] nlohmann::json encode_roof_edit_intent(const RoofEditIntent& intent);
 [[nodiscard]] RoofEditIntent decode_roof_edit_intent(const nlohmann::json& value);
 

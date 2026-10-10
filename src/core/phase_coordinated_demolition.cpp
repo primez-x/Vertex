@@ -260,7 +260,8 @@ Decoded components(const Json& value, const PhaseConstraintAuthoringIntent& encl
         !enclosing.roof_replacement.is_null() || !enclosing.slab_replacement.is_null() ||
         !enclosing.slab_demolition.is_null() || !enclosing.coordinated_replacements.is_null() ||
         !enclosing.structural_replacement.is_null() || !enclosing.stair_demolition.is_null() ||
-        !enclosing.stair_replacement.is_null() || !enclosing.stair_demolition_retirement.is_null())
+        !enclosing.stair_replacement.is_null() || !enclosing.stair_demolition_retirement.is_null() ||
+        !enclosing.ordinary_roof_edits.is_null())
         invalid("enclosing coordinated demolition cannot borrow another operation");
     if (complete && !enclosing.wall_demolition.is_null())
         invalid("complete coordinated demolition cannot borrow wall authoring");

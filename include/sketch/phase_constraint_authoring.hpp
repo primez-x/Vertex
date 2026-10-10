@@ -79,6 +79,12 @@ struct PhaseConstraintAuthoringIntent {
     // replayed architectural removal and explicit phase-room decisions.
     // The analytical stage retains the actual captured source as authority.
     nlohmann::json wall_demolition=nullptr;
+    // Dialect seventeen: a standalone nonempty canonical RoofEditIntent list,
+    // independently replayed against actual ordinary/proposed membership.
+    // It carries explicit opening transfer authority that candidate inference
+    // cannot recover. No sibling geometry, relationship, replacement or
+    // demolition authority accompanies it. Null preserves historical codecs.
+    nlohmann::json ordinary_roof_edits=nullptr;
 };
 
 [[nodiscard]] PhaseConstraintAuthoringIntent decode_phase_constraint_authoring_intent(

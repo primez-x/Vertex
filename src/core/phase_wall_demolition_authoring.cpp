@@ -500,7 +500,8 @@ void exclusive_root(const PhaseConstraintAuthoringIntent& intent) {
         !intent.roof_replacement.is_null() || !intent.slab_replacement.is_null() || !intent.slab_demolition.is_null() ||
         !intent.coordinated_replacements.is_null() || !intent.structural_replacement.is_null() ||
         !intent.stair_demolition.is_null() || !intent.stair_replacement.is_null() ||
-        !intent.stair_demolition_retirement.is_null() || !intent.coordinated_demolition.is_null())
+        !intent.stair_demolition_retirement.is_null() || !intent.coordinated_demolition.is_null() ||
+        !intent.ordinary_roof_edits.is_null())
         invalid("wall demolition must be the exclusive root dialect");
 }
 Entities physical_stage(const Entities& actual,const PhaseConstraintAuthoringIntent& root,

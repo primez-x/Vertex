@@ -3200,7 +3200,13 @@ Blocked / missing until testing a candidate that contains it.
 
 - [ ] **WINDOW-SKYLIGHT-GRIPS - Move and resize one skylight on the canvas**
   - Steps: In a horizontal floor plan, click a skylight. Drag inside its selected box to move it; drag each side and corner handle to resize it. Try Shift for fine positioning. Double-click it to edit dimensions, then Apply unchanged values. Drag outside the selected box to pan, click outside to deselect, and try right-click Properties/Delete. Start a resize, release, and immediately zoom or resize the app window. Undo and redo an accepted edit.
-  - Expected: A transparent box follows the roof's rotation and displays Skylight, width and depth. Moves and resizes affect only that cut and retain frame/curb/glazing dimensions. Invalid fits do not commit. Unchanged Apply does not add an undo step. Navigation cancels a pending gesture without leaving Previewing stuck. Delete removes only the skylight. Copy/Cut currently report an explicit individual-child gap and never operate on the roof. Partial crop/depth views use roof Openings for editing.
+  - Expected: A transparent box follows the roof's rotation and displays Skylight, width and depth. Moves and resizes affect only that cut and retain frame/curb/glazing dimensions. Invalid fits do not commit. Unchanged Apply does not add an undo step. Navigation cancels a pending gesture without leaving Previewing stuck. Delete removes only the skylight. Copy/Cut target the individual skylight; test their placement below. Partial crop/depth views use roof Openings for editing.
+  - Result: Not tested
+  - Notes: ______________________________
+
+- [ ] **WINDOW-SKYLIGHT-COPY - Copy, cut and duplicate one skylight**
+  - Steps: Select one skylight and use Ctrl+C, then Ctrl+V. Click a clear part of the same roof to place it. Repeat on another compatible roof and in another project. Change width/depth before placement, then edit its frame/curb/glazing after placement. Right-click a selected skylight and choose Duplicate; cancel once with right-click, then repeat and place. Use Ctrl+X and verify only the skylight disappears, then paste it elsewhere. Undo/redo and save/reopen. Try placing over another cut or across a ridge, and try switching floor/view while placement is pending.
+  - Expected: Copies get distinct identities, retain the original construction profile, and never copy or remove the containing roof. Unchanged measurements retain their input history; resizing changes only the new skylight. Invalid fits and canceled/stale placement leave the project unchanged. Undo restores a cut skylight in one step. Unsupported metadata reports a refusal without losing content or replacing the clipboard during a rejected Cut.
   - Result: Not tested
   - Notes: ______________________________
 

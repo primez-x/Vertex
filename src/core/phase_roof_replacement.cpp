@@ -535,6 +535,13 @@ PhaseRoofReplacementResult replay_phase_roof_replacement(
         expected.insert(plan.required_child_ids.begin(), plan.required_child_ids.end());
         if (identities.size() != expected.size()) reject("requires complete exact entity/child mapping");
         auto occupied = occupied_strings(source);
+        const auto authored_openings = combined ? roof_edit_opening_intents(all_roof_edits) : opening_edits;
+        for (const auto& edit:authored_openings) for (const auto& upsert:edit.upserts)
+            if (upsert.clone_source) {
+                const auto& passive=upsert.clone_source->roof;
+                occupied.read(Json{{"id",passive.id},{"type",passive.type},{"properties",passive.properties},
+                    {"required",passive.required},{"extensions",passive.extensions}});
+            }
         if (strict_children) {
             // Version one retains its historical reservation policy. The new
             // opening and combined dialects reserve the complete source envelope.
@@ -559,7 +566,6 @@ PhaseRoofReplacementResult replay_phase_roof_replacement(
         }
         // These identities were authored explicitly against the complete actual
         // source. They are not mapping keys and are retained verbatim in copies.
-        const auto authored_openings = combined ? roof_edit_opening_intents(all_roof_edits) : opening_edits;
         for (const auto& id : new_roof_opening_identity_ids(source, authored_openings)) {
             if (expected.contains(id) || identities.contains(id) || !fresh.insert(id).second)
                 reject("authored opening identity collides with replacement mapping: " + id);

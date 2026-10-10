@@ -1,4 +1,39 @@
-# Vertex project formats v1 through v168
+# Vertex project formats v1 through v169
+
+## Individual roof skylight transfer (v169, source integration)
+
+Native reader 169 and JSON/assets extraction 167 preserve explicit roof-opening
+transfer authority. Opening edit v3 retains the four root fields and adds a
+nullable `clone_source` to each v2 upsert. Its nonnull value has exactly `roof`
+and `opening_id`; the passive roof record has exactly `id`, `type`, `properties`,
+`required`, and `extensions`. Only the named skylight child's content transfers.
+The destination roof's pose, context, remaining roster and other metadata remain
+its actual captured source. A transfer requires a fresh child ID, all four
+entered mouth quantities and the source's exact skylight profile.
+
+Independent replay preserves the selected row's opaque data, unchanged numeric
+representations and exact quantity receipts. Changed mouth dimensions update
+receipt cores while preserving opaque siblings. The selected child input entry
+and recognized indexed scalar/profile receipts follow the new child and row
+index. Future receipt contracts, stale cores, ambiguous indexed bindings,
+collisions and budget overruns refuse instead of discarding data. Whole-child
+Cut retains the existing deletion guard for annotation remnants.
+
+Composite roof edit v8 has the same ten keys as v7 and requires opening v3.
+Standalone ordinary roof authoring uses phase-constraint dialect 17: the eight
+common source-bound fields plus a nonempty canonical `ordinary_roof_edits` list.
+It admits actual ordinary/proposed membership and cannot borrow sibling edit,
+replacement or demolition authority. Active baseline edits use the existing
+phase replacement path. Current and retained history reserve declared fresh
+children, including nested and undone transfer proofs.
+
+The clipboard format is `vertex.roof-opening.clipboard`, version 1, with exactly
+`format`, `version`, `roof`, and `opening_id`. The UI validates this passive
+content, then captures the destination source for roof-face placement. It never
+imports the containing source roof as an active entity. Historical opening
+v1/v2, composite v1-v7 and authoring v1-v16 retain their codecs. Storage keeps
+the v161 payload tables. Compilation, runtime, history/migration and output
+qualification remain outstanding under source-only implementation.
 
 ## Roof-hosted fixed skylights (v168, source integration)
 

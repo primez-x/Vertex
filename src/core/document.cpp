@@ -3091,7 +3091,7 @@ static void validate_phase_constraint_composed_originals(const std::map<std::str
     for (const auto& encoded:phase_constraint_authoring_proofs(command)) {
         const auto intent=decode_phase_constraint_authoring_intent(encoded);
         if (!intent.coordinated_replacements.is_null() || !intent.coordinated_demolition.is_null() ||
-            !intent.wall_demolition.is_null()) {
+            !intent.wall_demolition.is_null() || !intent.ordinary_roof_edits.is_null()) {
             const auto replay = replay_phase_constraint_authoring(source, encoded);
             if (entity_map_digest(replay) != entity_map_digest(candidate))
                 throw std::invalid_argument("Coordinated architectural authoring differs from its actual source replay");
@@ -3471,6 +3471,17 @@ static void validate_phase_constraint_fresh_lifetime(const std::map<std::string,
                 nested_fresh.insert(id);
             }
         }
+        if (!root_intent.ordinary_roof_edits.is_null()) {
+            complete_envelope_reservation=true;
+            roof_mixed_asset_reservation=true;
+            std::vector<RoofEditIntent> edits;
+            for (const auto& row:root_intent.ordinary_roof_edits) edits.push_back(decode_roof_edit_intent(row));
+            for (const auto& id:new_roof_opening_identity_ids(source,roof_edit_opening_intents(edits))) {
+                if (!fresh.insert(id).second)
+                    throw std::invalid_argument("An ordinary roof opening overlaps another fresh identity: "+id);
+                nested_fresh.insert(id);
+            }
+        }
     }
     for (const auto& intent : phase_constraint_authoring_components(command)) {
         if (!intent.stair_replacement.is_null()) {
@@ -3679,6 +3690,46 @@ static void validate_phase_constraint_fresh_lifetime(const std::map<std::string,
     }
     if (fresh.empty()) return;
     if (fresh.size()>4096) throw std::invalid_argument("Active design fresh identity budget exceeded");
+    const auto reserve_clone_sources=[&](const PhaseConstraintAuthoringIntent& root) {
+        std::vector<RoofOpeningEditIntent> openings;
+        const auto append=[&](const nlohmann::json& rows) {
+            if (rows.is_null()) return;
+            for (const auto& row:rows) {
+                const auto edit=decode_roof_edit_intent(row);
+                if (edit.openings) openings.push_back(*edit.openings);
+            }
+        };
+        append(root.ordinary_roof_edits);
+        if (!root.coordinated_replacements.is_null()) append(root.coordinated_replacements.at("ordinary_roof_edits"));
+        for (const auto& leaf:phase_constraint_replacement_components(root)) if (!leaf.roof_replacement.is_null()) {
+            const auto replacement=decode_phase_roof_replacement_authoring(leaf.roof_replacement);
+            openings.insert(openings.end(),replacement.roof_opening_edits.begin(),replacement.roof_opening_edits.end());
+            for (const auto* rows:{&replacement.roof_edits,&replacement.ordinary_roof_edits})
+                for (const auto& edit:*rows) if (edit.openings) openings.push_back(*edit.openings);
+        }
+        std::size_t nodes=0,bytes=0;
+        const auto scan=[&](const auto& self,const nlohmann::json& value,unsigned depth)->void {
+            if (depth>64 || ++nodes>4*1024*1024)
+                throw std::invalid_argument("Retained roof clone source exceeds the identity JSON budget");
+            const auto text=[&](const std::string& name) {
+                if (name.size()>64*1024*1024-bytes)
+                    throw std::invalid_argument("Retained roof clone source exceeds the identity string budget");
+                bytes+=name.size();
+                if (fresh.contains(name))
+                    throw std::invalid_argument("A fresh identity aliases a captured roof clone source: "+name);
+            };
+            if (value.is_string()) text(value.template get_ref<const std::string&>());
+            else if (value.is_array()) for (const auto& child:value) self(self,child,depth+1);
+            else if (value.is_object()) for (const auto& [name,child]:value.items()) {text(name);self(self,child,depth+1);}
+        };
+        for (const auto& edit:openings) for (const auto& upsert:edit.upserts) if (upsert.clone_source) {
+            const auto& roof=upsert.clone_source->roof;
+            scan(scan,nlohmann::json{{"id",roof.id},{"type",roof.type},{"properties",roof.properties},
+                {"required",roof.required},{"extensions",roof.extensions}},0);
+        }
+    };
+    for (const auto& encoded:phase_constraint_authoring_proofs(command))
+        reserve_clone_sources(decode_phase_constraint_authoring_intent(encoded));
     if (complete_envelope_reservation)
         for (const auto* key:{"id","type","properties","required","extensions"})
             if (nested_fresh.contains(key))
@@ -3705,6 +3756,19 @@ static void validate_phase_constraint_fresh_lifetime(const std::map<std::string,
                 }
             for (const auto& encoded:phase_constraint_authoring_proofs(*record.boundary_constraint_changes)) {
                 const auto root=decode_phase_constraint_authoring_intent(encoded);
+                reserve_clone_sources(root);
+                const auto reserve_openings=[&](const nlohmann::json& rows) {
+                    if (rows.is_null()) return;
+                    for (const auto& row:rows) {
+                        const auto edit=decode_roof_edit_intent(row);
+                        if (edit.openings) for (const auto& upsert:edit.openings->upserts)
+                            if (fresh.contains(upsert.opening_id))
+                                throw std::invalid_argument("Roof opening identity was already reserved by retained typed intent: "+upsert.opening_id);
+                    }
+                };
+                reserve_openings(root.ordinary_roof_edits);
+                if (!root.coordinated_replacements.is_null())
+                    reserve_openings(root.coordinated_replacements.at("ordinary_roof_edits"));
                 for (const auto& id:phase_demolition_ordinary_roof_destinations(root))
                     if (fresh.contains(id))
                         throw std::invalid_argument("Proposed identity was already reserved by retained ordinary roof split intent: "+id);

@@ -127,8 +127,12 @@ polling timeout does not permit restarting it.
    side/corner resizing, quick properties/deletion and background manufactured
    placement/edit previews. Grips retain roof axes and require a fully visible,
    horizontal plan with unbounded depth; cropped partial fills retain the roof
-   Openings editing route. Individual skylight clipboard workflows remain an
-   implementation gap; child selection must never copy/cut the containing roof.
+   Openings editing route. Qualify subsequent individual skylight Copy/Cut,
+   roof-face Paste and Duplicate source work, including passive content transfer,
+   exact retained quantities/metadata, destination host/phase validation and
+   fresh identity reservation through undone history. Future/ambiguous receipt
+   bindings and deletion with unresolved annotation remnants remain explicit
+   refusals; rotation, grouped child selection and 3D child picking remain gaps.
 10. Implement observed native/vendor/device adapters through existing workers;
     complete declared IFC/DXF/Pinc fidelity and independently consumed output.
     Add offline OCR text regions/confidence feeding reviewed proposals. New
