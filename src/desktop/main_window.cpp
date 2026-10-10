@@ -33570,11 +33570,9 @@ public:
                 throw std::invalid_argument("Select unambiguous physical walls to remove together.");
             wall_ids.push_back(found->first);
         }
-        // A wall-only selection can still mix retained originals with active
-        // proposed or ordinary walls. Use the complete typed room stage rather
-        // than passing that cohort to the historical baseline-only producer.
-        if (const auto demolition=inspect_phase_wall_demolition_selection(source.entities(),wall_ids);
-            demolition && !demolition->ordinary_wall_ids.empty())
+        // Every baseline wall selection uses the complete typed room stage,
+        // including wall-only cohorts with no affected rooms or ordinary walls.
+        if (inspect_phase_wall_demolition_selection(source.entities(),wall_ids))
             return removeSelectedMixedPhysicalWalls(source,cut,prepared);
         const bool site = siteCanvas(m_architecturalCanvas);
         const auto site_generation = m_site_publication_generation;
@@ -33609,15 +33607,7 @@ public:
         require_current();
         std::optional<Command> final_command;
         PreparedSelectionRemoval details;
-        if (const auto demolition=prepare_phase_wall_demolition(source,wall_ids,
-                cut ? "Cut baseline walls from active design" : "Demolish baseline walls in active design")) {
-            const auto& registry=demolition->entity_changes.front().entity;
-            const auto phases=ModelPhases::from_json(registry.properties.at("model"));
-            if (!phases.active_alternative())
-                throw std::invalid_argument("The active wall demolition design changed. Select the walls again.");
-            final_command=reviewRemodelingRoomChanges(source,*demolition,
-                PhysicalWallPhaseSelection{registry.id,phases.active_alternative()},authority,owner);
-        } else {
+        {
             preflight_physical_walls_deletion_join_inference(source.entities(),wall_ids,true);
             const auto join_plan=inspect_physical_wall_join_removal(source.entities(),wall_ids);
             if (!join_plan.ready()) {
@@ -35875,7 +35865,7 @@ public:
         }
         try {
             const auto source = authoringSnapshot();
-            const auto command = reviewBoundaryRedefinition(source, boundaryRedefinitionCommand(source, boundary, classification));
+            const auto command = reviewBoundaryRedefinition(source, boundaryRedefinitionCommand(source, boundary, classification, nullptr, true));
             if (!command) return false;
             (void)Document::preview_command(source, *command);
             applyDocumentCommand(*command);
@@ -64802,7 +64792,7 @@ private:
                 const auto reviewed = reviewBoundaryRedefinition(authoringSnapshot(), boundaryRedefinitionCommand(authoringSnapshot(),
                     boundary_geometry(replacement), classification,
                     boundary_construction_envelope(m_boundary_session->accepted_chains().front(),
-                                                   m_boundary_session->options())));
+                                                   m_boundary_session->options()), true));
                 if (!reviewed) return;
                 const auto& command = *reviewed;
                 (void)Document::preview_command(authoringSnapshot(), command);

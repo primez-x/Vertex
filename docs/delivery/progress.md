@@ -14,6 +14,49 @@ changed source does not acquire runtime acceptance without later qualification.
 
 ## Current delivery state
 
+### October 10 independent redraw correspondence and baseline wall dispatch
+
+The preceding phase/drawing composition is committed and pushed as 7d0f0cce.
+Source diagnosis confirmed that independent Redefine redraws did not promise
+original child order, yet an equal segment count caused the desktop to retain
+old segment/vertex identities by index. Starting an otherwise identical redraw
+at another corner could therefore attach a dimension or satisfied lock to a
+different edge. Both independent-redraw callers now declare fresh topology and
+invoke the existing explicit Keep/map/Remove reference review. Its cancellation
+returns before publication or clearing the editable redraw. The helper default,
+core identity-preserving edit contract, historical commands and format meanings
+remain unchanged. Existing reviewed recovery checkpoints retain the accepted
+mapping/removal choices; no new codec or reader floor is needed.
+
+Every detected active-baseline wall selection now dispatches through the
+existing complete typed wall-demolition path, including wall-only cohorts and
+those without affected rooms. The obsolete raw registry fallback is removed
+from current ordinary wall Delete/Cut preparation. No-room demolition emits the
+complete pure34 command; affected rooms retain the accepted typed room review.
+Both routes retain original physical geometry, complete hosting consequences,
+source/selection fences, cancellation and one finalization. Prepared mixed
+deletion can now compose these baseline-wall selections with actual skylights
+instead of falling back to a raw ordinary command. Historical33 reconstruction
+and existing raw registry commands do not gain broader authority.
+
+Root reviewed the narrow source diff and both route walkthroughs. Manual U053
+now explicitly exercises equal-count redraw from a changed corner/winding,
+reference mapping, cancellation and history. The remodeling mixed-delete task
+also covers isolated walls without affected rooms. All 498 tasks remain Not
+tested. Requirement definitions are preserved; delivery notes record the source
+corrections. `git diff --check`, scoped commit, push and exact remote-ref
+verification accompany this source batch. No builds, tests/new tests, scripts,
+probes, native jobs, UI launches, packages or installations run. Compilation,
+actual interaction, draft recovery, history and migration are unqualified. The
+installed candidate is unchanged; all ten production gates remain open.
+
+Next required work includes an explicit coordinated corner-window deletion
+lane: current single-corner ordinary deletion is source checked, but it does not
+retain an explicit selection-removal proof for composition with skylights.
+Multiple-corner and corner-plus-other ordinary selection also need their full
+lifecycles. Mixed clipboard/properties/transforms, native directional group
+controls and the other consolidated production packages remain required.
+
 ### October 10 phase/drawing and reviewed-room mixed deletion - source integration
 
 The preceding hosted-opening/wall batch is committed and pushed as 3d0581cd.

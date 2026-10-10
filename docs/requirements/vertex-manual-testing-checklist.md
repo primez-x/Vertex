@@ -404,8 +404,8 @@ drawing; switching modes does not change existing geometry.
 - [ ] **U053 — Reopen an existing area for editing**
   - Steps: Draw and close a rectangular room. Select it and run Redefine boundary from Commands. Draw a larger replacement and finish it. Repeat with a triangle. Start another redraw, try starting a new drawing, choose Cancel, then finish the retained redraw. Undo, Redo, save and reopen.
   - Expected: The selected area changes in place. Its measurements and area total follow the new shape. Cancelling keeps the current redraw. One Undo restores the prior shape; Redo restores the replacement. Save/reopen retains the result and history.
-  - Also try: Add a length dimension and an angle dimension, then redraw the area with a different number of corners. In Review redraw references, keep the angle and map its original edges/corner to the numbered replacement edges/corner. Remove the length dimension. Repeat with an automatically placed angle label and choose Remove for that angle. Cancel once, then finish and Apply the same choices. Undo, Redo, clone the result, save and reopen.
-  - Expected: Nothing changes before Apply. Cancel keeps the editable redraw. The kept angle follows the chosen edges; the removed length returns on Undo. Automatic measurements follow the new shape. Incomplete choices or conflicting locked measurements disable Apply with an explanation. Clone and save/reopen retain the accepted result.
+  - Also try: Add a length dimension and an angle dimension, then redraw the area with a different number of corners. Repeat with the same number of corners but start at a different corner or reverse the drawing direction. In Review redraw references, keep the angle and map its original edges/corner to the numbered replacement edges/corner. Remove the length dimension. Repeat with an automatically placed angle label and choose Remove for that angle. Cancel once, then finish and Apply the same choices. Undo, Redo, clone the result, save and reopen.
+  - Expected: Nothing changes before Apply. Cancel keeps the editable redraw. Equal corner counts do not silently assign old dimensions or locks to different edges; retained references follow the explicit mappings you choose. The kept angle follows the chosen edges; the removed length returns on Undo. Automatic measurements follow the new shape. Incomplete choices or conflicting locked measurements disable Apply with an explanation. Clone and save/reopen retain the accepted result.
   - Result: Not tested
   - Notes / steps to reproduce: ____________________
 
@@ -3440,7 +3440,7 @@ Blocked / missing until testing a candidate that contains it.
   - Notes: ______________________________
 
 - [ ] **SKYLIGHT-MIXED-ROOM-DELETE - Review rooms when removing an existing wall and a skylight**
-  - Steps: Create rooms bounded by existing walls, then create a remodeling alternative. Select an existing wall and a skylight on another roof. Delete them, make the desired room decisions, and inspect room names, classifications and dimensions. Undo once, redo, save and reopen.
+  - Steps: Create rooms bounded by existing walls, then create a remodeling alternative. Select an existing wall and a skylight on another roof. Delete them, make the desired room decisions, and inspect room names, classifications and dimensions. Repeat with an isolated existing wall that has no affected rooms, then with several existing walls. Undo once, redo, save and reopen.
   - Expected: The wall's demolition, selected skylight removal and every accepted room decision are retained together. Existing geometry remains available in the baseline view. Unselected dimensions and labels remain attached to their correct objects, and one Undo restores the full change.
   - Result: Not tested
   - Notes: ______________________________

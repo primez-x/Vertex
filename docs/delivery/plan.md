@@ -79,6 +79,11 @@ polling timeout does not permit restarting it.
    tangent constraints; close remaining lifecycle gaps in curve propagation,
    exact travel/offset/walking, bay construction, reopen/redefine/clone and
    complete Draw/Define workflows. Source presence is not product acceptance.
+   Independent redraw now always declares fresh topology, including equal edge
+   counts, and uses the existing explicit reference mapping/removal review.
+   Qualify changed starting corner/winding, dimensions and locked constraints,
+   cancellation, draft recovery, Undo and save/reopen. Historical identity-
+   preserving same-count edits retain their original meaning.
 3. Qualify detached room correspondence using actual source lineage and
    analytical overlap, reviewed split/merge/new/retire dispositions in one
    command, snapshot-aware clear-room dimensions and explicit coordinated
@@ -251,6 +256,13 @@ polling timeout does not permit restarting it.
    behavior; the current ordinary phase/drawing preparation uses47. Corner-window
    mixed deletion, raw phase-registry deletion, mixed clipboard/properties/
    transforms and native directional group controls remain required gaps.
+   Subsequent controller dispatch routes every active-baseline wall cohort,
+   including wall-only selections with no affected rooms, through the existing
+   complete typed wall-demolition producer. Its no-room command remains pure34;
+   affected rooms retain the accepted typed review. The obsolete raw registry
+   fallback is removed from current wall Delete/Cut preparation. Qualify these
+   current routes with mixed skylights and preserved baseline/history; no
+   historical raw/phase command gains broader authority.
 10. Implement observed native/vendor/device adapters through existing workers;
     complete declared IFC/DXF/Pinc fidelity and independently consumed output.
     Add offline OCR text regions/confidence feeding reviewed proposals. New
