@@ -10,6 +10,14 @@ Full production certification still requires imported Apex projects and the
 remaining architectural authoring workflows to be exercised through the single
 production gate.
 
+When a project contains multiple phase registries, **Design set** in Layers and
+the alternatives editor selects which objects and alternatives to edit. The
+control is hidden for a single set. Selecting a set leaves every saved phase
+choice intact; **Display phase** changes the chosen set through the undoable
+command. Open editors bind the chosen set as well as the document, so a stale
+editor cannot publish against a different target. Unsaved alternative edits
+must be saved or restored before switching sets.
+
 Construction requires an explicit registry of participating model entity IDs, a
 shared baseline, and alternatives. The registry must match the caller's intended
 scope; this module does not independently inspect a document or geometry. Every
@@ -18,13 +26,21 @@ Baseline objects are existing. An alternative may mark baseline objects demolish
 and introduce proposed objects. Demolished objects remain present with that phase
 so downstream consumers can apply their own explicit phase filters. Proposed
 objects from other alternatives are absent. Replacement geometry needs a distinct
-entity ID from the demolished baseline object. This bounded model permits only one
-alternative family; it does not support stacked alternatives or sequential projects.
+entity ID from the demolished baseline object. Each registry permits one
+alternative family. A document may contain disjoint registries with independent
+saved choices; this does not provide stacked alternatives or sequential projects.
 
 After phase setup, desktop authoring assigns newly created geometry to the active
 alternative's proposals, or to the shared baseline when baseline is selected.
 Geometry and registry membership are one undoable command, including pasted and
 compound geometry and hosted openings; opening host references remain unchanged.
+Independent new objects use the selected design set. A door or window uses its
+wall's actual set and that set's current phase, even when another set is selected
+for editing. Unregistered legacy walls keep unregistered openings. Hosted stair
+railings follow their stair through the baseline and every proposal/demolition
+list, and cannot be registered in a foreign set. Deletion removes membership
+from every owning registry. Explicit source-derived cohorts retain their supplied
+membership rather than being reassigned by the authoring selection.
 Building and floor organization records are not newly enrolled by geometry authoring.
 Editing existing unregistered geometry does not silently enroll or reclassify it.
 

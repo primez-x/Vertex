@@ -163,8 +163,10 @@ public:
     [[nodiscard]] bool setContainerVisible(const QString& entity_id, bool visible);
     void showAllContainers();
     [[nodiscard]] bool entityVisible(const QString& entity_id) const;
-    // The active design phase is a persisted semantic selection.  An empty
-    // value denotes the shared existing baseline.
+    // Registry selection is an editing target, separate from each registry's
+    // persisted active alternative. An empty alternative denotes its baseline.
+    [[nodiscard]] QString modelPhaseRegistryId() const;
+    [[nodiscard]] bool selectModelPhaseRegistry(const QString& registry_id);
     [[nodiscard]] QString activeRemodelingAlternative() const;
     [[nodiscard]] bool selectRemodelingAlternative(const QString& alternative_id);
     [[nodiscard]] QString createBuilding(const QString& property_id, const QString& name,

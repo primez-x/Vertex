@@ -148,6 +148,12 @@ only the roster, baseline and each alternative's demolition/proposal owner
 lists; alternative identities, names and active selection remain local. It does
 not supply transport authentication or destination ownership. V9 capture,
 wire admission, actual destination binding and publication remain unimplemented.
+
+The desktop authoring target now selects among existing phase registries, with
+each registry retaining its saved active alternative. Enrollment, deletion,
+hosted ownership, annotation filtering and automatic wall measurements evaluate
+the actual registry graph. This source change does not add V9 transport or turn
+retained V1-V8 phase proof into an editable imported destination registry.
 The desktop must also expose registry selection so all transferred alternatives
 remain editable. No existing carrier is advertised as completing this contract.
 

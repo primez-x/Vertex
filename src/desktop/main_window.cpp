@@ -3830,15 +3830,35 @@ QString assembly_quantity_text(const AssemblyQuantityProperty& value) {
         .arg(QString::number(value.value, 'g', 12), assembly_quantity_unit_label(value.unit));
 }
 
-std::optional<PhaseModelRecord> decode_phase_model(const DocumentSnapshot& snapshot) {
+std::vector<PhaseModelRecord> decode_phase_models(const DocumentSnapshot& snapshot) {
+    std::vector<PhaseModelRecord> records;
     for (const auto& [id, entity] : snapshot.entities()) {
         if (entity.type != "model_phases") continue;
         if (!entity.properties.contains("model")) {
             throw std::invalid_argument("The design phase record has no model payload.");
         }
-        return PhaseModelRecord{id, ModelPhases::from_json(entity.properties.at("model"))};
+        records.push_back({id, ModelPhases::from_json(entity.properties.at("model"))});
     }
-    return std::nullopt;
+    return records;
+}
+
+std::optional<PhaseModelRecord> decode_phase_model(
+    const DocumentSnapshot& snapshot, const std::string& registry_id = {}) {
+    const auto records = decode_phase_models(snapshot);
+    if (registry_id.empty()) {
+        if (!records.empty()) return records.front();
+        return std::nullopt;
+    }
+    for (const auto& record : records)
+        if (record.entity_id == registry_id) return record;
+    throw std::invalid_argument("The selected design set no longer exists.");
+}
+
+QString phase_registry_label(const DocumentSnapshot& snapshot, const PhaseModelRecord& record,
+                             std::size_t index) {
+    const auto name = read_string(snapshot.entities().at(record.entity_id).properties, "name");
+    if (name && !QString::fromStdString(*name).trimmed().isEmpty()) return QString::fromStdString(*name);
+    return QStringLiteral("Design set %1").arg(static_cast<qulonglong>(index + 1));
 }
 
 std::optional<RoomRelationshipRecord> decode_room_relationships(
@@ -4018,7 +4038,8 @@ bool saved_design_overlay_active(const DocumentSnapshot& source,
 std::set<std::string, std::less<>> visible_project_entities_with_phase(
     const DocumentSnapshot& snapshot, const ProjectViewFilter& filter) {
     auto visible = visible_project_entities(snapshot, filter);
-    if (const auto phases = decode_phase_model(snapshot)) {
+    for (const auto& phase_record : decode_phase_models(snapshot)) {
+        const auto* phases = &phase_record;
         const auto active_state = phases->model.active_state();
         std::set<std::string,std::less<>> inactive;
         for (const auto& id : phases->model.entity_ids()) {
@@ -8261,7 +8282,8 @@ public:
                         true,false,false);
                 const auto [transaction,target]=makeArchitecturalObjectTransformTransaction(
                     source,found->second,rotation_degrees,offset_x,offset_y,offset_z,uniform_scale,clone);
-                return {augmentAuthoredCommand(architecturalObjectTransformCommand(source,found->second,transaction),source),target};
+                return {augmentAuthoredCommand(architecturalObjectTransformCommand(source,found->second,transaction,
+                    phaseRegistryForAuthoring(source)),source),target};
             }();
             if (const auto* changes=std::get_if<ApplyEntityChanges>(&command);
                 changes && changes->entity_changes.empty()) { clearError(); return true; }
@@ -12996,7 +13018,8 @@ public:
                         const auto [transaction, target] = makeArchitecturalObjectTransformTransaction(
                             source,*original,rotation->text(),offset_x->text(),offset_y->text(),
                             offset_z->text(),scale->text(),clone->isChecked());
-                        return {augmentAuthoredCommand(architecturalObjectTransformCommand(source,*original,transaction),source),target};
+                        return {augmentAuthoredCommand(architecturalObjectTransformCommand(source,*original,transaction,
+                            phaseRegistryForAuthoring(source)),source),target};
                     }();
                     root = alternativeReplacementTargetID(command, root);
                     const auto preview = Document::preview_command(source, command);
@@ -16022,9 +16045,50 @@ public:
         }
     }
 
+    std::optional<PhaseModelRecord> selectedPhaseModel(const DocumentSnapshot& source) const {
+        if (m_phase_registry_document.lock() == m_document && !m_phase_registry_id.isEmpty()) {
+            const auto found = source.entities().find(m_phase_registry_id.toStdString());
+            if (found != source.entities().end() && found->second.type == "model_phases")
+                return decode_phase_model(source, found->first);
+        }
+        return decode_phase_model(source);
+    }
+
+    [[nodiscard]] QString modelPhaseRegistryId() const {
+        try {
+            const auto record = selectedPhaseModel(authoringSnapshot());
+            return record ? id_from(record->entity_id) : QString{};
+        } catch (const std::exception&) {
+            return {};
+        }
+    }
+
+    [[nodiscard]] bool selectModelPhaseRegistry(const QString& registry_id) {
+        try {
+            if (hasPendingPlacementEdit() || m_text_placement_context || m_plan_label_context || m_armed_area_class)
+                throw std::invalid_argument("Finish or cancel the current drawing or placement before changing design sets.");
+            const auto source = authoringSnapshot();
+            const auto record = decode_phase_model(source, registry_id.toStdString());
+            if (!record || registry_id.isEmpty())
+                throw std::invalid_argument("Choose an existing design set.");
+            m_phase_registry_id = id_from(record->entity_id);
+            m_phase_registry_document = m_document;
+            clearError();
+            // Selecting an editing target does not change any saved phase or
+            // history. Each registry retains its own active alternative.
+            refresh();
+            return true;
+        } catch (const std::exception& error) {
+            setError(QStringLiteral("Design set: %1").arg(QString::fromUtf8(error.what())));
+            try { refreshModelPhaseControl(authoringSnapshot()); }
+            catch (const std::exception&) { /* Preserve the original unavailable-source diagnostic. */ }
+            return false;
+        }
+    }
+
     [[nodiscard]] QString activeRemodelingAlternative() const {
         try {
-            const auto record = decode_phase_model(m_document->snapshot());
+            const auto record = selectedPhaseModel(authoringSnapshot());
             if (!record || !record->model.active_alternative()) return {};
             return id_from(*record->model.active_alternative());
         } catch (const std::exception&) {
@@ -16105,7 +16169,7 @@ public:
             if (hasPendingPlacementEdit() || m_text_placement_context || m_plan_label_context || m_armed_area_class)
                 throw std::invalid_argument("Finish or cancel the current drawing or placement before changing design phases.");
             const auto source = authoringSnapshot();
-            const auto record = decode_phase_model(source);
+            const auto record = selectedPhaseModel(source);
             if (!record) throw std::invalid_argument("Create a design phase record before selecting an alternative.");
             const auto trimmed = alternative_id.trimmed();
             const std::optional<std::string> selected = trimmed.isEmpty()
@@ -16131,7 +16195,7 @@ public:
     bool ensureModelPhaseRecord() {
         try {
             const auto source = authoringSnapshot();
-            if (decode_phase_model(source).has_value()) return true;
+            if (selectedPhaseModel(source).has_value()) return true;
             const auto model_ids = phase_model_entity_ids(source);
             if (model_ids.empty()) {
                 throw std::invalid_argument(
@@ -16169,6 +16233,13 @@ public:
             dialog.setModal(true);
             dialog.resize(900, 620);
             auto* layout = new QVBoxLayout(&dialog);
+
+            auto* registry_label = new QLabel(QStringLiteral("Design set"), &dialog);
+            auto* registry = new QComboBox(&dialog);
+            registry->setObjectName(QStringLiteral("remodelingRegistrySelection"));
+            registry->setToolTip(QStringLiteral("Choose which set of model objects and alternatives to edit."));
+            layout->addWidget(registry_label);
+            layout->addWidget(registry);
 
             auto* phase = new QComboBox(&dialog);
             phase->setObjectName(QStringLiteral("remodelingPhaseSelection"));
@@ -16438,7 +16509,20 @@ public:
             const auto refresh_dialog = [&] {
                 editing_source=authoringSnapshot();
                 editing_authority=captureSourceEditAuthority(*editing_source);
-                record = decode_phase_model(*editing_source);
+                record = selectedPhaseModel(*editing_source);
+                const auto registries = decode_phase_models(*editing_source);
+                {
+                    const QSignalBlocker registry_blocker(registry);
+                    registry->clear();
+                    for (std::size_t i = 0; i < registries.size(); ++i) {
+                        registry->addItem(phase_registry_label(*editing_source, registries[i], i),
+                                          id_from(registries[i].entity_id));
+                        registry->setItemData(static_cast<int>(i), id_from(registries[i].entity_id), Qt::ToolTipRole);
+                    }
+                    registry->setCurrentIndex(record ? registry->findData(id_from(record->entity_id)) : -1);
+                    registry_label->setVisible(registries.size() > 1);
+                    registry->setVisible(registries.size() > 1);
+                }
                 if (!record) {
                     const auto ids=phase_model_entity_ids(*editing_source);
                     // Opening or cancelling the editor never creates history.
@@ -16446,7 +16530,7 @@ public:
                     record=PhaseModelRecord{draft_record_id,ModelPhases::create(ids,ids,{})};
                 }
                 baseline_source=editing_source;
-                if (const auto stored=decode_phase_model(*editing_source); stored && stored->model.active_alternative())
+                if (const auto stored=selectedPhaseModel(*editing_source); stored && stored->model.active_alternative())
                     baseline_source=Document::preview_command(*editing_source,Command{model_phase_selection_command(
                         *editing_source,stored->entity_id,std::nullopt,editing_source->revision())});
                 demolition_scene.reset(); demolition_scope.clear();
@@ -16470,6 +16554,30 @@ public:
             };
             refresh_dialog();
 
+            QObject::connect(registry, &QComboBox::activated, &dialog, [&](int index) {
+                try {
+                    require_editing_source();
+                    const auto alternative_id = phase_selection(phase);
+                    const auto existing = std::find_if(record->model.alternatives().begin(), record->model.alternatives().end(),
+                        [&](const auto& row) { return alternative_id && row.id == *alternative_id; });
+                    const auto expected_name = existing == record->model.alternatives().end()
+                        ? QString{} : QString::fromStdString(existing->name);
+                    const auto selected_ids = selected_demolition_ids();
+                    const std::set<std::string> selected(selected_ids.begin(), selected_ids.end());
+                    const std::set<std::string> expected = existing == record->model.alternatives().end()
+                        ? std::set<std::string>{} : std::set<std::string>(existing->demolished_ids.begin(), existing->demolished_ids.end());
+                    if (name->text() != expected_name || selected != expected)
+                        throw std::invalid_argument("Save your alternative changes or restore their original values before changing design sets.");
+                    if (!selectModelPhaseRegistry(registry->itemData(index).toString()))
+                        throw std::invalid_argument(lastError().toStdString());
+                    refresh_dialog();
+                } catch (const std::exception& error) {
+                    const QSignalBlocker blocker(registry);
+                    registry->setCurrentIndex(record ? registry->findData(id_from(record->entity_id)) : -1);
+                    status->setText(QString::fromUtf8(error.what()));
+                }
+            });
+
             QObject::connect(phase, &QComboBox::currentIndexChanged, &dialog,
                              [&](int) { refresh_selection(); });
             QObject::connect(comparison_left, &QComboBox::currentIndexChanged, &dialog,
@@ -16491,7 +16599,7 @@ public:
                     if (!phase->count()) return;
                     require_editing_source();
                     const auto selected=phase->currentData().toString();
-                    if (selected.isEmpty() && !decode_phase_model(*editing_source)) {
+                    if (selected.isEmpty() && !selectedPhaseModel(*editing_source)) {
                         clearError(); status->setText(QStringLiteral("Existing baseline selected.")); return;
                     }
                     if (selectRemodelingAlternative(selected)) {
@@ -16509,7 +16617,7 @@ public:
                         throw std::invalid_argument("Enter a name for the new alternative.");
                     require_editing_source();
                     const auto& source = *editing_source;
-                    const auto current = decode_phase_model(source);
+                    const auto current = selectedPhaseModel(source);
                     if (!record) throw std::invalid_argument("The design phase record is unavailable.");
                     RemodelingAlternative candidate;
                     candidate.id = new_id("alternative");
@@ -21807,14 +21915,7 @@ public:
         if (calculation_workflow_name(property.properties)!="appraisal" ||
             policy==property.properties.end() || !policy->is_object() ||
             read_string(*policy,"measurement_basis")!=std::optional<std::string>{"exterior"}) return {};
-        std::set<std::string,std::less<>> inactive;
-        if (const auto phases=decode_phase_model(candidate)) {
-            const auto active=phases->model.active_state();
-            for (const auto& id : phases->model.entity_ids()) {
-                const auto state=active.find(id);
-                if (state==active.end() || state->second==ModelPhase::demolished) inactive.insert(id);
-            }
-        }
+        const auto inactive = constraint_phase_scope(candidate.entities()).inactive_owner_ids;
         const auto organization=organize_project(candidate);
         std::vector<std::string> requested;
         for (const auto& id : chain_ids) {
@@ -25128,7 +25229,7 @@ public:
     }
 
     static Command architecturalObjectTransformCommand(const DocumentSnapshot& source,
-        const Entity& original, const ArchitecturalTransaction& transaction) {
+        const Entity& original, const ArchitecturalTransaction& transaction, const std::string& registry_id) {
         const auto& operations=transaction.operations();
         if ((original.type=="stair" || original.type=="railing") && operations.size()==2 &&
             operations[0].action==ArchitecturalAction::duplicate && operations[0].object_id==original.id &&
@@ -25141,8 +25242,8 @@ public:
             auto command=sourceDerivedStairCloneCommand(source, {{original.id,
                 {{}, {movement.x,movement.y,movement.z},movement.rotation_z_radians,movement.scale,false,false}}},
                 transaction.undo_label(),identities,children,&capture);
-            auto complete=augmentAuthoredCommand(command,source);
-            requireIndependentCopyRegistrations(source,command,std::get<ApplyEntityChanges>(complete),&capture);
+            auto complete=augmentAuthoredCommandForRegistry(command,source,{},registry_id);
+            requireIndependentCopyRegistrationsForRegistry(source,command,std::get<ApplyEntityChanges>(complete),&capture,registry_id);
             return complete;
         }
         if ((original.type=="stair" || original.type=="railing") && operations.size()==1 &&
@@ -25163,9 +25264,9 @@ public:
             auto command = sourceDerivedStructuralCloneCommand(source, {{original.id,
                 {{}, {movement.x, movement.y, movement.z}, movement.rotation_z_radians, movement.scale, false, false}}},
                 transaction.undo_label(), identities, &capture);
-            auto complete = augmentAuthoredCommand(command, source);
-            requireIndependentCopyRegistrations(source, command,
-                std::get<ApplyEntityChanges>(complete), &capture);
+            auto complete = augmentAuthoredCommandForRegistry(command, source, {}, registry_id);
+            requireIndependentCopyRegistrationsForRegistry(source, command,
+                std::get<ApplyEntityChanges>(complete), &capture, registry_id);
             return complete;
         }
         if (original.type == "slab" && operations.size() == 2 &&
@@ -25178,9 +25279,9 @@ public:
             auto command = sourceDerivedSlabCloneCommand(source, {original.id}, {{original.id,
                 {{}, {movement.x, movement.y, movement.z}, movement.rotation_z_radians, movement.scale, false, false}}},
                 transaction.undo_label(), identities, &capture);
-            auto complete = augmentAuthoredCommand(command, source);
-            requireIndependentCopyRegistrations(source, command,
-                std::get<ApplyEntityChanges>(complete), &capture);
+            auto complete = augmentAuthoredCommandForRegistry(command, source, {}, registry_id);
+            requireIndependentCopyRegistrationsForRegistry(source, command,
+                std::get<ApplyEntityChanges>(complete), &capture, registry_id);
             return complete;
         }
         if (original.type == "roof" && operations.size() == 2 &&
@@ -25285,7 +25386,7 @@ public:
             pivot.y-(s*pivot.x+c*pivot.y),0.0,transform.rotation_radians,1.0};
         const auto transaction=ArchitecturalTransaction::create(new_id("plan-rotation"),
             std::to_string(source.revision()),{entity.id},{std::move(operation)},"Rotate physical object in plan");
-        return augmentAuthoredCommand(architecturalObjectTransformCommand(source,entity,transaction),source);
+        return augmentAuthoredCommandForRegistry(architecturalObjectTransformCommand(source,entity,transaction,{}),source);
     }
 
     static CanvasBoundaryPreviewMetrics endpointPreviewMetrics(const Entity& entity) {
@@ -27150,7 +27251,7 @@ public:
                 !capture.wall_group_pivot || intent.canvas_pivot.x!=capture.wall_group_pivot->x ||
                 intent.canvas_pivot.y!=capture.wall_group_pivot->y)
                 throw std::invalid_argument("The captured wall-group rotation authority changed.");
-            return augmentAuthoredCommand(makeSelectionGeometryTransformCommand(source,capture.wall_ids,planar),source);
+            return augmentAuthoredCommandForRegistry(makeSelectionGeometryTransformCommand(source,capture.wall_ids,planar),source);
         }
         const auto c=std::cos(intent.source_radians),s=std::sin(intent.source_radians);
         const ArchitecturalTransform gesture{
@@ -27180,10 +27281,10 @@ public:
                 ArchitecturalOperation operation{ArchitecturalAction::transform,entity.id};operation.transform=gesture;
                 const auto transaction=ArchitecturalTransaction::create(new_id("architectural-tx"),
                     std::to_string(source.revision()),{entity.id},{std::move(operation)},"Transform architectural object");
-                command=architecturalObjectTransformCommand(source,entity,transaction);
+                command=architecturalObjectTransformCommand(source,entity,transaction,{});
             }
         }
-        return augmentAuthoredCommand(command,source);
+        return augmentAuthoredCommandForRegistry(command,source);
     }
 
     void startVertexPreviewJob(PendingVertexPreview request) {
@@ -27356,7 +27457,7 @@ public:
                                 : makeSelectionGeometryTranslationCommand(*source,std::move(parts.model_ids),
                                     parts.model_delta,std::move(parts.presentation_changes),plan_move->canvas_delta,
                                     parts.annotation_moves,parts.reference_moves,room_dimension_placements.get());
-                            command=augmentAuthoredCommand(std::move(command),*source);
+                            command=augmentAuthoredCommandForRegistry(std::move(command),*source);
                         }
                         if (!cancellation.is_cancelled()) {
                             if (auto proposed = projectAlternativeWallCanvasCommand(*source, command, *retained,
@@ -27423,7 +27524,7 @@ public:
                         const bool no_op=site_wall_move->canvas_delta.x==0.0 && site_wall_move->canvas_delta.y==0.0;
                         Command command=no_op
                             ? Command{ApplyEntityChanges{source->revision(),{}, {},"Move selection"}}
-                            : augmentAuthoredCommand(prepareDetachedSiteTranslationCommand(*source,
+                            : augmentAuthoredCommandForRegistry(prepareDetachedSiteTranslationCommand(*source,
                                 site_wall_move->ids,site_wall_move->canvas_delta,*site_input,
                                 room_dimension_placements.get()),*source);
                         if (!cancellation.is_cancelled()) {
@@ -33364,8 +33465,8 @@ public:
                 change.entity.properties.erase("vertical_placement");
             }
             const bool measured_placement=placeMeasuredClipboardGraph(source,changes);
-            const auto command = validateIndependentAreaCopy(source,ApplyEntityChanges{
-                source.revision(), std::move(changes), {}, "Paste selection"});
+            const auto command = augmentAuthoredCommand(validateIndependentAreaCopy(source,ApplyEntityChanges{
+                source.revision(), std::move(changes), {}, "Paste selection"}), source);
             const auto candidate=Document::preview_command(source, command);
             auto targets=siteCanvas(m_architecturalCanvas) ? preparedSiteAnnotationTargets(candidate)
                 : std::map<QString,SiteAnnotationTarget>{};
@@ -44334,12 +44435,30 @@ private:
         });
     }
 
-    Command augmentAuthoredCommand(const Command& command) {
+    Command augmentAuthoredCommand(const Command& command) const {
         return augmentAuthoredCommand(command, authoringSnapshot());
     }
 
+    std::string phaseRegistryForAuthoring(const DocumentSnapshot& source) const {
+        const auto registry = selectedPhaseModel(source);
+        return registry ? registry->entity_id : std::string{};
+    }
+
+    Command augmentAuthoredCommand(const Command& command, const DocumentSnapshot& source,
+        const std::set<std::string,std::less<>>& admitted_destinations = {}) const {
+        return augmentAuthoredCommandForRegistry(command, source, admitted_destinations,
+            phaseRegistryForAuthoring(source));
+    }
+
+    void requireIndependentCopyRegistrations(const DocumentSnapshot& source,
+        const ApplyEntityChanges& intent, const ApplyEntityChanges& candidate,
+        const IndependentModelCopyCapture* model_copy = nullptr) const {
+        requireIndependentCopyRegistrationsForRegistry(source, intent, candidate, model_copy,
+            phaseRegistryForAuthoring(source));
+    }
+
     static void registerNewObjectMemberships(const DocumentSnapshot& source, ApplyEntityChanges& command,
-        const std::set<std::string,std::less<>>& admitted_destinations={}) {
+        const std::set<std::string,std::less<>>& admitted_destinations={}, const std::string& registry_id={}) {
         auto* changes = &command;
         // Imported page views retain explicit ownership as new content is
         // authored. The same command registers new layer-owned objects,
@@ -44373,104 +44492,157 @@ private:
                 changes->entity_changes.push_back(EntityChange::upsert(std::move(updated)));
             }
         }
-        if (const auto record = decode_phase_model(source); record &&
-            std::none_of(changes->entity_changes.begin(), changes->entity_changes.end(),
-                [&](const auto& change) {
-                    return change.kind == EntityChangeKind::erase &&
-                           change.entity_id == record->entity_id;
-                })) {
-            auto registry = source.entities().at(record->entity_id);
-            auto model = record->model;
-            for (const auto& change : changes->entity_changes) {
-                if (change.entity_id == record->entity_id ||
-                    change.entity.id == record->entity_id) {
-                    registry = change.entity;
-                    model = ModelPhases::from_json(registry.properties.at("model"));
-                }
+        // Evaluate the actual post-command registries, including an explicit
+        // imported/replacement cohort. Never re-enroll its owners into another set.
+        std::map<std::string, Entity, std::less<>> registry_entities;
+        for (const auto& [id, entity] : source.entities())
+            if (entity.type == "model_phases") registry_entities.emplace(id, entity);
+        std::set<std::string, std::less<>> removed;
+        for (const auto& change : changes->entity_changes) {
+            if (change.kind == EntityChangeKind::erase) {
+                removed.insert(change.entity_id);
+                registry_entities.erase(change.entity_id);
+            } else if (change.entity.type == "model_phases") {
+                registry_entities.insert_or_assign(change.entity.id, change.entity);
+            } else if (registry_entities.contains(change.entity.id)) {
+                throw std::invalid_argument("A design set cannot change its entity type.");
             }
-            auto ids = model.entity_ids();
-            auto baseline = model.baseline_ids();
-            auto alternatives = model.alternatives();
-            bool changed = false;
-            for (const auto& change : changes->entity_changes) {
-                if (change.kind != EntityChangeKind::erase) continue;
-                const auto removed = change.entity_id;
-                if (removed == record->entity_id) continue;
-                const auto entity_before = std::find(ids.begin(), ids.end(), removed);
-                if (entity_before == ids.end()) continue;
-                ids.erase(entity_before);
-                std::erase(baseline, removed);
-                for (auto& alternative : alternatives) {
-                    std::erase(alternative.demolished_ids, removed);
-                    std::erase(alternative.proposed_ids, removed);
-                }
-                changed = true;
+        }
+        struct RegistryEdit {
+            Entity entity;
+            ModelPhases model;
+            std::vector<std::string> ids;
+            std::vector<std::string> baseline;
+            std::vector<RemodelingAlternative> alternatives;
+            bool changed{};
+        };
+        std::vector<RegistryEdit> registries;
+        std::map<std::string, std::size_t, std::less<>> memberships;
+        std::optional<std::size_t> selected;
+        for (const auto& [id, entity] : registry_entities) {
+            auto model = ModelPhases::from_json(entity.properties.at("model"));
+            RegistryEdit edit{entity, model, model.entity_ids(), model.baseline_ids(), model.alternatives()};
+            const auto count = edit.ids.size();
+            std::erase_if(edit.ids, [&](const auto& owner) { return removed.contains(owner); });
+            std::erase_if(edit.baseline, [&](const auto& owner) { return removed.contains(owner); });
+            for (auto& alternative : edit.alternatives) {
+                std::erase_if(alternative.demolished_ids, [&](const auto& owner) { return removed.contains(owner); });
+                std::erase_if(alternative.proposed_ids, [&](const auto& owner) { return removed.contains(owner); });
             }
-            for (const auto& change : changes->entity_changes) {
-                if (change.kind != EntityChangeKind::upsert ||
-                    source.entities().contains(change.entity.id) ||
-                    admitted_destinations.contains(change.entity.id) ||
-                    !is_phase_model_entity(change.entity.type) ||
-                    hosted_stair_railing(change.entity) ||
-                    change.entity.type == "building" || change.entity.type == "floor" ||
-                    std::find(ids.begin(), ids.end(), change.entity.id) != ids.end()) continue;
-                ids.push_back(change.entity.id);
-                if (model.active_alternative()) {
-                    for (auto& alternative : alternatives) {
-                        if (alternative.id == *model.active_alternative())
-                            alternative.proposed_ids.push_back(change.entity.id);
-                    }
-                } else {
-                    baseline.push_back(change.entity.id);
-                }
-                changed = true;
+            edit.changed = count != edit.ids.size();
+            const auto index = registries.size();
+            if (id == registry_id) selected = index;
+            for (const auto& owner : edit.ids)
+                if (!memberships.emplace(owner, index).second)
+                    throw std::invalid_argument("An object belongs to overlapping design sets: " + owner);
+            registries.push_back(std::move(edit));
+        }
+        const auto fresh = [&](const EntityChange& change) {
+            return change.kind == EntityChangeKind::upsert && !source.entities().contains(change.entity.id) &&
+                !admitted_destinations.contains(change.entity.id) && is_phase_model_entity(change.entity.type);
+        };
+        const auto enroll_current = [&](std::size_t index, const std::string& owner) {
+            auto& edit = registries.at(index);
+            edit.ids.push_back(owner);
+            if (edit.model.active_alternative()) {
+                for (auto& alternative : edit.alternatives)
+                    if (alternative.id == *edit.model.active_alternative()) alternative.proposed_ids.push_back(owner);
+            } else edit.baseline.push_back(owner);
+            memberships.emplace(owner, index);
+            edit.changed = true;
+        };
+        const auto effective_entity = [&](const std::string& id) -> const Entity* {
+            for (auto change = changes->entity_changes.rbegin(); change != changes->entity_changes.rend(); ++change) {
+                if (change->kind == EntityChangeKind::erase && change->entity_id == id) return nullptr;
+                if (change->kind == EntityChangeKind::upsert && change->entity.id == id) return &change->entity;
             }
-            // A newly hosted rail follows its stair in every alternative.
-            // Admission must not leave an existing rail surviving a
-            // demolished host, including alternatives that are inactive.
-            for (const auto& change : changes->entity_changes) {
-                if (change.kind != EntityChangeKind::upsert ||
-                    source.entities().contains(change.entity.id) || admitted_destinations.contains(change.entity.id) ||
-                    !hosted_stair_railing(change.entity) ||
-                    std::find(ids.begin(), ids.end(), change.entity.id) != ids.end()) continue;
-                const auto rail = decode_railing_properties(change.entity.id, change.entity.properties);
-                if (std::find(ids.begin(), ids.end(), stair_railing_host_id(rail)) == ids.end())
-                    throw std::invalid_argument("A new stair railing needs a host in the phase registry.");
-                ids.push_back(change.entity.id);
-                if (std::find(baseline.begin(), baseline.end(), stair_railing_host_id(rail)) != baseline.end())
-                    baseline.push_back(change.entity.id);
-                for (auto& alternative : alternatives) {
-                    if (std::find(alternative.demolished_ids.begin(), alternative.demolished_ids.end(),
-                            stair_railing_host_id(rail)) != alternative.demolished_ids.end())
-                        alternative.demolished_ids.push_back(change.entity.id);
-                    if (std::find(alternative.proposed_ids.begin(), alternative.proposed_ids.end(),
-                            stair_railing_host_id(rail)) != alternative.proposed_ids.end())
-                        alternative.proposed_ids.push_back(change.entity.id);
-                }
-                changed = true;
+            const auto found = source.entities().find(id);
+            return found == source.entities().end() ? nullptr : &found->second;
+        };
+        // Pure retained transform workers do not have an editing target and
+        // cannot introduce independent owners. UI authoring captures one explicitly.
+        for (const auto& change : changes->entity_changes) {
+            if (!fresh(change) || memberships.contains(change.entity.id) ||
+                hosted_stair_railing(change.entity) || change.entity.type == "opening" ||
+                change.entity.type == "building" || change.entity.type == "floor") continue;
+            if (!selected) {
+                if (!registry_entities.empty() || !registry_id.empty())
+                    throw std::invalid_argument("Choose an existing design set before adding model objects.");
+                continue;
             }
-            if (changed) {
-                const auto phase_model = ModelPhases::create(
-                    std::move(ids), std::move(baseline), std::move(alternatives),
-                    model.active_alternative());
-                registry.properties["model"] = retain_model_phase_source(registry.properties.at("model"), phase_model);
-                std::erase_if(changes->entity_changes, [&](const auto& change) {
-                    return change.entity.id == record->entity_id;
-                });
-                changes->entity_changes.push_back(EntityChange::upsert(std::move(registry)));
+            enroll_current(*selected, change.entity.id);
+        }
+        for (const auto& change : changes->entity_changes) {
+            if (!fresh(change)) continue;
+            const auto railing = hosted_stair_railing(change.entity);
+            if (!railing && change.entity.type != "opening") continue;
+            const auto host = railing
+                ? stair_railing_host_id(decode_railing_properties(change.entity.id, change.entity.properties))
+                : read_string(change.entity.properties, "wall_id").value_or("");
+            const auto* host_entity = effective_entity(host);
+            if (!host_entity || host_entity->type != (railing ? "stair" : "wall"))
+                throw std::invalid_argument("The hosted component needs its actual current host.");
+            const auto host_membership = memberships.find(host);
+            const auto own_membership = memberships.find(change.entity.id);
+            if (own_membership != memberships.end()) {
+                if (host_membership == memberships.end() || own_membership->second != host_membership->second)
+                    throw std::invalid_argument("A hosted component cannot belong to a different design set from its host.");
+                // Explicit source-derived cohorts already carry their lifecycle,
+                // including inactive alternatives. Do not reinterpret that intent.
+                continue;
             }
+            // Legacy unregistered hosts keep their legacy ownership. A selected
+            // unrelated set cannot acquire their opening or hosted railing.
+            if (host_membership == memberships.end()) {
+                if (railing && !registry_entities.empty())
+                    throw std::invalid_argument("A new stair railing needs a host in a design set.");
+                continue;
+            }
+            auto& edit = registries.at(host_membership->second);
+            if (!railing) {
+                const auto state = ModelPhases::create(edit.ids, edit.baseline, edit.alternatives,
+                    edit.model.active_alternative()).active_state();
+                const auto found = state.find(host);
+                if (found == state.end() || found->second == ModelPhase::demolished)
+                    throw std::invalid_argument("Choose an active wall before adding a door or window.");
+                enroll_current(host_membership->second, change.entity.id);
+                continue;
+            }
+            // Rails inherit the stair's complete lifecycle, including alternatives
+            // that are not displayed, so a rail cannot survive demolition of its host.
+            edit.ids.push_back(change.entity.id);
+            if (std::find(edit.baseline.begin(), edit.baseline.end(), host) != edit.baseline.end())
+                edit.baseline.push_back(change.entity.id);
+            for (auto& alternative : edit.alternatives) {
+                if (std::find(alternative.demolished_ids.begin(), alternative.demolished_ids.end(), host) != alternative.demolished_ids.end())
+                    alternative.demolished_ids.push_back(change.entity.id);
+                if (std::find(alternative.proposed_ids.begin(), alternative.proposed_ids.end(), host) != alternative.proposed_ids.end())
+                    alternative.proposed_ids.push_back(change.entity.id);
+            }
+            memberships.emplace(change.entity.id, host_membership->second);
+            edit.changed = true;
+        }
+        for (auto& edit : registries) {
+            if (!edit.changed) continue;
+            const auto model = ModelPhases::create(std::move(edit.ids), std::move(edit.baseline),
+                std::move(edit.alternatives), edit.model.active_alternative());
+            edit.entity.properties["model"] = retain_model_phase_source(edit.entity.properties.at("model"), model);
+            std::erase_if(changes->entity_changes, [&](const auto& change) {
+                return change.kind == EntityChangeKind::upsert && change.entity.id == edit.entity.id;
+            });
+            changes->entity_changes.push_back(EntityChange::upsert(std::move(edit.entity)));
         }
     }
 
-    static void requireIndependentCopyRegistrations(const DocumentSnapshot& source,
+    static void requireIndependentCopyRegistrationsForRegistry(const DocumentSnapshot& source,
         const ApplyEntityChanges& intent, const ApplyEntityChanges& candidate,
-        const IndependentModelCopyCapture* model_copy = nullptr) {
+        const IndependentModelCopyCapture* model_copy = nullptr, const std::string& registry_id = {}) {
         if (model_copy && model_copy->intent) {
             if (model_copy->source_digest != document_snapshot_digest(source) ||
                 command_to_json(Command{intent}).dump() != command_to_json(Command{*model_copy->intent}).dump())
                 throw std::invalid_argument("The copy no longer matches its admitted source-derived intent.");
             auto expected = intent;
-            registerNewObjectMemberships(source, expected);
+            registerNewObjectMemberships(source, expected, {}, registry_id);
             if (command_to_json(Command{candidate}).dump() != command_to_json(Command{expected}).dump())
                 throw std::invalid_argument("A copy may add only its admitted geometry, qualified presentation and scope enrollment.");
             return;
@@ -44486,7 +44658,7 @@ private:
         if (!intent.asset_changes.empty() || !candidate.asset_changes.empty())
             throw std::invalid_argument("An independent selection copy must retain its existing local assets.");
         auto registrations = intent;
-        registerNewObjectMemberships(source,registrations);
+        registerNewObjectMemberships(source,registrations, {}, registry_id);
         std::map<std::string,Entity,std::less<>> allowed;
         for (const auto& change : registrations.entity_changes)
             if (source.entities().contains(change.entity.id))
@@ -44514,11 +44686,11 @@ private:
                 if (change.kind==EntityChangeKind::upsert && change.entity.type=="roof_join" &&
                     !source.entities().contains(change.entity.id))
                     admitted_destinations.insert(change.entity.id);
-        return augmentAuthoredCommand(command,source,admitted_destinations);
+        return augmentAuthoredCommandForRegistry(command,source,admitted_destinations);
     }
 
-    static Command augmentAuthoredCommand(const Command& command, const DocumentSnapshot& source,
-        const std::set<std::string,std::less<>>& admitted_destinations={}) {
+    static Command augmentAuthoredCommandForRegistry(const Command& command, const DocumentSnapshot& source,
+        const std::set<std::string,std::less<>>& admitted_destinations={}, const std::string& registry_id={}) {
         // Register only newly authored geometry. Existing unregistered objects
         // retain their legacy visibility; editing them must not change ownership.
         auto authored_command = command;
@@ -44600,7 +44772,7 @@ private:
                     changes->entity_changes.push_back(EntityChange::upsert(std::move(updated)));
                 }
             }
-            registerNewObjectMemberships(source,*changes,admitted_destinations);
+            registerNewObjectMemberships(source,*changes,admitted_destinations,registry_id);
         }
         // Constraint authoring completed its physical/exterior consequences
         // before sealing the candidate. Never change that admitted command.
@@ -45087,7 +45259,7 @@ private:
                     before.extensions.dump()!=after.extensions.dump())
                     command.entity_changes.push_back(EntityChange::upsert(after));
             }
-            return augmentAuthoredCommand(command,source);
+            return augmentAuthoredCommandForRegistry(command,source);
         }
         const auto plan=inspect_phase_structural_replacement_plan(source.entities(),request->seed_object_ids,
             request->registry_id,request->alternative_id,true);
@@ -45387,7 +45559,7 @@ private:
                     before.extensions.dump()!=after.extensions.dump())
                     ordinary.entity_changes.push_back(EntityChange::upsert(after));
             }
-            return augmentAuthoredCommand(ordinary, source);
+            return augmentAuthoredCommandForRegistry(ordinary, source);
         }
         const auto plan=inspect_phase_stair_replacement_plan(source.entities(), transforms,
             request->registry_id, request->alternative_id);
@@ -45422,7 +45594,7 @@ private:
                     before.extensions.dump()!=after.extensions.dump())
                     ordinary.entity_changes.push_back(EntityChange::upsert(after));
             }
-            return augmentAuthoredCommand(ordinary, source);
+            return augmentAuthoredCommandForRegistry(ordinary, source);
         }
         const auto plan=inspect_phase_stair_replacement_plan(source.entities(), edits,
             request->registry_id, request->alternative_id);
@@ -45501,7 +45673,7 @@ private:
             return sourceDerivedStructuralCandidateCommand(source,before,
                 stage_structural_plan_axis_resize_entity(before,scale_x,scale_y,anchor,frame_rotation_radians),
                 "Resize structural object in plan");
-        return augmentAuthoredCommand(plan_axis_resize_command(source, id, scale_x, scale_y,
+        return augmentAuthoredCommandForRegistry(plan_axis_resize_command(source, id, scale_x, scale_y,
             anchor, frame_rotation_radians), source);
     }
 
@@ -49079,6 +49251,15 @@ private:
         phase_heading->setObjectName(QStringLiteral("phaseHeading"));
         phase_heading->setStyleSheet(QStringLiteral("font-weight:600;"));
         layers_layout->addWidget(phase_heading);
+        m_phase_registry_combo = new QComboBox(navigator_panel);
+        m_phase_registry_combo->setObjectName(QStringLiteral("modelPhaseRegistry"));
+        m_phase_registry_combo->setMinimumWidth(0);
+        m_phase_registry_combo->setSizeAdjustPolicy(QComboBox::AdjustToMinimumContentsLengthWithIcon);
+        m_phase_registry_combo->setToolTip(QStringLiteral("Choose the design set to edit. Each set keeps its own active alternative."));
+        layers_layout->addWidget(m_phase_registry_combo);
+        QObject::connect(m_phase_registry_combo, &QComboBox::activated, owner, [this](int index) {
+            (void)selectModelPhaseRegistry(m_phase_registry_combo->itemData(index).toString());
+        });
         m_model_phase_combo = new QComboBox(navigator_panel);
         m_model_phase_combo->setObjectName(QStringLiteral("modelPhase"));
         m_model_phase_combo->setMinimumWidth(0);
@@ -56389,7 +56570,21 @@ private:
         const QSignalBlocker blocker(m_model_phase_combo);
         m_model_phase_combo->clear();
         try {
-            const auto record = decode_phase_model(snapshot);
+            const auto registries = decode_phase_models(snapshot);
+            const auto record = selectedPhaseModel(snapshot);
+            if (m_phase_registry_combo) {
+                const QSignalBlocker registry_blocker(m_phase_registry_combo);
+                m_phase_registry_combo->clear();
+                for (std::size_t i = 0; i < registries.size(); ++i) {
+                    m_phase_registry_combo->addItem(phase_registry_label(snapshot, registries[i], i),
+                                                    id_from(registries[i].entity_id));
+                    m_phase_registry_combo->setItemData(static_cast<int>(i), id_from(registries[i].entity_id), Qt::ToolTipRole);
+                }
+                m_phase_registry_combo->setCurrentIndex(record ? m_phase_registry_combo->findData(id_from(record->entity_id)) : -1);
+                m_phase_registry_combo->setEnabled(true);
+                m_phase_registry_combo->setToolTip(QStringLiteral("Choose the design set to edit. Each set keeps its own active alternative."));
+                m_phase_registry_combo->setVisible(m_workspace == Workspace::architectural && registries.size() > 1);
+            }
             if (!record) {
                 m_model_phase_combo->addItem(QStringLiteral("Set up design phases…"));
                 m_model_phase_combo->setEnabled(true);
@@ -56410,6 +56605,10 @@ private:
                 "Active design phase: %1. Use Design phases and alternatives to create or review options.")
                 .arg(m_model_phase_combo->currentText()));
         } catch (const std::exception& error) {
+            if (m_phase_registry_combo) {
+                m_phase_registry_combo->setEnabled(false);
+                m_phase_registry_combo->setToolTip(QString::fromUtf8(error.what()));
+            }
             m_model_phase_combo->addItem(QStringLiteral("Invalid design phase record"));
             m_model_phase_combo->setEnabled(false);
             m_model_phase_combo->setToolTip(QString::fromUtf8(error.what()));
@@ -58938,6 +59137,7 @@ private:
         const bool architectural = m_workspace == Workspace::architectural;
         if (m_site_placement_action) m_site_placement_action->setEnabled(m_document->is_editable() && !hasPendingPlacementEdit());
         if (m_phase_heading) m_phase_heading->setVisible(architectural);
+        if (m_phase_registry_combo) m_phase_registry_combo->setVisible(architectural && m_phase_registry_combo->count() > 1);
         if (m_model_phase_combo) m_model_phase_combo->setVisible(architectural);
         if (m_manage_phases_button) m_manage_phases_button->setVisible(architectural);
         for (auto* action : m_architectural_actions) action->setVisible(architectural);
@@ -61239,6 +61439,7 @@ private:
         bool metric_units;
         std::optional<DocumentSnapshot> source;
         std::vector<CanvasLabelPresentationIdentity> generated_label_selection;
+        QString phase_registry_id;
     };
 
     struct WorkspaceAuthorityToken {
@@ -61323,6 +61524,7 @@ private:
         const auto& context=authority.context;
         return m_document==context.document && m_document->revision()==context.revision &&
             m_selected_id==context.selected_id && m_active_layer_id==context.layer_id &&
+            modelPhaseRegistryId()==context.phase_registry_id &&
             m_metric_units==context.metric_units && (!require_editable || m_document->is_editable()) &&
             authority.workspace==m_workspace && authority.selection==m_selected_ids &&
             context.generated_label_selection==m_selected_generated_labels &&
@@ -61561,6 +61763,7 @@ private:
     ModalContext captureModalContext() const {
         ModalContext context{m_document, m_document->revision(), m_selected_id, m_active_layer_id, m_metric_units, {}};
         context.generated_label_selection=m_selected_generated_labels;
+        context.phase_registry_id=modelPhaseRegistryId();
         try { context.source=authoringSnapshot(); }
         catch (const std::exception&) {
             // Signal handlers may capture focus/input context without an
@@ -61574,8 +61777,9 @@ private:
         try {
             if (!context.source || m_document != context.document || m_document->revision() != context.revision ||
                 m_selected_id != context.selected_id || m_active_layer_id != context.layer_id ||
+                modelPhaseRegistryId() != context.phase_registry_id ||
                 m_metric_units != context.metric_units || context.generated_label_selection!=m_selected_generated_labels) {
-                setError(QStringLiteral("The project, selection, drawing layer or units changed while the dialog was open. Reopen the tool to use the current context."));
+                setError(QStringLiteral("The project, selection, drawing layer, design set or units changed while the dialog was open. Reopen the tool to use the current context."));
                 return false;
             }
             const auto current=authoringSnapshot();
@@ -64669,6 +64873,9 @@ private:
     QString m_floor_reference_projection_error;
     PlanSceneCaches m_floor_reference_scene_caches;
     QComboBox* m_model_phase_combo{};
+    QComboBox* m_phase_registry_combo{};
+    QString m_phase_registry_id;
+    std::weak_ptr<Document> m_phase_registry_document;
     QComboBox* m_pageSizeCombo{};
     QComboBox* m_architecturalViewCombo{};
     QLabel* m_phase_heading{};
@@ -65338,6 +65545,12 @@ void MainWindow::showAllContainers() { m_impl->showAllContainers(); }
 bool MainWindow::entityVisible(const QString& id) const { return m_impl->entityVisible(id); }
 QString MainWindow::activeRemodelingAlternative() const {
     return m_impl->activeRemodelingAlternative();
+}
+QString MainWindow::modelPhaseRegistryId() const {
+    return m_impl->modelPhaseRegistryId();
+}
+bool MainWindow::selectModelPhaseRegistry(const QString& registry_id) {
+    return m_impl->selectModelPhaseRegistry(registry_id);
 }
 bool MainWindow::selectRemodelingAlternative(const QString& alternative_id) {
     return m_impl->selectRemodelingAlternative(alternative_id);

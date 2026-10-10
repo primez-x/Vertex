@@ -14,6 +14,42 @@ changed source does not acquire runtime acceptance without later qualification.
 
 ## Current delivery state
 
+### October 10 multiple design sets — source integration
+
+The desktop now selects an explicit model_phases registry for authoring and
+alternative management. A compact Design set control appears in Layers and the
+alternatives editor only when more than one registry exists. Each registry keeps
+its own saved active alternative; choosing an editing target creates no history
+and does not change the other sets' selections. The public desktop API exposes
+the target identity. Pending placements refuse a target change, unsaved
+alternative edits are retained instead of discarded on a switch, and modal/source
+authority includes the effective registry identity.
+
+Object enrollment evaluates every effective post-command registry, preserves
+explicit source-derived membership, rejects overlapping ownership and prunes
+deleted owners from every surviving set. Newly authored independent objects
+enter the selected set's baseline or active proposal. A new door/window uses its
+actual wall's set and saved active choice; legacy unregistered walls retain their
+unregistered openings. New stair railings inherit their actual host's complete
+baseline/proposal/demolition lifecycle. Hosted membership cannot cross sets, and
+a registered-host requirement remains for new rails when design sets exist.
+Pasted geometry now passes through the same enrollment path before publication.
+
+Pure retained transform workers use static, snapshot-bound augmentation without
+reading live UI selection. Fresh independent enrollment requires an explicit
+target when registries exist; UI clone preparation and exact copy-registration
+comparison share that target. Automatic exterior-wall measurements use the
+complete phase scope, and baseline-only room annotation acknowledgements are
+filtered against every registry's active alternative rather than the first one.
+
+This closes the identified desktop first-registry source gap; V9/PSIP0004 phase
+transport and actual destination binding remain unfinished. Root source review
+and independent integrated review approved the inspected scope with no actionable
+P1/P2 finding. Scoped diff checks and requirements JSON parsing passed.
+Compilation, interaction, history, save/reopen and performance remain unverified.
+No build, test, new test, probe, script, native job, launch, package or installation
+ran. The installed candidate is unchanged.
+
 ### October 10 phase source codecs — source integration
 
 The shared phase model now has a raw-preserving edit codec and a complete owner
