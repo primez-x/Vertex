@@ -63,8 +63,24 @@ exact sine and cosine values, matching the existing semicircle convention.
 The radical-axis quadratic can certify a negative discriminant, retain genuine
 positive roots, or establish exact zero for a polynomial half-turn case.
 This includes rotated interior semicircle tangency without a shared endpoint.
-Generic trigonometric intervals containing zero remain indeterminate; an
-intended tangent construction is not proof of exact stored-input tangency.
+Generic trigonometric intervals containing zero remain indeterminate unless an
+independent selected-arc separation proof establishes a strict gap; an intended
+tangent construction is not proof of exact stored-input tangency.
+
+Selected-arc projections also permit separation without a unique radical axis.
+For each of the x/y axes, two diagonals and both original chord normals, the range encloses both original
+endpoints and the supporting circle's two stationary projection points. Only a
+proved-outside stationary point is discarded. A strict squared projection gap
+greater than four times the squared metre tolerance times the direction's squared
+length proves separation even after allowing tolerance at both arcs' endpoints.
+The contact kernel may admit a supporting-circle root near each endpoint even
+outside both selected sides; a gap above twice tolerance excludes that case as
+well as actual contact and tolerance-close geometry. This can admit opposed
+subarcs of nearly concentric circles whose axis-aligned boxes touch. Chord normals
+also cover long separated pieces whose projections overlap in every fixed-axis
+direction, tying the proof to their actual orientation. Failure in these
+directions remains inconclusive; it does not manufacture a root or prove
+clearance. The projection arithmetic shares each attempt's existing fixed budget.
 
 Output points have bounded rational square-root and binary64 rounding
 enclosures. Each published point's near/far classification at all four original
@@ -79,14 +95,17 @@ remain indeterminate. The ordinary fast contact paths are retained. Numerical
 error allowances and general tangency/runtime qualification remain open.
 
 Strict hole topology also checks analytical arc/arc clearance after a contact
-miss. A supporting-circle gap can prove complete separation directly. Otherwise,
+miss. A supporting-circle gap or selected-arc projection gap can prove complete
+separation directly. Otherwise,
 certified selected-arc contact absence precedes the complete nonconcentric
 minimum-distance candidate set: endpoints, endpoint radial projections and both
 circles' center-axis combinations. Only proved-outside candidates are discarded;
 all others require a squared-distance lower bound strictly above tolerance.
 Clearance and the contact prerequisite each use their own bounded arithmetic
-context at each fixed refinement. Uncertain or concentric near cases reject
-conservatively. Proving no intersection does not permit tolerance-close holes.
+context at each fixed refinement. Concentric or uncertain cases without a strict
+separation proof reject conservatively. Proving no intersection does not permit
+tolerance-close holes. Projection behavior and performance remain uncompiled
+and runtime-unqualified in the current source-only work.
 
 Rotation uses an explicit world-space pivot and radians. Horizontal reflection
 reflects y about the supplied pivot, vertical reflection reflects x. Reflections

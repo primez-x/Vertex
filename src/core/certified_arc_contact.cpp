@@ -269,6 +269,72 @@ bool endpoint_classification(Arithmetic& work, const Point& root, Vec2 output,
     return true;
 }
 
+struct CircleMetric { Point center; Interval radius; };
+
+CircleMetric metric(Arithmetic& work, const Circle& arc) {
+    if (arc.s.low <= 0 && arc.s.high >= 0) throw Unresolved{};
+    const auto center = mul(work, arc.b,
+                            div(work, Interval{Rational{-1}}, mul(work, Interval{Rational{2}}, arc.s)));
+    const auto radius_squared = sub(work, norm_squared(work, center), div(work, arc.c, arc.s));
+    if (radius_squared.low < 0) throw Unresolved{};
+    return {center, sqrt_bounds(work, radius_squared)};
+}
+
+Interval projection_extent(Arithmetic& work, const Circle& arc, const CircleMetric& arc_metric,
+                           const Point& direction, const Point& unit,
+                           const Rational& tolerance_squared) {
+    auto extent = dot(work, direction, arc.start);
+    const auto include = [&](const Point& point) {
+        const auto projection = dot(work, direction, point);
+        extent.low = std::min(extent.low, projection.low);
+        extent.high = std::max(extent.high, projection.high);
+    };
+    include(add(work, arc.start, arc.chord));
+    // A linear projection of a compact circular arc reaches each extremum at
+    // an endpoint or where its tangent is perpendicular to this direction.
+    // Both supporting-circle stationary points are enclosed. Discard one only
+    // when it is proved outside the selected arc; uncertain membership widens
+    // the range and can never create a separation proof.
+    const auto displacement = mul(work, unit, arc_metric.radius);
+    for (const int sign : std::array{-1, 1}) {
+        const auto candidate = add(work, arc_metric.center,
+                                   mul(work, displacement, Interval{Rational{sign}}));
+        if (membership(work, arc, candidate, tolerance_squared) != Membership::outside)
+            include(candidate);
+    }
+    return extent;
+}
+
+bool projected_arc_gap_exceeds(Arithmetic& work, const Circle& left, const CircleMetric& left_metric,
+                               const Circle& right, const CircleMetric& right_metric,
+                               const Rational& tolerance_squared) {
+    // Chord normals retain a separating direction tied to each actual arc,
+    // including long subarcs whose projections overlap on all fixed axes.
+    // These directions also cover opposed subarcs of nearly concentric circles.
+    // Failure along every direction is inconclusive, not a contact result.
+    const std::array directions{exact_point({1, 0}), exact_point({0, 1}),
+        exact_point({1, 1}), exact_point({1, -1}), perpendicular(left.chord), perpendicular(right.chord)};
+    for (const auto& direction : directions) {
+        const auto magnitude_squared = norm_squared(work, direction);
+        const auto unit = mul(work, direction,
+                              div(work, Interval{Rational{1}}, sqrt_bounds(work, magnitude_squared)));
+        const auto a = projection_extent(work, left, left_metric, direction, unit, tolerance_squared);
+        const auto b = projection_extent(work, right, right_metric, direction, unit, tolerance_squared);
+        const auto forward = work.sub(b.low, a.high);
+        const auto reverse = work.sub(a.low, b.high);
+        const Rational gap = std::max(Rational{0}, std::max(forward, reverse));
+        // Cauchy-Schwarz: a projection gap g proves Euclidean distance at least
+        // g / |direction|. A circle root may be admitted within tolerance of
+        // each arc's endpoint, even outside both selected sides. A gap greater
+        // than twice tolerance excludes those two neighborhoods as well as
+        // actual contact and the stricter-than-tolerance topology requirement.
+        const auto admitted_gap_squared = work.mul(Rational{4},
+            work.mul(tolerance_squared, magnitude_squared.high));
+        if (work.mul(gap, gap) > admitted_gap_squared) return true;
+    }
+    return false;
+}
+
 CertifiedArcContact attempt(const Segment& left_source, const Segment& right_source,
                             double tolerance, unsigned terms) {
     Arithmetic work;
@@ -279,12 +345,18 @@ CertifiedArcContact attempt(const Segment& left_source, const Segment& right_sou
     const auto right = circle(work, right_source, origin, terms);
     if ((left.s.low <= 0 && left.s.high >= 0) ||
         (right.s.low <= 0 && right.s.high >= 0)) return {};
+    const auto separated_subarcs = [&] {
+        const auto left_metric = metric(work, left);
+        const auto right_metric = metric(work, right);
+        return projected_arc_gap_exceeds(work, left, left_metric, right, right_metric, tolerance_squared)
+            ? CertifiedArcContact{CertifiedArcContactKind::none} : CertifiedArcContact{};
+    };
     const auto n = sub(work, mul(work, left.b, right.s), mul(work, right.b, left.s));
     const auto k = sub(work, mul(work, left.c, right.s), mul(work, right.c, left.s));
     const auto h = norm_squared(work, n);
     // A zero/uncertain radical axis may mean coincidence. It does not define
     // a unique root, and must never manufacture a contact.
-    if (h.low <= 0) return {};
+    if (h.low <= 0) return separated_subarcs();
     const auto jn = perpendicular(n);
     const auto a = left.s;
     const auto b = dot(work, left.b, jn);
@@ -294,7 +366,7 @@ CertifiedArcContact attempt(const Segment& left_source, const Segment& right_sou
                                   mul(work, Interval{Rational{4}}, mul(work, a, c)));
     if (discriminant.high < 0) return {CertifiedArcContactKind::none};
     const bool zero = discriminant.low == 0 && discriminant.high == 0;
-    if (!zero && discriminant.low <= 0) return {};
+    if (!zero && discriminant.low <= 0) return separated_subarcs();
     const auto root = sqrt_bounds(work, discriminant);
     const auto denominator = mul(work, Interval{Rational{2}}, a);
     const auto base = mul(work, n, negate(k));
@@ -333,17 +405,6 @@ CertifiedArcContact attempt(const Segment& left_source, const Segment& right_sou
     return result;
 }
 
-struct CircleMetric { Point center; Interval radius; };
-
-CircleMetric metric(Arithmetic& work, const Circle& arc) {
-    if (arc.s.low <= 0 && arc.s.high >= 0) throw Unresolved{};
-    const auto center = mul(work, arc.b,
-                            div(work, Interval{Rational{-1}}, mul(work, Interval{Rational{2}}, arc.s)));
-    const auto radius_squared = sub(work, norm_squared(work, center), div(work, arc.c, arc.s));
-    if (radius_squared.low < 0) throw Unresolved{};
-    return {center, sqrt_bounds(work, radius_squared)};
-}
-
 bool full_circle_gap_exceeds(Arithmetic& work, const CircleMetric& left, const CircleMetric& right,
                              const Interval& center_distance, const Rational& tolerance) {
     return work.sub(work.sub(center_distance.low, left.radius.high), right.radius.high) > tolerance ||
@@ -367,6 +428,11 @@ bool clearance_attempt(const Segment& left_source, const Segment& right_source,
     // A lower gap bound for complete supporting circles is a sufficient proof
     // for any selected subarcs, without solving or classifying their contacts.
     if (full_circle_gap_exceeds(work, left_metric, right_metric, center_distance, tolerance_exact))
+        return true;
+
+    // A selected-arc projection gap proves both absence of contact and strict
+    // clearance without requiring a unique radical axis or distinct centers.
+    if (projected_arc_gap_exceeds(work, left, left_metric, right, right_metric, tolerance_squared))
         return true;
 
     // Zero-distance intersections are also stationary minima and need not lie

@@ -14,6 +14,43 @@ changed source does not acquire runtime acceptance without later qualification.
 
 ## Current delivery state
 
+### October 9 selected-arc separation without a resolved center axis
+
+The earlier analytical clearance path rejected selected arcs when the supporting
+circles were concentric or their center/radical axes were uncertain, even when
+the selected pieces were far apart. New exact interval projections independently
+enclose each selected arc using its original endpoints and both supporting-circle
+stationary extrema. Only proved-outside extrema are discarded. A strict projected
+gap in an x/y, diagonal or original-chord-normal direction above twice the original metre tolerance
+excludes actual contact and the existing tolerated endpoint neighborhoods on both
+arcs. Root review identified that an actual-arc gap above tolerance alone could
+still contain a supporting-circle root admitted near both endpoints; the proof
+now retains that conservative contact behavior rather than weakening topology
+clearance. Both uncertain-contact retries and hole-clearance
+checks can use this proof. Failure remains inconclusive within the existing fixed
+arithmetic/refinement limits.
+
+Opposed northeast/southwest quarter arcs illustrate why diagonals matter: their
+axis-aligned bounds may touch while their diagonal projections have a positive
+gap. Independent review also identified long separated arcs whose projections
+overlap in every fixed-axis direction. Both original exact chord normals now
+provide directions tied to the source arcs' orientation. These are source
+arguments, not executed fixtures or qualification results.
+General uncertain tangency and separations not established by these directions
+remain guarded rather than being marked complete.
+
+The bounded bay/rotation/reflection/clone helper audit found no confirmed
+supported-workflow defect. A full-draft bay controller checkpoint concern was
+examined; finalization performs another guarded checkpoint before commit, and
+no reachable defect was established. No speculative controller patch was made.
+
+Root integration review and independent source review approved the bounded
+projection change after the endpoint-neighborhood and orientation corrections.
+Scoped `git diff --check` passed. No builds, tests, new tests, probes, scripts,
+native jobs, launches, packages or
+installations ran. Compilation, numerical behavior, performance and production
+qualification remain unverified; the installed candidate is unchanged.
+
 ### October 9 survey correction history and reopened report metadata
 
 Survey corrections formerly compared the current call identities with the first
