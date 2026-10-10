@@ -50178,7 +50178,11 @@ private:
                              (void)editSelectedThickness(m_thickness_edit->text());
                          });
         QObject::connect(m_factor_edit, &QLineEdit::editingFinished, owner,
-                         [this] { editSelectedFactor(m_factor_edit->text()); });
+                         [this] {
+                             if (m_refreshing || !m_factor_edit->isModified()) return;
+                             m_factor_edit->setModified(false);
+                             editSelectedFactor(m_factor_edit->text());
+                         });
         QObject::connect(m_include_building_check, &QCheckBox::toggled, owner,
                          [this](bool) {
                              if (!m_refreshing) {
@@ -56409,6 +56413,7 @@ private:
                                              .arg(factor.rational.numerator)
                                              .arg(factor.rational.denominator)
                                        : factor.expression);
+            m_factor_edit->setModified(false);
         }
         {
             QSignalBlocker building_blocker(m_include_building_check);

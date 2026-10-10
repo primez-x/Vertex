@@ -4888,7 +4888,8 @@ QRectF PlanCanvas::selectionControlRect(const QRectF& viewport) const {
                 ? std::max(entity.thickness_metres, .04) : entity.stroke_width_metres;
             if (std::isfinite(width) && width > 0) padding = 6.0 + width * m_scale * .5;
         }
-        const bool label_selection = m_has_selected_label;
+        const bool label_selection = m_selected_entity_indices.empty() &&
+            !m_has_selected_reference && m_has_selected_label;
         const auto sx = label_selection || m_transform_preview_exact ? 1.0 : m_left_gesture == LeftGesture::selection_axis_resize
             ? m_axis_scale_x_preview : m_transform_scale_preview;
         const auto sy = label_selection || m_transform_preview_exact ? 1.0 : m_left_gesture == LeftGesture::selection_axis_resize
@@ -4912,8 +4913,10 @@ QTransform PlanCanvas::selectionControlTransform(const QRectF& viewport) const {
             const auto y = (-dx*s+dy*c)*m_axis_scale_y_preview;
             axes->center = {m_axis_anchor.x+x*c-y*s, m_axis_anchor.y+x*s+y*c};
         } else if (m_transform_frame_start && !m_transform_preview_exact && m_left_gesture == LeftGesture::selection_rotate) {
-            // Label axes already include their presented rotation.
-            const bool label_selection = m_has_selected_label;
+            // Only label-only axes already include their presented rotation.
+            // Same-owner measurements must not suppress the body's preview.
+            const bool label_selection = m_selected_entity_indices.empty() &&
+                !m_has_selected_reference && m_has_selected_label;
             if (!label_selection) axes->rotation_radians += m_transform_rotation_preview;
         }
         // Same-ID wall measurements are selected with their geometry. Only
@@ -5954,7 +5957,7 @@ void PlanCanvas::drawSelectionDimensions(QPainter& painter, const QRectF& viewpo
             if (m_transform_preview_pending) text += QStringLiteral("  ·  Checking");
             else if (!m_transform_preview_valid) text += QStringLiteral("  ·  Invalid");
         }
-        if (transforming && m_left_gesture == LeftGesture::selection_rotate) {
+        if (transforming) {
             const auto radians = m_transform_source_rotation
                 ? *m_transform_source_rotation + m_transform_rotation_preview * m_transform_source_rotation_direction
                 : m_transform_preview_exact

@@ -14,6 +14,30 @@ changed source does not acquire runtime acceptance without later qualification.
 
 ## Current delivery state
 
+### October 9 appraisal dimensions and selected-frame source corrections
+
+The full appraisal report and its PDF audit now read identified editable edges
+from `segments`, with the supported anonymous `boundary` fallback. Previously,
+the report omitted their boundary dimensions while Details and area arithmetic
+used those same current edges. Qualification, analytical arc lengths, units,
+perimeter, totals and captured-source export checks are unchanged.
+
+Submitting an untouched inspector factor no longer writes imported/default
+factor metadata or adds a history entry. The field now uses the existing
+modified-input guard and resets its modified state when values are presented.
+Explicit factor edits still use the existing exact-rational authoring path.
+
+Selected-body frame previews now distinguish body-plus-label selections from
+label-only selections. Same-owner measurements no longer suppress local frame
+resize or rotation. Side and corner resizing retain the absolute-angle readout
+alongside dimensions; exact previews, callbacks and source fences are unchanged.
+
+Root reviewed the integrated source and scoped diffs. No builds, tests, probes,
+scripts, native jobs, launches, packages or installations ran. Compilation,
+interactions and storage round trips remain unverified; the installed candidate
+is unchanged. These corrections do not establish final user acceptance or
+production qualification.
+
 ### October 9 independent copied view-overlay source implementation
 
 Transformed roof and horizontal-assembly copies now move their appended

@@ -293,7 +293,8 @@ QString boundary_details(const DocumentSnapshot& source,const AppraisalDocumentR
         html+=row(QStringLiteral("Boundary perimeter"),length(value.perimeter_metres,report,metric));
         html+=QStringLiteral("</table>");
         if(ansi(report) && entity!=source.entities().end()) {
-            const auto geometry=entity->second.properties.find("boundary");
+            auto geometry=entity->second.properties.find("segments");
+            if(geometry==entity->second.properties.end())geometry=entity->second.properties.find("boundary");
             if(geometry!=entity->second.properties.end() && geometry->is_array()) {
                 html+=QStringLiteral("<h3>Boundary dimensions</h3><p>");std::size_t index=0;
                 try {for(const auto& edge:*geometry) {
