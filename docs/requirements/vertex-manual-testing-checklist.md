@@ -3194,7 +3194,13 @@ Blocked / missing until testing a candidate that contains it.
 
 - [ ] **WINDOW-SKYLIGHT - Place and edit a skylight on a roof**
   - Steps: Create a sloped roof and choose Skylight from either Windows or Roof/site in Library. Drag it onto a visible roof face on the active layer, then try click placement. Enter width/depth, frame, curb and glazing dimensions. Select the roof, open Openings, move the cut with X/Y, resize it, change Skylight to Cut only and back, add another skylight and remove it. Inspect plan/3D/section and schedules. Move, mirror, uniformly scale and copy the roof; undo/redo and save/reopen. Repeat on one face of gable and hip roofs; try crossing a ridge, overlapping cuts and excessive frame width. Export a plan and IFC.
-  - Expected: Both library entries create a roof cut with a slope-following frame and glazing. Uniform scaling changes all physical dimensions; footprint resizing preserves construction dimensions. Rejected cuts or profiles leave the project unchanged. Schedules distinguish roof material from skylight volume, and IFC has a separate roof, skylight window, actual void and fill relationship. History and copying retain the child profile. Current individual canvas grips are missing; use roof Openings for edits.
+  - Expected: Both library entries create a roof cut with a slope-following frame and glazing. Uniform scaling changes all physical dimensions; footprint resizing preserves construction dimensions. Rejected cuts or profiles leave the project unchanged. Schedules distinguish roof material from skylight volume, and IFC has a separate roof, skylight window, actual void and fill relationship. History and copying the containing roof retain the child profile.
+  - Result: Not tested
+  - Notes: ______________________________
+
+- [ ] **WINDOW-SKYLIGHT-GRIPS - Move and resize one skylight on the canvas**
+  - Steps: In a horizontal floor plan, click a skylight. Drag inside its selected box to move it; drag each side and corner handle to resize it. Try Shift for fine positioning. Double-click it to edit dimensions, then Apply unchanged values. Drag outside the selected box to pan, click outside to deselect, and try right-click Properties/Delete. Start a resize, release, and immediately zoom or resize the app window. Undo and redo an accepted edit.
+  - Expected: A transparent box follows the roof's rotation and displays Skylight, width and depth. Moves and resizes affect only that cut and retain frame/curb/glazing dimensions. Invalid fits do not commit. Unchanged Apply does not add an undo step. Navigation cancels a pending gesture without leaving Previewing stuck. Delete removes only the skylight. Copy/Cut currently report an explicit individual-child gap and never operate on the roof. Partial crop/depth views use roof Openings for editing.
   - Result: Not tested
   - Notes: ______________________________
 

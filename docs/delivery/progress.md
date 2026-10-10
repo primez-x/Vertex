@@ -14,6 +14,50 @@ changed source does not acquire runtime acceptance without later qualification.
 
 ## Current delivery state
 
+### October 10 skylight canvas editing - source integration
+
+Roof skylights now have explicit nested canvas targets, independent of their
+containing roof selection. A transparent rotated frame supplies eight side and
+corner grips, width/depth and Skylight readouts. Selected-body drag moves that
+cut; outside drag pans and outside click deselects. Double-click and Properties
+open a compact dimension editor near the pointer. Right-click offers child
+Properties/Delete/Select roof; Delete removes the cut instead of its roof.
+
+Placement and gesture previews derive the actual manufactured fill in a
+background regeneration queue, with one running and one replaceable request.
+Typed roster/composite edits, full source/context/viewport signatures and exact
+gesture serials bind admission. A release waits for its matching prepared
+command, including recovery-workspace preparation and phase replacement child
+identities. Source/viewport changes and canceled gestures retire previews.
+Native HLR linework can contain disjoint strokes; it never becomes an inferred
+measurement loop. No-op properties Apply leaves history unchanged.
+
+Grips retain the host axes and construction profile, use practical increments
+and Shift fine input, and respect object selection filters. They require a
+fully visible horizontal-plan mouth and unbounded view depth; partial crop or
+depth presentations retain roof Openings edits. Individual child Copy/Cut is
+still an implementation gap and explicitly refuses instead of acting on the
+containing roof. Independent skylight rotation and grouped child selection
+remain gaps; no new native schema or proof authority is introduced here.
+
+This batch is source-only. No builds, tests, new tests, probes/scripts, native
+jobs, UI launches, packages or installations ran. The installed candidate stays
+unchanged; interaction, rendering, kernel behavior, history/recovery and output
+are unqualified. The checklist retains 450 original scenarios plus nine focused
+door/window scenarios, all new cases Not tested. All ten production gates and
+the full approved objective remain open.
+
+The bounded independent source review approved this integration after fixing
+the misplaced menu callback, empty-history Apply, pending-preview cancellation,
+selection-filter and generated-label precedence, and joined-roof child
+deselection/context targeting. Root reviewed the resulting interfaces and
+remaining workflow limits. Diff whitespace checking and registry JSON parsing
+passed; these do not establish compilation or runtime behavior. The scoped
+commit is backed up on the delivery branch after this record is saved.
+
+Next source work includes individual skylight clipboard/clone behavior and
+coordinated multi-host corner windows, alongside the remaining full plan.
+
 ### October 10 roof-hosted skylights - source integration
 
 Both Windows and Roof/site skylight catalog entries now route through an actual

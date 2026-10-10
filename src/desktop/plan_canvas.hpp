@@ -15,6 +15,7 @@
 #include <QPicture>
 #include <QPainterPath>
 #include <QPointer>
+#include <QPolygonF>
 #include <QRectF>
 #include <QSharedPointer>
 #include <QString>
@@ -95,6 +96,25 @@ struct CanvasSelectionFrame {
     // angle may be shifted or reflected; snapping and readouts use the source.
     std::optional<double> source_rotation_radians;
     double source_rotation_direction{1.0};
+};
+
+// Nested roof children keep their owner identity and captured document revision.
+// The horizontal mouth frame uses the roof yaw; these controls never rotate it.
+struct CanvasRoofOpeningTarget {
+    QString roof_id;
+    QString opening_id;
+    std::uint64_t source_revision{};
+    bool operator==(const CanvasRoofOpeningTarget&) const = default;
+};
+
+struct CanvasRoofOpeningControls {
+    CanvasRoofOpeningTarget target;
+    CanvasSelectionFrame frame;
+};
+
+struct CanvasRoofOpeningEdit {
+    CanvasRoofOpeningTarget target;
+    CanvasSelectionFrame frame;
 };
 
 // Semantic, screen-only opening controls. The jamb points lie on the host
@@ -674,6 +694,41 @@ public:
         std::optional<std::vector<CanvasEntity>> result, std::vector<CanvasLabel> labels = {});
     void setOpeningWidthResizeRequested(
         std::function<bool(QString, double, bool, std::uint64_t)> callback);
+    // Screen-only horizontal mouth controls. Publish after setEntities, which
+    // retires their source capture. Duplicate identities/invalid frames refuse.
+    void setRoofOpeningControls(std::vector<CanvasRoofOpeningControls> controls);
+    void setSelectedRoofOpening(std::optional<CanvasRoofOpeningTarget> target);
+    [[nodiscard]] const std::vector<CanvasRoofOpeningControls>& roofOpeningControls() const noexcept {
+        return m_roof_opening_controls;
+    }
+    [[nodiscard]] const std::optional<CanvasRoofOpeningTarget>& selectedRoofOpening() const noexcept {
+        return m_selected_roof_opening;
+    }
+    void setRoofOpeningSelectionRequested(std::function<bool(CanvasRoofOpeningTarget)> callback);
+    void setRoofOpeningDoubleClicked(std::function<void(CanvasRoofOpeningTarget)> callback);
+    void setRoofOpeningEditStarted(std::function<void(CanvasRoofOpeningTarget)> callback);
+    void setRoofOpeningPreviewRequested(
+        std::function<std::optional<Boundary>(CanvasRoofOpeningEdit, std::uint64_t)> callback);
+    void setRoofOpeningEditRequested(
+        std::function<bool(CanvasRoofOpeningEdit, std::uint64_t)> callback);
+    void setRoofOpeningEditCanceled(std::function<void()> callback);
+    // UI-thread protocol: mark inside the preview callback before returning
+    // nullopt. Release waits for the exact final serial; cancellation and every
+    // new candidate retire old serials. Completion never changes the model.
+    [[nodiscard]] std::uint64_t roofOpeningPreviewSerial() const noexcept {
+        return m_roof_opening_preview_serial;
+    }
+    [[nodiscard]] bool roofOpeningPreviewPending() const noexcept {
+        return m_roof_opening_preview_pending || m_roof_opening_release_pending;
+    }
+    [[nodiscard]] const std::optional<Boundary>& roofOpeningPreviewBoundary() const noexcept {
+        return m_roof_opening_boundary_preview;
+    }
+    [[nodiscard]] const std::optional<CanvasRoofOpeningEdit>& roofOpeningPreviewEdit() const noexcept {
+        return m_roof_opening_edit_preview;
+    }
+    bool markRoofOpeningPreviewPending(std::uint64_t serial);
+    bool completeRoofOpeningPreview(std::uint64_t serial, std::optional<Boundary> result);
     // Exact document projection for a selected stable boundary vertex. The
     // returned entities override screen geometry only, including related owners.
     // nullopt rejects unless the callback marks its current serial pending.
@@ -887,6 +942,17 @@ private:
     bool applyOpeningWidthPreview(std::uint64_t serial,
         std::optional<std::vector<CanvasEntity>> result, std::vector<CanvasLabel> labels = {});
     void drawOpeningWidthHandles(QPainter& painter, const QRectF& viewport) const;
+    [[nodiscard]] const CanvasRoofOpeningControls* selectedRoofOpeningControls() const;
+    [[nodiscard]] std::optional<CanvasRoofOpeningControls> roofOpeningAt(QPointF point) const;
+    // Local-axis signs: zero is an unchanged axis; {0,0} moves the body.
+    [[nodiscard]] std::optional<Vec2> roofOpeningHandleAt(QPointF point) const;
+    [[nodiscard]] Vec2 roofOpeningLocalPoint(QPointF point, const CanvasSelectionFrame& frame) const;
+    [[nodiscard]] QPolygonF roofOpeningFramePolygon(const CanvasSelectionFrame& frame,
+                                                  const QRectF& viewport) const;
+    void updateRoofOpeningPreview(QPointF point, Qt::KeyboardModifiers modifiers);
+    bool applyRoofOpeningPreview(std::uint64_t serial, std::optional<Boundary> result);
+    void finishRoofOpeningPreview(std::uint64_t serial);
+    void drawRoofOpeningControls(QPainter& painter, const QRectF& viewport) const;
     void drawSelectionFrame(QPainter& painter, const QRectF& viewport,
         const std::vector<QRectF>& annotation_footprints) const;
     void drawSelectionCaption(QPainter& painter, const QRectF& viewport,
@@ -1149,11 +1215,27 @@ private:
     bool m_panning{false};
     enum class LeftGesture {
         none, canvas_pan, object_move, generated_label_move, selection_resize, selection_rotate, selection_axis_resize,
-        vertex_move, opening_width_resize, marquee, space_pan
+        vertex_move, opening_width_resize, roof_opening_edit, marquee, space_pan
     };
     LeftGesture m_left_gesture{LeftGesture::none};
     QPointF m_left_start;
     bool m_left_dragging{false};
+    std::vector<CanvasRoofOpeningControls> m_roof_opening_controls;
+    std::optional<CanvasRoofOpeningTarget> m_selected_roof_opening;
+    std::optional<CanvasRoofOpeningControls> m_roof_opening_capture;
+    std::optional<CanvasRoofOpeningTarget> m_pressed_roof_opening;
+    Vec2 m_roof_opening_handle{};
+    Vec2 m_roof_opening_press_local{};
+    std::optional<CanvasRoofOpeningEdit> m_roof_opening_edit_preview;
+    std::optional<Boundary> m_roof_opening_boundary_preview;
+    std::optional<QPointF> m_roof_opening_preview_pointer;
+    bool m_roof_opening_preview_fine{};
+    bool m_roof_opening_edit_started{};
+    bool m_roof_opening_preview_valid{};
+    bool m_roof_opening_preview_pending{};
+    bool m_roof_opening_preview_request_in_progress{};
+    bool m_roof_opening_release_pending{};
+    std::uint64_t m_roof_opening_preview_serial{};
     QString m_pressed_entity;
     bool m_pressed_occupied{false};
     std::optional<CanvasLabelPresentationIdentity> m_pressed_generated_label;
@@ -1313,6 +1395,13 @@ private:
     std::function<std::optional<std::vector<CanvasEntity>>(
         QString, double, bool, std::uint64_t)> m_opening_width_preview_requested;
     std::function<bool(QString, double, bool, std::uint64_t)> m_opening_width_resize_requested;
+    std::function<bool(CanvasRoofOpeningTarget)> m_roof_opening_selection_requested;
+    std::function<void(CanvasRoofOpeningTarget)> m_roof_opening_double_clicked;
+    std::function<void(CanvasRoofOpeningTarget)> m_roof_opening_edit_started_callback;
+    std::function<std::optional<Boundary>(CanvasRoofOpeningEdit, std::uint64_t)>
+        m_roof_opening_preview_requested;
+    std::function<bool(CanvasRoofOpeningEdit, std::uint64_t)> m_roof_opening_edit_requested;
+    std::function<void()> m_roof_opening_edit_canceled;
     std::function<std::optional<std::vector<CanvasEntity>>(
         QString, QString, Vec2, std::uint64_t)> m_boundary_vertex_preview_requested;
     std::function<bool(QString, QString, Vec2, std::uint64_t)>

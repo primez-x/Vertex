@@ -123,8 +123,12 @@ polling timeout does not permit restarting it.
    roof-hosted fixed skylight source across both catalog entries, actual sloped
    frame/glazing, roster editing, scaling/resizing, cloning/removal, phases,
    history, material quantities and separate IFC roof/window relationships.
-   Individual skylight canvas grips and surface-aware placement preview remain
-   workflow gaps; roof selection and Openings currently provide explicit edits.
+   Qualify the subsequent individual skylight canvas selection, body movement,
+   side/corner resizing, quick properties/deletion and background manufactured
+   placement/edit previews. Grips retain roof axes and require a fully visible,
+   horizontal plan with unbounded depth; cropped partial fills retain the roof
+   Openings editing route. Individual skylight clipboard workflows remain an
+   implementation gap; child selection must never copy/cut the containing roof.
 10. Implement observed native/vendor/device adapters through existing workers;
     complete declared IFC/DXF/Pinc fidelity and independently consumed output.
     Add offline OCR text regions/confidence feeding reviewed proposals. New
