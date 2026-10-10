@@ -14,6 +14,45 @@ changed source does not acquire runtime acceptance without later qualification.
 
 ## Current delivery state
 
+### October 10 phase source codecs — source integration
+
+The shared phase model now has a raw-preserving edit codec and a complete owner
+remapper. Existing alternative selection, alternative edits/creation and new
+object enrollment use the edit codec. Surviving roster IDs and alternative rows
+retain their source order and version numeric form; intended membership changes,
+removals, names and active selection follow the proposed semantic value. Both
+input and result retain the existing closed ModelPhases validation contract.
+
+The owner remapper requires exact complete roster coverage and injective target
+IDs. It changes only entity_ids, baseline_ids and each alternative's demolished
+and proposed owner lists. Alternative IDs, names and active selection remain in
+their local namespace even if their spelling matches a document owner. No
+membership is pruned or inferred. Existing caller resource admission remains
+required; the codec introduces no new global source-model ceiling.
+
+This is an authoring correction and transfer primitive, not completed DXF phase
+exchange. Source-backed design identifies a V9 authoring graph and PSIP0004
+contract as the next transport work. It must carry every registry's baseline,
+inactive proposal and demolition owners separately from active CAD depiction.
+Complete catalog/host/context closure, wall joins and terrain source forms,
+reviewed hierarchy members, qualified roof-join registry references, physical
+room lineage and separate registry/body/catalog/context/stair-child mappings
+remain required. Existing V1-V8 contracts must remain intact.
+
+Destination binding must validate the complete actual staged graph and preserve
+source semantics before one atomic publication. Existing reviewed hierarchy
+cannot be silently overwritten, collapsed into duplicate phase members or
+claimed to retain different source metadata. Empty active depiction is valid
+for an inactive proposal cohort. The desktop's first-registry-only phase decoder
+also needs registry selection so every imported alternative remains editable.
+No V9 transport, PSIP0004 admission or live phase-registry import is claimed by
+this source batch. Compilation and runtime qualification remain unverified.
+
+Root source review and independent integrated source review approved the codec
+and inspected authoring callers with no actionable P1/P2 finding. Scoped diff
+checks passed. No build, test, new test, probe, script, native job, launch,
+package or installation ran. The installed candidate remains unchanged.
+
 ### October 10 source-kit input completeness — manifest correction
 
 The current tracked tree contained 1,889 files, while the explicit source-kit

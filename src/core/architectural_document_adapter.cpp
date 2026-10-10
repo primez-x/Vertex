@@ -1809,8 +1809,9 @@ ApplyEntityChanges assembly_type_update_command(const DocumentSnapshot& source,
 ApplyEntityChanges model_phase_selection_command(const DocumentSnapshot& source,
     const std::string& entity_id, std::optional<std::string> alternative, Revision expected_revision) {
     auto entity = semantic_entity(source, entity_id, "model_phases", expected_revision);
-    entity.properties["model"] = ModelPhases::from_json(entity.properties.at("model"))
-        .with_active(std::move(alternative)).to_json();
+    const auto selected = ModelPhases::from_json(entity.properties.at("model"))
+        .with_active(std::move(alternative));
+    entity.properties["model"] = retain_model_phase_source(entity.properties.at("model"), selected);
     return {expected_revision, {EntityChange::upsert(std::move(entity))}, {}, "Select remodeling alternative"};
 }
 
@@ -1827,7 +1828,8 @@ ApplyEntityChanges model_phase_alternative_update_command(const DocumentSnapshot
     RemodelingAlternative replacement = *found;
     replacement.name = std::move(name);
     replacement.demolished_ids = std::move(demolished_ids);
-    entity.properties["model"] = phases.with_updated_alternative(std::move(replacement)).to_json();
+    entity.properties["model"] = retain_model_phase_source(entity.properties.at("model"),
+        phases.with_updated_alternative(std::move(replacement)));
     return {expected_revision, {EntityChange::upsert(std::move(entity))}, {}, "Update remodeling alternative"};
 }
 

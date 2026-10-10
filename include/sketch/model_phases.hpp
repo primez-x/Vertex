@@ -74,4 +74,20 @@ private:
     void validate_selection(const std::optional<std::string>& alternative) const;
 };
 
+// Apply the proposed semantic value to a validated saved model, retaining its
+// version number representation and the source order of surviving memberships
+// and alternatives. New IDs/alternatives append in canonical order. Caller
+// resource admission must precede this codec; no membership is inferred.
+[[nodiscard]] nlohmann::json retain_model_phase_source(
+    const nlohmann::json& saved, const ModelPhases& proposed);
+
+// Remap every roster owner and every occurrence in membership arrays through
+// an exact, complete, injective mapping. Alternative IDs, names, active choice,
+// array order and version representation stay local/source exact. Saved and
+// remapped models are validated; missing/extra keys and blank/colliding targets
+// refuse. Caller resource admission must precede this codec.
+[[nodiscard]] nlohmann::json remap_model_phase_owner_ids(
+    const nlohmann::json& saved,
+    const std::map<std::string, std::string, std::less<>>& owners);
+
 }  // namespace sketch

@@ -132,6 +132,25 @@ work.
 
 ## Native project mapping
 
+### Phase authoring transfer (planned V9, implementation incomplete)
+
+V1-V8 phase observations remain private source evidence. Complete editable
+phase transfer requires a separate V9 authoring inventory and PSIP0004 worker
+contract: all baseline, demolition and inactive proposal owners must accompany
+the registries, independently of the active CAD depiction. Full catalogs,
+wall joins, terrain, actual reviewed hierarchy members and typed host/level
+relationships participate in that closure. Bodies, catalogs, registries,
+reviewed contexts and stair children require separate owner mappings.
+
+The shared ModelPhases source codec now preserves surviving saved array order
+for ordinary edits and provides complete injective owner remapping. It patches
+only the roster, baseline and each alternative's demolition/proposal owner
+lists; alternative identities, names and active selection remain local. It does
+not supply transport authentication or destination ownership. V9 capture,
+wire admission, actual destination binding and publication remain unimplemented.
+The desktop must also expose registry selection so all transferred alternatives
+remain editable. No existing carrier is advertised as completing this contract.
+
 ### Complete material catalogs (V8, reviewed source integration)
 
 V8 adds complete original material/assembly catalogs to supported editable

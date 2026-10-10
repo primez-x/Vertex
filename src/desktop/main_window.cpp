@@ -16521,7 +16521,7 @@ public:
                     auto entity = current ? source.entities().at(current->entity_id)
                         : Entity::create("model_phases",{{"model",record->model.to_json()}});
                     entity.id=record->entity_id;
-                    entity.properties["model"] = selected.to_json();
+                    entity.properties["model"] = retain_model_phase_source(entity.properties.at("model"), selected);
                     const ApplyEntityChanges command{
                         source.revision(), {EntityChange::upsert(std::move(entity))}, {},
                         "Create remodeling alternative"};
@@ -44452,9 +44452,8 @@ private:
             if (changed) {
                 const auto phase_model = ModelPhases::create(
                     std::move(ids), std::move(baseline), std::move(alternatives),
-                    model.active_alternative()).to_json();
-                registry.properties["model"] = merge_canonical_metadata(registry.properties.at("model"),
-                    registry.properties.at("model"), phase_model);
+                    model.active_alternative());
+                registry.properties["model"] = retain_model_phase_source(registry.properties.at("model"), phase_model);
                 std::erase_if(changes->entity_changes, [&](const auto& change) {
                     return change.entity.id == record->entity_id;
                 });

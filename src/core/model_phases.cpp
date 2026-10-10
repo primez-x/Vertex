@@ -25,6 +25,18 @@ void exact_keys(const nlohmann::json& value, const std::set<std::string>& keys) 
     for (const auto& key : keys)
         if (!value.contains(key)) throw std::invalid_argument("missing phases JSON field: " + key);
 }
+
+// Both inputs have already passed the closed model codec. Keep surviving raw
+// rows in their original order, then append only the new canonical IDs.
+nlohmann::json retain_ids(const nlohmann::json& saved, const nlohmann::json& proposed) {
+    std::set<std::string, std::less<>> remaining;
+    for (const auto& row : proposed) remaining.insert(row.get_ref<const std::string&>());
+    auto result = nlohmann::json::array();
+    for (const auto& row : saved)
+        if (remaining.erase(row.get_ref<const std::string&>())) result.push_back(row);
+    for (const auto& id : remaining) result.push_back(id);
+    return result;
+}
 }  // namespace
 
 bool is_model_phase_entity_type(std::string_view type) noexcept {
@@ -182,6 +194,65 @@ ModelPhases ModelPhases::from_json(const nlohmann::json& value) {
     } catch (const nlohmann::json::exception& error) {
         throw std::invalid_argument(std::string("invalid model phases JSON: ") + error.what());
     }
+}
+
+nlohmann::json retain_model_phase_source(const nlohmann::json& saved, const ModelPhases& proposed) {
+    (void)ModelPhases::from_json(saved);
+    const auto canonical = proposed.to_json();
+    (void)ModelPhases::from_json(canonical);
+    auto result = saved;
+    result.at("entity_ids") = retain_ids(saved.at("entity_ids"), canonical.at("entity_ids"));
+    result.at("baseline_ids") = retain_ids(saved.at("baseline_ids"), canonical.at("baseline_ids"));
+
+    std::map<std::string, const nlohmann::json*, std::less<>> remaining;
+    for (const auto& row : canonical.at("alternatives"))
+        remaining.emplace(row.at("id").get_ref<const std::string&>(), &row);
+    auto alternatives = nlohmann::json::array();
+    for (const auto& row : saved.at("alternatives")) {
+        const auto found = remaining.find(row.at("id").get_ref<const std::string&>());
+        if (found == remaining.end()) continue;
+        const auto& replacement = *found->second;
+        auto retained = row;
+        retained.at("name") = replacement.at("name");
+        retained.at("demolished_ids") = retain_ids(row.at("demolished_ids"), replacement.at("demolished_ids"));
+        retained.at("proposed_ids") = retain_ids(row.at("proposed_ids"), replacement.at("proposed_ids"));
+        alternatives.push_back(std::move(retained));
+        remaining.erase(found);
+    }
+    for (const auto& entry : remaining) alternatives.push_back(*entry.second);
+    result.at("alternatives") = std::move(alternatives);
+    result.at("active_alternative") = canonical.at("active_alternative");
+    if (ModelPhases::from_json(result).to_json() != canonical)
+        throw std::invalid_argument("retained phase source differs from proposed model");
+    return result;
+}
+
+nlohmann::json remap_model_phase_owner_ids(const nlohmann::json& saved,
+    const std::map<std::string, std::string, std::less<>>& owners) {
+    const auto model = ModelPhases::from_json(saved);
+    if (owners.size() != model.entity_ids().size())
+        throw std::invalid_argument("phase owner mapping must exactly cover the model roster");
+    std::set<std::string, std::less<>> targets;
+    for (const auto& id : model.entity_ids()) {
+        const auto found = owners.find(id);
+        if (found == owners.end())
+            throw std::invalid_argument("phase owner mapping is missing entity: " + id);
+        check_id(found->second);
+        if (!targets.insert(found->second).second)
+            throw std::invalid_argument("phase owner mapping targets must be injective");
+    }
+    auto result = saved;
+    const auto remap_ids = [&](nlohmann::json& rows) {
+        for (auto& row : rows) row = owners.at(row.get_ref<const std::string&>());
+    };
+    remap_ids(result.at("entity_ids"));
+    remap_ids(result.at("baseline_ids"));
+    for (auto& alternative : result.at("alternatives")) {
+        remap_ids(alternative.at("demolished_ids"));
+        remap_ids(alternative.at("proposed_ids"));
+    }
+    (void)ModelPhases::from_json(result);
+    return result;
 }
 
 }  // namespace sketch
