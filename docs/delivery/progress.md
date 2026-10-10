@@ -14,6 +14,57 @@ changed source does not acquire runtime acceptance without later qualification.
 
 ## Current delivery state
 
+### October 9 certified interior arc-contact fallback
+
+The remaining nonshared contact gap now has a private bounded rational fallback
+for an indeterminate fast arc/arc result. Public and boundary paths retain the
+original endpoints for the retry, and source-space certified output is not
+translated a second time. Exact binary64 inputs, rational half-angle Taylor
+enclosures and a radical-axis quadratic distinguish strict gaps and genuine
+roots without weakening the discriminant guard. Canonical half-turn coefficients
+can establish exact rotated interior tangency: `(-1,1) -> (1,-1), -pi` and
+`(1,3) -> (3,1), +pi` produce `(1,1)` with no shared endpoint. This is a source
+derivation, not an executed result. Generic trigonometric zero-containing
+intervals and coincident/uncertain radical axes remain indeterminate.
+
+Complete root/output enclosures govern admission and merging. Independent
+source review identified an endpoint-classification error-budget gap: a rounded
+point could appear within tolerance of an endpoint while its true root was
+outside. Publication now requires every endpoint near/far classification to
+agree with the entire root enclosure, including a dropped root when merging;
+ambiguous thresholds remain indeterminate. Arithmetic uses fixed refinement,
+square-root, operation and integer-size budgets, with conservative failure. Boost
+Multiprecision 1.92.0 is declared explicitly in the pinned dependency manifest,
+exact-version CMake target, static-source notice/SPDX declaration and source
+allowlist. Existing distribution counts and source-kit receipts remain
+historical rather than being rebound by these source edits.
+
+Root integration review also found that a proved intersection miss alone cannot
+qualify hole clearance: two arcs may be disjoint but less than the metre
+tolerance apart. A bounded analytical clearance extension now checks endpoints,
+endpoint radial projections and both circles' center-axis stationary candidates,
+retaining uncertain membership and requiring strict distance lower bounds above
+tolerance. A supporting-circle gap can prove separation independently; otherwise
+actual selected-arc contact absence is certified first. New internal misses and
+all arc/arc misses in hole validation retain the clearance guard. Public
+intersection results and strict topology clearance remain separate decisions.
+Clearance and its nested contact prerequisite use separate bounded arithmetic
+contexts. Concentric/degenerate or exhausted cases reject conservatively.
+
+The bounded roof/stair/railing dialog audit found no missing schema-backed edit
+field or confirmed ordinary property-edit defect. Documentation incorrectly
+excluded multi-flight stair authoring and stair-hosted railings; it now describes
+the implemented controls while retaining structural/code and production limits.
+No architectural runtime or full lifecycle acceptance is inferred from this
+audit.
+
+Root integration review and independent source review approved the contact and
+clearance changes after correcting merge-output and endpoint-classification
+findings. Scoped `git diff --check` passed. No builds, tests, new tests, probes,
+scripts, native jobs, launches, packages or installations ran. Compilation, numerical
+behavior, editor interaction and production qualification remain unverified;
+the installed candidate is unchanged.
+
 ### October 9 constraint-editor native value retention
 
 The constraint dialog still parsed generated wall and measured-segment length

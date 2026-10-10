@@ -4287,6 +4287,14 @@
     },
     {
       "category": "source",
+      "path": "src/core/certified_arc_contact.cpp"
+    },
+    {
+      "category": "source",
+      "path": "src/core/certified_arc_contact.hpp"
+    },
+    {
+      "category": "source",
       "path": "src/core/closed_boundary_detection.cpp"
     },
     {

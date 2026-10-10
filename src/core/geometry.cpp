@@ -1,4 +1,5 @@
 #include "sketch/geometry.hpp"
+#include "certified_arc_contact.hpp"
 
 #include <algorithm>
 #include <array>
@@ -612,8 +613,8 @@ IntersectionResult intersect_coincident_arcs(const Segment& left_segment,
     return result;
 }
 
-IntersectionResult intersect_arcs(const Segment& left_segment, const Segment& right_segment,
-                                  double tolerance, bool exact_input_origin) {
+IntersectionResult intersect_arcs_fast(const Segment& left_segment, const Segment& right_segment,
+                                       double tolerance, bool exact_input_origin) {
     IntersectionResult result;
     // Boundary validation calls this kernel directly, unlike the public
     // contact API. Preserve the same local circle arithmetic in both paths.
@@ -631,7 +632,7 @@ IntersectionResult intersect_arcs(const Segment& left_segment, const Segment& ri
             exact_point_difference(left_segment.end, origin) &&
             exact_point_difference(right_segment.start, origin) &&
             exact_point_difference(right_segment.end, origin);
-        auto local = intersect_arcs(local_left, local_right, tolerance, exact_local_origin);
+        auto local = intersect_arcs_fast(local_left, local_right, tolerance, exact_local_origin);
         for (std::size_t index = 0; index < local.point_count; ++index) {
             const auto point = local.points[index];
             const auto restored = point + origin;
@@ -828,6 +829,37 @@ IntersectionResult intersect_arcs(const Segment& left_segment, const Segment& ri
     const Vec2 perpendicular{-centers.y / center_distance, centers.x / center_distance};
     add_if_on_both(base + perpendicular * height);
     add_if_on_both(base - perpendicular * height);
+    return result;
+}
+
+IntersectionResult certified_arc_retry(const Segment& left, const Segment& right, double tolerance) {
+    const auto certified = detail::certified_arc_contact(left, right, tolerance);
+    IntersectionResult result;
+    if (certified.kind == detail::CertifiedArcContactKind::none) return result;
+    if (certified.kind == detail::CertifiedArcContactKind::indeterminate) {
+        result.kind = IntersectionKind::indeterminate;
+        return result;
+    }
+    result.kind = IntersectionKind::points;
+    result.points = certified.points;
+    result.point_count = certified.point_count;
+    return result;
+}
+
+IntersectionResult intersect_arcs(const Segment& left, const Segment& right,
+                                  double tolerance, bool exact_input_origin) {
+    auto result = intersect_arcs_fast(left, right, tolerance, exact_input_origin);
+    // This entry still owns the original boundary endpoints. Never certify a
+    // pair after an inexact floating-point translation: the public API retries
+    // its captured source pair separately below.
+    if (result.kind == IntersectionKind::indeterminate && exact_input_origin) {
+        result = certified_arc_retry(left, right, tolerance);
+        // Boundary topology also excludes tolerance-close misses. A certified
+        // absence of exact roots alone does not certify positive clearance.
+        if (result.kind == IntersectionKind::none &&
+            detail::certified_arc_clearance_unresolved_or_within(left, right, tolerance))
+            result.kind = IntersectionKind::indeterminate;
+    }
     return result;
 }
 
@@ -1031,7 +1063,31 @@ SegmentIntersection segment_intersection(const Segment& first, const Segment& se
     auto left=first; auto right=second;
     left.start=first.start-origin; left.end=first.end-origin;
     right.start=second.start-origin; right.end=second.end-origin;
-    const auto hit=intersect_segments(left,right,tolerance,exact_input_origin);
+    // This public path owns the original pair below. Its translated fast call
+    // must not invoke a local certificate and later restore that rounded point.
+    auto hit = first.sweep_radians != 0.0 && second.sweep_radians != 0.0
+        ? intersect_arcs_fast(left, right, tolerance, exact_input_origin)
+        : intersect_segments(left, right, tolerance, exact_input_origin);
+    if (hit.kind == IntersectionKind::indeterminate && first.sweep_radians != 0.0 &&
+        second.sweep_radians != 0.0) {
+        // The private retry returns source-space points, including certified
+        // binary64 rounding. Do not subtract and restore the origin again.
+        const auto source_hit = certified_arc_retry(first, second, tolerance);
+        SegmentIntersection source_result;
+        if (source_hit.kind == IntersectionKind::indeterminate) {
+            source_result.kind = SegmentIntersectionKind::indeterminate;
+        } else if (source_hit.kind == IntersectionKind::points) {
+            source_result.kind = SegmentIntersectionKind::touch;
+            for (std::size_t index = 0; index < source_hit.point_count; ++index) {
+                const auto point = source_hit.points[index];
+                if (distance(point, first.start) > tolerance && distance(point, first.end) > tolerance &&
+                    distance(point, second.start) > tolerance && distance(point, second.end) > tolerance)
+                    source_result.kind = SegmentIntersectionKind::proper;
+                source_result.points.push_back(point);
+            }
+        }
+        return source_result;
+    }
     SegmentIntersection result;
     if (hit.kind==IntersectionKind::overlap) result.kind=SegmentIntersectionKind::overlap;
     else if (hit.kind==IntersectionKind::indeterminate) result.kind=SegmentIntersectionKind::indeterminate;
@@ -1581,6 +1637,9 @@ std::optional<std::string> validate_boundary_holes(
                         return true;
                     if (right.sweep_radians == 0.0 && left.sweep_radians != 0.0 &&
                         line_arc_clearance_unresolved_or_within(right, left, tolerance_metres))
+                        return true;
+                    if (left.sweep_radians != 0.0 && right.sweep_radians != 0.0 &&
+                        detail::certified_arc_clearance_unresolved_or_within(left, right, tolerance_metres))
                         return true;
                 }
             }

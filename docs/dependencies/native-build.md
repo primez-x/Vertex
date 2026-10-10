@@ -53,3 +53,11 @@ PATH after it exits. Packaged executables retain their bundled runtime layout.
 
 Normal CMake builds use the prepared local libraries and do not invoke vcpkg
 installation or fetch sources.
+
+The precision engine explicitly depends on Boost Multiprecision 1.92.0 through
+the pinned `boost-multiprecision` port and `Boost::multiprecision` CMake target.
+Its header-only rational backend supports bounded curve-contact certification;
+it adds no runtime DLL or online service. The distribution component manifest
+names the retained port SPDX record and BSL-1.0 notice separately from Boost
+Graph. Changed-source compilation and offline source-kit qualification remain
+required; previous package evidence does not qualify this dependency change.

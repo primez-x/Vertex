@@ -100,6 +100,9 @@ then locate its controls without depending on a page implementation:
 | Stair level connection toggle | `buildingObjectLevelConnectionEnabled` |
 | Stair graph/link IDs | `buildingObjectLevelGraph`, `buildingObjectLevelLink` |
 | Stair lower/upper level IDs | `buildingObjectLowerLevel`, `buildingObjectUpperLevel` |
+| Ordered stair flights and connecting landings | `buildingObjectStairFlights`, `buildingObjectStairLandings` |
+| Add/remove/reorder stair flights | `buildingObjectAddStairFlight`, `buildingObjectRemoveStairFlight`, `buildingObjectMoveStairFlightUp`, `buildingObjectMoveStairFlightDown` |
+| Stair derived summary | `buildingObjectStairSummary` |
 | Roof run/span/rise | `buildingObjectRun`, `buildingObjectSpan`, `buildingObjectRise` |
 | Gable length | `buildingObjectLength` |
 | Railing length and post spacing | `buildingObjectLength`, `buildingObjectPostSpacing` |
@@ -177,12 +180,25 @@ changing history.  Rotation and translation remain available; a uniform
 scale of a connected stair is rejected so the graph height cannot silently
 drift from the authored flight.
 
-The dialog is a bounded authoring surface.  The railing form currently models
-a straight top rail and endpoint/interior posts as one validated solid; it does
-not yet provide baluster profiles, curved runs, stair hosting, or code/load
-checks.  It does not provide structural,
-code-compliance, material assembly, multi-flight stair, or production-complete
-roof design checks beyond the existing solid builders.  The test executable
+The multi-flight stair form authors an ordered flight table with a riser count
+and optional going/width overrides for each flight. Blank overrides use the
+stair's defaults. Each connecting landing has depth, thickness, turn, return
+gap and alignment controls. Add/remove/reorder actions retain child identities;
+reordering moves the flight while preserving landing order. Straight, quarter
+and half turns are exposed; return gap applies to half turns. Total risers and
+the dimensional summary are derived from the current controls. Top landings
+and floor-to-floor level connections remain available in this form.
+
+The railing forms include a free straight run, a stair-flight host and a
+stair-landing host, with height, thickness and maximum post spacing. Hosted
+forms use the captured document to resolve host geometry and coverage rather
+than requiring an unrelated free-standing rail. These source capabilities do
+not establish building-code, structural-load or production acceptance.
+
+The dialog remains a bounded authoring surface. Baluster profiles, curved
+railing runs and structural/code/load checks are not provided by these forms;
+production roof qualification extends beyond accepting a valid solid.
+The historical test executable
 uses Qt's noninteractive error guard and keeps normal runs headless.  For
 selected visual review, pass:
 

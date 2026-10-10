@@ -53,8 +53,40 @@ circle equations. A single shared contact is admitted only when the complete
 second-root distance and its numerical error allowance lie within the metre
 tolerance. Origin/chord subtraction and power-of-two scaling must retain their
 inputs exactly. Other contacts retain the existing two-root or indeterminate
-path. Nonshared uncertain tangencies remain indeterminate. Numerical error
-allowances, interior tangency and general tangency qualification remain open.
+path.
+
+An indeterminate arc/arc result now has a bounded rational retry on the original
+binary64 endpoints, before any floating-point origin subtraction. Circle
+coefficients use exact binary64 decomposition and rational Taylor enclosures
+for the stored sweep's half-angle. Canonical positive/negative half turns use
+exact sine and cosine values, matching the existing semicircle convention.
+The radical-axis quadratic can certify a negative discriminant, retain genuine
+positive roots, or establish exact zero for a polynomial half-turn case.
+This includes rotated interior semicircle tangency without a shared endpoint.
+Generic trigonometric intervals containing zero remain indeterminate; an
+intended tangent construction is not proof of exact stored-input tangency.
+
+Output points have bounded rational square-root and binary64 rounding
+enclosures. Each published point's near/far classification at all four original
+endpoints must agree with its entire root enclosure; an ambiguous threshold
+remains indeterminate rather than becoming an expected adjacent join.
+Deduplication requires the second root's entire enclosure to fit within
+tolerance of the retained output and preserve its endpoint classifications.
+Refinement is finite (12, 24 and 48 Taylor terms, 192 square-root bisections,
+a 20,000-operation budget per attempt
+and a 32,768-bit intermediate arithmetic limit); exhausted or uncertain cases
+remain indeterminate. The ordinary fast contact paths are retained. Numerical
+error allowances and general tangency/runtime qualification remain open.
+
+Strict hole topology also checks analytical arc/arc clearance after a contact
+miss. A supporting-circle gap can prove complete separation directly. Otherwise,
+certified selected-arc contact absence precedes the complete nonconcentric
+minimum-distance candidate set: endpoints, endpoint radial projections and both
+circles' center-axis combinations. Only proved-outside candidates are discarded;
+all others require a squared-distance lower bound strictly above tolerance.
+Clearance and the contact prerequisite each use their own bounded arithmetic
+context at each fixed refinement. Uncertain or concentric near cases reject
+conservatively. Proving no intersection does not permit tolerance-close holes.
 
 Rotation uses an explicit world-space pivot and radians. Horizontal reflection
 reflects y about the supplied pivot, vertical reflection reflects x. Reflections

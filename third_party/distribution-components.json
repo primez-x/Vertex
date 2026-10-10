@@ -1272,6 +1272,27 @@
       ]
     },
     {
+      "id": "boost-multiprecision",
+      "kind": "static-source",
+      "package": {
+        "name": "boost-multiprecision",
+        "version": "1.92.0",
+        "license": "BSL-1.0"
+      },
+      "source": {
+        "kind": "vcpkg-spdx",
+        "spdx_path": ".deps/native/x64-windows/share/boost-multiprecision/vcpkg.spdx.json",
+        "prefix_path": ".deps/native/x64-windows",
+        "package_id": "SPDXRef-port",
+        "paths": [
+          ".deps/native/x64-windows/include/boost"
+        ]
+      },
+      "notice_paths": [
+        ".deps/native/x64-windows/share/boost-multiprecision/copyright"
+      ]
+    },
+    {
       "id": "inter-font",
       "kind": "asset",
       "package": {

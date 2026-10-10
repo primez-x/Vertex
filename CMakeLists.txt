@@ -479,8 +479,11 @@ if(MSVC)
   endforeach()
 endif()
 
-add_library(sketch_precision src/core/geometry.cpp src/core/quantity.cpp src/core/area_arithmetic.cpp)
+find_package(boost_multiprecision 1.92.0 EXACT CONFIG REQUIRED)
+add_library(sketch_precision src/core/geometry.cpp src/core/certified_arc_contact.cpp
+  src/core/quantity.cpp src/core/area_arithmetic.cpp)
 target_include_directories(sketch_precision PUBLIC include)
+target_link_libraries(sketch_precision PRIVATE Boost::multiprecision)
 add_library(sketch_pinc_project_import src/core/pinc_project_import.cpp)
 target_include_directories(sketch_pinc_project_import PUBLIC include)
 target_link_libraries(sketch_pinc_project_import PUBLIC sketch_precision sketch_json)

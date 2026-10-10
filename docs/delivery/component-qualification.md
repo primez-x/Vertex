@@ -6,6 +6,22 @@ not licensing clearance or production acceptance. Existing authorization to
 include the supplied artwork remains recorded; this audit introduces no new
 permission gate or publication action.
 
+## Precision dependency source overlay (2026-10-09)
+
+The precision target explicitly selects Boost Multiprecision 1.92.0 for the
+bounded rational curve-contact fallback. The retained port's SPDX record names
+recipe tree `5c3b7779f77b2e9c7997e4b36f6cc19505e4720d`, the upstream
+`boost-1.92.0` resource and BSL-1.0. Its original notice and all installed Boost
+headers are declared in a separate static-source component. The pinned vcpkg
+manifest and exact-version CMake target now name this dependency directly,
+instead of relying on Boost Graph's transitive include availability.
+
+No dependency provisioning, compilation, inventory/SBOM generation or source-kit
+composition ran for this source change. Existing candidate-bound counts and
+receipts below remain historical; the new component and its transitive inputs
+require final source-kit/runtime binding. This declaration does not establish
+corresponding-source completeness or distribution qualification.
+
 ## Selected Qt source and build overlay (2026-10-07)
 
 The current source selects the coherent Qt 6.11.2 Windows MSVC SDK through
