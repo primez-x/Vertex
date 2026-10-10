@@ -61993,6 +61993,10 @@ public:
             auto* buttons=new QDialogButtonBox(QDialogButtonBox::Apply|QDialogButtonBox::Cancel,&dialog);buttons->setObjectName("measuredStrokeGeometryButtons");layout->addWidget(buttons);
             std::optional<Command> candidate;
             const auto scene=[](const Boundary& path,const char* id,QColor color) {CanvasEntity value{QString::fromLatin1(id),"measurement_linework",path,0,false};value.stroke_color=color;return value;};
+            const auto coordinate_input_text=[&](double value) {
+                return QString::number(context.metric_units?value:value/0.3048,'g',17)+
+                    (context.metric_units?QStringLiteral(" m"):QStringLiteral(" ft"));
+            };
             const auto update=[&] {
                 candidate.reset();buttons->button(QDialogButtonBox::Apply)->setEnabled(false);dimensions->setRowCount(0);
                 preview->setEntities({scene(original_geometry,"before",QColor(148,163,184))});preview->fitView();
@@ -62001,12 +62005,25 @@ public:
                     BoundaryGeometryEdit edit;edit.boundary_id=selected->id;
                     std::optional<Quantity> authored;
                     if (operation->currentData().toString()=="length") {
-                        authored=parse_quantity(length->text().toStdString(),context.metric_units?Unit::metre:Unit::foot);
-                        edit.kind=BoundaryGeometryEditKind::resize_segment;edit.target_id=edge->currentData().toString().toStdString();edit.target_length_metres=authored->metres;
+                        const auto original_length=segment_length(original.edges.at(static_cast<std::size_t>(edge->currentIndex())).segment);
+                        edit.kind=BoundaryGeometryEditKind::resize_segment;edit.target_id=edge->currentData().toString().toStdString();
+                        // Display conversions are not newly authored measurements. In particular,
+                        // a full-precision feet string can exceed the exact parser's rational range.
+                        if (length->text().trimmed()==coordinate_input_text(original_length))
+                            edit.target_length_metres=original_length;
+                        else {
+                            authored=parse_quantity(length->text().toStdString(),context.metric_units?Unit::metre:Unit::foot);
+                            edit.target_length_metres=authored->metres;
+                        }
                         edit.fixed_endpoint=fixed->currentIndex()==0?BoundaryFixedEndpoint::start:BoundaryFixedEndpoint::end;edit.move_connected=connected->isChecked();
                     } else {
                         edit.kind=BoundaryGeometryEditKind::move_vertex;edit.target_id=vertex->currentData().toString().toStdString();
-                        edit.target_position={parse_quantity(x->text().toStdString(),context.metric_units?Unit::metre:Unit::foot).metres,parse_quantity(y->text().toStdString(),context.metric_units?Unit::metre:Unit::foot).metres};
+                        const auto original_point=vertices.at(edit.target_id);
+                        const auto coordinate=[&](const QString& text,double original_value) {
+                            return text.trimmed()==coordinate_input_text(original_value)?original_value:
+                                parse_quantity(text.toStdString(),context.metric_units?Unit::metre:Unit::foot).metres;
+                        };
+                        edit.target_position={coordinate(x->text(),original_point.x),coordinate(y->text(),original_point.y)};
                     }
                     auto command=measuredStrokeGeometryCommand(source,edit,authored);const auto proposed=Document::preview_command(source,command);
                     const auto replay=replay_measurement_linework(*decode_measurement_linework_model(proposed.entities().at(selected->id).properties.at("model")).model);
@@ -62035,10 +62052,9 @@ public:
                 const bool length_mode=operation->currentData().toString()=="length";
                 form->setRowVisible(edge,length_mode);form->setRowVisible(length,length_mode);form->setRowVisible(fixed,length_mode);form->setRowVisible(connected,length_mode);
                 form->setRowVisible(vertex,!length_mode);form->setRowVisible(x,!length_mode);form->setRowVisible(y,!length_mode);
-                const auto coordinate=[&](double value){return QString::number(context.metric_units?value:value/0.3048,'g',17)+(context.metric_units?QStringLiteral(" m"):QStringLiteral(" ft"));};
                 QSignalBlocker length_block(length),x_block(x),y_block(y);
-                length->setText(coordinate(segment_length(original.edges.at(static_cast<std::size_t>(edge->currentIndex())).segment)));
-                const auto point=vertices.at(vertex->currentData().toString().toStdString());x->setText(coordinate(point.x));y->setText(coordinate(point.y));update();
+                length->setText(coordinate_input_text(segment_length(original.edges.at(static_cast<std::size_t>(edge->currentIndex())).segment)));
+                const auto point=vertices.at(vertex->currentData().toString().toStdString());x->setText(coordinate_input_text(point.x));y->setText(coordinate_input_text(point.y));update();
             };
             for (auto* input : {length,x,y})QObject::connect(input,&QLineEdit::textChanged,&dialog,[&]{update();});
             for (auto* selector : {operation,edge,vertex})QObject::connect(selector,&QComboBox::currentIndexChanged,&dialog,[&]{load();});
@@ -62205,6 +62221,21 @@ public:
                 return QString::number(context.metric_units ? metres : metres / 0.3048, 'g', 17) +
                     (context.metric_units ? QStringLiteral(" m") : QStringLiteral(" ft"));
             };
+            const auto initial_edge_input_text = [&](const Segment& segment, const QString& mode) {
+                if (mode == QStringLiteral("angle")) {
+                    const auto degrees = segment.sweep_radians * 180.0 / std::numbers::pi;
+                    return QStringLiteral("%1 deg").arg(degrees != 0 ? degrees : 60.0, 0, 'g', 17);
+                }
+                if (mode == QStringLiteral("height")) {
+                    const auto chord_length = std::hypot(segment.end.x-segment.start.x, segment.end.y-segment.start.y);
+                    const auto height = segment.sweep_radians == 0 ? chord_length * 0.1 :
+                        chord_length * 0.5 * std::tan(segment.sweep_radians * 0.25);
+                    return format_length(height, context.metric_units);
+                }
+                const auto value = segment_length(segment);
+                return format_length(mode == QStringLiteral("arc_length") && segment.sweep_radians == 0 ?
+                    value * 1.1 : value, context.metric_units);
+            };
             const auto add_row = [&](const QString& name, const QString& before, const QString& after) {
                 const auto row = changes->rowCount();
                 changes->insertRow(row);
@@ -62266,6 +62297,13 @@ public:
                         edit.target_position = {coordinate(x->text(), original_point.x),
                                                 coordinate(y->text(), original_point.y)};
                     } else if (curve) {
+                        if (original_edge.segment.sweep_radians != 0 &&
+                            length->text().trimmed() == initial_edge_input_text(original_edge.segment, mode) &&
+                            (mode != QStringLiteral("arc_length") ||
+                                clockwise->isChecked() == (original_edge.segment.sweep_radians < 0))) {
+                            clear_preview(QStringLiteral("No geometry change. Enter a new curve measurement to reshape this edge."));
+                            return;
+                        }
                         ConstructionReceipt receipt;
                         receipt.segment_id = original_edge.segment_id;
                         receipt.start = original_edge.segment.start;
@@ -62283,11 +62321,26 @@ public:
                             receipt.height = parse_quantity(length->text().toStdString(), context.metric_units ? Unit::metre : Unit::foot);
                             receipt.clockwise = false; // Signed height defines the side.
                         } else {
-                            receipt.kind = BoundaryConstructionKind::arc_chord_length;
-                            receipt.arc_length = parse_quantity(length->text().toStdString(), context.metric_units ? Unit::metre : Unit::foot);
+                            if (original_edge.segment.sweep_radians != 0 &&
+                                length->text().trimmed() == initial_edge_input_text(original_edge.segment, mode)) {
+                                // Side-only reversal keeps the exact source sweep magnitude and
+                                // chord; no generated decimal length is newly authored or parsed.
+                                receipt.kind = BoundaryConstructionKind::arc_chord_angle;
+                                receipt.angle = angle_from_radians(-original_edge.segment.sweep_radians);
+                                receipt.clockwise = false;
+                            } else {
+                                receipt.kind = BoundaryConstructionKind::arc_chord_length;
+                                receipt.arc_length = parse_quantity(length->text().toStdString(), context.metric_units ? Unit::metre : Unit::foot);
+                            }
                         }
                         edit.arc_construction = std::move(receipt);
                     } else {
+                        // The initial length is display-rounded. Opening this editor or changing
+                        // an anchor must not turn that presentation into a geometry edit.
+                        if (length->text().trimmed()==initial_edge_input_text(original_edge.segment, mode)) {
+                            clear_preview(QStringLiteral("No geometry change. Enter a new length to resize this edge."));
+                            return;
+                        }
                         exact_length = parse_quantity(length->text().toStdString(),
                             context.metric_units ? Unit::metre : Unit::foot);
                         edit.target_length_metres = exact_length->metres;
@@ -62490,18 +62543,7 @@ public:
                 value_label->setText(mode == QStringLiteral("angle") ? QStringLiteral("Signed sweep angle") :
                     mode == QStringLiteral("height") ? QStringLiteral("Signed arc height") :
                     mode == QStringLiteral("arc_length") ? QStringLiteral("Arc length") : QStringLiteral("New length"));
-                if (mode == QStringLiteral("angle")) {
-                    const auto degrees = segment.sweep_radians * 180.0 / std::numbers::pi;
-                    length->setText(QStringLiteral("%1 deg").arg(degrees != 0 ? degrees : 60.0, 0, 'g', 17));
-                } else if (mode == QStringLiteral("height")) {
-                    const auto chord_length = std::hypot(segment.end.x-segment.start.x, segment.end.y-segment.start.y);
-                    const auto height = segment.sweep_radians == 0 ? chord_length * 0.1 :
-                        chord_length * 0.5 * std::tan(segment.sweep_radians * 0.25);
-                    length->setText(dimensionCoordinateText(height));
-                } else {
-                    const auto value = segment_length(segment);
-                    length->setText(dimensionCoordinateText(mode == QStringLiteral("arc_length") && segment.sweep_radians == 0 ? value * 1.1 : value));
-                }
+                length->setText(initial_edge_input_text(segment, mode));
                 length->selectAll();
             };
             const auto refresh_coordinates = [&] {

@@ -42,6 +42,15 @@ crossings, near-contact within tolerance, and non-finite intermediate values
 retain the conservative fallback. This admits ordinary rotated rectangles
 without weakening the crossing and uncertainty diagnostics.
 
+Arc/arc contacts retain both positive-height circle roots even when radial
+penetration is below the metre tolerance. Contact deduplication uses the actual
+distance between roots. Uncertain discriminants return indeterminate. An exact
+axis-aligned semicircle tangent can be admitted only when compensated endpoint,
+midpoint, center and radius arithmetic establishes it, including every prior
+origin subtraction. Rounded translation cannot establish that exception.
+Noncanonical uncertain tangencies remain indeterminate; general tangency
+qualification is still open.
+
 Rotation uses an explicit world-space pivot and radians. Horizontal reflection
 reflects y about the supplied pivot, vertical reflection reflects x. Reflections
 negate arc sweeps and signed area; rotations retain sweeps. IDs remain stable.
@@ -98,6 +107,12 @@ attached dimensions, analytical area, and perimeter. Apply retains the exact
 typed candidate and rechecks it against the unchanged captured source; Cancel
 does not publish a command. Invalid input, locked constraints, or changed
 document/selection/layer/workspace/units clear the candidate and disable Apply.
+Prefilled rounded lengths and curve measurements are presentation values:
+leaving them unchanged does not resize or reconstruct an existing edge. Changing
+only an arc's side retains its unrounded analytical length. The measured-stroke
+editor also keeps unchanged coordinates and lengths directly from its captured
+source, avoiding a feet-conversion round trip through the exact quantity parser.
+Changed expressions still use that parser and retain their authored quantities.
 For a straight selected boundary, an independent related-object option routes
 the resize through the shared endpoint solver. The canonical selected resize
 pins every selected boundary vertex; explicit relationships may move other

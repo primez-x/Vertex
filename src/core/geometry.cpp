@@ -175,6 +175,11 @@ CompensatedValue compensated_product(CompensatedValue a, CompensatedValue b) {
     return compensated_sum(product, tail);
 }
 
+bool exact_point_difference(Vec2 point, Vec2 origin) {
+    return compensated_sum(point.x, -origin.x).tail == 0.0 &&
+        compensated_sum(point.y, -origin.y).tail == 0.0;
+}
+
 void add_point(IntersectionResult& result, Vec2 point, double tolerance) {
     for (std::size_t index = 0; index < result.point_count; ++index) {
         if (distance(result.points[index], point) <= tolerance) {
@@ -608,8 +613,36 @@ IntersectionResult intersect_coincident_arcs(const Segment& left_segment,
 }
 
 IntersectionResult intersect_arcs(const Segment& left_segment, const Segment& right_segment,
-                                  double tolerance) {
+                                  double tolerance, bool exact_input_origin) {
     IntersectionResult result;
+    // Boundary validation calls this kernel directly, unlike the public
+    // contact API. Preserve the same local circle arithmetic in both paths.
+    if (left_segment.start.x != 0.0 || left_segment.start.y != 0.0) {
+        const auto origin = left_segment.start;
+        const Segment local_left{{0, 0}, left_segment.end - origin, left_segment.sweep_radians};
+        const Segment local_right{right_segment.start - origin, right_segment.end - origin,
+                                  right_segment.sweep_radians};
+        if (!finite(local_left.end) || !finite(local_right.start) || !finite(local_right.end)) {
+            result.kind = IntersectionKind::indeterminate;
+            return result;
+        }
+        const bool exact_local_origin = exact_input_origin &&
+            exact_point_difference(left_segment.start, origin) &&
+            exact_point_difference(left_segment.end, origin) &&
+            exact_point_difference(right_segment.start, origin) &&
+            exact_point_difference(right_segment.end, origin);
+        auto local = intersect_arcs(local_left, local_right, tolerance, exact_local_origin);
+        for (std::size_t index = 0; index < local.point_count; ++index) {
+            const auto point = local.points[index];
+            const auto restored = point + origin;
+            if (!finite(restored) || distance(restored - origin, point) > tolerance) {
+                result.kind = IntersectionKind::indeterminate;
+                return result;
+            }
+            local.points[index] = restored;
+        }
+        return local;
+    }
     const auto left = arc_geometry(left_segment);
     const auto right = arc_geometry(right_segment);
     const auto centers = right.center - left.center;
@@ -634,27 +667,66 @@ IntersectionResult intersect_arcs(const Segment& left_segment, const Segment& ri
         return result;
     }
 
-    const auto along = (left.radius * left.radius - right.radius * right.radius +
-                        center_distance * center_distance) /
-                       (2.0 * center_distance);
-    const auto height_squared = left.radius * left.radius - along * along;
-    const auto height_tolerance = tolerance * (2.0 * left.radius + tolerance);
-    if (height_squared < -height_tolerance) {
-        result.kind = IntersectionKind::indeterminate;
-        return result;
-    }
-
-    const auto base = left.center + centers * (along / center_distance);
     const auto add_if_on_both = [&](Vec2 point) {
         if (point_on_arc(left, point, tolerance) && point_on_arc(right, point, tolerance)) {
             add_point(result, point, tolerance);
         }
     };
-    if (height_squared <= height_tolerance) {
-        add_if_on_both(base);
+
+    // Axis diameters can establish an exact tangent independently of the
+    // cancellation-prone circle discriminant only if every earlier origin
+    // subtraction retained the actual endpoints. Other unresolved tangencies
+    // fail closed rather than manufacture a contact within radial tolerance.
+    const auto exact_axis_circle = [](const Segment& segment, const ArcGeometry& arc) {
+        if (std::abs(segment.sweep_radians) != std::numbers::pi) return false;
+        const auto chord_x = compensated_sum(segment.end.x, -segment.start.x);
+        const auto chord_y = compensated_sum(segment.end.y, -segment.start.y);
+        const auto center_x = compensated_sum(segment.start.x * 0.5, segment.end.x * 0.5);
+        const auto center_y = compensated_sum(segment.start.y * 0.5, segment.end.y * 0.5);
+        return chord_x.tail == 0.0 && chord_y.tail == 0.0 &&
+            (chord_x.value == 0.0 || chord_y.value == 0.0) &&
+            center_x.tail == 0.0 && center_y.tail == 0.0 &&
+            center_x.value == arc.center.x && center_y.value == arc.center.y;
+    };
+    const auto center_x = compensated_sum(right.center.x, -left.center.x);
+    const auto center_y = compensated_sum(right.center.y, -left.center.y);
+    const auto radius_sum = compensated_sum(left.radius, right.radius);
+    const auto radius_difference = compensated_sum(left.radius, -right.radius);
+    const bool external_tangent = radius_sum.tail == 0.0 && center_distance == radius_sum.value;
+    const bool internal_tangent = radius_difference.tail == 0.0 &&
+        center_distance == std::abs(radius_difference.value);
+    if (exact_input_origin && exact_axis_circle(left_segment, left) &&
+        exact_axis_circle(right_segment, right) &&
+        center_x.tail == 0.0 && center_y.tail == 0.0 &&
+        (center_x.value == 0.0 || center_y.value == 0.0) &&
+        (external_tangent || internal_tangent)) {
+        const auto direction = external_tangent || left.radius > right.radius ? 1.0 : -1.0;
+        add_if_on_both(left.center + centers * (direction * left.radius / center_distance));
         return result;
     }
 
+    const auto left_squared = left.radius * left.radius;
+    const auto right_squared = right.radius * right.radius;
+    const auto distance_squared = center_distance * center_distance;
+    const auto along = (left_squared - right_squared + distance_squared) /
+                       (2.0 * center_distance);
+    const auto along_squared = along * along;
+    const auto height_squared = left_squared - along_squared;
+    constexpr auto roundoff = 64.0 * std::numeric_limits<double>::epsilon();
+    const auto along_error = roundoff * (left_squared + right_squared + distance_squared) /
+                             (2.0 * center_distance);
+    const auto height_error = roundoff * (left_squared + along_squared) +
+        2.0 * std::abs(along) * along_error + along_error * along_error;
+    if (!std::isfinite(height_squared) || !std::isfinite(height_error) ||
+        height_squared <= height_error) {
+        result.kind = IntersectionKind::indeterminate;
+        return result;
+    }
+
+    // A positive height has two genuine circle roots even when their radial
+    // penetration is below the metre tolerance. Merge only contacts whose
+    // actual separation is within tolerance, through add_point above.
+    const auto base = left.center + centers * (along / center_distance);
     const auto height = std::sqrt(height_squared);
     const Vec2 perpendicular{-centers.y / center_distance, centers.x / center_distance};
     add_if_on_both(base + perpendicular * height);
@@ -663,7 +735,7 @@ IntersectionResult intersect_arcs(const Segment& left_segment, const Segment& ri
 }
 
 IntersectionResult intersect_segments(const Segment& left, const Segment& right,
-                                      double tolerance) {
+                                      double tolerance, bool exact_input_origin = true) {
     const auto left_is_arc = left.sweep_radians != 0.0;
     const auto right_is_arc = right.sweep_radians != 0.0;
     if (!left_is_arc && !right_is_arc) {
@@ -675,7 +747,7 @@ IntersectionResult intersect_segments(const Segment& left, const Segment& right,
     if (!right_is_arc) {
         return intersect_line_arc(right, left, tolerance);
     }
-    return intersect_arcs(left, right, tolerance);
+    return intersect_arcs(left, right, tolerance, exact_input_origin);
 }
 
 // Clearance is a topology decision, not an intersection coordinate. A line
@@ -853,12 +925,16 @@ SegmentIntersection segment_intersection(const Segment& first, const Segment& se
         segment_length(first)<=tolerance || segment_length(second)<=tolerance)
         throw std::invalid_argument("Segment intersection requires finite nondegenerate geometry");
     // Local coordinates avoid cancellation far from the document origin.
+    // Retain subtraction fidelity for the kernel's exact-tangency exception.
     const auto origin = first.sweep_radians != 0.0 ? first.start :
         (second.sweep_radians != 0.0 ? second.start : first.start);
+    const bool exact_input_origin = exact_point_difference(first.start, origin) &&
+        exact_point_difference(first.end, origin) && exact_point_difference(second.start, origin) &&
+        exact_point_difference(second.end, origin);
     auto left=first; auto right=second;
     left.start=first.start-origin; left.end=first.end-origin;
     right.start=second.start-origin; right.end=second.end-origin;
-    const auto hit=intersect_segments(left,right,tolerance);
+    const auto hit=intersect_segments(left,right,tolerance,exact_input_origin);
     SegmentIntersection result;
     if (hit.kind==IntersectionKind::overlap) result.kind=SegmentIntersectionKind::overlap;
     else if (hit.kind==IntersectionKind::indeterminate) result.kind=SegmentIntersectionKind::indeterminate;

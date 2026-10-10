@@ -14,6 +14,48 @@ changed source does not acquire runtime acceptance without later qualification.
 
 ## Current delivery state
 
+### October 9 analytical curve contacts and unchanged measurement editing
+
+Source inspection found the arc/arc kernel used radial penetration tolerance to
+collapse two actual intersection roots into a manufactured tangent. Unit-radius
+upper semicircles with center spacing `2 - 2^-26` cross roughly 0.122 mm above
+their tolerance-close endpoints. The old contact could be mistaken for their
+expected endpoint join, allowing a self-crossing boundary into area arithmetic.
+Positive-height roots are now retained and deduplicated by actual separation;
+uncertain discriminants return indeterminate. Internal boundary validation and
+the public contact API use local circle arithmetic consistently.
+
+Independent review found the initial exact-tangent exception could also be
+misled by rounded endpoint translation. Both public and private origin changes
+now carry compensated subtraction fidelity into that exception. Any lost tail
+disables the exact-tangent proof. Exact axis-aligned semicircle tangencies have
+a separate compensated-input proof; uncertain noncanonical tangencies remain
+indeterminate. General arc/arc tangency qualification is still an open
+production requirement, recorded in the delivery registry.
+
+The measured-stroke editor formerly reparsed generated full-precision feet
+strings even for untouched lengths and coordinates. A supported 2 m value can
+overflow the exact parser's int64 rational multiplication after that conversion.
+Matching prefilled values now retain the original captured doubles; genuinely
+changed expressions still parse and retain their authored quantities. The
+boundary editor also no longer proposes a resize or curve reconstruction from
+an unchanged rounded display value. Reversing only a curve's side keeps its
+original chord and sweep magnitude through the existing typed angle factory,
+without inventing or reparsing a decimal length. Default line-to-curve proposals
+and explicit measurement edits retain their existing construction paths.
+
+The bounded appraisal projection audit found no additional confirmed visible
+or export mismatch in the examined current-source, qualification and total
+paths. An unused nonstandard-area aggregate helper has undocumented dwelling
+scope; it was not treated as a confirmed report defect or changed speculatively.
+This source audit does not qualify normative appraisal rules.
+
+Root integration review and final independent source review approved the
+corrections. Scoped `git diff --check` passed. No builds, tests, new tests, probes, scripts, native jobs,
+launches, packages or installations ran. Compilation, actual curve contacts,
+editor interaction and saved-history behavior remain unverified. The installed
+candidate is unchanged and production acceptance remains open.
+
 ### October 9 replaced-source recovery scheduling and published file leases
 
 The source audit confirmed a second autosave gap after successful

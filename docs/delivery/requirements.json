@@ -2360,7 +2360,7 @@
         "binding": null
       },
       "qualification_history": [],
-      "delivery_notes": null,
+      "delivery_notes": "October 9 source-only correction preserves actual near-tangent arc/arc roots and prevents rounded origin translation from proving an exact tangent. Uncertain noncanonical tangencies remain indeterminate; general arc/arc tangency and numerical qualification are still required. See docs/delivery/progress.md and docs/geometry-operations.md. No changed-source compilation or runtime acceptance is claimed.",
       "source_snapshot": {
         "id": "GEO-BASE-001",
         "area": "geometry",
@@ -3907,7 +3907,7 @@
         "binding": null
       },
       "qualification_history": [],
-      "delivery_notes": null,
+      "delivery_notes": "October 9 source-only editor correction preserves unchanged source lengths and coordinates, avoids reparsing generated feet conversions, and treats unchanged rounded curve measurements as no geometry change. Changing only arc side retains the analytical source length. Changed expressions retain exact parsing. See docs/delivery/progress.md; changed-source compilation and user-observed editing remain unverified.",
       "source_snapshot": {
         "id": "APX-CURVE-001",
         "area": "apex_parity",
