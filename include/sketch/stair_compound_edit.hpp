@@ -13,13 +13,23 @@ namespace sketch {
 struct StairCompoundEditIntent {
     StairObjectEditIntent profile_edit;
     StairTransformIntent placement_edit;
+    // Closed v2 coordinates world-authored hosted profiles when the profile
+    // changes resolved vertical placement. False retains closed v1 semantics.
+    bool coordinate_profile_hosted_geometry{false};
 };
 
 [[nodiscard]] nlohmann::json encode_stair_compound_edit_intent(const StairCompoundEditIntent& intent);
 [[nodiscard]] StairCompoundEditIntent decode_stair_compound_edit_intent(const nlohmann::json& value);
 
+// The admitted profile stage, including only explicitly opted-in hosted world
+// geometry consequences. Replacement staging uses this same source authority.
+[[nodiscard]] std::map<std::string, Entity, std::less<>> replay_stair_compound_profile_entities(
+    const std::map<std::string, Entity, std::less<>>& actual_entities,
+    const std::vector<StairCompoundEditIntent>& intents);
+
 // Replay the complete actual map in two typed stages. Profiles admit actual
-// attachments/levels first; placement then moves active dependent rails and
+// attachments/levels first, and v2 coordinates their hosted world geometry;
+// placement then moves active dependent rails and
 // actual hosted catalog rows exactly once. Explicit hosted rail placement still
 // requires its selected actual stair and equivalent captured operator.
 [[nodiscard]] std::map<std::string, Entity, std::less<>> replay_stair_compound_edit_entities(

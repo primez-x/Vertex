@@ -1,0 +1,28 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="3100" height="2600" viewBox="-50 -50 3100 2600" role="img" aria-labelledby="walk-in-freezer--title walk-in-freezer--desc" data-vertex-style="white-outline-2">
+<title id="walk-in-freezer--title">Walk in freezer</title>
+<desc id="walk-in-freezer--desc">Original orthographic walk in freezer plan with thick insulated panels, heated threshold, heavy inward hinged door, pallet storage bays and twin fan evaporator. Nominal footprint 3000 by 2500 millimetres. Entrance is +Y. Transparent background.</desc>
+<!-- Original Vertex artwork, GPL-3.0-or-later. -->
+<g fill="#ffffff" stroke="#111111" stroke-width="14" stroke-linejoin="round" stroke-linecap="round">
+<path d="M0 0H3000V2500H2070V2280H2780V220H220V2280H1070V2500H0Z" fill="#f2f2f2"/>
+<path d="M55 55H2945V2445H2125M1015 2445H55V55" fill="none" stroke-width="6"/>
+<path d="M750 0V220M1500 0V220M2250 0V220M0 800H220M0 1600H220M2780 800H3000M2780 1600H3000M600 2280V2500M2550 2280V2500" fill="none" stroke-width="6"/>
+<rect x="300" y="640" width="730" height="660" rx="12"/>
+<rect x="300" y="1420" width="730" height="660" rx="12"/>
+<rect x="1970" y="640" width="730" height="660" rx="12"/>
+<rect x="1970" y="1420" width="730" height="660" rx="12"/>
+<path d="M345 685H985V1255H345ZM345 1465H985V2035H345ZM2015 685H2655V1255H2015ZM2015 1465H2655V2035H2015Z" fill="#f2f2f2" stroke-width="7"/>
+<path d="M345 805H985M345 955H985M345 1105H985M345 1585H985M345 1735H985M345 1885H985M2015 805H2655M2015 955H2655M2015 1105H2655M2015 1585H2655M2015 1735H2655M2015 1885H2655" fill="none" stroke-width="6"/>
+<rect x="830" y="280" width="1340" height="280" rx="15" fill="#f2f2f2"/>
+<circle cx="1180" cy="420" r="100"/><circle cx="1820" cy="420" r="100"/>
+<circle cx="1180" cy="420" r="22"/><circle cx="1820" cy="420" r="22"/>
+<path d="M1180 398Q1070 345 1125 327Q1165 328 1180 398M1202 420Q1255 310 1273 365Q1272 405 1202 420M1180 442Q1290 495 1235 513Q1195 512 1180 442M1158 420Q1105 530 1087 475Q1088 435 1158 420M1820 398Q1710 345 1765 327Q1805 328 1820 398M1842 420Q1895 310 1913 365Q1912 405 1842 420M1820 442Q1930 495 1875 513Q1835 512 1820 442M1798 420Q1745 530 1727 475Q1728 435 1798 420" fill="none" stroke-width="6"/>
+<path d="M870 310V530M925 310V530M2075 310V530M2130 310V530" fill="none" stroke-width="6"/>
+<rect x="1070" y="2280" width="1000" height="220" fill="#f2f2f2" stroke-width="8"/>
+<path d="M1095 2320H2045M1095 2370H2045M1095 2420H2045M1095 2470H2045" fill="none" stroke-width="5"/>
+<path d="M1070 2280V1280H1180V2280Z"/>
+<path d="M1110 1320V2240M1150 1320V2240" fill="none" stroke-width="6"/>
+<path d="M1070 1280A1000 1000 0 0 1 2070 2280" fill="none" stroke-width="6" stroke-dasharray="24 20"/>
+<path d="M1190 1420H1235V1590H1190" fill="none" stroke-width="10"/>
+<circle cx="1125" cy="2270" r="20"/>
+</g>
+</svg>

@@ -1,0 +1,23 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1300" height="1000" viewBox="-50 -50 1300 1000" role="img" aria-labelledby="commercial-range--title commercial-range--desc" data-vertex-style="white-outline-2">
+<title id="commercial-range--title">Commercial six burner range</title>
+<desc id="commercial-range--desc">Original orthographic commercial range top view with six open burners, separate cast grates, rear flue, control knobs and front oven handle. Nominal footprint 1200 by 900 millimetres. Front is +Y. Transparent background.</desc>
+<!-- Original Vertex artwork, GPL-3.0-or-later. -->
+<g fill="#ffffff" stroke="#111111" stroke-width="10" stroke-linejoin="round" stroke-linecap="round">
+<rect x="0" y="0" width="1200" height="900" rx="12"/>
+<rect x="25" y="20" width="1150" height="80" rx="8" fill="#f2f2f2"/>
+<path d="M100 45V75M180 45V75M260 45V75M340 45V75M420 45V75M500 45V75M580 45V75M660 45V75M740 45V75M820 45V75M900 45V75M980 45V75M1060 45V75" fill="none" stroke-width="6"/>
+<rect x="25" y="120" width="1150" height="580" rx="8" fill="#f2f2f2"/>
+<path d="M40 130H390V395H40ZM425 130H775V395H425ZM810 130H1160V395H810ZM40 425H390V690H40ZM425 425H775V690H425ZM810 425H1160V690H810Z"/>
+<circle cx="215" cy="263" r="68" fill="#f2f2f2"/><circle cx="600" cy="263" r="68" fill="#f2f2f2"/><circle cx="985" cy="263" r="68" fill="#f2f2f2"/>
+<circle cx="215" cy="558" r="68" fill="#f2f2f2"/><circle cx="600" cy="558" r="68" fill="#f2f2f2"/><circle cx="985" cy="558" r="68" fill="#f2f2f2"/>
+<circle cx="215" cy="263" r="28"/><circle cx="600" cy="263" r="28"/><circle cx="985" cy="263" r="28"/>
+<circle cx="215" cy="558" r="28"/><circle cx="600" cy="558" r="28"/><circle cx="985" cy="558" r="28"/>
+<path d="M75 263H162M268 263H355M215 155V210M215 316V370M460 263H547M653 263H740M600 155V210M600 316V370M845 263H932M1038 263H1125M985 155V210M985 316V370M75 558H162M268 558H355M215 450V505M215 611V665M460 558H547M653 558H740M600 450V505M600 611V665M845 558H932M1038 558H1125M985 450V505M985 611V665" fill="none" stroke-width="15"/>
+<path d="M25 725H1175" fill="none"/>
+<circle cx="120" cy="775" r="24" fill="#f2f2f2"/><circle cx="312" cy="775" r="24" fill="#f2f2f2"/><circle cx="504" cy="775" r="24" fill="#f2f2f2"/>
+<circle cx="696" cy="775" r="24" fill="#f2f2f2"/><circle cx="888" cy="775" r="24" fill="#f2f2f2"/><circle cx="1080" cy="775" r="24" fill="#f2f2f2"/>
+<path d="M120 775V761M312 775V761M504 775V761M696 775V761M888 775V761M1080 775V761" fill="none" stroke-width="6"/>
+<rect x="180" y="840" width="840" height="30" rx="10"/>
+<path d="M215 825V840M985 825V840" fill="none" stroke-width="8"/>
+</g>
+</svg>

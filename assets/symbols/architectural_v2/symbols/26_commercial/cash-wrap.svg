@@ -1,0 +1,27 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="2100" height="850" viewBox="-50 -50 2100 850" role="img" aria-labelledby="cash-wrap--title cash-wrap--desc" data-vertex-style="white-outline-2">
+<title id="cash-wrap--title">Cash wrap</title>
+<desc id="cash-wrap--desc">Original orthographic retail counter top view with transaction ledge, register, cash drawer and recessed bagging well. Nominal footprint 2000 by 750 millimetres. Customer side is +Y. Transparent background.</desc>
+<!-- Original Vertex artwork, GPL-3.0-or-later. -->
+<g fill="#ffffff" stroke="#111111" stroke-width="10" stroke-linejoin="round">
+<rect x="0" y="0" width="2000" height="750" rx="24"/>
+<rect x="28" y="28" width="1944" height="540" rx="12"/>
+<path d="M28 568H1972V722H28Z" fill="#f2f2f2"/>
+<path d="M38 615H1962M38 680H1962" fill="none" stroke-width="6"/>
+<rect x="110" y="75" width="530" height="350" rx="12" fill="#f2f2f2"/>
+<rect x="140" y="105" width="470" height="220" rx="10"/>
+<path d="M170 350H580M170 380H580" fill="none" stroke-width="6"/>
+<rect x="780" y="180" width="380" height="330" rx="15"/>
+<rect x="820" y="380" width="300" height="90" rx="8" fill="#f2f2f2"/>
+<rect x="870" y="407" width="200" height="22" rx="5"/>
+<path d="M912 180V126H1028V180" fill="#f2f2f2"/>
+<rect x="815" y="45" width="310" height="90" rx="12"/>
+<rect x="835" y="62" width="270" height="55" rx="6" fill="#f2f2f2"/>
+<rect x="1210" y="285" width="150" height="195" rx="12"/>
+<rect x="1235" y="310" width="100" height="65" rx="5" fill="#f2f2f2"/>
+<path d="M1240 402H1330M1240 435H1330" fill="none" stroke-width="6"/>
+<rect x="1450" y="100" width="430" height="400" rx="28" fill="#f2f2f2"/>
+<rect x="1490" y="140" width="350" height="320" rx="22"/>
+<path d="M1510 210H1820M1510 390H1820" fill="none" stroke-width="6"/>
+<path d="M1635 165V205M1695 165V205" fill="none" stroke-width="8"/>
+</g>
+</svg>

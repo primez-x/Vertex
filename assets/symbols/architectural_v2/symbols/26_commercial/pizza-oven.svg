@@ -1,0 +1,22 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1300" height="1300" viewBox="-50 -50 1300 1300" role="img" aria-labelledby="pizza-oven--title pizza-oven--desc" data-vertex-style="white-outline-2">
+<title id="pizza-oven--title">Domed pizza oven</title>
+<desc id="pizza-oven--desc">Original orthographic domed pizza oven top view with circular insulated baking chamber, segmented masonry rim, front mouth, loading hearth and chimney collar. Nominal footprint 1200 by 1200 millimetres. Loading front is +Y. Transparent background.</desc>
+<!-- Original Vertex artwork, GPL-3.0-or-later. -->
+<g fill="#ffffff" stroke="#111111" stroke-width="10" stroke-linejoin="round" stroke-linecap="round">
+<path d="M140 0H1060L1200 140V1060L1060 1200H140L0 1060V140Z" fill="#f2f2f2"/>
+<path d="M160 35H1040L1165 160V1040L1040 1165H160L35 1040V160Z"/>
+<path d="M385 965A500 500 0 1 1 815 965L815 1050H385Z" fill="#f2f2f2"/>
+<path d="M410 885A415 415 0 1 1 790 885L790 1010H410Z"/>
+<path d="M440 838A355 355 0 1 1 760 838" fill="none" stroke-width="6"/>
+<path d="M600 50V135M350 117L395 193M167 300L245 345M100 550H185M168 800L245 755M850 117L805 193M1033 300L955 345M1100 550H1015M1032 800L955 755" fill="none" stroke-width="7"/>
+<path d="M270 430Q600 380 930 430M245 550H955M270 670Q600 720 930 670" fill="none" stroke-width="5"/>
+<path d="M430 960Q600 1000 770 960V1040H430Z" fill="#f2f2f2"/>
+<rect x="330" y="1040" width="540" height="115" rx="12"/>
+<path d="M365 1080H835M365 1120H835" fill="none" stroke-width="6"/>
+<rect x="385" y="840" width="60" height="200" rx="10" fill="#f2f2f2"/>
+<rect x="755" y="840" width="60" height="200" rx="10" fill="#f2f2f2"/>
+<circle cx="600" cy="270" r="90" fill="#f2f2f2"/>
+<circle cx="600" cy="270" r="60"/><circle cx="600" cy="270" r="35" fill="#f2f2f2" stroke-width="6"/>
+<path d="M505 995H695" fill="none" stroke-width="8"/>
+</g>
+</svg>

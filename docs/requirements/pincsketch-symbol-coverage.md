@@ -2,7 +2,7 @@
 
 Updated 2026-10-09. This crosswalk compares the 80 unique symbol names found by static inspection of the archived PincSketch 4.3 HTML bundle with the named entries in Vertex Architectural SVG Library v2. It is a name-and-kind comparison: a listed Vertex asset is a plausible graphic candidate, not proof of equal artwork, dimensions, editing controls, placement behavior, or user-visible availability. “No confirmed counterpart” means the v2 index has no clearly corresponding named entry; it does not assert that no custom drawing could approximate it.
 
-Current source has 352 visible SVG library entries (240 nominal and 112 editable-default entries) plus 809 legacy catalog entries, for 1,161 catalog records. These counts describe available records; they do not establish complete Pinc coverage or quality.
+Current source has 364 visible SVG library entries (252 nominal and 112 editable-default entries) plus 809 legacy catalog entries, for 1,173 catalog records. These counts describe available records; they do not establish complete Pinc coverage or quality. The twelve commercial additions have separate original artwork and physical defaults; they are not additional Pinc names.
 
 The PincSketch inventory reports 110 symbol occurrences including 26 Favorites (84 excluding Favorites), but those are still only 80 unique names. Favorites repeat names from the other categories. The Pinc names therefore do not imply 80 distinct drawing implementations. The separately inventoried 22 area types, including Clear, are outside this symbol-only crosswalk.
 

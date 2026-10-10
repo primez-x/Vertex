@@ -834,6 +834,7 @@ drawing; switching modes does not change existing geometry.
 
 - [ ] **U111 — Browse library categories**
   - Steps: Open Library and expand each available category, including bathroom, bedroom, living, kitchen, office, doors/windows and structure. Read the category and item names shown in the placement list.
+  - Commercial check: Choose Commercial and place a range, griddle, fryer, dishwasher, steam table, pizza oven, cooler and freezer. Compare their distinct details. Search for Cash Wrap, Retail Kiosk, Dental Chair and Hospital Bed. Place and resize each, rotate one, then save/reopen and export. The default footprints are editable, and surrounding artwork padding must not add to the displayed physical dimensions.
   - Expected: Source categories use readable names without numeric filename prefixes. Bathroom, bedroom, living, kitchen, office, electrical, HVAC/plumbing, doors/windows, structure, circulation, site and commercial equipment are easy to distinguish.
   - Result: Not tested
   - Notes / steps to reproduce: ____________________
@@ -1330,6 +1331,7 @@ drawing; switching modes does not change existing geometry.
 
 - [ ] **U181 — Edit stair width, rise or run**
   - Steps: Select a stair and open its object properties. Change its flight width, going or rise, review the preview, and apply the edit.
+  - Hosted elevation check: Place a geometric component hosted by a level-bound stair, then change the stair's vertical offset by one foot or 300 mm. Inspect the stair, attached rails and component in 3D and elevation. Repeat with a proposed alternative, then Undo, Redo, save and reopen. The component follows the elevation change once; the baseline retains its original elevation. Repeat with an independent level-bound railing and change its offset.
   - Expected: The stair updates consistently in plan and 3D.
   - Result: Not tested
   - Notes / steps to reproduce: ____________________

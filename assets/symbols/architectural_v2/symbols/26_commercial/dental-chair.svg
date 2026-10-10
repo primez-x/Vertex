@@ -1,0 +1,30 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="900" height="2000" viewBox="-50 -50 900 2000" role="img" aria-labelledby="dental-chair--title dental-chair--desc" data-vertex-style="white-outline-2">
+<title id="dental-chair--title">Dental chair</title>
+<desc id="dental-chair--desc">Original orthographic reclined dental chair top view with shaped cushions, headrest, armrests, delivery tray and cuspidor. Nominal footprint 800 by 1900 millimetres. Foot end is +Y. Transparent background.</desc>
+<!-- Original Vertex artwork, GPL-3.0-or-later. -->
+<g fill="#ffffff" stroke="#111111" stroke-width="10" stroke-linejoin="round" stroke-linecap="round">
+<path d="M235 665Q130 970 185 1410Q215 1525 400 1540Q585 1525 615 1410Q670 970 565 665Z" fill="#f2f2f2"/>
+<ellipse cx="400" cy="1110" rx="130" ry="235"/>
+<rect x="365" y="1120" width="70" height="215" rx="20" fill="#f2f2f2"/>
+<path d="M270 220Q400 170 530 220L585 675Q580 740 530 770H270Q220 740 215 675Z"/>
+<path d="M290 250Q400 215 510 250L548 660Q545 700 520 715H280Q255 700 252 660Z" fill="#f2f2f2" stroke-width="6"/>
+<path d="M365 220V155H435V220" fill="#f2f2f2"/>
+<rect x="305" y="0" width="190" height="160" rx="65"/>
+<path d="M337 40Q400 18 463 40M336 120Q400 145 464 120" fill="none" stroke-width="6"/>
+<path d="M270 770H530Q565 790 555 1020L520 1140H280L245 1020Q235 790 270 770Z"/>
+<path d="M295 807H505M280 1080Q400 1115 520 1080" fill="none" stroke-width="6"/>
+<path d="M280 1140H520L555 1700Q550 1775 505 1810H295Q250 1775 245 1700Z"/>
+<path d="M294 1175H506L520 1690Q515 1735 490 1755H310Q285 1735 280 1690Z" fill="#f2f2f2" stroke-width="6"/>
+<path d="M295 1810H505V1900H295Z" fill="#f2f2f2"/>
+<path d="M220 700H150V1040H245M580 700H650V1040H555" fill="none" stroke-width="20"/>
+<rect x="130" y="715" width="70" height="300" rx="30"/>
+<rect x="600" y="715" width="70" height="300" rx="30"/>
+<path d="M650 880H710V620" fill="none" stroke-width="14"/>
+<rect x="580" y="385" width="220" height="235" rx="20"/>
+<rect x="605" y="410" width="170" height="150" rx="12" fill="#f2f2f2" stroke-width="6"/>
+<path d="M620 580V615M665 580V615M710 580V615M755 580V615" fill="none" stroke-width="8"/>
+<path d="M150 830H85V600" fill="none" stroke-width="14"/>
+<ellipse cx="85" cy="510" rx="85" ry="95"/><ellipse cx="85" cy="510" rx="55" ry="62" fill="#f2f2f2" stroke-width="6"/>
+<circle cx="85" cy="525" r="15"/><path d="M85 440V395H145V445" fill="none" stroke-width="10"/>
+</g>
+</svg>

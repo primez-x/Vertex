@@ -78,9 +78,11 @@ Json wire(const StairCompoundEditIntent& intent) {
             {"rotation_z_radians", t.rotation_z_radians}, {"uniform_scale", t.scale},
             {"flip_horizontal", t.flip_horizontal}, {"flip_vertical", t.flip_vertical}}}};
     if (!intent.placement_edit.quantity_entries.is_null()) placement["quantity_entries"] = intent.placement_edit.quantity_entries;
-    return {{"version", 1}, {"profile_edit", {{"version", 1}, {"object_id", p.object_id},
+    Json result{{"version", intent.coordinate_profile_hosted_geometry ? 2 : 1}, {"profile_edit", {{"version", 1}, {"object_id", p.object_id},
         {"profile_fields", p.profile_fields}, {"quantity_entries", p.quantity_entries}}},
         {"placement_edit", std::move(placement)}};
+    if (intent.coordinate_profile_hosted_geometry) result["coordinate_profile_hosted_geometry"] = true;
+    return result;
 }
 bool coordinate_pointer(std::string_view key) {
     return key == "/base_position_m/0" || key == "/base_position_m/1" || key == "/base_position_m/2";
@@ -178,8 +180,9 @@ Json encode_stair_compound_edit_intent(const StairCompoundEditIntent& intent) tr
     // Bound the whole wire before nested encoders invoke family codecs.
     (void)budget(wire(intent));
     rigid(intent);
-    Json result{{"version", 1}, {"profile_edit", encode_stair_object_edit_intent(intent.profile_edit)},
+    Json result{{"version", intent.coordinate_profile_hosted_geometry ? 2 : 1}, {"profile_edit", encode_stair_object_edit_intent(intent.profile_edit)},
         {"placement_edit", encode_stair_transform_intent(intent.placement_edit)}};
+    if (intent.coordinate_profile_hosted_geometry) result["coordinate_profile_hosted_geometry"] = true;
     (void)budget(result);
     return result;
 } catch (const Json::exception& error) {
@@ -187,18 +190,24 @@ Json encode_stair_compound_edit_intent(const StairCompoundEditIntent& intent) tr
 }
 StairCompoundEditIntent decode_stair_compound_edit_intent(const Json& value) try {
     (void)budget(value);
-    if (!value.is_object() || value.size() != 3 || !value.contains("version") ||
+    const auto version = field(value, "version");
+    if (!version || !version->is_number_integer() || (*version != 1 && *version != 2))
+        invalid("proof version is unsupported");
+    const bool coordinated = *version == 2;
+    if (!value.is_object() || value.size() != (coordinated ? 4 : 3) || !value.contains("version") ||
         !value.contains("profile_edit") || !value.contains("placement_edit") ||
-        !value.at("version").is_number_integer() || value.at("version") != 1)
+        (coordinated && (!value.contains("coordinate_profile_hosted_geometry") ||
+            !value.at("coordinate_profile_hosted_geometry").is_boolean() ||
+            value.at("coordinate_profile_hosted_geometry") != true)))
         invalid("proof fields/version are not closed");
     StairCompoundEditIntent result{decode_stair_object_edit_intent(value.at("profile_edit")),
-        decode_stair_transform_intent(value.at("placement_edit"))};
+        decode_stair_transform_intent(value.at("placement_edit")), coordinated};
     (void)encode_stair_compound_edit_intent(result);
     return result;
 } catch (const Json::exception& error) {
     invalid(std::string("malformed intent: ") + error.what());
 }
-Entities replay_stair_compound_edit_entities(const Entities& actual,
+Entities replay_stair_compound_profile_entities(const Entities& actual,
     const std::vector<StairCompoundEditIntent>& intents) try {
     if (intents.size() > maximum_architectural_group_targets) invalid("target budget exceeded");
     if (intents.empty()) return actual;
@@ -223,6 +232,20 @@ Entities replay_stair_compound_edit_entities(const Entities& actual,
         profiles.push_back(intent.profile_edit);
     }
     auto profiled = replay_stair_object_edit_entities(actual, profiles);
+    std::vector<std::string> coordinated;
+    for (const auto& intent : intents) if (intent.coordinate_profile_hosted_geometry)
+        coordinated.push_back(intent.profile_edit.object_id);
+    return stair_transform_detail::coordinate_profile_hosted_geometry(actual, std::move(profiled), coordinated);
+} catch (const Standard_Failure& error) {
+    const auto message = error.GetMessageString();
+    invalid(std::string("native profile admission failed: ") + (message ? message : "Open CASCADE failure"));
+} catch (const Json::exception& error) {
+    invalid(std::string("malformed actual profile source: ") + error.what());
+}
+Entities replay_stair_compound_edit_entities(const Entities& actual,
+    const std::vector<StairCompoundEditIntent>& intents) try {
+    if (intents.empty()) return actual;
+    auto profiled = replay_stair_compound_profile_entities(actual, intents);
     std::vector<StairTransformIntent> placements;
     placements.reserve(intents.size());
     Names moving, selected_hosts;
@@ -290,7 +313,7 @@ std::vector<StairCompoundEditIntent> capture_stair_compound_edits(const Entities
                 scalar(intermediate.properties.at("orientation_rad"));
         }
         if (const auto entered=field(wanted.properties,"quantity_entries")) placement.quantity_entries=*entered;
-        result.push_back({std::move(profile),std::move(placement)});
+        result.push_back({std::move(profile),std::move(placement),true});
     }
     const auto replayed=replay_stair_compound_edit_entities(actual,result);
     for (const auto& intent:result) agrees(admitted.at(intent.profile_edit.object_id),replayed.at(intent.profile_edit.object_id));

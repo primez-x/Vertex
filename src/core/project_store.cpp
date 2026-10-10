@@ -377,6 +377,10 @@ std::uint32_t required_format_version_internal(const DocumentSnapshot& snapshot,
             const auto& value=*pending.back(); pending.pop_back();
             if (++nodes>ProjectStore::maximum_json_values)
                 storage_error(StorageErrorCode::resource_limit,"Typed edit reader-floor scan exceeds its JSON budget");
+            if (value.is_object() && value.value("version",nlohmann::json())==2 &&
+                value.value("coordinate_profile_hosted_geometry",nlohmann::json())==true &&
+                value.contains("profile_edit") && value.contains("placement_edit"))
+                floor=std::max(floor,164U);
             if (value.is_object() && value.value("version",nlohmann::json())==6 &&
                 value.value("coordinate_world_hosted_geometry",nlohmann::json())==true &&
                 value.contains("roof_id") && value.contains("transform") && value.contains("uniform_transform"))
@@ -464,9 +468,9 @@ std::uint32_t required_format_version_internal(const DocumentSnapshot& snapshot,
     };
     for (const auto& revision : snapshot.history()) {
         if (revision.phase_entity_import) required=std::max(required,160U);
-        if (required<163 && revision.boundary_geometry_edit)
+        if (required<164 && revision.boundary_geometry_edit)
             required=std::max(required,typed_edit_reader_floor(encode_boundary_geometry_edit(*revision.boundary_geometry_edit)));
-        if (required<163 && revision.boundary_constraint_changes)
+        if (required<164 && revision.boundary_constraint_changes)
             required=std::max(required,typed_edit_reader_floor(command_to_json(Command{*revision.boundary_constraint_changes})));
         if (required<122 && revision.boundary_geometry_edit)
             required=std::max(required,quantity_reader_floor(encode_boundary_geometry_edit(*revision.boundary_geometry_edit)));
@@ -2785,6 +2789,7 @@ bool verify_sqlite_schema(sqlite3* database, bool allow_recovery = false) {
          sqlite3_column_int(user_version.get(), 0) != 160 &&
          sqlite3_column_int(user_version.get(), 0) != 161 &&
          sqlite3_column_int(user_version.get(), 0) != 162 &&
+         sqlite3_column_int(user_version.get(), 0) != 164 &&
          sqlite3_column_int(user_version.get(), 0) != 163 &&
          sqlite3_column_int(user_version.get(), 0) != 143 &&
          sqlite3_column_int(user_version.get(), 0) != 142 &&
@@ -3505,6 +3510,8 @@ DocumentSnapshot read_snapshot(sqlite3* database, RecoveryLedger* recovery = nul
     // here and authenticate the manifest with its stored version below.
     const auto required_format = required_format_version_internal(snapshot, format_number < 28);
     if (required_format > format_number) {
+        if (required_format>=164)
+            storage_error(StorageErrorCode::unsupported_format,"This project requires reader 164 for level-edited stair-hosted components");
         if (required_format>=163)
             storage_error(StorageErrorCode::unsupported_format,"This project requires reader 163 for coordinated roof-hosted components");
         if (required_format>=162)

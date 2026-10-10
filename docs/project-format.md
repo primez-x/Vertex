@@ -1,4 +1,27 @@
-# Vertex project formats v1 through v163
+# Vertex project formats v1 through v164
+
+## Level-edited stair-hosted profiles (v164, source integration)
+
+Native reader 164 and JSON/assets extraction 162 preserve compound stair-edit
+intent v2. It retains the closed profile and rigid-placement lanes and adds
+`coordinate_profile_hosted_geometry:true`. Actual-source replay resolves the
+old and profile-edited vertical bindings before applying the placement lane.
+Type-owned geometric profiles follow that vertical displacement in the actual
+Site frame, including active attached rails. Legacy host-derived components
+already follow their host geometry; their placement rows remain exact during
+this profile stage. The ordinary placement operator then runs once.
+
+Alternative edits copy the admitted profile-stage catalog rows and preserve
+original baseline objects. Free callouts follow the complete vertical and rigid
+displacement; bound dimensions use the profile-edited source silhouette without
+applying its vertical shift twice. Unrelated rows and opaque metadata remain
+unchanged. Compound v1 keeps its historical replay behavior. Changing hosts or
+Site frames with vertical displacement remains an explicit refusal rather than
+an inferred attachment.
+
+The reader floor follows nested proofs and every retained revision, including
+undone edits. V164 retains the v161 payload tables. Source integration does not
+establish compilation, save/reopen, migration or runtime qualification.
 
 ## Coordinated roof-hosted components (v163, source integration)
 

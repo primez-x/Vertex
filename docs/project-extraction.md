@@ -1,5 +1,11 @@
 # Portable project extraction
 
+Exchange version 162 requires native reader 164 for compound stair-edit v2.
+Its explicit profile-hosted coordination remains present in nested and retained
+history, including undone edits. Older compound v1 keeps its original meaning;
+the asset schema stays unchanged. See [project-format.md](project-format.md).
+Compilation and runtime qualification remain pending.
+
 Exchange version 161 requires native reader 163 for coordinated roof-hosted
 components. Roof edit v6 and roof replacement v9 retain explicit actual-source
 placement/copy authority in nested, retained and undone history. Historical

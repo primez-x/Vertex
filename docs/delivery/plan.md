@@ -110,6 +110,9 @@ polling timeout does not permit restarting it.
    Complete create/edit/transform/clone/delete across plan and 3D, linked views,
    associative dimensions, material hatching, schedules/quantities, phases,
    alternatives, revisions and one source-bound issue set.
+   Complete the remaining specific hosted door mechanisms: barn, pocket and
+   bifold currently have library artwork but lack their distinct operation
+   semantics. Generic hinged fallback is not completion of those families.
 10. Implement observed native/vendor/device adapters through existing workers;
     complete declared IFC/DXF/Pinc fidelity and independently consumed output.
     Add offline OCR text regions/confidence feeding reviewed proposals. New

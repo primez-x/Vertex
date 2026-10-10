@@ -1,0 +1,23 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="2100" height="2100" viewBox="-50 -50 2100 2100" role="img" aria-labelledby="kiosk--title kiosk--desc" data-vertex-style="white-outline-2">
+<title id="kiosk--title">Retail kiosk</title>
+<desc id="kiosk--desc">Original orthographic island kiosk top view with three display counters, corner posts, transaction station and rear staff opening. Nominal footprint 2000 by 2000 millimetres. Customer front is +Y. Transparent background.</desc>
+<!-- Original Vertex artwork, GPL-3.0-or-later. -->
+<g fill="#ffffff" stroke="#111111" stroke-width="12" stroke-linejoin="round">
+<path d="M0 0H650V450H450V1550H1550V450H1350V0H2000V2000H0Z"/>
+<path d="M40 40H610V400H400V1600H1600V400H1390V40H1960V1960H40Z" fill="none" stroke-width="6"/>
+<rect x="75" y="500" width="290" height="980" rx="15" fill="#f2f2f2"/>
+<path d="M100 550H340V1430H100ZM100 830H340M100 1150H340" fill="none" stroke-width="7"/>
+<rect x="1635" y="500" width="290" height="980" rx="15" fill="#f2f2f2"/>
+<path d="M1660 550H1900V1430H1660ZM1660 830H1900M1660 1150H1900" fill="none" stroke-width="7"/>
+<rect x="500" y="1635" width="980" height="290" rx="15" fill="#f2f2f2"/>
+<path d="M550 1660H1430V1900H550ZM850 1660V1900M1170 1660V1900" fill="none" stroke-width="7"/>
+<rect x="120" y="100" width="360" height="220" rx="16"/>
+<path d="M150 135H450V285H150Z" fill="#f2f2f2" stroke-width="6"/>
+<rect x="1490" y="100" width="350" height="240" rx="16"/>
+<rect x="1540" y="145" width="250" height="125" rx="8" fill="#f2f2f2"/>
+<path d="M1640 285H1740" fill="none" stroke-width="8"/>
+<circle cx="60" cy="60" r="38"/><circle cx="1940" cy="60" r="38"/>
+<circle cx="60" cy="1940" r="38"/><circle cx="1940" cy="1940" r="38"/>
+<path d="M650 40H1350" fill="none" stroke-width="6" stroke-dasharray="30 25"/>
+</g>
+</svg>

@@ -23,6 +23,13 @@ namespace stair_transform_detail {
 // Internal pure producer. Complete source bounds precede all codec/layout work;
 // public staging then uses typed profile and hosted catalog/native admission.
 void source_bounds(const std::map<std::string, Entity, std::less<>>& actual_entities);
+// Coordinate the admitted profile stage's resolved vertical displacement only.
+// Host-derived rows retain their actual placements; type-owned world geometry
+// follows its unchanged actual host/frame, including active attached rails.
+[[nodiscard]] std::map<std::string, Entity, std::less<>> coordinate_profile_hosted_geometry(
+    const std::map<std::string, Entity, std::less<>>& actual_entities,
+    std::map<std::string, Entity, std::less<>> profiled_entities,
+    const std::vector<std::string>& object_ids);
 [[nodiscard]] std::map<std::string, Entity, std::less<>> stage_geometry(
     const std::map<std::string, Entity, std::less<>>& actual_entities,
     std::span<const ArchitecturalGroupTransformTarget> targets);

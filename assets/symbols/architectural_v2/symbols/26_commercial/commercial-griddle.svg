@@ -1,0 +1,21 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1000" height="900" viewBox="-50 -50 1000 900" role="img" aria-labelledby="commercial-griddle--title commercial-griddle--desc" data-vertex-style="white-outline-2">
+<title id="commercial-griddle--title">Commercial griddle</title>
+<desc id="commercial-griddle--desc">Original orthographic commercial griddle top view with flat cooking plate, raised rear and side splash guards, forward grease trough, drain and three heat controls. Nominal footprint 900 by 800 millimetres. Operator front is +Y. Transparent background.</desc>
+<!-- Original Vertex artwork, GPL-3.0-or-later. -->
+<g fill="#ffffff" stroke="#111111" stroke-width="10" stroke-linejoin="round" stroke-linecap="round">
+<rect x="0" y="0" width="900" height="800" rx="12"/>
+<path d="M20 20H880V620H845V75H55V620H20Z" fill="#f2f2f2"/>
+<rect x="70" y="95" width="760" height="495" rx="6"/>
+<path d="M90 115H810M90 565H810" fill="none" stroke-width="5"/>
+<path d="M290 150V530M610 150V530" fill="none" stroke-width="4" stroke-dasharray="18 18"/>
+<rect x="55" y="605" width="790" height="65" rx="8" fill="#f2f2f2"/>
+<path d="M80 625H780M80 650H780" fill="none" stroke-width="5"/>
+<circle cx="810" cy="637" r="17"/><circle cx="810" cy="637" r="6" stroke-width="4"/>
+<path d="M25 692H875" fill="none" stroke-width="7"/>
+<circle cx="170" cy="730" r="27" fill="#f2f2f2"/><circle cx="450" cy="730" r="27" fill="#f2f2f2"/><circle cx="730" cy="730" r="27" fill="#f2f2f2"/>
+<path d="M170 730V713M450 730V713M730 730V713" fill="none" stroke-width="6"/>
+<circle cx="235" cy="730" r="8" stroke-width="4"/><circle cx="515" cy="730" r="8" stroke-width="4"/><circle cx="795" cy="730" r="8" stroke-width="4"/>
+<rect x="335" y="765" width="230" height="22" rx="6" stroke-width="6"/>
+<path d="M70 35V60M130 35V60M190 35V60M250 35V60M310 35V60M370 35V60M430 35V60M490 35V60M550 35V60M610 35V60M670 35V60M730 35V60M790 35V60M850 35V60" fill="none" stroke-width="4"/>
+</g>
+</svg>

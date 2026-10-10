@@ -1,0 +1,25 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="600" height="900" viewBox="-50 -50 600 900" role="img" aria-labelledby="deep-fryer--title deep-fryer--desc" data-vertex-style="white-outline-2">
+<title id="deep-fryer--title">Commercial deep fryer</title>
+<desc id="deep-fryer--desc">Original orthographic deep fryer top view with twin wire baskets, oil well, basket handles, rear flue slots and thermostat ledge. Nominal footprint 500 by 800 millimetres. Operator front is +Y. Transparent background.</desc>
+<!-- Original Vertex artwork, GPL-3.0-or-later. -->
+<g fill="#ffffff" stroke="#111111" stroke-width="8" stroke-linejoin="round" stroke-linecap="round">
+<rect x="0" y="0" width="500" height="800" rx="12"/>
+<rect x="18" y="18" width="464" height="110" rx="8" fill="#f2f2f2"/>
+<path d="M50 45V100M90 45V100M130 45V100M170 45V100M210 45V100M250 45V100M290 45V100M330 45V100M370 45V100M410 45V100M450 45V100" fill="none" stroke-width="5"/>
+<rect x="25" y="155" width="450" height="455" rx="25" fill="#f2f2f2"/>
+<rect x="45" y="178" width="410" height="410" rx="20"/>
+<path d="M75 530V240H425V530M95 530V260H405V530" fill="none" stroke-width="6"/>
+<rect x="70" y="200" width="165" height="340" rx="10" fill="#f2f2f2"/>
+<rect x="265" y="200" width="165" height="340" rx="10" fill="#f2f2f2"/>
+<path d="M95 220V520M125 220V520M155 220V520M185 220V520M215 220V520M285 220V520M315 220V520M345 220V520M375 220V520M405 220V520M80 250H225M80 295H225M80 340H225M80 385H225M80 430H225M80 475H225M275 250H420M275 295H420M275 340H420M275 385H420M275 430H420M275 475H420" fill="none" stroke-width="3"/>
+<path d="M130 540V630H175V540M325 540V630H370V540" fill="none" stroke-width="7"/>
+<rect x="120" y="615" width="65" height="145" rx="15"/>
+<rect x="315" y="615" width="65" height="145" rx="15"/>
+<path d="M138 640V735M333 640V735" fill="none" stroke-width="4"/>
+<path d="M30 645H105M200 645H300M395 645H470" fill="none" stroke-width="6"/>
+<circle cx="65" cy="705" r="22" fill="#f2f2f2"/>
+<path d="M65 705V691" fill="none" stroke-width="5"/>
+<circle cx="435" cy="705" r="14"/><rect x="220" y="710" width="60" height="32" rx="6" fill="#f2f2f2" stroke-width="5"/>
+<path d="M28 780H472" fill="none" stroke-width="5"/>
+</g>
+</svg>

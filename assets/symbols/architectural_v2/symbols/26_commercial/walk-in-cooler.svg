@@ -1,0 +1,23 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="3100" height="2600" viewBox="-50 -50 3100 2600" role="img" aria-labelledby="walk-in-cooler--title walk-in-cooler--desc" data-vertex-style="white-outline-2">
+<title id="walk-in-cooler--title">Walk in cooler</title>
+<desc id="walk-in-cooler--desc">Original orthographic walk in cooler plan with insulated wall panels, inward hinged entrance, perimeter wire storage racks and single fan evaporator. Nominal footprint 3000 by 2500 millimetres. Entrance is +Y. Transparent background.</desc>
+<!-- Original Vertex artwork, GPL-3.0-or-later. -->
+<g fill="#ffffff" stroke="#111111" stroke-width="14" stroke-linejoin="round" stroke-linecap="round">
+<path d="M0 0H3000V2500H2150V2380H2880V120H120V2380H1100V2500H0Z" fill="#f2f2f2"/>
+<path d="M750 0V120M1500 0V120M2250 0V120M0 625H120M0 1250H120M0 1875H120M2880 625H3000M2880 1250H3000M2880 1875H3000M600 2380V2500M2600 2380V2500" fill="none" stroke-width="6"/>
+<rect x="180" y="180" width="470" height="2030" rx="10"/>
+<rect x="2350" y="180" width="470" height="2030" rx="10"/>
+<rect x="720" y="180" width="1560" height="450" rx="10"/>
+<path d="M220 230H610V2160H220ZM2390 230H2780V2160H2390ZM770 220H2230V590H770Z" fill="none" stroke-width="7"/>
+<path d="M220 550H610M220 890H610M220 1230H610M220 1570H610M220 1910H610M2390 550H2780M2390 890H2780M2390 1230H2780M2390 1570H2780M2390 1910H2780M1130 220V590M1500 220V590M1870 220V590" fill="none" stroke-width="6"/>
+<path d="M300 250V2140M415 250V2140M530 250V2140M2470 250V2140M2585 250V2140M2700 250V2140M790 330H2210M790 470H2210" fill="none" stroke-width="4"/>
+<rect x="1180" y="700" width="640" height="250" rx="18" fill="#f2f2f2"/>
+<circle cx="1500" cy="825" r="82"/><circle cx="1500" cy="825" r="19"/>
+<path d="M1500 806Q1410 757 1460 750Q1490 750 1500 806M1519 825Q1565 735 1575 783Q1578 815 1519 825M1500 844Q1590 893 1540 900Q1510 900 1500 844M1481 825Q1435 915 1425 867Q1422 835 1481 825" fill="none" stroke-width="6"/>
+<path d="M1220 720V930M1260 720V930M1740 720V930M1780 720V930" fill="none" stroke-width="5"/>
+<path d="M1100 2380V1330H1150V2380Z"/>
+<path d="M1100 1330A1050 1050 0 0 1 2150 2380" fill="none" stroke-width="6" stroke-dasharray="24 20"/>
+<path d="M1100 2380H2150" fill="none" stroke-width="5"/>
+<circle cx="1125" cy="2370" r="16"/><path d="M1132 1460V1560" fill="none" stroke-width="8"/>
+</g>
+</svg>

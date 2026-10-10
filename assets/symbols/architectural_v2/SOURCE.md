@@ -23,7 +23,7 @@ Imported from the user-provided `Vertex_Architectural_SVG_Library_v2.zip`.
   documents that project authorization and archive identity; it does not make a
   representation about rights held by any unidentified third party.
 
-240 SVG descriptions specify nominal footprint dimensions in millimetres. The
+252 SVG descriptions specify nominal footprint dimensions in millimetres. The
 other 112 provide no physical dimensions; their catalog sizes are editable
 defaults, not measured dimensions. SVG viewBoxes are rendering coordinates and
 must not be interpreted as physical dimensions by themselves.
@@ -45,6 +45,18 @@ openings or product specifications. The cased-opening source route targets the
 bare wall-cut operation; static source routing does not prove runtime behavior.
 These are independently authored project assets in the GPL-3.0-or-later repository;
 they use no copied Pinc HTML or executable. The original user-provided archive
-identity and history remain unchanged. The current index contains 352 symbols
+identity and history remain unchanged. That checkpoint's index contained 352 symbols
 (240 nominal and 112 editable-default entries) in the original 25 categories; the
 Pinc crosswalk records the source and comparison limits.
+
+On 2026-10-10, twelve independently authored commercial plan SVGs were added:
+cash wrap, retail kiosk, dental chair, hospital bed, six-burner commercial range,
+commercial dishwasher, walk-in cooler, walk-in freezer, pizza oven, deep fryer,
+commercial griddle and steam table. Their separate detailed geometry replaces
+missing visible counterparts to legacy catalog entries, rather than exposing
+the old procedural graphics. The current index has 364 SVGs in 26 categories,
+with 252 nominal and 112 editable-default entries. Nominal sizes are adjustable
+design defaults, not manufacturer specifications, required clearances or
+certified medical/food-service layouts. These new original project assets are
+distributed under GPL-3.0-or-later. Desktop appearance, placement and output
+remain unqualified under the current source-only instruction.

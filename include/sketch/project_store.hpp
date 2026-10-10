@@ -229,7 +229,9 @@ public:
     // require v162, including nested proofs and retained Undo branches.
     // Roof-edit v6 and roof-replacement v9 coordinate actual hosted components
     // and require v163, including nested proofs and retained Undo branches.
-    static constexpr std::uint32_t format_version = 163;
+    // Compound stair edit v2 coordinates type-owned hosted profiles after a
+    // vertical binding edit; nested and undone proofs require reader 164.
+    static constexpr std::uint32_t format_version = 164;
     static constexpr std::uint32_t recovery_format_version = 4;
     [[nodiscard]] static std::uint32_t required_format_version(const DocumentSnapshot& snapshot);
     static constexpr std::uint64_t maximum_file_bytes = 4ULL * 1024ULL * 1024ULL * 1024ULL;

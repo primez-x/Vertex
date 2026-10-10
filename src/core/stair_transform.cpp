@@ -205,7 +205,8 @@ bool admit_instance(const AssemblyModel& model, const AssemblyInstance& instance
     return false;
 }
 Entities coordinate_catalogs(const Entities& source, Entities result,
-    const std::map<std::string,ArchitecturalGroupTransform,std::less<>>& operations) {
+    const std::map<std::string,ArchitecturalGroupTransform,std::less<>>& operations,
+    bool profile_vertical_only = false) {
     Names hosts;
     for (const auto& [id,operation] : operations) { (void)operation; hosts.insert(id); }
     const auto scope=constraint_phase_scope(source);
@@ -237,6 +238,10 @@ Entities coordinate_catalogs(const Entities& source, Entities result,
             // Identity physical owners retain exact catalogs, even when another
             // selected owner changes. All affected rows still receive admission.
             if (architectural_group_assembly_transform(operations.at(host))==AssemblyTransform{}) continue;
+            // Profile binding edits already move the legacy source solid. Its
+            // actual placement remains exact; only world-authored profiles need
+            // a further translation in this stage.
+            if (profile_vertical_only && !typed) continue;
             transforms.emplace(instance.id,typed?world_transform(source,host,operations.at(host)):
                 architectural_group_assembly_transform(operations.at(host)));
         }
@@ -261,6 +266,112 @@ void stair_transform_detail::source_bounds(const Entities& source) {
         budget.text(id); budget.text(entity.type);
         budget.read(entity.properties); budget.read(entity.extensions);
     }
+}
+Entities stair_transform_detail::coordinate_profile_hosted_geometry(
+    const Entities& actual, Entities profiled, const std::vector<std::string>& object_ids) {
+    if (object_ids.empty()) return profiled;
+    if (object_ids.size()>maximum_architectural_group_targets) invalid("profile coordination target budget exceeded");
+    source_bounds(actual);
+    source_bounds(profiled);
+    if (actual.size()!=profiled.size()) invalid("profile coordination changed actual owner inventory");
+    Names targets;
+    const auto scope=constraint_phase_scope(actual);
+    for (const auto& id : object_ids) {
+        if (!targets.insert(id).second) invalid("profile coordination has duplicate targets");
+        if (scope.inactive_owner_ids.contains(id)) invalid("profile coordination target is inactive");
+    }
+    for (const auto& [id,entity] : actual) if (const auto host=rail_host(entity);
+        host && targets.contains(*host) && !scope.inactive_owner_ids.contains(id)) {
+        targets.insert(id);
+        if (targets.size()>4096) invalid("profile coordination affected owner budget exceeded");
+    }
+    const auto anchor=[](const Entities& entities, const Entity& entity) {
+        const auto host=rail_host(entity);
+        const auto& owner=host ? entities.at(*host) : entity;
+        if (owner.type!="stair" && owner.type!="railing") invalid("profile coordination requires an actual stair or railing host");
+        return resolve_vertical_placement(entities,owner);
+    };
+    std::map<std::string,ArchitecturalGroupTransform,std::less<>> operations;
+    for (const auto& id : targets) {
+        const auto before=actual.find(id);
+        const auto after=profiled.find(id);
+        if (before==actual.end() || after==profiled.end() || before->second.type!=after->second.type ||
+            (before->second.type!="stair" && before->second.type!="railing"))
+            invalid("profile coordination lacks the same actual physical owner");
+        const auto old_anchor=anchor(actual,before->second), new_anchor=anchor(profiled,after->second);
+        const auto old_base=point(old_anchor.properties.at("base_position_m"));
+        const auto new_base=point(new_anchor.properties.at("base_position_m"));
+        const auto displacement=new_base.z-old_base.z;
+        if (!std::isfinite(displacement)) invalid("profile vertical displacement is not finite");
+        if (displacement==0.0) continue;
+        operations.emplace(id,ArchitecturalGroupTransform{old_base,{0.0,0.0,displacement}});
+    }
+    if (operations.empty()) return profiled;
+    Names hosts;
+    for (const auto& [id,operation] : operations) { (void)operation; hosts.insert(id); }
+    std::size_t inventory=0;
+    Names catalogs;
+    for (const auto& [id,catalog] : actual) {
+        if (catalog.type!="assembly_model" || !affected_catalog(catalog,hosts)) continue;
+        const auto raw=field(catalog.properties,"model");
+        if (!raw) invalid("affected profile catalog has no actual model");
+        catalog_bounds(*raw,inventory);
+        catalogs.insert(id);
+    }
+    // Ordinary profile admission already owns rehosting of physical railings.
+    // Only actual world-authored hosted rows need a stable anchor/frame here.
+    // Bound every participating catalog before aggregate expansion discovery;
+    // opaque affected references never become inferred placement authority.
+    Names typed_hosts;
+    AssemblyExpansionBudget discovery_budget;
+    for (const auto& id : catalogs) {
+        const auto& catalog=actual.at(id);
+        catalog_context(catalog,actual,scope.inactive_owner_ids);
+        auto remainder=catalog;
+        for (auto& row : remainder.properties.at("model").at("instances")) {
+            row.erase("id");
+            if (row.contains("placement") && row.at("placement").is_object()) row.at("placement").erase("host_entity_id");
+        }
+        if (touches(remainder.properties,hosts) || touches(remainder.extensions,hosts))
+            invalid("affected profile catalog contains unsupported host references: "+id);
+        const auto model=AssemblyModel::from_json(catalog.properties.at("model"));
+        bool participating=false;
+        for (const auto& instance : model.instances()) {
+            if (!instance.placement || !hosts.contains(instance.placement->host_entity_id)) continue;
+            participating=true;
+            if (!model.expand(instance,discovery_budget).profiles.empty())
+                typed_hosts.insert(instance.placement->host_entity_id);
+        }
+        if (!participating) invalid("affected profile catalog binding is outside a supported hosted row: "+id);
+    }
+    if (typed_hosts.empty()) {
+        // Legacy rows require no placement rewrite, but their actual source and
+        // resulting host-derived geometry still receive the same admission.
+        auto result=coordinate_catalogs(actual,std::move(profiled),operations,true);
+        validate_document_site_frames(result);
+        return result;
+    }
+    for (const auto& id : typed_hosts) {
+        const auto& before=actual.at(id);
+        const auto& after=profiled.at(id);
+        const auto old_anchor=anchor(actual,before), new_anchor=anchor(profiled,after);
+        const auto old_base=point(old_anchor.properties.at("base_position_m"));
+        const auto new_base=point(new_anchor.properties.at("base_position_m"));
+        if (rail_host(before)!=rail_host(after) || old_anchor.id!=new_anchor.id ||
+            old_base.x!=new_base.x || old_base.y!=new_base.y ||
+            scalar(old_anchor.properties.at("orientation_rad"))!=scalar(new_anchor.properties.at("orientation_rad")))
+            invalid("profile vertical coordination cannot infer a changed host or planar anchor");
+        const auto old_frame=resolve_site_presentation(actual,id), new_frame=resolve_site_presentation(profiled,id);
+        if (old_frame.source_frame!=new_frame.source_frame ||
+            old_frame.forward.translation_m.x!=new_frame.forward.translation_m.x ||
+            old_frame.forward.translation_m.y!=new_frame.forward.translation_m.y ||
+            old_frame.forward.translation_m.z!=new_frame.forward.translation_m.z ||
+            old_frame.forward.rotation_radians!=new_frame.forward.rotation_radians)
+            invalid("profile vertical coordination cannot infer a changed Site frame");
+    }
+    auto result=coordinate_catalogs(actual,std::move(profiled),operations,true);
+    validate_document_site_frames(result);
+    return result;
 }
 Json encode_stair_transform_intent(const StairTransformIntent& intent) {
     identity(intent.object_id);

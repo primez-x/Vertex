@@ -1,7 +1,7 @@
 {
   "library": "Vertex Architectural SVG Library",
   "version": "2.0",
-  "count": 352,
+  "count": 364,
   "symbols": [
     {
       "id": "basin-oval",
@@ -2114,6 +2114,78 @@
       "name": "Structural Issue",
       "category": "25_drafting_symbols",
       "file": "symbols/25_drafting_symbols/structural-issue.svg"
+    },
+    {
+      "id": "cash-wrap",
+      "name": "Cash Wrap",
+      "category": "26_commercial",
+      "file": "symbols/26_commercial/cash-wrap.svg"
+    },
+    {
+      "id": "commercial-dishwasher",
+      "name": "Commercial Dishwasher",
+      "category": "26_commercial",
+      "file": "symbols/26_commercial/commercial-dishwasher.svg"
+    },
+    {
+      "id": "commercial-griddle",
+      "name": "Commercial Griddle",
+      "category": "26_commercial",
+      "file": "symbols/26_commercial/commercial-griddle.svg"
+    },
+    {
+      "id": "commercial-range",
+      "name": "Commercial Range",
+      "category": "26_commercial",
+      "file": "symbols/26_commercial/commercial-range.svg"
+    },
+    {
+      "id": "deep-fryer",
+      "name": "Deep Fryer",
+      "category": "26_commercial",
+      "file": "symbols/26_commercial/deep-fryer.svg"
+    },
+    {
+      "id": "dental-chair",
+      "name": "Dental Chair",
+      "category": "26_commercial",
+      "file": "symbols/26_commercial/dental-chair.svg"
+    },
+    {
+      "id": "hospital-bed",
+      "name": "Hospital Bed",
+      "category": "26_commercial",
+      "file": "symbols/26_commercial/hospital-bed.svg"
+    },
+    {
+      "id": "kiosk",
+      "name": "Retail Kiosk",
+      "category": "26_commercial",
+      "file": "symbols/26_commercial/kiosk.svg"
+    },
+    {
+      "id": "pizza-oven",
+      "name": "Pizza Oven",
+      "category": "26_commercial",
+      "file": "symbols/26_commercial/pizza-oven.svg"
+    },
+    {
+      "id": "steam-table",
+      "name": "Steam Table",
+      "category": "26_commercial",
+      "file": "symbols/26_commercial/steam-table.svg"
+    },
+    {
+      "id": "walk-in-cooler",
+      "name": "Walk-In Cooler",
+      "category": "26_commercial",
+      "file": "symbols/26_commercial/walk-in-cooler.svg"
+    },
+    {
+      "id": "walk-in-freezer",
+      "name": "Walk-In Freezer",
+      "category": "26_commercial",
+      "file": "symbols/26_commercial/walk-in-freezer.svg"
     }
   ]
 }

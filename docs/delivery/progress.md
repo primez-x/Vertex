@@ -14,6 +14,51 @@ changed source does not acquire runtime acceptance without later qualification.
 
 ## Current delivery state
 
+### October 10 stair profile elevation and commercial SVGs — source integration
+
+Current-source review found that editing a stair or independent railing's
+vertical binding could move its physical geometry while type-owned hosted
+profiles remained at their old elevation. New compound stair-edit v2 adds
+explicit profile-hosted coordination before the existing placement stage.
+Actual resolved elevation differences, Site frames, active attached rails and
+bounded catalog rows drive the operation. Legacy host-derived placements remain
+exact during that profile stage; their source and resulting geometry are admitted.
+Compound v1 retains its historical meaning. New additive alternative capture
+keeps v2, copied profile-stage catalogs and original baseline objects.
+
+Saved independent callouts follow both profile elevation and rigid placement.
+Legacy component callouts include their actual uniform and vertical placement
+scales; bound dimensions already use the profile-edited silhouette and avoid a
+second elevation shift. Shared catalogs compose disjoint admitted rows with
+baseline-row and alias preservation. Native reader164/extraction162 follows
+nested and retained proofs, including undone changes. Changing hosts or Site
+frames with elevation displacement and type-owned profiles remains a refusal
+requiring a richer reviewed attachment operation.
+
+Library discovery confirmed missing visible commercial components: old catalog
+definitions were filtered out of the SVG placement list. Twelve separate original
+SVGs now provide cash wrap, retail kiosk, dental chair, hospital bed, commercial
+range, dishwasher, griddle, steam table, pizza oven, deep fryer, walk-in cooler
+and freezer. Each has distinct detailed white-primary/black-outline geometry,
+an editable nominal footprint, catalog hash and source-kit entry. The index has
+364 SVG records in 26 categories: 252 nominal and 112 editable-default entries.
+Counts do not certify artwork quality or 300 distinct usable families.
+
+Independent source review identified and corrected valid physical rehost
+refusal, lost new alternative-capture authority and scaled legacy callout
+displacement. Source/XML/JSON inspection and scoped diff checks supply source
+evidence only. The source-kit allowlist matches 1,919 tracked/new paths, with
+no duplicate entries; the checklist retains all 450 scenarios. No builds, tests,
+new tests, scripts/probes, native jobs, UI launches, packages or installations
+ran. The installed candidate is unchanged. Compilation, actual visual/placement
+behavior, output, migration/history and production qualification remain open.
+
+The next identified object-family gap is specific barn, pocket and bifold door
+operation semantics: artwork exists, but distinct hosted mechanisms are missing.
+Do not count generic hinge fallback as completed behavior. All ten production
+gates remain open; continue the complete delivery plan without an inferred
+overall percentage or ETA.
+
 ### October 10 roof-hosted lifecycle and actionable checklist — source integration
 
 Independent source review established two implementation defects: supported

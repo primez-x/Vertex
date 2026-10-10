@@ -1470,6 +1470,54 @@
       "path": "assets/symbols/architectural_v2/symbols/25_drafting_symbols/structural-issue.svg"
     },
     {
+      "category": "fixtures",
+      "path": "assets/symbols/architectural_v2/symbols/26_commercial/cash-wrap.svg"
+    },
+    {
+      "category": "fixtures",
+      "path": "assets/symbols/architectural_v2/symbols/26_commercial/commercial-dishwasher.svg"
+    },
+    {
+      "category": "fixtures",
+      "path": "assets/symbols/architectural_v2/symbols/26_commercial/commercial-griddle.svg"
+    },
+    {
+      "category": "fixtures",
+      "path": "assets/symbols/architectural_v2/symbols/26_commercial/commercial-range.svg"
+    },
+    {
+      "category": "fixtures",
+      "path": "assets/symbols/architectural_v2/symbols/26_commercial/deep-fryer.svg"
+    },
+    {
+      "category": "fixtures",
+      "path": "assets/symbols/architectural_v2/symbols/26_commercial/dental-chair.svg"
+    },
+    {
+      "category": "fixtures",
+      "path": "assets/symbols/architectural_v2/symbols/26_commercial/hospital-bed.svg"
+    },
+    {
+      "category": "fixtures",
+      "path": "assets/symbols/architectural_v2/symbols/26_commercial/kiosk.svg"
+    },
+    {
+      "category": "fixtures",
+      "path": "assets/symbols/architectural_v2/symbols/26_commercial/pizza-oven.svg"
+    },
+    {
+      "category": "fixtures",
+      "path": "assets/symbols/architectural_v2/symbols/26_commercial/steam-table.svg"
+    },
+    {
+      "category": "fixtures",
+      "path": "assets/symbols/architectural_v2/symbols/26_commercial/walk-in-cooler.svg"
+    },
+    {
+      "category": "fixtures",
+      "path": "assets/symbols/architectural_v2/symbols/26_commercial/walk-in-freezer.svg"
+    },
+    {
       "category": "build",
       "path": "cmake/PlaneGCS.cmake"
     },

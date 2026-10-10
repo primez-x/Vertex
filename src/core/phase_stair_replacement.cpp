@@ -694,7 +694,8 @@ DependencyResolution resolve_dependency_dispositions(const Entities& actual,
                 const auto host_edit = std::find_if(lane.begin(), lane.end(), [&](const auto& edit) { return intent_owner(edit) == row.stair_id; });
                 if (host_edit == lane.end()) reject("dependency lacks edited host operator");
                 auto placement = host_edit->placement_edit; placement.object_id = row.rail_id; placement.quantity_entries = nullptr;
-                lane.push_back({*captured, std::move(placement)});
+                const bool coordinate_profile = host_edit->coordinate_profile_hosted_geometry;
+                lane.push_back({*captured, std::move(placement), coordinate_profile});
             } else lane.push_back(*captured);
         };
         if (!result.effective.compound_edits.empty()) add(result.effective.compound_edits);
@@ -899,7 +900,7 @@ bool stage_retained_topology(const Entities& actual, const std::vector<Intent>& 
         }
         const auto profiles = compound_profiles(rebound);
         topology_dependencies(copied_source, profiles);
-        profiled = replay_stair_object_edit_entities(copied_source, profiles);
+        profiled = replay_stair_compound_profile_entities(copied_source, rebound);
         edited = replay_stair_compound_edit_entities(copied_source, rebound);
     } else {
         std::vector<StairTransformIntent> rebound;
@@ -991,6 +992,9 @@ bool stage_retained_topology(const Entities& actual, const std::vector<Intent>& 
                     }
                 }
                 profile.object_id = owner; intent.placement_edit.object_id = owner;
+                // This branch is new authoring through additive source capture.
+                // Historical replay never requests the captured result, so keep
+                // the newly derived profile-hosted coordination authority.
                 (void)encode_stair_compound_edit_intent(intent);
             }
             *captured = std::move(temporary);
@@ -1018,7 +1022,7 @@ Derivation derive(const Entities& actual, const std::vector<Intent>& edits,
                 const auto profiles = compound_profiles(edits);
                 topology_dependencies(actual, profiles);
                 result.physical = replay_stair_compound_edit_entities(actual, edits);
-                result.profile_descriptors = replay_stair_object_edit_entities(actual, profiles);
+                result.profile_descriptors = replay_stair_compound_profile_entities(actual, edits);
                 result.profile_source.entities = result.profile_descriptors;
             } else result.physical = replay_stair_transform_entities(actual, edits);
         }
@@ -1323,14 +1327,16 @@ const std::string& qualified_profile_presentation_owner(
 }
 void transform_overlay(Json& row, const CoordinatedView& view, const Entities& actual, const Entities& candidate,
     const PhaseStairReplacementIdentityMap& mapping, const PresentationTransforms& transforms,
+    const PresentationTransforms& free_transforms,
     const EmbeddedAssemblyPresentationIds& source_aliases, const EmbeddedAssemblyPresentationIds& candidate_aliases,
     const PhaseStairReplacementIdentityMap& source_identities, const std::string& qualified_view,
     OverlayGeometryCache& source_cache, OverlayGeometryCache& candidate_cache) {
     const auto binding = field(row, "dimension_binding");
     const auto owner = binding && !binding->is_null() ? binding->at("object_id").get<std::string>()
         : row.value("object_id", std::string{});
-    const auto found = transforms.find(owner);
-    if (found == transforms.end()) reject("copied overlay has no captured source-qualified transform");
+    const auto& operators = binding && !binding->is_null() ? transforms : free_transforms;
+    const auto found = operators.find(owner);
+    if (found == operators.end()) reject("copied overlay has no captured source-qualified transform");
     const auto& transform = found->second; const OverlayFrame frame(view);
     if (binding && !binding->is_null()) {
         const auto normal = frame.vector(frame.normal, transform);
@@ -1356,7 +1362,8 @@ void transform_overlay(Json& row, const CoordinatedView& view, const Entities& a
 }
 void presentation(Entities& candidate, const Entities& actual, const PhaseStairReplacementIdentityMap& mapping,
     const PhaseStairReplacementOverlayIdentityMap& overlay_ids, const PresentationTransforms& transforms = {},
-    const ProfilePresentationSource* profile_source = nullptr) {
+    const ProfilePresentationSource* profile_source = nullptr,
+    const PresentationTransforms& free_transforms = {}) {
     const auto& silhouette_source = profile_source ? profile_source->entities : actual;
     const PhaseStairReplacementIdentityMap identity_source;
     const auto& source_identities = profile_source ? profile_source->identities : identity_source;
@@ -1422,7 +1429,8 @@ void presentation(Entities& candidate, const Entities& actual, const PhaseStairR
                             // JSON framing keeps long/local view IDs qualified
                             // without inventing an ambiguous concatenated alias.
                             const auto qualified = Json::array({id, view_id}).dump();
-                            transform_overlay(row, *saved, silhouette_source, candidate, mapping, transforms, source_aliases, candidate_aliases,
+                            transform_overlay(row, *saved, silhouette_source, candidate, mapping, transforms,
+                                free_transforms.empty() ? transforms : free_transforms, source_aliases, candidate_aliases,
                                 source_identities, qualified, source_cache, candidate_cache);
                         }
                         row.at("id") = overlay_ids.at({id, view_id, row.at("id").get<std::string>()});
@@ -2013,7 +2021,7 @@ Entities replay_phase_stair_replacement_authoring(const Entities& actual, const 
             }
         }
         admit_instances(candidate, copied_hosted);
-        PresentationTransforms presentation_operations;
+        PresentationTransforms presentation_operations, free_presentation_operations;
         if (transformed) {
             std::map<std::string, ArchitecturalGroupTransform, std::less<>> captured;
             for (const auto& transform : authoring.transforms) captured.emplace(transform.object_id, transform.transform);
@@ -2027,8 +2035,34 @@ Entities replay_phase_stair_replacement_authoring(const Entities& actual, const 
                 // three follows typed rehosting in the profile stage, matching O.
                 captured[id] = captured.at(*host);
             }
-            for (const auto& id : derived.copied_owners)
+            Ids coordinated_profiles;
+            for (const auto& edit : authoring.compound_edits)
+                if (edit.coordinate_profile_hosted_geometry) coordinated_profiles.insert(intent_owner(edit));
+            for (const auto& [id, entity] : placement_source)
+                if (const auto host = host_id(entity); host && coordinated_profiles.contains(*host))
+                    coordinated_profiles.insert(id);
+            const auto free_operator = [&](const std::string& id, bool world_authored = false,
+                                           double profile_vertical_scale = 1.0) {
+                auto operation = captured.at(id);
+                if (compound && coordinated_profiles.contains(id)) {
+                    // Bound dimensions already use the profile-edited silhouette.
+                    // Independent coordinates instead begin in the original view,
+                    // so their operator includes the resolved profile Z shift.
+                    const auto anchor = [&](const Entities& entities) {
+                        const auto& entity = entities.at(id);
+                        const auto host = host_id(entity);
+                        return resolve_vertical_placement(entities, host ? entities.at(*host) : entity)
+                            .properties.at("base_position_m").at(2).get<double>();
+                    };
+                    operation.offset.z += (anchor(placement_source) - anchor(actual)) * profile_vertical_scale;
+                    if (!std::isfinite(operation.offset.z)) reject("profile callout displacement is not finite");
+                }
+                return presentation_transform(actual, id, operation, world_authored);
+            };
+            for (const auto& id : derived.copied_owners) {
                 presentation_operations.emplace(id, presentation_transform(actual, id, captured.at(id)));
+                free_presentation_operations.emplace(id, free_operator(id));
+            }
             for (const auto& key : hosted) {
                 const auto model = AssemblyModel::from_json(actual.at(key.first).properties.at("model"));
                 const auto row = std::find_if(model.instances().begin(), model.instances().end(), [&](const auto& item) { return item.id == key.second; });
@@ -2038,10 +2072,16 @@ Entities replay_phase_stair_replacement_authoring(const Entities& actual, const 
                 const auto& host = row->placement->host_entity_id;
                 presentation_operations.emplace(original_aliases.at(key),
                     presentation_transform(actual, host, captured.at(host), world_authored));
+                // A legacy profile-stage body is A(Tz(delta) H), with A kept
+                // exact. Its Z travel includes both actual placement scales.
+                const double profile_vertical_scale = world_authored ? 1.0 :
+                    row->placement->scale * row->placement->vertical_scale;
+                free_presentation_operations.emplace(original_aliases.at(key),
+                    free_operator(host, world_authored, profile_vertical_scale));
             }
         }
         presentation(candidate, actual, presentation_ids, authoring.overlay_identities, presentation_operations,
-            compound ? &derived.profile_source : nullptr);
+            compound ? &derived.profile_source : nullptr, free_presentation_operations);
         if (!hosted.empty() && embedded_assembly_presentation_ids(candidate) != before_presentation)
             reject("presentation append changed a qualified source or proposed component alias");
         (void)source_budget(candidate);
