@@ -214,11 +214,22 @@ inline void validate_slab(const Entity& entity, GeometryBudget& budget) {
 
 inline void validate_native_dxf_boundary(const Entity& entity, GeometryBudget& budget) {
     const auto& marker = entity.extensions.at("vertex_dxf_boundary");
-    fields(marker, {"version", "depiction"});
-    if (!marker.at("version").is_number_integer() || marker.at("version") != 2 ||
-        marker.at("depiction") != "BOUNDARY_PLAN_V1" ||
+    if (!marker.is_object() || !marker.contains("version") ||
+        !marker.at("version").is_number_integer()) reject();
+    const bool dependency_group = marker.at("version") == 3;
+    if (dependency_group) {
+        fields(marker, {"version", "depiction", "member_ids"});
+        if (!marker.at("member_ids").is_array() || marker.at("member_ids").empty() ||
+            marker.at("member_ids").size() > project_import_entity_limit) reject();
+        for (const auto& id : marker.at("member_ids")) (void)text(id, false);
+    } else {
+        fields(marker, {"version", "depiction"});
+        if (marker.at("version") != 2) reject();
+    }
+    if (marker.at("depiction") != "BOUNDARY_PLAN_V1" ||
         entity.extensions.contains("physical_wall_room") ||
-        native_dxf_boundary_has_untransported_links(entity)) reject();
+        (dependency_group ? native_dxf_boundary_has_untransported_source_links(entity)
+                          : native_dxf_boundary_has_untransported_links(entity))) reject();
     const auto& properties = entity.properties;
     const char* key = properties.contains("boundary_model_version") ? "segments" :
         properties.contains("boundary") ? "boundary" : "segments";
@@ -582,6 +593,9 @@ inline void validate(const ProjectImportCandidate& result) {
     }
     // Validate the detached graph using the same native entity, reference and
     // geometry checks as an ordinary command. No live document is mutated.
+    if (result.kind == ProjectImportKind::dxf) {
+        try { validate_native_dxf_boundary_groups(result.entities); } catch (...) { reject(); }
+    }
     auto document = Document::create(result.kind == ProjectImportKind::ifc
         ? detached_ifc_validation_entities(result.entities) : result.entities);
     if (!document.snapshot().is_editable()) reject();

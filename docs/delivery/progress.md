@@ -14,6 +14,49 @@ changed source does not acquire runtime acceptance without later qualification.
 
 ## Current delivery state
 
+### October 9 linked DXF appraisal boundary transfer
+
+Source implementation extends the standalone carrier to complete connected
+appraisal boundary groups. Version 3 declares typed dependencies and identical
+sorted membership, retaining one bounded source payload and ordinary analytical
+outer/hole plan per member. Source classification/topology and fresh receipt
+ownership remain separate from consumer-owned deduction/ceiling reference
+remapping. Existing version-1 wall/opening and version-2 standalone contracts
+remain unchanged.
+
+Root has integrated explicit V2/V3 isolated-response schemas, per-boundary
+geometry budgets and whole-group validation. Desktop import validates both
+mapper and final fresh identities and refuses a parent/deduction group assigned
+to different destination floors before one atomic command. Sloped-ceiling
+copies clear their active room observation anchor and require reconfirmation;
+raw original facts and hashes remain preserved source evidence. Import does not
+refresh appraisal or reporting confirmations.
+
+Source preflight now uses actual appraisal boundary types, consistent source
+floor/context, direct ceiling exclusions and original sloped geometry evidence.
+Root integration review caught architectural room boundaries being admitted as
+appraisal deductions and corrected the consumer-type contract. Independent
+review additionally identified malformed duplicate declarations escaping the
+identity inventory and valid edge-sharing deductions being refused as inline
+holes. Native declarations are now inventoried before full decode; rejected
+overlapping declarations prevent any member's native activation, including
+fallback through a standalone or wall carrier. Actual appraisal deductions use
+the existing calculation engine's inclusive containment and union subtraction,
+with geometry/work bounds before solid operations. A private geometry-only
+profile neither derives GLA nor confirms appraisal evidence. Actual inline
+holes retain strict topology. Core-only builds lacking that containment engine
+retain deduction groups as ordinary geometry rather than activate them.
+
+Root integration review and independent review approved the corrected source;
+scoped `git diff --check` passed. Requirements JSON parsed with acceptance flags
+unchanged. Existing linked-carrier fallback fixture expectations need
+reconciliation when qualification resumes; no tests were changed or run.
+Live wall/measured-line sources, physical source-bound rooms and actual
+stair-floor references remain additional graph-transport gaps. Compilation,
+runtime, consumer round trips and production acceptance remain unverified. The
+installed candidate remains unchanged. No builds, tests, new tests, probes,
+scripts, native jobs, launches, packages or installations have run.
+
 ### October 9 standalone DXF boundary reconstruction and coherent IFC unit authority
 
 Closed standalone native boundaries now export a bounded version-2 JSON block

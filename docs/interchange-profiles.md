@@ -163,6 +163,45 @@ diagnostics and original-source retention. Physical source-bound rooms retain
 their existing checked-output path. These remain explicit compatibility gaps,
 not a lossless whole-project DXF certification.
 
+### Linked appraisal boundary records (2026-10-09, source implementation)
+
+The version-3 envelope extends `BOUNDARY_PLAN_V1` with an explicit
+`dependency_graph` and one identical sorted `member_ids` list for a complete
+connected appraisal boundary group. Each member retains its own bounded JSON
+and ordinary analytical outer/hole plan. Incoming links participate in group
+discovery; a deduction cannot export separately from a referencing area. The
+original version-1 wall/opening and version-2 standalone contracts remain.
+
+Native activation requires every declared member exactly once, matching group
+declarations, complete typed references, an acyclic deduction graph, editable
+native geometry, and exact regenerated plans for every member. Boundary and
+receipt ownership and consumer-owned deduction/ceiling references remap through
+typed visitors; local topology and arbitrary source JSON remain untouched.
+The isolated response revalidates group membership and all bounded geometry.
+Desktop CAD-layer review must assign every linked area/deduction to the same
+floor before one atomic import command can publish the group.
+
+Recoverable identities and links are inventoried before full native admission;
+malformed duplicates and inconsistent incoming declarations cannot leave other
+group members eligible. Source deductions use the calculation engine's actual
+inclusive containment and union semantics, permitting edge-sharing and
+full-parent deductions. Segment and operation budgets precede solid operations.
+Actual inline holes keep their strict topology rules. Core-only builds without
+the containment engine retain deduction groups as ordinary geometry fallback.
+
+Copied sloped-ceiling observations require reconfirmation: the active room
+anchor is cleared and `complete_room_observed` becomes false. Original facts
+and hashes remain source evidence; import never manufactures a new confirmation
+or reporting digest. `source_confirmation_required` makes this disposition
+explicit. Existing source evidence must be consistent before native activation.
+
+Live wall/measured-line graphs, physical source-bound rooms and real
+`stair_from_floor_id` references still require additional source/floor transport.
+They retain ordinary geometry and original-source evidence with diagnostics.
+Partial, duplicate or inconsistent groups likewise activate no native members.
+This is source implementation, pending qualification;
+it does not certify whole-project DXF fidelity or external consumer behavior.
+
 IFC now uses one actual project's linked length-unit assignment for every core
 editable reconstruction, including legacy axes and swept solids. Orphan metre
 declarations cannot authorize a wall, slab or opening. Recognized nonlength

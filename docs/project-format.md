@@ -5057,6 +5057,28 @@ record. Unknown active schemas remain refused. Full geometry, isolated-candidate
 and atomic destination validation still apply. No project container floor or
 historical command schema changes; compilation and round trips remain unverified.
 
+The subsequent DXF version-3 envelope carries complete connected appraisal
+boundary groups. Each bounded source envelope adds `member_ids` and
+`dependency_graph` to the version-2 fields. The graph declares exactly
+`deduction_ids`, `below_5ft_deduction_ids`, `room_boundary_id` and
+`stair_from_floor_id`; the last is a real floor reference and remains unsupported
+by this boundary-only transport. Imported group members retain
+`extensions.vertex_dxf_boundary` with exactly `version: 3`,
+`depiction: "BOUNDARY_PLAN_V1"`, and an identical sorted `member_ids` array of
+their fresh owner identities. Typed dependency remapping also updates this
+provenance list without touching local vertex/edge IDs or opaque vendor data.
+
+The mapper, isolated candidate and desktop validate complete group membership,
+typed links and acyclic deductions before activation. Original sloped-ceiling
+facts stay in `vertex_dxf_source`; the active copied facts have an empty room
+anchor and `complete_room_observed: false` and need user reconfirmation.
+Observation and reporting hashes are not refreshed. Desktop destination review
+keeps linked deductions on their parent's floor, committing all members,
+annotations, retained bytes and reviewed layers atomically. Failed native proof
+retains ordinary geometry and original bytes with explicit diagnostics. This
+adds no container version or historical command schema; source implementation
+remains uncompiled and runtime unverified.
+
 DXF straight lengths use aligned `DIMENSION`; curved segment and physical-wall
 axis lengths use `ARC_DIMENSION` with their actual circular centre and extension
 points. Clockwise source arcs reverse their endpoint order for the DXF CCW

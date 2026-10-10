@@ -8,6 +8,7 @@
 #include "sketch/constraint_phase_scope.hpp"
 #include "sketch/measurement_linework.hpp"
 #include "sketch/document_wall.hpp"
+#include "sketch/document_digest.hpp"
 #include "sketch/hosted_opening_geometry.hpp"
 #include "sketch/door_operation.hpp"
 #include "sketch/opening_assembly.hpp"
@@ -17,6 +18,7 @@
 #endif
 #ifdef SKETCH_DXF_NATIVE_GEOMETRY
 #include "sketch/architecture.hpp"
+#include "sketch/calculations.hpp"
 #endif
 
 #include <algorithm>
@@ -501,8 +503,10 @@ Json bounded_native_json(std::string_view bytes) {
     return Json::parse(bytes, callback);
 }
 
-DxfBlock boundary_plan_block(const Entity& entity, std::string name, const std::string& layer) {
-    if (native_dxf_boundary_has_untransported_links(entity))
+DxfBlock boundary_plan_block(const Entity& entity, std::string name, const std::string& layer,
+                             bool proved_appraisal_group = false) {
+    if (proved_appraisal_group ? native_dxf_boundary_has_untransported_source_links(entity) :
+        native_dxf_boundary_has_untransported_links(entity))
         throw std::invalid_argument("native boundary dependent graph is not transported");
     const auto outer = read_entity_boundary(entity);
     if (!outer || outer->size() > 4096 ||
@@ -564,6 +568,209 @@ bool export_boundary_entity(const DocumentSnapshot& document, const Entity& enti
         diagnostic(result.diagnostics, entity.id, entity.type, "native_boundary_not_representable");
         return false;
     }
+}
+
+Json boundary_group_marker(const std::vector<std::string>& members) {
+    return {{"version", 3}, {"depiction", kBoundaryDepiction}, {"member_ids", members}};
+}
+
+void validate_boundary_group_source_contexts(const std::vector<Entity>& members) {
+    std::map<std::string, const Entity*, std::less<>> owners;
+    std::map<std::string, Boundary, std::less<>> geometry;
+    std::size_t segments = 0;
+    // Match the isolated candidate's geometry limits before invoking any solid
+    // containment operation. Actual inline holes still receive strict topology
+    // validation through boundary_plan_block; deductions are inclusive areas.
+    for (const auto& entity : members) {
+        owners.emplace(entity.id, &entity);
+        auto outer = read_entity_boundary(entity);
+        if (!outer) throw std::invalid_argument("source appraisal geometry unavailable");
+        std::size_t count = outer->size();
+        if (const auto holes = entity.properties.find("holes"); holes != entity.properties.end()) {
+            if (!holes->is_array()) throw std::invalid_argument("invalid native holes");
+            for (const auto& value : *holes) {
+                const auto hole = read_boundary_value(value);
+                if (!hole || hole->size() > 512 || count > 512 - hole->size())
+                    throw std::invalid_argument("native boundary group geometry limit");
+                count += hole->size();
+            }
+        }
+        if (count > 512 || segments > 50'000 - count)
+            throw std::invalid_argument("native boundary group geometry limit");
+        segments += count;
+        geometry.emplace(entity.id, std::move(*outer));
+    }
+    const auto field = [](const Entity& entity, const char* key) {
+        const auto value = entity.properties.find(key);
+        if (value == entity.properties.end()) return std::string{};
+        if (!value->is_string()) throw std::invalid_argument("invalid source appraisal context");
+        return value->get<std::string>();
+    };
+    const auto source_scope = [&](const Entity& entity) {
+        if (entity.properties.contains("calculation_scope")) return field(entity, "calculation_scope");
+        const auto classification = entity.properties.contains("measurement_classification")
+            ? field(entity, "measurement_classification") : field(entity, "classification");
+        return classification == "survey" ? std::string("site") : std::string("building");
+    };
+    std::uint64_t pairs = 0;
+    for (const auto& entity : members) {
+        const auto graph = native_dxf_boundary_dependency_graph(entity);
+        std::size_t operation_segments = geometry.at(entity.id).size();
+        for (const auto& id : graph.at("deduction_ids")) {
+            const auto& child = *owners.at(id.get<std::string>());
+            const auto floor = field(entity, "floor_id");
+            if (floor.empty() || field(child, "floor_id") != floor ||
+                field(child, "building_id") != field(entity, "building_id") ||
+                field(child, "property_id") != field(entity, "property_id") ||
+                source_scope(entity) == "site" || source_scope(child) == "site")
+                throw std::invalid_argument("source appraisal deduction context differs");
+            const auto count = geometry.at(child.id).size();
+            if (operation_segments > 50'000 - count)
+                throw std::invalid_argument("native appraisal deduction work limit");
+            operation_segments += count;
+        }
+        const auto work = static_cast<std::uint64_t>(operation_segments) * operation_segments;
+        if (work > 250'000 || pairs > 250'000 - work)
+            throw std::invalid_argument("native appraisal deduction work limit");
+        pairs += work;
+    }
+    for (const auto& entity : members) {
+        const auto graph = native_dxf_boundary_dependency_graph(entity);
+        if (graph.at("deduction_ids").empty()) continue;
+#ifdef SKETCH_DXF_NATIVE_GEOMETRY
+        // Use the same inclusive containment and union subtraction as the
+        // appraisal consumer: edge-sharing and full-parent deductions are valid.
+        // This private profile proves geometry only and derives no living-area
+        // qualification, measurement observation or reporting confirmation.
+        CalculationProfile profile{"native-dxf-geometry", 1, AreaUnit::square_metre, 2,
+            {{"geometry", ClassificationRule{}}}};
+        MeasurementArea area{entity.id, "native-dxf-context", field(entity, "floor_id"),
+            "geometry", geometry.at(entity.id), {}, {1, 1}, AreaScope::building};
+        for (const auto& id : graph.at("deduction_ids"))
+            area.deductions.push_back({id.get<std::string>(), geometry.at(id.get<std::string>())});
+        (void)calculate_area(area, profile);
+#else
+        throw std::invalid_argument("native appraisal containment engine unavailable");
+#endif
+    }
+}
+
+// Reproduce the existing appraisal_ceiling_geometry_digest binding without
+// making the transport library depend on appraisal profile/report authority.
+// This is a check of source evidence, never a new observation or certification.
+void validate_boundary_group_ceiling_sources(const std::vector<Entity>& members) {
+    std::map<std::string, const Entity*, std::less<>> owners;
+    for (const auto& entity : members) owners.emplace(entity.id, &entity);
+    for (const auto& entity : members) {
+        if (!entity.properties.contains("appraisal_facts")) continue;
+        const auto& facts = entity.properties.at("appraisal_facts");
+        if (!facts.contains("ansi") || !facts.at("ansi").contains("ceiling")) continue;
+        const auto& ceiling = facts.at("ansi").at("ceiling");
+        if (ceiling.value("kind", std::string{}) != "sloped") continue;
+        const auto graph = native_dxf_boundary_dependency_graph(entity);
+        if (graph.at("room_boundary_id") != entity.id)
+            throw std::invalid_argument("source ceiling room anchor differs");
+        const auto outer = read_entity_boundary(entity);
+        if (!outer) throw std::invalid_argument("source ceiling geometry unavailable");
+        std::map<std::string, Entity, std::less<>> binding;
+        binding.emplace("room", Entity{"room", "ceiling_geometry", {{"boundary", boundary_json(*outer)}}, false, Json::object()});
+        for (const auto& id : graph.at("deduction_ids")) {
+            const auto child = owners.at(id.get<std::string>());
+            const auto geometry = read_entity_boundary(*child);
+            if (!geometry) throw std::invalid_argument("source ceiling deduction unavailable");
+            const auto key = "deduction:" + child->id;
+            binding.emplace(key, Entity{key, "ceiling_deduction", {{"boundary", boundary_json(*geometry)}}, false, Json::object()});
+        }
+        if (!ceiling.contains("source_geometry_sha256") || !ceiling.at("source_geometry_sha256").is_string() ||
+            ceiling.at("source_geometry_sha256") != entity_map_digest(binding))
+            throw std::invalid_argument("stale source ceiling geometry evidence");
+    }
+}
+
+bool export_boundary_group(const DocumentSnapshot& document, const std::vector<std::string>& ids,
+                           const ConstraintPhaseScope& scope, DxfProjectExportResult& result) {
+    try {
+        std::vector<Entity> source, detached;
+        std::map<std::string, std::string> unchanged;
+        const auto marker = boundary_group_marker(ids);
+        for (const auto& id : ids) {
+            const auto found = document.entities().find(id);
+            if (found == document.entities().end() || scope.inactive_owner_ids.contains(id) ||
+                !can_recognize_boundary_entity_type(found->second.type))
+                throw std::invalid_argument("inactive or unavailable boundary dependency");
+            auto entity = found->second;
+            entity.extensions["vertex_dxf_boundary"] = marker;
+            source.push_back(std::move(entity));
+            unchanged.emplace(id, id);
+        }
+        validate_native_dxf_boundary_groups(source);
+        validate_boundary_group_source_contexts(source);
+        validate_boundary_group_ceiling_sources(source);
+        for (const auto& entity : source) detached.push_back(detached_native_entity(entity, unchanged));
+        if (!Document::create(detached).snapshot().is_editable())
+            throw std::invalid_argument("native boundary group schema is not editable");
+        DxfDrawing pending;
+        for (const auto& entity : source) {
+            auto metadata = native_payload(document, document.entities().at(entity.id), {});
+            // The current import marker is admission state, not source graph
+            // authority. The carrier below declares its actual new membership.
+            metadata["extensions"].erase("vertex_dxf_boundary");
+            metadata["version"] = 3;
+            metadata["depiction"] = kBoundaryDepiction;
+            metadata["member_ids"] = ids;
+            metadata["dependency_graph"] = native_dxf_boundary_dependency_graph(entity);
+            const auto payload = metadata.dump();
+            if (payload.size() > 16 * 1024) throw std::invalid_argument("native payload byte limit");
+            (void)bounded_native_json(payload);
+            const auto layer = layer_for(document, entity, result.diagnostics);
+            auto block = boundary_plan_block(entity, "VERTEX_BOUNDARY_" +
+                std::to_string(result.drawing.blocks.size() + pending.blocks.size() + 1), layer, true);
+            block.vertex_entity_json = payload;
+            pending.inserts.push_back({block.name, {}, 1, 1, 0, layer});
+            pending.blocks.push_back(std::move(block));
+        }
+        (void)export_dxf_ascii(pending);
+        result.drawing.blocks.insert(result.drawing.blocks.end(), pending.blocks.begin(), pending.blocks.end());
+        result.drawing.inserts.insert(result.drawing.inserts.end(), pending.inserts.begin(), pending.inserts.end());
+        return true;
+    } catch (const std::exception&) {
+        for (const auto& id : ids) diagnostic(result.diagnostics, id, "boundary", "native_boundary_group_not_representable");
+        return false;
+    }
+}
+
+// Build undirected components for the saved active boundary design. An active
+// link to a hidden dependency still enters the component and refuses it; an
+// unrelated inactive incoming owner is retained evidence, not emitted output.
+// Failed components keep every active member on ordinary fallback.
+std::pair<std::set<std::string>, std::set<std::string>> export_boundary_groups(
+    const DocumentSnapshot& document, const ConstraintPhaseScope& scope, DxfProjectExportResult& result) {
+    std::map<std::string, std::set<std::string>> adjacency;
+    std::set<std::string> linked;
+    for (const auto& [id, entity] : document.entities()) {
+        if (!can_recognize_boundary_entity_type(entity.type) || scope.inactive_owner_ids.contains(id)) continue;
+        adjacency.try_emplace(id);
+        try {
+            const auto dependencies = native_dxf_boundary_dependency_ids(entity);
+            if (!dependencies.empty()) linked.insert(id);
+            for (const auto& target : dependencies) {
+                adjacency[id].insert(target); adjacency[target].insert(id);
+            }
+        } catch (const std::exception&) { linked.insert(id); }
+    }
+    std::set<std::string> processed, activated, fallback;
+    for (const auto& root : linked) {
+        if (processed.contains(root)) continue;
+        std::set<std::string> members{root};
+        std::vector<std::string> pending{root};
+        for (std::size_t i = 0; i < pending.size(); ++i)
+            for (const auto& child : adjacency[pending[i]]) if (members.insert(child).second) pending.push_back(child);
+        processed.insert(members.begin(), members.end());
+        const std::vector<std::string> ids(members.begin(), members.end());
+        auto& destination = export_boundary_group(document, ids, scope, result) ? activated : fallback;
+        destination.insert(members.begin(), members.end());
+    }
+    return {std::move(activated), std::move(fallback)};
 }
 
 void export_architectural_entity(const DocumentSnapshot& document, const Entity& entity,
@@ -648,7 +855,8 @@ void report_boundary_semantics_loss(const Entity& entity, std::string_view impor
 }
 
 void export_native_entity(const DocumentSnapshot& document, const Entity& entity,
-                          DxfProjectExportResult& result, const ConstraintPhaseScope& scope) {
+                          DxfProjectExportResult& result, const ConstraintPhaseScope& scope,
+                          bool allow_boundary_native = true) {
     if (entity.type == "wall" || entity.type == "opening") {
         export_architectural_entity(document, entity, result, scope);
         return;
@@ -693,7 +901,7 @@ void export_native_entity(const DocumentSnapshot& document, const Entity& entity
             diagnostic(result.diagnostics, entity.id, entity.type, "boundary_not_representable");
             return;
         }
-        if (boundary->size() >= 2 && same_point(boundary->back().end, boundary->front().start) &&
+        if (allow_boundary_native && boundary->size() >= 2 && same_point(boundary->back().end, boundary->front().start) &&
             export_boundary_entity(document, entity, layer, result)) return;
         const auto line_count = result.drawing.lines.size();
         const auto arc_count = result.drawing.arcs.size();
@@ -1352,15 +1560,18 @@ struct NativeCandidate {
     std::vector<std::string> hosted_ids;
     std::size_t insert_index{};
     const DxfBlock* block{};
+    int version{1};
+    std::vector<std::string> member_ids;
 };
 
-NativeCandidate decode_native_candidate(const DxfBlock& block, std::size_t insert_index) {
-    const auto payload = bounded_native_json(block.vertex_entity_json);
+NativeCandidate decode_native_candidate(const DxfBlock& block, std::size_t insert_index, const Json& payload) {
     std::set<std::string> expected{"version", "id", "type", "properties", "extensions", "hosted_opening_ids"};
     std::set<std::string> actual;
     if (!payload.is_object()) throw std::invalid_argument("native payload must be object");
     const bool boundary = payload.contains("version") && payload.at("version").is_number_integer() &&
-        payload.at("version") == 2;
+        (payload.at("version") == 2 || payload.at("version") == 3);
+    const bool group = boundary && payload.at("version") == 3;
+    if (group) { expected.insert("member_ids"); expected.insert("dependency_graph"); }
     if (boundary) {
         expected.insert("depiction");
         if (!payload.contains("depiction") || payload.at("depiction") != kBoundaryDepiction)
@@ -1399,6 +1610,21 @@ NativeCandidate decode_native_candidate(const DxfBlock& block, std::size_t inser
         throw std::invalid_argument("native entity cannot host children");
     if (boundary && candidate.entity.extensions.contains("physical_wall_room"))
         throw std::invalid_argument("physical room source graph unavailable");
+    candidate.version = payload.at("version").get<int>();
+    if (group) {
+        if (!payload.at("member_ids").is_array() ||
+            payload.at("dependency_graph") != native_dxf_boundary_dependency_graph(candidate.entity))
+            throw std::invalid_argument("native boundary dependency graph differs");
+        for (const auto& id : payload.at("member_ids")) {
+            if (!id.is_string() || id.get_ref<const std::string&>().empty() || id.get_ref<const std::string&>().size() > 255)
+                throw std::invalid_argument("invalid boundary group identity");
+            candidate.member_ids.push_back(id.get<std::string>());
+        }
+        if (candidate.member_ids.empty() || !std::is_sorted(candidate.member_ids.begin(), candidate.member_ids.end()) ||
+            std::adjacent_find(candidate.member_ids.begin(), candidate.member_ids.end()) != candidate.member_ids.end() ||
+            !std::binary_search(candidate.member_ids.begin(), candidate.member_ids.end(), candidate.entity.id))
+            throw std::invalid_argument("invalid boundary group membership");
+    }
     return candidate;
 }
 
@@ -1479,21 +1705,73 @@ std::set<std::size_t> import_native_graphs(const DxfDrawing& drawing, bool sourc
                                          DxfProjectImportResult& result) {
     std::map<std::string, NativeCandidate> candidates;
     std::set<std::string> duplicate_ids;
+    std::set<std::string> declared_ids;
+    std::set<std::string> rejected_boundary_group_ids;
     std::set<std::size_t> activated;
     for (std::size_t i = 0; i < drawing.inserts.size(); ++i) {
         const auto& insert = drawing.inserts[i];
         const auto block = std::find_if(drawing.blocks.begin(), drawing.blocks.end(),
             [&](const auto& value) { return block_identity(value.name) == block_identity(insert.block_name); });
         if (block == drawing.blocks.end() || block->vertex_entity_json.empty()) continue;
+        Json payload;
         try {
+            payload = bounded_native_json(block->vertex_entity_json);
+            // Inventory recoverable declarations before full admission. A
+            // malformed graph or placement still conflicts with another copy.
+            if (payload.is_object() && payload.contains("version") &&
+                payload.at("version").is_number_integer() &&
+                (payload.at("version") == 1 || payload.at("version") == 2 || payload.at("version") == 3) &&
+                payload.contains("id") && payload.at("id").is_string()) {
+                const auto id = payload.at("id").get<std::string>();
+                if (!id.empty() && id.size() <= 255 && !declared_ids.insert(id).second)
+                    duplicate_ids.insert(id);
+            }
+            auto candidate = decode_native_candidate(*block, i, payload);
+            const auto source_id = candidate.entity.id;
+            if (candidate.version == 2) {
+                // A standalone record cannot supply its active appraisal links.
+                // Recoverable incoming links still prevent a referenced V3 group
+                // from being promoted as though that declaration did not exist.
+                const auto dependencies = native_dxf_boundary_dependency_ids(candidate.entity);
+                rejected_boundary_group_ids.insert(dependencies.begin(), dependencies.end());
+            }
             if (!source_is_metres || insert.insertion.x != 0 || insert.insertion.y != 0 ||
                 insert.scale_x != 1 || insert.scale_y != 1 || insert.rotation_degrees != 0 ||
                 block->base.x != 0 || block->base.y != 0)
                 throw std::invalid_argument("native placement/units differs");
-            auto candidate = decode_native_candidate(*block, i);
-            const auto source_id = candidate.entity.id;
             if (!candidates.emplace(source_id, std::move(candidate)).second) duplicate_ids.insert(source_id);
         } catch (const std::exception& error) {
+            if (payload.is_object() && payload.contains("version") &&
+                payload.at("version").is_number_integer() &&
+                (payload.at("version") == 2 || payload.at("version") == 3)) {
+                const auto remember = [&](const Json& value) {
+                    if (value.is_string()) {
+                        const auto& id = value.get_ref<const std::string&>();
+                        if (!id.empty() && id.size() <= 255) rejected_boundary_group_ids.insert(id);
+                    }
+                };
+                const auto array = [&](const Json& object, const char* key) {
+                    if (object.is_object() && object.contains(key) && object.at(key).is_array())
+                        for (const auto& id : object.at(key)) remember(id);
+                };
+                if (payload.contains("id")) remember(payload.at("id"));
+                array(payload, "member_ids");
+                const auto references = [&](const Json& graph) {
+                    array(graph, "deduction_ids"); array(graph, "below_5ft_deduction_ids");
+                    if (graph.is_object() && graph.contains("room_boundary_id")) remember(graph.at("room_boundary_id"));
+                };
+                if (payload.contains("dependency_graph")) references(payload.at("dependency_graph"));
+                if (payload.contains("properties") && payload.at("properties").is_object()) {
+                    const auto& properties = payload.at("properties");
+                    array(properties, "deduction_ids");
+                    const auto facts = properties.find("appraisal_facts");
+                    if (facts != properties.end() && facts->is_object()) {
+                        const auto ansi = facts->find("ansi");
+                        if (ansi != facts->end() && ansi->is_object() && ansi->contains("ceiling"))
+                            references(ansi->at("ceiling"));
+                    }
+                }
+            }
             diagnostic(result.diagnostics, block->name, "BLOCK",
                 std::string_view(error.what()) == "manufactured plan geometry unavailable"
                     ? "manufactured_plan_geometry_unavailable" : "native_metadata_not_activated");
@@ -1501,10 +1779,85 @@ std::set<std::size_t> import_native_graphs(const DxfDrawing& drawing, bool sourc
     }
     std::set<std::string> allocated_ids;
     for (const auto& [id, candidate] : candidates) { (void)candidate; allocated_ids.insert(id); }
+    std::set<std::string> processed_groups;
     for (const auto& [id, candidate] : candidates) {
-        if (!can_recognize_boundary_entity_type(candidate.entity.type)) continue;
+        if (candidate.version != 3 || processed_groups.contains(id)) continue;
+        // Mark the attempted declaration, but conflicting members are still
+        // checked below. No member is published until every proof succeeds.
+        processed_groups.insert(candidate.member_ids.begin(), candidate.member_ids.end());
         try {
-            if (duplicate_ids.contains(id)) throw std::invalid_argument("duplicate native identity");
+            std::vector<const NativeCandidate*> group;
+            std::vector<Entity> source;
+            std::map<std::string, std::string> ids;
+            std::map<std::string, std::string, std::less<>> typed_ids;
+            const auto marker = boundary_group_marker(candidate.member_ids);
+            for (const auto& member_id : candidate.member_ids) {
+                const auto found = candidates.find(member_id);
+                if (found == candidates.end() || duplicate_ids.contains(member_id) ||
+                    rejected_boundary_group_ids.contains(member_id) || found->second.version != 3 ||
+                    found->second.member_ids != candidate.member_ids)
+                    throw std::invalid_argument("partial or mismatched native boundary group");
+                group.push_back(&found->second);
+                auto entity = found->second.entity;
+                entity.extensions["vertex_dxf_boundary"] = marker;
+                source.push_back(std::move(entity));
+                auto fresh = make_stable_id();
+                while (!allocated_ids.insert(fresh).second) fresh = make_stable_id();
+                ids.emplace(member_id, fresh); typed_ids.emplace(member_id, std::move(fresh));
+            }
+            // Any incoming V3 declaration must share this exact complete group.
+            for (const auto& [other_id, other] : candidates) {
+                if (other.version != 3 || std::binary_search(candidate.member_ids.begin(), candidate.member_ids.end(), other_id)) continue;
+                for (const auto& target : native_dxf_boundary_dependency_ids(other.entity))
+                    if (std::binary_search(candidate.member_ids.begin(), candidate.member_ids.end(), target))
+                        throw std::invalid_argument("incoming native boundary graph differs");
+                for (const auto& target : other.member_ids)
+                    if (std::binary_search(candidate.member_ids.begin(), candidate.member_ids.end(), target))
+                        throw std::invalid_argument("overlapping native boundary graph");
+            }
+            validate_native_dxf_boundary_groups(source);
+            validate_boundary_group_source_contexts(source);
+            validate_boundary_group_ceiling_sources(source);
+            std::vector<Entity> detached;
+            for (const auto& entity : source) {
+                auto fresh = detached_native_entity(entity, ids);
+                remap_native_dxf_boundary_dependency_ids(fresh, typed_ids);
+                detached.push_back(std::move(fresh));
+            }
+            validate_native_dxf_boundary_groups(detached);
+            const auto document = Document::create(detached).snapshot();
+            if (!document.is_editable()) throw std::invalid_argument("native boundary group schema is not editable");
+            for (std::size_t i = 0; i < group.size(); ++i) {
+                const auto& item = *group[i];
+                const auto& block = *item.block;
+                const auto layer = !block.lines.empty() ? block.lines.front().layer :
+                    !block.arcs.empty() ? block.arcs.front().layer :
+                    !block.polylines.empty() ? block.polylines.front().layer : std::string("0");
+                const auto expected = boundary_plan_block(document.entities().at(ids.at(item.entity.id)), block.name, layer, true);
+                if (!same_block_geometry(block, expected, true)) throw std::invalid_argument("native boundary geometry differs");
+                const auto effective_layer = layer == "0" ? drawing.inserts.at(item.insert_index).layer : layer;
+                detached[i].extensions["dxf_source"] = source_extension(effective_layer, "INSERT");
+            }
+            for (const auto* item : group) activated.insert(item->insert_index);
+            result.entities.insert(result.entities.end(), detached.begin(), detached.end());
+            for (const auto* item : group) {
+                const auto& properties = item->entity.properties;
+                const bool sloped = properties.contains("appraisal_facts") &&
+                    properties.at("appraisal_facts").contains("ansi") &&
+                    properties.at("appraisal_facts").at("ansi").contains("ceiling") &&
+                    properties.at("appraisal_facts").at("ansi").at("ceiling").value("kind", std::string{}) == "sloped";
+                if (sloped || properties.contains("appraisal_reporting"))
+                    diagnostic(result.diagnostics, item->entity.id, item->entity.type, "source_confirmation_required");
+            }
+        } catch (const std::exception&) {
+            diagnostic(result.diagnostics, id, candidate.entity.type, "native_boundary_group_not_activated");
+        }
+    }
+    for (const auto& [id, candidate] : candidates) {
+        if (!can_recognize_boundary_entity_type(candidate.entity.type) || candidate.version == 3) continue;
+        try {
+            if (duplicate_ids.contains(id) || rejected_boundary_group_ids.contains(id) || processed_groups.contains(id))
+                throw std::invalid_argument("conflicting native identity declaration");
             auto fresh = make_stable_id();
             while (!allocated_ids.insert(fresh).second) fresh = make_stable_id();
             auto entity = detached_native_entity(candidate.entity, {{id, fresh}});
@@ -1543,7 +1896,9 @@ std::set<std::size_t> import_native_graphs(const DxfDrawing& drawing, bool sourc
             std::map<std::string, std::string> ids;
             std::vector<Entity> detached;
             for (const auto* item : group) {
-                if (duplicate_ids.contains(item->entity.id)) throw std::invalid_argument("duplicate native identity");
+                if (duplicate_ids.contains(item->entity.id) || rejected_boundary_group_ids.contains(item->entity.id) ||
+                    processed_groups.contains(item->entity.id))
+                    throw std::invalid_argument("conflicting native identity declaration");
                 auto fresh = make_stable_id();
                 while (!allocated_ids.insert(fresh).second) fresh = make_stable_id();
                 ids.emplace(item->entity.id, std::move(fresh));
@@ -1727,7 +2082,9 @@ DxfProjectExportResult export_project_dxf(const DocumentSnapshot& document,
 #ifdef SKETCH_PHYSICAL_ROOMS
     const auto physical_rooms = physical_wall_room_checks(document);
 #endif
+    const auto [native_boundaries, fallback_boundaries] = export_boundary_groups(document, scope, result);
     for (const auto& [id, entity] : document.entities()) {
+        if (native_boundaries.contains(id)) continue;
         if (scope.inactive_owner_ids.contains(id)) {
             diagnostic(result.diagnostics, id, entity.type, "inactive_design_evidence_not_representable");
             continue;
@@ -1752,7 +2109,7 @@ DxfProjectExportResult export_project_dxf(const DocumentSnapshot& document,
 #endif
             continue;
         }
-        export_native_entity(document, entity, result, scope);
+        export_native_entity(document, entity, result, scope, !fallback_boundaries.contains(id));
     }
     // Validate the complete mapped drawing before returning it. The caller can
     // still inspect diagnostics; an invalid mapped record is never serialized.
