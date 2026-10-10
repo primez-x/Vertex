@@ -225,7 +225,9 @@ public:
     // payloads require v161; asset identity and metadata remain revision-local.
     // Histories without receipts or sharing retain their
     // usual semantic format floor and legacy inline BLOB schema.
-    static constexpr std::uint32_t format_version = 161;
+    // Explicit relationship endpoint retargets in physical-room review v5
+    // require v162, including nested proofs and retained Undo branches.
+    static constexpr std::uint32_t format_version = 162;
     static constexpr std::uint32_t recovery_format_version = 4;
     [[nodiscard]] static std::uint32_t required_format_version(const DocumentSnapshot& snapshot);
     static constexpr std::uint64_t maximum_file_bytes = 4ULL * 1024ULL * 1024ULL * 1024ULL;

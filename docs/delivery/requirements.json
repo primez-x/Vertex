@@ -7567,7 +7567,7 @@
         "binding": null
       },
       "qualification_history": [],
-      "delivery_notes": null,
+      "delivery_notes": "2026-10-10 source integration: physical room split/merge review supports explicit removal or endpoint retargeting of incident relationships to actual retained/new assigned rooms in one atomic geometry/room/dimension/history edit. Unaffected endpoints and relation kinds are preserved; complete graph admission rejects conflicts. Intent v5 requires native reader162/extraction160 across retained history. Source-only; compilation, desktop interaction, migration/reopen and final acceptance remain outstanding. See docs/room-relationships.md and docs/delivery/progress.md.",
       "source_snapshot": {
         "id": "ARCH-MOD-009",
         "area": "architecture",

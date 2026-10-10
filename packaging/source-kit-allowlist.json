@@ -3547,6 +3547,10 @@
     },
     {
       "category": "source",
+      "path": "include/sketch/imported_source.hpp"
+    },
+    {
+      "category": "source",
       "path": "include/sketch/integration_adapter.hpp"
     },
     {
@@ -4820,6 +4824,10 @@
     {
       "category": "source",
       "path": "src/core/import_worker_policy.cpp"
+    },
+    {
+      "category": "source",
+      "path": "src/core/imported_source.cpp"
     },
     {
       "category": "source",

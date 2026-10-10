@@ -117,6 +117,7 @@
 #include "sketch/dxf_phase_source.hpp"
 #include "sketch/dxf_phase_asset_carrier.hpp"
 #include "sketch/dxf_source_receipt.hpp"
+#include "sketch/imported_source.hpp"
 #include "sketch/dxf_annotation_source.hpp"
 #include "sketch/dxf_sheet_view_source.hpp"
 #include "sketch/ifc_project_exchange.hpp"
@@ -174,6 +175,7 @@
 #include <QApplication>
 #include <QAbstractItemModel>
 #include <QAbstractItemView>
+#include <QByteArrayView>
 #include <QComboBox>
 #include <QDateTime>
 #include <QCloseEvent>
@@ -207,6 +209,7 @@
 #include <QMouseEvent>
 #include <QLabel>
 #include <QLineEdit>
+#include <QLocale>
 #include <QKeySequenceEdit>
 #include <QKeyEvent>
 #include <QListView>
@@ -307,6 +310,13 @@
 #include <utility>
 
 #include <nlohmann/json.hpp>
+
+#ifdef _WIN32
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <Windows.h>
+#endif
 
 static void initialize_vertex_symbol_resources() {
     Q_INIT_RESOURCE(vertex_architectural_symbols);
@@ -37778,6 +37788,414 @@ public:
         }
     }
 
+    static QString importedSourceExtension(ImportedSourceFormat format) {
+        switch (format) {
+        case ImportedSourceFormat::dxf: return QStringLiteral("dxf");
+        case ImportedSourceFormat::ifc: return QStringLiteral("ifc");
+        case ImportedSourceFormat::pinc: return QStringLiteral("pinc");
+        }
+        throw std::invalid_argument("Unknown imported source format.");
+    }
+
+    void validateImportedSourceDestination(const QString& path, ImportedSourceFormat format) const {
+        const QFileInfo info(path);
+        if (path.trimmed().isEmpty() || path.contains(QChar(u'\0')) ||
+            info.suffix().compare(importedSourceExtension(format), Qt::CaseInsensitive) != 0)
+            throw std::invalid_argument("Choose a destination with the original file extension.");
+        if (info.isSymLink() || (info.exists() && !info.isFile()))
+            throw std::invalid_argument("Choose a regular file destination.");
+        const auto destination = filesystem_path(info.absoluteFilePath());
+        const auto protected_source = [&](const std::filesystem::path& source_path) {
+            if (source_path.empty()) return false;
+            std::error_code error;
+            if (std::filesystem::equivalent(destination, source_path, error) && !error) return true;
+            return same_filesystem_path(std::filesystem::weakly_canonical(destination),
+                std::filesystem::weakly_canonical(source_path));
+        };
+        if (protected_source(m_file_path) || protected_source(m_autosave_path))
+            throw std::invalid_argument("Choose a destination separate from the project and its recovery copy.");
+    }
+
+    struct ImportedSourceDestinationState {
+        bool exists{};
+        qint64 size{};
+        QDateTime modified, created;
+        QString canonical_path;
+        std::uint64_t volume_serial{}, file_index{}, native_write_ticks{};
+        friend bool operator==(const ImportedSourceDestinationState&,
+            const ImportedSourceDestinationState&) = default;
+    };
+
+    struct ImportedSourceDestinationReadGuard {
+#ifdef _WIN32
+        HANDLE handle{INVALID_HANDLE_VALUE};
+        ImportedSourceDestinationReadGuard(const QString& path, bool exists) {
+            if (!exists) return;
+            const auto native_path = filesystem_path(path);
+            // Refuse pre-existing writers and prevent new writes/replacements
+            // until the UI's final publication check. File timestamps alone
+            // cannot expose writes made through a still-open Windows handle.
+            handle = CreateFileW(native_path.c_str(), GENERIC_READ, FILE_SHARE_READ,
+                nullptr, OPEN_EXISTING, FILE_FLAG_OPEN_REPARSE_POINT, nullptr);
+            if (handle == INVALID_HANDLE_VALUE)
+                throw std::runtime_error("The existing destination is in use or cannot be protected during export.");
+        }
+        ~ImportedSourceDestinationReadGuard() {
+            if (handle != INVALID_HANDLE_VALUE) CloseHandle(handle);
+        }
+#else
+        ImportedSourceDestinationReadGuard(const QString&, bool) {}
+#endif
+        ImportedSourceDestinationReadGuard(const ImportedSourceDestinationReadGuard&) = delete;
+        ImportedSourceDestinationReadGuard& operator=(const ImportedSourceDestinationReadGuard&) = delete;
+    };
+
+    struct ImportedSourceStagedOutput {
+        std::shared_ptr<QSaveFile> file;
+        std::shared_ptr<ImportedSourceDestinationReadGuard> previous_guard;
+    };
+
+    static ImportedSourceDestinationState importedSourceDestinationState(const QString& path) {
+        const QFileInfo info(path);
+        if (info.isSymLink() || (info.exists() && !info.isFile()))
+            throw std::runtime_error("The original-file destination changed to a nonregular file.");
+        ImportedSourceDestinationState result{info.exists(), info.exists() ? info.size() : 0, info.lastModified(),
+            info.birthTime(), info.exists() ? info.canonicalFilePath() : QString()};
+#ifdef _WIN32
+        const auto native_path = filesystem_path(path);
+        const auto handle = CreateFileW(native_path.c_str(), FILE_READ_ATTRIBUTES,
+            FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr, OPEN_EXISTING,
+            FILE_FLAG_OPEN_REPARSE_POINT | FILE_FLAG_BACKUP_SEMANTICS, nullptr);
+        if (handle == INVALID_HANDLE_VALUE) {
+            const auto error = GetLastError();
+            if ((error == ERROR_FILE_NOT_FOUND || error == ERROR_PATH_NOT_FOUND) && !result.exists)
+                return result;
+            throw std::runtime_error("The original-file destination identity could not be verified.");
+        }
+        BY_HANDLE_FILE_INFORMATION identity{};
+        const bool identified = GetFileInformationByHandle(handle, &identity) != 0;
+        CloseHandle(handle);
+        if (!identified || !result.exists ||
+            (identity.dwFileAttributes & (FILE_ATTRIBUTE_REPARSE_POINT | FILE_ATTRIBUTE_DIRECTORY)) != 0 ||
+            ((static_cast<std::uint64_t>(identity.nFileSizeHigh) << 32) | identity.nFileSizeLow) !=
+                static_cast<std::uint64_t>(result.size))
+            throw std::runtime_error("The original-file destination changed or is not a regular file.");
+        result.volume_serial = identity.dwVolumeSerialNumber;
+        result.file_index = (static_cast<std::uint64_t>(identity.nFileIndexHigh) << 32) | identity.nFileIndexLow;
+        result.native_write_ticks = (static_cast<std::uint64_t>(identity.ftLastWriteTime.dwHighDateTime) << 32) |
+            identity.ftLastWriteTime.dwLowDateTime;
+#endif
+        return result;
+    }
+
+    static std::string importedSourceDestinationDigest(const QString& path,
+        const ImportedSourceDestinationState& expected, const std::atomic_bool& cancelled) {
+        const auto unchanged = [&] {
+            if (importedSourceDestinationState(path) != expected)
+                throw std::runtime_error("The original-file destination changed while preparing the save.");
+        };
+        unchanged();
+        if (!expected.exists) return {};
+        if (expected.size < 0 || static_cast<std::uint64_t>(expected.size) >
+            native_dxf_phase_asset_transport_byte_limit)
+            throw std::runtime_error("The existing destination exceeds the original-file verification limit.");
+        QFile file(path);
+        if (!file.open(QIODevice::ReadOnly) || file.size() != expected.size)
+            throw std::runtime_error("The existing original-file destination could not be verified.");
+        QCryptographicHash hash(QCryptographicHash::Sha256);
+        qint64 read{};
+        while (!file.atEnd()) {
+            if (cancelled.load()) throw std::runtime_error("Original-file export cancelled.");
+            const auto chunk = file.read(static_cast<qint64>(imported_source_stream_chunk_bytes));
+            if (chunk.isEmpty() || chunk.size() > expected.size - read)
+                throw std::runtime_error("The existing original-file destination changed or could not be read.");
+            hash.addData(chunk);
+            read += chunk.size();
+        }
+        if (cancelled.load()) throw std::runtime_error("Original-file export cancelled.");
+        if (file.error() != QFileDevice::NoError || read != expected.size || file.size() != expected.size)
+            throw std::runtime_error("The existing original-file destination changed or could not be read.");
+        unchanged();
+        return hash.result().toHex().toStdString();
+    }
+
+    bool exportImportedSourceSnapshot(const DocumentSnapshot& source, const QString& owner_id,
+        const QString& path) {
+        try {
+            const auto sources = list_imported_sources(source);
+            const auto found = std::find_if(sources.begin(), sources.end(), [&](const auto& item) {
+                return item.owner_id == owner_id.toStdString();
+            });
+            if (found == sources.end()) throw std::invalid_argument("Choose a retained imported source.");
+            const auto output_path = QFileInfo(path).absoluteFilePath();
+            validateImportedSourceDestination(path, found->format);
+            const auto destination_state = importedSourceDestinationState(output_path);
+            const auto format = found->format;
+            const auto expected_size = found->byte_count;
+            const auto expected_hash = found->sha256;
+            const auto cancelled = std::make_shared<std::atomic_bool>(false);
+            auto* ui_thread = owner->thread();
+            // The background operation owns its file until it is fully staged.
+            // Only the UI thread can publish it after cancellation/path checks.
+            auto destination = runPincOperation(owner, cancelled,
+                QStringLiteral("Verifying and saving the original imported file…"),
+                [source, owner_id, output_path, cancelled, expected_size, expected_hash, ui_thread, destination_state] {
+                    auto previous_guard = std::make_shared<ImportedSourceDestinationReadGuard>(
+                        output_path, destination_state.exists);
+                    const auto previous_digest = importedSourceDestinationDigest(
+                        output_path, destination_state, *cancelled);
+                    auto staged = std::make_shared<QSaveFile>(output_path);
+                    staged->setDirectWriteFallback(false);
+                    if (!staged->open(QIODevice::WriteOnly))
+                        throw std::runtime_error("The original-file destination could not be staged.");
+                    QCryptographicHash hash(QCryptographicHash::Sha256);
+                    std::uint64_t written{};
+                    stream_imported_source(source, owner_id.toStdString(), [&](std::span<const std::byte> chunk) {
+                        if (cancelled->load()) throw std::runtime_error("Original-file export cancelled.");
+                        if (chunk.size() > expected_size - written)
+                            throw std::runtime_error("Original-file output exceeds its retained size.");
+                        const auto* data = reinterpret_cast<const char*>(chunk.data());
+                        const auto size = static_cast<qint64>(chunk.size());
+                        if (staged->write(data, size) != size)
+                            throw std::runtime_error("The original imported file could not be written completely.");
+                        hash.addData(QByteArrayView(data, static_cast<qsizetype>(chunk.size())));
+                        written += chunk.size();
+                    });
+                    if (cancelled->load()) throw std::runtime_error("Original-file export cancelled.");
+                    if (written != expected_size || hash.result().toHex().toStdString() != expected_hash ||
+                        !staged->flush() || staged->error() != QFileDevice::NoError)
+                        throw std::runtime_error("Original-file output did not match its retained size and SHA-256.");
+                    if (importedSourceDestinationDigest(output_path, destination_state, *cancelled) != previous_digest)
+                        throw std::runtime_error("The original-file destination changed while preparing the save.");
+                    if (!staged->moveToThread(ui_thread))
+                        throw std::runtime_error("Original-file publication could not return to the desktop thread.");
+                    return ImportedSourceStagedOutput{std::move(staged), std::move(previous_guard)};
+                }, QStringLiteral("Export original imported file"), QStringLiteral("importedSourceExportProgress"),
+                "Original-file export cancelled.");
+            validateImportedSourceDestination(output_path, format);
+            if (importedSourceDestinationState(output_path) != destination_state)
+                throw std::runtime_error("The original-file destination changed before publication.");
+            destination.previous_guard.reset();
+            if (!destination.file->commit())
+                throw std::runtime_error("The original imported file could not be published.");
+            clearError();
+            owner->statusBar()->showMessage(QStringLiteral("Original imported file exported."), 5000);
+            return true;
+        } catch (const std::exception& error) {
+            setError(QStringLiteral("Original-file export: %1").arg(QString::fromUtf8(error.what())));
+            return false;
+        }
+    }
+
+    bool exportImportedSource(const QString& owner_id, const QString& path) {
+        return exportImportedSourceSnapshot(m_document->snapshot(), owner_id, path);
+    }
+
+    void showImportedSources() {
+        try {
+            const auto source = m_document->snapshot();
+            const auto sources = list_imported_sources(source);
+            QDialog dialog(owner);
+            dialog.setObjectName(QStringLiteral("importedSourcesDialog"));
+            dialog.setWindowTitle(QStringLiteral("Imported sources"));
+            dialog.resize(840, 560);
+            auto* layout = new QVBoxLayout(&dialog);
+            auto* explanation = new QLabel(QStringLiteral(
+                "Export an original imported file or inspect its import notes. These files retain the imported content before later edits."), &dialog);
+            explanation->setTextFormat(Qt::PlainText);
+            explanation->setWordWrap(true);
+            layout->addWidget(explanation);
+            auto* search = new QLineEdit(&dialog);
+            search->setObjectName(QStringLiteral("importedSourceSearch"));
+            search->setPlaceholderText(QStringLiteral("Search source files or formats"));
+            search->setClearButtonEnabled(true);
+            layout->addWidget(search);
+            constexpr std::size_t page_size = 100;
+            std::size_t page_start{};
+            std::vector<std::size_t> filtered, shown;
+            auto* table = new QTableWidget(0, 4, &dialog);
+            table->setObjectName(QStringLiteral("importedSourcesTable"));
+            table->setHorizontalHeaderLabels({QStringLiteral("Source file"), QStringLiteral("Format"),
+                QStringLiteral("Size"), QStringLiteral("Import notes")});
+            table->setEditTriggers(QAbstractItemView::NoEditTriggers);
+            table->setSelectionBehavior(QAbstractItemView::SelectRows);
+            table->setSelectionMode(QAbstractItemView::SingleSelection);
+            table->verticalHeader()->hide();
+            table->horizontalHeader()->setSectionResizeMode(0, QHeaderView::Stretch);
+            for (int column = 1; column < table->columnCount(); ++column)
+                table->horizontalHeader()->setSectionResizeMode(column, QHeaderView::ResizeToContents);
+            layout->addWidget(table, 1);
+            auto* pages = new QHBoxLayout;
+            auto* previous = new QPushButton(QStringLiteral("Previous"), &dialog);
+            previous->setObjectName(QStringLiteral("importedSourcesPrevious"));
+            auto* page_label = new QLabel(&dialog);
+            page_label->setObjectName(QStringLiteral("importedSourcesPage"));
+            auto* next = new QPushButton(QStringLiteral("Next"), &dialog);
+            next->setObjectName(QStringLiteral("importedSourcesNext"));
+            pages->addWidget(previous);
+            pages->addWidget(page_label, 1);
+            pages->addWidget(next);
+            layout->addLayout(pages);
+            auto* details = new QPlainTextEdit(&dialog);
+            details->setObjectName(QStringLiteral("importedSourceDetails"));
+            details->setReadOnly(true);
+            details->setMaximumBlockCount(5005);
+            layout->addWidget(details, 1);
+            constexpr std::size_t note_page_size = imported_source_diagnostic_page_limit;
+            std::size_t note_start{};
+            std::string note_owner;
+            auto* note_paging = new QHBoxLayout;
+            auto* previous_notes = new QPushButton(QStringLiteral("Previous notes"), &dialog);
+            previous_notes->setObjectName(QStringLiteral("importedSourcePreviousNotes"));
+            auto* note_page_label = new QLabel(&dialog);
+            note_page_label->setObjectName(QStringLiteral("importedSourceNotesPage"));
+            auto* next_notes = new QPushButton(QStringLiteral("Next notes"), &dialog);
+            next_notes->setObjectName(QStringLiteral("importedSourceNextNotes"));
+            note_paging->addWidget(previous_notes);
+            note_paging->addWidget(note_page_label, 1);
+            note_paging->addWidget(next_notes);
+            layout->addLayout(note_paging);
+            auto* export_status = new QLabel(&dialog);
+            export_status->setObjectName(QStringLiteral("importedSourceExportStatus"));
+            export_status->setTextFormat(Qt::PlainText);
+            export_status->setWordWrap(true);
+            layout->addWidget(export_status);
+            auto* buttons = new QDialogButtonBox(QDialogButtonBox::Close, &dialog);
+            auto* export_button = buttons->addButton(QStringLiteral("Export original…"), QDialogButtonBox::ActionRole);
+            export_button->setObjectName(QStringLiteral("exportImportedOriginal"));
+            const auto update_details = [&] {
+                const auto row = table->currentRow();
+                export_button->setEnabled(row >= 0 && static_cast<std::size_t>(row) < shown.size());
+                if (!export_button->isEnabled()) {
+                    note_owner.clear();
+                    note_start = 0;
+                    previous_notes->setEnabled(false);
+                    next_notes->setEnabled(false);
+                    note_page_label->clear();
+                    details->setPlainText(sources.empty() ? QStringLiteral("No imported source files in this project.")
+                        : QStringLiteral("No source files match this search."));
+                    return;
+                }
+                const auto& item = sources[shown[static_cast<std::size_t>(row)]];
+                if (note_owner != item.owner_id) {
+                    note_owner = item.owner_id;
+                    note_start = 0;
+                }
+                previous_notes->setEnabled(note_start != 0);
+                next_notes->setEnabled(note_start + note_page_size < item.diagnostic_count);
+                QStringList lines;
+                lines << QStringLiteral("SHA-256: %1").arg(QString::fromStdString(item.sha256));
+                json notes;
+                try {
+                    notes = imported_source_diagnostics(source, item.owner_id, note_start, note_page_size);
+                } catch (const std::exception& error) {
+                    lines << QStringLiteral("Import notes could not be read: %1").arg(QString::fromUtf8(error.what()));
+                    details->setPlainText(lines.join(QLatin1Char('\n')));
+                    note_page_label->clear();
+                    previous_notes->setEnabled(false);
+                    next_notes->setEnabled(false);
+                    return;
+                }
+                for (std::size_t i = 0; i < notes.size(); ++i) {
+                    const auto& note = notes[i];
+                    QStringList fields;
+                    for (const auto* field : {"source_id", "source_pointer", "source_kind", "code", "message"}) {
+                        const auto value = note.find(field);
+                        if (value != note.end() && value->is_string()) fields << QString::fromStdString(value->get<std::string>());
+                    }
+                    if (fields.isEmpty()) fields << QString::fromStdString(note.dump());
+                    lines << fields.join(QStringLiteral(" · "));
+                }
+                if (item.diagnostic_count == 0) lines << QStringLiteral("No import diagnostics were recorded.");
+                note_page_label->setText(item.diagnostic_count == 0 ? QStringLiteral("0 notes")
+                    : QStringLiteral("%1–%2 of %3 notes").arg(static_cast<qulonglong>(note_start + 1))
+                        .arg(static_cast<qulonglong>(note_start + notes.size()))
+                        .arg(static_cast<qulonglong>(item.diagnostic_count)));
+                details->setPlainText(lines.join(QLatin1Char('\n')));
+            };
+            const auto populate = [&] {
+                QSignalBlocker blocker(table);
+                shown.clear();
+                const auto count = std::min(page_size, filtered.size() - page_start);
+                table->setRowCount(0);
+                table->setRowCount(static_cast<int>(count));
+                for (std::size_t row = 0; row < count; ++row) {
+                    shown.push_back(filtered[page_start + row]);
+                    const auto& item = sources[shown.back()];
+                    table->setItem(static_cast<int>(row), 0, new QTableWidgetItem(QString::fromStdString(item.source_name)));
+                    table->setItem(static_cast<int>(row), 1, new QTableWidgetItem(importedSourceExtension(item.format).toUpper()));
+                    table->setItem(static_cast<int>(row), 2, new QTableWidgetItem(
+                        QLocale().formattedDataSize(static_cast<qint64>(item.byte_count))));
+                    table->setItem(static_cast<int>(row), 3, new QTableWidgetItem(
+                        QString::number(static_cast<qulonglong>(item.diagnostic_count))));
+                }
+                previous->setEnabled(page_start != 0);
+                next->setEnabled(page_start + count < filtered.size());
+                page_label->setText(count == 0 ? QStringLiteral("0 files")
+                    : QStringLiteral("%1–%2 of %3 files").arg(static_cast<qulonglong>(page_start + 1))
+                        .arg(static_cast<qulonglong>(page_start + count)).arg(static_cast<qulonglong>(filtered.size())));
+                if (count != 0) table->selectRow(0);
+                update_details();
+            };
+            const auto filter = [&] {
+                const auto query = search->text().trimmed();
+                filtered.clear();
+                for (std::size_t i = 0; i < sources.size(); ++i)
+                    if (query.isEmpty() || QString::fromStdString(sources[i].source_name).contains(query, Qt::CaseInsensitive) ||
+                        importedSourceExtension(sources[i].format).contains(query, Qt::CaseInsensitive)) filtered.push_back(i);
+                page_start = 0;
+                populate();
+            };
+            QObject::connect(search, &QLineEdit::textChanged, &dialog, filter);
+            QObject::connect(previous, &QPushButton::clicked, &dialog, [&] {
+                if (page_start >= page_size) page_start -= page_size;
+                populate();
+            });
+            QObject::connect(next, &QPushButton::clicked, &dialog, [&] {
+                if (page_start + page_size < filtered.size()) page_start += page_size;
+                populate();
+            });
+            QObject::connect(table, &QTableWidget::itemSelectionChanged, &dialog, update_details);
+            QObject::connect(previous_notes, &QPushButton::clicked, &dialog, [&] {
+                if (note_start >= note_page_size) note_start -= note_page_size;
+                update_details();
+            });
+            QObject::connect(next_notes, &QPushButton::clicked, &dialog, [&] {
+                const auto row = table->currentRow();
+                if (row >= 0 && static_cast<std::size_t>(row) < shown.size() &&
+                    note_start + note_page_size < sources[shown[static_cast<std::size_t>(row)]].diagnostic_count)
+                    note_start += note_page_size;
+                update_details();
+            });
+            QObject::connect(export_button, &QPushButton::clicked, &dialog, [&] {
+                const auto row = table->currentRow();
+                if (row < 0 || static_cast<std::size_t>(row) >= shown.size()) return;
+                const auto& item = sources[shown[static_cast<std::size_t>(row)]];
+                const auto extension = importedSourceExtension(item.format);
+                auto suggested = QString::fromStdString(item.source_name);
+                suggested.replace(QLatin1Char('\\'), QLatin1Char('/'));
+                suggested = QFileInfo(suggested).fileName();
+                if (QFileInfo(suggested).suffix().compare(extension, Qt::CaseInsensitive) != 0)
+                    suggested = QStringLiteral("original-source.") + extension;
+                const auto path = QFileDialog::getSaveFileName(&dialog, QStringLiteral("Export original imported file"),
+                    suggested, QStringLiteral("%1 file (*.%2)").arg(extension.toUpper(), extension));
+                if (!path.isEmpty()) {
+                    export_status->clear();
+                    export_button->setEnabled(false);
+                    const auto exported = exportImportedSourceSnapshot(source, QString::fromStdString(item.owner_id), path);
+                    export_status->setText(exported ? QStringLiteral("Original imported file exported.") : lastError());
+                    export_button->setEnabled(true);
+                }
+            });
+            QObject::connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
+            layout->addWidget(buttons);
+            filter();
+            dialog.exec();
+        } catch (const std::exception& error) {
+            setError(QStringLiteral("Imported sources: %1").arg(QString::fromUtf8(error.what())));
+        }
+    }
+
     bool exportDxf(const QString& path) {
         if (path.trimmed().isEmpty()) {
             setError(QStringLiteral("Choose a DXF destination."));
@@ -44017,6 +44435,7 @@ public:
                     owner, QStringLiteral("Export IFC"), {}, QStringLiteral("IFC model (*.ifc)"));
                 if (!selected.isEmpty()) exportIfc(selected);
             }},
+            {QStringLiteral("Imported sources / export original file"), [this] { showImportedSources(); }},
             {QStringLiteral("Print selected sheet"), [this] { showPrintPreview(); }},
             {QStringLiteral("Print drawing set"), [this] { showDrawingSetPrintPreview(); }},
             {QStringLiteral("About"), [this] { showAbout(); }},
@@ -49127,6 +49546,11 @@ private:
         export_set_action->setObjectName(QStringLiteral("exportDrawingSetPdf"));
         QObject::connect(export_set_action, &QAction::triggered, owner,
                          [this] { exportDrawingSetFromDialog(); });
+        auto* imported_sources_action = more_menu->addAction(QStringLiteral("Imported sources…"));
+        imported_sources_action->setObjectName(QStringLiteral("importedSources"));
+        imported_sources_action->setToolTip(QStringLiteral("Inspect import notes and export the exact retained original file"));
+        QObject::connect(imported_sources_action, &QAction::triggered, owner,
+                         [this] { showImportedSources(); });
         auto* appraisal_report_action=more_menu->addAction(QStringLiteral("Appraisal area report…"));
         appraisal_report_action->setObjectName(QStringLiteral("appraisalReport"));
         QObject::connect(appraisal_report_action,&QAction::triggered,owner,[this]{showAppraisalReport();});
@@ -66658,6 +67082,14 @@ bool MainWindow::exportIfc(const QString& path) {
 
 bool MainWindow::importIfc(const QString& path) {
     return m_impl->importIfc(path);
+}
+
+bool MainWindow::exportImportedSource(const QString& owner_id, const QString& path) {
+    return m_impl->exportImportedSource(owner_id, path);
+}
+
+void MainWindow::showImportedSources() {
+    m_impl->showImportedSources();
 }
 
 bool MainWindow::showPrintPreview() {

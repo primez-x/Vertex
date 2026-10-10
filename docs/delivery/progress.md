@@ -14,6 +14,58 @@ changed source does not acquire runtime acceptance without later qualification.
 
 ## Current delivery state
 
+### October 10 source recovery and coordinated room relationships — source integration
+
+Tools and command search now expose Imported sources for actual retained DXF,
+IFC and Pinc originals. The captured source browser searches filenames/formats,
+pages the file list and import notes, and exports the original before later
+geometry edits. Direct assets verify their actual hash; receipt-backed DXF proves
+the full original before fixed 64 KiB emission. The export verifies written
+length/hash in a staged QSaveFile with direct-write fallback disabled, protects
+the current native project/recovery path, and does not change document history.
+
+Independent review found two concrete recovery defects. Owner diagnostics no
+longer consume cumulative descriptor budgets; retrieval separately admits one
+owner's log and returns a page of at most 1,000 notes. The Windows destination
+guard refuses existing writers and prevents new writes/replacements during
+preparation, while bounded actual hashes and file identities are checked before
+and after staging. The UI retains the guard through its final path/state check
+and releases it immediately before publication. The final release/rename is not
+a filesystem compare-and-swap. Cancellation latency and failure behavior remain
+runtime-unqualified. Corrective independent source review found no remaining
+P1/P2 in this bounded integration; it does not supply release approval.
+
+Physical room split/merge review now explicitly removes or retargets each
+incident relationship whose endpoint retires. Replacement choices are actual
+retained/new rooms assigned in the same review; unaffected endpoints and relation
+kinds stay fixed. Candidate graph validation rejects invalid roles, duplicates,
+cycles and driver contradictions. Changing room assignments invalidates stale
+choices. Geometry, room facts, dimensions and relationships publish in one typed
+command with preserved schema and unknown metadata. This closes a source gap
+that the separate relationship editor could not cover atomically.
+
+Room-review intent v5 requires native reader 162/extraction 160 throughout nested
+proofs and retained history, including undone edits. Older intent contracts stay
+unchanged; v162 keeps the v161 payload table schema. Prior independent source
+review found no additional P1/P2 in the room replay/format integration.
+
+The live combined rigid/partial transformation route and persisted tangent
+constraints already exist in current source; an outdated remaining-task label
+must not trigger their reimplementation. A bounded appraisal source review also
+found qualification/stale-source guards in aggregation, Details, canvas labels
+and PDF reports, with unrounded contributions summed before once rounding.
+Normative standard confirmation, independent expectations and actual output
+qualification remain outstanding. The delivery plan now distinguishes those
+existing implementations from required production acceptance.
+
+Delivery JSON and the source-kit inventory parse; the allowlist matches 1,907
+tracked/new source paths without missing entries, extras or duplicates. Scoped
+diff checks passed. No application build, test, probe, UI launch, package or
+installation ran. The installed candidate is unchanged. Compilation, native
+save/reopen/replay, platform file failures and human interaction remain open,
+along with all ten production gates. Continue the complete plan, not a reduced
+source-batch exit; this entry does not support an overall percentage or ETA.
+
 ### October 10 original-file receipts and shared asset history — source integration
 
 Asset-bearing DXF import now prepares an exact ordinary-body Asset and a strict

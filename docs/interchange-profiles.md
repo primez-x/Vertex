@@ -63,6 +63,32 @@ does not prove the full import-worker sandbox or external network observation.
 Profile unit tests exercise only the portable declaration and fail-closed
 readiness decision, using synthetic attestations.
 
+## Recovering original imported files
+
+**Tools > Imported sources** and command search expose retained DXF, IFC and Pinc
+originals. The browser searches source names/formats, pages the source list and
+recorded import notes, and exports the captured original before later model
+edits. This recovery action does not export the current edited geometry or
+assert that unsupported source objects became editable.
+
+Direct originals verify their actual payload hash before streaming. Asset-bearing
+DXF uses the immutable reconstruction receipt, proving the full original length
+and hash before emitting fixed-size chunks. A staged local save verifies the
+written size/hash, disables direct-write fallback and publishes only after
+cancellation and destination checks. The current native project and recovery
+copy are protected. Destination presence, Windows identity and actual content
+are rechecked to reject intervening changes during preparation. A Windows read
+guard refuses existing writable handles and prevents new writes/replacements
+until the last publication check; a destination in use is refused. Existing
+target verification is bounded by the 512 MiB transport limit. These checks do not
+provide a filesystem compare-and-swap against an external writer racing the
+final rename.
+
+Diagnostic logs have separate per-owner admission and paged display; unrelated
+large logs do not consume recovery descriptor budgets. This is source-only
+implementation. Filesystem failure/cancellation behavior, original-file byte
+comparisons after save/reopen and external consumer qualification remain open.
+
 ## Native bounded DXF codec
 
 `sketch/dxf_exchange.hpp` supplies an independent, in-memory ASCII DXF R2013

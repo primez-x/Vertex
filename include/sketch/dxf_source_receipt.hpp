@@ -3,6 +3,7 @@
 #include "sketch/dxf_phase_asset_carrier.hpp"
 
 #include <map>
+#include <functional>
 #include <span>
 #include <string>
 #include <string_view>
@@ -59,6 +60,17 @@ void validate_native_dxf_source_receipt(const nlohmann::json& source_properties,
     const nlohmann::json& source_properties,
     NativeDxfSourceDependencyRefs dependency_properties,
     const NativeDxfPhaseSourceAssetRefs& retained_assets,
+    NativeDxfPhaseAssetWorkBudget* budget = nullptr);
+
+// Validate the complete pinned original before the first sink invocation, then
+// synchronously emit it using at most 64 KiB of staging. The sink and spans must
+// not escape this call; a sink exception aborts immediately. No destination is
+// opened or published by the core. All borrowed inputs must remain unchanged.
+void stream_native_dxf_source_receipt(
+    const nlohmann::json& source_properties,
+    NativeDxfSourceDependencyRefs dependency_properties,
+    const NativeDxfPhaseSourceAssetRefs& retained_assets,
+    const std::function<void(std::span<const std::byte>)>& sink,
     NativeDxfPhaseAssetWorkBudget* budget = nullptr);
 
 } // namespace sketch

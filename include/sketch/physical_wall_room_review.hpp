@@ -32,6 +32,12 @@ struct PhysicalWallRoomRelationshipRemoval {
     std::vector<std::string> removed_room_ids;
     std::vector<RoomRelation> acknowledged_relations;
 };
+struct PhysicalWallRoomRelationshipRetarget {
+    std::string entity_id;
+    RoomRelation original_relation;
+    std::string replacement_source_id;
+    std::string replacement_target_id;
+};
 struct PhysicalWallRoomDimensionPlacement {
     std::string dimension_id;
     Vec2 offset;
@@ -64,6 +70,9 @@ struct PhysicalWallRoomReviewIntent {
     std::vector<PhysicalWallRoomDimensionPlacement> selected_dimension_placements;
     // Replay resolves this original map from independently admitted history.
     std::optional<PhysicalWallRoomDimensionSource> selected_dimension_source;
+    // Version five redirects explicitly acknowledged retirement rows only to
+    // retained/new physical rooms assigned by this same context/plane review.
+    std::vector<PhysicalWallRoomRelationshipRetarget> relationship_retargets;
 };
 struct ReplayedPhysicalWallRoomReview {
     std::map<std::string,Entity,std::less<>> entities;

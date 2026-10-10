@@ -1574,6 +1574,7 @@ drawing; switching modes does not change existing geometry.
 
 - [ ] **U241 — Import a DXF drawing**
   - Steps: Choose Import DXF with a drawing containing several CAD layers and text. Review its layers, assign them to existing project layers on two floors, and import. Check the geometry and text on each layer. Undo, Redo, save and reopen. Repeat and cancel the layer review.
+  - Original-file check: After editing the imported drawing, open **Tools > Imported sources**, search its filename, browse its import notes and choose **Export original**. Compare the saved file with the input file; it should contain the original drawing, without your later edits. Repeat after save/reopen and with a Pinc import. Cancel an export over an existing file and confirm that file stays unchanged. If there are more than 1,000 notes, use Next notes and Previous notes to reach the remaining entries.
   - Expected: Supported lines, arcs, text and blocks arrive at the correct scale and on the chosen layers. Floor assignment preserves source coordinates and elevations. Text follows its assigned layer. One Undo restores the pre-import document; save/reopen preserves the mapping and source. Cancel changes nothing. Unsupported content is reported and its original bytes retained.
   - Result: Not tested
   - Notes / steps to reproduce: ____________________
@@ -1584,6 +1585,7 @@ drawing; switching modes does not change existing geometry.
   - Notes / steps to reproduce: ____________________
 
 - [ ] **U243 — Import an IFC model**
+  - Original-file check: Edit a supported imported object, save and reopen. Open **Tools > Imported sources**, select the IFC file and export its original. Compare it with the file you imported and inspect the retained import notes. Your later object edits should be absent from the recovered original. Cancel another export and confirm the destination stays unchanged.
   - Expected: Supported objects are editable or clearly identified as reference-only.
   - Result: Not tested
   - Notes / steps to reproduce: ____________________
@@ -2862,6 +2864,7 @@ drawing; switching modes does not change existing geometry.
 
 - [ ] **U440 — Choose which split room keeps its name**
   - Steps: Create and name one physical room. Add a partition across it. Select the stale room in Layers, open **Repair room from walls**, and click the intended side. Cancel once, then apply. Inspect both sides and Undo.
+  - Relationship check: Give a room an explicit relationship before a split or merge that retires it. In the room review, choose **Retarget** and select the intended replacement room, keeping the other endpoint unchanged. Cancel once, then apply and inspect the relationship editor. Undo/Redo and save/reopen: the room and relationship should change together. Repeat with **Remove**, then try a retarget that creates a cycle; the conflicting edit should leave the whole drawing unchanged.
   - Expected: Only the explicitly chosen space keeps the old room's name and classification. The other space is available to classify separately. The application does not guess which side owns the old facts. Cancel changes nothing; Undo restores the retained stale room.
   - Result: Not tested
   - Notes: ______________________________

@@ -1,4 +1,27 @@
-# Vertex project formats v1 through v161
+# Vertex project formats v1 through v162
+
+## Reviewed room relationship replacements (v162, source integration)
+
+Native reader 162 and JSON/assets extraction 160 preserve room-review intent
+version five. It adds `relationship_retargets` to the complete version-four
+intent fields. Each row identifies the relationship entity, exact original
+relation and explicit replacement source/target IDs. Original incident rows and
+retiring memberships still require exact acknowledgement; a row may be removed
+or retargeted, never silently inferred.
+
+An unaffected endpoint stays fixed. A retiring endpoint can be redirected only
+to an actual retained or newly created physical room assigned in that review.
+The relationship kind is preserved, including symmetric independent relations.
+Complete graph admission rejects self relations, duplicates, wrong roles,
+conflicting drivers, cycles and independence contradictions. Graph schema,
+unknown properties and extensions remain preserved. Geometry, dimensions, room
+facts and relationship replacements publish through one typed history command.
+
+Intents without replacements keep their previous version and field contract.
+The reader floor inspects nested command proofs in all retained revisions,
+including undone changes. V162 uses the existing v161 verified payload tables;
+it changes replay semantics rather than the SQLite asset schema. Compilation,
+save/reopen, migration and Undo/Redo remain unqualified under source-only work.
 
 ## Immutable source receipts and shared asset payloads (v161, source integration)
 

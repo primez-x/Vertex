@@ -2,6 +2,7 @@
 #include "sketch/sha256_stream.hpp"
 
 #include <algorithm>
+#include <array>
 #include <initializer_list>
 #include <set>
 #include <stdexcept>
@@ -472,5 +473,54 @@ std::string reconstruct_native_dxf_source_receipt(const Json& properties,
     require(output.size() == h.original_size && sha256_hex(bytes(output)) == h.original_hash,
         "reconstructed original length or SHA-256 differs");
     return output;
+}
+
+void stream_native_dxf_source_receipt(const Json& properties,
+    NativeDxfSourceDependencyRefs dependencies, const NativeDxfPhaseSourceAssetRefs& retained,
+    const std::function<void(std::span<const std::byte>)>& sink, Budget* budget) {
+    require(static_cast<bool>(sink), "missing source sink");
+    Budget local; auto& b = budget ? *budget : local; limits(b);
+    const auto admitted = validate(properties, dependencies, retained, b);
+    const auto& h = admitted.h;
+    // Reserve this pass's complete work before invoking the writer. validate()
+    // already streamed and authenticated the pinned full original. The second
+    // deterministic pass borrows those same immutable assets and record rows.
+    // Account for every record/encoder charge, including empty payloads (whose
+    // fixed record costs cannot be bounded by a small multiple of file size).
+    std::uint64_t emission_work = h.original_size + admitted.recipe->bytes.size();
+    rows(text(*admitted.recipe), h, b, [&](const Row& row, std::size_t) {
+        emission_work += row.original_id.size() + 256 + chunks(row.size) * 590ULL + row.size +
+            row.size / native_dxf_phase_asset_carrier_chunk_bytes * 224ULL +
+            ((row.size % native_dxf_phase_asset_carrier_chunk_bytes) + 2) / 3 * 4;
+    });
+    work(b, emission_work);
+    Budget emission;
+    std::array<std::byte, 64 * 1024> staging{};
+    std::size_t staged{};
+    std::uint64_t emitted{};
+    const auto flush = [&] {
+        if (staged != 0) { sink({staging.data(), staged}); staged = 0; }
+    };
+    const auto emit = [&](std::string_view part) {
+        require(part.size() <= h.original_size - emitted, "stream exceeds pinned original length");
+        emitted += part.size();
+        auto input = bytes(part);
+        while (!input.empty()) {
+            const auto count = std::min(input.size(), staging.size() - staged);
+            std::copy_n(input.data(), count, staging.data() + staged);
+            staged += count;
+            input = input.subspan(count);
+            if (staged == staging.size()) flush();
+        }
+    };
+    const auto body = text(*admitted.body);
+    emit(body.substr(0, body.size() - terminal.size()));
+    emit("999\n"); emit(begin_marker); emit("\n");
+    rows(text(*admitted.recipe), h, emission, [&](const Row& row, std::size_t index) {
+        asset_records(row.original_id, lookup(retained, row.fresh_id), index, emission, emit);
+    });
+    emit("999\n"); emit(end_marker); emit("\n"); emit(terminal);
+    require(emitted == h.original_size, "stream differs from pinned original length");
+    flush();
 }
 } // namespace sketch

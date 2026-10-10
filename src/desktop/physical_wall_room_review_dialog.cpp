@@ -75,9 +75,12 @@ public:
     struct Reference {
         std::string id;std::set<std::string> owners;std::set<Child> children;bool dimension{};bool automatic_lengths{};bool area_dimension{};bool preserved_constraint{};QComboBox* decision{};
     };
+    struct GraphRelationRow {
+        QComboBox* decision{};QComboBox* source{};QComboBox* target{};
+    };
     struct Graph {
         std::string id;RoomRelationshipSnapshot model;
-        std::map<std::string,QCheckBox*,std::less<>> memberships;std::vector<QCheckBox*> relations;
+        std::map<std::string,QCheckBox*,std::less<>> memberships;std::vector<GraphRelationRow> relations;
     };
     PhysicalWallRoomReviewDialog* dialog;
     DocumentSnapshot original_source;
@@ -142,8 +145,13 @@ public:
         reference_table=table(reference_page,"physicalRoomReviewReferences",{"Attached reference","Decision","Validated preview"});
         mapping_table=table(reference_page,"physicalRoomReviewMappings",{"Previous edge / corner","Chosen edge / corner"});
         reference_layout->addWidget(reference_table);reference_layout->addWidget(mapping_table);tabs->addTab(reference_page,QStringLiteral("References"));
-        graph_table=table(tabs,"physicalRoomReviewRelationships",{"Relationship model / exact row","Explicit removal acknowledgement"});
-        tabs->addTab(graph_table,QStringLiteral("Room relationships"));layout->addWidget(tabs,2);
+        auto* graph_page=new QWidget(tabs);auto* graph_layout=new QVBoxLayout(graph_page);
+        auto* graph_help=new QLabel(QStringLiteral("Acknowledge retiring room memberships separately. For each relationship involving a retiring room, "
+            "choose Remove or Retarget and explicitly replace every retiring endpoint with an assigned retained or new room. "
+            "Current spaces are labeled C1, C2, and so on; unchanged endpoints stay fixed."),graph_page);
+        graph_help->setWordWrap(true);graph_layout->addWidget(graph_help);
+        graph_table=table(graph_page,"physicalRoomReviewRelationships",{"Relationship model / exact row","Disposition / acknowledgement","Source endpoint","Target endpoint"});
+        graph_layout->addWidget(graph_table);tabs->addTab(graph_page,QStringLiteral("Room relationships"));layout->addWidget(tabs,2);
         status=new QLabel(dialog);status->setObjectName(QStringLiteral("physicalRoomReviewStatus"));status->setWordWrap(true);status->setTextFormat(Qt::PlainText);layout->addWidget(status);
         auto* buttons=new QDialogButtonBox(QDialogButtonBox::Apply|QDialogButtonBox::Cancel,dialog);
         apply=buttons->button(QDialogButtonBox::Apply);apply->setObjectName(QStringLiteral("physicalRoomReviewApply"));
@@ -277,9 +285,9 @@ public:
             rebuilding=previous_rebuilding;scene();
         }
     }
-    void changed(bool topology=false) {
+    void changed(bool topology=false,bool room_assignments_changed=false) {
         if (rebuilding) return;
-        if (topology) rebuild_mappings();update();
+        if (topology) rebuild_mappings();update(room_assignments_changed);
     }
     void reset() {
         rebuilding=true;report.reset();retained.clear();fresh.clear();references.clear();graphs.clear();mappings.clear();active.reset();
@@ -300,7 +308,7 @@ public:
                 auto* decision=choice(retained_table,QStringLiteral("retainedDecision:")+text(old.room.id));
                 decision->addItem(QStringLiteral("Retain identity"),"retain");decision->addItem(QStringLiteral("Retire room"),"retire");
                 retained_table->setCellWidget(row,2,decision);retained_table->setItem(row,3,new QTableWidgetItem);
-                retained.emplace(old.room.id,decision);QObject::connect(decision,&QComboBox::currentIndexChanged,dialog,[this]{changed(true);});
+                retained.emplace(old.room.id,decision);QObject::connect(decision,&QComboBox::currentIndexChanged,dialog,[this]{changed(true,true);});
             }
             for (const auto& space:report->fresh) {
                 const auto row=fresh_table->rowCount();fresh_table->insertRow(row);FreshRow controls;
@@ -327,7 +335,7 @@ public:
                 fresh.push_back(controls);
                 QObject::connect(controls.assignment,&QComboBox::currentIndexChanged,dialog,[this,index=space.index]{
                     if (rebuilding) return;
-                    auto& f=fresh.at(index);f.ids={};f.dimension_ids.clear();f.allocated_room_id.clear();f.point.reset();changed(true);
+                    auto& f=fresh.at(index);f.ids={};f.dimension_ids.clear();f.allocated_room_id.clear();f.point.reset();changed(true,true);
                 });
                 for (auto* edit:{controls.name,controls.classification}) QObject::connect(edit,&QLineEdit::textChanged,dialog,[this]{changed();});
                 QObject::connect(controls.pick,&QPushButton::clicked,dialog,[this,index=space.index]{
@@ -369,12 +377,12 @@ public:
                 if (std::none_of(model.references().begin(),model.references().end(),[this](const auto& r){return retained.contains(r.id);})) continue;
                 Graph graph{id,std::move(model),{}, {}};
                 for (const auto& r:graph.model.references()) if (retained.contains(r.id)) {
-                    auto* check=graph_row(text(id)+QStringLiteral(" · membership ")+text(r.id),QStringLiteral("graphMembership:")+text(id)+":"+text(r.id));
+                    auto* check=graph_membership_row(text(id)+QStringLiteral(" · membership ")+room_label(r.id),QStringLiteral("graphMembership:")+text(id)+":"+text(r.id));
                     graph.memberships.emplace(r.id,check);
                 }
                 for (std::size_t i=0;i<graph.model.relations().size();++i) {
                     const auto& r=graph.model.relations()[i];
-                    graph.relations.push_back(graph_row(text(id)+QStringLiteral(" · ")+text(r.source_id)+" "+relation_name(r.kind)+" "+text(r.target_id),QStringLiteral("graphRelation:")+text(id)+":"+QString::number(i)));
+                    graph.relations.push_back(graph_relation_row(text(id)+QStringLiteral(" · ")+room_label(r.source_id)+" "+relation_name(r.kind)+" "+room_label(r.target_id),QStringLiteral("graphRelation:")+text(id)+":"+QString::number(i)));
                 }
                 graphs.push_back(std::move(graph));continue;
             } else continue;
@@ -391,10 +399,26 @@ public:
             reference_table->setCellWidget(row,1,reference.decision);QObject::connect(reference.decision,&QComboBox::currentIndexChanged,dialog,[this]{changed(true);});references.push_back(std::move(reference));
         }
     }
-    QCheckBox* graph_row(const QString& label,const QString& name) {
+    QString room_label(const std::string& id) const {
+        const auto found=source.entities().find(id);
+        const auto name=found==source.entities().end()?id:found->second.properties.value("name",id);
+        return name.empty() || name==id?text(id):text(name)+QStringLiteral(" [%1]").arg(text(id));
+    }
+    QCheckBox* graph_membership_row(const QString& label,const QString& name) {
         const auto row=graph_table->rowCount();graph_table->insertRow(row);graph_table->setItem(row,0,new QTableWidgetItem(label));
-        auto* check=new QCheckBox(QStringLiteral("Remove shown row"),graph_table);check->setObjectName(name);graph_table->setCellWidget(row,1,check);
+        graph_table->item(row,0)->setToolTip(label);
+        auto* check=new QCheckBox(QStringLiteral("Retire shown membership"),graph_table);check->setObjectName(name);graph_table->setCellWidget(row,1,check);
         QObject::connect(check,&QCheckBox::toggled,dialog,[this]{changed();});return check;
+    }
+    GraphRelationRow graph_relation_row(const QString& label,const QString& name) {
+        const auto row=graph_table->rowCount();graph_table->insertRow(row);graph_table->setItem(row,0,new QTableWidgetItem(label));
+        graph_table->item(row,0)->setToolTip(label);GraphRelationRow controls;
+        controls.decision=choice(graph_table,name);
+        controls.decision->addItem(QStringLiteral("Remove"),"remove");controls.decision->addItem(QStringLiteral("Retarget"),"retarget");
+        controls.source=choice(graph_table,name+QStringLiteral(":source"));controls.target=choice(graph_table,name+QStringLiteral(":target"));
+        graph_table->setCellWidget(row,1,controls.decision);graph_table->setCellWidget(row,2,controls.source);graph_table->setCellWidget(row,3,controls.target);
+        for (auto* combo:{controls.decision,controls.source,controls.target}) QObject::connect(combo,&QComboBox::currentIndexChanged,dialog,[this]{changed();});
+        return controls;
     }
     std::map<std::string,std::size_t,std::less<>> assignments() const {
         std::map<std::string,std::size_t,std::less<>> result;
@@ -453,7 +477,68 @@ public:
     }
     void graph_requirement(QCheckBox* check,bool needed) {
         check->setProperty("required",needed);check->setEnabled(needed);
+        check->setText(needed?QStringLiteral("Retire shown membership"):QStringLiteral("Kept"));
         if (!needed) {QSignalBlocker blocker(check);check->setChecked(false);}
+    }
+    void refresh_graphs(const std::set<std::string>& retiring,bool room_assignments_changed) {
+        if (!report) return;
+        std::map<std::string,std::size_t,std::less<>> assignment_counts;
+        for (const auto& f:fresh) {
+            const auto action=value(f.assignment);
+            if (action.starts_with("retained:")) ++assignment_counts[action.substr(9)];
+        }
+        std::map<std::string,QString,std::less<>> destinations;
+        for (std::size_t i=0;i<fresh.size();++i) {
+            allocate(i);const auto& f=fresh[i];const auto action=value(f.assignment);
+            std::string id;QString label;
+            if (action=="create") {
+                id=f.allocated_room_id;const auto name=f.name->text().trimmed();
+                label=(name.isEmpty()?QStringLiteral("New room"):name)+QStringLiteral(" [%1]").arg(text(id));
+            } else if (action.starts_with("retained:")) {
+                id=action.substr(9);
+                if (!retained.contains(id) || value(retained.at(id))!="retain" || assignment_counts.at(id)!=1) continue;
+                label=room_label(id);
+            } else continue;
+            destinations.emplace(id,QStringLiteral("C%1 · %2").arg(i+1).arg(label));
+        }
+        const auto endpoint=[&](QComboBox* combo,const std::string& id,bool needed) {
+            const bool was_needed=combo->property("retiring").toBool();const auto previous=value(combo);
+            QSignalBlocker blocker(combo);combo->clear();combo->setProperty("retiring",needed);
+            if (needed) {
+                combo->addItem(QStringLiteral("Choose replacement…"),QString{});
+                for (const auto& [destination,label]:destinations) {
+                    combo->addItem(label,text(destination));combo->setItemData(combo->count()-1,label,Qt::ToolTipRole);
+                }
+                if (was_needed && !previous.empty()) combo->setCurrentIndex(std::max(0,combo->findData(text(previous))));
+            } else combo->addItem(room_label(id),text(id));
+            combo->setToolTip(combo->currentText());
+            const bool lost=was_needed && !previous.empty() && needed && combo->currentIndex()==0;
+            const bool valid=!needed || combo->currentIndex()>0;
+            return std::tuple{lost,was_needed!=needed,valid};
+        };
+        for (auto& graph:graphs) {
+            for (auto& [id,check]:graph.memberships) graph_requirement(check,retiring.contains(id));
+            for (std::size_t i=0;i<graph.relations.size();++i) {
+                const auto& relation=graph.model.relations()[i];auto& row=graph.relations[i];
+                const bool source_retiring=retiring.contains(relation.source_id),target_retiring=retiring.contains(relation.target_id);
+                const bool affected=source_retiring || target_retiring,was_affected=row.decision->property("affected").toBool();
+                const auto previous=value(row.decision);QSignalBlocker blocker(row.decision);
+                const auto [source_lost,source_changed,source_valid]=endpoint(row.source,relation.source_id,source_retiring);
+                const auto [target_lost,target_changed,target_valid]=endpoint(row.target,relation.target_id,target_retiring);
+                row.decision->clear();row.decision->setProperty("affected",affected);row.decision->setProperty("required",affected);
+                if (affected) {
+                    row.decision->addItem(QStringLiteral("Choose…"),QString{});
+                    row.decision->addItem(QStringLiteral("Remove"),"remove");row.decision->addItem(QStringLiteral("Retarget"),"retarget");
+                    const bool invalid_retarget=previous=="retarget" && (source_lost || target_lost || source_changed || target_changed ||
+                        (room_assignments_changed && (!source_valid || !target_valid)));
+                    if (was_affected && !invalid_retarget && (previous=="remove" || previous=="retarget"))
+                        row.decision->setCurrentIndex(row.decision->findData(text(previous)));
+                } else row.decision->addItem(QStringLiteral("Kept"),"keep");
+                row.decision->setEnabled(affected);
+                const bool retarget=value(row.decision)=="retarget";
+                row.source->setEnabled(retarget && source_retiring);row.target->setEnabled(retarget && target_retiring);
+            }
+        }
     }
     PhysicalWallRoomReviewIntent intent() {
         require_current();if (!report) throw std::invalid_argument("Current room detection is unavailable.");
@@ -509,32 +594,43 @@ public:
                 decision->child_mapping[vertex?"vertices":"segments"][old_id]=value(found->second);
             }
         }
+        std::set<std::string> destinations;
+        for (const auto& room:result.fresh) if (room.disposition!=PhysicalWallRoomFreshDisposition::unclassified && !retiring.contains(room.room_id))
+            destinations.insert(room.room_id);
         for (auto& graph:graphs) {
             PhysicalWallRoomRelationshipRemoval d;d.entity_id=graph.id;
             for (auto& [owner,check]:graph.memberships) if (retiring.contains(owner)) {
-                if (!check->isChecked()) throw std::invalid_argument("Acknowledge every removed room-relationship membership and incident row.");d.removed_room_ids.push_back(owner);
+                if (!check->isChecked()) throw std::invalid_argument("Acknowledge every retiring room-relationship membership.");d.removed_room_ids.push_back(owner);
             }
             for (std::size_t i=0;i<graph.relations.size();++i) {
                 const auto& relation=graph.model.relations()[i];if (!retiring.contains(relation.source_id) && !retiring.contains(relation.target_id)) continue;
-                if (!graph.relations[i]->isChecked()) throw std::invalid_argument("Acknowledge every removed room-relationship membership and incident row.");d.acknowledged_relations.push_back(relation);
+                const auto& row=graph.relations[i];const auto action=value(row.decision);
+                if (action!="remove" && action!="retarget")
+                    throw std::invalid_argument("Choose Remove or Retarget for every relationship involving a retiring room.");
+                d.acknowledged_relations.push_back(relation);
+                if (action=="retarget") {
+                    const auto replacement_source=retiring.contains(relation.source_id)?value(row.source):relation.source_id;
+                    const auto replacement_target=retiring.contains(relation.target_id)?value(row.target):relation.target_id;
+                    if ((retiring.contains(relation.source_id) && !destinations.contains(replacement_source)) ||
+                        (retiring.contains(relation.target_id) && !destinations.contains(replacement_target)))
+                        throw std::invalid_argument("Choose an assigned retained or new room for every retiring endpoint of the retargeted relationship in "+graph.id+".");
+                    result.relationship_retargets.push_back({graph.id,relation,replacement_source,replacement_target});
+                }
             }
             if (!d.removed_room_ids.empty()) result.relationship_removals.push_back(std::move(d));
         }
         return result;
     }
-    void update() {
+    void update(bool room_assignments_changed=false) {
         candidate.reset();candidate_snapshot.reset();accepted.reset();apply->setEnabled(false);
         for (int row=0;row<reference_table->rowCount();++row) reference_table->item(row,2)->setText({});
         std::set<std::string> retiring;for (const auto& [id,c]:retained) if (value(c)=="retire") retiring.insert(id);
-        for (auto& g:graphs) {
-            for (auto& [id,check]:g.memberships) graph_requirement(check,retiring.contains(id));
-            for (std::size_t i=0;i<g.relations.size();++i) {const auto& r=g.model.relations()[i];graph_requirement(g.relations[i],retiring.contains(r.source_id)||retiring.contains(r.target_id));}
-        }
         for (auto& f:fresh) {
             const auto action=value(f.assignment);const bool create=action=="create";f.name->setEnabled(create);f.classification->setEnabled(create);
             f.pick->setEnabled(!action.empty() && action!="unclassified");f.pick->setText(f.point?QStringLiteral("Interior chosen · pick again"):QStringLiteral("Pick inside"));
         }
         try {
+            require_current();refresh_graphs(retiring,room_assignments_changed);
             if (deletion_acknowledgement && !deletion_acknowledgement->isChecked())
                 throw std::invalid_argument("Review the Wall deletion tab and confirm its listed removals.");
             const auto decisions=intent();

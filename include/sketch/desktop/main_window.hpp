@@ -731,6 +731,10 @@ public:
     // and source-retention rules as DXF.
     [[nodiscard]] bool exportIfc(const QString& path);
     [[nodiscard]] bool importIfc(const QString& path);
+    // Retrieve the exact retained imported file, independently of subsequent
+    // model edits. No current geometry export or project/history edit occurs.
+    [[nodiscard]] bool exportImportedSource(const QString& owner_id, const QString& path);
+    void showImportedSources();
     [[nodiscard]] bool showPrintPreview();
     [[nodiscard]] bool showDrawingSetPrintPreview();
 

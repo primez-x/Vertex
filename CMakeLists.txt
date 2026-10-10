@@ -275,7 +275,7 @@ if(SKETCH_BUILD_ARCHITECTURE OR SKETCH_BUILD_DESKTOP)
 endif()
 
 add_library(sketch_document src/core/document.cpp src/core/document_digest.cpp src/core/constraint_entity.cpp
-  src/core/dxf_phase_asset_source.cpp src/core/dxf_phase_asset_carrier.cpp src/core/dxf_source_receipt.cpp
+  src/core/dxf_phase_asset_source.cpp src/core/dxf_phase_asset_carrier.cpp src/core/dxf_source_receipt.cpp src/core/imported_source.cpp
   src/core/constraint_integrity.cpp src/core/constraint_phase_scope.cpp src/core/boundary_entity.cpp src/core/boundary_integrity.cpp
   src/core/boundary_geometry_edit.cpp src/core/constraint_wall_edit.cpp src/core/wall_split.cpp src/core/wall_merge.cpp
   src/core/boundary_dimension.cpp src/core/sheet_view_entity_codec.cpp

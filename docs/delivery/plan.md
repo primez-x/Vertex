@@ -74,12 +74,15 @@ polling timeout does not permit restarting it.
 1. Finish retained parked drawing snapshot fences and qualify the existing
    fast-input/inline-label work. Reject same-ID/same-revision head replacement
    without geometry/history mutation; legitimate park/resume still works.
-2. Complete a combined rigid/partial hard-connected solve, persisted tangent
-   constraints, required curve propagation, exact travel/offset/walking, bay
-   construction, reopen/redefine/clone and complete Draw/Define workflows.
-3. Add detached room correspondence using actual source lineage and analytical
-   overlap, reviewed split/merge/new/retire dispositions in one command,
-   snapshot-aware clear-room dimensions and coordinated relationship edits.
+2. Qualify the existing combined rigid/partial hard-connected solve and persisted
+   tangent constraints; close remaining lifecycle gaps in curve propagation,
+   exact travel/offset/walking, bay construction, reopen/redefine/clone and
+   complete Draw/Define workflows. Source presence is not product acceptance.
+3. Qualify detached room correspondence using actual source lineage and
+   analytical overlap, reviewed split/merge/new/retire dispositions in one
+   command, snapshot-aware clear-room dimensions and explicit coordinated
+   relationship removals/retargets. Preserve existing implementations; fix
+   demonstrated gaps rather than restarting them from an outdated task label.
 4. Qualify versioned appraisal standards/reporting: ceiling/stair exceptions,
    facts, deductions, rounding, dwelling/ADU categories and explicit withheld
    stale/unknown values. Details, canvas, reports and exported fields agree.

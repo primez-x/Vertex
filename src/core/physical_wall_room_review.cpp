@@ -24,6 +24,7 @@
 #include <cmath>
 #include <set>
 #include <stdexcept>
+#include <tuple>
 #include <utility>
 
 namespace sketch {
@@ -99,6 +100,32 @@ RoomRelation relation(const Json& value) {
     else if (kind=="derived_from") r.kind=RoomRelationKind::derived_from;
     else if (kind!="independent") invalid("unsupported graph relation");
     return r;
+}
+auto retarget_original_key(const PhysicalWallRoomRelationshipRetarget& edit) {
+    return std::tie(edit.entity_id,edit.original_relation.source_id,edit.original_relation.target_id,edit.original_relation.kind);
+}
+auto retarget_key(const PhysicalWallRoomRelationshipRetarget& edit) {
+    return std::tuple_cat(retarget_original_key(edit),std::tie(edit.replacement_source_id,edit.replacement_target_id));
+}
+void retarget_shape(const std::vector<PhysicalWallRoomRelationshipRetarget>& edits) {
+    if (edits.empty() || edits.size()>2048) invalid("relationship retargets require one to 2048 explicit rows");
+    for (std::size_t i=0;i<edits.size();++i) {
+        const auto& edit=edits[i];
+        id(edit.entity_id);id(edit.original_relation.source_id);id(edit.original_relation.target_id);
+        (void)relation_name(edit.original_relation.kind);
+        id(edit.replacement_source_id);id(edit.replacement_target_id);
+        if (edit.original_relation.source_id==edit.original_relation.target_id ||
+            (edit.original_relation.kind==RoomRelationKind::independent &&
+                edit.original_relation.target_id<edit.original_relation.source_id))
+            invalid("relationship retarget requires a canonical original graph row");
+        if (edit.original_relation.source_id==edit.replacement_source_id &&
+            edit.original_relation.target_id==edit.replacement_target_id)
+            invalid("relationship retarget cannot leave both endpoints unchanged");
+        if (i && retarget_original_key(edits[i-1])==retarget_original_key(edit))
+            invalid("duplicate original relationship retarget row");
+        if (i && !(retarget_key(edits[i-1])<retarget_key(edit)))
+            invalid("relationship retargets must have canonical sorted rows");
+    }
 }
 bool mentions(const Json& value,const std::set<std::string>& tokens) {
     if (value.is_string()) return tokens.contains(value.get_ref<const std::string&>());
@@ -1090,12 +1117,16 @@ PhysicalWallRoomReviewIntent decode_physical_wall_room_review_intent(const Json&
     try {
         if (value.dump().size()>16*1024*1024) invalid("intent exceeds evidence budget");
         if (!value.is_object() || !value.contains("version") || !value.at("version").is_number_integer() ||
-            (value.at("version")!=1 && value.at("version")!=2 && value.at("version")!=3 && value.at("version")!=4))
+            (value.at("version")!=1 && value.at("version")!=2 && value.at("version")!=3 && value.at("version")!=4 && value.at("version")!=5))
             invalid("unsupported intent version");
-        const bool selected_placements=value.at("version")==4;
-        if (selected_placements && value.dump().size()>1024*1024) invalid("selected placement intent exceeds evidence budget");
-        const bool explicit_scope=value.at("version")==3 || selected_placements;
-        if (selected_placements)
+        const bool explicit_retargets=value.at("version")==5;
+        const bool placement_fields=value.at("version")==4 || explicit_retargets;
+        if (value.at("version")==4 && value.dump().size()>1024*1024) invalid("selected placement intent exceeds evidence budget");
+        const bool explicit_scope=value.at("version")==3 || placement_fields;
+        if (explicit_retargets)
+            keys(value,{"version","selected_wall_id","source_snapshot_digest","source_authoring_digest","source_saved_revision","source_entities_digest","context","effective_elevation_m",
+                "retained","fresh","removed_reference_ids","kept_reference_ids","relationship_removals","active_phase_room_scope","context_plane_selection","selected_dimension_placements","selected_dimension_source","relationship_retargets"});
+        else if (placement_fields)
             keys(value,{"version","selected_wall_id","source_snapshot_digest","source_authoring_digest","source_saved_revision","source_entities_digest","context","effective_elevation_m",
                 "retained","fresh","removed_reference_ids","kept_reference_ids","relationship_removals","active_phase_room_scope","context_plane_selection","selected_dimension_placements","selected_dimension_source"});
         else if (explicit_scope)
@@ -1106,14 +1137,14 @@ PhysicalWallRoomReviewIntent decode_physical_wall_room_review_intent(const Json&
                 "retained","fresh","removed_reference_ids","kept_reference_ids","relationship_removals"});
         PhysicalWallRoomReviewIntent result;
         if (explicit_scope) {
-            if (!value.at("active_phase_room_scope").is_boolean() || (!selected_placements && value.at("active_phase_room_scope")!=true) ||
+            if (!value.at("active_phase_room_scope").is_boolean() || (!placement_fields && value.at("active_phase_room_scope")!=true) ||
                 !value.at("context_plane_selection").is_boolean()) invalid("version three requires explicit ordinary active room scope and selection mode");
             result.active_phase_room_scope=value.at("active_phase_room_scope").get<bool>();
             result.context_plane_selection=value.at("context_plane_selection").get<bool>();
         } else result.context_plane_selection=value.at("version")==2;
-        if (selected_placements) {
+        if (placement_fields) {
             const auto& placements=value.at("selected_dimension_placements");
-            if (!placements.is_array() || placements.empty() || placements.size()>128) invalid("invalid selected dimension placement collection");
+            if (!placements.is_array() || (!explicit_retargets && placements.empty()) || placements.size()>128) invalid("invalid selected dimension placement collection");
             for (const auto& placement:placements) {
                 keys(placement,{"dimension_id","offset"});
                 const auto& offset=placement.at("offset");
@@ -1121,16 +1152,20 @@ PhysicalWallRoomReviewIntent decode_physical_wall_room_review_intent(const Json&
                 result.selected_dimension_placements.push_back({placement.at("dimension_id").get<std::string>(),
                     {offset[0].get<double>(),offset[1].get<double>()}});
             }
-            placement_shape(result.selected_dimension_placements);
+            if (!placements.empty()) placement_shape(result.selected_dimension_placements);
             const auto& receipt=value.at("selected_dimension_source");
-            keys(receipt,{"original_revision","original_entities_digest"});
-            const auto& revision=receipt.at("original_revision");
-            if ((!revision.is_number_integer() && !revision.is_number_unsigned()) ||
-                (revision.is_number_integer() && !revision.is_number_unsigned() && revision.get<std::int64_t>()<0))
-                invalid("invalid selected dimension original revision");
-            PhysicalWallRoomDimensionSource original{revision.get<Revision>(),receipt.at("original_entities_digest").get<std::string>()};
-            digest(original.original_entities_digest);
-            result.selected_dimension_source=std::move(original);
+            if (placements.empty()) {
+                if (!receipt.is_null()) invalid("empty selected dimension placements require a null original-source receipt");
+            } else {
+                keys(receipt,{"original_revision","original_entities_digest"});
+                const auto& revision=receipt.at("original_revision");
+                if ((!revision.is_number_integer() && !revision.is_number_unsigned()) ||
+                    (revision.is_number_integer() && !revision.is_number_unsigned() && revision.get<std::int64_t>()<0))
+                    invalid("invalid selected dimension original revision");
+                PhysicalWallRoomDimensionSource original{revision.get<Revision>(),receipt.at("original_entities_digest").get<std::string>()};
+                digest(original.original_entities_digest);
+                result.selected_dimension_source=std::move(original);
+            }
         }
         result.selected_wall_id=value.at("selected_wall_id").get<std::string>();
         if (result.context_plane_selection) {
@@ -1206,6 +1241,17 @@ PhysicalWallRoomReviewIntent decode_physical_wall_room_review_intent(const Json&
             }
             result.relationship_removals.push_back(std::move(d));
         }
+        if (explicit_retargets) {
+            const auto& retargets=value.at("relationship_retargets");
+            if (!retargets.is_array() || retargets.empty() || retargets.size()>2048)
+                invalid("invalid relationship retarget collection");
+            for (const auto& row:retargets) {
+                keys(row,{"entity_id","original_relation","replacement_source_id","replacement_target_id"});
+                result.relationship_retargets.push_back({row.at("entity_id").get<std::string>(),relation(row.at("original_relation")),
+                    row.at("replacement_source_id").get<std::string>(),row.at("replacement_target_id").get<std::string>()});
+            }
+            retarget_shape(result.relationship_retargets);
+        }
         return result;
     } catch (const Json::exception&) { invalid("malformed intent value types"); }
 }
@@ -1213,7 +1259,8 @@ PhysicalWallRoomReviewIntent decode_physical_wall_room_review_intent(const Json&
 Json encode_physical_wall_room_review_intent(const PhysicalWallRoomReviewIntent& intent) {
     if ((!intent.selected_dimension_placements.empty())!=intent.selected_dimension_source.has_value())
         invalid("selected dimension placements require exactly one original-source receipt");
-    Json retained=Json::array(),fresh=Json::array(),relationships=Json::array();
+    const bool explicit_retargets=!intent.relationship_retargets.empty();
+    Json retained=Json::array(),fresh=Json::array(),relationships=Json::array(),retargets=Json::array();
     for (const auto& d:intent.retained) {
         std::string action;
         if (d.disposition==PhysicalWallRoomRetainedDisposition::retain) action="retain";
@@ -1236,24 +1283,35 @@ Json encode_physical_wall_room_review_intent(const PhysicalWallRoomReviewIntent&
         Json rows=Json::array();for (const auto& r:d.acknowledged_relations) rows.push_back(relation_json(r));
         relationships.push_back({{"entity_id",d.entity_id},{"removed_room_ids",d.removed_room_ids},{"acknowledged_relations",std::move(rows)}});
     }
-    Json result{{"version",!intent.selected_dimension_placements.empty() ? 4 : (intent.active_phase_room_scope ? 3 : (intent.context_plane_selection ? 2 : 1))},{"selected_wall_id",intent.selected_wall_id},{"source_snapshot_digest",intent.source_snapshot_digest},
+    if (explicit_retargets) {
+        auto edits=intent.relationship_retargets;
+        std::sort(edits.begin(),edits.end(),[](const auto& a,const auto& b){return retarget_key(a)<retarget_key(b);});
+        retarget_shape(edits);
+        for (const auto& edit:edits)
+            retargets.push_back({{"entity_id",edit.entity_id},{"original_relation",relation_json(edit.original_relation)},
+                {"replacement_source_id",edit.replacement_source_id},{"replacement_target_id",edit.replacement_target_id}});
+    }
+    Json result{{"version",explicit_retargets ? 5 : (!intent.selected_dimension_placements.empty() ? 4 : (intent.active_phase_room_scope ? 3 : (intent.context_plane_selection ? 2 : 1)))},{"selected_wall_id",intent.selected_wall_id},{"source_snapshot_digest",intent.source_snapshot_digest},
         {"source_authoring_digest",intent.source_authoring_digest},
         {"source_saved_revision",intent.source_saved_revision ? Json(*intent.source_saved_revision) : Json(nullptr)},
         {"source_entities_digest",intent.source_entities_digest},{"context",context_json(intent.context)},{"effective_elevation_m",intent.effective_elevation_m},
         {"retained",std::move(retained)},{"fresh",std::move(fresh)},{"removed_reference_ids",intent.removed_reference_ids},
         {"kept_reference_ids",intent.kept_reference_ids},{"relationship_removals",std::move(relationships)}};
-    if (intent.active_phase_room_scope || !intent.selected_dimension_placements.empty()) {
+    if (explicit_retargets || intent.active_phase_room_scope || !intent.selected_dimension_placements.empty()) {
         result["active_phase_room_scope"]=intent.active_phase_room_scope;
         result["context_plane_selection"]=intent.context_plane_selection;
     }
-    if (!intent.selected_dimension_placements.empty()) {
+    if (explicit_retargets || !intent.selected_dimension_placements.empty()) {
         auto placements=Json::array();
         for (const auto& placement:intent.selected_dimension_placements)
             placements.push_back({{"dimension_id",placement.dimension_id},{"offset",{placement.offset.x,placement.offset.y}}});
         result["selected_dimension_placements"]=std::move(placements);
-        result["selected_dimension_source"]={{"original_revision",intent.selected_dimension_source->original_revision},
-            {"original_entities_digest",intent.selected_dimension_source->original_entities_digest}};
+        result["selected_dimension_source"]=intent.selected_dimension_source
+            ? Json{{"original_revision",intent.selected_dimension_source->original_revision},
+                {"original_entities_digest",intent.selected_dimension_source->original_entities_digest}}
+            : Json(nullptr);
     }
+    if (explicit_retargets) result["relationship_retargets"]=std::move(retargets);
     (void)decode_physical_wall_room_review_intent(result);return result;
 }
 
@@ -1476,6 +1534,9 @@ ReplayedPhysicalWallRoomReview replay_physical_wall_room_review(const Entities& 
         if (!affected) invalid("removal must name a supported affected dimension or endpoint constraint");
         result.erase(reference_id);
     }
+    std::map<std::string,std::vector<const PhysicalWallRoomRelationshipRetarget*>,std::less<>> graph_retargets;
+    std::set<std::string> retarget_destinations;
+    for (const auto& edit:intent.relationship_retargets) graph_retargets[edit.entity_id].push_back(&edit);
     std::set<std::string> graph_decisions;
     for (const auto& d:intent.relationship_removals) {
         if (!graph_decisions.insert(d.entity_id).second) invalid("duplicate relationship graph decision");
@@ -1494,9 +1555,49 @@ ReplayedPhysicalWallRoomReview replay_physical_wall_room_review(const Entities& 
         }
         for (const auto& r:d.acknowledged_relations) acknowledged.insert(relation_json(r).dump());
         if (incident!=acknowledged) invalid("every removed relationship row requires exact acknowledgement");
+        if (const auto edits=graph_retargets.find(d.entity_id);edits!=graph_retargets.end()) {
+            for (const auto* edit:edits->second) {
+                const auto original=relation_json(edit->original_relation).dump();
+                if (!incident.contains(original) || !acknowledged.contains(original))
+                    invalid("relationship retarget must name an exact acknowledged retired incident row in its original graph");
+                const auto endpoint=[&](const std::string& original_id,const std::string& replacement_id) {
+                    if (!retiring.contains(original_id)) {
+                        if (replacement_id!=original_id) invalid("relationship retarget must preserve its unaffected endpoint");
+                        return;
+                    }
+                    const auto role=std::find_if(graph.references().begin(),graph.references().end(),
+                        [&](const auto& reference){return reference.id==original_id;});
+                    if (!remove_rooms.contains(original_id) || role==graph.references().end() ||
+                        role->kind!=RoomReferenceKind::room_boundary)
+                        invalid("relationship retarget requires an acknowledged retired room-boundary role");
+                    // Assigned identities were admitted against this exact fresh
+                    // inventory and retained/create dispositions above. Existing
+                    // unrelated rooms and other contexts provide no authority.
+                    if (!assigned.contains(replacement_id) || retiring.contains(replacement_id))
+                        invalid("retired relationship endpoint requires an explicitly assigned retained or new room in this review");
+                    const auto destination=std::find_if(references.begin(),references.end(),
+                        [&](const auto& reference){return reference.id==replacement_id;});
+                    if (destination==references.end()) references.push_back({replacement_id,RoomReferenceKind::room_boundary});
+                    else if (destination->kind!=RoomReferenceKind::room_boundary || !destination->wall_members.empty())
+                        invalid("relationship retarget destination has a conflicting existing role");
+                    retarget_destinations.insert(replacement_id);
+                };
+                endpoint(edit->original_relation.source_id,edit->replacement_source_id);
+                endpoint(edit->original_relation.target_id,edit->replacement_target_id);
+                relations.push_back({edit->replacement_source_id,edit->replacement_target_id,edit->original_relation.kind});
+            }
+        }
         auto properties=found->second.properties;properties.erase("model");
         if (mentions(properties,affected_tokens) || mentions(found->second.extensions,affected_tokens)) invalid("unsupported relationship metadata reference");
-        found->second.properties["model"]=RoomRelationshipSnapshot::create(std::move(references),std::move(relations)).to_json();
+        auto reconstructed=RoomRelationshipSnapshot::create(std::move(references),std::move(relations)).to_json();
+        // Removing the last wall-chain reference must not downgrade an actual
+        // schema-two graph. Its remaining definitions keep their same dialect.
+        reconstructed["schema_version"]=graph.schema_version();
+        found->second.properties["model"]=std::move(reconstructed);
+    }
+    for (const auto& [entity_id,edits]:graph_retargets) {
+        (void)edits;
+        if (!graph_decisions.contains(entity_id)) invalid("relationship retarget lacks its original graph removal acknowledgement");
     }
     if (intent.context_plane_selection || intent.active_phase_room_scope) {
         // Explicit retirement removes known live memberships. Original
@@ -1623,6 +1724,14 @@ ReplayedPhysicalWallRoomReview replay_physical_wall_room_review(const Entities& 
         // Re-admit the resulting actual inventory, including fresh physical
         // owners, without changing any evaluated or saved phase selection.
         (void)active_physical_wall_room_ids(result);
+    }
+    // Graph rows are reconstructed before room creation, but their new roles
+    // must resolve to the actual completed physical owners before any result
+    // escapes. Document preview separately validates the full graph union.
+    for (const auto& room_id:retarget_destinations) {
+        const auto found=result.find(room_id);
+        if (found==result.end() || found->second.id!=room_id || !is_physical_wall_room(found->second) ||
+            !assigned.contains(room_id)) invalid("relationship retarget destination is missing from the final reviewed physical rooms");
     }
     for (const auto& reference_id:preserved_constraints) {
         const auto found=result.find(reference_id);

@@ -1,5 +1,27 @@
 # Room relationship semantic core
 
+## Relationships during a physical room split or merge
+
+The detached room review now lets the user choose **Remove** or **Retarget** for
+each relationship incident to a room being retired. Retarget shows the actual
+retained/new rooms assigned in that review. Affected endpoints require explicit
+choices; unaffected endpoints stay fixed and the relationship kind stays the
+same. Changing room assignments clears choices that have become invalid.
+Membership retirement is acknowledged separately from the incident relation.
+
+Apply validates the complete candidate graph and commits the wall/room edit,
+dimensions and relationship changes together. Cancel publishes nothing. The
+review cannot redirect to an unclassified space, unrelated room, retiring room
+or decorative symbol. Duplicate relations, self relations, inconsistent roles,
+cycles and conflicting drivers refuse the complete edit. Existing graph schema
+and unknown metadata remain preserved. This coordinated operation differs from
+the standalone relationship editor, which edits declarations separately.
+
+Explicit replacements use room-review intent version five, native reader 162
+and JSON/assets extraction 160. Earlier intents retain their contracts. This is
+source implementation; desktop interaction, replay and reopening have not been
+run for this increment, and production acceptance remains open.
+
 `RoomRelationshipSnapshot` is the bounded ARCH-MOD-009 relationship model. A room boundary, an appraisal measurement boundary, and an architectural wall have distinct reference kinds and distinct identities. Coincident geometry never creates a relationship. Absence of a declaration means unspecified, not independent.
 
 Dependencies read as **source follows target** or **source is derived from target**. `follows` has one driver. `derived_from` permits multiple explicit inputs, such as the walls surrounding a room. A source cannot mix these driver modes. Architectural walls may be targets but cannot be driven by this boundary model. Boundary-to-boundary chains are supported.
