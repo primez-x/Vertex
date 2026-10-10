@@ -3251,6 +3251,10 @@ Json bounded_phase_carrier_json(std::string_view bytes, NativeDxfWallSourceWorkB
 
 void export_phase_carrier(const NativeDxfPhaseSourceGraph& graph, DxfDrawing& drawing,
     NativeDxfWallSourceWorkBudget& budget, std::vector<DxfProjectDiagnostic>& diagnostics) {
+    // A manifest alone would produce an unusable exchange file. Keep this
+    // refusal until the separately bounded payload carrier is connected.
+    if (!graph.assets.empty())
+        throw std::invalid_argument("Native DXF referenced-asset payload transport is not implemented.");
     const auto encoded = encode_native_dxf_phase_source_graph(graph, &budget).dump(-1, ' ', true);
     // Charge actual encoded framing as well as raw source admission.
     (void)bounded_phase_carrier_json(encoded, budget);

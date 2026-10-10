@@ -5,6 +5,7 @@
 #include "sketch/project_organization.hpp"
 #include "sketch/assembly_document_adapter.hpp"
 #include "sketch/dxf_architectural_source.hpp"
+#include "sketch/dxf_phase_asset_source.hpp"
 
 #include <cstddef>
 #include <algorithm>
@@ -59,6 +60,7 @@ struct DxfProjectImportResult {
     // candidates only. Inactive owners have no geometry-currentness claim.
     // Source evidence cannot become live owners without actual destination binding.
     std::optional<nlohmann::json> phase_source_graph;
+    NativeDxfPhaseSourceAssets phase_source_assets;
 
     bool complete() const noexcept { return diagnostics.empty(); }
 };
@@ -100,6 +102,7 @@ struct NativeDxfWallSourceWorkBudget {
     // every snapshot/hash replay against their own bounded operation ledger.
     std::size_t destination_asset_replay_bytes{};
     std::size_t destination_asset_replay_work{};
+    NativeDxfPhaseAssetWorkBudget phase_assets;
 };
 // Authenticates V8 source closure and the exact live subset before admission.
 // All attempts share the ledger; preflight reserves downstream catalog passes.

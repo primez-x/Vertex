@@ -14,6 +14,47 @@ changed source does not acquire runtime acceptance without later qualification.
 
 ## Current delivery state
 
+### October 10 referenced asset graph and worker framing — source integration
+
+The complete phase graph now consumes the document-authoring catalog policy.
+Referenced assets have a separate exact inventory and fresh destination mapping.
+Graph version four carries an exact manifest; payloads are supplied separately
+and checked against actual hashes, raw metadata and complete reachable references.
+Source capture admits borrowed payloads before copying and excludes unreferenced
+assets. Binary capacity/work stays separate from geometry JSON and nonlinear work.
+
+PSIP0005 adds explicitly framed JSON and a sorted binary table, bounded and
+manifest-checked before payload allocation. Legacy protocols retain their previous
+JSON limits. Worker result transfer and desktop preparation now carry the assets;
+hierarchy preview and final publication stage them with the same entity command.
+Fresh payload identities cannot overwrite existing owners or assets.
+Binding previews staged additions against the actual retained destination,
+preserving existing independent entity/asset names. Complete worker-table length
+is checked before payload allocation. Source review also found current-state
+capacity was insufficient: every retained revision's repeated asset rows count
+toward native save/recovery limits. Binding and the final desktop preview now
+check that prospective history, including the original DXF receipt, before live
+publication. No native storage limit or fresh-import collision rule is weakened.
+
+The exchange feature is still unfinished. The DXF carrier, large-input broker
+profile and lossless retention of large original DXF files remain open. Export
+explicitly refuses asset-bearing graphs while their payload carrier is absent,
+preventing a manifest-only file. Source and destination/history capacity are
+different contracts: source transfer admits 256 MiB; native storage limits total
+retained revision asset bytes to 512 MiB. Finite replay and JSON budgets may still
+refuse otherwise valid projects. Full-capacity transfer is not claimed.
+
+Root and independent integrated source review closed the concrete namespace,
+truncated-response allocation and prospective persistence-capacity findings.
+No remaining P1/P2 was identified in this bounded source integration. Scoped
+diff checks and delivery JSON inspection passed; the source-kit allowlist matches
+all 1,899 tracked/new source paths without extras or duplicates.
+
+No build, test, new test, probe, script,
+native job, launch, package or installation has run. The installed candidate is
+unchanged; compilation and runtime behavior remain unqualified. All production
+delivery packages remain open, with no supported overall percentage or ETA.
+
 ### October 10 detached sheet witnesses and catalog references — source integration
 
 Imported missing overlay witnesses now have exact maps scoped by their original

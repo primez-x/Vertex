@@ -1,6 +1,7 @@
 #pragma once
 
 #include "sketch/document.hpp"
+#include "sketch/dxf_phase_asset_source.hpp"
 
 #include <map>
 #include <span>
@@ -27,6 +28,8 @@ inline constexpr std::size_t native_dxf_phase_destination_asset_replay_work_limi
 // This value grants no destination hierarchy or publication authority.
 struct NativeDxfPhaseSourceGraph {
     std::map<std::string, Entity, std::less<>> entities;
+    // Actual reached payloads have their own source identity namespace.
+    NativeDxfPhaseSourceAssets assets;
     std::vector<std::string> body_ids;
     std::vector<std::string> catalog_ids;
     std::vector<std::string> registry_ids;
@@ -36,7 +39,7 @@ struct NativeDxfPhaseSourceGraph {
     std::vector<std::string> support_ids;
     std::vector<std::string> enrolled_hierarchy_ids;
     std::vector<std::string> depicted_body_ids;
-    bool operator==(const NativeDxfPhaseSourceGraph&) const = default;
+    bool operator==(const NativeDxfPhaseSourceGraph&) const;
 };
 
 // Seeds name actual owners, not a depiction filter. Any touched registry adds
@@ -51,14 +54,18 @@ struct NativeDxfPhaseSourceGraph {
 // and six explicit sorted unique role/subset arrays. Version 2 adds a nonempty
 // support_ids array for annotations, dimensions and constraints; support-free
 // graphs retain version 1. Version 3 uses the same inventory fields and is
-// mandatory exactly when coordinated sheet/view companions are retained.
+// mandatory for asset-free coordinated sheet/view companions.
+// Version 4 is required exactly when assets are retained. It adds an exact
+// asset_manifest and always carries support_ids (which may be empty). Payloads
+// are supplied separately to this graph API; this does not provide a DXF carrier.
 // No canonical entity/model encoder is used.
 // Admission precedes semantic decoders and the organizer;
 // failed attempts remain charged to the shared catalog/architectural ledger.
 [[nodiscard]] nlohmann::json encode_native_dxf_phase_source_graph(
     const NativeDxfPhaseSourceGraph& graph, NativeDxfWallSourceWorkBudget* work_budget = nullptr);
 [[nodiscard]] NativeDxfPhaseSourceGraph decode_native_dxf_phase_source_graph(
-    const nlohmann::json& value, NativeDxfWallSourceWorkBudget* work_budget = nullptr);
+    const nlohmann::json& value, NativeDxfWallSourceWorkBudget* work_budget = nullptr,
+    const NativeDxfPhaseSourceAssets& external_assets = {});
 void validate_native_dxf_phase_source_graph(const NativeDxfPhaseSourceGraph& graph,
     NativeDxfWallSourceWorkBudget* work_budget = nullptr);
 
@@ -75,6 +82,9 @@ struct NativeDxfPhaseDestinationMaps {
     NativeDxfPhaseOwnerMap reviewed_context_owner_ids;
     NativeDxfPhaseOwnerMap support_owner_ids;
     NativeDxfPhaseOwnerMap stair_child_ids;
+    // Independent exact asset namespace; targets are fresh and distinct from
+    // actual owner targets and other allocated selection identities.
+    NativeDxfPhaseOwnerMap asset_ids;
     // Child IDs are scoped by their actual source annotation owner. They are
     // freshened for desktop selection without changing catalog/template IDs.
     std::map<std::string, NativeDxfPhaseOwnerMap, std::less<>> annotation_child_ids;
@@ -91,6 +101,8 @@ struct NativeDxfPhaseDestinationBinding {
     // Fresh bodies/catalogs/registries/support and explicitly reviewed new contexts
     // only. Existing reviewed hierarchy is never copied into publication.
     std::vector<Entity> staged_entities;
+    // Fresh actual payloads, ready for the same atomic phase import command.
+    std::vector<Asset> staged_assets;
 };
 // Complete raw current-state admission before private Document::create.
 // Reserves ambient model/catalog/architectural/geometry consumer passes before
@@ -130,6 +142,11 @@ void admit_native_dxf_phase_physical_room_checks(
 // Visits every current typed geometry-history proof's dynamic fields before
 // replay, using the same inventory as mixed phase demolition admission.
 void admit_native_dxf_phase_destination_snapshot(const DocumentSnapshot& actual_destination,
+    NativeDxfWallSourceWorkBudget* work_budget = nullptr);
+// Capacity-only admission of every retained revision's asset rows, including
+// the prospective imported head. Call before publication after adding source
+// retention; this does not authenticate assets or grant publication authority.
+void admit_native_dxf_phase_retained_asset_capacity(const DocumentSnapshot& prospective_destination,
     NativeDxfWallSourceWorkBudget* work_budget = nullptr);
 // Pure mapped source evidence, with unchanged complete role/depiction semantics.
 // This grants no destination owner creation or publication authority.

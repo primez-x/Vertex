@@ -38136,6 +38136,7 @@ public:
 
     struct PreparedDxfPhaseImport {
         std::vector<Entity> entities;
+        std::vector<Asset> assets;
         std::vector<std::string> registry_ids;
         std::vector<std::string> reviewed_existing_hierarchy_ids;
         json context_mapping = json::array();
@@ -38146,22 +38147,28 @@ public:
     };
 
     std::optional<PreparedDxfPhaseImport> prepareDxfPhaseImport(
-        const json& raw_graph, const DocumentSnapshot& source, bool review_contexts,
+        const json& raw_graph, const NativeDxfPhaseSourceAssets& source_assets,
+        const DocumentSnapshot& source, bool review_contexts,
         NativeDxfWallSourceWorkBudget& budget) {
         const auto source_document = m_document;
         admit_native_dxf_phase_destination_snapshot(source, &budget);
         const auto modal = captureModalContext();
         const auto authority = captureSourceEditAuthority(source);
-        const auto graph = decode_native_dxf_phase_source_graph(raw_graph, &budget);
+        const auto graph = decode_native_dxf_phase_source_graph(raw_graph, &budget, source_assets);
         auto occupied = retainedSlabIdentityNames(source, true);
         for (const auto& [id, entity] : source.entities()) { (void)entity; occupied.insert(id); }
         for (const auto& [id, asset] : source.assets()) { (void)asset; occupied.insert(id); }
         const auto allocate = [&](const std::string& kind) {
             auto id = new_id(kind);
-            while (graph.entities.contains(id) || !occupied.insert(id).second) id = new_id(kind);
+            while (graph.entities.contains(id) || graph.assets.contains(id) || !occupied.insert(id).second)
+                id = new_id(kind);
             return id;
         };
         NativeDxfPhaseDestinationMaps maps;
+        for (const auto& [id, asset] : graph.assets) {
+            (void)asset;
+            maps.asset_ids.emplace(id, allocate("phase-asset"));
+        }
         for (const auto& id : graph.body_ids) {
             maps.body_owner_ids.emplace(id, allocate(graph.entities.at(id).type));
             for (const auto& child : native_dxf_architectural_child_identity_ids(graph.entities.at(id)))
@@ -38324,8 +38331,9 @@ public:
             prepared.context_mapping.push_back({{"source_id", id}, {"destination_id", target_id},
                 {"type", graph.entities.at(id).type}, {"created", created}});
         }
-        const auto bound = bind_native_dxf_phase_source_destinations(graph, maps, source, reviewed_new_contexts, &budget);
-        prepared.entities = bound.staged_entities;
+        auto bound = bind_native_dxf_phase_source_destinations(graph, maps, source, reviewed_new_contexts, &budget);
+        prepared.entities = std::move(bound.staged_entities);
+        prepared.assets = std::move(bound.staged_assets);
         // Choose an editing target from one source object, rather than choosing
         // three unrelated lexicographically first identities. An unregistered
         // object has no owning set; choose the first imported set deliberately
@@ -38404,7 +38412,8 @@ public:
             if (mapped.phase_source_graph) {
                 if (hasPendingPlacementEdit() || m_text_placement_context || m_plan_label_context || m_armed_area_class)
                     throw std::invalid_argument("Finish or cancel the current drawing or placement before importing design sets.");
-                phase_import = prepareDxfPhaseImport(*mapped.phase_source_graph, source, review_layers, catalog_operation_budget);
+                phase_import = prepareDxfPhaseImport(*mapped.phase_source_graph, mapped.phase_source_assets,
+                    source, review_layers, catalog_operation_budget);
                 if (!phase_import) return false;
             }
             const auto reserve_destination_catalog = [&](const Entity& existing, std::size_t passes) {
@@ -38525,6 +38534,7 @@ public:
             for (const auto& [id, entity] : source.entities()) { (void)entity; reserved_ids.insert(id); }
             for (const auto& [id, asset] : source.assets()) { (void)asset; reserved_ids.insert(id); }
             if (phase_import) for (const auto& entity : phase_import->entities) reserved_ids.insert(entity.id);
+            if (phase_import) for (const auto& asset : phase_import->assets) reserved_ids.insert(asset.id);
             if (complete_catalog_transfer || phase_import) {
                 const auto occupied = retainedSlabIdentityNames(source, phase_import.has_value());
                 reserved_ids.insert(occupied.begin(), occupied.end());
@@ -38658,8 +38668,14 @@ public:
             }
             // Derive destinations from the real hierarchy, including reviewed
             // new layers. Source graph bindings cannot supply fake containers.
+            std::vector<AssetChange> imported_asset_changes;
+            if (phase_import) {
+                imported_asset_changes.reserve(phase_import->assets.size() + 1);
+                for (auto& asset : phase_import->assets)
+                    imported_asset_changes.push_back(AssetChange::upsert(std::move(asset)));
+            }
             const Command hierarchy_preview = phase_import
-                ? Command{ImportPhaseEntities{source.revision(), changes, {}, "Preview DXF destination layers",
+                ? Command{ImportPhaseEntities{source.revision(), changes, imported_asset_changes, "Preview DXF destination layers",
                     phase_import->registry_ids, phase_import->reviewed_existing_hierarchy_ids}}
                 : Command{ApplyEntityChanges{source.revision(), changes, {}, "Preview DXF destination layers"}};
             const auto reviewed_hierarchy = Document::preview_command(source, hierarchy_preview);
@@ -39049,15 +39065,20 @@ public:
                 source_entity.properties["diagnostics"].push_back({{"source_id", item.source_id},
                     {"source_kind", item.source_kind}, {"code", item.code}});
             changes.push_back(EntityChange::upsert(std::move(source_entity)));
+            imported_asset_changes.push_back(AssetChange::upsert(std::move(asset)));
             const Command command = phase_import
                 ? Command{ImportPhaseEntities{source.revision(), std::move(changes),
-                    {AssetChange::upsert(std::move(asset))}, "Import DXF", phase_import->registry_ids,
+                    std::move(imported_asset_changes), "Import DXF", phase_import->registry_ids,
                     phase_import->reviewed_existing_hierarchy_ids}}
                 : Command{ApplyEntityChanges{source.revision(), std::move(changes),
-                    {AssetChange::upsert(std::move(asset))}, "Import DXF"}};
+                    std::move(imported_asset_changes), "Import DXF"}};
             if (phase_import && !phase_import->source_current())
                 throw std::invalid_argument("The project changed before importing design sets. Reopen Import DXF.");
-            validateImportedHostedGeometry(Document::preview_command(source, command), imported_boundary_ids);
+            const auto final_import_preview = Document::preview_command(source, command);
+            // Include the original DXF receipt and all transferred payloads,
+            // as well as repeated assets in every retained revision.
+            admit_native_dxf_phase_retained_asset_capacity(final_import_preview, &catalog_operation_budget);
+            validateImportedHostedGeometry(final_import_preview, imported_boundary_ids);
             if (phase_import && !phase_import->source_current())
                 throw std::invalid_argument("The project changed during design-set preparation. Reopen Import DXF.");
             // V9 carries explicit complete source membership, including owners

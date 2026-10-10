@@ -222,9 +222,21 @@ destination witnesses are unchanged; admission rejects accidental rebinding
 against newly staged owners in either direction. Imported views cannot shadow
 existing output-view identities. An opt-in catalog adapter now inventories and
 remaps native canonical document/asset references with separately budgeted real
-asset admission; legacy defaults remain unchanged. The V9 graph, binary payload
-transport and destination publication still need that integration, so canonical
-catalog-reference and asset transfer remain open. Scoped annotation owner contexts
+asset admission; legacy defaults remain unchanged. The graph now consumes that
+policy and retains reached assets through version four: an exact manifest plus
+separately supplied payloads, rather than binary data embedded in geometry JSON.
+PSIP0005 frames bounded JSON and a sorted, hash-bound binary asset table. Desktop
+preparation allocates fresh asset identities and stages those payloads with the
+same phase import command, including intermediate hierarchy preview.
+Binding previews actual staged additions against the retained destination.
+Final desktop capacity admission includes the source receipt and every repeated
+asset row in the prospective history, before live publication. Source-transfer
+and native retained-history limits remain distinct (256 MiB and 512 MiB).
+This is source integration, not complete exchange transport. The DXF exporter
+explicitly refuses asset-bearing graphs until their payload carrier is connected;
+it cannot emit a manifest-only file. The legacy DXF parser and worker profiles
+still limit input, and large original-source retention still needs a lossless
+solution. Full-capacity furnished transfer remains open. Scoped annotation owner contexts
 must match actual layer ancestry, while children may use independent layers.
 Fresh phase import uses an explicit retained command policy rather than legacy
 constraint satisfaction for inactive alternatives. Existing legacy commands

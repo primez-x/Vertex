@@ -13,14 +13,18 @@
 #include "sketch/stair_semantics.hpp"
 #include "sketch/windows_import_worker.hpp"
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstdint>
 #include <cstring>
 #include <functional>
+#include <istream>
 #include <map>
 #include <optional>
+#include <ostream>
 #include <set>
 #include <span>
+#include <streambuf>
 #include <stdexcept>
 #include <string>
 #include <utility>
@@ -31,6 +35,9 @@ namespace sketch {
 enum class ProjectImportKind { dxf, ifc };
 inline constexpr std::size_t project_import_input_limit = 64 * 1024 * 1024;
 inline constexpr std::size_t project_import_output_limit = 64 * 1024 * 1024;
+// PSIP0005 keeps the legacy JSON ceiling and carries at most 256 MiB of
+// manifest-bound binary assets separately. Ordinary protocols keep 64 MiB.
+inline constexpr std::size_t project_import_asset_output_limit = 384 * 1024 * 1024;
 inline constexpr std::size_t project_import_entity_limit = 100'000;
 inline constexpr std::size_t project_import_diagnostic_limit = 250'000;
 inline constexpr std::size_t project_import_boundary_segment_limit = 512;
@@ -59,6 +66,7 @@ struct ProjectImportCandidate {
     // PSIP0004 complete original phase inventory. This is source evidence,
     // never a fabricated destination hierarchy or permission to publish it.
     std::optional<nlohmann::json> phase_source_graph;
+    NativeDxfPhaseSourceAssets phase_source_assets;
 };
 
 inline const char* project_import_kind_name(ProjectImportKind kind) {
@@ -71,6 +79,37 @@ inline const char* project_import_kind_name(ProjectImportKind kind) {
 
 namespace project_import_detail {
 inline void reject() { throw std::invalid_argument("Invalid isolated project import response."); }
+// Stream the separately framed table without another full-size string copy.
+class AssetOutputBuffer final : public std::streambuf {
+public:
+    explicit AssetOutputBuffer(std::vector<std::byte>& output) : output_(output) {}
+protected:
+    std::streamsize xsputn(const char* data, std::streamsize count) override {
+        if (count < 0 || output_.size() > project_import_asset_output_limit ||
+            static_cast<std::uint64_t>(count) > project_import_asset_output_limit - output_.size()) reject();
+        if (count != 0) {
+            const auto* begin = reinterpret_cast<const std::byte*>(data);
+            output_.insert(output_.end(), begin, begin + static_cast<std::size_t>(count));
+        }
+        return count;
+    }
+    int_type overflow(int_type value) override {
+        if (traits_type::eq_int_type(value, traits_type::eof())) return traits_type::not_eof(value);
+        const char byte = traits_type::to_char_type(value);
+        xsputn(&byte, 1);
+        return value;
+    }
+private:
+    std::vector<std::byte>& output_;
+};
+class AssetInputBuffer final : public std::streambuf {
+public:
+    explicit AssetInputBuffer(std::span<const std::byte> input) {
+        // Only the get area is exposed; the immutable report remains alive.
+        auto* begin = const_cast<char*>(reinterpret_cast<const char*>(input.data()));
+        setg(begin, begin, begin + input.size());
+    }
+};
 
 inline bool observed_worker_project_failure(const WindowsImportWorkerReport& report) {
     // controls_attested() deliberately requires successful completion. A
@@ -577,7 +616,9 @@ inline void validate(const ProjectImportCandidate& result) {
         result.diagnostics.size() > project_import_diagnostic_limit ||
         (!result.diagnostics.empty() && !result.source_retention_required)) reject();
     if (result.kind != ProjectImportKind::dxf && (!result.physical_source_graphs.empty() ||
-        !result.catalog_sources.empty() || !result.authoring_catalog_ids.empty() || result.phase_source_graph)) reject();
+        !result.catalog_sources.empty() || !result.authoring_catalog_ids.empty() || result.phase_source_graph ||
+        !result.phase_source_assets.empty())) reject();
+    if (!result.phase_source_graph && !result.phase_source_assets.empty()) reject();
     if (result.catalog_sources.size() > project_import_entity_limit ||
         result.authoring_catalog_ids.size() > result.catalog_sources.size() ||
         !std::is_sorted(result.authoring_catalog_ids.begin(), result.authoring_catalog_ids.end()) ||
@@ -798,7 +839,8 @@ inline void validate(const ProjectImportCandidate& result) {
     // geometry checks as an ordinary command. No live document is mutated.
     if (result.phase_source_graph) {
         try {
-            const auto graph = decode_native_dxf_phase_source_graph(*result.phase_source_graph, &source_budget);
+            const auto graph = decode_native_dxf_phase_source_graph(*result.phase_source_graph, &source_budget,
+                result.phase_source_assets);
             // The worker is a separate trust boundary. Recheck the carrier's
             // single source namespace before destination IDs are allocated;
             // overlap must not turn into two independently editable copies.
@@ -858,6 +900,7 @@ inline void validate(const ProjectImportCandidate& result) {
 // every candidate through Document. Callers still commit an ordinary command.
 inline std::vector<std::byte> encode_project_import_candidate(const ProjectImportCandidate& result) {
     project_import_detail::validate(result);
+    const bool asset_protocol = !result.phase_source_assets.empty();
     const bool phase_protocol = result.phase_source_graph.has_value();
     const bool catalog_protocol = !result.catalog_sources.empty();
     nlohmann::json entities = nlohmann::json::array(), diagnostics = nlohmann::json::array();
@@ -868,7 +911,7 @@ inline std::vector<std::byte> encode_project_import_candidate(const ProjectImpor
     }
     for (const auto& d : result.diagnostics)
         diagnostics.push_back({{"source_id", d.source_id}, {"source_kind", d.source_kind}, {"code", d.code}});
-    auto value = nlohmann::json{{"protocol", phase_protocol ? "PSIP0004" : catalog_protocol ? "PSIP0003" :
+    auto value = nlohmann::json{{"protocol", asset_protocol ? "PSIP0005" : phase_protocol ? "PSIP0004" : catalog_protocol ? "PSIP0003" :
             result.physical_source_graphs.empty() ? "PSIP0001" : "PSIP0002"},
         {"kind", project_import_kind_name(result.kind)},
         {"entities", std::move(entities)}, {"diagnostics", std::move(diagnostics)},
@@ -882,6 +925,23 @@ inline std::vector<std::byte> encode_project_import_candidate(const ProjectImpor
     if (phase_protocol) value["phase_source_graph"] = *result.phase_source_graph;
     const auto wire = value.dump();
     if (wire.size() > project_import_output_limit) project_import_detail::reject();
+    if (asset_protocol) {
+        NativeDxfPhaseAssetWorkBudget budget;
+        const auto manifest = decode_native_dxf_phase_asset_manifest(result.phase_source_graph->at("asset_manifest"), &budget);
+        std::vector<std::byte> output;
+        project_import_detail::AssetOutputBuffer buffer(output);
+        std::ostream stream(&buffer);
+        stream.write("PSIP0005", 8);
+        const auto size = static_cast<std::uint32_t>(wire.size());
+        std::array<char, 4> length{};
+        for (std::size_t i = 0; i < length.size(); ++i)
+            length[i] = static_cast<char>((size >> (i * 8)) & 0xffU);
+        stream.write(length.data(), static_cast<std::streamsize>(length.size()));
+        stream.write(wire.data(), static_cast<std::streamsize>(wire.size()));
+        write_native_dxf_phase_asset_table(stream, manifest, result.phase_source_assets, &budget);
+        if (!stream || output.size() > project_import_asset_output_limit) project_import_detail::reject();
+        return output;
+    }
     std::vector<std::byte> output(wire.size());
     std::memcpy(output.data(), wire.data(), wire.size());
     return output;
@@ -891,7 +951,18 @@ inline ProjectImportCandidate decode_project_import_candidate(
     const WindowsImportWorkerReport& report, ProjectImportKind expected_kind) {
     using namespace project_import_detail;
     if (!report.controls_attested() || report.exit_code != 0 || report.timed_out ||
-        !report.diagnostics.empty() || report.output.empty() || report.output.size() > project_import_output_limit) reject();
+        !report.diagnostics.empty() || report.output.empty() || report.output.size() > project_import_asset_output_limit) reject();
+    const auto* begin = reinterpret_cast<const char*>(report.output.data());
+    const bool asset_protocol = report.output.size() >= 8 && std::memcmp(begin, "PSIP0005", 8) == 0;
+    std::size_t json_offset = 0, json_size = report.output.size();
+    if (asset_protocol) {
+        if (expected_kind != ProjectImportKind::dxf || report.output.size() < 24) reject();
+        std::uint32_t declared = 0;
+        for (std::size_t i = 0; i < 4; ++i)
+            declared |= std::to_integer<std::uint32_t>(report.output[8 + i]) << (i * 8);
+        json_offset = 12; json_size = declared;
+        if (!json_size || json_size > project_import_output_limit || json_size > report.output.size() - 24) reject();
+    } else if (report.output.size() > project_import_output_limit) reject();
     std::size_t nodes = 0;
     std::vector<std::set<std::string>> object_keys;
     std::string root_field;
@@ -911,11 +982,12 @@ inline ProjectImportCandidate decode_project_import_candidate(
             !std::isfinite(value.get<double>())) reject();
         return true;
     };
-    const auto* begin = reinterpret_cast<const char*>(report.output.data());
-    const auto value = nlohmann::json::parse(begin, begin + report.output.size(), callback);
+    const auto value = nlohmann::json::parse(begin + json_offset, begin + json_offset + json_size, callback);
     const bool physical_protocol = value.is_object() && value.contains("protocol") && value.at("protocol") == "PSIP0002";
     const bool catalog_protocol = value.is_object() && value.contains("protocol") && value.at("protocol") == "PSIP0003";
-    const bool phase_protocol = value.is_object() && value.contains("protocol") && value.at("protocol") == "PSIP0004";
+    const bool phase_protocol = value.is_object() && value.contains("protocol") &&
+        (asset_protocol ? value.at("protocol") == "PSIP0005" : value.at("protocol") == "PSIP0004");
+    if (asset_protocol && !phase_protocol) reject();
     // Only exact versioned source fields use the larger framing allowance.
     // Old profiles retain their original field limits regardless of key order.
     const auto legacy_json_limits = [&](const auto& self, const nlohmann::json& item, int depth) -> void {
@@ -971,6 +1043,27 @@ inline ProjectImportCandidate decode_project_import_candidate(
     if (phase_protocol) {
         if (expected_kind != ProjectImportKind::dxf || !value.at("phase_source_graph").is_object()) reject();
         result.phase_source_graph = value.at("phase_source_graph");
+        if (asset_protocol) {
+            const auto& graph = *result.phase_source_graph;
+            if (!graph.contains("version") || graph.at("version") != 4 || !graph.contains("asset_manifest")) reject();
+            NativeDxfPhaseAssetWorkBudget budget;
+            const auto manifest = decode_native_dxf_phase_asset_manifest(graph.at("asset_manifest"), &budget);
+            if (manifest.empty()) reject();
+            const auto table = std::span<const std::byte>(report.output).subspan(json_offset + json_size);
+            // The complete bounded report is available. Reject truncation or
+            // trailing bytes before the table reader allocates any payload.
+            std::uint64_t expected_table_size = 12;
+            for (const auto& [id, row] : manifest) {
+                const auto row_size = 12 + static_cast<std::uint64_t>(id.size()) + row.byte_count;
+                if (row_size > project_import_asset_output_limit - expected_table_size) reject();
+                expected_table_size += row_size;
+            }
+            if (expected_table_size != table.size()) reject();
+            AssetInputBuffer buffer(table);
+            std::istream stream(&buffer);
+            result.phase_source_assets = read_native_dxf_phase_asset_table(stream, manifest, &budget);
+            if (stream.peek() != std::char_traits<char>::eof()) reject();
+        }
     }
     for (const auto& e : value.at("entities")) {
         if (catalog_protocol || phase_protocol) {

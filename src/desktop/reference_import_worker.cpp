@@ -314,6 +314,8 @@ int main(int argc, char** argv) {
                 }
                 if constexpr (requires { result.phase_source_graph; })
                     candidate.phase_source_graph = std::move(result.phase_source_graph);
+                if constexpr (requires { result.phase_source_assets; })
+                    candidate.phase_source_assets = std::move(result.phase_source_assets);
                 for (auto& diagnostic : result.diagnostics)
                     candidate.diagnostics.push_back({std::move(diagnostic.source_id),
                         std::move(diagnostic.source_kind), std::move(diagnostic.code)});

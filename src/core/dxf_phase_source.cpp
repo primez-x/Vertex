@@ -57,6 +57,39 @@ void budget_limits(const NativeDxfWallSourceWorkBudget& budget) {
     require(budget.destination_asset_replay_bytes <= native_dxf_phase_destination_asset_replay_byte_limit &&
         budget.destination_asset_replay_work <= native_dxf_phase_destination_asset_replay_work_limit,
         "invalid destination asset replay ledger");
+    const auto& a = budget.phase_assets;
+    require(a.max_payload_bytes <= native_dxf_phase_asset_payload_limit &&
+        a.max_work_bytes <= native_dxf_phase_asset_work_limit &&
+        a.max_json_bytes <= native_dxf_phase_asset_json_byte_limit &&
+        a.max_json_nodes <= native_dxf_phase_asset_json_node_limit &&
+        a.consumed_work_bytes <= a.max_work_bytes && a.consumed_json_bytes <= a.max_json_bytes &&
+        a.consumed_json_nodes <= a.max_json_nodes, "invalid phase asset ledger");
+}
+void asset_work(NativeDxfWallSourceWorkBudget& budget, std::uint64_t amount) {
+    budget_limits(budget);
+    auto& a = budget.phase_assets;
+    require(amount <= a.max_work_bytes - a.consumed_work_bytes, "cumulative phase asset work limit");
+    a.consumed_work_bytes += amount;
+}
+// A validator admits all descriptor metadata and the complete physical
+// inventory before hashing. Every later payload/metadata copy is reserved here.
+void asset_pass(const NativeDxfPhaseSourceAssets& assets, NativeDxfWallSourceWorkBudget& budget,
+    std::size_t copies = 0, bool destination_inventory = false) {
+    const auto first = budget.phase_assets.consumed_json_bytes;
+    if (destination_inventory) {
+        NativeDxfPhaseSourceAssetRefs refs;
+        for (const auto& [id, asset] : assets) refs.emplace(id, &asset);
+        validate_native_dxf_phase_destination_asset_refs(refs, &budget.phase_assets);
+    } else validate_native_dxf_phase_source_assets(assets, &budget.phase_assets);
+    std::uint64_t bytes = budget.phase_assets.consumed_json_bytes - first;
+    for (const auto& [id, asset] : assets)
+        bytes += asset.bytes.size() + id.size() + asset.id.size() + asset.media_type.size() + asset.sha256.size();
+    require(!copies || bytes <= budget.phase_assets.max_work_bytes / copies, "phase asset copy work limit");
+    asset_work(budget, bytes * copies);
+}
+void destination_asset_pass(const NativeDxfPhaseSourceAssets& assets, NativeDxfWallSourceWorkBudget& budget,
+    std::size_t copies = 0) {
+    asset_pass(assets, budget, copies, true);
 }
 void work(NativeDxfWallSourceWorkBudget& budget, std::size_t amount) {
     auto& b = budget.catalog_transfer;
@@ -144,6 +177,19 @@ const Entity& actual(const Owners& owners, const std::string& id, std::string_vi
 }
 
 using References = std::map<std::string, std::string, std::less<>>;
+Ids asset_references(const Entity& owner) {
+    Ids result;
+    for (const auto* slot : {"asset_id", "render_asset_id"}) {
+        if (owner.properties.contains(slot)) result.insert(reference(owner.properties.at(slot)));
+        const auto plural = std::string(slot) + "s";
+        if (owner.properties.contains(plural)) {
+            const auto& values = owner.properties.at(plural);
+            require(values.is_array(), "typed asset reference collection is not an array");
+            for (const auto& value : values) result.insert(reference(value));
+        }
+    }
+    return result;
+}
 // Only typed document references are read. Nested arbitrary metadata and local
 // identities never enter the global owner namespace.
 References direct_references(const Entity& entity) {
@@ -185,22 +231,38 @@ References direct_references(const Entity& entity) {
     return result;
 }
 References dependencies(const Entity& owner, const Owners& owners, NativeDxfWallSourceWorkBudget& budget) {
-    auto result = direct_references(owner);
+    // Catalogs follow Document's exact canonical reference contract. In
+    // particular, unrelated wall_join_id/roof_join_id metadata on a catalog
+    // does not acquire ownership merely because physical bodies use it.
+    auto result = owner.type == "assembly_model" ? References{} : direct_references(owner);
     const auto add = [&](const std::string& id, const char* type = "") {
         identity(id);
         const auto [found, inserted] = result.emplace(id, type);
         require(inserted || !*type || found->second.empty() || found->second == type, "dependency role conflict " + id);
         if (*type) found->second = type;
     };
-    for (const auto* slot : {"asset_id", "asset_ids", "render_asset_id", "render_asset_ids"})
-        require(!owner.properties.contains(slot), "unsupported typed dependency " + owner.id + ": " + slot);
     // Document does not interpret phase_id/phase_binding/phase_registry_id or
     // an arbitrary phase_membership extension as roster authority. Preserve
     // that source metadata; actual ModelPhases registries alone enroll owners.
     if (owner.type == "assembly_model") {
-        const auto refs = complete_assembly_catalog_source_refs(owner, budget.catalog_transfer);
+        const auto refs = complete_assembly_catalog_source_refs(owner, budget.catalog_transfer,
+            AssemblyCatalogSourceReferencePolicy::document_authoring);
         for (const auto& id : refs.hosted_entity_ids) add(id);
-        for (const auto& id : refs.context_owner_ids) add(id);
+        for (const auto& [id, role] : refs.document_owner_roles) {
+            const auto& target = actual(owners, id);
+            require(role.empty() || target.type == role, "catalog canonical dependency role differs " + id);
+            add(id, role.c_str());
+        }
+        for (const auto& [slot, role] : std::array<std::pair<const char*, const char*>, 4>{{
+            {"property_id", "property"}, {"building_id", "building"}, {"floor_id", "floor"}, {"layer_id", "layer"}}}) {
+            if (owner.properties.contains(slot)) {
+                const auto id = reference(owner.properties.at(slot));
+                const auto& target = actual(owners, id);
+                require(target.type == role, "catalog context dependency role differs " + id);
+                add(id, role);
+            }
+        }
+        return result; // Other catalog fields and nested metadata stay opaque.
     } else if (body_type(owner.type)) {
         for (const auto& id : native_dxf_wall_source_dependency_ids(owner)) add(id);
         for (const auto& id : native_dxf_architectural_source_catalog_ids(owner)) add(id, "assembly_model");
@@ -736,6 +798,15 @@ void roles(NativeDxfPhaseSourceGraph& graph, const Owners& owners, const Phases&
     graph.enrolled_hierarchy_ids.assign(phases.enrolled_hierarchy.begin(), phases.enrolled_hierarchy.end());
 }
 void semantic_graph(const NativeDxfPhaseSourceGraph& graph, NativeDxfWallSourceWorkBudget& budget) {
+    Ids reached_assets;
+    for (const auto& [id, owner] : graph.entities) {
+        (void)id;
+        for (const auto& asset : asset_references(owner)) {
+            require(graph.assets.contains(asset), "missing reached source asset " + asset);
+            reached_assets.insert(asset);
+        }
+    }
+    require(reached_assets.size() == graph.assets.size(), "source asset inventory has unreachable extras");
     const auto phases = phase_inventory(graph.entities);
     NativeDxfPhaseSourceGraph expected; roles(expected, graph.entities, phases);
     require(graph.body_ids == expected.body_ids && graph.catalog_ids == expected.catalog_ids &&
@@ -746,7 +817,8 @@ void semantic_graph(const NativeDxfPhaseSourceGraph& graph, NativeDxfWallSourceW
     // Admit every complete catalog before the first semantic catalog decode.
     // Dependency identities/roles are proved before architectural consumers
     // can inspect actual hosts. The raw source remains the representation.
-    for (const auto& id : graph.catalog_ids) admit_complete_assembly_catalog_source(graph.entities.at(id), budget.catalog_transfer);
+    for (const auto& id : graph.catalog_ids) admit_complete_assembly_catalog_source(graph.entities.at(id), budget.catalog_transfer,
+        AssemblyCatalogSourceReferencePolicy::document_authoring);
     std::map<std::string, References, std::less<>> reached;
     for (const auto& [id, owner] : graph.entities) {
         auto refs = dependencies(owner, graph.entities, budget);
@@ -834,6 +906,20 @@ void raw_graph(const NativeDxfPhaseSourceGraph& graph, NativeDxfWallSourceWorkBu
     budget_limits(budget);
     require(!graph.entities.empty() && graph.entities.size() <= native_dxf_phase_source_owner_limit, "source owner inventory limit");
     for (const auto& [id, owner] : graph.entities) raw_entity(id, owner, budget);
+    require(graph.assets.size() <= native_dxf_phase_asset_count_limit, "source asset inventory limit");
+    if (!graph.assets.empty()) {
+        // Descriptors and owner JSON share the existing graph lane. The asset
+        // codec's separate metadata ledger does not double graph capacity.
+        charge(budget.catalog_transfer.consumed_json_bytes, 80 + graph.assets.size() * 90,
+            budget.catalog_transfer.max_json_bytes, "combined graph manifest byte limit");
+        charge(budget.catalog_transfer.consumed_json_nodes, 4 + graph.assets.size() * 5,
+            budget.catalog_transfer.max_json_nodes, "combined graph manifest node limit");
+        for (const auto& [id, asset] : graph.assets) {
+            map_text(id, budget); map_text(asset.media_type, budget);
+            map_text(asset.sha256, budget); raw(asset.metadata, budget);
+        }
+    }
+    asset_pass(graph.assets, budget);
     for (const auto* ids : {&graph.body_ids, &graph.catalog_ids, &graph.registry_ids, &graph.context_ids, &graph.support_ids,
         &graph.enrolled_hierarchy_ids, &graph.depicted_body_ids}) {
         // Bound caller-owned vectors before constructing any transport copy.
@@ -850,17 +936,18 @@ void raw_graph(const NativeDxfPhaseSourceGraph& graph, NativeDxfWallSourceWorkBu
     }
     reserve_models(graph.entities, budget);
 }
-Json unchecked_encode(const NativeDxfPhaseSourceGraph& graph) {
+Json unchecked_encode(const NativeDxfPhaseSourceGraph& graph, NativeDxfWallSourceWorkBudget& budget) {
     Json entities = Json::array();
     for (const auto& [id, owner] : graph.entities) entities.push_back({{"id", id}, {"type", owner.type},
         {"properties", owner.properties}, {"required", owner.required}, {"extensions", owner.extensions}});
     const bool sheet_companions = std::any_of(graph.support_ids.begin(), graph.support_ids.end(), [&](const auto& id) {
         return native_dxf_sheet_view_source_type(graph.entities.at(id).type);
     });
-    Json value{{"version", graph.support_ids.empty() ? 1 : sheet_companions ? 3 : 2}, {"entities", std::move(entities)}, {"body_ids", graph.body_ids},
+    Json value{{"version", !graph.assets.empty() ? 4 : graph.support_ids.empty() ? 1 : sheet_companions ? 3 : 2}, {"entities", std::move(entities)}, {"body_ids", graph.body_ids},
         {"catalog_ids", graph.catalog_ids}, {"registry_ids", graph.registry_ids}, {"context_ids", graph.context_ids},
         {"enrolled_hierarchy_ids", graph.enrolled_hierarchy_ids}, {"depicted_body_ids", graph.depicted_body_ids}};
-    if (!graph.support_ids.empty()) value["support_ids"] = graph.support_ids;
+    if (!graph.support_ids.empty() || !graph.assets.empty()) value["support_ids"] = graph.support_ids;
+    if (!graph.assets.empty()) value["asset_manifest"] = encode_native_dxf_phase_asset_manifest(graph.assets, &budget.phase_assets);
     return value;
 }
 bool unsupported_incoming(const Entity& owner, const Ids& selected) {
@@ -902,20 +989,47 @@ bool exact_owner(const Entity& left, const Entity& right) {
     return left.id == right.id && left.type == right.type && left.required == right.required &&
         exact_raw(left.properties, right.properties) && exact_raw(left.extensions, right.extensions);
 }
-bool exact_graph(const NativeDxfPhaseSourceGraph& left, const NativeDxfPhaseSourceGraph& right) {
+bool exact_asset(const Asset& left, const Asset& right) {
+    return left.id == right.id && left.media_type == right.media_type && left.sha256 == right.sha256 &&
+        left.bytes == right.bytes && exact_raw(left.metadata, right.metadata);
+}
+bool exact_graph(const NativeDxfPhaseSourceGraph& left, const NativeDxfPhaseSourceGraph& right,
+    NativeDxfWallSourceWorkBudget& budget) {
+    asset_pass(left.assets, budget, 1); asset_pass(right.assets, budget, 1);
     if (left.entities.size() != right.entities.size() || left.body_ids != right.body_ids ||
         left.catalog_ids != right.catalog_ids || left.registry_ids != right.registry_ids ||
         left.context_ids != right.context_ids || left.support_ids != right.support_ids || left.enrolled_hierarchy_ids != right.enrolled_hierarchy_ids ||
-        left.depicted_body_ids != right.depicted_body_ids) return false;
+        left.depicted_body_ids != right.depicted_body_ids || left.assets.size() != right.assets.size()) return false;
     for (const auto& [id, owner] : left.entities) {
         const auto found = right.entities.find(id);
         if (found == right.entities.end() || !exact_owner(owner, found->second)) return false;
+    }
+    for (const auto& [id, asset] : left.assets) {
+        const auto found = right.assets.find(id);
+        if (found == right.assets.end() || !exact_asset(asset, found->second)) return false;
     }
     return true;
 }
 NativeDxfPhaseOwnerMap admit_maps(const NativeDxfPhaseSourceGraph& source,
     const NativeDxfPhaseDestinationMaps& maps, NativeDxfWallSourceWorkBudget& budget) {
-    NativeDxfPhaseOwnerMap owners; Ids targets;
+    NativeDxfPhaseOwnerMap owners; Ids targets, asset_targets;
+    for (const auto* map : {&maps.body_owner_ids, &maps.catalog_owner_ids, &maps.registry_owner_ids,
+        &maps.reviewed_context_owner_ids, &maps.support_owner_ids, &maps.stair_child_ids, &maps.asset_ids}) {
+        require(map->size() <= native_dxf_phase_source_node_limit, "destination map inventory limit");
+        for (const auto& [original, destination] : *map) {
+            map_text(original, budget); map_text(destination, budget);
+        }
+    }
+    for (const auto* scoped : {&maps.sheet_view_ids, &maps.annotation_child_ids, &maps.sheet_witness_ids}) {
+        require(scoped->size() <= source.entities.size(), "destination map scope limit");
+        for (const auto& [id, map] : *scoped) {
+            map_text(id, budget);
+            require(map.size() <= native_dxf_phase_source_node_limit, "destination scoped map inventory limit");
+            for (const auto& [original, destination] : map) {
+                map_text(original, budget); map_text(destination, budget);
+            }
+        }
+    }
     const auto admit = [&](const auto& map, const auto& expected) {
         require(map.size() == expected.size(), "destination map must exactly cover its namespace");
         product_work(budget, map.size(), 4 * 256);
@@ -930,6 +1044,22 @@ NativeDxfPhaseOwnerMap admit_maps(const NativeDxfPhaseSourceGraph& source,
     admit(maps.body_owner_ids, source.body_ids); admit(maps.catalog_owner_ids, source.catalog_ids);
     admit(maps.registry_owner_ids, source.registry_ids); admit(maps.reviewed_context_owner_ids, source.context_ids);
     admit(maps.support_owner_ids, source.support_ids);
+    require(maps.asset_ids.size() == source.assets.size(), "asset map must exactly cover source assets");
+    // Admit every supplied string, including an extra key in an exact-sized
+    // malformed map, before any identity or ordered-map comparison.
+    for (const auto& [original, destination] : maps.asset_ids) {
+        map_text(original, budget); map_text(destination, budget);
+        identity(original); identity(destination);
+    }
+    for (const auto& [id, asset] : source.assets) {
+        (void)asset;
+        const auto found = maps.asset_ids.find(id);
+        require(found != maps.asset_ids.end(), "missing asset mapping " + id);
+        require(!source.assets.contains(found->second) && !source.entities.contains(found->second),
+            "asset target is not fresh " + found->second);
+        require(targets.insert(found->second).second, "asset target collides with an allocated owner or asset " + found->second);
+        asset_targets.insert(found->second);
+    }
     if (!maps.sheet_view_ids.empty()) {
         Ids companion_owners;
         for (const auto& id : source.support_ids)
@@ -988,9 +1118,20 @@ NativeDxfPhaseOwnerMap admit_maps(const NativeDxfPhaseSourceGraph& source,
         require(found != maps.stair_child_ids.end(), "missing stair child mapping " + child);
         identity(found->first); identity(found->second); raw(Json(found->first), budget); raw(Json(found->second), budget);
         require(child_targets.insert(found->second).second, "stair child map collapses children");
+        map_lookup_work(found->second, asset_targets.size(), budget);
+        require(!asset_targets.contains(found->second), "asset target collides with allocated stair identity");
         // A child remains local even when it spells a document identity. No
         // string-based owner substitution is ever applied in that namespace.
     }
+    for (const auto* scoped : {&maps.sheet_view_ids, &maps.annotation_child_ids})
+        for (const auto& [id, scope] : *scoped) {
+            map_text(id, budget);
+            for (const auto& [original, destination] : scope) {
+                map_text(original, budget); map_text(destination, budget);
+                map_lookup_work(destination, asset_targets.size(), budget);
+                require(!asset_targets.contains(destination), "asset target collides with allocated local identity");
+            }
+        }
     if (!maps.sheet_witness_ids.empty()) {
         // Admit ALL supplied raw strings before comparisons, including unknown
         // keys in malformed exact-sized scopes. No owner limit applies to the
@@ -1111,7 +1252,8 @@ NativeDxfPhaseSourceGraph mapped_source(const NativeDxfPhaseSourceGraph& source,
         Entity owner = can_recognize_boundary_entity_type(original.type) && owners.at(id) != id
             ? remap_boundary_owner_identity(original, owners.at(id)) : original;
         if (original.type == "assembly_model") owner = remap_complete_assembly_catalog_source_refs(
-            original, maps.catalog_owner_ids, maps.body_owner_ids, maps.reviewed_context_owner_ids, budget.catalog_transfer);
+            original, maps.catalog_owner_ids, maps.body_owner_ids, maps.reviewed_context_owner_ids, budget.catalog_transfer,
+            AssemblyCatalogSourceReferencePolicy::document_authoring, owners, maps.asset_ids);
         else if (original.type == "assembly_instance") owner = remap_native_dxf_independent_assembly_source(
             original, maps.body_owner_ids, maps.catalog_owner_ids);
         else owner.id = owners.at(id);
@@ -1158,10 +1300,18 @@ NativeDxfPhaseSourceGraph mapped_source(const NativeDxfPhaseSourceGraph& source,
 #endif
             }
         }
-        patch_direct_refs(owner, original, owners);
+        if (original.type != "assembly_model") patch_direct_refs(owner, original, owners);
+        if (original.type != "assembly_model") for (const auto* slot : {"asset_id", "render_asset_id"}) {
+            if (original.properties.contains(slot)) owner.properties.at(slot) = maps.asset_ids.at(reference(original.properties.at(slot)));
+            const auto plural = std::string(slot) + "s";
+            if (original.properties.contains(plural))
+                for (std::size_t i = 0; i < original.properties.at(plural).size(); ++i)
+                    owner.properties.at(plural)[i] = maps.asset_ids.at(reference(original.properties.at(plural)[i]));
+        }
         const auto patch = [&](Json& value) { if (value != "") value = owners.at(reference(value)); };
-        if (owner.properties.contains("deduction_ids")) for (auto& value : owner.properties.at("deduction_ids")) patch(value);
-        if (owner.properties.contains("appraisal_facts")) {
+        if (original.type != "assembly_model" && owner.properties.contains("deduction_ids"))
+            for (auto& value : owner.properties.at("deduction_ids")) patch(value);
+        if (original.type != "assembly_model" && owner.properties.contains("appraisal_facts")) {
             auto& facts = owner.properties.at("appraisal_facts");
             if (facts.contains("ansi") && facts.at("ansi").contains("ceiling")) {
                 auto& ceiling = facts.at("ansi").at("ceiling");
@@ -1184,6 +1334,13 @@ NativeDxfPhaseSourceGraph mapped_source(const NativeDxfPhaseSourceGraph& source,
         const auto mapped_id = owner.id;
         require(result.entities.emplace(mapped_id, std::move(owner)).second, "mapped owner collision");
     }
+    asset_pass(source.assets, budget, 1);
+    for (const auto& [id, asset] : source.assets) {
+        auto copy = asset;
+        copy.id = maps.asset_ids.at(id);
+        const auto mapped_id = copy.id;
+        require(result.assets.emplace(mapped_id, std::move(copy)).second, "mapped asset collision");
+    }
     const auto map_role = [&](const auto& ids) {
         std::vector<std::string> mapped; mapped.reserve(ids.size());
         for (const auto& id : ids) mapped.push_back(owners.at(id));
@@ -1201,16 +1358,9 @@ NativeDxfPhaseSourceGraph mapped_source(const NativeDxfPhaseSourceGraph& source,
     return result;
 }
 void admit_assets(const std::map<std::string, Asset, std::less<>>& assets, NativeDxfWallSourceWorkBudget& budget) {
-    require(assets.size() <= native_dxf_phase_source_owner_limit, "destination asset count limit");
-    for (const auto& [id, asset] : assets) {
-        identity(id); require(id == asset.id, "destination asset map identity differs");
-        raw(Json(id), budget); raw(Json(asset.media_type), budget); raw(Json(asset.sha256), budget); raw(asset.metadata, budget);
-        charge(budget.destination_asset_replay_bytes, asset.bytes.size(),
-            native_dxf_phase_destination_asset_replay_byte_limit, "destination retained asset replay byte limit");
-        require(asset.bytes.size() <= native_dxf_phase_destination_asset_replay_work_limit / 4, "destination asset hash work limit");
-        charge(budget.destination_asset_replay_work, asset.bytes.size() * 4,
-            native_dxf_phase_destination_asset_replay_work_limit, "destination cumulative asset hash work limit");
-    }
+    // Each actual inventory retains native physical capacity independently.
+    // Fork/preview payload copies and validation hashes share the binary lane.
+    destination_asset_pass(assets, budget, 4);
 }
 // Same complete dynamic-field inventory used by mixed phase demolition's
 // retained-history admission. Only raw fields are visited here; no command
@@ -1234,15 +1384,20 @@ struct HistoryAdmission {
         text(value.id); text(value.type); read(value.properties); read(value.extensions); reserve_intrinsic_owner(value, budget);
     }
     void read(const Asset& value) {
-        text(value.id); text(value.media_type); text(value.sha256); read(value.metadata);
-        charge(budget.destination_asset_replay_bytes, value.bytes.size(), native_dxf_phase_destination_asset_replay_byte_limit,
-            "history proof asset replay byte limit");
-        require(value.bytes.size() <= native_dxf_phase_destination_asset_replay_work_limit / 4, "history asset hash work limit");
-        charge(budget.destination_asset_replay_work, value.bytes.size() * 4, native_dxf_phase_destination_asset_replay_work_limit,
-            "history proof cumulative asset hash work limit");
+        map_text(value.id, budget);
+        const NativeDxfPhaseSourceAssetRefs refs{{value.id, &value}};
+        const auto first = budget.phase_assets.consumed_json_bytes;
+        validate_native_dxf_phase_destination_asset_refs(refs, &budget.phase_assets);
+        const auto bytes = budget.phase_assets.consumed_json_bytes - first + value.id.size() +
+            value.media_type.size() + value.sha256.size() + value.bytes.size();
+        require(bytes <= budget.phase_assets.max_work_bytes / 4, "history asset copy work limit");
+        asset_work(budget, bytes * 4);
     }
     void read(const EntityChange& value) { text(value.entity_id); read(value.entity); }
-    void read(const AssetChange& value) { text(value.asset_id); read(value.asset); }
+    void read(const AssetChange& value) {
+        text(value.asset_id);
+        if (value.kind == AssetChangeKind::upsert) read(value.asset);
+    }
     void read(const PhaseEntityImportProof& value) {
         fixed(256); text(value.message);
         sequence(value.registry_ids); sequence(value.entity_ids); sequence(value.asset_ids);
@@ -1372,7 +1527,7 @@ NativeDxfPhaseDestinationBinding destination_binding(const NativeDxfPhaseSourceG
     const DocumentSnapshot& destination, const std::vector<Entity>& reviewed_contexts,
     NativeDxfWallSourceWorkBudget& budget) {
     budget_limits(budget); require(destination.is_editable(), "actual destination is read-only");
-    admit_destination_owners(destination.entities(), budget); admit_assets(destination.assets(), budget);
+    admit_destination_owners(destination.entities(), budget); destination_asset_pass(destination.assets(), budget);
     require(reviewed_contexts.size() <= mapped.context_ids.size(), "extra reviewed context owners");
     Ids context_targets(mapped.context_ids.begin(), mapped.context_ids.end());
     for (const auto& owner : reviewed_contexts) {
@@ -1381,7 +1536,9 @@ NativeDxfPhaseDestinationBinding destination_binding(const NativeDxfPhaseSourceG
         require(!destination.entities().contains(owner.id), "reviewed new context overwrites an actual owner");
     }
     Owners combined = destination.entities();
-    NativeDxfPhaseDestinationBinding result; result.mapped_graph = mapped;
+    NativeDxfPhaseDestinationBinding result;
+    asset_pass(mapped.assets, budget, 2); // mapped proof and staged payloads
+    result.mapped_graph = mapped;
     // Child selection spans annotation states in the canvas. Retained local
     // names must not shadow actual destination components or appearance owners.
     Ids destination_annotation_names;
@@ -1389,6 +1546,10 @@ NativeDxfPhaseDestinationBinding destination_binding(const NativeDxfPhaseSourceG
         destination_annotation_names.insert(id);
         if (owner.type == "annotation_state")
             for (const auto& child : native_dxf_annotation_child_identity_ids(owner)) destination_annotation_names.insert(child);
+    }
+    for (const auto& [id, asset] : destination.assets()) {
+        (void)asset;
+        destination_annotation_names.insert(id);
     }
     for (const auto& [id, owner] : mapped.entities) {
         const bool existing_context = context_type(owner.type) && destination.entities().contains(id);
@@ -1398,6 +1559,24 @@ NativeDxfPhaseDestinationBinding destination_binding(const NativeDxfPhaseSourceG
     for (const auto& id : mapped.support_ids) if (mapped.entities.at(id).type == "annotation_state")
         for (const auto& child : native_dxf_annotation_child_identity_ids(mapped.entities.at(id)))
             require(destination_annotation_names.insert(child).second, "mapped annotation child collides in actual destination " + child);
+    NativeDxfPhaseSourceAssetRefs combined_assets;
+    for (const auto& [id, asset] : destination.assets()) combined_assets.emplace(id, &asset);
+    for (const auto& [id, asset] : mapped.assets) {
+        require(destination_annotation_names.insert(id).second, "fresh asset collides with actual destination or imported identity " + id);
+        require(combined_assets.emplace(id, &asset).second, "fresh asset overwrites actual destination asset " + id);
+    }
+    // The aggregate actual destination inventory must fit before any staged
+    // payload copy or private document replay; individual tables are insufficient.
+    const auto first_asset_json = budget.phase_assets.consumed_json_bytes;
+    validate_native_dxf_phase_destination_asset_refs(combined_assets, &budget.phase_assets);
+    std::uint64_t combined_copy_bytes = budget.phase_assets.consumed_json_bytes - first_asset_json;
+    for (const auto& [id, asset] : combined_assets)
+        combined_copy_bytes += id.size() + asset->id.size() + asset->media_type.size() + asset->sha256.size() + asset->bytes.size();
+    // Preview copies the next current state and its snapshot and compares the
+    // retained raw result. Retained-history restoration is admitted separately.
+    require(combined_copy_bytes <= budget.phase_assets.max_work_bytes / 3, "combined asset replay work limit");
+    asset_work(budget, combined_copy_bytes * 3);
+    for (const auto& [id, asset] : mapped.assets) { (void)id; result.staged_assets.push_back(asset); }
     if (std::any_of(mapped.support_ids.begin(), mapped.support_ids.end(), [&](const auto& id) {
             return native_dxf_sheet_view_source_type(mapped.entities.at(id).type);
         })) {
@@ -1465,15 +1644,27 @@ NativeDxfPhaseDestinationBinding destination_binding(const NativeDxfPhaseSourceG
             validate_native_dxf_sheet_view_source(mapped.entities.at(id), combined, &budget);
     for (const auto& [id, owner] : mapped.entities)
         require(exact_owner(owner, combined.at(id)), "actual combined mapped owner differs " + id);
-    std::vector<Entity> entities; entities.reserve(combined.size());
-    for (const auto& [id, owner] : combined) { (void)id; entities.push_back(owner); }
-    std::vector<Asset> assets; assets.reserve(destination.assets().size());
-    for (const auto& [id, asset] : destination.assets()) { (void)id; assets.push_back(asset); }
-    // This is a complete phase import, including retained inactive constraints.
-    // Its private document must use the same persisted policy as publication.
-    auto private_document = Document::create_phase_import(std::move(entities), std::move(assets));
-    require(private_document.is_editable(), "combined destination has unsupported authoring state");
-    const auto admitted = private_document.snapshot();
+    // Preview the exact fresh additions against the actual retained destination.
+    // Existing independent owner/asset namespaces stay existing; they must not
+    // be reinterpreted as fresh additions to a fabricated empty document.
+    admit_native_dxf_phase_destination_snapshot(destination, &budget);
+    asset_pass(mapped.assets, budget, 6); // command/variant copies and native staged replay
+    std::sort(result.staged_entities.begin(), result.staged_entities.end(), [](const auto& a, const auto& b) { return a.id < b.id; });
+    ImportPhaseEntities command;
+    command.expected_revision = destination.revision();
+    command.registry_ids = mapped.registry_ids;
+    for (const auto& id : mapped.enrolled_hierarchy_ids)
+        if (destination.entities().contains(id)) command.reviewed_existing_hierarchy_ids.push_back(id);
+    command.entity_changes.reserve(result.staged_entities.size());
+    for (const auto& entity : result.staged_entities) command.entity_changes.push_back(EntityChange::upsert(entity));
+    command.asset_changes.reserve(result.staged_assets.size());
+    for (const auto& asset : result.staged_assets) command.asset_changes.push_back(AssetChange::upsert(asset));
+    const auto admitted = Document::preview_command(destination, command);
+    admit_native_dxf_phase_retained_asset_capacity(admitted, &budget);
+    require(admitted.is_editable(), "combined destination has unsupported authoring state");
+    require(admitted.assets().size() == combined_assets.size(), "private admission changed destination asset inventory");
+    for (const auto& [id, asset] : combined_assets)
+        require(exact_asset(*asset, admitted.assets().at(id)), "private admission changed actual destination asset " + id);
     require(admitted.entities().size() == combined.size(), "private admission changed destination owner inventory");
     for (const auto& [id, owner] : combined)
         require(exact_owner(owner, admitted.entities().at(id)), "private admission changed actual destination owner " + id);
@@ -1492,10 +1683,16 @@ NativeDxfPhaseDestinationBinding destination_binding(const NativeDxfPhaseSourceG
         }
     }
 #endif
-    std::sort(result.staged_entities.begin(), result.staged_entities.end(), [](const auto& a, const auto& b) { return a.id < b.id; });
     return result;
 }
 } // namespace
+
+bool NativeDxfPhaseSourceGraph::operator==(const NativeDxfPhaseSourceGraph& other) const {
+    NativeDxfWallSourceWorkBudget budget;
+    // Equality is raw representation equality, including metadata numeric
+    // types and signed zero; payload scans use a bounded standalone ledger.
+    return exact_graph(*this, other, budget);
+}
 
 void validate_native_dxf_phase_source_graph(const NativeDxfPhaseSourceGraph& graph,
     NativeDxfWallSourceWorkBudget* work_budget) {
@@ -1505,18 +1702,26 @@ void validate_native_dxf_phase_source_graph(const NativeDxfPhaseSourceGraph& gra
 }
 Json encode_native_dxf_phase_source_graph(const NativeDxfPhaseSourceGraph& graph,
     NativeDxfWallSourceWorkBudget* work_budget) {
-    validate_native_dxf_phase_source_graph(graph, work_budget);
-    return unchecked_encode(graph);
+    NativeDxfWallSourceWorkBudget local; auto& budget = work_budget ? *work_budget : local;
+    validate_native_dxf_phase_source_graph(graph, &budget);
+    return unchecked_encode(graph, budget);
 }
 NativeDxfPhaseSourceGraph decode_native_dxf_phase_source_graph(const Json& value,
-    NativeDxfWallSourceWorkBudget* work_budget) {
+    NativeDxfWallSourceWorkBudget* work_budget, const NativeDxfPhaseSourceAssets& external_assets) {
     NativeDxfWallSourceWorkBudget local; auto& budget = work_budget ? *work_budget : local;
     try {
         budget_limits(budget); raw(value, budget);
         require(value.is_object() && value.at("version").is_number_integer() &&
             ((value.at("version") == 1 && value.size() == 8 && !value.contains("support_ids")) ||
-             ((value.at("version") == 2 || value.at("version") == 3) && value.size() == 9 && value.contains("support_ids"))),
+             ((value.at("version") == 2 || value.at("version") == 3) && value.size() == 9 && value.contains("support_ids")) ||
+             (value.at("version") == 4 && value.size() == 10 && value.contains("support_ids") && value.contains("asset_manifest"))),
             "unsupported graph schema/version");
+        const bool assets_present = value.at("version") == 4;
+        if (assets_present) {
+            const auto manifest = decode_native_dxf_phase_asset_manifest(value.at("asset_manifest"), &budget.phase_assets);
+            require(!manifest.empty(), "version four requires a nonempty asset manifest");
+            bind_native_dxf_phase_asset_manifest(manifest, external_assets, &budget.phase_assets);
+        } else require(external_assets.empty() && !value.contains("asset_manifest"), "legacy graph cannot bind external assets");
         const auto& rows = value.at("entities");
         require(rows.is_array() && !rows.empty() && rows.size() <= native_dxf_phase_source_owner_limit, "source table shape/limit");
         NativeDxfPhaseSourceGraph result; std::string previous;
@@ -1534,15 +1739,17 @@ NativeDxfPhaseSourceGraph decode_native_dxf_phase_source_graph(const Json& value
         };
         result.body_ids = read_ids("body_ids"); result.catalog_ids = read_ids("catalog_ids");
         result.registry_ids = read_ids("registry_ids"); result.context_ids = read_ids("context_ids");
-        if (value.at("version") == 2 || value.at("version") == 3) {
+        if (value.at("version") == 2 || value.at("version") == 3 || assets_present) {
             result.support_ids = read_ids("support_ids");
-            require(!result.support_ids.empty(), "support inventory cannot be empty");
+            require(assets_present || !result.support_ids.empty(), "support inventory cannot be empty");
         }
         const bool sheet_companions = std::any_of(result.entities.begin(), result.entities.end(), [](const auto& item) {
             return native_dxf_sheet_view_source_type(item.second.type);
         });
-        require((value.at("version") == 3) == sheet_companions, "sheet/view companions require graph version three");
+        require(assets_present || (value.at("version") == 3) == sheet_companions, "sheet/view companions require graph version three");
         result.enrolled_hierarchy_ids = read_ids("enrolled_hierarchy_ids"); result.depicted_body_ids = read_ids("depicted_body_ids");
+        asset_pass(external_assets, budget, 1);
+        result.assets = external_assets;
         reserve_models(result.entities, budget); semantic_graph(result, budget); return result;
     } catch (const Json::exception& error) { refuse(std::string("malformed graph codec: ") + error.what()); }
 }
@@ -1565,14 +1772,14 @@ NativeDxfPhaseSourceGraph capture_native_dxf_phase_source_graph(const DocumentSn
         std::vector<std::string> all_catalogs;
         for (const auto& [id, owner] : owners) if (owner.type == "assembly_model") {
             all_catalogs.push_back(id);
-            admit_complete_assembly_catalog_source(owner, budget.catalog_transfer);
+            admit_complete_assembly_catalog_source(owner, budget.catalog_transfer,
+                AssemblyCatalogSourceReferencePolicy::document_authoring);
         }
-        // Complete source capture authenticates actual embedded host roles and
-        // every direct catalog context before inverse host closure can use it.
-        // All catalogs are raw-admitted before the first catalog model decoder.
-        const auto catalogs = capture_complete_assembly_catalog_sources(source, all_catalogs, budget.catalog_transfer);
+        // Read actual canonical catalog references without copying or hashing
+        // assets from ambient unselected catalogs. Selected placement host
+        // roles are authenticated by semantic_graph after complete closure.
         std::map<std::string, References, std::less<>> refs;
-        for (const auto& [id, catalog] : catalogs) refs.emplace(id, dependencies(catalog, owners, budget));
+        for (const auto& id : all_catalogs) refs.emplace(id, dependencies(owners.at(id), owners, budget));
         Ids selected; std::vector<std::string> pending;
         const auto include = [&](const std::string& id) {
             (void)actual(owners, id);
@@ -1626,10 +1833,57 @@ NativeDxfPhaseSourceGraph capture_native_dxf_phase_source_graph(const DocumentSn
             }
         }
         NativeDxfPhaseSourceGraph result;
+        NativeDxfPhaseSourceAssetRefs reached_assets;
+        for (const auto& id : selected) for (const auto& asset : asset_references(owners.at(id))) {
+            const auto found = source.assets().find(asset);
+            require(found != source.assets().end(), "missing actual reached asset " + asset);
+            reached_assets.emplace(asset, &found->second);
+        }
+        require(reached_assets.size() <= native_dxf_phase_asset_count_limit, "reached asset inventory limit");
+        if (!reached_assets.empty()) {
+            charge(budget.catalog_transfer.consumed_json_bytes, 80 + reached_assets.size() * 90,
+                budget.catalog_transfer.max_json_bytes, "captured combined manifest byte limit");
+            charge(budget.catalog_transfer.consumed_json_nodes, 4 + reached_assets.size() * 5,
+                budget.catalog_transfer.max_json_nodes, "captured combined manifest node limit");
+            for (const auto& [id, asset] : reached_assets) {
+                map_text(id, budget); map_text(asset->media_type, budget);
+                map_text(asset->sha256, budget); raw(asset->metadata, budget);
+            }
+        }
+        // Borrow actual snapshot payloads so complete subset admission precedes
+        // both hashing and the first retained payload/metadata allocation.
+        const auto first_asset_json = budget.phase_assets.consumed_json_bytes;
+        validate_native_dxf_phase_source_asset_refs(reached_assets, &budget.phase_assets);
+        std::uint64_t asset_copy_bytes = budget.phase_assets.consumed_json_bytes - first_asset_json;
+        for (const auto& [id, asset] : reached_assets)
+            asset_copy_bytes += id.size() + asset->id.size() + asset->media_type.size() + asset->sha256.size() + asset->bytes.size();
+        asset_work(budget, asset_copy_bytes);
+        for (const auto& [id, asset] : reached_assets) result.assets.emplace(id, *asset);
         for (const auto& id : selected) result.entities.emplace(id, owners.at(id));
         const auto captured_phases = phase_inventory(result.entities); roles(result, result.entities, captured_phases);
         reserve_models(result.entities, budget); semantic_graph(result, budget); return result;
     } catch (const Json::exception& error) { refuse(std::string("malformed captured source: ") + error.what()); }
+}
+
+void admit_native_dxf_phase_retained_asset_capacity(const DocumentSnapshot& destination,
+    NativeDxfWallSourceWorkBudget* work_budget) {
+    NativeDxfWallSourceWorkBudget local; auto& budget = work_budget ? *work_budget : local;
+    budget_limits(budget);
+    const auto& history = destination.history();
+    require(!history.empty() && history.size() <= 10'000 && destination.revision() < history.size(),
+        "native retained asset history capacity limit");
+    product_work(budget, history.size(), 1);
+    std::size_t rows = 0, bytes = 0;
+    for (const auto& record : history) {
+        charge(rows, record.assets.size(), native_dxf_phase_destination_asset_count_limit,
+            "Import would exceed the native retained asset row capacity.");
+        product_work(budget, record.assets.size(), 1);
+        for (const auto& [id, asset] : record.assets) {
+            (void)id;
+            charge(bytes, asset.bytes.size(), static_cast<std::size_t>(native_dxf_phase_destination_asset_payload_limit),
+                "Import would exceed the native retained asset byte capacity.");
+        }
+    }
 }
 
 void admit_native_dxf_phase_destination_snapshot(const DocumentSnapshot& destination,
@@ -1639,6 +1893,10 @@ void admit_native_dxf_phase_destination_snapshot(const DocumentSnapshot& destina
         budget_limits(budget);
         const auto& history = destination.history();
         require(!history.empty() && history.size() <= 4096 && destination.revision() < history.size(), "actual retained history limit");
+        // ProjectStore/recovery counts every retained revision row, including
+        // repeated payloads. Admit that complete physical inventory before the
+        // first current/head or retained payload hash in this replay pass.
+        admit_native_dxf_phase_retained_asset_capacity(destination, &budget);
         HistoryAdmission proof{budget};
         const auto first_head_byte = budget.catalog_transfer.consumed_json_bytes;
         proof.text(destination.document_id()); proof.text(destination.read_only_reason());
@@ -1653,7 +1911,6 @@ void admit_native_dxf_phase_destination_snapshot(const DocumentSnapshot& destina
             const auto& record = history[i];
             require(record.revision == i, "actual history must be contiguous");
             const auto first_record_byte = budget.catalog_transfer.consumed_json_bytes;
-            const auto first_asset_byte = budget.destination_asset_replay_bytes;
             proof.fixed(sizeof(RevisionRecord)); proof.text(record.action); proof.optional(record.name);
             admit_destination_owners(record.entities, budget); admit_assets(record.assets, budget);
             require(record.undo_stack.size() <= native_dxf_phase_source_node_limit &&
@@ -1665,8 +1922,11 @@ void admit_native_dxf_phase_destination_snapshot(const DocumentSnapshot& destina
             proof.optional(record.phase_entity_import);
             charge(prefix_json_bytes, budget.catalog_transfer.consumed_json_bytes - first_record_byte,
                 native_dxf_phase_source_byte_limit, "retained prefix JSON byte limit");
-            charge(prefix_asset_bytes, budget.destination_asset_replay_bytes - first_asset_byte,
-                native_dxf_phase_destination_asset_replay_byte_limit, "retained prefix asset byte limit");
+            for (const auto& [id, asset] : record.assets) {
+                (void)id;
+                charge(prefix_asset_bytes, asset.bytes.size(), static_cast<std::size_t>(native_dxf_phase_destination_asset_payload_limit),
+                    "retained prefix native asset capacity limit");
+            }
             if (record.boundary_constraint_changes) {
                 const auto& command = *record.boundary_constraint_changes;
                 if (command.room_review_completion || command.phase_room_review_completion ||
@@ -1677,14 +1937,9 @@ void admit_native_dxf_phase_destination_snapshot(const DocumentSnapshot& destina
                     // Two replay passes cover fork/preview; asset hex expansion
                     // is separately bounded rather than billed as foreign JSON.
                     product_work(budget, prefix_json_bytes + head_json_bytes, 16);
-                    require(prefix_asset_bytes <= native_dxf_phase_destination_asset_replay_byte_limit / 8,
-                        "retained prefix asset hex replay capacity");
-                    charge(budget.destination_asset_replay_bytes, prefix_asset_bytes * 8,
-                        native_dxf_phase_destination_asset_replay_byte_limit, "cumulative retained prefix asset hex bytes");
-                    require(prefix_asset_bytes <= native_dxf_phase_destination_asset_replay_work_limit / 32,
+                    require(prefix_asset_bytes <= budget.phase_assets.max_work_bytes / 32,
                         "retained prefix asset hash replay capacity");
-                    charge(budget.destination_asset_replay_work, prefix_asset_bytes * 32,
-                        native_dxf_phase_destination_asset_replay_work_limit, "cumulative retained prefix asset hash work");
+                    asset_work(budget, static_cast<std::uint64_t>(prefix_asset_bytes) * 32);
                     // Digest command codecs may replay every prior typed
                     // geometry proof as they serialize the prefix. Reserve its
                     // actual intrinsic family work, not opaque JSON pairs.
@@ -1787,12 +2042,28 @@ void validate_native_dxf_phase_destination_binding(const NativeDxfPhaseSourceGra
         raw_graph(binding.mapped_graph, budget);
         require(binding.staged_entities.size() <= native_dxf_phase_source_owner_limit, "staged destination owner limit");
         for (const auto& owner : binding.staged_entities) raw_entity(owner.id, owner, budget);
+        NativeDxfPhaseSourceAssetRefs staged_assets;
+        require(binding.staged_assets.size() <= native_dxf_phase_asset_count_limit, "staged asset inventory limit");
+        for (const auto& asset : binding.staged_assets) {
+            map_text(asset.id, budget);
+            require(staged_assets.emplace(asset.id, &asset).second, "duplicate staged asset identity");
+        }
+        const auto first_asset_json = budget.phase_assets.consumed_json_bytes;
+        validate_native_dxf_phase_source_asset_refs(staged_assets, &budget.phase_assets);
+        std::uint64_t staged_scan_bytes = budget.phase_assets.consumed_json_bytes - first_asset_json;
+        for (const auto& [id, asset] : staged_assets)
+            staged_scan_bytes += id.size() + asset->media_type.size() + asset->sha256.size() + asset->bytes.size();
+        asset_work(budget, staged_scan_bytes);
         const auto mapped = mapped_source(source, maps, budget);
-        require(exact_graph(mapped, binding.mapped_graph), "binding does not equal complete raw remapped source graph");
+        require(exact_graph(mapped, binding.mapped_graph, budget), "binding does not equal complete raw remapped source graph");
         const auto expected = destination_binding(mapped, actual_destination, reviewed_new_context_owners, budget);
         require(expected.staged_entities.size() == binding.staged_entities.size(), "binding staged-owner inventory differs");
         for (std::size_t i = 0; i < expected.staged_entities.size(); ++i)
             require(exact_owner(expected.staged_entities[i], binding.staged_entities[i]), "binding staged owner/order differs");
+        require(expected.staged_assets.size() == binding.staged_assets.size(), "binding staged-asset inventory differs");
+        asset_pass(mapped.assets, budget, 1);
+        for (std::size_t i = 0; i < expected.staged_assets.size(); ++i)
+            require(exact_asset(expected.staged_assets[i], binding.staged_assets[i]), "binding staged asset/order differs");
     } catch (const Json::exception& error) { refuse(std::string("malformed binding validation: ") + error.what()); }
     catch (const std::out_of_range& error) { refuse(std::string("unmapped typed validation reference: ") + error.what()); }
 }
