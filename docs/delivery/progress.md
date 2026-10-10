@@ -14,6 +14,39 @@ changed source does not acquire runtime acceptance without later qualification.
 
 ## Current delivery state
 
+### October 10 detached sheet witnesses and catalog references — source integration
+
+Imported missing overlay witnesses now have exact maps scoped by their original
+sheet/view companion. Desktop allocates fresh names from the retained current
+and historical destination namespace. The graph rejects incomplete scopes,
+cross-companion collisions and names belonging to source/mapped owners or other
+allocated view/component/stair identities. Remapping changes only missing
+overlay witness names, preserving their detached coordinates and mandatory
+dimension hosts. Existing destination witnesses remain protected against new
+geometry. No owner is fabricated, and omitted maps retain the previous policy.
+
+The complete-catalog adapter now has an explicit document-authoring policy for
+native top-level typed/untyped references, collections and asset references.
+Capture validates real source identities, roles and asset hashes; remapping
+preserves raw models, numeric forms, local IDs, metadata and extensions. Legacy
+callers retain their existing default policy and refusal behavior. Phase and
+material metadata remain opaque. Independent source review caught an overbroad
+interpretation of vertical bindings: native admission permits them only on
+floors, so catalogs now explicitly reject that misplaced field.
+
+Referenced asset admission uses separate aggregate payload and hash-work
+ledgers (256 MiB and 8 GiB), rather than billing binary bytes as nonlinear
+geometry work. This is preparation for complete transfer: the phase graph,
+DXF/worker payload transport and destination publication do not yet carry those
+assets or opt into the new catalog policy. Those integrations remain open.
+
+Root reviewed the integrated witness mapper and desktop allocation. Independent
+catalog source review closed its concrete finding; scoped diff checks passed.
+No build, test, new test, probe, script, launch, package or installation ran.
+The changed source remains uncompiled and runtime-unqualified; the installed
+candidate is unchanged. This increment does not imply production acceptance,
+an overall completion percentage or an ETA.
+
 ### October 10 coordinated sheet/view transfer — source integration
 
 The V9 source graph now requires version three exactly when sheet/view

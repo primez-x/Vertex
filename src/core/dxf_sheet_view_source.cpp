@@ -224,6 +224,76 @@ std::vector<std::string> view_ids(const SheetViewModel& model) {
     for (const auto& view : model.views()) result.push_back(view.id);
     return result; // The authoritative model already validated and sorted IDs.
 }
+void lookup_work(const std::string& id, std::size_t count, NativeDxfWallSourceWorkBudget& budget) {
+    product_work(budget, id.size() + 1, search_steps(count));
+}
+std::vector<std::string> unresolved_witness_ids(const Entity& source, const Owners& authored,
+    NativeDxfWallSourceWorkBudget& budget) {
+    std::set<std::string, std::less<>> identities;
+    global_slots(source.properties.at("model"), [&](const Json& value, ReferenceKind kind) {
+        if (kind != ReferenceKind::optional_witness) return;
+        const auto& id = value.get_ref<const std::string&>();
+        lookup_work(id, authored.size(), budget);
+        if (authored.contains(id)) return;
+        // Original missing names are raw witnesses, not document owner IDs.
+        // Charge comparison and potential string/node allocation before insert.
+        raw_text(id, budget);
+        product_work(budget, id.size() + 1, search_steps(identities.size()) * 2);
+        identities.insert(id);
+    });
+    work(budget, identities.size());
+    std::vector<std::string> result;
+    result.reserve(identities.size());
+    for (const auto& id : identities) {
+        raw_text(id, budget);
+        work(budget, id.size() + 1);
+        result.push_back(id);
+    }
+    return result;
+}
+const References* unresolved_witness_scope(const Entity& source,
+    const std::vector<std::string>& identities, const NativeDxfSheetViewSourceMaps& mapping,
+    const Owners& authored, const References* owner_mapping, NativeDxfWallSourceWorkBudget& budget) {
+    lookup_work(source.id, mapping.size(), budget);
+    const auto scope = mapping.find(source.id);
+    if (scope == mapping.end()) return nullptr;
+    require(scope->second.size() == identities.size(), "unresolved witness mapping is incomplete");
+    // Reference existing owner-map strings; never invent owners or copy the
+    // complete owner inventory just to reserve their names.
+    std::set<std::string_view, std::less<>> mapped_owners;
+    if (owner_mapping) {
+        require(owner_mapping->size() <= native_dxf_phase_source_owner_limit, "mapped owner inventory limit");
+        work(budget, owner_mapping->size());
+        for (const auto& [original, destination] : *owner_mapping) {
+            raw_text(original, budget);
+            raw_text(destination, budget);
+            product_work(budget, destination.size() + 1, search_steps(mapped_owners.size()) * 2);
+            mapped_owners.insert(destination);
+        }
+    }
+    std::set<std::string_view, std::less<>> destinations;
+    work(budget, scope->second.size());
+    for (const auto& [original, destination] : scope->second) {
+        // Bill every supplied scoped string before scans or comparison work,
+        // including a malformed extra key in an otherwise equal-sized scope.
+        raw_text(original, budget);
+        raw_text(destination, budget);
+        work(budget, destination.size() + 1);
+        require(!destination.empty() && !std::all_of(destination.begin(), destination.end(),
+            [](unsigned char c) { return std::isspace(c); }), "blank mapped unresolved witness identity");
+        lookup_work(original, identities.size(), budget);
+        require(std::binary_search(identities.begin(), identities.end(), original),
+            "unresolved witness mapping has an unknown source identity");
+        lookup_work(destination, authored.size(), budget);
+        require(!authored.contains(destination), "mapped unresolved witness names an actual source owner");
+        lookup_work(destination, mapped_owners.size(), budget);
+        require(!mapped_owners.contains(std::string_view(destination)),
+            "mapped unresolved witness names a mapped owner");
+        product_work(budget, destination.size() + 1, search_steps(destinations.size()) * 2);
+        require(destinations.insert(destination).second, "noninjective unresolved witness mapping");
+    }
+    return &scope->second;
+}
 } // namespace
 
 bool native_dxf_sheet_view_source_type(std::string_view type) noexcept { return type == kSheetViewEntityType; }
@@ -265,6 +335,16 @@ References native_dxf_sheet_view_source_dependencies(const Entity& source, const
     return result;
 }
 
+std::vector<std::string> native_dxf_sheet_view_source_unresolved_witness_ids(const Entity& source,
+    const Owners& authored, NativeDxfWallSourceWorkBudget* work_budget) {
+    NativeDxfWallSourceWorkBudget local;
+    auto& budget = work_budget ? *work_budget : local;
+    admit_native_dxf_sheet_view_source_work(source, budget);
+    (void)decode_sheet_view_entity(source);
+    validate_globals(source, authored);
+    return unresolved_witness_ids(source, authored, budget);
+}
+
 void validate_native_dxf_sheet_view_source(const Entity& source, const Owners& authored,
     NativeDxfWallSourceWorkBudget* work_budget) {
     NativeDxfWallSourceWorkBudget local;
@@ -276,31 +356,43 @@ void validate_native_dxf_sheet_view_source(const Entity& source, const Owners& a
 
 void validate_native_dxf_sheet_view_witness_binding(const Entity& source,
     const Owners& original_owners, const Owners& candidate_owners,
-    NativeDxfWallSourceWorkBudget* work_budget) {
+    NativeDxfWallSourceWorkBudget* work_budget,
+    const NativeDxfSheetViewSourceMaps& unresolved_witness_mapping) {
     NativeDxfWallSourceWorkBudget local;
     auto& budget = work_budget ? *work_budget : local;
     admit_native_dxf_sheet_view_source_work(source, budget);
     (void)decode_sheet_view_entity(source);
     validate_globals(source, original_owners);
     require(candidate_owners.size() <= native_dxf_phase_source_owner_limit, "candidate owner inventory limit");
+    const auto* scope = unresolved_witness_mapping.empty() ? nullptr : unresolved_witness_scope(source,
+        unresolved_witness_ids(source, original_owners, budget), unresolved_witness_mapping,
+        original_owners, nullptr, budget);
     global_slots(source.properties.at("model"), [&](const Json& value, ReferenceKind kind) {
         if (kind != ReferenceKind::optional_witness) return;
         const auto& id = value.get_ref<const std::string&>();
-        product_work(budget, id.size() + 1, search_steps(candidate_owners.size()));
-        if (!original_owners.contains(id))
-            require(!candidate_owners.contains(id), "unresolved overlay witness would attach to an unrelated owner " + id);
+        lookup_work(id, original_owners.size(), budget);
+        if (original_owners.contains(id)) return;
+        if (scope) lookup_work(id, scope->size(), budget);
+        const auto& destination = scope ? scope->at(id) : id;
+        lookup_work(destination, candidate_owners.size(), budget);
+        require(!candidate_owners.contains(destination),
+            "unresolved overlay witness would attach to an unrelated owner " + destination);
     });
 }
 
 void remap_native_dxf_sheet_view_source_dependencies(Entity& source, const Owners& authored,
     const References& owner_mapping, const References& context_mapping,
-    const NativeDxfSheetViewSourceMaps& view_mapping, NativeDxfWallSourceWorkBudget* work_budget) {
+    const NativeDxfSheetViewSourceMaps& view_mapping, NativeDxfWallSourceWorkBudget* work_budget,
+    const NativeDxfSheetViewSourceMaps& unresolved_witness_mapping) {
     (void)context_mapping; // The strict three-field sheet/view envelope owns none.
     NativeDxfWallSourceWorkBudget local;
     auto& budget = work_budget ? *work_budget : local;
     admit_native_dxf_sheet_view_source_work(source, budget);
     const auto identities = view_ids(decode_sheet_view_entity(source));
     validate_globals(source, authored);
+    const auto* witness_scope = unresolved_witness_mapping.empty() ? nullptr : unresolved_witness_scope(source,
+        unresolved_witness_ids(source, authored, budget), unresolved_witness_mapping,
+        authored, &owner_mapping, budget);
     const auto scope = view_mapping.find(source.id);
     if (scope != view_mapping.end()) {
         require(scope->second.size() == identities.size(), "view mapping is incomplete");
@@ -327,8 +419,20 @@ void remap_native_dxf_sheet_view_source_dependencies(Entity& source, const Owner
     auto result = source;
     auto& model = result.properties.at("model");
     global_slots(model, [&](Json& value, ReferenceKind kind) {
-        if (kind == ReferenceKind::optional_witness &&
-            !authored.contains(value.get_ref<const std::string&>())) return;
+        if (kind == ReferenceKind::optional_witness) {
+            const auto& id = value.get_ref<const std::string&>();
+            lookup_work(id, authored.size(), budget);
+            if (!authored.contains(id)) {
+                if (witness_scope) {
+                    lookup_work(id, witness_scope->size(), budget);
+                    const auto& destination = witness_scope->at(id);
+                    raw_text(destination, budget);
+                    work(budget, destination.size() + 1);
+                    value = destination;
+                }
+                return;
+            }
+        }
         const auto id = global_id(value);
         const auto found = owner_mapping.find(id);
         require(found != owner_mapping.end(), "typed reference missing from destination map " + id);

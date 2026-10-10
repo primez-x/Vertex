@@ -66,6 +66,20 @@ void product_work(NativeDxfWallSourceWorkBudget& budget, std::size_t a, std::siz
     require(!b || a <= native_dxf_phase_source_work_limit / b, "graph work product limit");
     work(budget, a * b);
 }
+void map_text(const std::string& text, NativeDxfWallSourceWorkBudget& budget) {
+    // Admit raw local names without a JSON temporary or the document-owner
+    // identity contract. Original missing witnesses may be whitespace or long.
+    require(text.size() <= native_dxf_phase_source_byte_limit / 6, "raw map string limit");
+    auto& b = budget.catalog_transfer;
+    charge(b.consumed_json_bytes, text.size() * 6 + 3, b.max_json_bytes, "cumulative raw map byte limit");
+    charge(b.consumed_json_nodes, 1, b.max_json_nodes, "cumulative raw map node limit");
+    work(budget, text.size() + 1);
+}
+void map_lookup_work(const std::string& text, std::size_t count, NativeDxfWallSourceWorkBudget& budget) {
+    std::size_t steps = 1;
+    while (count > 1) { count = (count + 1) / 2; ++steps; }
+    product_work(budget, text.size() + 1, steps * 4);
+}
 // Conservative JSON encoding bound, charged incrementally before copies,
 // serialization, model codecs, sorting, or recursive graph consumers.
 void raw(const Json& value, NativeDxfWallSourceWorkBudget& budget, std::size_t depth = 0) {
@@ -977,6 +991,70 @@ NativeDxfPhaseOwnerMap admit_maps(const NativeDxfPhaseSourceGraph& source,
         // A child remains local even when it spells a document identity. No
         // string-based owner substitution is ever applied in that namespace.
     }
+    if (!maps.sheet_witness_ids.empty()) {
+        // Admit ALL supplied raw strings before comparisons, including unknown
+        // keys in malformed exact-sized scopes. No owner limit applies to the
+        // inner original/mapped names and no unresolved name becomes an owner.
+        auto& ledger = budget.catalog_transfer;
+        require(maps.sheet_witness_ids.size() <= source.support_ids.size(), "extra witness companion scopes");
+        charge(ledger.consumed_json_nodes, maps.sheet_witness_ids.size() + 1,
+            ledger.max_json_nodes, "cumulative witness scope node limit");
+        work(budget, maps.sheet_witness_ids.size());
+        for (const auto& [id, scope] : maps.sheet_witness_ids) {
+            map_text(id, budget); identity(id);
+            require(scope.size() <= native_dxf_phase_source_node_limit, "witness map size limit");
+            charge(ledger.consumed_json_nodes, scope.size() + 1,
+                ledger.max_json_nodes, "cumulative witness map node limit");
+            work(budget, scope.size());
+            for (const auto& [original, destination] : scope) {
+                map_text(original, budget); map_text(destination, budget);
+                require(!destination.empty() && !std::all_of(destination.begin(), destination.end(),
+                    [](unsigned char c) { return std::isspace(c); }), "blank mapped unresolved witness identity");
+            }
+        }
+        // Refer to admitted strings instead of copying long local identities.
+        // Other allocated selection/view/stair names must remain distinct even
+        // when those local namespaces do not create actual document owners.
+        std::set<std::string_view, std::less<>> allocated_names;
+        const auto reserve_name = [&](const std::string& name) {
+            map_text(name, budget);
+            map_lookup_work(name, allocated_names.size(), budget);
+            allocated_names.insert(name);
+        };
+        for (const auto& name : targets) reserve_name(name);
+        for (const auto* scoped : {&maps.sheet_view_ids, &maps.annotation_child_ids})
+            for (const auto& [id, scope] : *scoped) {
+                (void)id;
+                for (const auto& [original, destination] : scope) { (void)original; reserve_name(destination); }
+            }
+        for (const auto& [original, destination] : maps.stair_child_ids) { (void)original; reserve_name(destination); }
+        std::size_t companion_count = 0;
+        std::set<std::string_view, std::less<>> witness_targets;
+        for (const auto& id : source.support_ids) {
+            const auto& owner = source.entities.at(id);
+            if (!native_dxf_sheet_view_source_type(owner.type)) continue;
+            ++companion_count;
+            map_lookup_work(id, maps.sheet_witness_ids.size(), budget);
+            const auto scope = maps.sheet_witness_ids.find(id);
+            require(scope != maps.sheet_witness_ids.end(), "missing sheet witness companion map " + id);
+            const auto witnesses = native_dxf_sheet_view_source_unresolved_witness_ids(owner, source.entities, &budget);
+            require(scope->second.size() == witnesses.size(), "companion witness map must be exact");
+            for (const auto& original : witnesses) {
+                map_lookup_work(original, scope->second.size(), budget);
+                const auto mapped = scope->second.find(original);
+                require(mapped != scope->second.end(), "missing companion unresolved witness identity");
+                const auto& destination = mapped->second;
+                map_lookup_work(destination, source.entities.size(), budget);
+                require(!source.entities.contains(destination), "mapped unresolved witness names an actual source owner");
+                map_lookup_work(destination, allocated_names.size(), budget);
+                require(!allocated_names.contains(std::string_view(destination)),
+                    "mapped unresolved witness collides with an allocated identity");
+                map_lookup_work(destination, witness_targets.size(), budget);
+                require(witness_targets.insert(destination).second, "mapped unresolved witnesses collide across companions");
+            }
+        }
+        require(maps.sheet_witness_ids.size() == companion_count, "witness maps must exactly cover source companions");
+    }
     return owners;
 }
 void patch_direct_refs(Entity& result, const Entity& original, const NativeDxfPhaseOwnerMap& owners) {
@@ -1050,7 +1128,7 @@ NativeDxfPhaseSourceGraph mapped_source(const NativeDxfPhaseSourceGraph& source,
         if (native_dxf_sheet_view_source_type(original.type)) {
             owner = original;
             remap_native_dxf_sheet_view_source_dependencies(owner, source.entities, owners,
-                maps.reviewed_context_owner_ids, maps.sheet_view_ids, &budget);
+                maps.reviewed_context_owner_ids, maps.sheet_view_ids, &budget, maps.sheet_witness_ids);
             owner.id = owners.at(id);
         }
         if (original.type == "measurement_linework")
@@ -1117,7 +1195,8 @@ NativeDxfPhaseSourceGraph mapped_source(const NativeDxfPhaseSourceGraph& source,
     result.enrolled_hierarchy_ids = map_role(source.enrolled_hierarchy_ids); result.depicted_body_ids = map_role(source.depicted_body_ids);
     for (const auto& id : source.support_ids)
         if (native_dxf_sheet_view_source_type(source.entities.at(id).type))
-            validate_native_dxf_sheet_view_witness_binding(source.entities.at(id), source.entities, result.entities, &budget);
+            validate_native_dxf_sheet_view_witness_binding(source.entities.at(id), source.entities, result.entities,
+                &budget, maps.sheet_witness_ids);
     raw_graph(result, budget); semantic_graph(result, budget);
     return result;
 }

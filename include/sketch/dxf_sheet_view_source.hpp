@@ -23,6 +23,11 @@ using NativeDxfSheetViewSourceMaps = std::map<std::string,
 native_dxf_sheet_view_source_dependencies(const Entity& source,
     const std::map<std::string, Entity, std::less<>>& authored,
     NativeDxfWallSourceWorkBudget* work_budget = nullptr);
+// Sorted unique raw nonempty overlay witnesses absent from actual authored
+// owners. Associative dimension hosts remain mandatory actual owners.
+[[nodiscard]] std::vector<std::string> native_dxf_sheet_view_source_unresolved_witness_ids(
+    const Entity& source, const std::map<std::string, Entity, std::less<>>& authored,
+    NativeDxfWallSourceWorkBudget* work_budget = nullptr);
 // Sorted unique view IDs in this actual companion's local namespace. Sheets,
 // viewports, overlays, revisions, callouts and schedules are never global IDs.
 [[nodiscard]] std::vector<std::string> native_dxf_sheet_view_source_view_identity_ids(
@@ -40,10 +45,13 @@ void validate_native_dxf_sheet_view_source(const Entity& source,
 // Preserve unresolved overlay witnesses as unresolved across publication.
 // Check both imported and retained destination companions: adding an owner
 // must not silently turn detached view coordinates into an object attachment.
+// An optional exact, injective ORIGINAL companion scope checks mapped witness
+// names against candidate owners; omitted scopes check the retained raw names.
 void validate_native_dxf_sheet_view_witness_binding(const Entity& source,
     const std::map<std::string, Entity, std::less<>>& original_owners,
     const std::map<std::string, Entity, std::less<>>& candidate_owners,
-    NativeDxfWallSourceWorkBudget* work_budget = nullptr);
+    NativeDxfWallSourceWorkBudget* work_budget = nullptr,
+    const NativeDxfSheetViewSourceMaps& unresolved_witness_mapping = {});
 
 // Patch a private raw copy and publish only after intrinsic revalidation.
 // Entity.id remains the graph mapper's responsibility. The optional view map
@@ -53,10 +61,15 @@ void validate_native_dxf_sheet_view_witness_binding(const Entity& source,
 // types, ordering, metadata and extensions remain untouched. The strict entity
 // envelope has no canonical context slots; context_mapping is intentionally
 // unused and is accepted for the graph's common dependency-mapper interface.
+// The optional unresolved-witness map uses the same ORIGINAL companion scope
+// and exactly covers its missing witnesses with injective nonblank raw names.
+// Only missing overlay.object_id slots change; these names must remain absent
+// from actual source and mapped owners. Omitted scopes retain raw witnesses.
 void remap_native_dxf_sheet_view_source_dependencies(Entity& source,
     const std::map<std::string, Entity, std::less<>>& authored,
     const std::map<std::string, std::string, std::less<>>& owner_mapping,
     const std::map<std::string, std::string, std::less<>>& context_mapping,
     const NativeDxfSheetViewSourceMaps& view_mapping = {},
-    NativeDxfWallSourceWorkBudget* work_budget = nullptr);
+    NativeDxfWallSourceWorkBudget* work_budget = nullptr,
+    const NativeDxfSheetViewSourceMaps& unresolved_witness_mapping = {});
 } // namespace sketch

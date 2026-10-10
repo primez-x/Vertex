@@ -2,6 +2,7 @@
 #include "sketch/architectural_document_adapter.hpp"
 #include "sketch/assembly_model.hpp"
 #include "sketch/document.hpp"
+#include <cstdint>
 #include <span>
 #include <string_view>
 #include <utility>
@@ -92,15 +93,26 @@ struct AssemblyCatalogTransferBudget {
     std::size_t consumed_json_bytes{};
     std::size_t consumed_json_nodes{};
     std::size_t consumed_validation_work{};
+    // Binary asset payload and hash/copy replay are linear work, independent
+    // of the catalog's JSON and nonlinear geometry admission ledgers.
+    std::uint64_t max_asset_payload_bytes{256ULL * 1024ULL * 1024ULL};
+    std::uint64_t max_asset_work_bytes{8ULL * 1024ULL * 1024ULL * 1024ULL};
+    std::uint64_t consumed_asset_payload_bytes{};
+    std::uint64_t consumed_asset_work_bytes{};
 };
+enum class AssemblyCatalogSourceReferencePolicy { legacy_physical, document_authoring };
 struct AssemblyCatalogSourceReferences {
     std::vector<std::string> hosted_entity_ids;
     std::vector<std::string> context_owner_ids;
+    // Empty role means the native untyped document reference contract.
+    std::map<std::string, std::string, std::less<>> document_owner_roles;
+    std::vector<std::string> asset_ids;
     bool operator==(const AssemblyCatalogSourceReferences&) const = default;
 };
 // Raw shape, graph and work admission only; does not decode a model. Admit all
 // catalogs in an operation before allowing the first semantic model decode.
-void admit_complete_assembly_catalog_source(const Entity& source, AssemblyCatalogTransferBudget& budget);
+void admit_complete_assembly_catalog_source(const Entity& source, AssemblyCatalogTransferBudget& budget,
+    AssemblyCatalogSourceReferencePolicy policy = AssemblyCatalogSourceReferencePolicy::legacy_physical);
 // Reserves decoding of an existing catalog without treating its canonical
 // owner references as transport candidates. Those references stay in place.
 void admit_existing_assembly_catalog_work(const Entity& existing, AssemblyCatalogTransferBudget& budget);
@@ -112,29 +124,40 @@ inline constexpr std::size_t assembly_catalog_transport_byte_limit = 16 * 1024 *
 inline constexpr std::size_t assembly_catalog_transport_node_limit = 1'000'000;
 [[nodiscard]] nlohmann::json parse_assembly_catalog_transport_json(std::string_view bytes);
 // Validates the complete actual catalog after raw work admission. Inventories
-// only persisted placement hosts and property/building/floor/layer owner slots.
-// Other canonical owner references (including phase) are explicitly refused;
-// opaque nested metadata is not scanned for reference-looking strings.
+// Legacy policy inventories placement hosts and the four context owner slots,
+// refusing its historical unsupported slots. Document-authoring policy adds the
+// native top-level document/asset references. Floor-only vertical bindings are
+// refused on catalogs; phase fields, material assignments and nested
+// metadata/extensions stay opaque.
 [[nodiscard]] AssemblyCatalogSourceReferences complete_assembly_catalog_source_refs(
-    const Entity& source, AssemblyCatalogTransferBudget& budget);
+    const Entity& source, AssemblyCatalogTransferBudget& budget,
+    AssemblyCatalogSourceReferencePolicy policy = AssemblyCatalogSourceReferencePolicy::legacy_physical);
 // Actual embedded placement hosts use the same role contract in captured
 // documents and detached source graphs. A registry/catalog/context is no host.
 [[nodiscard]] bool is_complete_assembly_catalog_host_type(std::string_view type) noexcept;
-// Requires mappings for the actual catalog owner and all reached hosts/context.
-// Patches only Entity.id, placement.host_entity_id and the four context slots;
+// Requires mappings for the actual catalog owner and all reached references.
+// Patches only Entity.id, placement.host_entity_id and actual policy-owned slots;
 // complete rows, dialect/order, local identities, numeric forms and metadata
 // remain raw. Destination snapshot admission remains the caller's responsibility.
 [[nodiscard]] Entity remap_complete_assembly_catalog_source_refs(const Entity& source,
     const std::map<std::string, std::string, std::less<>>& catalog_owner_mapping,
     const std::map<std::string, std::string, std::less<>>& host_owner_mapping,
     const std::map<std::string, std::string, std::less<>>& context_owner_mapping,
-    AssemblyCatalogTransferBudget& budget);
+    AssemblyCatalogTransferBudget& budget,
+    AssemblyCatalogSourceReferencePolicy policy = AssemblyCatalogSourceReferencePolicy::legacy_physical,
+    const std::map<std::string, std::string, std::less<>>& document_owner_mapping = {},
+    const std::map<std::string, std::string, std::less<>>& asset_mapping = {});
 // Copies real requested assembly_model owners from an actual captured snapshot;
-// validates reached hosts/context against that source's identities and roles.
+// validates reached owners against that source's identities and roles. Extended
+// capture also validates actual reached asset payloads/hashes without copying
+// assets; unique reached payloads are charged once per capture, with hashes in
+// the separate binary work ledger. The caller owns asset transport, closure
+// and destination admission.
 // No catalog pruning, fabricated owners or destination authority is supplied.
 [[nodiscard]] AssemblyDocumentEntities capture_complete_assembly_catalog_sources(
     const DocumentSnapshot& source, const std::vector<std::string>& catalog_ids,
-    AssemblyCatalogTransferBudget& budget);
+    AssemblyCatalogTransferBudget& budget,
+    AssemblyCatalogSourceReferencePolicy policy = AssemblyCatalogSourceReferencePolicy::legacy_physical);
 // Detached minimal catalogs for selected independent roots. Validates the entire
 // source first; catalogs contain no legacy instances or host references.
 [[nodiscard]] AssemblyDocumentEntities assembly_clipboard_dependencies(

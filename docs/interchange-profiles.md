@@ -214,11 +214,17 @@ the actual registry graph. V1-V8 retain their prior contracts and are not
 retrospectively treated as complete phase authoring inventories. V9 now retains
 saved output-view overrides through actual, unambiguous companion view identities;
 native local view names do not receive document-owner length restrictions.
-Missing unbound overlay witnesses stay detached. Admission rejects accidental
-rebinding against existing or newly staged owners in either direction, and
-imported views cannot shadow existing output-view identities. Conflicting
-unresolved witness names remain an explicit transfer limitation; unsupported
-canonical catalog references also remain open. Scoped annotation owner contexts
+Missing unbound overlay witnesses stay detached. Desktop now freshens their
+names through exact maps scoped by the original companion, including empty
+scopes. Graph admission rejects collisions with actual source/mapped owners,
+other allocated identities and witnesses from other companions. Existing
+destination witnesses are unchanged; admission rejects accidental rebinding
+against newly staged owners in either direction. Imported views cannot shadow
+existing output-view identities. An opt-in catalog adapter now inventories and
+remaps native canonical document/asset references with separately budgeted real
+asset admission; legacy defaults remain unchanged. The V9 graph, binary payload
+transport and destination publication still need that integration, so canonical
+catalog-reference and asset transfer remain open. Scoped annotation owner contexts
 must match actual layer ancestry, while children may use independent layers.
 Fresh phase import uses an explicit retained command policy rather than legacy
 constraint satisfaction for inactive alternatives. Existing legacy commands

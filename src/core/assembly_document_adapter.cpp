@@ -187,7 +187,11 @@ void validate_catalog_transfer_budget(const AssemblyCatalogTransferBudget& budge
         budget.max_validation_work <= 67108864 &&
         budget.consumed_json_bytes <= budget.max_json_bytes &&
         budget.consumed_json_nodes <= budget.max_json_nodes &&
-        budget.consumed_validation_work <= budget.max_validation_work,
+        budget.consumed_validation_work <= budget.max_validation_work &&
+        budget.max_asset_payload_bytes <= 256ULL * 1024ULL * 1024ULL &&
+        budget.max_asset_work_bytes <= 8ULL * 1024ULL * 1024ULL * 1024ULL &&
+        budget.consumed_asset_payload_bytes <= budget.max_asset_payload_bytes &&
+        budget.consumed_asset_work_bytes <= budget.max_asset_work_bytes,
         "invalid complete assembly catalog transfer budget");
 }
 void charge_catalog_work(std::size_t& consumed, std::size_t limit,
@@ -208,6 +212,14 @@ void charge_catalog_product(AssemblyCatalogTransferBudget& budget,
     }
     charge_catalog_work(budget.consumed_validation_work, budget.max_validation_work,
         first * second, "complete assembly catalog validation work budget exceeded");
+}
+void charge_catalog_asset_bytes(std::uint64_t& consumed, std::uint64_t limit,
+    std::uint64_t amount, const char* message) {
+    if (amount > limit - consumed) {
+        consumed = limit;
+        throw std::invalid_argument(message);
+    }
+    consumed += amount;
 }
 void admit_catalog_json(const nlohmann::json& value, std::size_t depth,
     AssemblyCatalogTransferBudget& budget) {
@@ -242,6 +254,143 @@ void admit_catalog_json(const nlohmann::json& value, std::size_t depth,
         require(std::isfinite(value.get<double>()), "complete assembly catalog JSON numbers must be finite");
     }
 }
+void charge_catalog_string(AssemblyCatalogTransferBudget& budget, const std::string& value) {
+    charge_catalog_product(budget, value.size(), 1);
+    charge_catalog_product(budget, 1, 1);
+}
+// Keep the exact Document::reference_type_for_key contract: an engaged empty
+// role is untyped; phase/material metadata is not a document owner reference.
+std::optional<std::string_view> catalog_document_reference_role(std::string_view key) {
+    static constexpr std::array<std::pair<std::string_view, std::string_view>, 19> typed{{
+        {"assembly_catalog_id", "assembly_model"}, {"property_id", "property"},
+        {"building_id", "building"}, {"floor_id", "floor"}, {"layer_id", "layer"},
+        {"boundary_id", "boundary"}, {"wall_id", "wall"}, {"opening_id", "opening"},
+        {"room_id", "room"}, {"slab_id", "slab"}, {"roof_id", "roof"},
+        {"stair_id", "stair"}, {"sheet_id", "sheet"}, {"view_id", "view"},
+        {"constraint_id", "constraint"}, {"label_id", "label"}, {"column_id", "column"},
+        {"beam_id", "beam"}, {"railing_id", "railing"}}};
+    for (const auto& [candidate, role] : typed)
+        if (key == candidate || (key.size() == candidate.size() + 1 && key.back() == 's' &&
+            key.substr(0, candidate.size()) == candidate)) return role;
+    for (const auto candidate : {"parent_id", "host_id", "target_id", "entity_id", "source_entity_id",
+        "parent_ids", "host_ids", "target_ids", "entity_ids", "source_entity_ids", "refs", "references"})
+        if (key == candidate) return std::string_view{};
+    return std::nullopt;
+}
+bool catalog_context_slot(std::string_view key) {
+    return std::any_of(catalog_context_slots.begin(), catalog_context_slots.end(),
+        [&](const auto& slot) { return slot.first == key; });
+}
+bool catalog_asset_slot(std::string_view key) {
+    return key == "asset_id" || key == "asset_ids" || key == "render_asset_id" || key == "render_asset_ids";
+}
+bool catalog_reference_collection(std::string_view key) {
+    return key == "refs" || key == "references" || key.ends_with("_ids");
+}
+AssemblyCatalogSourceReferences catalog_document_references(const Entity& source,
+    AssemblyCatalogTransferBudget& budget) {
+    AssemblyCatalogSourceReferences result;
+    std::set<std::string, std::less<>> assets;
+    const auto owner = [&](const nlohmann::json& value, std::string_view role) {
+        require(value.is_string(), "complete assembly catalog document reference must be a string");
+        const auto& id = value.get_ref<const std::string&>();
+        charge_catalog_string(budget, id);
+        identifier(id);
+        charge_catalog_product(budget, result.document_owner_roles.size() + 1, 1);
+        const auto found = result.document_owner_roles.find(id);
+        if (found == result.document_owner_roles.end()) result.document_owner_roles.emplace(id, role);
+        else if (!role.empty()) {
+            require(found->second.empty() || found->second == role,
+                "complete assembly catalog document owner has conflicting roles");
+            found->second = role;
+        }
+    };
+    for (const auto& [key, value] : source.properties.items()) {
+        require(key != "vertical_level_binding",
+            "complete assembly catalog cannot contain a floor-only vertical level binding");
+        if (catalog_context_slot(key)) continue;
+        const auto role = catalog_document_reference_role(key);
+        const bool asset = catalog_asset_slot(key);
+        if (!role && !asset) continue;
+        const auto append = [&](const nlohmann::json& reference) {
+            if (!asset) { owner(reference, *role); return; }
+            require(reference.is_string(), "complete assembly catalog asset reference must be a string");
+            const auto& id = reference.get_ref<const std::string&>();
+            charge_catalog_string(budget, id);
+            identifier(id);
+            charge_catalog_product(budget, assets.size() + 1, 1);
+            assets.insert(id);
+        };
+        if (catalog_reference_collection(key)) {
+            require(value.is_array(), "complete assembly catalog reference collection must be an array");
+            for (const auto& reference : value) append(reference);
+        } else append(value);
+    }
+    for (const auto& [key, role] : catalog_context_slots) {
+        const auto reference = source.properties.find(std::string(key));
+        if (reference == source.properties.end()) continue;
+        require(reference->is_string(), "complete assembly catalog context owner must be a string");
+        const auto& id = reference->get_ref<const std::string&>();
+        charge_catalog_string(budget, id);
+        identifier(id);
+        const auto found = result.document_owner_roles.find(id);
+        if (found != result.document_owner_roles.end()) {
+            require(found->second.empty() || found->second == role,
+                "complete assembly catalog context/document owner has conflicting roles");
+            found->second = role;
+        }
+    }
+    charge_catalog_product(budget, assets.size(), 1);
+    result.asset_ids.assign(assets.begin(), assets.end());
+    return result;
+}
+void validate_catalog_source_asset(const Asset& asset, AssemblyCatalogTransferBudget& budget) {
+    // Match Document's native asset contract without manufacturing a document,
+    // regenerating a hash, copying the payload or claiming import authority.
+    charge_catalog_string(budget, asset.id);
+    charge_catalog_string(budget, asset.media_type);
+    charge_catalog_string(budget, asset.sha256);
+    identifier(asset.id);
+    require(!asset.media_type.empty() && asset.media_type.size() <= 256 &&
+        asset.media_type.find_first_of("\r\n") == std::string::npos &&
+        asset.media_type.find('\0') == std::string::npos,
+        "complete assembly catalog source asset media type is invalid");
+    require(asset.bytes.size() <= 256ULL * 1024ULL * 1024ULL,
+        "complete assembly catalog source asset exceeds the native byte limit");
+    charge_catalog_asset_bytes(budget.consumed_asset_payload_bytes, budget.max_asset_payload_bytes,
+        static_cast<std::uint64_t>(asset.bytes.size()), "complete assembly catalog asset payload budget exceeded");
+    require(asset.metadata.is_object(), "complete assembly catalog source asset metadata must be an object");
+    const auto first_node = budget.consumed_json_nodes;
+    const auto first_byte = budget.consumed_json_bytes;
+    admit_catalog_json(asset.metadata, 0, budget);
+    require(budget.consumed_json_nodes - first_node <= 100000,
+        "complete assembly catalog source asset metadata exceeds the native node limit");
+    charge_catalog_product(budget, budget.consumed_json_nodes - first_node +
+        (budget.consumed_json_bytes - first_byte) / 8, 2);
+    const auto validate_keys = [&](const auto& self, const nlohmann::json& value) -> void {
+        if (value.is_object()) {
+            for (auto item = value.begin(); item != value.end(); ++item) {
+                require(item.key().size() <= 128,
+                    "complete assembly catalog source asset metadata has an oversized key");
+                self(self, item.value());
+            }
+        } else if (value.is_array()) for (const auto& child : value) self(self, child);
+    };
+    validate_keys(validate_keys, asset.metadata);
+    // dump enforces strict UTF-8 exactly as native metadata admission does.
+    (void)nlohmann::json(asset.media_type).dump();
+    require(asset.metadata.dump().size() <= 1024 * 1024,
+        "complete assembly catalog source asset metadata exceeds the native encoded size limit");
+    require(asset.sha256.size() == 64 && std::all_of(asset.sha256.begin(), asset.sha256.end(),
+        [](unsigned char c) { return (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f'); }),
+        "complete assembly catalog source asset SHA-256 is invalid");
+    // The hash implementation consumes the actual retained payload. Reserve its
+    // linear work before hashing; a failure stays charged like catalog decoding.
+    charge_catalog_asset_bytes(budget.consumed_asset_work_bytes, budget.max_asset_work_bytes,
+        static_cast<std::uint64_t>(asset.bytes.size()), "complete assembly catalog asset hash work budget exceeded");
+    require(sha256_hex(asset.bytes) == asset.sha256,
+        "complete assembly catalog source asset SHA-256 does not match its bytes");
+}
 bool unsupported_catalog_owner_slot(std::string_view key) {
     // This is the canonical top-level reference contract, not a suffix scan.
     // Nested properties and extensions remain opaque, including local IDs.
@@ -262,11 +411,16 @@ bool unsupported_catalog_owner_slot(std::string_view key) {
     return key == "refs" || key == "references" || key == "vertical_level_binding" ||
         key == "material_assignment";
 }
-void preflight_complete_catalog(const Entity& source, AssemblyCatalogTransferBudget& budget,
-    bool transport_owner_references = true) {
+AssemblyCatalogSourceReferences preflight_complete_catalog(const Entity& source, AssemblyCatalogTransferBudget& budget,
+    bool transport_owner_references = true,
+    AssemblyCatalogSourceReferencePolicy policy = AssemblyCatalogSourceReferencePolicy::legacy_physical) {
     validate_catalog_transfer_budget(budget);
+    require(policy == AssemblyCatalogSourceReferencePolicy::legacy_physical ||
+        policy == AssemblyCatalogSourceReferencePolicy::document_authoring,
+        "invalid complete assembly catalog reference policy");
     require(source.type == "assembly_model" && source.properties.is_object() && source.extensions.is_object(),
         "complete assembly catalog requires an actual assembly_model owner");
+    if (policy == AssemblyCatalogSourceReferencePolicy::document_authoring) charge_catalog_string(budget, source.id);
     identifier(source.id);
     const auto first_node = budget.consumed_json_nodes;
     const auto first_byte = budget.consumed_json_bytes;
@@ -278,11 +432,20 @@ void preflight_complete_catalog(const Entity& source, AssemblyCatalogTransferBud
     charge_catalog_product(budget, 4, 1);
     admit_catalog_json(source.properties, 2, budget);
     admit_catalog_json(source.extensions, 2, budget);
+    if (policy == AssemblyCatalogSourceReferencePolicy::document_authoring) {
+        // Reserve raw string scanning and reference/binding traversal before
+        // graph/map validation or any semantic decoder allocates authored data.
+        charge_catalog_product(budget, budget.consumed_json_nodes - first_node +
+            budget.consumed_json_bytes - first_byte, 1);
+    }
     for (const auto& [key, value] : source.properties.items()) {
         (void)value;
-        require(!transport_owner_references || !unsupported_catalog_owner_slot(key),
+        require(!transport_owner_references || policy == AssemblyCatalogSourceReferencePolicy::document_authoring ||
+            !unsupported_catalog_owner_slot(key),
             "complete assembly catalog contains an unsupported canonical owner reference");
     }
+    auto references = policy == AssemblyCatalogSourceReferencePolicy::document_authoring
+        ? catalog_document_references(source, budget) : AssemblyCatalogSourceReferences{};
     const auto& model = source.properties.at("model");
     require(model.is_object(), "complete assembly catalog requires a model object");
     const auto& schema = model.at("schema");
@@ -305,6 +468,10 @@ void preflight_complete_catalog(const Entity& source, AssemblyCatalogTransferBud
     for (const auto& row : model.at("types")) {
         require(row.is_object() && row.at("id").is_string(), "invalid complete assembly catalog type");
         const auto& id = row.at("id").get_ref<const std::string&>();
+        if (policy == AssemblyCatalogSourceReferencePolicy::document_authoring) {
+            charge_catalog_string(budget, id);
+            charge_catalog_product(budget, types.size() + 1, 1);
+        }
         local_identifier(id);
         auto [entry, inserted] = types.emplace(id, RawType{&row, 0, 0, {}});
         require(inserted, "duplicate complete assembly catalog type identity");
@@ -415,6 +582,7 @@ void preflight_complete_catalog(const Entity& source, AssemblyCatalogTransferBud
     charge_catalog_product(budget, weighted_source,
         4 * (validation_nodes + instance_nodes + types.size() + model.at("materials").size() + 1));
     charge_catalog_product(budget, validation_segments + instance_segments, 4);
+    return references;
 }
 void revision(const DocumentSnapshot& source, Revision expected) {
     if (source.revision() != expected)
@@ -470,9 +638,10 @@ Entity remap_architectural_material_source_refs(const Entity& source,
     return result;
 }
 
-void admit_complete_assembly_catalog_source(const Entity& source, AssemblyCatalogTransferBudget& budget) {
+void admit_complete_assembly_catalog_source(const Entity& source, AssemblyCatalogTransferBudget& budget,
+    AssemblyCatalogSourceReferencePolicy policy) {
     try {
-        preflight_complete_catalog(source, budget);
+        (void)preflight_complete_catalog(source, budget, true, policy);
     } catch (const nlohmann::json::exception& error) {
         throw std::invalid_argument(std::string("invalid complete assembly catalog source: ") + error.what());
     }
@@ -507,16 +676,20 @@ nlohmann::json parse_assembly_catalog_transport_json(std::string_view bytes) {
     return nlohmann::json::parse(bytes, callback);
 }
 AssemblyCatalogSourceReferences complete_assembly_catalog_source_refs(
-    const Entity& source, AssemblyCatalogTransferBudget& budget) {
+    const Entity& source, AssemblyCatalogTransferBudget& budget, AssemblyCatalogSourceReferencePolicy policy) {
     try {
-        preflight_complete_catalog(source, budget);
+        auto result = preflight_complete_catalog(source, budget, true, policy);
         // Full semantic validation never becomes the representation: the raw
         // entity, including unused rows and authored ordering, stays untouched.
         (void)catalog(source);
         std::set<std::string, std::less<>> hosts, context;
         for (const auto& instance : source.properties.at("model").at("instances")) {
             if (!instance.contains("placement")) continue;
-            const auto id = instance.at("placement").at("host_entity_id").get<std::string>();
+            const auto& id = instance.at("placement").at("host_entity_id").get_ref<const std::string&>();
+            if (policy == AssemblyCatalogSourceReferencePolicy::document_authoring) {
+                charge_catalog_string(budget, id);
+                charge_catalog_product(budget, hosts.size() + 1, 1);
+            }
             identifier(id);
             hosts.insert(id);
         }
@@ -525,11 +698,19 @@ AssemblyCatalogSourceReferences complete_assembly_catalog_source_refs(
             const auto found = source.properties.find(std::string(key));
             if (found == source.properties.end()) continue;
             require(found->is_string(), "complete assembly catalog context owner must be a string");
-            const auto id = found->get<std::string>();
+            const auto& id = found->get_ref<const std::string&>();
+            if (policy == AssemblyCatalogSourceReferencePolicy::document_authoring) {
+                charge_catalog_string(budget, id);
+                charge_catalog_product(budget, context.size() + 1, 1);
+            }
             identifier(id);
             context.insert(id);
         }
-        return {{hosts.begin(), hosts.end()}, {context.begin(), context.end()}};
+        if (policy == AssemblyCatalogSourceReferencePolicy::document_authoring)
+            charge_catalog_product(budget, hosts.size() + context.size(), 1);
+        result.hosted_entity_ids.assign(hosts.begin(), hosts.end());
+        result.context_owner_ids.assign(context.begin(), context.end());
+        return result;
     } catch (const nlohmann::json::exception& error) {
         throw std::invalid_argument(std::string("invalid complete assembly catalog source: ") + error.what());
     }
@@ -538,9 +719,21 @@ Entity remap_complete_assembly_catalog_source_refs(const Entity& source,
     const std::map<std::string, std::string, std::less<>>& catalog_owner_mapping,
     const std::map<std::string, std::string, std::less<>>& host_owner_mapping,
     const std::map<std::string, std::string, std::less<>>& context_owner_mapping,
-    AssemblyCatalogTransferBudget& budget) {
+    AssemblyCatalogTransferBudget& budget, AssemblyCatalogSourceReferencePolicy policy,
+    const std::map<std::string, std::string, std::less<>>& document_owner_mapping,
+    const std::map<std::string, std::string, std::less<>>& asset_mapping) {
     const auto first_node = budget.consumed_json_nodes;
-    const auto references = complete_assembly_catalog_source_refs(source, budget);
+    const auto references = complete_assembly_catalog_source_refs(source, budget, policy);
+    if (policy == AssemblyCatalogSourceReferencePolicy::document_authoring) {
+        for (const auto* mapping : {&catalog_owner_mapping, &host_owner_mapping, &context_owner_mapping,
+            &document_owner_mapping, &asset_mapping}) {
+            charge_catalog_product(budget, mapping->size(), 1);
+            for (const auto& [from, to] : *mapping) {
+                charge_catalog_string(budget, from);
+                charge_catalog_string(budget, to);
+            }
+        }
+    }
     const auto mapped_id = [](const auto& mapping, const std::string& id) -> const std::string& {
         const auto found = mapping.find(id);
         require(found != mapping.end(), "complete assembly catalog owner mapping is missing");
@@ -550,6 +743,31 @@ Entity remap_complete_assembly_catalog_source_refs(const Entity& source,
     const auto& owner_id = mapped_id(catalog_owner_mapping, source.id);
     for (const auto& id : references.hosted_entity_ids) (void)mapped_id(host_owner_mapping, id);
     for (const auto& id : references.context_owner_ids) (void)mapped_id(context_owner_mapping, id);
+    for (const auto& [id, role] : references.document_owner_roles) {
+        (void)role;
+        (void)mapped_id(document_owner_mapping, id);
+    }
+    for (const auto& id : references.asset_ids) (void)mapped_id(asset_mapping, id);
+    if (policy == AssemblyCatalogSourceReferencePolicy::document_authoring) {
+        // A reached global owner must retain one destination identity even when
+        // it appears in different reference categories, including self refs.
+        std::map<std::string, std::string_view, std::less<>> destinations;
+        const auto consistent = [&](const auto& mapping, const std::string& id) {
+            charge_catalog_string(budget, id);
+            charge_catalog_product(budget, destinations.size() + 1, 1);
+            const std::string_view destination = mapped_id(mapping, id);
+            const auto [found, inserted] = destinations.emplace(id, destination);
+            require(inserted || found->second == destination,
+                "complete assembly catalog owner mappings disagree");
+        };
+        consistent(catalog_owner_mapping, source.id);
+        for (const auto& id : references.hosted_entity_ids) consistent(host_owner_mapping, id);
+        for (const auto& id : references.context_owner_ids) consistent(context_owner_mapping, id);
+        for (const auto& [id, role] : references.document_owner_roles) {
+            (void)role;
+            consistent(document_owner_mapping, id);
+        }
+    }
     charge_catalog_product(budget, budget.consumed_json_nodes - first_node, 1);
     Entity result = source;
     result.id = owner_id;
@@ -563,7 +781,20 @@ Entity remap_complete_assembly_catalog_source_refs(const Entity& source,
         const auto found = result.properties.find(std::string(key));
         if (found != result.properties.end()) *found = context_owner_mapping.at(found->get<std::string>());
     }
-    (void)complete_assembly_catalog_source_refs(result, budget);
+    if (policy == AssemblyCatalogSourceReferencePolicy::document_authoring) {
+        for (auto& [key, value] : result.properties.items()) {
+            if (catalog_context_slot(key)) continue;
+            const bool asset = catalog_asset_slot(key);
+            if (!asset && !catalog_document_reference_role(key)) continue;
+            const auto& mapping = asset ? asset_mapping : document_owner_mapping;
+            const auto patch = [&](nlohmann::json& reference) {
+                reference = mapping.at(reference.get_ref<const std::string&>());
+            };
+            if (catalog_reference_collection(key)) for (auto& reference : value) patch(reference);
+            else patch(value);
+        }
+    }
+    (void)complete_assembly_catalog_source_refs(result, budget, policy);
     return result;
 }
 bool is_complete_assembly_catalog_host_type(std::string_view type) noexcept {
@@ -573,22 +804,31 @@ bool is_complete_assembly_catalog_host_type(std::string_view type) noexcept {
     return std::find(host_roles.begin(), host_roles.end(), type) != host_roles.end();
 }
 AssemblyDocumentEntities capture_complete_assembly_catalog_sources(const DocumentSnapshot& source,
-    const std::vector<std::string>& catalog_ids, AssemblyCatalogTransferBudget& budget) {
+    const std::vector<std::string>& catalog_ids, AssemblyCatalogTransferBudget& budget,
+    AssemblyCatalogSourceReferencePolicy policy) {
     validate_catalog_transfer_budget(budget);
+    require(policy == AssemblyCatalogSourceReferencePolicy::legacy_physical ||
+        policy == AssemblyCatalogSourceReferencePolicy::document_authoring,
+        "invalid complete assembly catalog reference policy");
     require(catalog_ids.size() <= 4096, "complete assembly catalog capture count budget exceeded");
     std::set<std::string, std::less<>> selected;
     for (const auto& id : catalog_ids) {
         charge_catalog_product(budget, 1, 1);
+        if (policy == AssemblyCatalogSourceReferencePolicy::document_authoring) {
+            charge_catalog_string(budget, id);
+            charge_catalog_product(budget, selected.size() + 1, 1);
+        }
         identifier(id);
         require(selected.insert(id).second, "duplicate complete assembly catalog capture owner");
     }
     AssemblyDocumentEntities result;
+    std::set<std::string, std::less<>> captured_assets;
     for (const auto& id : selected) {
         const auto owner = source.entities().find(id);
         require(owner != source.entities().end() && owner->second.id == id && owner->second.type == "assembly_model",
             "complete assembly catalog capture owner is missing or has inconsistent role/identity");
         const auto first_node = budget.consumed_json_nodes;
-        const auto references = complete_assembly_catalog_source_refs(owner->second, budget);
+        const auto references = complete_assembly_catalog_source_refs(owner->second, budget, policy);
         for (const auto& host_id : references.hosted_entity_ids) {
             const auto host = source.entities().find(host_id);
             require(host != source.entities().end() && host->second.id == host_id &&
@@ -598,10 +838,30 @@ AssemblyDocumentEntities capture_complete_assembly_catalog_sources(const Documen
         for (const auto& [key, role] : catalog_context_slots) {
             const auto reference = owner->second.properties.find(std::string(key));
             if (reference == owner->second.properties.end()) continue;
-            const auto context_id = reference->get<std::string>();
+            const auto& context_id = reference->get_ref<const std::string&>();
             const auto context = source.entities().find(context_id);
             require(context != source.entities().end() && context->second.id == context_id && context->second.type == role,
                 "complete assembly catalog source context is missing or has inconsistent role/identity");
+        }
+        for (const auto& [reference_id, role] : references.document_owner_roles) {
+            charge_catalog_string(budget, reference_id);
+            const auto target = source.entities().find(reference_id);
+            require(target != source.entities().end() && target->second.id == reference_id &&
+                (role.empty() || target->second.type == role),
+                "complete assembly catalog source document owner is missing or has inconsistent role/identity");
+        }
+        for (const auto& asset_id : references.asset_ids) {
+            charge_catalog_string(budget, asset_id);
+            const auto asset = source.assets().find(asset_id);
+            require(asset != source.assets().end() && asset->second.id == asset_id,
+                "complete assembly catalog source asset is missing or has inconsistent identity");
+            charge_catalog_product(budget, captured_assets.size() + 1, 1);
+            if (!captured_assets.insert(asset_id).second) continue;
+            try {
+                validate_catalog_source_asset(asset->second, budget);
+            } catch (const nlohmann::json::exception& error) {
+                throw std::invalid_argument(std::string("invalid complete assembly catalog source asset: ") + error.what());
+            }
         }
         charge_catalog_product(budget, budget.consumed_json_nodes - first_node, 1);
         result.emplace(id, owner->second);

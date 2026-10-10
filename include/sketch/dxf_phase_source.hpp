@@ -81,6 +81,10 @@ struct NativeDxfPhaseDestinationMaps {
     // View IDs are scoped by their original sheet/view companion. Other sheet,
     // viewport and callout identities remain local and unchanged.
     std::map<std::string, NativeDxfPhaseOwnerMap, std::less<>> sheet_view_ids;
+    // Missing overlay witnesses are scoped by the ORIGINAL companion owner.
+    // A supplied inventory exactly covers all companions, including empty
+    // scopes, and freshens only detached raw names without creating owners.
+    std::map<std::string, NativeDxfPhaseOwnerMap, std::less<>> sheet_witness_ids;
 };
 struct NativeDxfPhaseDestinationBinding {
     NativeDxfPhaseSourceGraph mapped_graph;

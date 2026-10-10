@@ -38158,7 +38158,7 @@ public:
         for (const auto& [id, asset] : source.assets()) { (void)asset; occupied.insert(id); }
         const auto allocate = [&](const std::string& kind) {
             auto id = new_id(kind);
-            while (!occupied.insert(id).second) id = new_id(kind);
+            while (graph.entities.contains(id) || !occupied.insert(id).second) id = new_id(kind);
             return id;
         };
         NativeDxfPhaseDestinationMaps maps;
@@ -38182,6 +38182,28 @@ public:
                 auto& views = maps.sheet_view_ids[id];
                 for (const auto& view : native_dxf_sheet_view_source_view_identity_ids(owner, &budget))
                     views.emplace(view, allocate("sheet-view"));
+                auto& witnesses = maps.sheet_witness_ids[id];
+                for (const auto& witness : native_dxf_sheet_view_source_unresolved_witness_ids(owner, graph.entities, &budget)) {
+                    // The helper admits extraction; reserve this additional
+                    // raw key copy and ordered-map insertion before allocating.
+                    auto& ledger = budget.catalog_transfer;
+                    const auto charge = [](std::size_t& consumed, std::size_t amount, std::size_t maximum) {
+                        if (consumed > maximum || amount > maximum - consumed)
+                            throw std::invalid_argument("Native DXF sheet witness allocation limit");
+                        consumed += amount;
+                    };
+                    if (witness.size() > native_dxf_phase_source_byte_limit / 6)
+                        throw std::invalid_argument("Native DXF sheet witness string limit");
+                    charge(ledger.consumed_json_bytes, witness.size() * 6 + 3, ledger.max_json_bytes);
+                    charge(ledger.consumed_json_nodes, 1, ledger.max_json_nodes);
+                    std::size_t steps = 1;
+                    for (auto count = witnesses.size(); count > 1; count = (count + 1) / 2) ++steps;
+                    if (witness.size() + 1 > native_dxf_phase_source_work_limit / (steps * 4))
+                        throw std::invalid_argument("Native DXF sheet witness comparison limit");
+                    charge(ledger.consumed_validation_work, (witness.size() + 1) * steps * 4,
+                        ledger.max_validation_work);
+                    witnesses.emplace(witness, allocate("sheet-witness"));
+                }
             }
         }
         std::set<std::string, std::less<>> created_contexts;
