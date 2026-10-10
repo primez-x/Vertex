@@ -285,4 +285,8 @@ Boundary project_assembly_plan(const AssemblyExpansion& expansion) {
     return checked_projection([&] { return make_assembly_geometry(expansion).shape; });
 }
 
+Boundary project_building_shape_plan(const TopoDS_Shape& shape) {
+    return checked_projection([&] { return shape; });
+}
+
 }  // namespace sketch

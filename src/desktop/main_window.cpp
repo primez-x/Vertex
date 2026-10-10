@@ -38049,6 +38049,18 @@ public:
                 }
                 budget.consumed_validation_work += cost * passes;
             };
+            const auto catalog_history_passes = [](const auto& entities, std::size_t base) {
+                std::size_t roots = 0;
+                for (const auto& [id, entity] : entities) {
+                    (void)id;
+                    if (entity.type == "assembly_instance" && ++roots > 4096)
+                        throw std::invalid_argument("The destination assembly history exceeds the DXF import work limit.");
+                }
+                // Restoring a history state validates its independent roots
+                // against whole catalogs. Reserve those repeated consumers
+                // before a preview can replay any retained state.
+                return base + (roots ? 16 * (roots + 1) * (roots + 1) : 0);
+            };
             if (complete_catalog_transfer) {
                 // Preview/publication forks restore the complete retained
                 // history, including catalogs deleted from the current head.
@@ -38057,17 +38069,22 @@ public:
                 // restore/state admissions and constraint replay admissions;
                 // do not deduplicate revisions merely by catalog identity.
                 constexpr std::size_t retained_catalog_passes = 128;
-                for (const auto& record : source.history())
+                for (const auto& record : source.history()) {
+                    const auto retained_passes = catalog_history_passes(record.entities, retained_catalog_passes);
                     for (const auto& [id, existing] : record.entities) {
                         (void)id;
+                        admit_native_dxf_architectural_source_work(existing, record.entities, catalog_operation_budget);
                         if (existing.type == "assembly_model")
-                            reserve_destination_catalog(existing, retained_catalog_passes);
+                            reserve_destination_catalog(existing, retained_passes);
                     }
+                }
                 constexpr std::size_t current_catalog_passes = 32;
+                const auto current_passes = catalog_history_passes(source.entities(), current_catalog_passes);
                 for (const auto& [id, existing] : source.entities()) {
                     (void)id;
+                    admit_native_dxf_architectural_source_work(existing, source.entities(), catalog_operation_budget);
                     if (existing.type == "assembly_model")
-                        reserve_destination_catalog(existing, current_catalog_passes);
+                        reserve_destination_catalog(existing, current_passes);
                 }
             }
 
@@ -38135,6 +38152,10 @@ public:
             std::set<std::string, std::less<>> reserved_ids;
             for (const auto& [id, entity] : source.entities()) { (void)entity; reserved_ids.insert(id); }
             for (const auto& [id, asset] : source.assets()) { (void)asset; reserved_ids.insert(id); }
+            if (complete_catalog_transfer) {
+                const auto occupied = retainedSlabIdentityNames(source);
+                reserved_ids.insert(occupied.begin(), occupied.end());
+            }
             const auto allocate_id = [&](const std::string& kind) {
                 auto id = new_id(kind);
                 while (!reserved_ids.insert(id).second) id = new_id(kind);
@@ -38312,7 +38333,9 @@ public:
             std::map<std::string, std::string, std::less<>> identities;
             for (const auto& candidate : mapped.entities) {
                 if (can_recognize_boundary_entity_type(candidate.type) || candidate.type == "wall" || candidate.type == "opening" ||
-                    (candidate.type == "measurement_linework" && native_member(candidate)))
+                    (candidate.type == "measurement_linework" && native_member(candidate)) ||
+                    (wall_source_member(candidate) && candidate.extensions.at("vertex_dxf_boundary").value("version", 0) == 8 &&
+                        native_dxf_architectural_source_type(candidate.type)))
                     identities.emplace(candidate.id, allocate_id(candidate.type));
             }
             // Catalog, body and context identities have separate namespaces.
@@ -38321,7 +38344,18 @@ public:
             std::map<std::string, std::string, std::less<>> catalog_identities;
             std::map<std::string, std::string, std::less<>> source_body_identities;
             std::map<std::string, std::string, std::less<>> source_context_identities;
+            std::map<std::string, std::string, std::less<>> architectural_child_identities;
             if (complete_catalog_transfer) {
+                // Child identities have their own typed namespace. Reserve
+                // retained authoring/history names before allocating children;
+                // catalog-local profile/type/material IDs remain unchanged.
+                for (const auto& candidate : mapped.entities) {
+                    if (!wall_source_member(candidate) ||
+                        candidate.extensions.at("vertex_dxf_boundary").value("version", 0) != 8) continue;
+                    for (const auto& child : native_dxf_architectural_child_identity_ids(candidate))
+                        if (!architectural_child_identities.contains(child))
+                            architectural_child_identities.emplace(child, allocate_id("architectural-child"));
+                }
                 for (const auto& id : mapped.authoring_catalog_ids) {
                     if (!mapped.catalog_sources.contains(id) ||
                         !catalog_identities.emplace(id, allocate_id("assembly-catalog")).second)
@@ -38353,6 +38387,22 @@ public:
                     bind_context(original.at("building_id").get<std::string>(), context->building_id);
                     bind_context(original.at("floor_id").get<std::string>(), context->floor_id);
                     bind_context(original.at("layer_id").get<std::string>(), context->layer_id);
+                    if (candidate.type == "stair" && candidate.properties.contains("level_connection")) {
+                        // A connected stair uses an actual level graph owner;
+                        // its link and level IDs remain local to that graph.
+                        // Only an existing reviewed floor binding can supply
+                        // the destination owner. The binder proves its model
+                        // against the retained source before publication.
+                        const auto& floor = reviewed_hierarchy.entities().at(context->floor_id);
+                        if (floor.type != "floor" || !floor.properties.contains("vertical_level_binding"))
+                            throw std::invalid_argument("A connected DXF stair needs a destination floor with matching levels.");
+                        const auto binding = VerticalLevelBinding::from_json(floor.properties.at("vertical_level_binding"));
+                        const auto graph = reviewed_hierarchy.entities().find(binding.graph_entity_id);
+                        if (graph == reviewed_hierarchy.entities().end() || graph->second.type != "vertical_levels")
+                            throw std::invalid_argument("The reviewed DXF stair destination has no valid level graph.");
+                        bind_context(candidate.properties.at("level_connection").at("graph_id").get<std::string>(),
+                            binding.graph_entity_id);
+                    }
                 }
                 for (const auto& [id, catalog_context] : catalog_source_contexts) {
                     (void)id;
@@ -38415,11 +38465,23 @@ public:
                 if (native_member(candidate)) {
                     if (can_recognize_boundary_entity_type(candidate.type))
                         imported = remap_boundary_owner_identity(candidate, identity->second);
+                    else if (candidate.type == "assembly_instance") {
+                        const auto catalog = candidate.properties.at("assembly_catalog_id").get<std::string>();
+                        imported = remap_native_dxf_independent_assembly_source(candidate, identities,
+                            {{catalog, catalog}});
+                    }
                     else {
                         imported.id = identity->second;
                         if (candidate.type == "measurement_linework")
                             imported.properties["model"] = remap_measurement_linework_owner_identity(
                                 candidate.properties.at("model"), identity->second);
+                    }
+                    if (candidate.type == "railing" && candidate.properties.contains("host")) {
+                        const auto host = native_boundaries.find(
+                            candidate.properties.at("host").at("stair_id").get<std::string>());
+                        if (host == native_boundaries.end() || host->second->type != "stair")
+                            throw std::invalid_argument("A DXF railing is missing its actual imported stair.");
+                        remap_native_dxf_architectural_host_body_aliases(imported, *host->second, identities);
                     }
                     remap_native_dxf_boundary_dependency_ids(imported, identities);
                 } else {
@@ -38490,15 +38552,32 @@ public:
                     if (change.kind != EntityChangeKind::upsert) continue;
                     auto staged = change.entity;
                     if (const auto context = imported_wall_source_contexts.find(staged.id);
-                        context != imported_wall_source_contexts.end()) {
+                        context != imported_wall_source_contexts.end() && staged.type != "roof_join") {
                         staged.properties["property_id"] = context->second.property_id;
                         staged.properties["building_id"] = context->second.building_id;
                         staged.properties["floor_id"] = context->second.floor_id;
                         staged.properties["layer_id"] = context->second.layer_id;
                     }
                     if (complete_catalog_transfer && wall_source_member(staged) &&
-                        staged.extensions.at("vertex_dxf_boundary").value("version", 0) == 8)
+                        staged.extensions.at("vertex_dxf_boundary").value("version", 0) == 8) {
                         staged = remap_architectural_material_source_refs(staged, catalog_identities);
+                        if (staged.type == "assembly_instance")
+                            staged.properties.at("assembly_catalog_id") = catalog_identities.at(
+                                staged.properties.at("assembly_catalog_id").get<std::string>());
+                        remap_native_dxf_architectural_source_context_dependencies(staged, source_context_identities);
+                        const Entity* authored_host = nullptr;
+                        if (staged.type == "railing" && staged.properties.contains("host")) {
+                            const auto host_id = staged.properties.at("host").at("stair_id").get<std::string>();
+                            const auto host = std::find_if(changes.begin(), changes.end(), [&](const auto& item) {
+                                return item.kind == EntityChangeKind::upsert && item.entity.id == host_id &&
+                                    item.entity.type == "stair";
+                            });
+                            if (host == changes.end())
+                                throw std::invalid_argument("A DXF railing is missing its pending authored stair.");
+                            authored_host = &host->entity;
+                        }
+                        remap_native_dxf_architectural_child_identities(staged, architectural_child_identities, authored_host);
+                    }
                     actual_destination_entities.insert_or_assign(staged.id, std::move(staged));
                 }
             }
@@ -38522,7 +38601,7 @@ public:
                 bind_native_dxf_catalog_destinations(imported_native_boundaries, imported_wall_source_contexts,
                     actual_destination_entities, mapped.physical_source_graphs, mapped.catalog_sources,
                     mapped.authoring_catalog_ids, source_body_identities, catalog_identities,
-                    source_context_identities, &catalog_operation_budget);
+                    source_context_identities, &catalog_operation_budget, &architectural_child_identities);
                 for (const auto& member : imported_native_boundaries)
                     if (member.type == "assembly_model") changes.push_back(EntityChange::upsert(member));
             } else {

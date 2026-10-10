@@ -4,6 +4,7 @@
 #include "sketch/dxf_exchange.hpp"
 #include "sketch/project_organization.hpp"
 #include "sketch/assembly_document_adapter.hpp"
+#include "sketch/dxf_architectural_source.hpp"
 
 #include <cstddef>
 #include <algorithm>
@@ -84,6 +85,9 @@ struct NativeDxfWallSourceWorkBudget {
     // contract. Physical detection/replay shares source_work across components.
     bool measured_operation{};
     AssemblyCatalogTransferBudget catalog_transfer;
+    // V8 family solids/HLR have a separate shared bounded ledger; legacy
+    // wall/topology contracts retain their original source_work limit.
+    std::size_t architectural_work{};
 };
 // Authenticates V8 source closure and the exact live subset before admission.
 // All attempts share the ledger; preflight reserves downstream catalog passes.
@@ -122,12 +126,14 @@ void bind_native_dxf_catalog_destinations(std::vector<Entity>& entities,
     const std::map<std::string, std::string, std::less<>>& body_owner_mapping,
     const std::map<std::string, std::string, std::less<>>& catalog_owner_mapping,
     const std::map<std::string, std::string, std::less<>>& context_owner_mapping,
-    NativeDxfWallSourceWorkBudget* work_budget = nullptr);
+    NativeDxfWallSourceWorkBudget* work_budget = nullptr,
+    const std::map<std::string, std::string, std::less<>>* child_identity_mapping = nullptr);
 void validate_native_dxf_wall_source_groups(const std::vector<Entity>& entities,
     NativeDxfWallSourceWorkBudget* work_budget = nullptr, bool preflight_only = false,
     const NativeDxfPhysicalSourceGraphs* physical_source_graphs = nullptr,
     const std::map<std::string, Entity, std::less<>>* actual_destination_entities = nullptr,
-    const NativeDxfCatalogSources* catalog_sources = nullptr);
+    const NativeDxfCatalogSources* catalog_sources = nullptr,
+    const std::map<std::string, std::string, std::less<>>* child_identity_mapping = nullptr);
 void validate_native_dxf_wall_source_member(const Entity& entity);
 // Owner identity is changed separately with the boundary owner codec where
 // applicable. Only graph-owned references and membership change here.
@@ -148,7 +154,8 @@ void bind_native_dxf_wall_source_destinations(std::vector<Entity>& entities,
     const NativeDxfPhysicalSourceGraphs* physical_source_graphs = nullptr,
     const NativeDxfCatalogSources* catalog_sources = nullptr,
     NativeDxfWallSourceWorkBudget* work_budget = nullptr,
-    const std::map<std::string, std::string, std::less<>>* catalog_owner_mapping = nullptr);
+    const std::map<std::string, std::string, std::less<>>* catalog_owner_mapping = nullptr,
+    const std::map<std::string, std::string, std::less<>>* child_identity_mapping = nullptr);
 
 // V2 carries one standalone boundary, not an appraisal/source dependency graph.
 // Document's generic reference vocabulary does not cover these consumer-owned

@@ -149,9 +149,15 @@ source admission uses authentic source evidence; it grants no destination
 hierarchy authority. PSIP0003 carries the new tables and complete entity flags;
 PSIP0001/2 keep their existing schemas.
 
-Unsupported host families, independent assembly instances and full phase/level
-authoring remain explicit implementation gaps. Current source integration has
-not been compiled or exercised. External-consumer fidelity, capacity and
+Additional V8 source integration covers catalog-bearing slabs, roofs, stairs,
+railings, columns, beams, room volumes and roof joins, plus independent assembly
+roots. It regenerates analytical plans from real authored objects, preserves
+typed host/join relationships and distinguishes stair child identities from
+body/catalog identities. Connected stairs require a real destination floor
+binding with matching level graph semantics. Full phase authoring and changed
+local levels remain explicit gaps. Integrated root and independent source review
+approved this increment and its required corrections. It has not been compiled
+or exercised. External-consumer fidelity, capacity and
 production qualification remain open; no installed candidate has changed.
 
 ### Physical-room groups (2026-10-10, source implementation)

@@ -637,6 +637,11 @@ inline void validate(const ProjectImportCandidate& result) {
             if (!native_entities.emplace(entity.id, &entity).second) reject();
         }
     GeometryBudget geometry_budget;
+    NativeDxfWallSourceWorkBudget source_budget;
+    std::map<std::string, Entity, std::less<>> pending_architectural_sources;
+    if (result.kind == ProjectImportKind::dxf && !result.catalog_sources.empty())
+        for (const auto& entity : result.entities)
+            if (!pending_architectural_sources.emplace(entity.id, entity).second) reject();
     for (const auto& entity : result.entities) {
         (void)text(entity.id, false);
         const auto transfer_marker = entity.extensions.find("vertex_dxf_boundary");
@@ -669,7 +674,8 @@ inline void validate(const ProjectImportCandidate& result) {
         }
         const bool shared = entity.type == "boundary" || entity.type == "wall" || entity.type == "opening";
         const bool dxf = entity.type == "annotation_state" || native_dxf_boundary ||
-            (native_dxf_measured_source && entity.type == "measurement_linework");
+            (native_dxf_measured_source && entity.type == "measurement_linework") ||
+            (native_dxf_catalog_source && native_dxf_architectural_source_type(entity.type));
         const bool ifc = entity.type == "wall" || entity.type == "slab" || entity.type == "roof" || entity.type == "room" ||
             entity.type == "opening" || entity.type == "ifc_reference" ||
             entity.type == "stair" || entity.type == "railing";
@@ -677,7 +683,8 @@ inline void validate(const ProjectImportCandidate& result) {
         if (entity.properties.contains("parent_id") || entity.properties.contains("layer_id")) reject();
         if (native_dxf_wall_source && !native_dxf_boundary) {
             if (entity.type != "wall" && entity.type != "opening" &&
-                !(native_dxf_measured_source && entity.type == "measurement_linework")) reject();
+                !(native_dxf_measured_source && entity.type == "measurement_linework") &&
+                !(native_dxf_catalog_source && native_dxf_architectural_source_type(entity.type))) reject();
             for (const auto* key : {"property_id", "building_id", "floor_id", "layer_id", "phase_id"})
                 if (entity.properties.contains(key)) reject();
             const auto binding = entity.extensions.find("vertex_dxf_wall_source_context_binding");
@@ -692,6 +699,16 @@ inline void validate(const ProjectImportCandidate& result) {
              entity.extensions.contains("vertex_dxf_wall_source_hosted_openings") ||
              entity.extensions.contains("vertex_dxf_measured_graph"))) reject();
         if (entity.extensions.contains("vertex_dxf_measured_graph") && !native_dxf_measured_source) reject();
+        if (native_dxf_catalog_source && native_dxf_architectural_source_type(entity.type)) {
+            // Admit the real native dialect and its typed dependencies before
+            // catalog decoding. IFC's normalized forms cannot stand in for
+            // raw architectural source authoring. Whole-group authentication
+            // below proves these pending objects against the original graph.
+            try {
+                admit_native_dxf_architectural_source_work(entity, pending_architectural_sources, source_budget);
+            } catch (...) { reject(); }
+            continue;
+        }
         if (native_dxf_boundary) {
             validate_native_dxf_boundary(entity, geometry_budget);
         } else if (entity.type == "boundary") {
@@ -775,7 +792,6 @@ inline void validate(const ProjectImportCandidate& result) {
     // Validate the detached graph using the same native entity, reference and
     // geometry checks as an ordinary command. No live document is mutated.
     if (result.kind == ProjectImportKind::dxf && !result.catalog_sources.empty()) {
-        NativeDxfWallSourceWorkBudget source_budget;
         try {
             // All candidate shape charges precede catalog/model decoding. The
             // same ledger includes preflight, authentication and private-copy

@@ -14,6 +14,40 @@ changed source does not acquire runtime acceptance without later qualification.
 
 ## Current delivery state
 
+### October 10 additional architectural DXF families — source integration
+
+V8 source work extends catalog-bearing cohorts to slabs, roofs, stairs, railings,
+columns, beams, room volumes, roof joins and independent assembly instances.
+The dedicated codec reuses existing authored solids and analytical plan
+projection, captures typed host/join dependencies, and keeps body owners,
+catalog owners and stair child identities in separate mappings. Catalog-local
+type, material and part identities remain unchanged. Independent roots retain
+their raw overrides and model dialect rather than substituting a pruned library.
+
+Desktop integration allocates retained-history-safe identities and maps a
+connected stair only to an actual reviewed destination floor's level graph.
+Missing support or changed local level semantics refuse transfer. Original
+proofs remain private source evidence; they cannot create destination floors or
+levels. Worker admission, exact source/destination plan parity and final atomic
+publication are connected in the source implementation.
+
+Independent source review found two required corrections: straight-stair
+railings need authenticated body aliases rather than invented child mappings,
+and roof joins need actual member-derived contexts without adding fields to
+their closed properties. The corrections preserve opaque railing extras, use
+schema-directed child witnesses, and reuse admitted roof contexts. Assembly
+projection also reserves expanded profile edges with nested part multiplicity
+before solid/projection consumers. Integrated root review and targeted
+independent source re-review approved the corrections with no further
+actionable finding. Scoped diff checks and registry JSON parsing passed.
+
+This scope has source integration/review evidence. It has not been compiled or
+exercised, and the installed candidate remains unchanged. Full phase authoring,
+changed local level identities, external fidelity and capacity qualification
+remain open. The larger drawing, architectural lifecycle, appraisal, library,
+compatibility, recovery, distribution and handoff obligations also remain open;
+this exchange increment is not an overall completion estimate.
+
 ### October 10 complete catalog DXF transfer — source integration
 
 The shared assembly adapter now provides bounded raw admission, complete source

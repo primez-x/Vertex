@@ -40,13 +40,31 @@ atomic import command publishes them. Foreign IDs never implicitly capture
 existing catalogs. Transfer markers disappear from live V8 objects; source
 bytes and opaque provenance remain recoverable.
 
-Current native host transport is limited to supported wall/opening cohorts.
-Other hosted architectural families, independent assembly instance transport,
-full phase authoring and changed local level identities remain implementation
-gaps. Unsupported canonical catalog references are refused, not removed.
-This adds no native project schema floor. Integrated source review approved the
-corrected scope; compilation, runtime exchange, capacity, external fidelity and
-production acceptance remain unverified. The installed candidate is unchanged.
+The additional architectural source codec extends V8 catalog cohorts to slabs,
+roofs, stairs, railings, columns, beams, room volumes, roof joins and independent
+assembly roots. These families use `ARCHITECTURAL_PLAN_V1` depictions generated
+from their actual authored geometry and checked again against the actual staged
+destination. Roof joins retain closed properties and derive one proven common
+full context from their actual member roofs; conflicting contexts refuse.
+Hosted railings retain stair owners and separately mapped flight/landing
+witnesses. Simple-stair derived flights alias their authenticated body owner;
+opaque version-two host extras remain unchanged. A connected stair maps
+its external level graph owner to a real reviewed destination binding while
+preserving graph-local level and link IDs. Changed graph semantics refuse.
+Independent assembly envelopes preserve raw overrides and patch only their
+root and catalog owners. Catalog-local identities do not enter the body map.
+
+Additional-family work uses a separate cumulative architectural work budget;
+legacy source work limits remain unchanged. Retained history, repeated assembly
+expansion and projection participate in admission before deep consumers. Raw
+assembly profile edges include nested part multiplicity in the nonlinear
+projection reservation; practical capacity remains unqualified.
+Full phase authoring and changed local level identities remain implementation
+gaps. Unsupported canonical references are refused, not removed. This adds no
+native project schema floor. Integrated root and independent source review
+approved the additional-family integration and its required corrections.
+Compilation, runtime exchange, capacity, external fidelity and production
+acceptance remain unverified. The installed candidate is unchanged.
 
 ## Physical-room DXF source transfer
 

@@ -31,4 +31,9 @@ namespace sketch {
 // become inferred geometry. Use project_assembly_view for individual source paths.
 [[nodiscard]] Boundary project_assembly_plan(const AssemblyExpansion& expansion);
 
+// Project an already admitted actual solid with the same analytical HLR path
+// as building and assembly plans. The caller retains geometry authority and
+// must apply its construction/work admission before invoking this function.
+[[nodiscard]] Boundary project_building_shape_plan(const TopoDS_Shape& shape);
+
 }  // namespace sketch
