@@ -845,6 +845,7 @@ if(SKETCH_BUILD_ARCHITECTURE OR SKETCH_BUILD_DESKTOP)
     src/core/phase_wall_replacement_command.cpp src/core/phase_wall_replacement_request.cpp
     src/core/phase_wall_profile_edit.cpp src/core/phase_wall_profile_capture.cpp src/core/phase_wall_canvas_proposal.cpp
     src/core/phase_hosted_opening_edit.cpp src/core/phase_hosted_opening_capture.cpp
+    src/core/phase_corner_window_edit.cpp
     src/core/phase_hosted_opening_rehost.cpp src/core/phase_hosted_opening_family_edit.cpp
     src/core/phase_opening_demolition.cpp src/core/phase_wall_demolition.cpp
     src/core/mixed_phase_wall_demolition.cpp

@@ -5,6 +5,7 @@
 #include "sketch/constraint_entity.hpp"
 #include "sketch/constraint_integrity.hpp"
 #include "sketch/constraint_phase_scope.hpp"
+#include "sketch/corner_window.hpp"
 #include "sketch/document_wall.hpp"
 #include "sketch/door_operation.hpp"
 #include "sketch/opening_assembly.hpp"
@@ -14,6 +15,7 @@
 #include "sketch/wall_measurement.hpp"
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <initializer_list>
 #include <set>
@@ -418,6 +420,30 @@ void validate_active_wall_physical_dependencies(
             assembly_fit(*openings[target][i], checked, checked.openings[i],strict_profiles);
     }
     admit_affected_joins(entities, targets, scope, openings,strict_profiles);
+    bool corner_state_admitted=false;
+    for (const auto& [id,entity]:entities) {
+        if (entity.type!="corner_window" || scope.inactive_owner_ids.contains(id)) continue;
+        const auto corner=parse_corner_window(entity);
+        if (std::none_of(corner.wall_ids.begin(),corner.wall_ids.end(),[&](const auto& host) {
+                return targets.contains(host);
+            })) continue;
+        if (!corner_state_admitted) {
+            validate_corner_window_state(entities);
+            corner_state_admitted=true;
+        }
+        std::array<Wall,2> hosts;
+        for (std::size_t leg=0;leg<hosts.size();++leg) {
+            const auto& host=entities.at(corner.wall_ids[leg]);
+            if (scope.inactive_owner_ids.contains(host.id) || scope.inactive_owner_ids.contains(corner.opening_ids[leg]))
+                invalid("Active corner window requires both actual active hosts and cuts");
+            if (strict_profiles) validate_wall_profile_source_entity(host);
+            hosts[leg]=hosted_wall(entities,host,openings[host.id]);
+            (void)make_wall(hosts[leg]);
+        }
+        // Bare managed cuts alone cannot prove that the common manufactured
+        // post/frame and both panes fit the final hosts and their remnants.
+        (void)make_corner_window(hosts,corner_window_cuts(corner,hosts),corner.assembly);
+    }
 }
 
 std::map<std::string, Entity, std::less<>> replay_wall_profile_entities(

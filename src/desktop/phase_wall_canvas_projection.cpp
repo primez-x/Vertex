@@ -10,6 +10,7 @@
 #include "sketch/roof_entity_codec.hpp"
 #include "sketch/boundary_dimension.hpp"
 #include "sketch/constraint_phase_scope.hpp"
+#include "sketch/corner_window.hpp"
 #include "sketch/document_wall.hpp"
 #include "sketch/document_wall_plan.hpp"
 #include "sketch/document_solid.hpp"
@@ -94,7 +95,7 @@ void clear_geometry(CanvasEntity& item) {
     item.segments.clear();item.holes.clear();item.stroke_segments.reset();item.hit_segments.clear();
     item.snap_segments.clear();item.snap_points.clear();item.drawing_alignment_segments.clear();
     item.vertex_handles.clear();item.resize_frame.reset();item.opening_width_controls.reset();
-    item.endpoint_baseline.reset();item.svg_symbol.reset();
+    item.endpoint_baseline.reset();item.svg_symbol.reset();item.corner_window_width_controls.reset();
 }
 void project_entity(CanvasEntity& item,const ArchitecturalViewContext& context,bool dimension=false) {
     item.segments=project_path(std::move(item.segments),context.frame);
@@ -120,8 +121,20 @@ void project_entity(CanvasEntity& item,const ArchitecturalViewContext& context,b
         controls.end_jamb=project_point(controls.end_jamb,context.frame);
         if (controls.host_baseline) controls.host_baseline=project_path({*controls.host_baseline},context.frame).front();
     }
+    if (item.corner_window_width_controls) for (auto& leg:item.corner_window_width_controls->legs) {
+        leg.start_jamb=project_point(leg.start_jamb,context.frame);
+        leg.end_jamb=project_point(leg.end_jamb,context.frame);
+        if (leg.host_baseline) leg.host_baseline=project_path({*leg.host_baseline},context.frame).front();
+    }
     if (!context.crop || dimension) return;
     const auto bounds=crop_bounds(*context.crop);
+    if (item.corner_window_width_controls) {
+        const auto footprint=item.segments.empty() ? std::optional<Bounds2>{} : std::optional{boundary_bounds(item.segments)};
+        bool full=footprint && inside(footprint->minimum,bounds) && inside(footprint->maximum,bounds);
+        for (const auto& leg:item.corner_window_width_controls->legs)
+            full=full && inside(leg.start_jamb,bounds) && inside(leg.end_jamb,bounds);
+        if (!full) item.corner_window_width_controls.reset();
+    }
     item.segments=clip_boundary_to_bounds(item.segments,bounds);
     if (item.stroke_segments) *item.stroke_segments=clip_boundary_to_bounds(*item.stroke_segments,bounds);
     item.hit_segments=clip_boundary_to_bounds(item.hit_segments,bounds);
@@ -566,23 +579,30 @@ PhaseWallCanvasProjection project_phase_wall_canvas(const DocumentSnapshot& sour
     const auto proposed_id=[&](const std::string& id) {
         const auto found=aliases.find(id);return found==aliases.end() ? id : found->second;
     };
+    const auto stage_scope=constraint_phase_scope(stage);
     std::map<std::string,Wall,std::less<>> walls;
-    for (const auto& [original,proposed]:aliases) {
-        if (!source.entities().contains(original) || source.entities().at(original).type!="wall") continue;
+    const auto stage_wall=[&](const std::string& id) -> const Wall& {
+        if (walls.contains(id)) return walls.at(id);
+        const auto owner=stage.find(id);
+        if (owner==stage.end() || owner->second.id!=id || owner->second.type!="wall")
+            throw std::invalid_argument("Phase wall canvas preview lost an actual wall host: "+id);
         std::vector<const Entity*> children;
-        for (const auto& [id,entity]:stage) {
-            (void)id;
-            if (entity.type=="opening" && entity.properties.value("wall_id",std::string{})==proposed) children.push_back(&entity);
+        for (const auto& [child_id,entity]:stage) {
+            if (!stage_scope.inactive_owner_ids.contains(child_id) && entity.type=="opening" &&
+                entity.properties.value("wall_id",std::string{})==id) children.push_back(&entity);
         }
         Wall wall;std::string error;
-        if (!read_document_wall(resolve_vertical_placement(stage,stage.at(proposed)),children,wall,error))
-            throw std::invalid_argument("Phase wall canvas preview wall "+original+": "+error);
-        walls.emplace(proposed,std::move(wall));
+        if (!read_document_wall(resolve_vertical_placement(stage,owner->second),children,wall,error))
+            throw std::invalid_argument("Phase wall canvas preview wall "+id+": "+error);
+        return walls.emplace(id,std::move(wall)).first->second;
+    };
+    for (const auto& [original,proposed]:aliases) {
+        if (source.entities().contains(original) && source.entities().at(original).type=="wall")
+            (void)stage_wall(proposed);
     }
     // Phase replacement retains its originals as recovery/design evidence.
     // Only the actual saved active semantic roster participates in junctions;
     // duplicate retired originals must not create false caps or T/X seams.
-    const auto stage_scope=constraint_phase_scope(stage);
     std::set<std::string,std::less<>> semantic_visible;
     for (const auto& [id,entity]:stage) if (!stage_scope.inactive_owner_ids.contains(id)) {
         (void)entity;
@@ -609,6 +629,57 @@ PhaseWallCanvasProjection project_phase_wall_canvas(const DocumentSnapshot& sour
         const auto old=old_plans.find(id);
         if (old!=old_plans.end() && (!same_path(plan.footprint,old->second.footprint) || !same_path(plan.strokes,old->second.strokes))) affected.insert(id);
     }
+    // A common manufactured owner changes whenever either final host or cut
+    // changes. Keep the captured owner spelling solely as a presentation alias.
+    const auto source_scope=constraint_phase_scope(source.entities());
+    for (const auto& [id,before]:source.entities()) {
+        // Parked/demolished alternatives retain their original host spelling;
+        // the active edit's aliases cannot become authority for those owners.
+        if (before.type!="corner_window" || source_scope.inactive_owner_ids.contains(id)) continue;
+        const auto original=parse_corner_window(before);
+        bool changed=affected.contains(id);
+        for (std::size_t leg=0;leg<2;++leg)
+            changed=changed || affected.contains(original.wall_ids[leg]) || affected.contains(original.opening_ids[leg]);
+        const auto after=stage.find(proposed_id(id));
+        if (after==stage.end()) {
+            if (changed) throw std::invalid_argument("Phase wall canvas preview lost an affected corner window: "+id);
+            continue;
+        }
+        if (after->second.id!=proposed_id(id) || after->second.type!="corner_window")
+            throw std::invalid_argument("Phase wall canvas preview changed a corner-window owner identity: "+id);
+        const auto proposed=parse_corner_window(after->second);
+        for (std::size_t leg=0;leg<2;++leg) {
+            if (proposed.wall_ids[leg]!=proposed_id(original.wall_ids[leg]) ||
+                proposed.opening_ids[leg]!=proposed_id(original.opening_ids[leg]))
+                throw std::invalid_argument("Phase wall canvas preview lost an exact corner-window host or cut mapping: "+id);
+            const auto& host=proposed.wall_ids[leg];
+            const auto& cut=proposed.opening_ids[leg];
+            changed=changed || !stage.contains(host) || !stage.contains(cut) ||
+                stage.at(cut)!=source.entities().at(original.opening_ids[leg]) ||
+                resolve_vertical_placement(stage,stage.at(host))!=
+                    resolve_vertical_placement(source.entities(),source.entities().at(original.wall_ids[leg]));
+        }
+        if (changed || after->second!=before) affected.insert(id);
+    }
+    const auto corner_hosts=[&](const CornerWindow& corner) {
+        std::array<Wall,2> hosts{stage_wall(corner.wall_ids[0]),stage_wall(corner.wall_ids[1])};
+        const auto cuts=corner_window_cuts(corner,hosts);
+        for (std::size_t leg=0;leg<2;++leg) {
+            const auto child=stage.find(corner.opening_ids[leg]);
+            if (child==stage.end() || child->second.id!=corner.opening_ids[leg] || child->second.type!="opening" ||
+                child->second.properties.value("corner_window_id",std::string{})!=corner.id ||
+                !child->second.properties.contains("corner_leg") || child->second.properties.at("corner_leg")!=leg ||
+                child->second.properties.value("wall_id",std::string{})!=corner.wall_ids[leg] ||
+                child->second.properties.value("opening_kind",std::string{})!="opening" ||
+                child->second.properties.contains("opening_assembly") || child->second.properties.contains("door_operation"))
+                throw std::invalid_argument("Phase wall canvas preview lost an actual managed corner cut: "+corner.id);
+            const auto retained_cut=std::find_if(hosts[leg].openings.begin(),hosts[leg].openings.end(),
+                [&](const auto& value){return value.id==cuts[leg].id;});
+            if (retained_cut==hosts[leg].openings.end() || *retained_cut!=cuts[leg])
+                throw std::invalid_argument("Phase wall canvas preview corner cut differs from its final manufactured owner: "+corner.id);
+        }
+        return hosts;
+    };
     if (coordinated) {
         for (const auto& [id,before]:source.entities()) {
             if (aliases.contains(id)) continue;
@@ -863,17 +934,7 @@ PhaseWallCanvasProjection project_phase_wall_canvas(const DocumentSnapshot& sour
         auto projected=prototype;clear_geometry(projected);
         bool world=true;
         if (entity.type=="wall") {
-            if (!walls.contains(target)) {
-                std::vector<const Entity*> children;
-                for (const auto& [child_id,child]:stage) {
-                    (void)child_id;
-                    if (child.type=="opening" && child.properties.value("wall_id",std::string{})==target) children.push_back(&child);
-                }
-                Wall wall;std::string error;
-                if (!read_document_wall(resolve_vertical_placement(stage,entity),children,wall,error)) throw std::invalid_argument(error);
-                walls.emplace(target,std::move(wall));
-            }
-            const auto& wall=walls.at(target);
+            const auto& wall=stage_wall(target);
             projected.thickness_metres=wall.thickness;
             if (shape_projection) {projected.segments=project_solid(make_wall(wall),*view_context);world=false;}
             else {
@@ -898,6 +959,68 @@ PhaseWallCanvasProjection project_phase_wall_canvas(const DocumentSnapshot& sour
                     {std::midpoint(wall.baseline.start.x,wall.baseline.end.x),std::midpoint(wall.baseline.start.y,wall.baseline.end.y)},
                     std::atan2(wall.baseline.end.y-wall.baseline.start.y,wall.baseline.end.x-wall.baseline.start.x),segment_length(wall.baseline),wall.thickness};
             }
+        } else if (entity.type=="corner_window") {
+            const auto corner=parse_corner_window(entity);
+            const auto original=parse_corner_window(source.entities().at(id));
+            bool visible=semantic_visible.contains(target);
+            for (std::size_t leg=0;leg<2;++leg)
+                visible=visible && semantic_visible.contains(corner.wall_ids[leg]) && semantic_visible.contains(corner.opening_ids[leg]);
+            if (view_context) {
+                const auto& context=*view_context;
+                if (context.restrict_to_objects || !context.object_ids.empty()) {
+                    const auto referenced=[&](const std::string& owner) {
+                        for (const auto& reference:context.object_ids) {
+                            if (reference==owner) return true;
+                            const auto source_owner=source.entities().find(reference);
+                            if (source_owner!=source.entities().end() && source_owner->second.type=="opening" &&
+                                source_owner->second.properties.value("wall_id",std::string{})==owner) return true;
+                        }
+                        return false;
+                    };
+                    visible=visible && (referenced(id) || (referenced(original.wall_ids[0]) && referenced(original.wall_ids[1])));
+                }
+                if (context.presentation.appearance) {
+                    const auto& appearance=*context.presentation.appearance;
+                    visible=visible && appearance.visible;
+                    for (const auto& object:appearance.objects)
+                        if ((object.object_id==id || object.object_id==original.wall_ids[0] || object.object_id==original.wall_ids[1]) &&
+                            object.visible && !*object.visible) visible=false;
+                }
+            }
+            if (visible) {
+                const auto hosts=corner_hosts(corner);
+                const auto cuts=corner_window_cuts(corner,hosts);
+                const auto shape=make_corner_window(hosts,cuts,corner.assembly);
+                projected.thickness_metres=0;
+                const bool full_depth=!view_context || (horizontal_plan &&
+                    full_opening_depth(hosts[0],cuts[0],view_context->depth) &&
+                    full_opening_depth(hosts[1],cuts[1],view_context->depth));
+                projected.segments=horizontal_plan && full_depth ? project_building_shape_plan(shape) : project_solid(shape,*view_context);
+                // Source controls certify a complete captured presentation.
+                // Eligible geometry alone cannot authorize newly visible grips.
+                if (captured.contains(key) && prototype.corner_window_width_controls && source.is_editable() &&
+                    prototype.corner_window_width_controls->legs[0].source_revision==source.revision() &&
+                    prototype.corner_window_width_controls->legs[1].source_revision==source.revision() &&
+                    horizontal_plan && full_depth) {
+                    CanvasCornerWindowWidthControls controls;controls.at_start=corner.at_start;
+                    for (std::size_t leg=0;leg<2;++leg) {
+                        const auto span=hosted_opening_span(hosts[leg].baseline,cuts[leg].offset,cuts[leg].width);
+                        controls.legs[leg]={span.start,span.end,cuts[leg].width,cuts[leg].height,
+                            source.revision(),hosts[leg].baseline,cuts[leg].offset};
+                    }
+                    projected.corner_window_width_controls=std::move(controls);
+                }
+                if (view_context) {
+                    if (horizontal_plan && full_depth) project_entity(projected,*view_context);
+                    world=false;
+                }
+                if (projected.segments.empty()) projected.corner_window_width_controls.reset();
+            }
+        } else if (entity.type=="opening" && entity.properties.contains("corner_window_id")) {
+            // These children remain in both complete host rosters, but the
+            // common owner supplies the only manufactured canvas target.
+            if (captured.contains(key)) result.entities.push_back(std::move(projected));
+            continue;
         } else if (entity.type=="opening") {
             const auto host=entity.properties.at("wall_id").get<std::string>();
             if (!walls.contains(host)) throw std::invalid_argument("Phase wall canvas preview opening has no qualified replacement host: "+id);
@@ -1274,6 +1397,11 @@ PhaseWallCanvasProjection project_phase_wall_canvas(const DocumentSnapshot& sour
                 const auto opening=std::find_if(wall.openings.begin(),wall.openings.end(),[&](const auto& value){return value.id==target;});
                 if (opening==wall.openings.end()) throw std::invalid_argument("Phase wall preview bound view dimension lost its opening.");
                 support=project_shape_view(opening_solid(owner,wall,*opening),BuildingViewKind::plan,view_context->frame);
+            } else if (owner.type=="corner_window") {
+                const auto corner=parse_corner_window(owner);
+                const auto hosts=corner_hosts(corner);
+                support=project_shape_view(make_corner_window(hosts,corner_window_cuts(corner,hosts),corner.assembly),
+                    BuildingViewKind::plan,view_context->frame);
             } else if (coordinated && coordinated_physical_type(owner.type))
                 support=project_shape_view(coordinated_shape(stage,target),BuildingViewKind::plan,view_context->frame);
             else if (horizontal_plan && can_recognize_boundary_entity_type(owner.type))

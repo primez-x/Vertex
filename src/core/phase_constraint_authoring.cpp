@@ -359,7 +359,7 @@ CoordinatedReplacements coordinated(const Json& value,const PhaseConstraintAutho
         if (!result.wall->wall_replacement.is_null()) {
             const auto leaf=decode_phase_wall_replacement_authoring(result.wall->wall_replacement);
             if (!leaf.wall_profiles.empty() || !leaf.opening_profiles.empty() || !leaf.opening_rehosts.empty() ||
-                !leaf.opening_families.empty() || !leaf.wall_stacks.empty())
+                !leaf.opening_families.empty() || !leaf.wall_stacks.empty() || !leaf.corner_profiles.empty())
                 invalid("Coordinated wall replacement cannot borrow another wall edit family");
         }
         if (result.wall->expected_revision!=enclosing.expected_revision ||
@@ -933,7 +933,7 @@ Entities replay_coordinated(const Entities& source,const PhaseConstraintAuthorin
                 requests.front().alternative_id!=leaf.alternative_id || requests.front().seed_wall_ids!=leaf.seed_wall_ids)
                 invalid("Coordinated wall replacement roots differ from the actual typed geometry authority");
             const auto plan=inspect_phase_wall_replacement_plan(source,leaf.seed_wall_ids,leaf.registry_id,
-                leaf.alternative_id,leaf.complete_presentations);
+                leaf.alternative_id,leaf.complete_presentations,leaf.complete_corner_windows);
             retained_baselines.insert(plan.required_entity_ids.begin(),plan.required_entity_ids.end());
         } else if (!requests.empty())
             invalid("Coordinated ordinary wall lane cannot borrow replacement authority for actual baseline owners");

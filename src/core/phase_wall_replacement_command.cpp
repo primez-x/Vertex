@@ -4,6 +4,8 @@
 #include "sketch/annotation_entity_codec.hpp"
 #include "sketch/constraint_integrity.hpp"
 #include "sketch/constraint_phase_scope.hpp"
+#include "sketch/corner_window.hpp"
+#include "sketch/corner_window_edit.hpp"
 #include "sketch/document_digest.hpp"
 #include "sketch/model_phases.hpp"
 #include "sketch/physical_wall_room.hpp"
@@ -91,6 +93,16 @@ Stage physical_stage(const Entities& source,const PhaseConstraintAuthoringIntent
     const PhaseWallReplacementAuthoring& edit) {
     if (intent.source_entities_digest!=entity_map_digest(source) ||
         intent.phase_selections!=phase_constraint_authoring_selections(source)) invalid("actual source or saved choice changed");
+    if (!edit.corner_profiles.empty()) {
+        if (!edit.complete_corner_windows || !edit.wall_profiles.empty() || !edit.opening_profiles.empty() ||
+            !edit.opening_rehosts.empty() || !edit.opening_families.empty() || !edit.wall_stacks.empty() ||
+            has_geometry_or_relation_intent(intent.intent))
+            invalid("corner profiles require leaf eight and a separate reviewed operation from all other edit authority");
+        const auto request=phase_corner_window_profile_replacement_request(source,edit.corner_profiles);
+        if (!request || request->registry_id!=edit.registry_id || request->alternative_id!=edit.alternative_id ||
+            request->seed_wall_ids!=edit.seed_wall_ids)
+            invalid("corner profile replacement roots do not match actual changes and saved baseline membership");
+    }
     if (!edit.wall_stacks.empty()) {
         if (!edit.wall_profiles.empty() || !edit.opening_profiles.empty() || !edit.opening_rehosts.empty() ||
             !edit.opening_families.empty() || has_geometry_or_relation_intent(intent.intent))
@@ -125,7 +137,7 @@ Stage physical_stage(const Entities& source,const PhaseConstraintAuthoringIntent
     }
     Stage stage;
     stage.plan=inspect_phase_wall_replacement_plan(source,edit.seed_wall_ids,edit.registry_id,
-        edit.alternative_id,edit.complete_presentations);
+        edit.alternative_id,edit.complete_presentations,edit.complete_corner_windows);
     stage.replacement=replay_phase_wall_replacement(source,stage.plan,edit.identities);
     auto mapped=remap_phase_wall_replacement_authoring_intent(intent.intent,stage.replacement.original_to_proposed);
     std::erase_if(mapped.relation_mutations,[&](const auto& mutation) {
@@ -137,6 +149,26 @@ Stage physical_stage(const Entities& source,const PhaseConstraintAuthoringIntent
         return true;
     });
     stage.entities=stage.replacement.entities;
+    if (!edit.corner_profiles.empty()) {
+        // Independently derive the original edits before touching the copied
+        // stage. Same-value rows need no mapping and retain their exact source.
+        const auto originals=replay_corner_window_profile_entities(source,edit.corner_profiles,false);
+        auto profiles=edit.corner_profiles;
+        std::erase_if(profiles,[&](const auto& profile) {
+            return exact(source.at(profile.owner_id),originals.at(profile.owner_id));
+        });
+        for (auto& profile:profiles) {
+            const auto mapped_owner=stage.replacement.original_to_proposed.find(profile.owner_id);
+            if (mapped_owner==stage.replacement.original_to_proposed.end())
+                invalid("corner profile requires its independently derived proposed owner");
+            const auto corner=parse_corner_window(source.at(profile.owner_id));
+            for (const auto& id:{corner.wall_ids[0],corner.wall_ids[1],corner.opening_ids[0],corner.opening_ids[1]})
+                if (!stage.replacement.original_to_proposed.contains(id))
+                    invalid("corner profile requires complete independently derived host and cut copies");
+            profile.owner_id=mapped_owner->second;
+        }
+        stage.entities=replay_corner_window_profile_entities(stage.entities,profiles,false);
+    }
     if (!edit.wall_stacks.empty()) {
         std::set<std::string,std::less<>> original_walls,copied_walls,reserved;
         for (const auto& [original,copy]:stage.replacement.original_to_proposed) {
@@ -282,7 +314,14 @@ Stage physical_stage(const Entities& source,const PhaseConstraintAuthoringIntent
     if (has_geometry_or_relation_intent(mapped))
         stage.entities=reconstruct_active_phase_constraint_authoring(stage.entities,mapped);
     else if (edit.wall_profiles.empty() && edit.opening_profiles.empty() && edit.opening_rehosts.empty() &&
-        edit.opening_families.empty() && edit.wall_stacks.empty()) invalid("replacement has no semantic edit");
+        edit.opening_families.empty() && edit.wall_stacks.empty() && edit.corner_profiles.empty()) invalid("replacement has no semantic edit");
+    if (edit.complete_corner_windows) {
+        // Identity remapping has already produced a complete valid physical
+        // source. Geometry consequences complete against that copied source,
+        // retaining the originals and every other saved alternative.
+        complete_corner_window_geometry(stage.replacement.entities,stage.entities);
+        validate_corner_window_state(stage.entities);
+    }
     preserve_baseline(source,stage.entities,stage.plan);
     // Incoming room evidence sees every independently reconstructed new
     // relationship. These copies were withheld from the physical solve; only
@@ -481,6 +520,12 @@ std::optional<PhaseWallReplacementRequest> phase_wall_layer_stack_replacement_re
 Json encode_phase_wall_replacement_authoring(const PhaseWallReplacementAuthoring& value) {
     if (value.opening_families.size() > 2048) invalid("invalid opening family inventory");
     if (value.wall_stacks.size()>2048) invalid("invalid wall stack inventory");
+    if (value.corner_profiles.size()>2048) invalid("invalid corner profile inventory");
+    if (value.complete_corner_windows && !value.complete_presentations)
+        invalid("corner completion requires complete presentation admission");
+    if (!value.corner_profiles.empty() && (!value.complete_corner_windows || !value.wall_profiles.empty() ||
+        !value.opening_profiles.empty() || !value.opening_rehosts.empty() || !value.opening_families.empty() ||
+        !value.wall_stacks.empty())) invalid("corner profiles require exclusive leaf-eight edit authority");
     Json decisions=Json::array();
     for (const auto& choice:value.room_constraint_decisions) {
         Json endpoints=Json::array();
@@ -537,13 +582,41 @@ Json encode_phase_wall_replacement_authoring(const PhaseWallReplacementAuthoring
     }
     // The decoder below is the single strict semantic admission path. Encoding
     // never supplies geometry, inferred room mappings or arbitrary clone data.
-    if (value.complete_presentations)
+    if (value.complete_corner_windows) {
+        Json profiles=Json::array();
+        std::set<std::string,std::less<>> targets;
+        for (const auto& profile:value.corner_profiles) {
+            if (!targets.insert(profile.owner_id).second) invalid("duplicate corner profile target");
+            profiles.push_back(encode_corner_window_profile_edit_intent(profile));
+        }
+        result=Json{{"version",8},{"complete_presentations",true},{"authoring",std::move(result)},
+            {"corner_profiles",std::move(profiles)}};
+    } else if (value.complete_presentations)
         result = Json{{"version",7},{"complete_presentations",true},{"authoring",std::move(result)}};
     if (result.dump().size()>1024*1024) invalid("replacement decisions exceed one MiB");
     return result;
 }
 PhaseWallReplacementAuthoring decode_phase_wall_replacement_authoring(const Json& value) {
     if (value.dump().size()>1024*1024) invalid("replacement decisions exceed one MiB");
+    if (value.is_object() && value.contains("version") && value.at("version").is_number_integer() &&
+        value.at("version")==8) {
+        keys(value,{"version","complete_presentations","authoring","corner_profiles"});
+        if (!value.at("complete_presentations").is_boolean() || value.at("complete_presentations")!=true)
+            invalid("corner completion wrapper requires complete presentations");
+        const auto& body=value.at("authoring");
+        if (!body.is_object() || !body.contains("version") || !body.at("version").is_number_integer() ||
+            body.at("version")<1 || body.at("version")>6)
+            invalid("corner completion requires a flat existing authoring dialect");
+        auto result=decode_flat_phase_wall_replacement_authoring(body,true);
+        result.complete_presentations=true;
+        result.complete_corner_windows=true;
+        const auto& rows=value.at("corner_profiles");
+        if (!rows.is_array() || rows.size()>2048) invalid("invalid corner profile inventory");
+        for (const auto& row:rows) result.corner_profiles.push_back(decode_corner_window_profile_edit_intent(row));
+        if (encode_phase_wall_replacement_authoring(result).dump()!=value.dump())
+            invalid("corner completion wrapper is not canonical");
+        return result;
+    }
     if (value.is_object() && value.contains("version") && value.at("version").is_number_integer() &&
         value.at("version") == 7) {
         keys(value,{"version","complete_presentations","authoring"});
@@ -722,7 +795,7 @@ Entities replay_phase_wall_replacement_authoring(const Entities& source,const Ph
     }
     complete_room_constraints(stage,edit);
     complete_surviving_presentations(stage,source,edit);
-    if (!edit.opening_families.empty() || !edit.wall_stacks.empty() || std::any_of(edit.wall_profiles.begin(),edit.wall_profiles.end(),
+    if (edit.complete_corner_windows || !edit.opening_families.empty() || !edit.wall_stacks.empty() || std::any_of(edit.wall_profiles.begin(),edit.wall_profiles.end(),
             strict_profile_admission)) {
         std::set<std::string,std::less<>> copied_walls;
         for (const auto& [original,copy]:stage.replacement.original_to_proposed) {
@@ -739,7 +812,7 @@ void validate_phase_wall_replacement_originals(const Entities& source,const Enti
     const PhaseConstraintAuthoringIntent& intent) {
     const auto edit=decode_phase_wall_replacement_authoring(intent.wall_replacement);
     const auto plan=inspect_phase_wall_replacement_plan(source,edit.seed_wall_ids,edit.registry_id,
-        edit.alternative_id,edit.complete_presentations);
+        edit.alternative_id,edit.complete_presentations,edit.complete_corner_windows);
     preserve_baseline(source,candidate,plan);
 }
 ApplyBoundaryConstraintChanges phase_wall_replacement_authoring_command(const PhaseConstraintAuthoringIntent& intent) {

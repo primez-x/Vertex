@@ -377,6 +377,9 @@ std::uint32_t required_format_version_internal(const DocumentSnapshot& snapshot,
             const auto& value=*pending.back(); pending.pop_back();
             if (++nodes>ProjectStore::maximum_json_values)
                 storage_error(StorageErrorCode::resource_limit,"Typed edit reader-floor scan exceeds its JSON budget");
+            if (value.is_object() && value.value("version",nlohmann::json()) == 8 && value.size() == 4 &&
+                value.contains("complete_presentations") && value.contains("authoring") && value.contains("corner_profiles"))
+                floor=std::max(floor,171U);
             if (value.is_object() && value.value("version",nlohmann::json()) == 17 && value.size() == 9 &&
                 value.contains("ordinary_roof_edits") && value.contains("source_snapshot_digest") && value.contains("intent"))
                 floor=std::max(floor,169U);
@@ -519,9 +522,9 @@ std::uint32_t required_format_version_internal(const DocumentSnapshot& snapshot,
     };
     for (const auto& revision : snapshot.history()) {
         if (revision.phase_entity_import) required=std::max(required,160U);
-        if (required<169 && revision.boundary_geometry_edit)
+        if (required<171 && revision.boundary_geometry_edit)
             required=std::max(required,typed_edit_reader_floor(encode_boundary_geometry_edit(*revision.boundary_geometry_edit)));
-        if (required<169 && revision.boundary_constraint_changes)
+        if (required<171 && revision.boundary_constraint_changes)
             required=std::max(required,typed_edit_reader_floor(command_to_json(Command{*revision.boundary_constraint_changes})));
         if (required<122 && revision.boundary_geometry_edit)
             required=std::max(required,quantity_reader_floor(encode_boundary_geometry_edit(*revision.boundary_geometry_edit)));
@@ -768,6 +771,7 @@ std::uint32_t required_format_version_internal(const DocumentSnapshot& snapshot,
                 if (!intent.is_object() || intent.value("version",0)!=2 || replacement==intent.end() ||
                     !replacement->is_object()) return 0;
                 const auto version=replacement->value("version",0);
+                if (version==8) return 171U;
                 if (version==7) return 120U;
                 if (version==6) return 107U;
                 if (version==2 && replacement->contains("wall_profiles") && replacement->at("wall_profiles").is_array() &&
@@ -2869,6 +2873,7 @@ bool verify_sqlite_schema(sqlite3* database, bool allow_recovery = false) {
          sqlite3_column_int(user_version.get(), 0) != 167 &&
          sqlite3_column_int(user_version.get(), 0) != 168 &&
          sqlite3_column_int(user_version.get(), 0) != 170 &&
+         sqlite3_column_int(user_version.get(), 0) != 171 &&
          sqlite3_column_int(user_version.get(), 0) != 169 &&
          sqlite3_column_int(user_version.get(), 0) != 163 &&
          sqlite3_column_int(user_version.get(), 0) != 143 &&
@@ -3590,6 +3595,8 @@ DocumentSnapshot read_snapshot(sqlite3* database, RecoveryLedger* recovery = nul
     // here and authenticate the manifest with its stored version below.
     const auto required_format = required_format_version_internal(snapshot, format_number < 28);
     if (required_format > format_number) {
+        if (required_format>=171)
+            storage_error(StorageErrorCode::unsupported_format,"This project requires reader 171 for coordinated corner-window edits in saved design alternatives and their retained history");
         if (required_format>=170)
             storage_error(StorageErrorCode::unsupported_format,"This project requires reader 170 for coordinated two-host corner windows and their retained history");
         if (required_format>=169)

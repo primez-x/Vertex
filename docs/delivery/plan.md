@@ -127,8 +127,11 @@ polling timeout does not permit restarting it.
    manufactured previews, retained quantity/profile edits and coordinated host
    movement/rotation replay. Equal explicit host scaling is implemented in
    architectural transactions, with cumulative temporary hosted rosters for
-   repeated transforms; wall group UI scaling remains. Complete active-baseline replacement,
-   associative leg dimensions and exchange; source integration does not close
+   repeated transforms; wall group UI scaling remains. Qualify source-derived
+   active-baseline owner/two-host/two-cut replacement and leaf-eight corner
+   name/dimension/profile editing, Properties and canvas preview/publication,
+   mandatory room review and reader 171/extraction 169 retained history.
+   Complete associative leg dimensions and exchange; source integration does not close
    those lifecycles. Qualify the roof-hosted fixed
    skylight source across both catalog entries, actual sloped
    frame/glazing, roster editing, scaling/resizing, cloning/removal, phases,

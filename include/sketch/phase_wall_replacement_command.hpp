@@ -7,6 +7,7 @@
 #include "sketch/phase_hosted_opening_rehost.hpp"
 #include "sketch/phase_hosted_opening_family_edit.hpp"
 #include "sketch/wall_layer_stack_edit.hpp"
+#include "sketch/phase_corner_window_edit.hpp"
 #include "sketch/constraint_entity.hpp"
 #include "sketch/physical_wall_phase_review.hpp"
 
@@ -52,6 +53,10 @@ struct PhaseWallReplacementAuthoring {
     // overlay map keys matching actual saved-view IDs. Historical flat admission
     // and fresh destinations stay strict. This adds no other edit authority.
     bool complete_presentations{false};
+    // Leaf eight retains historical flat edit dialects and independently
+    // completes copied corner cohorts. Profile rows are exclusive edit authority.
+    bool complete_corner_windows{false};
+    std::vector<CornerWindowProfileEditIntent> corner_profiles;
 };
 struct PhaseWallReplacementAuthoringPreview {
     PhaseWallReplacementResult replacement;

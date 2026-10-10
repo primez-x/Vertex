@@ -28,6 +28,7 @@
 #include "sketch/corner_window.hpp"
 #include "sketch/corner_window_transfer.hpp"
 #include "sketch/corner_window_edit.hpp"
+#include "sketch/phase_corner_window_edit.hpp"
 #include "sketch/hosted_opening_plan.hpp"
 #include "sketch/workspace_regeneration_queue.hpp"
 #include "sketch/roof_join_semantics.hpp"
@@ -25276,7 +25277,7 @@ public:
                 auto proposed = new_id("proposed");
                 while (!occupied.insert(proposed).second) proposed = new_id("proposed");
                 return proposed;
-            }, true);
+            }, true, true);
         if (!proposal) return std::nullopt;
         // An incomplete room stage is retained only as typed semantic intent.
         // Canvas projection and release handle it without preparing history.
@@ -30250,7 +30251,7 @@ public:
                     auto proposed = new_id("proposed");
                     while (!occupied.insert(proposed).second) proposed = new_id("proposed");
                     return proposed;
-                }, true);
+                }, true, true);
             if (proposal) {
                 proposal->intent.intent.message = move_offset ? "Move proposed hosted opening" : "Resize proposed hosted opening";
                 return Command{phase_wall_replacement_authoring_command(proposal->intent)};
@@ -30258,6 +30259,38 @@ public:
         }
         return move_offset ? Command{hosted_opening_offset_command(source, opening_id, *move_offset)} :
             Command{hosted_opening_width_resize_command(source, opening_id, *relative_width_scale, keep_start_jamb)};
+    }
+
+    static Command cornerWindowProfileGeometryCommand(const DocumentSnapshot& source,
+        const Entity& replacement, const std::string& message) {
+        const auto profile=make_corner_window_profile_edit_intent(source.entities(),replacement);
+        if (!profile) return ApplyEntityChanges{source.revision(),{}, {},message};
+        const auto request=phase_corner_window_profile_replacement_request(source.entities(),{*profile});
+        if (!request) return corner_window_upsert_command(source,replacement,source.revision());
+        const auto plan=inspect_phase_wall_replacement_plan(source.entities(),request->seed_wall_ids,
+            request->registry_id,request->alternative_id,true,true);
+        if (!plan.ready()) {
+            std::string reason="The corner-window design edit has unsupported dependencies.";
+            for (const auto& diagnostic:plan.diagnostics) if (diagnostic.blocking)
+                reason+='\n'+diagnostic.entity_id+": "+diagnostic.reason;
+            throw std::invalid_argument(reason);
+        }
+        PhaseWallReplacementAuthoring edit;
+        edit.registry_id=request->registry_id; edit.alternative_id=request->alternative_id;
+        edit.seed_wall_ids=request->seed_wall_ids;
+        edit.complete_presentations=true; edit.complete_corner_windows=true;
+        edit.corner_profiles={*profile};
+        auto occupied=retainedSlabIdentityNames(source);
+        for (const auto* ids:{&plan.required_entity_ids,&plan.required_child_ids})
+            for (const auto& original:*ids) {
+                auto proposed=new_id("proposed");
+                while (!occupied.insert(proposed).second) proposed=new_id("proposed");
+                edit.identities.emplace(original,std::move(proposed));
+            }
+        ConstraintAuthoringIntent semantic; semantic.message=message;
+        auto intent=make_phase_constraint_authoring_intent(source,semantic);
+        intent.wall_replacement=encode_phase_wall_replacement_authoring(edit);
+        return phase_wall_replacement_authoring_command(intent);
     }
 
     static std::optional<std::vector<CanvasEntity>> computeOpeningWidthPreview(
@@ -30269,12 +30302,26 @@ public:
         const std::vector<CanvasLabel>* retained_labels=nullptr) {
         try {
             if (source.entities().at(requested_id.toStdString()).type=="corner_window") {
-                auto command=augmentAuthoredCommand(Command{corner_window_leg_resize_command(source,
-                    requested_id.toStdString(),keep_start_jamb ? 1u : 0u,scale)},source);
+                auto replacement=source.entities().at(requested_id.toStdString());
+                const auto corner=parse_corner_window(replacement);
+                const auto leg=keep_start_jamb ? 1u : 0u;
+                const auto width=corner.widths[leg]*scale;
+                if (!std::isfinite(scale) || scale<=0.0 || !std::isfinite(width) || width<=0.0)
+                    throw std::invalid_argument("Corner leg resize must remain finite and positive.");
+                if (width!=corner.widths[leg]) replacement.properties["widths_m"][leg]=width;
+                auto command=cornerWindowProfileGeometryCommand(source,replacement,"Resize proposed corner window leg");
+                const std::vector<CanvasLabel> no_labels;
+                if (auto projection=projectAlternativeWallCanvasCommand(source,command,retained_scene,
+                        retained_scene,retained_labels ? *retained_labels : no_labels,metric_units,
+                        view_context ? std::optional{*view_context} : std::nullopt,prepared)) {
+                    if (proposed_labels) *proposed_labels=std::move(projection->labels);
+                    if (admitted_command) *admitted_command=std::move(command);
+                    return std::move(projection->entities);
+                }
+                command=augmentAuthoredCommand(command,source);
                 const auto candidate=prepared ? prepareCanvasEdit(source,command,edit_source,*prepared)
                     : Document::preview_command(source,command);
                 validate_architectural_geometry_changes(source,candidate,{requested_id.toStdString()});
-                const std::vector<CanvasLabel> no_labels;
                 auto projection=computeConstraintGeometryProjection(source,candidate,retained_scene,{},
                     retained_labels ? *retained_labels : no_labels,metric_units,{}, {},{},
                     view_context ? std::optional{*view_context} : std::nullopt,QFont{});
@@ -48225,7 +48272,7 @@ private:
             auto proposed = new_id("proposed");
             while (!occupied.insert(proposed).second) proposed = new_id("proposed");
             return proposed;
-        }, true);
+        }, true, true);
         if (wall_proposal) wall_intent = std::move(wall_proposal->intent);
         const auto* physical_phase = std::get_if<ApplyBoundaryConstraintChanges>(&physical_command);
         if (!wall_proposal && (!physical_phase || !physical_phase->phase_constraint_authoring_completion)) {
@@ -48837,7 +48884,7 @@ private:
         if (requests.size()!=1) throw std::invalid_argument("This edit replaces baseline walls in several design registries. Edit each building's alternative separately.");
         const auto& request=requests.front();
         const auto plan=inspect_phase_wall_replacement_plan(source.entities(),request.seed_wall_ids,
-            request.registry_id,request.alternative_id,true);
+            request.registry_id,request.alternative_id,true,true);
         if (!plan.ready()) {
             QStringList reasons;
             for (const auto& diagnostic:plan.diagnostics) if (diagnostic.blocking)
@@ -48847,6 +48894,7 @@ private:
         PhaseWallReplacementAuthoring replacement;replacement.registry_id=request.registry_id;
         replacement.alternative_id=request.alternative_id;replacement.seed_wall_ids=request.seed_wall_ids;
         replacement.complete_presentations=true;
+        replacement.complete_corner_windows=true;
         auto occupied=retainedSlabIdentityNames(source);
         for (const auto* ids:{&plan.required_entity_ids,&plan.required_child_ids})
             for (const auto& id:*ids) {
@@ -48948,7 +48996,7 @@ private:
         const auto request = phase_wall_layer_stack_replacement_request(source.entities(), {*captured});
         if (request) {
             const auto plan = inspect_phase_wall_replacement_plan(source.entities(), request->seed_wall_ids,
-                request->registry_id, request->alternative_id, true);
+                request->registry_id, request->alternative_id, true, true);
             if (!plan.ready()) {
                 QStringList reasons;
                 for (const auto& diagnostic : plan.diagnostics) if (diagnostic.blocking)
@@ -48961,6 +49009,7 @@ private:
             replacement.seed_wall_ids = request->seed_wall_ids;
             replacement.wall_stacks = {*captured};
             replacement.complete_presentations = true;
+            replacement.complete_corner_windows = true;
             for (const auto* slots : {&plan.required_entity_ids, &plan.required_child_ids})
                 for (const auto& id : *slots) {
                     auto proposed = new_id("proposed");
@@ -49020,6 +49069,7 @@ private:
             throw std::invalid_argument("The proposed wall profile requires its unchanged original project and no asset changes.");
         PhaseWallReplacementAuthoring replacement;
         replacement.complete_presentations = true;
+        replacement.complete_corner_windows = true;
         for (const auto& change:raw->entity_changes) {
             if (unchanged(change)) continue;
             if (change.kind!=EntityChangeKind::upsert || !shared_walls.contains(change.entity.id))
@@ -49041,7 +49091,8 @@ private:
             .expected_revision=source.revision(), .entity_changes={}, .message=raw->message}};
         std::sort(replacement.seed_wall_ids.begin(),replacement.seed_wall_ids.end());
         const auto plan=inspect_phase_wall_replacement_plan(source.entities(),replacement.seed_wall_ids,
-            replacement.registry_id,replacement.alternative_id,replacement.complete_presentations);
+            replacement.registry_id,replacement.alternative_id,replacement.complete_presentations,
+            replacement.complete_corner_windows);
         if (!plan.ready()) {
             QStringList reasons;
             for (const auto& diagnostic:plan.diagnostics) if (diagnostic.blocking)
@@ -49136,7 +49187,7 @@ private:
                 auto proposed = new_id("proposed");
                 while (!occupied.insert(proposed).second) proposed = new_id("proposed");
                 return proposed;
-            }, true);
+            }, true, true);
         if (!proposal) throw std::invalid_argument("The shared opening lost its captured design alternative.");
         proposal->intent.intent.message = raw->message;
         PhaseWallReplacementIdentityMap proposed_ids;
@@ -49220,7 +49271,7 @@ private:
                 auto proposed = new_id("proposed");
                 while (!occupied.insert(proposed).second) proposed = new_id("proposed");
                 return proposed;
-            }, true);
+            }, true, true);
         if (proposal) {
             proposal->intent.intent.message = raw->message;
             PhaseWallReplacementIdentityMap proposed_ids;
@@ -49324,7 +49375,7 @@ private:
                 auto proposed = new_id("proposed");
                 while (!occupied.insert(proposed).second) proposed = new_id("proposed");
                 return proposed;
-            }, true);
+            }, true, true);
         if (proposal) {
             proposal->intent.intent.message = raw->message;
             PhaseWallReplacementIdentityMap proposed_ids;
@@ -67226,10 +67277,22 @@ private:
                     }
                     candidate.properties["name"] = name->text().trimmed().toStdString();
                     if (editing && candidate.properties == owner_entity.properties) { dialog.accept(); return; }
-                    auto command = augmentAuthoredCommand(Command{corner_window_upsert_command(
-                        source, candidate, source.revision())}, source);
-                    const auto preview = Document::preview_command(source, command);
-                    validate_architectural_geometry_changes(source, preview, {corner.id});
+                    auto command = augmentAuthoredCommand(editing
+                        ? cornerWindowProfileGeometryCommand(source,candidate,"Edit proposed corner window")
+                        : Command{corner_window_upsert_command(source,candidate,source.revision())},source);
+                    if (const auto* child=std::get_if<ApplyBoundaryConstraintChanges>(&command);
+                        child && child->phase_constraint_authoring_completion) {
+                        const auto intent=decode_phase_constraint_authoring_intent(child->phase_constraint_authoring_intent);
+                        const auto physical=inspect_phase_wall_replacement_authoring(source,intent);
+                        std::set<std::string,std::less<>> copied_walls;
+                        for (const auto& [original,proposed]:physical.replacement.original_to_proposed)
+                            if (source.entities().contains(original) && source.entities().at(original).type=="wall")
+                                copied_walls.insert(proposed);
+                        validate_active_wall_physical_dependencies(physical.edited_entities,copied_walls);
+                    } else {
+                        const auto preview=Document::preview_command(source,command);
+                        validate_architectural_geometry_changes(source,preview,{corner.id});
+                    }
                     if (!sourceEditAuthorityUnchanged(authority))
                         throw std::invalid_argument("The corner-window source changed before publication.");
                     if (!applyAuthoredCommand(command)) { status->setText(lastError()); status->show(); return; }

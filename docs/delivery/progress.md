@@ -14,6 +14,60 @@ changed source does not acquire runtime acceptance without later qualification.
 
 ## Current delivery state
 
+### October 10 corner-window design-alternative editing - source integration
+
+Active baseline corner-window name, dimension and physical-profile edits now
+stage source-derived proposed copies of the owner, both actual wall hosts and
+both cuts. Original baseline records and other alternatives remain retained.
+Wall movement/profile/stack and ordinary opening edit/rehost/family replacement
+producers opt into the same complete corner cohort. Historical replacement
+leaves retain their original codecs and refusal behavior.
+
+The additive wall-replacement leaf eight has closed version/presentation/body/
+corner-profile fields. Its profile intent admits only the actual owner name and
+nine known dimensional pointers; it cannot supply clone payload, remap topology,
+change family or borrow another edit's authority. Actual saved membership and
+source changes derive the two-host request. Full fresh-ID reservations include
+retained/undone history and existing typed presentation children. Same-value
+edits retain native numbers and add no replacement. Unknown affected references,
+partial baseline cohorts and mixed authority refuse explicitly.
+
+Both canvas width handles and Properties discover alternative authority before
+ordinary Document preview. Proposed previews use the actual two-host frame,
+post and glazing; source IDs remain presentation aliases and captured Site
+placement applies once. Partial depth/crop views withhold grips. Mandatory room
+and relationship review still precedes final complete publication, including
+selection redirection to the committed proposed owner. Native dependency
+admission checks the common manufactured corner assembly in addition to complete
+host wall cuts, siblings and joins.
+
+Reader 171 and extraction 169 retain the new leaf in current, nested and undone
+history without changing v161 payload tables. Associative leg dimensions and
+IFC/DXF ownership transport remain implementation gaps. Discovery confirmed
+that temporary width readouts are not persistent dimensions and ordinary
+boundary-segment/silhouette bindings do not identify a corner leg. The checklist
+retains 450 original scenarios plus sixteen focused checks, all new checks Not
+tested and unavailable in the unchanged installed candidate. The full production
+scope and all ten gates remain open.
+
+Next work needs an owner-plus-leg dimension target rather than generated segment
+IDs: current BoundaryDimension v4 has boundary segments/wall axes, and linked
+SectionDimensionBinding resolves projected silhouettes. Both lack corner-leg
+identity. Source exchange discovery found no corner owner path in
+ifc_project_exchange.cpp, dxf_project_exchange.cpp or dxf_architectural_source.cpp;
+ordinary single-host void/fill and native DXF wall/opening carriers must gain
+atomic two-host ownership and import proof. These are source gaps, not merely
+missing qualification evidence.
+
+No builds, tests/new tests, scripts/probes, native jobs, UI launches, packages or
+installations ran. Static source inspection and diff/registry checks are not
+compilation, kernel/rendering, interaction, migration/history or output evidence.
+Independent source review approved the integration after correcting the canvas
+mapping scan to exclude captured-source inactive corner owners. Active cohorts
+still require exact owner/host/cut mappings. Root reviewed the integrated source
+interfaces and declared limits. Scoped Git backup accompanies this source batch;
+it does not qualify the unchanged installed candidate or close a production gate.
+
 ### October 10 corner-window canvas grips and host transforms - source integration
 
 Selected corner windows now have separate outer-jamb width handles for the two

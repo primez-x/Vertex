@@ -777,7 +777,7 @@ public:
 
     bool previewReplacement(const ConstraintAuthoringIntent& command, const PhaseWallReplacementRequest& request) {
         const auto plan = inspect_phase_wall_replacement_plan(snapshot.entities(), request.seed_wall_ids,
-            request.registry_id, request.alternative_id, true);
+            request.registry_id, request.alternative_id, true, true);
         if (!plan.ready()) {
             QStringList reasons;
             for (const auto& diagnostic : plan.diagnostics)
@@ -790,6 +790,7 @@ public:
         // including typed child IDs, even if another preview needs fewer copies.
         PhaseWallReplacementAuthoring edit;
         edit.complete_presentations = true;
+        edit.complete_corner_windows = true;
         edit.registry_id = request.registry_id;
         edit.alternative_id = request.alternative_id;
         edit.seed_wall_ids = request.seed_wall_ids;

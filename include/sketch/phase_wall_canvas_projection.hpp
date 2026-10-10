@@ -64,6 +64,11 @@ struct PhaseWallCanvasCoordinatedPhysicalInput {
 // stage's stair placement, including when their own envelope is unchanged.
 // Retained/eligible presentations must come from the captured source visibility
 // and object roster. Their original IDs/keys remain gesture rendering aliases.
+// Corner-window owners use the actual final two-host manufactured assembly;
+// their managed cuts remain wall-roster data without independent hit targets.
+// Both leg controls retain source snapshot revisions and local host baselines,
+// and require complete captured source controls plus complete final depth/crop.
+// As with wall bodies, the caller applies captured Site placement exactly once.
 [[nodiscard]] PhaseWallCanvasProjection project_phase_wall_canvas(
     const DocumentSnapshot& source,
     const PhaseWallReplacementAuthoringPreview& physical,

@@ -6,6 +6,7 @@
 #include "sketch/boundary_receipt.hpp"
 #include "sketch/boundary_transform.hpp"
 #include "sketch/constraint_phase_scope.hpp"
+#include "sketch/corner_window.hpp"
 #include "sketch/document_wall.hpp"
 #include "sketch/model_phases.hpp"
 #include "sketch/measurement_linework.hpp"
@@ -270,7 +271,8 @@ template<class Reference> void visit_boundary_copy_evidence(Entity& entity, cons
 }
 // Remove only precisely understood identity fields from a temporary inspection
 // copy. A reference elsewhere in a copied payload needs its own typed codec.
-Entity opaque_remainder(const Entity& entity, bool complete_presentations = false) {
+Entity opaque_remainder(const Entity& entity, bool complete_presentations = false,
+    bool complete_corner_windows = false) {
     auto remainder = entity;
     if (entity.type == "wall" && remainder.extensions.contains("wall_layer_stack_retirement")) {
         auto& archive = remainder.extensions.at("wall_layer_stack_retirement");
@@ -285,6 +287,16 @@ Entity opaque_remainder(const Entity& entity, bool complete_presentations = fals
     if (entity.type == "wall" && p.contains("layers"))
         for (auto& layer : p.at("layers")) layer.erase("id");
     if (entity.type == "opening") p.erase("wall_id");
+    if (complete_corner_windows) {
+        if (entity.type == "corner_window") {
+            (void)parse_corner_window(entity);
+            p.erase("wall_ids"); p.erase("opening_ids");
+        } else if (entity.type == "opening" && p.contains("corner_window_id")) {
+            // Complete cohort admission qualifies this backlink and leg. No
+            // generic reference keys or nested metadata are consumed here.
+            p.erase("corner_window_id");
+        }
+    }
     if (entity.type == "wall_join") p.erase("wall_ids");
     if (can_recognize_boundary_entity_type(entity.type)) {
         visit_measured_sources(remainder, consumed);
@@ -390,7 +402,8 @@ bool PhaseWallReplacementPlan::ready() const noexcept {
 
 PhaseWallReplacementPlan inspect_phase_wall_replacement_plan(
     const PhaseWallReplacementEntities& source, const std::vector<std::string>& seed_wall_ids,
-    const std::string& registry_id, const std::string& alternative_id, bool complete_presentations) {
+    const std::string& registry_id, const std::string& alternative_id, bool complete_presentations,
+    bool complete_corner_windows) {
     try {
         identity(registry_id); identity(alternative_id);
         if (source.size() > maximum_entities) reject("source entity budget exceeded");
@@ -416,6 +429,7 @@ PhaseWallReplacementPlan inspect_phase_wall_replacement_plan(
         PhaseWallReplacementPlan plan;
         plan.registry_id = registry_id; plan.alternative_id = alternative_id; plan.seed_wall_ids = seed_wall_ids;
         plan.complete_presentations = complete_presentations;
+        plan.complete_corner_windows = complete_corner_windows;
         if (seed_wall_ids.empty() || seed_wall_ids.size() > maximum_replacements) reject("requires a bounded nonempty explicit wall seed");
         std::sort(plan.seed_wall_ids.begin(), plan.seed_wall_ids.end());
         if (std::adjacent_find(plan.seed_wall_ids.begin(), plan.seed_wall_ids.end()) != plan.seed_wall_ids.end()) reject("wall seeds must be unique");
@@ -473,7 +487,7 @@ PhaseWallReplacementPlan inspect_phase_wall_replacement_plan(
             if (source.contains(id) && source.at(id).type == "wall" && baseline.contains(id) && !scope.inactive_owner_ids.contains(id)) return walls.insert(id).second;
             return false;
         };
-        Ids analytical_endpoints, room_transit, semantic_visible;
+        Ids analytical_endpoints, room_transit, semantic_visible, corner_owners;
         for (const auto& [id, entity] : source) if (!scope.inactive_owner_ids.contains(id)) semantic_visible.insert(id);
         const auto measured_checks = measurement_linework_source_checks(source, &semantic_visible);
         const auto add_analytical = [&](const std::string& id) {
@@ -495,6 +509,34 @@ PhaseWallReplacementPlan inspect_phase_wall_replacement_plan(
         bool changed = true;
         while (changed) {
             changed = false;
+            if (complete_corner_windows) for (const auto& [id, entity] : source) {
+                if (entity.type != "corner_window" || scope.inactive_owner_ids.contains(id)) continue;
+                const auto hosts = entity.properties.find("wall_ids");
+                if (hosts == entity.properties.end() || !touches(*hosts, walls)) continue;
+                try {
+                    const auto window = parse_corner_window(entity);
+                    bool eligible = baseline.contains(id);
+                    for (const auto& host : window.wall_ids) {
+                        if (!source.contains(host) || source.at(host).type != "wall" ||
+                            !baseline.contains(host) || scope.inactive_owner_ids.contains(host)) {
+                            diagnostic(plan, id, "corner replacement requires both actual active target baseline hosts: " + host);
+                            eligible = false;
+                        } else changed = add_baseline(host) || changed;
+                    }
+                    for (const auto& cut : window.opening_ids) {
+                        if (!source.contains(cut) || source.at(cut).type != "opening" ||
+                            !baseline.contains(cut) || scope.inactive_owner_ids.contains(cut)) {
+                            diagnostic(plan, id, "corner replacement requires both actual active target baseline cuts: " + cut);
+                            eligible = false;
+                        }
+                    }
+                    if (!baseline.contains(id))
+                        diagnostic(plan, id, "corner replacement requires actual target baseline owner membership");
+                    if (eligible) changed = corner_owners.insert(id).second || changed;
+                } catch (const std::exception& error) {
+                    diagnostic(plan, id, "affected corner aggregate is unsupported: " + std::string(error.what()));
+                }
+            }
             for (const auto& contact : contacts) {
                 if (organization.drawing_context(contact.owner) != organization.drawing_context(contact.host) ||
                     std::abs(geometry.at(contact.owner).elevation - geometry.at(contact.host).elevation) > default_geometry_tolerance_metres) continue;
@@ -593,10 +635,11 @@ PhaseWallReplacementPlan inspect_phase_wall_replacement_plan(
                         changed = add_baseline(wall) || changed;
                     }
             }
-            if (walls.size() + analytical_endpoints.size() + room_transit.size() > maximum_replacements) reject("closed wall replacement budget exceeded");
+            if (walls.size() + analytical_endpoints.size() + room_transit.size() + corner_owners.size() > maximum_replacements) reject("closed wall replacement budget exceeded");
         }
         Ids owners = walls, children, rooms;
         owners.insert(analytical_endpoints.begin(), analytical_endpoints.end());
+        owners.insert(corner_owners.begin(), corner_owners.end());
         rooms.insert(room_transit.begin(), room_transit.end());
         for (const auto& [id, entity] : source) {
             if (entity.type == "opening") {
@@ -607,6 +650,23 @@ PhaseWallReplacementPlan inspect_phase_wall_replacement_plan(
                 std::string wall_id, error;
                 if (!read_document_wall_id(entity, wall_id, error)) reject(id + ": " + error);
                 owners.insert(id);
+                if (complete_corner_windows && (entity.properties.contains("corner_window_id") ||
+                    entity.properties.contains("corner_leg"))) {
+                    const auto owner = entity.properties.find("corner_window_id");
+                    if (owner == entity.properties.end() || !owner->is_string() ||
+                        !corner_owners.contains(owner->get_ref<const std::string&>()))
+                        diagnostic(plan, id, "managed corner cut requires its complete eligible owner cohort");
+                }
+            }
+        }
+        if (!corner_owners.empty()) {
+            // Shared admission proves raw context, vertical placement, exact
+            // child ownership/dimensions and every saved phase membership.
+            // A source-derived copy never repairs an invalid retained cohort.
+            try { validate_corner_window_state(source); }
+            catch (const std::exception& error) {
+                for (const auto& id : corner_owners)
+                    diagnostic(plan, id, "corner source cohort is not admissible: " + std::string(error.what()));
             }
         }
         // Validate complete hosted geometry, including opening envelope, before
@@ -772,7 +832,7 @@ PhaseWallReplacementPlan inspect_phase_wall_replacement_plan(
             if (member != memberships.end() && (member->second != registry_id || !baseline.contains(id)))
                 diagnostic(plan, id, "copy would supersede a registered owner outside the target shared baseline");
             try {
-                const auto remainder = opaque_remainder(source.at(id), complete_presentations);
+                const auto remainder = opaque_remainder(source.at(id), complete_presentations, complete_corner_windows);
                 if (touches(remainder.properties, affected) || touches(remainder.extensions, affected))
                     diagnostic(plan, id, "copied payload contains an affected reference outside supported typed fields");
             } catch (const std::exception& error) { diagnostic(plan, id, "copied payload has unsupported typed evidence: " + std::string(error.what())); }
@@ -828,7 +888,7 @@ PhaseWallReplacementResult replay_phase_wall_replacement(
     const PhaseWallReplacementIdentityMap& identities) {
     try {
         const auto derived = inspect_phase_wall_replacement_plan(source, plan.seed_wall_ids, plan.registry_id,
-            plan.alternative_id, plan.complete_presentations);
+            plan.alternative_id, plan.complete_presentations, plan.complete_corner_windows);
         if (derived != plan) reject("supplied plan differs from actual source discovery");
         if (!derived.ready()) reject("replacement has unresolved affected dependencies");
         Ids expected(derived.required_entity_ids.begin(), derived.required_entity_ids.end());
@@ -884,8 +944,14 @@ PhaseWallReplacementResult replay_phase_wall_replacement(
             auto& p = copy.properties;
             if (copy.type == "wall") {
                 if (p.contains("layers")) for (auto& layer : p.at("layers")) remap_field(layer, "id", identities);
-            } else if (copy.type == "opening") remap_field(p, "wall_id", identities);
-            else if (copy.type == "wall_join") {
+            } else if (copy.type == "opening") {
+                remap_field(p, "wall_id", identities);
+                if (derived.complete_corner_windows) remap_field(p, "corner_window_id", identities);
+            } else if (copy.type == "corner_window" && derived.complete_corner_windows) {
+                for (const auto* key : {"wall_ids", "opening_ids"})
+                    for (auto& id : p.at(key)) id = identities.at(id.get<std::string>());
+                (void)parse_corner_window(copy);
+            } else if (copy.type == "wall_join") {
                 auto join = parse_wall_join(p, copy.id);
                 for (auto& id : join.wall_ids) id = remap(id, identities);
                 p["wall_ids"] = wall_join_json(join).at("wall_ids");
@@ -943,6 +1009,9 @@ PhaseWallReplacementResult replay_phase_wall_replacement(
         }
         if (ModelPhases::from_json(raw).to_json() != final_model.to_json()) reject("registry reconstruction differs from canonical update");
         result.entities.at(plan.registry_id).properties["model"] = std::move(raw);
+        if (derived.complete_corner_windows && std::any_of(derived.required_entity_ids.begin(),
+            derived.required_entity_ids.end(), [&](const auto& id) { return source.at(id).type == "corner_window"; }))
+            validate_corner_window_state(result.entities);
         if (derived.complete_presentations)
             complete_presentation(result.entities, source,
                 Ids(derived.required_entity_ids.begin(), derived.required_entity_ids.end()), identities);

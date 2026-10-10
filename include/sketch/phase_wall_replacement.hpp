@@ -39,6 +39,9 @@ struct PhaseWallReplacementPlan {
     // Opt-in additive typed presentation completion; legacy plans retain their
     // historical refusal of affected saved views and annotation overrides.
     bool complete_presentations{false};
+    // Additive owner/two-cut completion. Historical plans continue to refuse
+    // affected corner aggregates unless their command explicitly opts in.
+    bool complete_corner_windows{false};
 
     [[nodiscard]] bool ready() const noexcept;
     bool operator==(const PhaseWallReplacementPlan&) const = default;
@@ -66,7 +69,8 @@ struct PhaseWallReplacementResult {
     const std::vector<std::string>& seed_wall_ids,
     const std::string& registry_id,
     const std::string& alternative_id,
-    bool complete_presentations = false);
+    bool complete_presentations = false,
+    bool complete_corner_windows = false);
 
 // Reinspects source and requires exactly the derived plan and a complete,
 // injective fresh mapping. Never generates identities or accepts clone JSON.

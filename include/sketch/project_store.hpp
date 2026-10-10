@@ -242,7 +242,10 @@ public:
     // v169 adds explicit lossless roof-opening transfer authority in retained,
     // nested and undone history; existing schema-three roof values stay v168.
     // v170 adds a corner-window owner with two coordinated hosted cut entities.
-    static constexpr std::uint32_t format_version = 170;
+    // v171 adds source-derived corner-window cohorts and profile edits in saved
+    // alternatives through wall-replacement leaf eight; legacy leaves retain
+    // their exact codecs and admission behavior.
+    static constexpr std::uint32_t format_version = 171;
     static constexpr std::uint32_t recovery_format_version = 4;
     [[nodiscard]] static std::uint32_t required_format_version(const DocumentSnapshot& snapshot);
     static constexpr std::uint64_t maximum_file_bytes = 4ULL * 1024ULL * 1024ULL * 1024ULL;

@@ -43,7 +43,8 @@ struct PhaseWallCanvasProposal {
     const DocumentSnapshot& source,
     const ConstraintAuthoringIntent& semantic,
     const std::function<std::string(std::string_view original_id)>& allocate_fresh_identity,
-    bool complete_presentations = false);
+    bool complete_presentations = false,
+    bool complete_corner_windows = false);
 
 // Discover the actual saved-active shared-baseline hosts before ordinary
 // opening authoring or Document preview. Every profile must retain an existing
@@ -58,7 +59,8 @@ struct PhaseWallCanvasProposal {
     const DocumentSnapshot& source,
     const std::vector<HostedOpeningProfileEditIntent>& profiles,
     const std::function<std::string(std::string_view original_id)>& allocate_fresh_identity,
-    bool complete_presentations = false);
+    bool complete_presentations = false,
+    bool complete_corner_windows = false);
 
 // Discover both actual original and target hosts before ordinary rehosting or
 // preview. Either host can qualify the saved-active baseline replacement.
@@ -70,7 +72,8 @@ struct PhaseWallCanvasProposal {
     const DocumentSnapshot& source,
     const std::vector<HostedOpeningRehostIntent>& rehosts,
     const std::function<std::string(std::string_view original_id)>& allocate_fresh_identity,
-    bool complete_presentations = false);
+    bool complete_presentations = false,
+    bool complete_corner_windows = false);
 
 // Same-host family conversion discovers actual saved-active baseline owners
 // before ordinary physical replay or Document preview. A complete equivalent
@@ -81,6 +84,7 @@ struct PhaseWallCanvasProposal {
     const DocumentSnapshot& source,
     const std::vector<HostedOpeningFamilyEditIntent>& families,
     const std::function<std::string(std::string_view original_id)>& allocate_fresh_identity,
-    bool complete_presentations = false);
+    bool complete_presentations = false,
+    bool complete_corner_windows = false);
 
 } // namespace sketch

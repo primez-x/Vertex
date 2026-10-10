@@ -1,4 +1,35 @@
-# Vertex project formats v1 through v170
+# Vertex project formats v1 through v171
+
+## Corner-window design-alternative edits (v171, source integration)
+
+Wall-replacement leaf eight has exactly `version: 8`,
+`complete_presentations: true`, `authoring` and `corner_profiles`. The body is a
+historical flat leaf v1 through v6; nested wrappers refuse. An empty profile list
+allows the body's existing wall/opening authority with additive corner cohort
+completion. A nonempty list is exclusive from wall/opening profiles, rehosting,
+family conversion, stack edits, geometry and relationship edits.
+
+Each corner profile intent has exactly `version: 1`, `owner_id`, nullable `name`
+and `dimensions`. Dimensions are finite numbers at only `/widths_m/0`,
+`/widths_m/1`, `/sill_m`, `/height_m` and the frame-width/depth, panel/glazing
+thickness and inset pointers below `/opening_assembly`. Final physical semantics
+and native admission remain required. The source owner, both hosts and cuts
+must share actual saved-active baseline membership for replacement; proposed or
+ordinary owner edits receive no borrowed baseline authority from their hosts.
+
+Source-derived replacement discovery closes both wall hosts and the owner/cuts
+before room and dependency inventory. The exact fresh mapping includes all five
+participants and existing qualified dependencies. Only known owner/cut identity
+fields remap. Unsupported affected references refuse; opaque payload, unchanged
+numbers, exact supported receipt siblings, original baseline and other saved
+alternatives remain retained. The edit replays against the independently copied
+cohort; mandatory room/relationship decisions precede Document publication.
+
+Native reader 171 and JSON/assets extraction 169 preserve the leaf in current,
+nested and undone history. Existing leaves and the v161 payload tables retain
+their contracts. Compilation, physical/visual/editor behavior, save/reopen,
+migration and output remain unqualified. Persistent corner-leg dimensions and
+IFC/DXF ownership transport remain further work.
 
 ## Coordinated corner windows (v170, source integration)
 
