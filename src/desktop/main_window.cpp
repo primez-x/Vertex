@@ -783,17 +783,20 @@ void remap_entity_references(Entity& entity,
         reference(properties.at("material_assignment"), "catalog_id");
     if (entity.type == "boundary" || entity.type == "measurement_boundary" ||
         entity.type == "room_boundary") {
-        const auto lineage = [&](json& edges) {
+        std::map<std::pair<std::string,std::string>,std::string> source_segment_ids;
+        const auto lineage = [&](const json& edges) {
             if (!edges.is_array()) throw std::invalid_argument("Measured area source lineage is invalid.");
-            for (auto& edge : edges) for (auto& use : edge) {
-                for (const auto* key : {"owner_id", "segment_id"}) {
-                    const auto id = use.at(key).get<std::string>();
-                    if (!remap.contains(id))
-                        throw std::invalid_argument("Copy the measured area's complete member sources together before cloning it.");
-                    use[key] = remap.at(id);
-                }
+            for (const auto& edge : edges) for (const auto& use : edge) {
+                const auto owner = use.at("owner_id").get<std::string>();
+                const auto segment = use.at("segment_id").get<std::string>();
+                if (!remap.contains(owner) || !remap.contains(segment))
+                    throw std::invalid_argument("Copy the measured area's complete member sources together before cloning it.");
+                source_segment_ids.emplace(std::pair{owner,segment},remap.at(segment));
             }
         };
+        // Validate through the consumer's parsers before collecting scoped
+        // segment identities; the shared remapper changes no interval values.
+        (void)measurement_linework_source_ids(entity);
         if (entity.extensions.contains("measurement_linework_sources")) lineage(entity.extensions.at("measurement_linework_sources"));
         if (entity.type == "measurement_boundary" && entity.extensions.contains("measurement_linework_group")) {
             auto& group = entity.extensions.at("measurement_linework_group");
@@ -804,6 +807,7 @@ void remap_entity_references(Entity& entity,
                 throw std::invalid_argument("This combined measured area has unsupported group metadata. Its saved sources must remain unchanged.");
             for (auto& member : group.at("members")) lineage(member);
         }
+        entity = remap_measurement_linework_source_references(entity,remap,source_segment_ids);
         reference(properties,"deduction_ids");
         // Only these schema-owned identities are references. Observed values,
         // hashes and opaque vendor fields are not rewritten as identities.
@@ -819,13 +823,16 @@ void remap_entity_references(Entity& entity,
             }
         }
         if (properties.contains("wall_measurement_source")) {
-            auto& source = properties.at("wall_measurement_source");
-            if (source.is_object() && source.value("version",0) == 1 && source.contains("walls"))
-                for (auto& wall : source.at("walls")) {
-                    reference(wall,"id");
-                    for (const auto* key : {"property_id","building_id","floor_id","layer_id","phase_id"})
-                        reference(wall.at("context"),key);
+            const auto& source = properties.at("wall_measurement_source");
+            (void)exterior_wall_measurement_source_ids(entity);
+            std::map<std::string,std::string,std::less<>> source_context_ids;
+            for (const auto& wall : source.at("walls"))
+                for (const auto& [key,value] : wall.at("context").items()) {
+                    const auto id = value.get<std::string>();
+                    const auto found = remap.find(id);
+                    source_context_ids.emplace(id,found == remap.end() ? id : found->second);
                 }
+            entity = remap_exterior_wall_measurement_source_references(entity,remap,source_context_ids);
         }
         if (properties.contains("boundary_authoring")) {
             const auto decoded = decode_boundary_receipt_envelope(properties.at("boundary_authoring"));
@@ -9727,6 +9734,11 @@ public:
         for (auto& change : command.entity_changes) {
             if (change.kind != EntityChangeKind::upsert || !is_closed_boundary_entity(change.entity.type) ||
                 !change.entity.properties.contains("wall_measurement_source")) continue;
+            // A typed identity remap may already prove the complete copied
+            // graph. Retain its exact genesis/kernel/translation history.
+            // Rebind only copies whose physical transform or destination has
+            // made that source stale.
+            if (wall_measurement_source_current(candidate,change.entity)) continue;
             std::vector<std::string> walls;
             for (const auto& record : change.entity.properties.at("wall_measurement_source").at("walls"))
                 walls.push_back(record.at("id").get<std::string>());
@@ -38247,6 +38259,9 @@ public:
                 const auto& destination = destinations.at(source_layer(candidate));
                 imported.properties["floor_id"] = destination.floor_id;
                 imported.properties["layer_id"] = destination.layer_id;
+                if (can_recognize_boundary_entity_type(imported.type) &&
+                    imported.extensions.contains("vertex_dxf_boundary"))
+                    bind_native_dxf_boundary_destination_floor(imported, destination.floor_id);
                 if (selected_import_layer.empty()) selected_import_layer = destination.layer_id;
                 imported_boundary_ids.push_back(imported.id);
                 if (can_recognize_boundary_entity_type(imported.type) &&

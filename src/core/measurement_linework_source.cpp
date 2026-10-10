@@ -117,6 +117,36 @@ Uses read_group_outer(const Json& value,std::size_t count) {
     }
     return read_uses(value,count);
 }
+struct RetainedSourceLineage {
+    bool present{};
+    Uses outer;
+    std::vector<Uses> members;
+};
+RetainedSourceLineage read_retained_source_lineage(const Entity& entity) {
+    RetainedSourceLineage result;
+    const bool grouped=entity.extensions.contains("measurement_linework_group");
+    result.present=grouped || entity.extensions.contains("measurement_linework_sources");
+    if(!result.present)return result;
+    if(entity.type!="measurement_boundary")
+        throw std::invalid_argument("Measured linework lineage requires a measurement boundary.");
+    const auto count=decode_identified_boundary_entity(entity).segments.size();
+    if(grouped)result.members=read_group(entity.extensions.at("measurement_linework_group"));
+    if(!entity.extensions.contains("measurement_linework_sources"))
+        throw std::invalid_argument("Measured area group requires retained outer source lineage.");
+    result.outer=grouped ? read_group_outer(entity.extensions.at("measurement_linework_sources"),count) :
+        read_uses(entity.extensions.at("measurement_linework_sources"),count);
+    return result;
+}
+using SourcePair=std::pair<std::string,std::string>;
+std::set<SourcePair> retained_source_pairs(const RetainedSourceLineage& lineage) {
+    std::set<SourcePair> result;
+    const auto collect=[&](const Uses& uses) {
+        for(const auto& edge:uses)for(const auto& use:edge)result.emplace(use.owner_id,use.segment_id);
+    };
+    collect(lineage.outer);
+    for(const auto& member:lineage.members)collect(member);
+    return result;
+}
 struct GroupMatchWork {
     std::size_t remaining=2'000'000;
     void charge(std::size_t amount) {
@@ -190,6 +220,55 @@ bool measurement_linework_copy_isolated(const Entity& entity) {
        !marker.contains("version") || !marker.at("version").is_number_integer() || marker.at("version")!=1)
         throw std::invalid_argument("Measured linework copy scope schema, version or owner type is unsupported.");
     return true;
+}
+std::vector<std::string> measurement_linework_source_ids(const Entity& entity) {
+    const auto pairs=retained_source_pairs(read_retained_source_lineage(entity));
+    std::vector<std::string> result;
+    for(const auto& [owner_id,segment_id]:pairs) {
+        (void)segment_id;
+        if(result.empty() || result.back()!=owner_id)result.push_back(owner_id);
+    }
+    return result;
+}
+Entity remap_measurement_linework_source_references(const Entity& entity,
+    const std::map<std::string,std::string,std::less<>>& owner_ids,
+    const std::map<std::pair<std::string,std::string>,std::string>& segment_ids) {
+    const auto lineage=read_retained_source_lineage(entity);
+    if(!lineage.present)return entity;
+    const auto pairs=retained_source_pairs(lineage);
+    std::map<std::string,std::string,std::less<>> owners;
+    std::set<std::string> owner_targets;
+    std::map<std::string,std::set<std::string>,std::less<>> segment_targets;
+    for(const auto& source:pairs) {
+        if(!owners.contains(source.first)) {
+            const auto found=owner_ids.find(source.first);
+            if(found==owner_ids.end() || found->second.empty())
+                throw std::invalid_argument("Measured source owner mapping is missing or empty: "+source.first);
+            if(!owner_targets.insert(found->second).second)
+                throw std::invalid_argument("Measured source owner mappings collapse distinct owners.");
+            owners.emplace(source.first,found->second);
+        }
+        if(!segment_ids.empty()) {
+            const auto found=segment_ids.find(source);
+            if(found==segment_ids.end() || found->second.empty())
+                throw std::invalid_argument("Measured source segment mapping is missing or empty: "+source.first+"/"+source.second);
+            if(!segment_targets[source.first].insert(found->second).second)
+                throw std::invalid_argument("Measured source segment mappings collapse distinct segments within an owner.");
+        }
+    }
+    auto result=entity;
+    const auto remap=[&](Json& uses) {
+        for(auto& edge:uses)for(auto& use:edge) {
+            const SourcePair source{text(use,"owner_id"),text(use,"segment_id")};
+            use.at("owner_id")=owners.at(source.first);
+            if(!segment_ids.empty())use.at("segment_id")=segment_ids.at(source);
+        }
+    };
+    remap(result.extensions.at("measurement_linework_sources"));
+    if(result.extensions.contains("measurement_linework_group"))
+        for(auto& member:result.extensions.at("measurement_linework_group").at("members"))remap(member);
+    (void)read_retained_source_lineage(result);
+    return result;
 }
 static std::map<std::string,MeasurementLineworkSourceCheck,std::less<>>
 measurement_linework_source_checks_impl(const std::map<std::string,Entity,std::less<>>& entities,

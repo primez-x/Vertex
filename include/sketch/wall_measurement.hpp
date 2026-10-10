@@ -130,6 +130,19 @@ void validate_exterior_corner_physical_contacts_active_phase(
 // Strict structural decoding only; historical wall IDs may no longer exist.
 [[nodiscard]] std::vector<std::string> exterior_wall_measurement_source_ids(const Entity& owner);
 
+// Changes only typed wall IDs and declared context references in a retained
+// source. Every referenced ID needs an explicit mapping; identity entries are
+// allowed. Distinct referenced IDs require distinct valid destination IDs.
+// Absent sources return unchanged. Malformed sources/mappings throw without
+// mutating the input. V2 retains its numeric lineage and canonical record order,
+// and replays both owners against their exact unchanged authoritative outline.
+// V1 is structural only: the caller must prove currentness against the complete
+// final graph and perform Document admission. Owner receipts are not remapped.
+[[nodiscard]] Entity remap_exterior_wall_measurement_source_references(
+    const Entity& owner,
+    const std::map<std::string, std::string, std::less<>>& wall_ids,
+    const std::map<std::string, std::string, std::less<>>& context_ids);
+
 // Recognizes the unique simple exterior in an analytical line/arc wall network.
 // Interior partitions/loops and connected dangling branches are excluded.
 // Disconnected geometry must be strictly inside that exterior. Returns sorted

@@ -126,13 +126,96 @@ struct DxfProjectImportResult {
     return {ids.begin(), ids.end()};
 }
 
+// V4 transports only the stairs consumer's self-floor declaration. A source
+// floor stays raw evidence until a caller explicitly supplies a reviewed floor.
+// No floor identity is ever resolved through the boundary owner ID map.
+[[nodiscard]] inline std::string native_dxf_boundary_stair_floor_source(const Entity& entity) {
+    using Json = nlohmann::json;
+    const auto graph = native_dxf_boundary_dependency_graph(entity);
+    const auto binding = entity.extensions.find("vertex_dxf_stair_floor_binding");
+    const auto marker = entity.extensions.find("vertex_dxf_boundary");
+    if (marker == entity.extensions.end() || !marker->is_object() || marker->value("version", 0) != 4) {
+        if (binding != entity.extensions.end()) throw std::invalid_argument("stair floor binding requires V4");
+        return {};
+    }
+    const auto valid_id = [](const Json& value) {
+        return value.is_string() && !value.get_ref<const std::string&>().empty() &&
+            value.get_ref<const std::string&>().size() <= 255;
+    };
+    if (marker->size() != 3 || !marker->at("version").is_number_integer() ||
+        marker->value("depiction", std::string{}) != "BOUNDARY_PLAN_V1" ||
+        !marker->contains("member_ids") || !marker->at("member_ids").is_array())
+        throw std::invalid_argument("invalid V4 boundary marker");
+    std::vector<std::string> members;
+    for (const auto& id : marker->at("member_ids")) {
+        if (!valid_id(id)) throw std::invalid_argument("invalid V4 boundary identity");
+        members.push_back(id.get<std::string>());
+    }
+    if (members.empty() || !std::is_sorted(members.begin(), members.end()) ||
+        std::adjacent_find(members.begin(), members.end()) != members.end() ||
+        !std::binary_search(members.begin(), members.end(), entity.id))
+        throw std::invalid_argument("invalid V4 boundary membership");
+    const Json* facts = entity.properties.contains("appraisal_facts") ? &entity.properties.at("appraisal_facts") : nullptr;
+    const Json* ceiling = facts && facts->contains("ansi") && facts->at("ansi").contains("ceiling")
+        ? &facts->at("ansi").at("ceiling") : nullptr;
+    const bool stairs = ceiling && ceiling->value("kind", std::string{}) == "stairs";
+    const bool footprint = facts && facts->value("boundary_role", std::string{}) == "stair_footprint";
+    const auto active = graph.at("stair_from_floor_id").get<std::string>();
+    if (!stairs && !footprint && active.empty() && binding == entity.extensions.end()) return {};
+    if (!stairs || !footprint || !ceiling->contains("stair_from_floor_id") ||
+        (entity.type != "boundary" && entity.type != "measurement_boundary"))
+        throw std::invalid_argument("stair floor binding requires stair footprint facts");
+    const auto floor = entity.properties.find("floor_id");
+    if (binding == entity.extensions.end()) {
+        if (active.empty() || floor == entity.properties.end() || !valid_id(*floor) || *floor != active)
+            throw std::invalid_argument("source stairs require their owning floor");
+        return active;
+    }
+    if (!binding->is_object() || binding->size() != 3 || !binding->contains("version") ||
+        !binding->at("version").is_number_integer() || binding->at("version") != 1 ||
+        !binding->contains("source_floor_id") || !valid_id(binding->at("source_floor_id")) ||
+        !binding->contains("destination_floor_id"))
+        throw std::invalid_argument("invalid stair floor binding schema");
+    const auto& destination = binding->at("destination_floor_id");
+    if (destination.is_null()) {
+        if (!active.empty() || floor != entity.properties.end())
+            throw std::invalid_argument("pending stair floor binding must be detached");
+    } else if (!valid_id(destination) || floor == entity.properties.end() || !valid_id(*floor) ||
+               *floor != destination || active != destination.get<std::string>()) {
+        throw std::invalid_argument("bound stairs require their reviewed owning floor");
+    }
+    return binding->at("source_floor_id").get<std::string>();
+}
+
+// Call after assigning the actual reviewed destination floor/layer. Source
+// observations, organizational evidence and report digests are left unchanged.
+inline void bind_native_dxf_boundary_destination_floor(Entity& entity, const std::string& floor_id) {
+    const auto binding = entity.extensions.find("vertex_dxf_stair_floor_binding");
+    if (binding == entity.extensions.end()) {
+        if (!native_dxf_boundary_stair_floor_source(entity).empty())
+            throw std::invalid_argument("stair destination binding requires pending state");
+        return;
+    }
+    if (floor_id.empty() || floor_id.size() > 255 || !entity.properties.contains("floor_id") ||
+        entity.properties.at("floor_id") != floor_id)
+        throw std::invalid_argument("reviewed stair destination floor differs");
+    auto pending = entity;
+    pending.properties.erase("floor_id");
+    (void)native_dxf_boundary_stair_floor_source(pending);
+    if (!binding->at("destination_floor_id").is_null())
+        throw std::invalid_argument("stair destination binding requires pending state");
+    entity.properties["appraisal_facts"]["ansi"]["ceiling"]["stair_from_floor_id"] = floor_id;
+    (*binding)["destination_floor_id"] = floor_id;
+}
+
 [[nodiscard]] inline bool native_dxf_boundary_has_untransported_source_links(const Entity& entity) {
     if (!entity.properties.is_object() || entity.properties.contains("parent_id") ||
         entity.properties.contains("wall_measurement_source") ||
         entity.extensions.contains("physical_wall_room") ||
         entity.extensions.contains("measurement_linework_sources") ||
         entity.extensions.contains("measurement_linework_group")) return true;
-    return native_dxf_boundary_dependency_graph(entity).at("stair_from_floor_id") != "";
+    const auto stair_source = native_dxf_boundary_stair_floor_source(entity);
+    return native_dxf_boundary_dependency_graph(entity).at("stair_from_floor_id") != "" && stair_source.empty();
 }
 
 // Identity changes never alter local topology, arbitrary JSON, or appraisal
@@ -140,6 +223,14 @@ struct DxfProjectImportResult {
 inline void remap_native_dxf_boundary_dependency_ids(Entity& entity,
     const std::map<std::string, std::string, std::less<>>& ids) {
     (void)native_dxf_boundary_dependency_graph(entity);
+    const auto marker = entity.extensions.find("vertex_dxf_boundary");
+    if (marker != entity.extensions.end() && marker->is_object() &&
+        (marker->value("version", 0) == 3 || marker->value("version", 0) == 4)) {
+        std::vector<std::string> members;
+        for (const auto& id : marker->at("member_ids")) members.push_back(ids.at(id.get<std::string>()));
+        std::sort(members.begin(), members.end());
+        (*marker)["member_ids"] = members;
+    }
     const auto remap = [&](nlohmann::json& object, const char* key, bool array) {
         if (!object.contains(key)) return;
         const auto replace = [&](nlohmann::json& value) {
@@ -155,20 +246,14 @@ inline void remap_native_dxf_boundary_dependency_ids(Entity& entity,
         auto& ceiling = entity.properties["appraisal_facts"]["ansi"]["ceiling"];
         remap(ceiling, "below_5ft_deduction_ids", true);
         remap(ceiling, "room_boundary_id", false);
-        // Floor authority is deliberately absent from a V3 boundary group.
-        if (ceiling.contains("stair_from_floor_id") && ceiling.at("stair_from_floor_id") != "")
+        // V4 floor authority is bound explicitly, never by this owner ID map.
+        if (ceiling.contains("stair_from_floor_id") && ceiling.at("stair_from_floor_id") != "" &&
+            native_dxf_boundary_stair_floor_source(entity).empty())
             throw std::invalid_argument("native floor source graph unavailable");
         if (ceiling.value("kind", std::string{}) == "sloped") {
             ceiling["room_boundary_id"] = "";
             ceiling["complete_room_observed"] = false;
         }
-    }
-    const auto marker = entity.extensions.find("vertex_dxf_boundary");
-    if (marker != entity.extensions.end() && marker->is_object() && marker->value("version", 0) == 3) {
-        std::vector<std::string> members;
-        for (const auto& id : marker->at("member_ids")) members.push_back(ids.at(id.get<std::string>()));
-        std::sort(members.begin(), members.end());
-        (*marker)["member_ids"] = members;
     }
 }
 
@@ -183,7 +268,8 @@ inline void validate_native_dxf_boundary_groups(const std::vector<Entity>& entit
     std::set<std::string> checked;
     for (const auto& entity : entities) {
         const auto marker = entity.extensions.find("vertex_dxf_boundary");
-        if (marker == entity.extensions.end() || !marker->is_object() || marker->value("version", 0) != 3) continue;
+        if (marker == entity.extensions.end() || !marker->is_object() ||
+            (marker->value("version", 0) != 3 && marker->value("version", 0) != 4)) continue;
         if (checked.contains(entity.id)) continue;
         if (marker->size() != 3 || marker->value("depiction", std::string{}) != "BOUNDARY_PLAN_V1" ||
             !marker->contains("member_ids") || !marker->at("member_ids").is_array())
@@ -201,6 +287,7 @@ inline void validate_native_dxf_boundary_groups(const std::vector<Entity>& entit
         std::map<std::string, std::set<std::string>> adjacency;
         std::map<std::string, std::size_t> incoming;
         std::map<std::string, std::vector<std::string>> deductions;
+        bool has_stair_floor = false;
         for (const auto& id : members) {
             const auto owner = owners.find(id);
             if (owner == owners.end() || checked.contains(id)) throw std::invalid_argument("partial native boundary group");
@@ -209,6 +296,8 @@ inline void validate_native_dxf_boundary_groups(const std::vector<Entity>& entit
                 !member.extensions.contains("vertex_dxf_boundary") || member.extensions.at("vertex_dxf_boundary") != *marker ||
                 native_dxf_boundary_has_untransported_source_links(member))
                 throw std::invalid_argument("mismatched native boundary group");
+            if (marker->at("version") == 4 && !native_dxf_boundary_stair_floor_source(member).empty())
+                has_stair_floor = true;
             incoming.try_emplace(id, 0);
             const auto graph = native_dxf_boundary_dependency_graph(member);
             const auto room = graph.at("room_boundary_id").get<std::string>();
@@ -234,6 +323,8 @@ inline void validate_native_dxf_boundary_groups(const std::vector<Entity>& entit
                 adjacency[id].insert(target); adjacency[target].insert(id);
             }
         }
+        if (marker->at("version") == 4 && !has_stair_floor)
+            throw std::invalid_argument("V4 boundary group requires a proved stair floor");
         std::vector<std::string> ready;
         for (const auto& [id, count] : incoming) if (count == 0) ready.push_back(id);
         std::size_t visited = 0;
@@ -266,9 +357,11 @@ inline void validate_native_dxf_boundary_groups(const std::vector<Entity>& entit
 // area quantities retain named callouts with their association loss diagnosed.
 // Valid closed standalone boundaries use a V2 native block; complete connected
 // appraisal boundary dependencies use V3 member blocks with identical membership
-// and explicit typed links. Ordinary outer/hole curves accompany bounded source
+// and explicit typed links. V4 additionally proves stair footprints' self-floor
+// declarations, retaining the source floor until explicit destination binding.
+// Ordinary outer/hole curves accompany bounded source
 // properties, classifications and topology. Missing, inactive, cyclic or invalid
-// groups fall back together. Live measurement and stair-floor graphs are not
+// groups fall back together. Live measurement/physical source graphs are not
 // transported. Imported sloped observations require source reconfirmation.
 // Deduction containment uses the actual area engine in native-geometry builds;
 // core-only builds retain ordinary geometry when that proof is unavailable.
@@ -286,8 +379,10 @@ inline void validate_native_dxf_boundary_groups(const std::vector<Entity>& entit
 // boundary/annotation entities and validated native boundary/wall/opening graphs.
 // Foreign primitive candidates carry CAD classifications and separate hole loops.
 // The existing VERTEX_ENTITY_V1 XDATA carrier admits unchanged V1 wall/opening
-// JSON and V2/V3 closed-boundary JSON with depiction BOUNDARY_PLAN_V1. V3 requires
-// complete matching connected membership and typed appraisal dependency proof.
+// JSON and V2/V3/V4 closed-boundary JSON with depiction BOUNDARY_PLAN_V1. V3/V4
+// require complete matching connected membership and typed appraisal dependency
+// proof. V4 stair declarations detach into an explicit pending floor binding;
+// only the reviewed destination assignment may activate that declaration.
 // Every member is remapped and validated together; original observation hashes
 // remain unchanged and copied sloped ceiling anchors/confirmation are withheld.
 // V2 requires

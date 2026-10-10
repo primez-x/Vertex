@@ -3584,6 +3584,17 @@ Native format 53 and extraction 51 cover this authority in every retained
 revision, including undone/deleted history and recovery. Lower format labels
 are rejected even when their logical digest has been recomputed.
 
+Typed source-reference remapping covers both exterior source versions. It
+requires explicit valid, injective wall/context mappings, preserves captured
+numeric records and ordered translations, and checks a version-2 owner's exact
+intrinsic outline and physical-edge correspondence before and after rewriting.
+The desktop clone path uses this helper instead of rewriting version 1 alone.
+Measured-line source uses are remapped by original owner/segment pairs, preserving
+raw parameter intervals, reversal, order, local boundary topology and receipts.
+Neither helper proves a live source graph: complete final graph currentness and
+Document admission remain caller responsibilities. These are source changes,
+pending compilation and runtime qualification.
+
 ## Typed stair topology and owned flight railings (v51/v52)
 
 Canonical `stair` properties with `version: 2` and `form: multi_flight_stair`
@@ -5078,6 +5089,29 @@ annotations, retained bytes and reviewed layers atomically. Failed native proof
 retains ordinary geometry and original bytes with explicit diagnostics. This
 adds no container version or historical command schema; source implementation
 remains uncompiled and runtime unverified.
+
+The version-4 DXF envelope has the same group fields as version 3. It transports
+an appraisal stair footprint's proved self-floor declaration: the original
+`stair_from_floor_id` must equal its owning `floor_id`. Every connected member
+uses version 4, including a singleton stair group. The import marker remains
+exactly `{version: 4, depiction: "BOUNDARY_PLAN_V1", member_ids: [...]}` with
+identical sorted fresh member identities. Detached stair members clear the
+active ceiling floor reference and add exactly
+`extensions.vertex_dxf_stair_floor_binding: {version: 1, source_floor_id: <raw
+source floor>, destination_floor_id: null}`. Members without stair facts carry
+no binding. Source organization and observations remain inert retained evidence.
+
+The isolated candidate accepts only this pending state, without active
+property/building/floor/layer bindings. Desktop import assigns the reviewed
+destination floor/layer, then explicitly sets both the active stair reference
+and `destination_floor_id` to that floor before final whole-group validation.
+Floor references are never remapped as boundary identities. Invalid source
+kind, role, floor or binding cannot become valid by destination reassignment.
+Re-export strips the runtime binding marker and constructs a new declaration
+from current floor ownership; it does not recertify appraisal observations or
+reporting hashes. V1/V2/V3 carrier contracts and project container/history
+schemas remain unchanged. Full source-graph transport and external round trips
+remain open; V4 is uncompiled and runtime unverified.
 
 DXF straight lengths use aligned `DIMENSION`; curved segment and physical-wall
 axis lengths use `ARC_DIMENSION` with their actual circular centre and extension

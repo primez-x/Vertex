@@ -14,6 +14,41 @@ changed source does not acquire runtime acceptance without later qualification.
 
 ## Current delivery state
 
+### October 9 typed source copies and DXF stair floor binding
+
+The current source batch adds shared typed wall and measured-line source
+reference remappers and connects them to desktop copying. Exterior copies now
+handle retained source versions 1 and 2, with explicit wall/context mappings,
+unchanged captured numeric lineage and intrinsic version-2 replay/correspondence
+checks. Measured-line references use original owner/segment pairs without
+rewriting raw intervals or local boundary topology. Final source-graph
+currentness remains a separate command-admission requirement.
+Final copy admission preserves an already-current retained source instead of
+unconditionally downgrading version 2. Stale transformed or reassigned copies
+still use the existing fresh physical-source derivation and correspondence repair.
+
+DXF version 4 extends complete appraisal boundary groups with the stair
+footprint's actual self-owning-floor relationship. Source admission requires
+the original role/kind/floor declaration to agree. Detached import preserves
+the source floor as evidence and clears the active reference. The isolated
+broker requires pending binding state; desktop destination review binds the
+footprint to the chosen floor before final group validation and atomic import.
+Version-4 groups require at least one proved stair relationship; plain
+version-3 graphs cannot activate merely by changing their declared version.
+No floor is remapped through a boundary identity map, and observation/report
+confirmations remain unchanged. V1/V2/V3 contracts remain unchanged.
+
+Root integration review and independent review approved the corrected source.
+The two independent findings above were fixed; scoped `git diff --check`
+passed and the requirements JSON parsed with acceptance flags unchanged.
+ID-dependent numerical replay may still conservatively reject some version-2
+identity remaps and needs later qualification. No build, test, probe, script,
+native job, launch, package or installation has run. Compilation, numerical
+execution, clone/import interaction, history/reopen and external consumer
+round trips remain unverified. The installed candidate is unchanged. Live
+wall/measured-line and physical-room graphs still need complete DXF transport;
+typed remapping helpers alone do not close that production gap.
+
 ### October 9 linked DXF appraisal boundary transfer
 
 Source implementation extends the standalone carrier to complete connected

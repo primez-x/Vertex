@@ -536,7 +536,8 @@ DxfBlock boundary_plan_block(const Entity& entity, std::string name, const std::
             std::move(plan.polylines), {}, {}};
 }
 
-Entity detached_native_entity(const Entity& source, const std::map<std::string, std::string>& ids);
+Entity detached_native_entity(const Entity& source, const std::map<std::string, std::string>& ids,
+                              bool proved_stair_floor = false);
 
 bool export_boundary_entity(const DocumentSnapshot& document, const Entity& entity, const std::string& layer,
                             DxfProjectExportResult& result) {
@@ -570,8 +571,20 @@ bool export_boundary_entity(const DocumentSnapshot& document, const Entity& enti
     }
 }
 
-Json boundary_group_marker(const std::vector<std::string>& members) {
-    return {{"version", 3}, {"depiction", kBoundaryDepiction}, {"member_ids", members}};
+Json boundary_group_marker(const std::vector<std::string>& members, int version = 3) {
+    return {{"version", version}, {"depiction", kBoundaryDepiction}, {"member_ids", members}};
+}
+
+bool boundary_has_stair_declaration(const Entity& entity) {
+    (void)native_dxf_boundary_dependency_graph(entity);
+    const auto facts = entity.properties.find("appraisal_facts");
+    if (facts == entity.properties.end()) return false;
+    if (facts->value("boundary_role", std::string{}) == "stair_footprint") return true;
+    const auto ansi = facts->find("ansi");
+    if (ansi == facts->end()) return false;
+    const auto ceiling = ansi->find("ceiling");
+    return ceiling != ansi->end() && (ceiling->contains("stair_from_floor_id") ||
+        ceiling->value("kind", std::string{}) == "stairs");
 }
 
 void validate_boundary_group_source_contexts(const std::vector<Entity>& members) {
@@ -692,21 +705,37 @@ bool export_boundary_group(const DocumentSnapshot& document, const std::vector<s
     try {
         std::vector<Entity> source, detached;
         std::map<std::string, std::string> unchanged;
-        const auto marker = boundary_group_marker(ids);
+        int version = 3;
+        for (const auto& id : ids) {
+            const auto found = document.entities().find(id);
+            if (found != document.entities().end() && boundary_has_stair_declaration(found->second)) version = 4;
+        }
+        const auto marker = boundary_group_marker(ids, version);
         for (const auto& id : ids) {
             const auto found = document.entities().find(id);
             if (found == document.entities().end() || scope.inactive_owner_ids.contains(id) ||
                 !can_recognize_boundary_entity_type(found->second.type))
                 throw std::invalid_argument("inactive or unavailable boundary dependency");
             auto entity = found->second;
+            // Re-export uses the current reviewed self-floor declaration. Prior
+            // destination admission state never becomes a new source binding.
+            entity.extensions.erase("vertex_dxf_stair_floor_binding");
             entity.extensions["vertex_dxf_boundary"] = marker;
+            if (version == 4) {
+                const auto floor_id = native_dxf_boundary_stair_floor_source(entity);
+                if (!floor_id.empty()) {
+                    const auto floor = document.entities().find(floor_id);
+                    if (floor == document.entities().end() || floor->second.type != "floor")
+                        throw std::invalid_argument("source stair owning floor unavailable");
+                }
+            }
             source.push_back(std::move(entity));
             unchanged.emplace(id, id);
         }
         validate_native_dxf_boundary_groups(source);
         validate_boundary_group_source_contexts(source);
         validate_boundary_group_ceiling_sources(source);
-        for (const auto& entity : source) detached.push_back(detached_native_entity(entity, unchanged));
+        for (const auto& entity : source) detached.push_back(detached_native_entity(entity, unchanged, version == 4));
         if (!Document::create(detached).snapshot().is_editable())
             throw std::invalid_argument("native boundary group schema is not editable");
         DxfDrawing pending;
@@ -715,7 +744,8 @@ bool export_boundary_group(const DocumentSnapshot& document, const std::vector<s
             // The current import marker is admission state, not source graph
             // authority. The carrier below declares its actual new membership.
             metadata["extensions"].erase("vertex_dxf_boundary");
-            metadata["version"] = 3;
+            metadata["extensions"].erase("vertex_dxf_stair_floor_binding");
+            metadata["version"] = version;
             metadata["depiction"] = kBoundaryDepiction;
             metadata["member_ids"] = ids;
             metadata["dependency_graph"] = native_dxf_boundary_dependency_graph(entity);
@@ -752,7 +782,7 @@ std::pair<std::set<std::string>, std::set<std::string>> export_boundary_groups(
         adjacency.try_emplace(id);
         try {
             const auto dependencies = native_dxf_boundary_dependency_ids(entity);
-            if (!dependencies.empty()) linked.insert(id);
+            if (!dependencies.empty() || boundary_has_stair_declaration(entity)) linked.insert(id);
             for (const auto& target : dependencies) {
                 adjacency[id].insert(target); adjacency[target].insert(id);
             }
@@ -1569,8 +1599,8 @@ NativeCandidate decode_native_candidate(const DxfBlock& block, std::size_t inser
     std::set<std::string> actual;
     if (!payload.is_object()) throw std::invalid_argument("native payload must be object");
     const bool boundary = payload.contains("version") && payload.at("version").is_number_integer() &&
-        (payload.at("version") == 2 || payload.at("version") == 3);
-    const bool group = boundary && payload.at("version") == 3;
+        (payload.at("version") == 2 || payload.at("version") == 3 || payload.at("version") == 4);
+    const bool group = boundary && (payload.at("version") == 3 || payload.at("version") == 4);
     if (group) { expected.insert("member_ids"); expected.insert("dependency_graph"); }
     if (boundary) {
         expected.insert("depiction");
@@ -1611,6 +1641,8 @@ NativeCandidate decode_native_candidate(const DxfBlock& block, std::size_t inser
     if (boundary && candidate.entity.extensions.contains("physical_wall_room"))
         throw std::invalid_argument("physical room source graph unavailable");
     candidate.version = payload.at("version").get<int>();
+    if (candidate.version == 4 && candidate.entity.extensions.contains("vertex_dxf_stair_floor_binding"))
+        throw std::invalid_argument("native source cannot carry destination floor binding");
     if (group) {
         if (!payload.at("member_ids").is_array() ||
             payload.at("dependency_graph") != native_dxf_boundary_dependency_graph(candidate.entity))
@@ -1657,7 +1689,9 @@ bool same_block_geometry(const DxfBlock& a, const DxfBlock& b, bool exact = fals
 
 // Bindings to absent project scaffolding remain inert source evidence. Only
 // boundary topology and wall/opening host relationships become active here.
-Entity detached_native_entity(const Entity& source, const std::map<std::string, std::string>& ids) {
+Entity detached_native_entity(const Entity& source, const std::map<std::string, std::string>& ids,
+                              bool proved_stair_floor) {
+    const auto stair_floor = proved_stair_floor ? native_dxf_boundary_stair_floor_source(source) : std::string{};
     Entity result = can_recognize_boundary_entity_type(source.type) && ids.at(source.id) != source.id
         ? remap_boundary_owner_identity(source, ids.at(source.id)) : source;
     result.id = ids.at(source.id);
@@ -1666,6 +1700,11 @@ Entity detached_native_entity(const Entity& source, const std::map<std::string, 
             {"properties", source.properties}, {"extensions", source.extensions}};
     for (const auto* key : {"floor_id", "layer_id", "building_id", "property_id"})
         result.properties.erase(key);
+    if (!stair_floor.empty()) {
+        result.properties["appraisal_facts"]["ansi"]["ceiling"]["stair_from_floor_id"] = "";
+        result.extensions["vertex_dxf_stair_floor_binding"] = {{"version", 1},
+            {"source_floor_id", stair_floor}, {"destination_floor_id", nullptr}};
+    }
     if (can_recognize_boundary_entity_type(source.type)) {
         // Legacy names are organizational bindings too. A reviewed desktop
         // destination must not be overridden on later export by a source name.
@@ -1720,7 +1759,8 @@ std::set<std::size_t> import_native_graphs(const DxfDrawing& drawing, bool sourc
             // malformed graph or placement still conflicts with another copy.
             if (payload.is_object() && payload.contains("version") &&
                 payload.at("version").is_number_integer() &&
-                (payload.at("version") == 1 || payload.at("version") == 2 || payload.at("version") == 3) &&
+                (payload.at("version") == 1 || payload.at("version") == 2 || payload.at("version") == 3 ||
+                 payload.at("version") == 4) &&
                 payload.contains("id") && payload.at("id").is_string()) {
                 const auto id = payload.at("id").get<std::string>();
                 if (!id.empty() && id.size() <= 255 && !declared_ids.insert(id).second)
@@ -1743,7 +1783,7 @@ std::set<std::size_t> import_native_graphs(const DxfDrawing& drawing, bool sourc
         } catch (const std::exception& error) {
             if (payload.is_object() && payload.contains("version") &&
                 payload.at("version").is_number_integer() &&
-                (payload.at("version") == 2 || payload.at("version") == 3)) {
+                (payload.at("version") == 2 || payload.at("version") == 3 || payload.at("version") == 4)) {
                 const auto remember = [&](const Json& value) {
                     if (value.is_string()) {
                         const auto& id = value.get_ref<const std::string&>();
@@ -1781,7 +1821,7 @@ std::set<std::size_t> import_native_graphs(const DxfDrawing& drawing, bool sourc
     for (const auto& [id, candidate] : candidates) { (void)candidate; allocated_ids.insert(id); }
     std::set<std::string> processed_groups;
     for (const auto& [id, candidate] : candidates) {
-        if (candidate.version != 3 || processed_groups.contains(id)) continue;
+        if ((candidate.version != 3 && candidate.version != 4) || processed_groups.contains(id)) continue;
         // Mark the attempted declaration, but conflicting members are still
         // checked below. No member is published until every proof succeeds.
         processed_groups.insert(candidate.member_ids.begin(), candidate.member_ids.end());
@@ -1790,11 +1830,11 @@ std::set<std::size_t> import_native_graphs(const DxfDrawing& drawing, bool sourc
             std::vector<Entity> source;
             std::map<std::string, std::string> ids;
             std::map<std::string, std::string, std::less<>> typed_ids;
-            const auto marker = boundary_group_marker(candidate.member_ids);
+            const auto marker = boundary_group_marker(candidate.member_ids, candidate.version);
             for (const auto& member_id : candidate.member_ids) {
                 const auto found = candidates.find(member_id);
                 if (found == candidates.end() || duplicate_ids.contains(member_id) ||
-                    rejected_boundary_group_ids.contains(member_id) || found->second.version != 3 ||
+                    rejected_boundary_group_ids.contains(member_id) || found->second.version != candidate.version ||
                     found->second.member_ids != candidate.member_ids)
                     throw std::invalid_argument("partial or mismatched native boundary group");
                 group.push_back(&found->second);
@@ -1805,9 +1845,10 @@ std::set<std::size_t> import_native_graphs(const DxfDrawing& drawing, bool sourc
                 while (!allocated_ids.insert(fresh).second) fresh = make_stable_id();
                 ids.emplace(member_id, fresh); typed_ids.emplace(member_id, std::move(fresh));
             }
-            // Any incoming V3 declaration must share this exact complete group.
+            // Any incoming V3/V4 declaration must share this exact complete group.
             for (const auto& [other_id, other] : candidates) {
-                if (other.version != 3 || std::binary_search(candidate.member_ids.begin(), candidate.member_ids.end(), other_id)) continue;
+                if ((other.version != 3 && other.version != 4) ||
+                    std::binary_search(candidate.member_ids.begin(), candidate.member_ids.end(), other_id)) continue;
                 for (const auto& target : native_dxf_boundary_dependency_ids(other.entity))
                     if (std::binary_search(candidate.member_ids.begin(), candidate.member_ids.end(), target))
                         throw std::invalid_argument("incoming native boundary graph differs");
@@ -1820,7 +1861,7 @@ std::set<std::size_t> import_native_graphs(const DxfDrawing& drawing, bool sourc
             validate_boundary_group_ceiling_sources(source);
             std::vector<Entity> detached;
             for (const auto& entity : source) {
-                auto fresh = detached_native_entity(entity, ids);
+                auto fresh = detached_native_entity(entity, ids, candidate.version == 4);
                 remap_native_dxf_boundary_dependency_ids(fresh, typed_ids);
                 detached.push_back(std::move(fresh));
             }
@@ -1854,7 +1895,7 @@ std::set<std::size_t> import_native_graphs(const DxfDrawing& drawing, bool sourc
         }
     }
     for (const auto& [id, candidate] : candidates) {
-        if (!can_recognize_boundary_entity_type(candidate.entity.type) || candidate.version == 3) continue;
+        if (!can_recognize_boundary_entity_type(candidate.entity.type) || candidate.version == 3 || candidate.version == 4) continue;
         try {
             if (duplicate_ids.contains(id) || rejected_boundary_group_ids.contains(id) || processed_groups.contains(id))
                 throw std::invalid_argument("conflicting native identity declaration");

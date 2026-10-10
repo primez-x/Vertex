@@ -216,7 +216,8 @@ inline void validate_native_dxf_boundary(const Entity& entity, GeometryBudget& b
     const auto& marker = entity.extensions.at("vertex_dxf_boundary");
     if (!marker.is_object() || !marker.contains("version") ||
         !marker.at("version").is_number_integer()) reject();
-    const bool dependency_group = marker.at("version") == 3;
+    const bool floor_group = marker.at("version") == 4;
+    const bool dependency_group = marker.at("version") == 3 || floor_group;
     if (dependency_group) {
         fields(marker, {"version", "depiction", "member_ids"});
         if (!marker.at("member_ids").is_array() || marker.at("member_ids").empty() ||
@@ -225,6 +226,18 @@ inline void validate_native_dxf_boundary(const Entity& entity, GeometryBudget& b
     } else {
         fields(marker, {"version", "depiction"});
         if (marker.at("version") != 2) reject();
+    }
+    if (entity.extensions.contains("vertex_dxf_stair_floor_binding") && !floor_group) reject();
+    if (floor_group) {
+        // The isolated worker supplies a detached graph. Only the desktop's
+        // reviewed destination may establish an active floor relationship.
+        for (const auto* key : {"property_id", "building_id", "floor_id", "layer_id"})
+            if (entity.properties.contains(key)) reject();
+        if (const auto binding = entity.extensions.find("vertex_dxf_stair_floor_binding");
+            binding != entity.extensions.end()) {
+            if (!binding->is_object() || !binding->contains("destination_floor_id") ||
+                !binding->at("destination_floor_id").is_null()) reject();
+        }
     }
     if (marker.at("depiction") != "BOUNDARY_PLAN_V1" ||
         entity.extensions.contains("physical_wall_room") ||

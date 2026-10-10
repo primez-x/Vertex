@@ -1227,6 +1227,65 @@ std::vector<std::string> exterior_wall_measurement_source_ids(const Entity& owne
     return ids;
 }
 
+Entity remap_exterior_wall_measurement_source_references(
+    const Entity& owner,
+    const std::map<std::string, std::string, std::less<>>& wall_ids,
+    const std::map<std::string, std::string, std::less<>>& context_ids) {
+    if (!owner.properties.is_object() || !owner.properties.contains("wall_measurement_source"))
+        return owner;
+    (void)exterior_wall_measurement_source_ids(owner);
+    const auto& source = owner.properties.at("wall_measurement_source");
+    const bool translated = source.at("version") == 2;
+    std::optional<WallMeasurementResult> original_replay;
+    if (translated) {
+        original_replay = materialize_exterior_wall_measurement(owner);
+        if (outline_record(original_replay->boundary) != outline_record(actual_boundary_geometry(owner)))
+            reject("Wall source remapping requires an exact retained physical translation outline");
+    }
+
+    // Use Document's bounded entity-identifier grammar. Only required entries
+    // are consumed, so callers may supply a complete graph identity map.
+    const auto valid_destination = [](std::string_view id) {
+        return !id.empty() && id.size() <= 128 &&
+            std::all_of(id.begin(), id.end(), [](unsigned char character) {
+                return (character >= 'a' && character <= 'z') ||
+                    (character >= 'A' && character <= 'Z') ||
+                    (character >= '0' && character <= '9') || character == '-' ||
+                    character == '_' || character == '.' || character == ':';
+            });
+    };
+    std::map<std::string, std::string, std::less<>> destination_sources;
+    const auto mapped_id = [&](const auto& mappings, const std::string& id) -> const std::string& {
+        const auto found = mappings.find(id);
+        if (found == mappings.end()) reject("Wall source remapping is missing a referenced identity: " + id);
+        if (!valid_destination(found->second)) reject("Wall source remapping has an invalid destination identity: " + id);
+        const auto [destination, inserted] = destination_sources.emplace(found->second, id);
+        if (!inserted && destination->second != id)
+            reject("Wall source remapping has colliding destination identities");
+        return found->second;
+    };
+
+    auto result = owner;
+    auto& remapped = result.properties.at("wall_measurement_source");
+    for (auto& record : remapped.at("walls")) {
+        record.at("id") = mapped_id(wall_ids, record.at("id").get<std::string>());
+        for (auto& [field, value] : record.at("context").items())
+            value = mapped_id(context_ids, value.get<std::string>());
+    }
+    if (translated) remapped = normalize_source_order(remapped);
+    (void)exterior_wall_measurement_source_ids(result);
+    if (translated) {
+        const auto replay = materialize_exterior_wall_measurement(result);
+        if (outline_record(replay.boundary) != outline_record(original_replay->boundary) ||
+            outline_record(replay.boundary) != outline_record(actual_boundary_geometry(result)))
+            reject("Wall source remapping changed its exact physical translation outline");
+        for (std::size_t index = 0; index < replay.ordered_wall_ids.size(); ++index)
+            if (replay.ordered_wall_ids[index] != wall_ids.at(original_replay->ordered_wall_ids[index]))
+                reject("Wall source remapping changed its physical edge correspondence");
+    }
+    return result;
+}
+
 static WallMeasurementResult derive_replacement_exterior_wall_measurement_impl(
     const std::map<std::string, Entity, std::less<>>& entities, const Entity& owner,
     const std::vector<std::string>& wall_ids, OffsetKernel kernel) {

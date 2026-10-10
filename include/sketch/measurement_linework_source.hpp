@@ -7,6 +7,7 @@
 #include <optional>
 #include <set>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace sketch {
@@ -27,6 +28,21 @@ struct MeasurementLineworkSourceCheck {
 // and exactly {"version":1} with an integer version. Malformed/unknown markers
 // throw invalid_argument. The marker does not contain a source cohort identity.
 [[nodiscard]] bool measurement_linework_copy_isolated(const Entity& entity);
+// Sorted unique source owners from retained outer and group-member lineage.
+// No lineage returns empty. Present lineage requires a supported measurement
+// boundary and the existing strict outer/member schemas and budgets.
+[[nodiscard]] std::vector<std::string> measurement_linework_source_ids(const Entity& entity);
+// Remap only typed retained source-use references, preserving the entity owner,
+// local boundary IDs, receipts, use order and raw interval/reversal JSON.
+// Every referenced owner needs a nonempty mapping; distinct owners cannot share
+// a target. An empty segment map preserves source-local segment IDs. Otherwise
+// every original {owner,segment} pair needs a nonempty mapping and distinct
+// source segments within one owner cannot share a target. Extra map entries are
+// ignored. Validation occurs before and after rewriting a private copy; callers
+// must separately validate the complete remapped source graph and geometry.
+[[nodiscard]] Entity remap_measurement_linework_source_references(const Entity& entity,
+    const std::map<std::string,std::string,std::less<>>& owner_ids,
+    const std::map<std::pair<std::string,std::string>,std::string>& segment_ids = {});
 // Unmarked lineage uses the historical shared drawing-layer graph, excluding
 // marked copy owners. If any retained outer/group-member source owner is marked,
 // rebuild from exactly all referenced owners and ALL their canonical edges.

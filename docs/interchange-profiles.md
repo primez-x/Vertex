@@ -202,6 +202,32 @@ Partial, duplicate or inconsistent groups likewise activate no native members.
 This is source implementation, pending qualification;
 it does not certify whole-project DXF fidelity or external consumer behavior.
 
+### Stair footprint floor binding (2026-10-09, source implementation)
+
+The version-4 envelope retains the version-3 group fields and adds transport
+for the appraisal stair footprint's self-floor relationship. Source admission
+requires `boundary_role: stair_footprint`, `ceiling.kind: stairs` and a nonempty
+`stair_from_floor_id` equal to the area's owning `floor_id`. A group containing
+such a member uses version 4 throughout; an otherwise standalone stair uses a
+singleton group. Missing or mismatched source floors cannot be repaired by
+import. This does not introduce arbitrary cross-floor stair dependencies.
+
+The canonical source dependency graph retains the original floor reference.
+Detached candidates clear the active reference and carry exactly
+`vertex_dxf_stair_floor_binding: {version: 1, source_floor_id: <source floor>,
+destination_floor_id: null}`. The isolated response requires detached
+organization and the pending state. After desktop destination review assigns
+the actual floor and layer, a typed binder sets the active reference and
+`destination_floor_id` to that floor. Complete final group validation precedes
+the atomic import. Floor IDs never pass through the boundary-owner identity
+map, and no observation hash or reporting confirmation is refreshed. Re-export
+rebuilds the source declaration from the current owning floor.
+
+V1/V2/V3 contracts remain unchanged. Live wall/measured-line graphs and physical
+source-bound rooms still require complete transport; source-only remapping
+helpers do not close that exchange gap. V4 is uncompiled and runtime unverified;
+external round trips and production acceptance remain open.
+
 IFC now uses one actual project's linked length-unit assignment for every core
 editable reconstruction, including legacy axes and swept solids. Orphan metre
 declarations cannot authorize a wall, slab or opening. Recognized nonlength
