@@ -172,7 +172,7 @@ void preflight_selection(const Json& proof, std::size_t& count, std::size_t dept
     } else if (version == 16) {
         const auto& wall = field(proof, "wall_demolition");
         const auto& inner_version = field(wall, "version");
-        if (!inner_version.is_number_integer() || inner_version < 1 || inner_version > 3)
+        if (!inner_version.is_number_integer() || inner_version < 1 || inner_version > 4)
             invalid("unsupported wall demolition version");
         preflight_ids(field(field(wall, "wall_demolition"), "wall_ids"), count);
         if (inner_version != 1) preflight_ids(field(wall, "ordinary_wall_ids"), count);

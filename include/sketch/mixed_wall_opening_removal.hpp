@@ -21,27 +21,33 @@ using MixedWallOpeningRemovalEntities = std::map<std::string, Entity, std::less<
 // leaf's narrow qualified roof phase-retention semantics. No independent
 // room/drawing or general shared-baseline demolition authority is granted. The explicit constraint
 // policy belongs to the actual captured history, never inferred from registries.
+// Corner completion authenticates every selected owner/cut before consequence
+// collapse. A managed cut outside selected walls uses complete owner removal;
+// it never lends authority to independent single-cut opening erasure.
 [[nodiscard]] MixedWallOpeningRemovalEntities replay_mixed_wall_opening_removal(
     const MixedWallOpeningRemovalEntities& actual, const MixedWallOpeningRemovalIntent& intent,
-    bool active_phase_constraints);
+    bool active_phase_constraints, bool complete_corner_window_consequences=false);
 
 // Reserves all wall/roof slots against real source/history/assets before native
 // work, and validates deterministic asset-free raw changes through exact real
 // snapshot preview and geometry admission. Publication retains the source fence.
 [[nodiscard]] ApplyEntityChanges prepare_mixed_wall_opening_removal(
     const DocumentSnapshot& source, const MixedWallOpeningRemovalIntent& intent,
-    const std::string& message);
+    const std::string& message, bool complete_corner_window_consequences=false);
 
 struct DecodedMixedWallOpeningDeletionReviewProof {
     ApplyEntityChanges command;
     MixedWallOpeningRemovalIntent intent;
+    bool complete_corner_window_consequences{false};
 };
 
 // Closed version40 mixed_wall_opening_deletion envelope. Historical wall/mixed
 // proofs keep their existing meanings. The raw version-one child is asset-free.
+// Closed v50 explicitly completes corner owners/cuts and catalog consequences;
+// a managed-cut selection can retire only its complete actual owner aggregate.
 [[nodiscard]] nlohmann::json encode_mixed_wall_opening_deletion_review_proof(
     const DocumentSnapshot& source, const MixedWallOpeningRemovalIntent& intent,
-    const Command& command);
+    const Command& command, bool complete_corner_window_consequences=false);
 [[nodiscard]] DecodedMixedWallOpeningDeletionReviewProof decode_mixed_wall_opening_deletion_review_proof(
     const nlohmann::json& proof);
 

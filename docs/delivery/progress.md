@@ -14,6 +14,44 @@ changed source does not acquire runtime acceptance without later qualification.
 
 ## Current delivery state
 
+### October 10 complete wall/corner deletion - reviewed source integration
+
+Standalone qualified corner-copy deletion is committed and pushed as e0f73c7d,
+with exact local/remote ref verification. Subsequent source fixes wall-only
+corner consequences, ordinary mixed wall/corner/opening/catalog cohorts and
+saved-design baseline wall demolition. New physical proof48, mixed proofs49/50
+and phase inner4 declare default-false completion authority. Original actual
+source derives one complete corner owner/two-cut closure; explicit selections
+authenticate before closure dominance. Physical retirement cleans the complete
+assembly; baseline demolition retains original bodies, both hosts and catalog
+rows while updating the selected alternative. One complete stage supplies room
+review and one publication. Historical proof lanes retain their meaning.
+
+Root integrated complete controller capture and wall routing, opposite-cut
+baseline dispatch, room/drawing/phase/mixed helpers, Document lifetime guards
+and reader183/extraction181 fences across retained, undone and nested history.
+Source review found and corrected protected-alternative over-refusal for exact
+retained copies on a covered baseline corner, and the new proof marker's fresh
+destination reservation. New-only guards retain required/inactive/foreign
+registry checks and historical identity name domains. Independent source review
+approves this bounded integration with no remaining concrete P1/P2 finding.
+Root reviewed the integrated interfaces and identified the separate phase cases
+below as required next implementation. No production acceptance is claimed.
+
+No builds, tests/new tests, scripts, probes, native jobs, UI launches, packages
+or installations run. Compilation, native interaction, room decisions,
+Undo/reopen, migration and measured responsiveness remain unqualified. The
+installed candidate is unchanged; all ten production gates remain open.
+Proposed corners on baseline hosts, corners spanning selected baseline/proposed
+hosts, and independent non-host baseline corner cohorts remain implementation
+gaps: inner4 currently admits host-derived baseline corners only when all five
+participants are baseline. Mixed opening proof50 also cannot represent a selected
+cut that is parked rather than physically retired. Preserve the committed inner4
+meaning while adding explicit authority for these cases in the next source batch.
+Mixed-family clipboard,
+Properties/transforms, architectural lifecycle and full consolidated delivery
+scope remain required work. Do not restart completed source batches.
+
 ### October 10 standalone corner-copy deletion - source integration
 
 The preceding group clipboard/catalog-copy source batch is committed and

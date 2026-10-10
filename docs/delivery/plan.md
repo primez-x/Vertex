@@ -271,8 +271,17 @@ polling timeout does not permit restarting it.
    components, drawing rows and selected skylights compose from the same
    original source before one publication. Selected drawing dependents cannot
    remove a baseline dimension bound to a newly demolished corner. Qualify this
-   source addition and retained/undone history. Corner combinations with wall,
-   opening and other baseline-family producers,
+   source addition and retained/undone history. Subsequent source adds explicit
+   wall-host corner consequences, coordinated wall/opening/component cohorts
+   and saved-design host demolition under proofs48/49/50 and phase inner4,
+   reader183/extraction181. Complete original owner/two-cut authority,
+   authenticated closure dominance, one room review, exact baseline body/copy
+   retention and current/retained/undone history require qualification.
+   Proposed corners on baseline hosts, corners spanning selected baseline and
+   proposed hosts, independent non-host baseline corner combinations with other
+   producers, and selected cuts parked by demolition remain implementation gaps.
+   Extend these through distinct authority without changing inner4 semantics.
+   Independent corner combinations with other producers,
    aggregate clipboard, mixed Properties/transforms and directional group
    controls remain required implementation gaps.
    Subsequent source completes corner-owner legacy catalog host-copy admission

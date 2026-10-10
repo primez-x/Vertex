@@ -153,6 +153,9 @@ void validate_physical_wall_room_dimension_placements(
 // Opening-hosted completion is a separate opt-in v38 authority. It includes
 // qualified rows on removed semantic openings, with actual wall/sibling cuts;
 // hosted and join completion are both required. Historical proofs stay exact.
+// Corner consequences are a separate opt-in v48 authority. Actual owners and
+// both managed cuts retire through the complete original-source corner codec;
+// hosted and join completion are required, with opening-host authority explicit.
 [[nodiscard]] ApplyEntityChanges prepare_physical_wall_deletion(
     const DocumentSnapshot& source,std::string_view wall_id,bool complete_hosted_removal=false,
     bool complete_join_removal=false,const PhysicalWallJoinRemovalAdditionalIdentities& additional_join_identities={});
@@ -162,7 +165,7 @@ void validate_physical_wall_room_dimension_placements(
 [[nodiscard]] ApplyEntityChanges prepare_physical_walls_deletion(
     const DocumentSnapshot& source,const std::vector<std::string>& wall_ids,bool complete_hosted_removal=false,
     bool complete_join_removal=false,const PhysicalWallJoinRemovalAdditionalIdentities& additional_join_identities={},
-    bool complete_opening_hosted_removal=false);
+    bool complete_opening_hosted_removal=false,bool complete_corner_window_consequences=false);
 // Complete immutable actual-map replay for a larger source-derived removal
 // composition. Includes hosted and join consequences. The enclosing authoring
 // command owns snapshot/history/assets/fresh-ID reservation and room review;
@@ -174,15 +177,17 @@ void validate_physical_wall_room_dimension_placements(
 [[nodiscard]] std::map<std::string,Entity,std::less<>> replay_complete_physical_walls_deletion(
     const std::map<std::string,Entity,std::less<>>& actual,const std::vector<std::string>& wall_ids,
     const PhysicalWallJoinRemovalAdditionalIdentities& additional_join_identities={},
-    bool complete_opening_hosted_removal=false,bool complete_hosted_catalog_consequences=false);
+    bool complete_opening_hosted_removal=false,bool complete_hosted_catalog_consequences=false,
+    bool complete_corner_window_consequences=false);
 // Analytical aggregate admission before native join inspection. The caller
 // must first reserve fresh identities against the complete original snapshot.
 void preflight_physical_walls_deletion_join_inference(
     const std::map<std::string,Entity,std::less<>>& actual,const std::vector<std::string>& wall_ids,
-    bool complete_opening_hosted_removal=false,bool complete_hosted_catalog_consequences=false);
+    bool complete_opening_hosted_removal=false,bool complete_hosted_catalog_consequences=false,
+    bool complete_corner_window_consequences=false);
 [[nodiscard]] nlohmann::json encode_physical_wall_deletion_review_proof(
     const DocumentSnapshot& source,const Command& command);
-// Accepts only bounded canonical grouped v31 or complete v35/v36/v38 envelopes and
+// Accepts only bounded canonical grouped v31 or complete v35/v36/v38/v48 envelopes and
 // returns their raw child. Actual source must validate all declared roots.
 [[nodiscard]] Command decode_physical_wall_deletion_review_proof(const nlohmann::json& proof);
 [[nodiscard]] bool is_physical_wall_room_deletion_review_command(const Command& command);

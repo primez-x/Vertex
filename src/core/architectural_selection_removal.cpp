@@ -144,7 +144,8 @@ Entities replay_architectural_selection_removal(const Entities& actual,
             const auto found = actual.find(id);
             if (found == actual.end()) reject("selected actual owner is missing: " + id);
             if (found->second.type == "roof") roofs.push_back(id);
-            else if (primitive(found->second)) objects.push_back(id);
+            else if (primitive(found->second) ||
+                (complete_corner_window_removal && found->second.type == "corner_window")) objects.push_back(id);
             else reject("selected root requires a dedicated removal path: " + id);
         }
         Keys selected_components;

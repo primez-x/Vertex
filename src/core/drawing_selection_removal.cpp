@@ -912,7 +912,7 @@ DrawingSelectionRemovalEntities replay_drawing_selection_removal_with_deletion_r
         if (!review || !review->room_review_completion || !review->room_review_geometry_completion ||
             review->room_review_geometry_proof.dump()!=geometry_proof.dump() || review->expected_revision!=source.revision() ||
             (version!=27 && version!=30 && version!=31 && version!=35 && version!=36 && version!=37 &&
-                version!=38 && version!=39 && version!=40))
+                version!=38 && version!=39 && version!=40 && version!=48 && version!=49 && version!=50))
             reject("drawing composition requires the exact closed deletion room review");
         const auto canonical=command_from_json(wire);
         if (command_to_json(canonical).dump()!=wire.dump()) reject("deletion room review is not canonical");

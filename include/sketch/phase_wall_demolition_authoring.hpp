@@ -17,13 +17,17 @@ struct PhaseWallDemolitionAuthoring {
     std::vector<std::string> ordinary_wall_ids;
     PhysicalWallJoinRemovalAdditionalIdentities wall_additional_identities;
     bool complete_hosted_catalog_consequences{false};
+    bool complete_corner_window_consequences{false};
 };
 
 // Closed inner one retains its exact six-field authority. Closed inner two
 // adds actual ordinary wall roots and their source-derived join destinations;
 // closed inner three explicitly admits complete ordinary hosted catalog
 // consequences, with optional ordinary walls. Historical children retain their
-// exact source-bound wire authority.
+// exact source-bound wire authority. Closed inner four additionally derives
+// complete actual corner-window consequences from the selected wall hosts and
+// requires complete hosted catalog consequences. It grants no independent
+// corner root or managed-cut removal authority.
 [[nodiscard]] nlohmann::json encode_phase_wall_demolition_authoring(
     const PhaseWallDemolitionAuthoring& intent);
 [[nodiscard]] PhaseWallDemolitionAuthoring decode_phase_wall_demolition_authoring(

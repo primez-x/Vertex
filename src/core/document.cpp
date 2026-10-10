@@ -3008,8 +3008,8 @@ static Command room_review_geometry_command(const ApplyBoundaryConstraintChanges
     const bool grouped_deletion=proof.at("kind")=="physical_wall_deletion";
     const bool mixed_deletion=proof.at("kind")=="mixed_wall_deletion";
     const bool mixed_opening_deletion=proof.at("kind")=="mixed_wall_opening_deletion";
-    if ((mixed_opening_deletion && version!=40) || (mixed_deletion && version!=37 && version!=39) ||
-        (grouped_deletion && version!=31 && version!=35 && version!=36 && version!=38) || (!grouped_deletion && !mixed_deletion && !mixed_opening_deletion &&
+    if ((mixed_opening_deletion && version!=40 && version!=50) || (mixed_deletion && version!=37 && version!=39 && version!=49) ||
+        (grouped_deletion && version!=31 && version!=35 && version!=36 && version!=38 && version!=48) || (!grouped_deletion && !mixed_deletion && !mixed_opening_deletion &&
         version!=1 && version!=10 && version!=17 && version!=19 && version!=21 && version!=22 && version!=23 && version!=34 && version!=43 && !ordinary_room_wall_proof_version(version)))
         throw std::invalid_argument("Room review cannot wrap another geometry intent");
     const auto decoded=[&]()->Command {
@@ -3444,9 +3444,9 @@ static bool has_complete_wall_join_deletion_proof(const ApplyBoundaryConstraintC
     const auto& proof=command.room_review_geometry_proof;
     return command.room_review_geometry_completion && proof.is_object() &&
         proof.contains("kind") && proof.contains("version") && proof.at("version").is_number_integer() &&
-        ((proof.at("kind")=="physical_wall_deletion" && (proof.at("version")==36 || proof.at("version")==38)) ||
-         (proof.at("kind")=="mixed_wall_deletion" && (proof.at("version")==37 || proof.at("version")==39)) ||
-         (proof.at("kind")=="mixed_wall_opening_deletion" && proof.at("version")==40));
+        ((proof.at("kind")=="physical_wall_deletion" && (proof.at("version")==36 || proof.at("version")==38 || proof.at("version")==48)) ||
+         (proof.at("kind")=="mixed_wall_deletion" && (proof.at("version")==37 || proof.at("version")==39 || proof.at("version")==49)) ||
+         (proof.at("kind")=="mixed_wall_opening_deletion" && (proof.at("version")==40 || proof.at("version")==50)));
 }
 static PhysicalWallJoinRemovalAdditionalIdentities complete_wall_join_deletion_destinations(
     const ApplyBoundaryConstraintChanges& command) {
@@ -3625,6 +3625,7 @@ static void validate_phase_constraint_fresh_lifetime(const std::map<std::string,
     bool complete_wall_demolition=false;
     bool complete_ordinary_wall_demolition=false;
     bool complete_wall_catalog_demolition=false;
+    bool complete_wall_corner_demolition=false;
     bool complete_hosted_demolition=false;
     bool complete_opening_demolition=false;
     for (const auto& [id,entity] : candidate) {
@@ -3659,6 +3660,7 @@ static void validate_phase_constraint_fresh_lifetime(const std::map<std::string,
 #ifdef VERTEX_HAS_PHYSICAL_ROOM_REVIEW
             const auto demolition=decode_phase_wall_demolition_authoring(root_intent.wall_demolition);
             complete_wall_catalog_demolition=complete_wall_catalog_demolition || demolition.complete_hosted_catalog_consequences;
+            complete_wall_corner_demolition=complete_wall_corner_demolition || demolition.complete_corner_window_consequences;
             complete_ordinary_wall_demolition=complete_ordinary_wall_demolition ||
                 !demolition.ordinary_wall_ids.empty() || demolition.complete_hosted_catalog_consequences;
             for (const auto& [original,ids]:demolition.wall_additional_identities) {
@@ -3952,6 +3954,8 @@ static void validate_phase_constraint_fresh_lifetime(const std::map<std::string,
     }
     if (complete_wall_catalog_demolition && fresh.contains("complete_hosted_catalog_consequences"))
         throw std::invalid_argument("A fresh wall demolition destination borrows the complete catalog proof field");
+    if (complete_wall_corner_demolition && fresh.contains("complete_corner_window_consequences"))
+        throw std::invalid_argument("A fresh wall demolition destination borrows the corner consequence proof field");
     if (complete_opening_demolition && fresh.contains("ordinary_opening_ids"))
         throw std::invalid_argument("A fresh architectural demolition destination borrows the ordinary opening proof field");
     if (phase_drawing_enclosure) {
@@ -8877,7 +8881,7 @@ Command command_from_json(const nlohmann::json& value,
                 (void)command_to_json(Command{result});
                 return result;
             }
-            if (value.at("version")==18 || value.at("version")==24 || value.at("version")==25 || value.at("version")==26 || value.at("version")==27 || value.at("version")==28 || value.at("version")==29 || value.at("version")==30 || value.at("version")==31 || value.at("version")==32 || value.at("version")==35 || value.at("version")==36 || value.at("version")==37 || value.at("version")==38 || value.at("version")==39 || value.at("version")==40 || value.at("version")==44) {
+            if (value.at("version")==18 || value.at("version")==24 || value.at("version")==25 || value.at("version")==26 || value.at("version")==27 || value.at("version")==28 || value.at("version")==29 || value.at("version")==30 || value.at("version")==31 || value.at("version")==32 || value.at("version")==35 || value.at("version")==36 || value.at("version")==37 || value.at("version")==38 || value.at("version")==39 || value.at("version")==40 || value.at("version")==44 || value.at("version")==48 || value.at("version")==49 || value.at("version")==50) {
                 const bool geometry=value.at("version")!=18 && value.at("version")!=29;
                 const bool batch=value.at("version")==27;
                 if (batch)

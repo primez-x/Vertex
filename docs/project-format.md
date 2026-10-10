@@ -1,4 +1,32 @@
-# Vertex project formats v1 through v182
+# Vertex project formats v1 through v183
+
+## Complete wall/corner retirement (v183, source integration)
+
+New closed physical-wall proof48, mixed-wall proof49 and mixed-wall/opening
+proof50 explicitly admit complete corner-window consequences. Every leaf uses
+the original actual source; an affected corner owner and both managed cuts
+retire together when either host is removed. Qualified catalog copies and
+known dependents follow that admitted closure. Explicit selected owners,
+managed cuts and component rows are authenticated before covered consequences
+collapse. Unrelated references, protected data and invalid source refuse the
+complete operation. One combined geometry stage feeds the existing room review.
+
+Phase-wall demolition inner4 requires both complete hosted-catalog and corner
+consequence flags. A baseline host's demolition also demolishes the actual
+corner owner and both cuts in the selected saved alternative. Original physical
+bodies, both hosts and retained catalog rows remain exact. Historical inner
+one/two/three and wall proofs31/35/36/38/37/39/40 keep their meanings.
+Inner4 requires all five corner participants to be baseline for this parking
+case. Proposed corners on baseline hosts, mixed baseline/proposed host cohorts
+and independent non-host baseline corners require subsequent authority; they
+remain implementation gaps. Proof50 requires selected opening roots to retire
+physically and does not admit cuts merely parked by baseline demolition.
+
+New authority in current, retained, undone or nested command history requires
+reader183/extraction181. Room-review codecs, destination lifetime checks and
+source/selection fences include the new proofs; no asset-storage change occurs.
+Compilation, interaction, native geometry, Undo/reopen and migration remain
+unqualified. The installed candidate is unchanged.
 
 ## Qualified corner-copy row deletion (v182, source integration)
 

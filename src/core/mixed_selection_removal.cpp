@@ -175,7 +175,8 @@ Command closed_ordinary_deletion_command(const Json& value) {
     if (version==1 && value.at("kind")=="apply_entity_changes") return closed_command(value,false);
     if (value.at("kind")!="apply_boundary_constraint_changes" ||
         (version!=27 && version!=30 && version!=31 && version!=35 && version!=36 && version!=37 &&
-            version!=38 && version!=39 && version!=40 && version!=41 && version!=46))
+            version!=38 && version!=39 && version!=40 && version!=41 && version!=46 &&
+            version!=48 && version!=49 && version!=50))
         reject("ordinary deletion requires a raw command or closed wall-deletion room review");
     const auto command=command_from_json(value);
     if (command_to_json(command).dump()!=value.dump()) reject("ordinary deletion command is not canonical");

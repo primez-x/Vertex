@@ -1,5 +1,12 @@
 # Portable project extraction
 
+Exchange version181 requires native reader183 for complete wall/corner
+retirement proofs48/49/50 and phase-wall demolition inner4. Complete owner/cut
+closure is derived from original actual host roots, with one room-review stage.
+Retained and undone nested histories preserve this floor and original source,
+save, selection and destination lifetime bindings. Historical proofs keep their
+floors. Source integration does not establish round-trip acceptance.
+
 Exchange version 180 requires native reader182 for mixed-removal dialect seven
 and qualified component-only corner-copy row authority. Inner version three
 does not promote its placement host into selected owner roots. Retained and

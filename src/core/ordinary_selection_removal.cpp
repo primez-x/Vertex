@@ -121,19 +121,19 @@ WallAuthority wall_authority(const Json& proof,const std::vector<std::string>& c
     WallAuthority result;
     const auto& kind=proof.at("kind");
     const auto& version=proof.at("version");
-    if (kind=="physical_wall_deletion" && (version==31 || version==35 || version==36 || version==38)) {
+    if (kind=="physical_wall_deletion" && (version==31 || version==35 || version==36 || version==38 || version==48)) {
         result.command=decode_physical_wall_deletion_review_proof(proof);
         // Read only after the closed public decoder has admitted the inventory.
         result.wall_ids=proof.at("wall_ids").get<std::vector<std::string>>();
-        if (version==36 || version==38)
+        if (version==36 || version==38 || version==48)
             result.destinations=proof.at("additional_join_identities").get<PhysicalWallJoinRemovalAdditionalIdentities>();
-        result.opening_hosts=version==38;
-    } else if (kind=="mixed_wall_deletion" && (version==37 || version==39)) {
+        result.opening_hosts=version==38 || (version==48 && proof.at("complete_opening_hosted_removal")==true);
+    } else if (kind=="mixed_wall_deletion" && (version==37 || version==39 || version==49)) {
         const auto decoded=decode_mixed_wall_deletion_review_proof(proof);
         result.command=Command{decoded.command};result.wall_ids=decoded.intent.wall_ids;
         result.architectural=decoded.intent.other;result.destinations=decoded.intent.wall_additional_identities;
         result.opening_hosts=decoded.complete_opening_hosted_removal;
-    } else if (kind=="mixed_wall_opening_deletion" && version==40) {
+    } else if (kind=="mixed_wall_opening_deletion" && (version==40 || version==50)) {
         const auto decoded=decode_mixed_wall_opening_deletion_review_proof(proof);
         result.command=Command{decoded.command};result.wall_ids=decoded.intent.wall_ids;
         result.architectural=decoded.intent.other;add_roots(result.architectural,decoded.intent.opening_ids);
@@ -205,7 +205,8 @@ void actual_wall_roots(const Entities& actual,const Entities& candidate,const st
 }
 bool room_deletion_version(const Json& version) {
     return version.is_number_integer() && (version==27 || version==30 || version==31 || version==35 ||
-        version==36 || version==37 || version==38 || version==39 || version==40);
+        version==36 || version==37 || version==38 || version==39 || version==40 ||
+        version==48 || version==49 || version==50);
 }
 Command closed_base(const Json& wire) {
     bounded_wire(wire);
