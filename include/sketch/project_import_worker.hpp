@@ -3,6 +3,7 @@
 #include "sketch/annotation_entity_codec.hpp"
 #include "sketch/boundary_entity.hpp"
 #include "sketch/document.hpp"
+#include "sketch/document_wall.hpp"
 #include "sketch/dxf_project_exchange.hpp"
 #include "sketch/geometry.hpp"
 #include "sketch/wall_semantics.hpp"
@@ -46,6 +47,9 @@ struct ProjectImportCandidate {
     bool source_retention_required{};
     // Broker-derived receipt only; never trusted from the serialized worker.
     bool isolation_controls_attested{};
+    // Transfer-only source proofs are shared by V7 members. They are never
+    // embedded in live entities or treated as destination hierarchy authority.
+    NativeDxfPhysicalSourceGraphs physical_source_graphs;
 };
 
 inline const char* project_import_kind_name(ProjectImportKind kind) {
@@ -170,8 +174,16 @@ inline Boundary boundary(const nlohmann::json& value, bool must_close, GeometryB
     }
     return result;
 }
-inline Wall wall(const Entity& entity) {
+inline Wall wall(const Entity& entity, bool native_physical_source = false) {
     Wall result;
+    if (native_physical_source) {
+        // V7 preserves valid native aliases, layer stacks and top profiles.
+        // Decode an observation through the shared codec; leave raw candidate
+        // properties and retained provenance unchanged.
+        std::string error;
+        if (!read_document_wall(entity, {}, result, error)) reject();
+        return result;
+    }
     result.id = entity.id;
     if (!entity.properties.contains("baseline")) reject();
     result.baseline = segment(entity.properties.at("baseline"));
@@ -182,14 +194,18 @@ inline Wall wall(const Entity& entity) {
         result.slope_rise = number(entity.properties, "slope_rise_m");
     return result;
 }
-inline HostedOpening opening(const Entity& entity, std::string& wall_id) {
+inline HostedOpening opening(const Entity& entity, std::string& wall_id, bool native_physical_source = false) {
     if (!entity.properties.contains("wall_id")) reject();
     wall_id = text(entity.properties.at("wall_id"), false);
+    const auto quantity = [&](const char* canonical, const char* legacy, bool positive = false) {
+        const auto* key = native_physical_source && !entity.properties.contains(canonical) ? legacy : canonical;
+        return number(entity.properties, key, positive);
+    };
     return HostedOpening{entity.id,
-        number(entity.properties, "offset_m"),
-        number(entity.properties, "width_m", true),
-        number(entity.properties, "sill_m"),
-        number(entity.properties, "height_m", true)};
+        quantity("offset_m", "offset"),
+        quantity("width_m", "width", true),
+        quantity("sill_m", "sill"),
+        quantity("height_m", "height", true)};
 }
 inline void validate_slab(const Entity& entity, GeometryBudget& budget) {
     if (!entity.properties.contains("boundary") || !entity.properties.contains("holes") ||
@@ -212,11 +228,26 @@ inline void validate_slab(const Entity& entity, GeometryBudget& budget) {
     if (validate_boundary_holes(outer, holes).has_value()) reject();
 }
 
+inline void validate_pending_dxf_physical_graph(const Entity& entity, bool physical_source_group) {
+    const auto graph = entity.extensions.find("vertex_dxf_physical_source_graph");
+    if (!physical_source_group) {
+        if (graph != entity.extensions.end()) reject();
+        return;
+    }
+    if (graph == entity.extensions.end()) reject();
+    fields(*graph, {"version", "source_graph_id", "source_owner_id"});
+    if (!graph->at("version").is_number_integer() || graph->at("version") != 1 ||
+        text(graph->at("source_graph_id"), false, 128).empty() ||
+        text(graph->at("source_owner_id"), false, 128).empty()) reject();
+    // Only pending state is legal across the isolated-worker boundary. The
+    // shared graph admission performs deep proof after all raw shape charges.
+}
 inline void validate_native_dxf_boundary(const Entity& entity, GeometryBudget& budget) {
     const auto& marker = entity.extensions.at("vertex_dxf_boundary");
     if (!marker.is_object() || !marker.contains("version") ||
         !marker.at("version").is_number_integer()) reject();
-    const bool measured_source_group = marker.at("version") == 6;
+    const bool physical_source_group = marker.at("version") == 7;
+    const bool measured_source_group = marker.at("version") == 6 || physical_source_group;
     const bool wall_source_group = marker.at("version") == 5 || measured_source_group;
     const bool floor_group = marker.at("version") == 4 || wall_source_group;
     const bool dependency_group = marker.at("version") == 3 || floor_group;
@@ -233,6 +264,7 @@ inline void validate_native_dxf_boundary(const Entity& entity, GeometryBudget& b
     if (entity.extensions.contains("vertex_dxf_wall_source_context_binding") && !wall_source_group) reject();
     if (entity.extensions.contains("vertex_dxf_measured_graph") && !measured_source_group) reject();
     if (entity.extensions.contains("vertex_dxf_wall_source_hosted_openings")) reject();
+    validate_pending_dxf_physical_graph(entity, physical_source_group);
     if (floor_group) {
         // The isolated worker supplies a detached graph. Only the desktop's
         // reviewed destination may establish an active floor relationship.
@@ -255,7 +287,7 @@ inline void validate_native_dxf_boundary(const Entity& entity, GeometryBudget& b
         // charges below. Dependency inspection must not trigger early replay.
     }
     if (marker.at("depiction") != "BOUNDARY_PLAN_V1" ||
-        entity.extensions.contains("physical_wall_room") ||
+        (entity.extensions.contains("physical_wall_room") && !physical_source_group) ||
         (!wall_source_group && (dependency_group ? native_dxf_boundary_has_untransported_source_links(entity)
                                                 : native_dxf_boundary_has_untransported_links(entity)))) reject();
     const auto& properties = entity.properties;
@@ -271,6 +303,17 @@ inline void validate_native_dxf_boundary(const Entity& entity, GeometryBudget& b
         if (!values->is_array()) reject();
         for (const auto& value : *values) {
             holes.push_back(boundary(value, true, budget, false));
+            topology_segments += holes.back().size();
+        }
+    }
+    if (const auto room = entity.extensions.find("physical_wall_room"); room != entity.extensions.end()) {
+        if (entity.type != "room_boundary" || !room->is_object() || !room->contains("holes") ||
+            !room->at("holes").is_array()) reject();
+        for (const auto& value : room->at("holes")) {
+            // Physical-room voids belong to the retained descriptor, rather
+            // than the ordinary boundary properties. Charge them before any
+            // shared descriptor decoder or source geometry proof can run.
+            holes.push_back(boundary(value, true, budget));
             topology_segments += holes.back().size();
         }
     }
@@ -524,6 +567,21 @@ inline void validate(const ProjectImportCandidate& result) {
     if (result.entities.size() > project_import_entity_limit ||
         result.diagnostics.size() > project_import_diagnostic_limit ||
         (!result.diagnostics.empty() && !result.source_retention_required)) reject();
+    if (result.kind != ProjectImportKind::dxf && !result.physical_source_graphs.empty()) reject();
+    if (result.physical_source_graphs.size() > project_import_entity_limit) reject();
+    std::size_t physical_proof_bytes = 0;
+    std::set<std::string, std::less<>> referenced_physical_graphs;
+    for (const auto& [id, proof] : result.physical_source_graphs) {
+        (void)text(nlohmann::json(id), false, 128);
+        fields(proof, {"version", "entities"});
+        if (!proof.at("version").is_number_integer() || proof.at("version") != 1 ||
+            !proof.at("entities").is_array() || proof.at("entities").empty() ||
+            proof.at("entities").size() > 4096) reject();
+        const auto bytes = proof.dump().size();
+        constexpr std::size_t physical_proof_limit = 16 * 1024 * 1024;
+        if (bytes > physical_proof_limit - physical_proof_bytes) reject();
+        physical_proof_bytes += bytes;
+    }
     for (const auto& diagnostic : result.diagnostics) {
         (void)text(diagnostic.source_id); (void)text(diagnostic.source_kind); (void)text(diagnostic.code, false);
     }
@@ -545,9 +603,18 @@ inline void validate(const ProjectImportCandidate& result) {
         const bool native_dxf_wall_source = result.kind == ProjectImportKind::dxf &&
             entity.extensions.contains("vertex_dxf_boundary") && entity.extensions.at("vertex_dxf_boundary").is_object() &&
             (entity.extensions.at("vertex_dxf_boundary").value("version", 0) == 5 ||
-             entity.extensions.at("vertex_dxf_boundary").value("version", 0) == 6);
+             entity.extensions.at("vertex_dxf_boundary").value("version", 0) == 6 ||
+             entity.extensions.at("vertex_dxf_boundary").value("version", 0) == 7);
+        const bool native_dxf_physical_source = native_dxf_wall_source &&
+            entity.extensions.at("vertex_dxf_boundary").at("version") == 7;
         const bool native_dxf_measured_source = native_dxf_wall_source &&
-            entity.extensions.at("vertex_dxf_boundary").at("version") == 6;
+            (entity.extensions.at("vertex_dxf_boundary").at("version") == 6 || native_dxf_physical_source);
+        validate_pending_dxf_physical_graph(entity, native_dxf_physical_source);
+        if (native_dxf_physical_source) {
+            const auto graph_id = text(entity.extensions.at("vertex_dxf_physical_source_graph").at("source_graph_id"), false, 128);
+            if (!result.physical_source_graphs.contains(graph_id)) reject();
+            referenced_physical_graphs.insert(graph_id);
+        }
         const bool shared = entity.type == "boundary" || entity.type == "wall" || entity.type == "opening";
         const bool dxf = entity.type == "annotation_state" || native_dxf_boundary ||
             (native_dxf_measured_source && entity.type == "measurement_linework");
@@ -586,7 +653,7 @@ inline void validate(const ProjectImportCandidate& result) {
             try { validate_annotation_entity(entity); } catch (...) { reject(); }
         } else if (entity.type == "wall") {
             if (native_dxf_wall_source) geometry_budget.charge(1);
-            if (!walls.emplace(entity.id, wall(entity)).second) reject();
+            if (!walls.emplace(entity.id, wall(entity, native_dxf_physical_source)).second) reject();
         } else if (entity.type == "measurement_linework") {
             if (!native_dxf_measured_source || !entity.properties.contains("model")) reject();
             const auto& model = entity.properties.at("model");
@@ -603,7 +670,7 @@ inline void validate(const ProjectImportCandidate& result) {
             validate_room(entity, geometry_budget);
         } else if (entity.type == "opening") {
             std::string wall_id;
-            auto hosted = opening(entity, wall_id);
+            auto hosted = opening(entity, wall_id, native_dxf_physical_source);
             if (entity.properties.contains("opening_kind")) {
                 const auto kind = text(entity.properties.at("opening_kind"), false);
                 if (kind != "opening" && kind != "door" && kind != "window") reject();
@@ -643,6 +710,7 @@ inline void validate(const ProjectImportCandidate& result) {
             geometry_budget.charge(native_stair_railing_work(entity, host));
         }
     }
+    if (referenced_physical_graphs.size() != result.physical_source_graphs.size()) reject();
     for (auto& [wall_id, hosted] : openings) {
         const auto host = walls.find(wall_id);
         if (host == walls.end()) reject();
@@ -655,7 +723,7 @@ inline void validate(const ProjectImportCandidate& result) {
     // Validate the detached graph using the same native entity, reference and
     // geometry checks as an ordinary command. No live document is mutated.
     if (result.kind == ProjectImportKind::dxf) {
-        try { validate_native_dxf_boundary_groups(result.entities); } catch (...) { reject(); }
+        try { validate_native_dxf_boundary_groups(result.entities, &result.physical_source_graphs); } catch (...) { reject(); }
     }
     auto document = Document::create(result.kind == ProjectImportKind::ifc
         ? detached_ifc_validation_entities(result.entities) : result.entities);
@@ -673,9 +741,12 @@ inline std::vector<std::byte> encode_project_import_candidate(const ProjectImpor
         entities.push_back({{"id", e.id}, {"type", e.type}, {"properties", e.properties}, {"extensions", e.extensions}});
     for (const auto& d : result.diagnostics)
         diagnostics.push_back({{"source_id", d.source_id}, {"source_kind", d.source_kind}, {"code", d.code}});
-    const auto wire = nlohmann::json{{"protocol", "PSIP0001"}, {"kind", project_import_kind_name(result.kind)},
+    auto value = nlohmann::json{{"protocol", result.physical_source_graphs.empty() ? "PSIP0001" : "PSIP0002"},
+        {"kind", project_import_kind_name(result.kind)},
         {"entities", std::move(entities)}, {"diagnostics", std::move(diagnostics)},
-        {"source_retention_required", result.source_retention_required}}.dump();
+        {"source_retention_required", result.source_retention_required}};
+    if (!result.physical_source_graphs.empty()) value["physical_source_graphs"] = result.physical_source_graphs;
+    const auto wire = value.dump();
     if (wire.size() > project_import_output_limit) project_import_detail::reject();
     std::vector<std::byte> output(wire.size());
     std::memcpy(output.data(), wire.data(), wire.size());
@@ -703,14 +774,25 @@ inline ProjectImportCandidate decode_project_import_candidate(
     };
     const auto* begin = reinterpret_cast<const char*>(report.output.data());
     const auto value = nlohmann::json::parse(begin, begin + report.output.size(), callback);
-    fields(value, {"protocol", "kind", "entities", "diagnostics", "source_retention_required"});
-    if (value.at("protocol") != "PSIP0001" || value.at("kind") != project_import_kind_name(expected_kind) ||
+    const bool physical_protocol = value.is_object() && value.contains("protocol") && value.at("protocol") == "PSIP0002";
+    if (physical_protocol)
+        fields(value, {"protocol", "kind", "entities", "diagnostics", "source_retention_required", "physical_source_graphs"});
+    else fields(value, {"protocol", "kind", "entities", "diagnostics", "source_retention_required"});
+    if ((!physical_protocol && value.at("protocol") != "PSIP0001") ||
+        value.at("kind") != project_import_kind_name(expected_kind) ||
         !value.at("source_retention_required").is_boolean() || !value.at("entities").is_array() ||
         !value.at("diagnostics").is_array() || value.at("entities").size() > project_import_entity_limit ||
         value.at("diagnostics").size() > project_import_diagnostic_limit) reject();
     ProjectImportCandidate result;
     result.kind = expected_kind;
     result.source_retention_required = value.at("source_retention_required").get<bool>();
+    if (physical_protocol) {
+        const auto& proofs = value.at("physical_source_graphs");
+        if (expected_kind != ProjectImportKind::dxf || !proofs.is_object() || proofs.empty() ||
+            proofs.size() > project_import_entity_limit) reject();
+        for (const auto& [id, proof] : proofs.items())
+            result.physical_source_graphs.emplace(text(nlohmann::json(id), false, 128), proof);
+    }
     for (const auto& e : value.at("entities")) {
         fields(e, {"id", "type", "properties", "extensions"});
         result.entities.push_back({text(e.at("id"), false), text(e.at("type"), false),

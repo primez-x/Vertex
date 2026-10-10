@@ -14,6 +14,53 @@ changed source does not acquire runtime acceptance without later qualification.
 
 ## Current delivery state
 
+### October 10 physical-room DXF transfer — source implementation
+
+Source implementation is underway in the shared DXF mapper, isolated import
+protocol and desktop destination review. The target is editable physical rooms
+with their complete active wall/opening inventory, retained analytical voids,
+mixed appraisal/measured-source dependencies and actual source hierarchy/level
+evidence. Destination admission uses the real staged project, including existing
+walls and levels; source evidence cannot invent destination containers.
+
+Independent approach review found that repeating the full proof on every object
+would exceed entity and transport limits. Shared bounded source-graph carriers
+and a result-level proof table replace that duplication. A second finding
+requires completed transfer markers to be removed before live publication, so
+save/reopen/copy/re-export do not depend on a discarded import-only table.
+Root has connected the shared proof table through the worker and destination
+review. Integrated source review found and corrected native wall/opening alias
+admission and recoverable malformed proof declarations that could otherwise
+escape group rejection. The corrected core reserves repeated level/phase graph
+work before organization/Document admission, including destination support at
+binder entry. It also reserves repeated hosted-opening/layer solid construction,
+aligns proof object-key bounds with wire parsing, and compares original wall
+extension history. Integrated root review and independent source review approved
+the frozen scope. Compilation, runtime behavior, numerical replay, performance
+and complete exchange qualification remain unverified.
+
+These edits are uncompiled and runtime-unverified. No build, test, new test,
+probe, script, native job, launch, package or installation has run. The installed
+candidate is unchanged. This work does not establish full-project exchange,
+phase/material/assembly authoring fidelity or production acceptance.
+
+The next editable exchange gap is actual material/catalog ownership. Discovery
+confirmed that material IDs are catalog-local, while assignments name an
+external `assembly_model` entity. Independent assembly clipboard extraction
+prunes unused rows and embedded instances; it cannot substitute for complete
+catalog transport. Capture/remap must preserve the actual complete catalog and
+typed entity/layer assignments, then stage reviewed catalog identities before
+final Document admission. IFC material representation alone does not implement
+that authoring graph. This remains implementation work, not an external wait.
+
+A separate source correction is in progress for material copying. Clipboard
+dependency collection currently sees root assignments but omits wall/slab layer
+assignments. A shared typed inventory/remapper has been implemented and reviewed
+by root; desktop collection and remapping still need integration. External
+catalog IDs must change through explicit mappings; material and layer IDs remain
+local. This correction does not substitute minimal clipboard catalogs for the
+complete editable catalog transport required above.
+
 ### October 9 physical-room source copies
 
 The current source batch adds a shared typed inventory/remapper for retained

@@ -15,8 +15,10 @@
 #include "sketch/opening_assembly.hpp"
 #include "sketch/hosted_opening_plan.hpp"
 #include "sketch/wall_measurement.hpp"
+#include "sketch/vertical_levels.hpp"
 #ifdef SKETCH_PHYSICAL_ROOMS
 #include "sketch/physical_wall_room.hpp"
+#include "sketch/physical_wall_spaces.hpp"
 #endif
 #ifdef SKETCH_DXF_NATIVE_GEOMETRY
 #include "sketch/architecture.hpp"
@@ -27,6 +29,7 @@
 #include <charconv>
 #include <cmath>
 #include <cstdint>
+#include <initializer_list>
 #include <limits>
 #include <map>
 #include <numbers>
@@ -36,11 +39,14 @@
 #include <string_view>
 #include <stdexcept>
 #include <utility>
+#include <tuple>
 
 namespace sketch {
 namespace {
 
 using Json = nlohmann::json;
+using PhysicalSourceGraphIndex = std::map<std::string,
+    std::map<std::string, Entity, std::less<>>, std::less<>>;
 constexpr double kGeometryTolerance = 1e-7;
 constexpr double kFullTurn = 2.0 * std::numbers::pi;
 constexpr const char* kManufacturedDepiction = "MANUFACTURED_PLAN_V1";
@@ -50,16 +56,29 @@ constexpr const char* kWallSourceHostedOpenings = "vertex_dxf_wall_source_hosted
 constexpr const char* kLineworkDepiction = "LINEWORK_PLAN_V1";
 constexpr const char* kMeasuredGraph = "vertex_dxf_measured_graph";
 constexpr const char* kResolvedContext = "vertex_dxf_resolved_context";
+constexpr const char* kPhysicalGraph = "vertex_dxf_physical_source_graph";
+
+bool physical_source_member(const Entity& entity) {
+    const auto marker = entity.extensions.find("vertex_dxf_boundary");
+    return marker != entity.extensions.end() && marker->is_object() && marker->value("version", 0) == 7;
+}
+
+bool resolved_source_member(const Entity& entity) {
+    const auto marker = entity.extensions.find("vertex_dxf_boundary");
+    return marker != entity.extensions.end() && marker->is_object() &&
+        (marker->value("version", 0) == 6 || marker->value("version", 0) == 7);
+}
 
 bool measured_source_member(const Entity& entity) {
     const auto marker = entity.extensions.find("vertex_dxf_boundary");
-    return marker != entity.extensions.end() && marker->is_object() && marker->value("version", 0) == 6;
+    return marker != entity.extensions.end() && marker->is_object() &&
+        (marker->value("version", 0) == 6 || marker->value("version", 0) == 7);
 }
 
 bool wall_source_member(const Entity& entity) {
     const auto marker = entity.extensions.find("vertex_dxf_boundary");
     return marker != entity.extensions.end() && marker->is_object() &&
-        (marker->value("version", 0) == 5 || marker->value("version", 0) == 6);
+        (marker->value("version", 0) == 5 || marker->value("version", 0) == 6 || marker->value("version", 0) == 7);
 }
 
 Json resolved_context_json(const DrawingContext& context) {
@@ -68,7 +87,7 @@ Json resolved_context_json(const DrawingContext& context) {
         {"floor_id", context.floor_id}, {"layer_id", context.layer_id}, {"level_id", context.level_id}};
 }
 
-DrawingContext read_resolved_context(const Json& context) {
+DrawingContext read_resolved_context(const Json& context, bool physical = false) {
     if (!context.is_object() || context.size() != 5)
         throw std::invalid_argument("invalid native resolved context");
     DrawingContext result;
@@ -78,6 +97,11 @@ DrawingContext read_resolved_context(const Json& context) {
         const auto value = context.find(key);
         if (value == context.end() || !value->is_string()) throw std::invalid_argument("invalid native resolved context ID");
         *destination = value->get<std::string>();
+        if (physical && std::string_view(key) == "level_id") {
+            if (destination->size() > 256) throw std::invalid_argument("invalid V7 local level identity");
+            (void)value->dump();
+            continue;
+        }
         if (destination->size() > 128 || (destination->empty() && std::string_view(key) != "level_id") ||
             !std::all_of(destination->begin(), destination->end(), [](unsigned char c) {
                 return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') ||
@@ -88,15 +112,15 @@ DrawingContext read_resolved_context(const Json& context) {
     return result;
 }
 
-DrawingContext member_resolved_context(const Entity& entity) {
+DrawingContext member_resolved_context(const Entity& entity, bool physical_operation = false) {
     const auto binding = entity.extensions.find(kWallSourceContextBinding);
     if (binding != entity.extensions.end())
         return read_resolved_context(binding->at(binding->at("destination_context").is_null() ?
-            "source_resolved_context" : "destination_resolved_context"));
+            "source_resolved_context" : "destination_resolved_context"), physical_operation || physical_source_member(entity));
     const auto& observation = entity.extensions.at(kResolvedContext);
     if (!observation.is_object() || observation.size() != 2 || !observation.at("version").is_number_integer() ||
         observation.at("version") != 1) throw std::invalid_argument("invalid native resolved context observation");
-    return read_resolved_context(observation.at("context"));
+    return read_resolved_context(observation.at("context"), physical_operation || physical_source_member(entity));
 }
 
 std::vector<std::string> measured_graph_ids(const Entity& area,
@@ -186,6 +210,328 @@ std::map<std::string, Entity, std::less<>> wall_source_context_graph(const std::
     }
     return graph;
 }
+
+// These snapshots are evidence, never entities to install in the destination.
+// Strip only prior transfer admission; source geometry/history remain raw.
+Entity physical_evidence_entity(Entity entity) {
+    for (const auto* key : {"vertex_dxf_boundary", "vertex_dxf_stair_floor_binding",
+        "dxf_source", kWallSourceContextBinding,
+        kWallSourceHostedOpenings, kMeasuredGraph, kResolvedContext, kPhysicalGraph})
+        entity.extensions.erase(key);
+    return entity;
+}
+
+bool physical_proof_type(std::string_view type) {
+    return type == "property" || type == "building" || type == "floor" || type == "layer" ||
+        type == "vertical_levels" || type == "model_phases" || type == "wall" || type == "opening" ||
+        type == "room_boundary" || type == "boundary" || type == "measurement_boundary" || type == "measurement_linework";
+}
+
+void admit_physical_graph_json_shape(const Json& proof) {
+    std::size_t nodes = 0;
+    const auto visit = [&](const auto& self, const Json& value, std::size_t depth) -> void {
+        if (depth > 24 || ++nodes > 262144) throw std::invalid_argument("V7 graph JSON shape limit");
+        if (value.is_string() && value.get_ref<const std::string&>().size() > 8192)
+            throw std::invalid_argument("V7 graph JSON string limit");
+        if (value.is_object()) for (const auto& [key, child] : value.items()) {
+            if (key.size() > 8192) throw std::invalid_argument("V7 graph JSON key limit");
+            self(self, child, depth + 1);
+        }
+        else if (value.is_array()) for (const auto& child : value) self(self, child, depth + 1);
+    };
+    visit(visit, proof, 0);
+    if (proof.dump().size() > 16 * 1024 * 1024) throw std::invalid_argument("V7 graph JSON byte limit");
+}
+
+// Admit typed support models before any organizer, Document or phase decoder.
+// A floor binding replays its graph on every organization pass; level placement
+// replays it again. Connected-link height validation also scans links/levels.
+// Count every actual support owner, including unrelated/extraneous proof owners,
+// rather than using resolved contexts to choose an inexpensive subset first.
+void admit_physical_support_work(const std::map<std::string, Entity, std::less<>>& graph,
+    NativeDxfWallSourceWorkBudget& budget, std::size_t organization_passes,
+    std::size_t placement_passes, std::size_t model_passes, std::size_t phase_passes,
+    std::size_t selected_placements = 0) {
+    constexpr std::size_t limit = 250'000;
+    if (budget.source_work > limit) throw std::invalid_argument("V7 cumulative support work limit");
+    const auto add = [&](std::size_t amount) {
+        if (amount > limit - budget.source_work) throw std::invalid_argument("V7 cumulative support replay work limit");
+        budget.source_work += amount;
+    };
+    const auto product = [&](std::size_t left, std::size_t right) {
+        if (right && left > limit / right) throw std::invalid_argument("V7 raw support work limit");
+        return left * right;
+    };
+    const auto exact = [](const Json& value, std::initializer_list<const char*> keys) {
+        if (!value.is_object() || value.size() != keys.size()) throw std::invalid_argument("V7 raw support schema");
+        for (const auto* key : keys) if (!value.contains(key)) throw std::invalid_argument("V7 raw support schema");
+    };
+    const auto raw_nodes = [&](const Json& value) {
+        std::size_t nodes = 0;
+        const auto visit = [&](const auto& self, const Json& child, std::size_t depth) -> void {
+            if (depth > 24 || ++nodes > limit) throw std::invalid_argument("V7 raw support JSON limit");
+            if (child.is_string() && child.get_ref<const std::string&>().size() > 8192)
+                throw std::invalid_argument("V7 raw support string limit");
+            if (child.is_object()) for (const auto& [key, entry] : child.items()) {
+                if (key.size() > 8192) throw std::invalid_argument("V7 raw support key limit");
+                self(self, entry, depth + 1);
+            }
+            else if (child.is_array()) for (const auto& entry : child) self(self, entry, depth + 1);
+        };
+        visit(visit, value, 0); return nodes;
+    };
+    const auto sorting_passes = [](std::size_t count) {
+        std::size_t passes = 1;
+        while (count > 1) { count = count / 2 + count % 2; ++passes; }
+        return passes;
+    };
+    std::map<std::string, std::size_t, std::less<>> level_work;
+    std::size_t maximum_level_work = 0, level_placed_owners = 0;
+    for (const auto& [id, owner] : graph) {
+        if (owner.id != id) throw std::invalid_argument("V7 support owner identity differs");
+        if (owner.type == "vertical_levels") {
+            const auto& model = owner.properties.at("model");
+            exact(model, {"version", "levels", "links"});
+            if (!model.at("version").is_number_integer() || model.at("version") != 1 ||
+                !model.at("levels").is_array() || !model.at("links").is_array() ||
+                model.at("levels").size() > 4096 || model.at("links").size() > 8192)
+                throw std::invalid_argument("V7 raw vertical graph schema/limit");
+            const auto levels = model.at("levels").size(), links = model.at("links").size();
+            std::size_t connected = 0;
+            for (const auto& entry : model.at("levels")) {
+                exact(entry, {"id", "elevation_m"});
+                if (!entry.at("id").is_string() || !entry.at("elevation_m").is_number())
+                    throw std::invalid_argument("V7 raw vertical level schema");
+            }
+            for (const auto& entry : model.at("links")) {
+                exact(entry, {"id", "lower_level_id", "upper_level_id", "state", "height_m"});
+                if (!entry.at("id").is_string() || !entry.at("lower_level_id").is_string() ||
+                    !entry.at("upper_level_id").is_string() || !entry.at("state").is_string() || !entry.at("height_m").is_number())
+                    throw std::invalid_argument("V7 raw vertical link schema");
+                if (entry.at("state") == "connected") ++connected;
+            }
+            const auto nodes = raw_nodes(model);
+            add(nodes); // Bound raw inspection itself, even for unused graphs.
+            const auto cost = nodes + product(levels + links + 1, 4 * sorting_passes(levels + links + 1)) +
+                product(connected, links + 2 * levels) + levels;
+            if (cost > limit) throw std::invalid_argument("V7 raw vertical replay work limit");
+            level_work.emplace(id, cost); maximum_level_work = std::max(maximum_level_work, cost);
+            add(product(cost, model_passes));
+        } else if (owner.type == "model_phases") {
+            const auto& model = owner.properties.at("model");
+            exact(model, {"schema", "version", "entity_ids", "baseline_ids", "alternatives", "active_alternative"});
+            if (model.at("schema") != "sketch.model_phases" || !model.at("version").is_number_integer() ||
+                model.at("version") != 1 || !model.at("entity_ids").is_array() || !model.at("baseline_ids").is_array() ||
+                !model.at("alternatives").is_array() || !(model.at("active_alternative").is_null() || model.at("active_alternative").is_string()))
+                throw std::invalid_argument("V7 raw phase schema");
+            const auto nodes = raw_nodes(model); add(nodes);
+            std::size_t entries = model.at("entity_ids").size() + model.at("baseline_ids").size() + model.at("alternatives").size() + 1;
+            const auto ids = [](const Json& values) {
+                for (const auto& value : values) if (!value.is_string()) throw std::invalid_argument("V7 raw phase identity schema");
+            };
+            ids(model.at("entity_ids")); ids(model.at("baseline_ids"));
+            for (const auto& alternative : model.at("alternatives")) {
+                exact(alternative, {"id", "name", "demolished_ids", "proposed_ids"});
+                if (!alternative.at("id").is_string() || !alternative.at("name").is_string() ||
+                    !alternative.at("demolished_ids").is_array() || !alternative.at("proposed_ids").is_array())
+                    throw std::invalid_argument("V7 raw phase alternative schema");
+                ids(alternative.at("demolished_ids")); ids(alternative.at("proposed_ids"));
+                entries += alternative.at("demolished_ids").size() + alternative.at("proposed_ids").size();
+            }
+            // Sorting, membership sets, state maps, registry references and
+            // retained state serialization all consume these typed entries.
+            const auto cost = nodes + product(entries, 4 * sorting_passes(entries));
+            if (cost > limit) throw std::invalid_argument("V7 raw phase replay work limit");
+            add(product(cost, phase_passes));
+        }
+        const auto placement = owner.properties.find("vertical_placement");
+        // These V7 consumers resolve physical walls only. A similarly named
+        // field on an opaque/hierarchy owner does not confer a placement role.
+        if (owner.type == "wall" && placement != owner.properties.end() && placement->is_object() &&
+            placement->contains("mode") && placement->at("mode") == "level")
+            ++level_placed_owners;
+    }
+    for (const auto& [id, owner] : graph) if (owner.type == "floor" && owner.properties.contains("vertical_level_binding")) {
+        (void)id;
+        const auto& binding = owner.properties.at("vertical_level_binding");
+        exact(binding, {"version", "graph_id", "level_id"});
+        if (!binding.at("version").is_number_integer() || binding.at("version") != 1 ||
+            !binding.at("graph_id").is_string() || !binding.at("level_id").is_string())
+            throw std::invalid_argument("V7 raw floor binding schema");
+        add(raw_nodes(binding));
+        const auto found = level_work.find(binding.at("graph_id").get_ref<const std::string&>());
+        if (found == level_work.end()) throw std::invalid_argument("V7 raw floor binding graph missing/type differs");
+        add(product(found->second, organization_passes));
+    }
+    add(product(maximum_level_work, product(level_placed_owners, placement_passes)));
+    add(product(maximum_level_work, selected_placements));
+    // Failed admission retains all work already charged above.
+}
+
+struct PhysicalSupportQueries { std::size_t rooms{}, detections{}; };
+PhysicalSupportQueries physical_support_queries(const std::map<std::string, Entity, std::less<>>& graph) {
+    PhysicalSupportQueries result;
+    std::set<std::string, std::less<>> selected;
+    for (const auto& [id, owner] : graph) if (owner.type == "room_boundary" && owner.extensions.contains("physical_wall_room")) {
+        (void)id;
+        const auto& wall = owner.extensions.at("physical_wall_room").at("selected_wall_id");
+        if (!wall.is_string()) throw std::invalid_argument("V7 raw selected wall schema");
+        selected.insert(wall.get<std::string>());
+        if (++result.rooms > 4096) throw std::invalid_argument("V7 raw support room limit");
+    }
+    // Equal selected owner IDs necessarily give equal keys in the immutable
+    // actual graph. Distinct IDs may share a context, so this is a safe upper
+    // bound on cached solves without organizing or trusting retained lineage.
+    result.detections = selected.size();
+    return result;
+}
+
+void admit_physical_plan_work(const std::map<std::string, Entity, std::less<>>& graph,
+    NativeDxfWallSourceWorkBudget& budget) {
+    constexpr std::size_t limit = 250'000;
+    if (budget.source_work > limit) throw std::invalid_argument("V7 cumulative native plan work limit");
+    std::map<std::string, std::size_t, std::less<>> openings;
+    for (const auto& [id, owner] : graph) if (owner.type == "wall") openings.emplace(id, 0);
+    for (const auto& [id, owner] : graph) if (owner.type == "opening") {
+        (void)id;
+        const auto& host = owner.properties.at("wall_id");
+        if (!host.is_string()) throw std::invalid_argument("V7 raw opening host schema");
+        const auto found = openings.find(host.get_ref<const std::string&>());
+        if (found == openings.end() || ++found->second > 128)
+            throw std::invalid_argument("V7 raw hosted opening inventory limit");
+    }
+    for (const auto& [id, count] : openings) {
+        const auto& owner = graph.at(id);
+        std::size_t layers = 1;
+        if (const auto value = owner.properties.find("layers"); value != owner.properties.end()) {
+            if (!value->is_array() || value->size() > 64) throw std::invalid_argument("V7 raw wall layer inventory limit");
+            layers = std::max<std::size_t>(1, value->size());
+        }
+        // Every wall AND hosted opening plan reconstructs the complete host
+        // solid. Each reconstruction makes each layer and cuts every opening.
+        // Include all raw hosts (inactive and other-plane too) before any native
+        // plan/solid work. Sixteen passes cover source/detached comparisons,
+        // manufactured projection and failed-native fallback reconstruction.
+        const auto constructions = count + 1;
+        const auto per_pass = layers * constructions * constructions; // <=64*129^2
+        if (per_pass > (limit - budget.source_work) / 16)
+            throw std::invalid_argument("V7 cumulative hosted opening/layer solid work limit");
+        budget.source_work += per_pass * 16;
+    }
+}
+
+Json physical_graph_json(const std::map<std::string, Entity, std::less<>>& entities) {
+    Json records = Json::array();
+    if (entities.size() > 4096) throw std::invalid_argument("V7 graph owner limit");
+    for (const auto& [id, entity] : entities) {
+        if (id != entity.id || !physical_proof_type(entity.type))
+            throw std::invalid_argument("V7 graph reaches unsupported owner");
+        const auto raw = physical_evidence_entity(entity);
+        records.push_back({{"id", id}, {"type", raw.type}, {"properties", raw.properties},
+            {"required", raw.required}, {"extensions", raw.extensions}});
+    }
+    Json proof{{"version", 1}, {"entities", std::move(records)}};
+    admit_physical_graph_json_shape(proof);
+    return proof;
+}
+
+std::map<std::string, Entity, std::less<>> read_physical_graph(const Json& proof) {
+    if (!proof.is_object() || proof.size() != 2 || !proof.at("version").is_number_integer() ||
+        proof.at("version") != 1 || !proof.at("entities").is_array() || proof.at("entities").empty() ||
+        proof.at("entities").size() > 4096) throw std::invalid_argument("invalid V7 source graph schema");
+    admit_physical_graph_json_shape(proof);
+    std::map<std::string, Entity, std::less<>> entities;
+    std::string previous;
+    for (const auto& record : proof.at("entities")) {
+        if (!record.is_object() || record.size() != 5 || !record.at("id").is_string() ||
+            !record.at("type").is_string() || !record.at("properties").is_object() ||
+            !record.at("extensions").is_object() || !record.at("required").is_boolean())
+            throw std::invalid_argument("invalid V7 source snapshot schema");
+        Entity entity{record.at("id").get<std::string>(), record.at("type").get<std::string>(),
+            record.at("properties"), record.at("required").get<bool>(), record.at("extensions")};
+        if (entity.id.empty() || entity.id.size() > 128 || entity.id <= previous ||
+            !std::all_of(entity.id.begin(), entity.id.end(), [](unsigned char c) {
+                return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') ||
+                    c == '-' || c == '_' || c == '.' || c == ':';
+            }) || !physical_proof_type(entity.type) ||
+            physical_evidence_entity(entity).extensions != entity.extensions)
+            throw std::invalid_argument("invalid V7 source snapshot identity/type/admission");
+        previous = entity.id;
+        entities.emplace(entity.id, std::move(entity));
+    }
+    return entities;
+}
+
+Json physical_source_proof(const DocumentSnapshot& document, const std::vector<std::string>& members,
+    NativeDxfWallSourceWorkBudget& budget) {
+    const auto registries = static_cast<std::size_t>(std::count_if(document.entities().begin(), document.entities().end(), [](const auto& owner) {
+        return owner.second.type == "model_phases";
+    }));
+    if (registries > 4096) throw std::invalid_argument("V7 source phase registry limit");
+    // Decode once; reserve the worst-case transitive registry closure scans too.
+    admit_physical_support_work(document.entities(), budget, 1, 0, 0, registries + 2);
+    const auto organization = organize_project(document);
+    std::map<std::string, ModelPhases, std::less<>> phases;
+    for (const auto& [id, owner] : document.entities()) if (owner.type == "model_phases")
+        phases.emplace(id, ModelPhases::from_json(owner.properties.at("model")));
+    std::map<std::string, Entity, std::less<>> graph;
+    std::set<std::string, std::less<>> layers;
+    const auto capture_context = [&](const std::string& id) {
+        const auto context = organization.drawing_context(id);
+        if (!context || !context->complete()) throw std::invalid_argument("V7 source hierarchy unresolved");
+        layers.insert(context->layer_id);
+        for (const auto& owner : {context->property_id, context->building_id, context->floor_id, context->layer_id})
+            graph.emplace(owner, document.entities().at(owner));
+        const auto& floor = document.entities().at(context->floor_id);
+        if (floor.properties.contains("vertical_level_binding")) {
+            const auto& binding = floor.properties.at("vertical_level_binding");
+            const auto graph_id = VerticalLevelBinding::from_json(binding).graph_entity_id;
+            const auto& levels = document.entities().at(graph_id);
+            if (levels.type != "vertical_levels") throw std::invalid_argument("V7 source vertical graph type differs");
+            graph.emplace(graph_id, levels);
+        }
+    };
+    for (const auto& id : members) { graph.emplace(id, document.entities().at(id)); capture_context(id); }
+    // Capture complete original wall inventory, including phase-inactive and
+    // other-plane observations. Selection occurs only after this capture.
+    for (const auto& [id, entity] : document.entities()) if (entity.type == "wall" || entity.type == "measurement_linework") {
+        const auto context = organization.drawing_context(id);
+        if (!context) throw std::invalid_argument("V7 original source context unresolved");
+        if (layers.contains(context->layer_id)) { graph.emplace(id, entity); capture_context(id); }
+    }
+    bool expanded = true;
+    while (expanded) {
+        expanded = false;
+        for (const auto& [id, entity] : document.entities()) {
+            if (entity.type == "opening" && entity.properties.contains("wall_id") &&
+                entity.properties.at("wall_id").is_string() && graph.contains(entity.properties.at("wall_id").get<std::string>())) {
+                if (graph.emplace(id, entity).second) { capture_context(id); expanded = true; }
+            }
+            if (entity.type != "model_phases") continue;
+            const auto& model = phases.at(id);
+            if (!std::any_of(model.entity_ids().begin(), model.entity_ids().end(), [&](const auto& owner) { return graph.contains(owner); })) continue;
+            if (graph.emplace(id, entity).second) expanded = true;
+            for (const auto& owner : model.entity_ids()) {
+                const auto& actual = document.entities().at(owner);
+                if (!physical_proof_type(actual.type)) throw std::invalid_argument("V7 phase reaches unsupported dependency");
+                if (graph.emplace(owner, actual).second) { capture_context(owner); expanded = true; }
+            }
+        }
+        // A registry may introduce a second context; inventory that context
+        // completely too, never substitute captured phase owners for actuals.
+        for (const auto& [id, entity] : document.entities()) if (entity.type == "wall" || entity.type == "measurement_linework") {
+            const auto context = organization.drawing_context(id);
+            if (context && layers.contains(context->layer_id) && graph.emplace(id, entity).second) expanded = true;
+        }
+    }
+    return physical_graph_json(graph);
+}
+
+void validate_physical_source_groups(const std::vector<Entity>& entities,
+    NativeDxfWallSourceWorkBudget& budget, bool preflight_only,
+    const NativeDxfPhysicalSourceGraphs* proofs,
+    const std::map<std::string, Entity, std::less<>>* destination,
+    const PhysicalSourceGraphIndex& source_index);
 
 std::string block_identity(std::string_view name) {
     std::string result(name);
@@ -297,6 +643,15 @@ std::size_t raw_boundary_segment_count(const Entity& entity) {
         for (const auto& hole : *holes) {
             if (!hole.is_array() || hole.empty() || hole.size() > 512 - count)
                 throw std::invalid_argument("V6 raw boundary segment limit");
+            count += hole.size();
+        }
+    }
+    if (physical_source_member(entity) && entity.extensions.contains("physical_wall_room")) {
+        const auto& holes = entity.extensions.at("physical_wall_room").at("holes");
+        if (!holes.is_array()) throw std::invalid_argument("V7 raw room holes must be an array");
+        for (const auto& hole : holes) {
+            if (!hole.is_array() || hole.empty() || hole.size() > 512 - count)
+                throw std::invalid_argument("V7 raw room hole segment limit");
             count += hole.size();
         }
     }
@@ -698,11 +1053,11 @@ Json native_payload(const DocumentSnapshot& document, const Entity& entity,
             {"hosted_opening_ids", std::move(ids)}};
     if (entity.type == "opening" && entity.properties.contains("opening_assembly"))
         result["depiction"] = kManufacturedDepiction;
-    if (measured_source_member(entity)) {
+    if (resolved_source_member(entity)) {
         // V6 admission state belongs to this transfer, never to a later V1
         // architectural carrier after its former consumers were removed.
         for (const auto* key : {"vertex_dxf_boundary", "vertex_dxf_stair_floor_binding",
-            kWallSourceContextBinding, kWallSourceHostedOpenings, kMeasuredGraph, kResolvedContext})
+            kWallSourceContextBinding, kWallSourceHostedOpenings, kMeasuredGraph, kResolvedContext, kPhysicalGraph})
             result["extensions"].erase(key);
     }
     return result;
@@ -720,6 +1075,22 @@ Json bounded_native_json(std::string_view bytes) {
             throw std::invalid_argument("duplicate native JSON key");
         if (value.is_string() && value.get_ref<const std::string&>().size() > 8192)
             throw std::invalid_argument("native JSON string limit");
+        return true;
+    };
+    return Json::parse(bytes, callback);
+}
+
+Json bounded_physical_graph_json(std::string_view bytes) {
+    if (bytes.size() > 16 * 1024 * 1024) throw std::invalid_argument("V7 aggregate proof byte limit");
+    std::vector<std::set<std::string>> keys;
+    std::size_t nodes = 0;
+    const auto callback = [&](int depth, Json::parse_event_t event, Json& value) {
+        if (depth > 24 || ++nodes > 262144) throw std::invalid_argument("V7 graph JSON limit");
+        if (event == Json::parse_event_t::object_start) keys.emplace_back();
+        else if (event == Json::parse_event_t::object_end) keys.pop_back();
+        else if (event == Json::parse_event_t::key && !keys.back().insert(value.get<std::string>()).second)
+            throw std::invalid_argument("duplicate V7 graph JSON key");
+        if (value.is_string() && value.get_ref<const std::string&>().size() > 8192) throw std::invalid_argument("V7 graph string limit");
         return true;
     };
     return Json::parse(bytes, callback);
@@ -746,6 +1117,16 @@ DxfBlock boundary_plan_block(const Entity& entity, std::string name, const std::
             holes.push_back(std::move(*hole));
         }
     }
+#ifdef SKETCH_PHYSICAL_ROOMS
+    if (physical_source_member(entity) && entity.extensions.contains("physical_wall_room")) {
+        const auto descriptor = decode_physical_wall_room_descriptor(entity);
+        if (!holes.empty()) throw std::invalid_argument("V7 room has competing inline holes");
+        for (const auto& hole : descriptor.holes) {
+            if (hole.size() > 4096 - segment_count) throw std::invalid_argument("V7 room hole primitive limit");
+            segment_count += hole.size(); holes.push_back(hole);
+        }
+    }
+#endif
     if (const auto error = validate_boundary_holes(*outer, holes))
         throw std::invalid_argument(*error);
     DxfDrawing plan;
@@ -965,6 +1346,7 @@ bool export_boundary_group(const DocumentSnapshot& document, const std::vector<s
         int version = 3;
         for (const auto& id : ids) {
             const auto found = document.entities().find(id);
+            if (found != document.entities().end() && found->second.extensions.contains("physical_wall_room")) { version = 7; break; }
             if (found != document.entities().end() && (found->second.type == "measurement_linework" ||
                 found->second.extensions.contains("measurement_linework_sources") ||
                 found->second.extensions.contains("measurement_linework_group"))) version = 6;
@@ -973,7 +1355,8 @@ bool export_boundary_group(const DocumentSnapshot& document, const std::vector<s
         }
         std::map<std::string, DrawingContext, std::less<>> captured_contexts;
         std::set<std::string, std::less<>> visible;
-        if (version == 6) {
+        if (version == 6 || version == 7) {
+            if (version == 7) admit_physical_support_work(document.entities(), wall_source_budget, 1, 0, 0, 0);
             const auto organization = organize_project(document);
             for (const auto& [id, entity] : document.entities()) {
                 if (scope.inactive_owner_ids.contains(id)) continue;
@@ -994,7 +1377,8 @@ bool export_boundary_group(const DocumentSnapshot& document, const std::vector<s
             if (found == document.entities().end() || scope.inactive_owner_ids.contains(id) ||
                 (version >= 5 ? found->second.type != "boundary" && found->second.type != "measurement_boundary" &&
                     found->second.type != "wall" && found->second.type != "opening" &&
-                    !(version == 6 && found->second.type == "measurement_linework") :
+                    !(version == 7 && found->second.type == "room_boundary") &&
+                    !((version == 6 || version == 7) && found->second.type == "measurement_linework") :
                     !can_recognize_boundary_entity_type(found->second.type)))
                 throw std::invalid_argument("inactive or unavailable boundary dependency");
             auto entity = found->second;
@@ -1004,8 +1388,9 @@ bool export_boundary_group(const DocumentSnapshot& document, const std::vector<s
             entity.extensions.erase(kWallSourceContextBinding);
             entity.extensions.erase(kResolvedContext);
             entity.extensions.erase(kMeasuredGraph);
+            entity.extensions.erase(kPhysicalGraph);
             entity.extensions["vertex_dxf_boundary"] = marker;
-            if (version == 6) {
+            if (version == 6 || version == 7) {
                 entity.extensions[kResolvedContext] = {{"version", 1}, {"context", resolved_context_json(captured_contexts.at(id))}};
                 entity.extensions[kMeasuredGraph] = {{"version", 1}, {"source_ids",
                     measured_graph_ids(entity, document.entities(), captured_contexts, &visible)}};
@@ -1027,6 +1412,14 @@ bool export_boundary_group(const DocumentSnapshot& document, const std::vector<s
             source.push_back(std::move(entity));
             unchanged.emplace(id, id);
         }
+        Json physical_proof;
+        NativeDxfPhysicalSourceGraphs physical_proofs;
+        if (version == 7) {
+            physical_proof = physical_source_proof(document, ids, wall_source_budget);
+            physical_proofs.emplace(ids.front(), physical_proof);
+            for (auto& entity : source) entity.extensions[kPhysicalGraph] = {{"version", 1},
+                {"source_graph_id", ids.front()}, {"source_owner_id", entity.id}};
+        }
         // Bound each actual wire envelope before source replay or containment.
         for (const auto& entity : source) {
             auto metadata = native_payload(document, document.entities().at(entity.id), scope);
@@ -1036,21 +1429,24 @@ bool export_boundary_group(const DocumentSnapshot& document, const std::vector<s
             metadata["extensions"].erase(kWallSourceHostedOpenings);
             metadata["extensions"].erase(kMeasuredGraph);
             metadata["extensions"].erase(kResolvedContext);
+            metadata["extensions"].erase(kPhysicalGraph);
             metadata["version"] = version;
             metadata["depiction"] = source_depiction(entity);
             metadata["member_ids"] = ids;
             metadata["dependency_graph"] = version >= 5 ? native_dxf_wall_source_dependency_graph(entity) :
                 native_dxf_boundary_dependency_graph(entity);
-            if (version == 6) metadata["resolved_context"] = resolved_context_json(captured_contexts.at(entity.id));
+            if (version == 6 || version == 7) metadata["resolved_context"] = resolved_context_json(captured_contexts.at(entity.id));
+            if (version == 7) metadata["physical_source_graph_id"] = ids.front();
+            if (version == 7) { metadata.erase("properties"); metadata.erase("extensions"); }
             const auto payload = metadata.dump();
             if (payload.size() > 16 * 1024) throw std::invalid_argument("native payload byte limit");
             (void)bounded_native_json(payload);
         }
         if (preflight_only) {
-            if (version >= 5) validate_native_dxf_wall_source_groups(source, &wall_source_budget, true);
+            if (version >= 5) validate_native_dxf_wall_source_groups(source, &wall_source_budget, true, &physical_proofs);
             return true;
         }
-        if (version >= 5) validate_native_dxf_wall_source_groups(source, &wall_source_budget);
+        if (version >= 5) validate_native_dxf_wall_source_groups(source, &wall_source_budget, false, &physical_proofs);
         else validate_native_dxf_boundary_groups(source);
         std::vector<Entity> source_boundaries;
         for (const auto& entity : source)
@@ -1058,12 +1454,28 @@ bool export_boundary_group(const DocumentSnapshot& document, const std::vector<s
         if (version < 5) validate_boundary_group_source_contexts(source_boundaries);
         validate_boundary_group_ceiling_sources(source_boundaries);
         for (const auto& entity : source) detached.push_back(detached_native_entity(entity, unchanged, version >= 4));
-        if (version >= 5) validate_native_dxf_wall_source_groups(detached, &wall_source_budget);
+        if (version >= 5) validate_native_dxf_wall_source_groups(detached, &wall_source_budget, false, &physical_proofs);
         else validate_native_dxf_boundary_groups(detached);
         const auto detached_document = Document::create(detached).snapshot();
         if (!detached_document.is_editable())
             throw std::invalid_argument("native boundary group schema is not editable");
         DxfDrawing pending;
+        if (version == 7) {
+            const auto encoded = physical_proof.dump(-1, ' ', true);
+            if (encoded.size() > 16 * 1024 * 1024) throw std::invalid_argument("V7 source graph byte limit");
+            constexpr std::size_t chunk_bytes = 6000;
+            const auto chunks = (encoded.size() + chunk_bytes - 1) / chunk_bytes;
+            for (std::size_t index = 0; index < chunks; ++index) {
+                const auto name = "VERTEX_PHYSICAL_PROOF_" + std::to_string(result.drawing.blocks.size() + pending.blocks.size() + 1);
+                Json chunk{{"version", 7}, {"depiction", "PHYSICAL_SOURCE_GRAPH_CHUNK_V1"}, {"graph_id", ids.front()},
+                    {"chunk_index", index}, {"chunk_count", chunks}, {"data", encoded.substr(index * chunk_bytes, chunk_bytes)}};
+                const auto bytes = chunk.dump(-1, ' ', true);
+                if (bytes.size() > 16 * 1024) throw std::invalid_argument("V7 graph carrier byte limit");
+                (void)bounded_native_json(bytes);
+                DxfBlock block; block.name = name; block.vertex_entity_json = bytes;
+                pending.blocks.push_back(std::move(block)); pending.inserts.push_back({name, {}, 1, 1, 0, "0"});
+            }
+        }
         for (const auto& entity : source) {
             auto metadata = native_payload(document, document.entities().at(entity.id), scope);
             // The current import marker is admission state, not source graph
@@ -1074,12 +1486,15 @@ bool export_boundary_group(const DocumentSnapshot& document, const std::vector<s
             metadata["extensions"].erase(kWallSourceHostedOpenings);
             metadata["extensions"].erase(kMeasuredGraph);
             metadata["extensions"].erase(kResolvedContext);
+            metadata["extensions"].erase(kPhysicalGraph);
             metadata["version"] = version;
             metadata["depiction"] = source_depiction(entity);
             metadata["member_ids"] = ids;
             metadata["dependency_graph"] = version >= 5 ? native_dxf_wall_source_dependency_graph(entity) :
                 native_dxf_boundary_dependency_graph(entity);
-            if (version == 6) metadata["resolved_context"] = resolved_context_json(captured_contexts.at(entity.id));
+            if (version == 6 || version == 7) metadata["resolved_context"] = resolved_context_json(captured_contexts.at(entity.id));
+            if (version == 7) metadata["physical_source_graph_id"] = ids.front();
+            if (version == 7) { metadata.erase("properties"); metadata.erase("extensions"); }
             const auto payload = metadata.dump();
             if (payload.size() > 16 * 1024) throw std::invalid_argument("native payload byte limit");
             (void)bounded_native_json(payload);
@@ -1132,7 +1547,12 @@ std::pair<std::set<std::string>, std::set<std::string>> export_boundary_groups(
     });
     wall_source_budget.measured_operation = measured_operation;
     std::optional<ProjectOrganization> organization;
-    if (measured_operation) organization = organize_project(document);
+    const bool physical_operation = std::any_of(document.entities().begin(), document.entities().end(), [](const auto& owner) {
+        return owner.second.extensions.contains("physical_wall_room");
+    });
+    // The physical export entry reserved this full-source organization before
+    // its first phase decoder; legacy V6 organization retains its old contract.
+    if (measured_operation || physical_operation) organization = organize_project(document);
     for (const auto& [id, entity] : document.entities()) {
         (void)entity;
         if (scope.inactive_owner_ids.contains(id)) continue;
@@ -1144,6 +1564,15 @@ std::pair<std::set<std::string>, std::set<std::string>> export_boundary_groups(
             (!can_recognize_boundary_entity_type(entity.type) && entity.type != "wall" && entity.type != "opening" &&
              entity.type != "measurement_linework")) continue;
         adjacency.try_emplace(id);
+        if (entity.extensions.contains("physical_wall_room")) {
+            linked.insert(id);
+            const auto room_context = contexts.find(id);
+            if (room_context != contexts.end()) for (const auto& [wall_id, wall] : document.entities())
+                if (wall.type == "wall" && !scope.inactive_owner_ids.contains(wall_id) &&
+                    contexts.contains(wall_id) && contexts.at(wall_id) == room_context->second) {
+                    adjacency[id].insert(wall_id); adjacency[wall_id].insert(id);
+                }
+        }
         if (entity.type == "measurement_linework") linked.insert(id);
         for (const auto& target : recover_measured_source_ids(entity.extensions)) {
             linked.insert(id); adjacency[id].insert(target); adjacency[target].insert(id);
@@ -1175,7 +1604,7 @@ std::pair<std::set<std::string>, std::set<std::string>> export_boundary_groups(
     }
     // V6 operation admission preflights every component before any nonlinear
     // proof. V1..V5-only operations retain their prior work/schema contract.
-    if (measured_operation) for (const auto& ids : components)
+    if (measured_operation || physical_operation) for (const auto& ids : components)
         if (!export_boundary_group(document, ids, scope, result, wall_source_budget, true))
             fallback.insert(ids.begin(), ids.end());
     for (const auto& ids : components) {
@@ -2002,18 +2431,24 @@ struct NativeCandidate {
     std::vector<std::string> member_ids;
 };
 
-NativeCandidate decode_native_candidate(const DxfBlock& block, std::size_t insert_index, const Json& payload) {
+NativeCandidate decode_native_candidate(const DxfBlock& block, std::size_t insert_index, const Json& payload,
+    const std::map<std::string, Json, std::less<>>& physical_proofs,
+    const PhysicalSourceGraphIndex& source_index) {
     std::set<std::string> expected{"version", "id", "type", "properties", "extensions", "hosted_opening_ids"};
     std::set<std::string> actual;
     if (!payload.is_object()) throw std::invalid_argument("native payload must be object");
-    const bool measured_source = payload.contains("version") && payload.at("version").is_number_integer() && payload.at("version") == 6;
+    const bool physical_source = payload.contains("version") && payload.at("version").is_number_integer() && payload.at("version") == 7;
+    const bool measured_source = payload.contains("version") && payload.at("version").is_number_integer() && (payload.at("version") == 6 || physical_source);
     const bool wall_source = payload.contains("version") && payload.at("version").is_number_integer() &&
         (payload.at("version") == 5 || measured_source);
     const bool linework = measured_source && payload.value("type", std::string{}) == "measurement_linework";
     if (measured_source) expected.insert("resolved_context");
+    if (physical_source) expected.insert("physical_source_graph_id");
+    if (physical_source) { expected.erase("properties"); expected.erase("extensions"); }
     const bool boundary = (payload.contains("version") && payload.at("version").is_number_integer() &&
         (payload.at("version") == 2 || payload.at("version") == 3 || payload.at("version") == 4)) ||
-        (wall_source && payload.contains("type") && (payload.at("type") == "boundary" || payload.at("type") == "measurement_boundary"));
+        (wall_source && payload.contains("type") && (payload.at("type") == "boundary" || payload.at("type") == "measurement_boundary" ||
+            (physical_source && payload.at("type") == "room_boundary")));
     const bool group = wall_source || (boundary && (payload.at("version") == 3 || payload.at("version") == 4));
     if (group) { expected.insert("member_ids"); expected.insert("dependency_graph"); }
     if (boundary) {
@@ -2021,8 +2456,14 @@ NativeCandidate decode_native_candidate(const DxfBlock& block, std::size_t inser
         if (!payload.contains("depiction") || payload.at("depiction") != kBoundaryDepiction)
             throw std::invalid_argument("boundary depiction contract missing");
     }
-    const bool manufactured = payload.contains("properties") && payload.at("properties").is_object() &&
-        payload.at("properties").contains("opening_assembly");
+    Json original_properties, original_extensions;
+    if (physical_source) {
+        const auto& original = source_index.at(payload.at("physical_source_graph_id").get<std::string>()).at(payload.at("id").get<std::string>());
+        if (original.type != payload.at("type")) throw std::invalid_argument("V7 thin carrier source type differs");
+        original_properties = original.properties; original_extensions = original.extensions;
+    }
+    const bool manufactured = physical_source ? original_properties.contains("opening_assembly") :
+        payload.contains("properties") && payload.at("properties").is_object() && payload.at("properties").contains("opening_assembly");
     if (manufactured) {
         expected.insert("depiction");
         if (!payload.contains("depiction") || payload.at("depiction") != kManufacturedDepiction)
@@ -2041,10 +2482,11 @@ NativeCandidate decode_native_candidate(const DxfBlock& block, std::size_t inser
     if (actual != expected || !payload.at("version").is_number_integer() ||
         (!boundary && !wall_source && payload.at("version") != 1) ||
         !payload.at("id").is_string() || !payload.at("type").is_string() ||
-        !payload.at("properties").is_object() || !payload.at("extensions").is_object() ||
+        (!physical_source && (!payload.at("properties").is_object() || !payload.at("extensions").is_object())) ||
         !payload.at("hosted_opening_ids").is_array()) throw std::invalid_argument("invalid native payload schema");
     NativeCandidate candidate{{payload.at("id").get<std::string>(), payload.at("type").get<std::string>(),
-                               payload.at("properties"), false, payload.at("extensions")}, {}, insert_index, &block};
+                               physical_source ? original_properties : payload.at("properties"), false,
+                               physical_source ? original_extensions : payload.at("extensions")}, {}, insert_index, &block};
     if (candidate.entity.id.empty() || candidate.entity.id.size() > 255 ||
         (boundary ? !can_recognize_boundary_entity_type(candidate.entity.type) :
          candidate.entity.type != "wall" && candidate.entity.type != "opening" && !linework) ||
@@ -2058,11 +2500,12 @@ NativeCandidate decode_native_candidate(const DxfBlock& block, std::size_t inser
     }
     if ((candidate.entity.type == "opening" || boundary || linework) && !candidate.hosted_ids.empty())
         throw std::invalid_argument("native entity cannot host children");
-    if (boundary && candidate.entity.extensions.contains("physical_wall_room"))
+    if (boundary && candidate.entity.extensions.contains("physical_wall_room") && !physical_source)
         throw std::invalid_argument("physical room source graph unavailable");
     candidate.version = payload.at("version").get<int>();
     if (candidate.entity.extensions.contains(kMeasuredGraph) || candidate.entity.extensions.contains(kResolvedContext))
         throw std::invalid_argument("native source cannot carry measured admission state");
+    if (candidate.entity.extensions.contains(kPhysicalGraph)) throw std::invalid_argument("native source cannot carry physical admission state");
     if ((candidate.version == 4 || wall_source) && candidate.entity.extensions.contains("vertex_dxf_stair_floor_binding"))
         throw std::invalid_argument("native source cannot carry destination floor binding");
     if (wall_source && candidate.entity.extensions.contains(kWallSourceContextBinding))
@@ -2075,12 +2518,18 @@ NativeCandidate decode_native_candidate(const DxfBlock& block, std::size_t inser
         candidate.entity.extensions[kWallSourceHostedOpenings] = {{"version", 1}, {"opening_ids", ids}};
     }
     if (measured_source) {
-        (void)read_resolved_context(payload.at("resolved_context"));
+        (void)read_resolved_context(payload.at("resolved_context"), physical_source);
         candidate.entity.extensions[kResolvedContext] = {{"version", 1}, {"context", payload.at("resolved_context")}};
         candidate.entity.extensions[kMeasuredGraph] = {{"version", 1},
             {"source_ids", payload.at("dependency_graph").at("measurement_graph_ids")}};
         // The exact graph codec selects V6 by its admission marker.
-        candidate.entity.extensions["vertex_dxf_boundary"] = boundary_group_marker({}, 6);
+        candidate.entity.extensions["vertex_dxf_boundary"] = boundary_group_marker({}, physical_source ? 7 : 6);
+    }
+    if (physical_source) {
+        const auto graph_id = payload.at("physical_source_graph_id").get<std::string>();
+        (void)physical_proofs.at(graph_id);
+        candidate.entity.extensions[kPhysicalGraph] = {{"version", 1}, {"source_graph_id", graph_id},
+            {"source_owner_id", candidate.entity.id}};
     }
     if (group) {
         if (!payload.at("member_ids").is_array() ||
@@ -2141,13 +2590,13 @@ Entity detached_native_entity(const Entity& source, const std::map<std::string, 
         result.properties["model"] = remap_measurement_linework_owner_identity(source.properties.at("model"), result.id);
     if (!result.extensions.contains("vertex_dxf_source"))
         result.extensions["vertex_dxf_source"] = {{"version", 1}, {"id", source.id},
-            {"properties", source.properties}, {"extensions", source.extensions}};
+            {"properties", source.properties}, {"extensions", physical_source_member(source) ? physical_evidence_entity(source).extensions : source.extensions}};
     if (wall_source) {
         result.extensions[kWallSourceContextBinding] = {{"version", 1},
             {"source_context", direct_source_context(source)}, {"destination_context", nullptr}};
         if (measured_source_member(source)) {
             auto& binding = result.extensions[kWallSourceContextBinding];
-            binding["version"] = 2;
+            binding["version"] = physical_source_member(source) ? 3 : 2;
             binding["source_resolved_context"] = resolved_context_json(member_resolved_context(source));
             binding["destination_resolved_context"] = nullptr;
             result.extensions.erase(kResolvedContext);
@@ -2176,7 +2625,7 @@ Entity detached_native_entity(const Entity& source, const std::map<std::string, 
             for (auto& layer : result.properties["layers"])
                 if (layer.is_object()) layer.erase("material_assignment");
     }
-    if (source.type == "wall") {
+    if (source.type == "wall" && !physical_source_member(source)) {
         Wall decoded;
         std::string error;
         if (!read_document_wall(source, {}, decoded, error)) throw std::invalid_argument(error);
@@ -2187,7 +2636,7 @@ Entity detached_native_entity(const Entity& source, const std::map<std::string, 
         if (decoded.top_gradient_m_per_m)
             result.properties["top_plane"] = wall_top_plane_json(*decoded.top_gradient_m_per_m);
         for (const auto* key : {"thickness", "height", "elevation", "slope_rise"}) result.properties.erase(key);
-    } else if (source.type == "opening") {
+    } else if (source.type == "opening" && !physical_source_member(source)) {
         if (!wall_source) result.properties["wall_id"] = ids.at(source.properties.at("wall_id").get<std::string>());
         for (const auto* key : {"offset", "width", "sill", "height"}) {
             const auto canonical = std::string(key) + "_m";
@@ -2201,27 +2650,97 @@ Entity detached_native_entity(const Entity& source, const std::map<std::string, 
 
 std::set<std::size_t> import_native_graphs(const DxfDrawing& drawing, bool source_is_metres,
                                          DxfProjectImportResult& result) {
+    // Inventory metadata-only carriers independently before decoding owners.
+    // Missing, duplicate, noncanonical or conflicting chunks leave no proof.
+    struct ProofChunks { std::size_t count{}; std::map<std::size_t, std::string> data; std::vector<std::size_t> inserts; bool refused{}; };
+    std::map<std::string, ProofChunks, std::less<>> chunks;
+    std::set<std::size_t> proof_inserts;
+    std::size_t aggregate_proof_bytes = 0;
+    for (std::size_t index = 0; index < drawing.inserts.size(); ++index) {
+        const auto& insert = drawing.inserts[index];
+        const auto block = std::find_if(drawing.blocks.begin(), drawing.blocks.end(), [&](const auto& value) {
+            return block_identity(value.name) == block_identity(insert.block_name);
+        });
+        if (block == drawing.blocks.end() || block->vertex_entity_json.empty()) continue;
+        Json payload;
+        std::string graph_id;
+        try {
+            payload = bounded_native_json(block->vertex_entity_json);
+            if (!payload.is_object()) continue;
+            const auto depiction = payload.find("depiction");
+            // Recover the reserved graph identity before checking the exact
+            // chunk schema. A malformed competing declaration must poison its
+            // graph rather than disappear while a valid chunk set activates.
+            const bool declares_graph = payload.contains("graph_id") ||
+                (depiction != payload.end() && depiction->is_string() && *depiction == "PHYSICAL_SOURCE_GRAPH_CHUNK_V1");
+            if (!declares_graph) continue;
+            proof_inserts.insert(index);
+            graph_id = payload.at("graph_id").get<std::string>();
+            auto& proof = chunks[graph_id];
+            if (payload.size() != 6 || !payload.at("version").is_number_integer() || payload.at("version") != 7 ||
+                depiction == payload.end() || *depiction != "PHYSICAL_SOURCE_GRAPH_CHUNK_V1" ||
+                graph_id.empty() || graph_id.size() > 128 || !payload.at("chunk_index").is_number_unsigned() ||
+                !payload.at("chunk_count").is_number_unsigned() || !payload.at("data").is_string() || !source_is_metres ||
+                insert.insertion.x != 0 || insert.insertion.y != 0 || insert.scale_x != 1 || insert.scale_y != 1 || insert.rotation_degrees != 0 ||
+                block->base.x != 0 || block->base.y != 0 || !block->lines.empty() || !block->arcs.empty() || !block->polylines.empty() ||
+                !block->circles.empty() || !block->labels.empty()) throw std::invalid_argument("invalid V7 graph chunk");
+            const auto count = payload.at("chunk_count").get<std::size_t>();
+            const auto part = payload.at("chunk_index").get<std::size_t>();
+            const auto data = payload.at("data").get<std::string>();
+            if (!count || count > 4096 || part >= count || (proof.count && proof.count != count) || data.empty() || data.size() > 6000 ||
+                std::any_of(data.begin(), data.end(), [](unsigned char c) { return c > 127; }) ||
+                data.size() > 16 * 1024 * 1024 - aggregate_proof_bytes || !proof.data.emplace(part, data).second)
+                throw std::invalid_argument("partial/conflicting V7 graph chunks");
+            aggregate_proof_bytes += data.size(); proof.count = count; proof.inserts.push_back(index);
+        } catch (const std::exception&) {
+            if (!graph_id.empty()) chunks[graph_id].refused = true;
+            if (proof_inserts.contains(index)) diagnostic(result.diagnostics, block->name, "BLOCK", "physical_source_graph_not_activated");
+        }
+    }
+    std::map<std::string, Json, std::less<>> physical_proofs;
+    PhysicalSourceGraphIndex source_index;
+    for (const auto& [id, parts] : chunks) {
+        if (parts.refused || parts.data.size() != parts.count) continue;
+        try {
+            std::string encoded;
+            for (std::size_t part = 0; part < parts.count; ++part) encoded += parts.data.at(part);
+            auto proof = bounded_physical_graph_json(encoded);
+            source_index.emplace(id, read_physical_graph(proof));
+            physical_proofs.emplace(id, std::move(proof));
+        } catch (const std::exception&) { diagnostic(result.diagnostics, id, "BLOCK", "physical_source_graph_not_activated"); }
+    }
     std::map<std::string, NativeCandidate> candidates;
     std::set<std::string> duplicate_ids;
     std::set<std::string> declared_ids;
     std::set<std::string> rejected_boundary_group_ids;
     std::set<std::size_t> activated;
     std::vector<Entity> original_measured_inventory;
+    std::vector<Entity> original_physical_inventory;
+    bool original_physical_inventory_incomplete = false;
     bool original_measured_context_incomplete = false;
     for (std::size_t i = 0; i < drawing.inserts.size(); ++i) {
         const auto& insert = drawing.inserts[i];
         const auto block = std::find_if(drawing.blocks.begin(), drawing.blocks.end(),
             [&](const auto& value) { return block_identity(value.name) == block_identity(insert.block_name); });
         if (block == drawing.blocks.end() || block->vertex_entity_json.empty()) continue;
+        if (proof_inserts.contains(i)) continue;
         Json payload;
+        Json observed_properties, observed_extensions;
         try {
             payload = bounded_native_json(block->vertex_entity_json);
+            if (payload.is_object() && payload.value("version", 0) == 7) {
+                const auto& original = source_index.at(payload.at("physical_source_graph_id").get<std::string>()).at(payload.at("id").get<std::string>());
+                observed_properties = original.properties; observed_extensions = original.extensions;
+            } else if (payload.is_object()) {
+                if (payload.contains("properties")) observed_properties = payload.at("properties");
+                if (payload.contains("extensions")) observed_extensions = payload.at("extensions");
+            }
             // Inventory recoverable declarations before full admission. A
             // malformed graph or placement still conflicts with another copy.
             if (payload.is_object() && payload.contains("version") &&
                 payload.at("version").is_number_integer() &&
                 (payload.at("version") == 1 || payload.at("version") == 2 || payload.at("version") == 3 ||
-                 payload.at("version") == 4 || payload.at("version") == 5 || payload.at("version") == 6) &&
+                 payload.at("version") == 4 || payload.at("version") == 5 || payload.at("version") == 6 || payload.at("version") == 7) &&
                 payload.contains("id") && payload.at("id").is_string()) {
                 const auto id = payload.at("id").get<std::string>();
                 if (!id.empty() && id.size() <= 255 && !declared_ids.insert(id).second)
@@ -2231,15 +2750,15 @@ std::set<std::size_t> import_native_graphs(const DxfDrawing& drawing, bool sourc
             // A refused standalone stroke still participates in an unisolated
             // area's layer inventory; destination CAD-layer choices cannot
             // remove it from the source proof.
-            if (payload.is_object() && ((payload.contains("version") && payload.at("version") == 6) ||
+            if (payload.is_object() && ((payload.contains("version") && (payload.at("version") == 6 || payload.at("version") == 7)) ||
                 (payload.contains("type") && payload.at("type") == "measurement_linework"))) {
                 try {
                     Entity observation{payload.at("id").get<std::string>(), payload.at("type").get<std::string>(),
-                        payload.at("properties"), false, payload.at("extensions")};
+                        observed_properties, false, observed_extensions};
                     if (observation.id.empty() || observation.id.size() > 255 ||
                         !observation.properties.is_object() || !observation.extensions.is_object())
                         throw std::invalid_argument("incomplete original V6 inventory");
-                    (void)read_resolved_context(payload.at("resolved_context"));
+                    (void)read_resolved_context(payload.at("resolved_context"), payload.value("version", 0) == 7);
                     observation.extensions.erase("vertex_dxf_boundary");
                     observation.extensions.erase(kWallSourceContextBinding);
                     observation.extensions.erase(kMeasuredGraph);
@@ -2249,7 +2768,15 @@ std::set<std::size_t> import_native_graphs(const DxfDrawing& drawing, bool sourc
                     original_measured_context_incomplete = true;
                 }
             }
-            auto candidate = decode_native_candidate(*block, i, payload);
+            if (payload.is_object() && payload.value("type", std::string{}) == "wall") {
+                try {
+                    Entity observation{payload.at("id").get<std::string>(), "wall", observed_properties, false, observed_extensions};
+                    if (observation.id.empty() || observation.id.size() > 255 || !observation.properties.is_object() || !observation.extensions.is_object())
+                        throw std::invalid_argument("incomplete original physical inventory");
+                    original_physical_inventory.push_back(physical_evidence_entity(std::move(observation)));
+                } catch (const std::exception&) { original_physical_inventory_incomplete = true; }
+            }
+            auto candidate = decode_native_candidate(*block, i, payload, physical_proofs, source_index);
             const auto source_id = candidate.entity.id;
             if (candidate.version == 2) {
                 // A standalone record cannot supply its active appraisal links.
@@ -2266,10 +2793,10 @@ std::set<std::size_t> import_native_graphs(const DxfDrawing& drawing, bool sourc
         } catch (const std::exception& error) {
             // Unreadable native metadata cannot certify a complete measured
             // source inventory. V1..V5-only imports retain their prior path.
-            if (payload.is_null()) original_measured_context_incomplete = true;
+            if (payload.is_null()) { original_measured_context_incomplete = true; original_physical_inventory_incomplete = true; }
             if (payload.is_object() && payload.contains("version") &&
                 payload.at("version").is_number_integer() &&
-                (payload.at("version") == 1 || payload.at("version") == 2 || payload.at("version") == 3 || payload.at("version") == 4 || payload.at("version") == 5 || payload.at("version") == 6)) {
+                (payload.at("version") == 1 || payload.at("version") == 2 || payload.at("version") == 3 || payload.at("version") == 4 || payload.at("version") == 5 || payload.at("version") == 6 || payload.at("version") == 7)) {
                 const auto remember = [&](const Json& value) {
                     if (value.is_string()) {
                         const auto& id = value.get_ref<const std::string&>();
@@ -2288,6 +2815,7 @@ std::set<std::size_t> import_native_graphs(const DxfDrawing& drawing, bool sourc
                     array(graph, "deduction_ids"); array(graph, "below_5ft_deduction_ids");
                     array(graph, "wall_source_ids"); array(graph, "hosted_opening_ids");
                     array(graph, "measurement_source_ids"); array(graph, "measurement_graph_ids");
+                    array(graph, "physical_wall_graph_ids");
                     if (graph.is_object() && graph.contains("room_boundary_id")) remember(graph.at("room_boundary_id"));
                     if (graph.is_object() && graph.contains("wall_id")) remember(graph.at("wall_id"));
                 };
@@ -2320,7 +2848,7 @@ std::set<std::size_t> import_native_graphs(const DxfDrawing& drawing, bool sourc
     NativeDxfWallSourceWorkBudget wall_source_budget;
     std::set<std::string> preflight_refused;
     wall_source_budget.measured_operation = std::any_of(candidates.begin(), candidates.end(),
-        [](const auto& entry) { return entry.second.version == 6; });
+        [](const auto& entry) { return entry.second.version == 6 || entry.second.version == 7; });
     const auto with_original_inventory = [&](std::vector<Entity> source) {
         std::set<std::string> members;
         for (const auto& member : source) members.insert(member.id);
@@ -2328,6 +2856,12 @@ std::set<std::size_t> import_native_graphs(const DxfDrawing& drawing, bool sourc
             throw std::invalid_argument("original V6 source context inventory incomplete");
         for (const auto& observation : original_measured_inventory)
             if (!members.contains(observation.id)) source.push_back(observation);
+        return source;
+    };
+    const auto with_physical_inventory = [&](std::vector<Entity> source) {
+        if (original_physical_inventory_incomplete) throw std::invalid_argument("original V7 wall inventory incomplete");
+        std::set<std::string> members; for (const auto& member : source) members.insert(member.id);
+        for (const auto& observation : original_physical_inventory) if (!members.contains(observation.id)) source.push_back(observation);
         return source;
     };
     if (wall_source_budget.measured_operation) {
@@ -2346,15 +2880,21 @@ std::set<std::size_t> import_native_graphs(const DxfDrawing& drawing, bool sourc
                     entity.extensions["vertex_dxf_boundary"] = boundary_group_marker(candidate.member_ids, candidate.version);
                     source.push_back(std::move(entity));
                 }
-                validate_native_dxf_wall_source_groups(candidate.version == 6 ? with_original_inventory(std::move(source)) : source,
-                    &wall_source_budget, true);
+                if (candidate.version == 7) source = with_physical_inventory(std::move(source));
+                NativeDxfPhysicalSourceGraphs group_proofs;
+                if (candidate.version == 7) {
+                    const auto graph_id = candidate.entity.extensions.at(kPhysicalGraph).at("source_graph_id").get<std::string>();
+                    group_proofs.emplace(graph_id, physical_proofs.at(graph_id));
+                }
+                validate_native_dxf_wall_source_groups(candidate.version >= 6 ? with_original_inventory(std::move(source)) : source,
+                    &wall_source_budget, true, &group_proofs);
             } catch (const std::exception&) {
                 preflight_refused.insert(candidate.member_ids.begin(), candidate.member_ids.end());
             }
         }
     }
     for (const auto& [id, candidate] : candidates) {
-        if ((candidate.version != 3 && candidate.version != 4 && candidate.version != 5 && candidate.version != 6) || processed_groups.contains(id)) continue;
+        if ((candidate.version != 3 && candidate.version != 4 && candidate.version != 5 && candidate.version != 6 && candidate.version != 7) || processed_groups.contains(id)) continue;
         // Mark the attempted declaration, but conflicting members are still
         // checked below. No member is published until every proof succeeds.
         processed_groups.insert(candidate.member_ids.begin(), candidate.member_ids.end());
@@ -2364,6 +2904,11 @@ std::set<std::size_t> import_native_graphs(const DxfDrawing& drawing, bool sourc
             std::vector<Entity> source;
             std::map<std::string, std::string> ids;
             std::map<std::string, std::string, std::less<>> typed_ids;
+            NativeDxfPhysicalSourceGraphs group_proofs;
+            if (candidate.version == 7) {
+                const auto graph_id = candidate.entity.extensions.at(kPhysicalGraph).at("source_graph_id").get<std::string>();
+                group_proofs.emplace(graph_id, physical_proofs.at(graph_id));
+            }
             const auto marker = boundary_group_marker(candidate.member_ids, candidate.version);
             for (const auto& member_id : candidate.member_ids) {
                 const auto found = candidates.find(member_id);
@@ -2390,8 +2935,8 @@ std::set<std::size_t> import_native_graphs(const DxfDrawing& drawing, bool sourc
                         throw std::invalid_argument("overlapping native boundary graph");
             }
             if (candidate.version >= 5)
-                validate_native_dxf_wall_source_groups(candidate.version == 6 ? with_original_inventory(source) : source,
-                    &wall_source_budget);
+                validate_native_dxf_wall_source_groups(candidate.version >= 6 ? with_original_inventory(candidate.version == 7 ? with_physical_inventory(source) : source) : source,
+                    &wall_source_budget, false, &group_proofs);
             else validate_native_dxf_boundary_groups(source);
             if (candidate.version >= 5) {
                 for (const auto* item : group) if (item->entity.type == "wall") {
@@ -2412,7 +2957,7 @@ std::set<std::size_t> import_native_graphs(const DxfDrawing& drawing, bool sourc
                 remap_native_dxf_boundary_dependency_ids(fresh, typed_ids);
                 detached.push_back(std::move(fresh));
             }
-            if (candidate.version >= 5) validate_native_dxf_wall_source_groups(detached, &wall_source_budget);
+            if (candidate.version >= 5) validate_native_dxf_wall_source_groups(detached, &wall_source_budget, false, &group_proofs);
             else validate_native_dxf_boundary_groups(detached);
             const auto document = Document::create(detached).snapshot();
             if (!document.is_editable()) throw std::invalid_argument("native boundary group schema is not editable");
@@ -2438,6 +2983,11 @@ std::set<std::size_t> import_native_graphs(const DxfDrawing& drawing, bool sourc
                 detached[i].extensions["dxf_source"] = source_extension(effective_layer, "INSERT");
             }
             for (const auto* item : group) activated.insert(item->insert_index);
+            if (candidate.version == 7) {
+                const auto graph_id = bounded_native_json(candidate.block->vertex_entity_json).at("physical_source_graph_id").get<std::string>();
+                for (const auto index : chunks.at(graph_id).inserts) activated.insert(index);
+                result.physical_source_graphs.try_emplace(graph_id, physical_proofs.at(graph_id));
+            }
             result.entities.insert(result.entities.end(), detached.begin(), detached.end());
             for (const auto* item : group) {
                 const auto& properties = item->entity.properties;
@@ -2447,6 +2997,10 @@ std::set<std::size_t> import_native_graphs(const DxfDrawing& drawing, bool sourc
                     properties.at("appraisal_facts").at("ansi").at("ceiling").value("kind", std::string{}) == "sloped";
                 if (candidate.version >= 5 && properties.contains("phase_id"))
                     diagnostic(result.diagnostics, item->entity.id, item->entity.type, "source_phase_not_transported");
+                if (candidate.version == 7 && std::any_of(physical_proofs.at(item->entity.extensions.at(kPhysicalGraph).at("source_graph_id").get<std::string>()).at("entities").begin(),
+                    physical_proofs.at(item->entity.extensions.at(kPhysicalGraph).at("source_graph_id").get<std::string>()).at("entities").end(), [](const auto& record) {
+                        return record.at("type") == "model_phases";
+                    })) diagnostic(result.diagnostics, item->entity.id, item->entity.type, "source_phase_registry_retained_inert");
                 if (sloped || properties.contains("appraisal_reporting"))
                     diagnostic(result.diagnostics, item->entity.id, item->entity.type, "source_confirmation_required");
             }
@@ -2455,7 +3009,7 @@ std::set<std::size_t> import_native_graphs(const DxfDrawing& drawing, bool sourc
         }
     }
     for (const auto& [id, candidate] : candidates) {
-        if (!can_recognize_boundary_entity_type(candidate.entity.type) || candidate.version == 3 || candidate.version == 4 || candidate.version == 5 || candidate.version == 6) continue;
+        if (!can_recognize_boundary_entity_type(candidate.entity.type) || candidate.version == 3 || candidate.version == 4 || candidate.version == 5 || candidate.version == 6 || candidate.version == 7) continue;
         try {
             if (duplicate_ids.contains(id) || rejected_boundary_group_ids.contains(id) || processed_groups.contains(id))
                 throw std::invalid_argument("conflicting native identity declaration");
@@ -2683,6 +3237,15 @@ Json native_dxf_wall_source_dependency_graph(const Entity& entity) {
             throw std::invalid_argument("invalid V6 measured graph declaration");
         graph["measurement_graph_ids"] = declaration.at("source_ids");
     }
+    if (physical_source_member(entity)) {
+        graph["physical_wall_graph_ids"] = Json::array();
+        if (entity.extensions.contains("physical_wall_room")) {
+            std::vector<std::string> inventory;
+            for (const auto& owner : entity.extensions.at("physical_wall_room").at("source_lineage").at("physical_sources"))
+                inventory.push_back(owner.at("owner_id").get<std::string>());
+            std::sort(inventory.begin(), inventory.end()); graph["physical_wall_graph_ids"] = inventory;
+        }
+    }
     return graph;
 }
 
@@ -2700,6 +3263,7 @@ std::vector<std::string> native_dxf_wall_source_dependency_ids(const Entity& ent
                 throw std::invalid_argument("invalid V6 measured graph owner");
             ids.insert(id.get<std::string>());
         }
+    if (physical_source_member(entity)) for (const auto& id : graph.at("physical_wall_graph_ids")) ids.insert(id.get<std::string>());
     // These are recoverable typed incoming physical-room references only.
     // Reaching such an owner rejects V5; its unsupported descriptor never gains
     // transport authority and no arbitrary nested owner_id search is used.
@@ -2729,6 +3293,7 @@ void validate_native_dxf_wall_source_member(const Entity& entity) {
         !marker.contains("member_ids") || !marker.at("member_ids").is_array() ||
         marker.at("member_ids").empty() || marker.at("member_ids").size() > 4096 ||
         (entity.type != "boundary" && entity.type != "measurement_boundary" &&
+         !(physical_source_member(entity) && entity.type == "room_boundary") &&
          entity.type != "wall" && entity.type != "opening" &&
          !(measured_source_member(entity) && entity.type == "measurement_linework")) || !entity.properties.is_object())
         throw std::invalid_argument("invalid V5 member schema");
@@ -2744,7 +3309,7 @@ void validate_native_dxf_wall_source_member(const Entity& entity) {
         !std::binary_search(members.begin(), members.end(), entity.id))
         throw std::invalid_argument("invalid V5 membership");
     for (const auto* key : {"physical_wall_room", "measurement_linework_sources", "measurement_linework_group"})
-        if (entity.extensions.contains(key) && (std::string_view(key) == "physical_wall_room" || !measured_source_member(entity)))
+        if (entity.extensions.contains(key) && ((std::string_view(key) == "physical_wall_room" && !physical_source_member(entity)) || !measured_source_member(entity)))
             throw std::invalid_argument("untransported native source graph");
     if (!measured_source_member(entity) && (entity.extensions.contains(kMeasuredGraph) || entity.extensions.contains(kResolvedContext)))
         throw std::invalid_argument("V5 cannot carry V6 admission state");
@@ -2778,7 +3343,7 @@ void validate_native_dxf_wall_source_member(const Entity& entity) {
         if (entity.properties.contains(key) || entity.properties.contains(std::string(key) + "s"))
             throw std::invalid_argument("untransported V5 owner reference");
     }
-    if (const auto placement = entity.properties.find("vertical_placement"); placement != entity.properties.end()) {
+    if (!physical_source_member(entity)) if (const auto placement = entity.properties.find("vertical_placement"); placement != entity.properties.end()) {
         if (!placement->is_object() || placement->size() != 3 || !placement->contains("version") ||
             !placement->at("version").is_number_integer() || placement->at("version") != 1 ||
             !placement->contains("mode") || placement->at("mode") != "absolute" ||
@@ -2814,13 +3379,13 @@ void validate_native_dxf_wall_source_member(const Entity& entity) {
     const auto binding = entity.extensions.find(kWallSourceContextBinding);
     if (binding == entity.extensions.end()) { (void)direct_source_context(entity); return; }
     if (!binding->is_object() || binding->size() != (measured_source_member(entity) ? 5 : 3) || !binding->contains("version") ||
-        !binding->at("version").is_number_integer() || binding->at("version") != (measured_source_member(entity) ? 2 : 1) ||
+        !binding->at("version").is_number_integer() || binding->at("version") != (physical_source_member(entity) ? 3 : measured_source_member(entity) ? 2 : 1) ||
         !binding->contains("source_context") || !binding->contains("destination_context"))
         throw std::invalid_argument("invalid V5 context binding");
     validate_direct_context(binding->at("source_context"));
     if (measured_source_member(entity)) {
         if (entity.extensions.contains(kResolvedContext)) throw std::invalid_argument("V6 pending resolved observation must detach");
-        const auto resolved = resolved_context_json(read_resolved_context(binding->at("source_resolved_context")));
+        const auto resolved = resolved_context_json(read_resolved_context(binding->at("source_resolved_context"), physical_source_member(entity)));
         for (const auto& [key, value] : binding->at("source_context").items())
             if (resolved.contains(key) && resolved.at(key) != value) throw std::invalid_argument("V6 source context contradiction");
         if (binding->at("destination_context").is_null() != binding->at("destination_resolved_context").is_null())
@@ -2863,6 +3428,20 @@ void remap_native_dxf_wall_source_dependency_ids(Entity& entity,
         result.extensions[kMeasuredGraph]["source_ids"] = inventory;
         result = remap_measurement_linework_source_references(result, ids);
     }
+    if (physical_source_member(result)) {
+#ifdef SKETCH_PHYSICAL_ROOMS
+        if (result.extensions.contains("physical_wall_room")) {
+            const auto refs = physical_wall_room_source_references(result);
+            std::map<std::string, std::string, std::less<>> walls, contexts, phases;
+            for (const auto& id : refs.wall_ids) walls.emplace(id, ids.contains(id) ? ids.at(id) : id);
+            for (const auto& id : refs.context_ids) contexts.emplace(id, id);
+            for (const auto& id : refs.phase_registry_ids) phases.emplace(id, id);
+            result = remap_physical_wall_room_source_references(result, walls, contexts, phases);
+        }
+#else
+        throw std::invalid_argument("physical room runtime unavailable");
+#endif
+    }
     if (result.type == "wall") {
         std::vector<std::string> hosted;
         for (const auto& id : result.extensions.at(kWallSourceHostedOpenings).at("opening_ids"))
@@ -2898,8 +3477,74 @@ void remap_native_dxf_wall_source_dependency_ids(Entity& entity,
     entity = std::move(result);
 }
 
-void validate_native_dxf_wall_source_groups(const std::vector<Entity>& entities,
-    NativeDxfWallSourceWorkBudget* work_budget, bool preflight_only) {
+static void validate_native_dxf_wall_source_groups_impl(const std::vector<Entity>& entities,
+    NativeDxfWallSourceWorkBudget* work_budget, bool preflight_only,
+    const NativeDxfPhysicalSourceGraphs* physical_source_graphs,
+    const std::map<std::string, Entity, std::less<>>* actual_destination_entities,
+    bool destination_support_reserved) {
+    for (const auto& entity : entities) if (!physical_source_member(entity) && entity.extensions.contains(kPhysicalGraph))
+        throw std::invalid_argument("physical graph proof requires V7");
+    PhysicalSourceGraphIndex source_index;
+    if (physical_source_graphs) {
+        std::set<std::string, std::less<>> referenced;
+        for (const auto& entity : entities) if (physical_source_member(entity))
+            referenced.insert(entity.extensions.at(kPhysicalGraph).at("source_graph_id").get<std::string>());
+        std::size_t bytes = 0;
+        if (referenced.size() != physical_source_graphs->size()) throw std::invalid_argument("orphan/missing V7 graph sidecar");
+        for (const auto& [id, proof] : *physical_source_graphs) {
+            if (!referenced.contains(id) || id.empty() || id.size() > 128) throw std::invalid_argument("invalid V7 graph sidecar identity");
+            const auto size = proof.dump().size();
+            if (size > 16 * 1024 * 1024 - bytes) throw std::invalid_argument("V7 aggregate sidecar byte limit");
+            bytes += size;
+            source_index.emplace(id, read_physical_graph(proof));
+        }
+    }
+    NativeDxfWallSourceWorkBudget local_budget;
+    if (!work_budget && std::any_of(entities.begin(), entities.end(), physical_source_member)) work_budget = &local_budget;
+    auto& physical_budget = work_budget ? *work_budget : local_budget;
+    if (std::any_of(entities.begin(), entities.end(), physical_source_member)) {
+        const auto observations = static_cast<std::size_t>(std::count_if(entities.begin(), entities.end(), [](const Entity& owner) {
+            return owner.type == "wall" && !wall_source_member(owner);
+        }));
+        if (observations > 250'000) throw std::invalid_argument("V7 raw observation limit");
+        std::map<std::string, std::set<std::string, std::less<>>, std::less<>> groups;
+        for (const auto& owner : entities) if (physical_source_member(owner)) {
+            const auto& ids = owner.extensions.at("vertex_dxf_boundary").at("member_ids");
+            if (!ids.is_array() || ids.empty() || !ids.front().is_string()) throw std::invalid_argument("invalid V7 support component");
+            groups[owner.extensions.at(kPhysicalGraph).at("source_graph_id").get<std::string>()].insert(ids.front().get<std::string>());
+        }
+        std::size_t destination_groups = 0;
+        // Reserve all source tables and the full actual destination before the
+        // first helper organizes even one graph. Counts include every retained
+        // room (the currentness cache queries them all), not just wire members.
+        for (const auto& [id, graph] : source_index) {
+            (void)id;
+            const auto queries = physical_support_queries(graph);
+            const auto consumers = groups.at(id).size();
+            if (consumers > 4096) throw std::invalid_argument("V7 raw support consumer limit");
+            destination_groups += consumers;
+            // Reserve all repeated raw host solids before source Document
+            // validation, physics or the later exact DXF plan comparisons.
+            for (std::size_t pass = 0; pass < consumers; ++pass) admit_physical_plan_work(graph, physical_budget);
+            // Explicit organization, Document floor/measurement validation,
+            // currentness cache, per-room selected placement and two organizer
+            // passes per worst-case distinct detection, plus recovered walls.
+            admit_physical_support_work(graph, physical_budget, consumers * (4 + queries.rooms + 2 * queries.detections + observations),
+                consumers * queries.detections, consumers, consumers * (7 + queries.detections), consumers * queries.rooms);
+        }
+        if (actual_destination_entities && !destination_support_reserved) {
+            const auto queries = physical_support_queries(*actual_destination_entities);
+            if (destination_groups > 4096) throw std::invalid_argument("V7 destination support consumer limit");
+            // The preflight and execution helpers both organize to inventory
+            // actual layers; final comparison/detection and selected placement
+            // use the same complete graph. No destination phase data is inert.
+            admit_physical_support_work(*actual_destination_entities, physical_budget,
+                destination_groups * (3 + queries.rooms + 2 * queries.detections), destination_groups * queries.detections,
+                0, destination_groups * (2 + queries.detections), destination_groups * queries.rooms);
+        }
+    }
+    if (std::any_of(entities.begin(), entities.end(), physical_source_member))
+        validate_physical_source_groups(entities, physical_budget, true, physical_source_graphs, actual_destination_entities, source_index);
     std::map<std::string, const Entity*, std::less<>> owners;
     for (const auto& entity : entities)
         if (!owners.emplace(entity.id, &entity).second) throw std::invalid_argument("duplicate imported identity");
@@ -2938,9 +3583,10 @@ void validate_native_dxf_wall_source_groups(const std::vector<Entity>& entities,
     std::map<std::string, DrawingContext, std::less<>> source_layers;
     if (measured_operation) {
         std::vector<Entity> observed;
+        const bool physical_operation = std::any_of(entities.begin(), entities.end(), physical_source_member);
         for (const auto& entity : entities) if (measured_source_member(entity) ||
             entity.type == "measurement_linework" || entity.extensions.contains(kResolvedContext)) {
-            const auto context = member_resolved_context(entity);
+            const auto context = member_resolved_context(entity, physical_operation);
             const auto [layer, inserted] = source_layers.emplace(context.layer_id, context);
             if (!inserted && layer->second != context)
                 throw std::invalid_argument("V6 source contexts disagree within one drawing layer");
@@ -2975,7 +3621,9 @@ void validate_native_dxf_wall_source_groups(const std::vector<Entity>& entities,
         std::map<std::string, std::vector<std::string>> deductions;
         std::map<std::string, std::size_t> incoming;
         std::vector<Entity> boundaries;
-        bool live_source = false;
+        bool live_source = physical_source_member(root) && std::any_of(members.begin(), members.end(), [](const auto& member) {
+            return member.extensions.contains("physical_wall_room");
+        });
         std::size_t measured_segments = 0;
         std::size_t measured_replay_work = 0;
         std::optional<int> binding_state;
@@ -2990,6 +3638,10 @@ void validate_native_dxf_wall_source_groups(const std::vector<Entity>& entities,
                 if (!graph.contains(id)) throw std::invalid_argument("missing V5 dependency");
                 adjacency[member.id].insert(id); adjacency[id].insert(member.id);
             }
+            if (physical_source_member(member) && member.extensions.contains("physical_wall_room"))
+                for (const auto& wall : members) if (wall.type == "wall" && member_resolved_context(wall) == member_resolved_context(member)) {
+                    adjacency[member.id].insert(wall.id); adjacency[wall.id].insert(member.id);
+                }
             if (member.type == "wall") {
                 std::set<std::string> expected, actual;
                 for (const auto& id : member.extensions.at(kWallSourceHostedOpenings).at("opening_ids"))
@@ -3159,6 +3811,8 @@ void validate_native_dxf_wall_source_groups(const std::vector<Entity>& entities,
         work_budget->measured_operation = work_budget->measured_operation || measured_operation;
     }
     if (preflight_only) return;
+    if (std::any_of(entities.begin(), entities.end(), physical_source_member))
+        validate_physical_source_groups(entities, physical_budget, false, physical_source_graphs, actual_destination_entities, source_index);
     for (const auto& pending : pending_checks) {
         if (pending.measured) {
             for (const auto& [id, member] : pending.graph) if (member.type == "measurement_linework") {
@@ -3181,11 +3835,364 @@ void validate_native_dxf_wall_source_groups(const std::vector<Entity>& entities,
     }
 }
 
+void validate_native_dxf_wall_source_groups(const std::vector<Entity>& entities,
+    NativeDxfWallSourceWorkBudget* work_budget, bool preflight_only,
+    const NativeDxfPhysicalSourceGraphs* physical_source_graphs,
+    const std::map<std::string, Entity, std::less<>>* actual_destination_entities) {
+    validate_native_dxf_wall_source_groups_impl(entities, work_budget, preflight_only,
+        physical_source_graphs, actual_destination_entities, false);
+}
+
+namespace {
+void validate_physical_source_groups(const std::vector<Entity>& entities,
+    NativeDxfWallSourceWorkBudget& budget, bool preflight_only,
+    const NativeDxfPhysicalSourceGraphs* proofs,
+    const std::map<std::string, Entity, std::less<>>* actual_destination,
+    const PhysicalSourceGraphIndex& source_index) {
+#ifndef SKETCH_PHYSICAL_ROOMS
+    (void)entities; (void)budget; (void)preflight_only; (void)proofs; (void)actual_destination; (void)source_index;
+    throw std::invalid_argument("physical room runtime unavailable");
+#else
+    if (!proofs || proofs->size() > 4096 || budget.source_work > 250'000 || budget.segments > 50'000)
+        throw std::invalid_argument("V7 source graph sidecar missing/over budget");
+    std::map<std::string, const Entity*, std::less<>> owners;
+    for (const auto& entity : entities) {
+        if (!owners.emplace(entity.id, &entity).second) throw std::invalid_argument("duplicate V7 source identity");
+        if (!physical_source_member(entity) && entity.extensions.contains(kPhysicalGraph))
+            throw std::invalid_argument("physical graph proof requires V7");
+    }
+    std::set<std::string, std::less<>> checked;
+    for (const auto& root : entities) {
+        if (!physical_source_member(root) || checked.contains(root.id)) continue;
+        const auto& marker = root.extensions.at("vertex_dxf_boundary");
+        const auto& proof = root.extensions.at(kPhysicalGraph);
+        if (!proof.is_object() || proof.size() != 3 || !proof.at("version").is_number_integer() || proof.at("version") != 1 ||
+            !proof.at("source_graph_id").is_string() || !proof.at("source_owner_id").is_string())
+            throw std::invalid_argument("invalid V7 runtime graph proof");
+        const auto graph_id = proof.at("source_graph_id").get<std::string>();
+        const auto& original_graph = source_index.at(graph_id);
+        std::map<std::string, std::string, std::less<>> ids;
+        std::map<std::string, std::string, std::less<>> original_ids;
+        std::string previous;
+        for (const auto& id : marker.at("member_ids")) {
+            const auto owner = id.get<std::string>();
+            const auto& reference = owners.at(owner)->extensions.at(kPhysicalGraph);
+            if (!reference.is_object() || reference.size() != 3 || reference.at("version") != 1 ||
+                reference.at("source_graph_id") != graph_id || !reference.at("source_owner_id").is_string())
+                throw std::invalid_argument("invalid V7 typed owner binding");
+            const auto source = reference.at("source_owner_id").get<std::string>();
+            if (owner <= previous || !owners.contains(owner) || !original_graph.contains(source) ||
+                !ids.emplace(source, owner).second || !original_ids.emplace(owner, source).second ||
+                !std::binary_search(marker.at("member_ids").begin(), marker.at("member_ids").end(), Json(owner)))
+                throw std::invalid_argument("invalid V7 owner binding membership");
+            previous = owner;
+        }
+        std::vector<Entity> members;
+        std::size_t rooms = 0, walls = 0, raw_edges = 0;
+        std::size_t topology_work = 0;
+        std::set<std::string, std::less<>> detection_keys;
+        const auto root_binding = root.extensions.find(kWallSourceContextBinding);
+        const bool destination = root_binding != root.extensions.end() && !root_binding->at("destination_context").is_null();
+        if (destination && !actual_destination) throw std::invalid_argument("V7 actual destination graph missing");
+        for (const auto& id : marker.at("member_ids")) {
+            const auto& member = *owners.at(id.get<std::string>());
+            if (!physical_source_member(member) || member.extensions.at("vertex_dxf_boundary") != marker ||
+                member.extensions.at(kPhysicalGraph).at("source_graph_id") != graph_id) throw std::invalid_argument("partial V7 proof membership");
+            if (member.extensions.contains("physical_wall_room")) {
+                if (member.type != "room_boundary") throw std::invalid_argument("V7 physical descriptor owner type differs");
+                const auto count = raw_boundary_segment_count(member);
+                if (count > 512 || raw_edges > 50'000 - count) throw std::invalid_argument("V7 raw room edge limit");
+                raw_edges += count; ++rooms;
+                if (count * count * 16 > 250'000 - topology_work) throw std::invalid_argument("V7 room topology work limit");
+                topology_work += count * count * 16;
+            }
+            const auto binding = member.extensions.find(kWallSourceContextBinding);
+            if (binding != member.extensions.end() && binding->at("destination_context").is_null() == destination)
+                throw std::invalid_argument("V7 context/proof destination states differ");
+            if (destination && binding == member.extensions.end()) throw std::invalid_argument("V7 bound graph has no reviewed context");
+            members.push_back(member);
+        }
+        if (!rooms) throw std::invalid_argument("V7 component requires a retained physical room");
+        std::size_t proof_edges = 0, proof_rooms = 0, proof_replay = 0;
+        const auto admit_raw = [&](const auto& graph) {
+            for (const auto& [id, owner] : graph) {
+                (void)id;
+                if (owner.type == "wall") ++walls;
+                if (can_recognize_boundary_entity_type(owner.type)) {
+                    auto raw = owner;
+                    if (owner.extensions.contains("physical_wall_room")) {
+                        raw.extensions["vertex_dxf_boundary"] = {{"version", 7}}; ++proof_rooms;
+                    }
+                    const auto count = raw_boundary_segment_count(raw);
+                    if (proof_edges > 50'000 - count) throw std::invalid_argument("V7 proof geometry budget");
+                    proof_edges += count;
+                    if (count * count * 16 > 250'000 - topology_work) throw std::invalid_argument("V7 proof topology work limit");
+                    topology_work += count * count * 16;
+                    if (owner.extensions.contains("physical_wall_room")) {
+                        const auto& lineage = owner.extensions.at("physical_wall_room").at("source_lineage");
+                        detection_keys.insert(lineage.at("context").dump() + ":" + lineage.at("physical_sources").at(0).at("effective_elevation_m").dump());
+                    }
+                }
+                if (owner.type == "measurement_linework") {
+                    const auto [count, replay] = raw_measured_stroke_work(owner);
+                    if (proof_edges > 50'000 - count || replay > (250'000 - proof_replay) / 16)
+                        throw std::invalid_argument("V7 proof history/replay budget");
+                    proof_edges += count; proof_replay += replay * 16;
+                }
+                // Identity-history geometry is raw admitted too. Only typed
+                // history snapshots are charged; arbitrary JSON gets no role.
+                for (const auto* key : {"boundary_geometry_derivation", "boundary_identity_history", "wall_split_archive", "wall_merge_archive"})
+                    if (owner.extensions.contains(key)) {
+                        std::size_t history_nodes = 0, history_pairs = 0;
+                        const auto visit = [&](const auto& self, const Json& value, std::size_t depth) -> void {
+                            if (depth > 24 || ++history_nodes > 250'000) throw std::invalid_argument("V7 raw identity history limit");
+                            if (value.is_array() && !value.empty() && value.front().is_object() &&
+                                value.front().contains("start") && value.front().contains("end") && value.front().contains("sweep_radians")) {
+                                if (value.size() > 512 || value.size() * value.size() * 16 > 250'000 - history_pairs)
+                                    throw std::invalid_argument("V7 raw history topology work limit");
+                                history_pairs += value.size() * value.size() * 16;
+                            }
+                            if (value.is_array() || value.is_object()) for (const auto& child : value) self(self, child, depth + 1);
+                        };
+                        visit(visit, owner.extensions.at(key), 0);
+                        if (history_nodes > (250'000 - proof_replay) / 16 || history_pairs > 250'000 - proof_replay - history_nodes * 16)
+                            throw std::invalid_argument("V7 proof identity history work limit");
+                        proof_replay += history_nodes * 16 + history_pairs;
+                    }
+                if (owner.properties.contains("boundary_authoring")) {
+                    const auto& receipt = owner.properties.at("boundary_authoring");
+                    std::size_t nodes = 0;
+                    const auto visit = [&](const auto& self, const Json& value, std::size_t depth) -> void {
+                        if (depth > 24 || ++nodes > 250'000) throw std::invalid_argument("V7 raw boundary receipt budget");
+                        if (value.is_array() || value.is_object()) for (const auto& child : value) self(self, child, depth + 1);
+                    };
+                    visit(visit, receipt, 0);
+                    if (nodes > (250'000 - proof_replay) / 16) throw std::invalid_argument("V7 boundary receipt replay work limit");
+                    proof_replay += nodes * 16;
+                }
+            }
+        };
+        admit_raw(original_graph);
+        if (destination) {
+            const auto destination_organization = organize_project(*actual_destination);
+            std::set<std::string, std::less<>> layers;
+            for (const auto& member : members) layers.insert(member_resolved_context(member).layer_id);
+            std::map<std::string, Entity, std::less<>> relevant;
+            for (const auto& [id, owner] : *actual_destination) if (owner.type == "wall" || owner.type == "room_boundary" ||
+                owner.type == "boundary" || owner.type == "measurement_boundary" || owner.type == "measurement_linework") {
+                const auto context = destination_organization.drawing_context(id);
+                if (!context) {
+                    if (owner.type == "wall") throw std::invalid_argument("V7 actual destination wall hierarchy unresolved");
+                    continue;
+                }
+                if (layers.contains(context->layer_id)) relevant.emplace(id, owner);
+            }
+            admit_raw(relevant);
+        }
+        if (walls > 2048 || proof_rooms > 128 || rooms > 128) throw std::invalid_argument("V7 physical detection inventory limit");
+        // Reserve all detection/region comparisons before intrinsic identified
+        // topology, reference codecs, Document admission or physical detection.
+        // This ledger is shared by all components and all source/detached passes.
+        if (preflight_only) {
+            // Source checks cache one solve per actual context/plane. Bound
+            // destination detection below shares that same cache discipline.
+            const auto detection_work = walls * walls * std::max<std::size_t>(1, detection_keys.size()) * 16;
+            if (detection_work > 250'000 || topology_work > 250'000 ||
+                detection_work > 250'000 - budget.source_work || topology_work > 250'000 - budget.source_work - detection_work)
+                throw std::invalid_argument("V7 cumulative physical detection/topology work limit");
+            if (proof_replay > 250'000 - budget.source_work - detection_work - topology_work)
+                throw std::invalid_argument("V7 cumulative proof replay work limit");
+            budget.source_work += detection_work + topology_work + proof_replay;
+            checked.insert(previous); for (const auto& member : members) checked.insert(member.id);
+            continue;
+        }
+        const auto organization = organize_project(original_graph);
+        const auto source_scope = constraint_phase_scope(original_graph);
+        const auto candidate_graph = wall_source_context_graph(members);
+        std::map<std::string, std::string, std::less<>> unchanged_contexts, unchanged_phases;
+        for (const auto& [id, owner] : original_graph) {
+            if (owner.type == "property" || owner.type == "building" || owner.type == "floor" || owner.type == "layer") unchanged_contexts.emplace(id, id);
+            if (owner.type == "model_phases") unchanged_phases.emplace(id, id);
+        }
+        for (const auto& member : members) if (member.extensions.contains("physical_wall_room")) {
+            const auto context = organization.drawing_context(original_ids.at(member.id));
+            if (!context) throw std::invalid_argument("V7 source room hierarchy unresolved");
+            for (const auto& [id, owner] : original_graph) if (owner.type == "wall" && !source_scope.inactive_owner_ids.contains(id)) {
+                const auto wall_context = organization.drawing_context(id);
+                if (!wall_context) throw std::invalid_argument("V7 original wall hierarchy unresolved");
+                if (*wall_context == *context && !ids.contains(id)) throw std::invalid_argument("V7 original active same-context wall omitted from component");
+            }
+        }
+        for (const auto& member : members) {
+            const auto& original = original_graph.at(original_ids.at(member.id));
+            if (original.type != member.type || source_scope.inactive_owner_ids.contains(original.id))
+                throw std::invalid_argument("V7 original source type/active selection differs");
+            const auto source_context = organization.drawing_context(original.id);
+            const auto& binding = member.extensions.find(kWallSourceContextBinding);
+            const auto retained_context = binding == member.extensions.end() ? member_resolved_context(member) :
+                read_resolved_context(binding->at("source_resolved_context"), true);
+            if (!source_context || *source_context != retained_context) throw std::invalid_argument("V7 authentic source hierarchy differs");
+            // The original graph cannot replace candidate owners to make a
+            // proof succeed: compare independently admitted raw typed copies.
+            auto expected = can_recognize_boundary_entity_type(original.type) && original.id != member.id ?
+                remap_boundary_owner_identity(original, member.id) : original;
+            expected.id = member.id;
+            if (original.type == "measurement_linework" && original.id != member.id)
+                expected.properties["model"] = remap_measurement_linework_owner_identity(original.properties.at("model"), member.id);
+            if (expected.extensions.contains("physical_wall_room")) {
+                const auto refs = physical_wall_room_source_references(expected);
+                auto wall_ids = ids;
+                for (const auto& id : refs.wall_ids) if (!wall_ids.contains(id)) {
+                    if (!original_graph.contains(id) || original_graph.at(id).type != "wall")
+                        throw std::invalid_argument("V7 active physical source owner omitted");
+                    wall_ids.emplace(id, id);
+                }
+                expected = remap_physical_wall_room_source_references(expected, wall_ids, unchanged_contexts, unchanged_phases);
+            }
+            // Existing graph codecs also own appraisal, exterior-source and
+            // measured lineage references. Reuse them without altering proof.
+            auto working = expected;
+            working.extensions["vertex_dxf_boundary"] = marker;
+            std::vector<std::string> source_members;
+            for (const auto& [source, owner] : ids) { (void)owner; source_members.push_back(source); }
+            working.extensions["vertex_dxf_boundary"]["member_ids"] = source_members;
+            working.extensions[kMeasuredGraph] = {{"version", 1}, {"source_ids", Json::array()}};
+            working.extensions[kPhysicalGraph] = member.extensions.at(kPhysicalGraph);
+            // Physical references above are already mapped; keep that codec
+            // outside the generic pass below to avoid a second remap.
+            auto physical = working.extensions.find("physical_wall_room") != working.extensions.end() ? working.extensions.at("physical_wall_room") : Json();
+            working.extensions.erase("physical_wall_room");
+            if (working.type == "wall") working.extensions[kWallSourceHostedOpenings] = {{"version", 1}, {"opening_ids", Json::array()}};
+            remap_native_dxf_wall_source_dependency_ids(working, ids);
+            if (!physical.is_null()) working.extensions["physical_wall_room"] = physical;
+            expected = physical_evidence_entity(std::move(working));
+            auto actual = physical_evidence_entity(candidate_graph.at(member.id));
+            if (!original.extensions.contains("vertex_dxf_source")) actual.extensions.erase("vertex_dxf_source");
+            if (binding != member.extensions.end()) {
+                expected.properties.erase("layer"); expected.properties.erase("layer_name");
+            }
+            if (destination) {
+                const auto target = member_resolved_context(member);
+                if (source_context->level_id != target.level_id) throw std::invalid_argument("V7 destination local level differs");
+                if (expected.extensions.contains("physical_wall_room")) {
+                    const auto refs = physical_wall_room_source_references(expected);
+                    std::map<std::string, std::string, std::less<>> wall_ids, context_ids, phase_ids;
+                    context_ids.emplace(source_context->property_id, target.property_id);
+                    context_ids.emplace(source_context->building_id, target.building_id);
+                    context_ids.emplace(source_context->floor_id, target.floor_id);
+                    context_ids.emplace(source_context->layer_id, target.layer_id);
+                    for (const auto& id : refs.wall_ids) wall_ids.emplace(id, id);
+                    for (const auto& id : refs.context_ids) if (!context_ids.contains(id)) context_ids.emplace(id, id);
+                    for (const auto& id : refs.phase_registry_ids) phase_ids.emplace(id, id);
+                    expected = remap_physical_wall_room_source_references(expected, wall_ids, context_ids, phase_ids);
+                }
+                for (const auto* key : {"property_id", "building_id", "floor_id", "layer_id", "phase_id"}) expected.properties.erase(key);
+                for (const auto& [key, value] : binding->at("destination_context").items()) expected.properties[key] = value;
+                if (expected.properties.contains("wall_measurement_source"))
+                    for (auto& record : expected.properties["wall_measurement_source"]["walls"])
+                        record["context"] = direct_source_context(candidate_graph.at(record.at("id").get<std::string>()));
+                if (member.extensions.contains("vertex_dxf_stair_floor_binding"))
+                    expected.properties["appraisal_facts"]["ansi"]["ceiling"]["stair_from_floor_id"] = target.floor_id;
+            }
+            if (expected.properties.dump() != actual.properties.dump() || expected.extensions.dump() != actual.extensions.dump())
+                throw std::invalid_argument("V7 candidate differs from raw source proof");
+        }
+        // Every source-original declared wall observation contributes before
+        // component partitioning; omitted/refused carriers cannot disappear.
+        if (!destination) for (const auto& observation : entities) if (observation.type == "wall" && !wall_source_member(observation)) {
+            const auto found = original_graph.find(observation.id);
+            if (found != original_graph.end()) {
+                auto actual = physical_evidence_entity(observation);
+                const auto original = physical_evidence_entity(found->second);
+                // V1 observations have no required bit. The cache created by
+                // detachment is transfer provenance, not original wall history.
+                if (!original.extensions.contains("vertex_dxf_source")) actual.extensions.erase("vertex_dxf_source");
+                if (actual.type != original.type || actual.properties.dump() != original.properties.dump() ||
+                    actual.extensions.dump() != original.extensions.dump())
+                    throw std::invalid_argument("V7 declared original wall conflicts with proof");
+            }
+            if (!original_graph.contains(observation.id)) {
+                // Resolve this separately recovered declaration against the
+                // authentic hierarchy. It never overwrites a proof owner.
+                auto observations = original_graph;
+                observations.emplace(observation.id, physical_evidence_entity(observation));
+                const auto recovered = organize_project(observations).drawing_context(observation.id);
+                if (!recovered) throw std::invalid_argument("V7 declared original wall hierarchy unresolved");
+                for (const auto& member : members) if (*organization.drawing_context(original_ids.at(member.id)) == *recovered)
+                    throw std::invalid_argument("V7 original applicable wall omitted");
+            }
+        }
+        std::vector<Entity> source_values;
+        for (const auto& [id, owner] : original_graph) { (void)id; source_values.push_back(owner); }
+        const auto source_document = Document::create(source_values).snapshot();
+        if (!source_document.is_editable()) throw std::invalid_argument("V7 original graph is not editable");
+        const auto source_checks = physical_wall_room_checks(source_document);
+        for (const auto& member : members) if (member.extensions.contains("physical_wall_room"))
+            if (!source_checks.at(original_ids.at(member.id)).current) throw std::invalid_argument("V7 original physical room is stale");
+        if (destination) {
+            const auto& actual_graph = *actual_destination;
+            const auto destination_organization = organize_project(actual_graph);
+            const auto active_rooms = active_physical_wall_room_ids(actual_graph);
+            using DetectionKey = std::tuple<std::string, std::string, std::string, std::string, std::string, double>;
+            std::map<DetectionKey, PhysicalWallSpaces> detections;
+            for (const auto& member : members) {
+                const auto actual = physical_evidence_entity(actual_graph.at(member.id));
+                const auto candidate = physical_evidence_entity(candidate_graph.at(member.id));
+                if (candidate.properties.dump() != actual.properties.dump() || candidate.extensions.dump() != actual.extensions.dump() || candidate.type != actual.type)
+                    throw std::invalid_argument("V7 bound candidate differs from actual destination graph");
+                const auto context = destination_organization.drawing_context(member.id);
+                if (!context || *context != member_resolved_context(member)) throw std::invalid_argument("V7 actual destination hierarchy differs");
+            }
+            for (const auto& member : members) if (member.extensions.contains("physical_wall_room")) {
+                if (!std::binary_search(active_rooms.begin(), active_rooms.end(), member.id))
+                    throw std::invalid_argument("V7 actual destination room is phase-inactive");
+                const auto context = destination_organization.drawing_context(member.id);
+                const auto descriptor = decode_physical_wall_room_descriptor(member);
+                if (!context) throw std::invalid_argument("V7 actual destination room context unresolved");
+                Wall selected; std::string error;
+                if (!read_document_wall(resolve_vertical_placement(actual_graph, actual_graph.at(descriptor.selected_wall_id)), {}, selected, error))
+                    throw std::invalid_argument(error);
+                DetectionKey key{context->property_id, context->building_id, context->floor_id, context->layer_id, context->level_id, selected.elevation};
+                auto found = detections.find(key);
+                if (found == detections.end()) found = detections.emplace(key, detect_physical_wall_spaces(actual_graph, descriptor.selected_wall_id)).first;
+                const auto& detection = found->second;
+                if (*context != detection.context || std::count_if(detection.spaces.begin(), detection.spaces.end(), [&](const auto& fresh) {
+                    return physical_wall_room_lineage_matches_current_inventory(member, *context, fresh);
+                }) != 1) throw std::invalid_argument("V7 actual destination physical inventory/plane differs");
+            }
+        }
+        for (const auto& member : members) checked.insert(member.id);
+    }
+#endif
+}
+} // namespace
+
 void bind_native_dxf_wall_source_destinations(std::vector<Entity>& entities,
-    const std::map<std::string, DrawingContext, std::less<>>& actual_contexts) {
+    const std::map<std::string, DrawingContext, std::less<>>& actual_contexts,
+    const std::map<std::string, Entity, std::less<>>* actual_destination_entities,
+    const NativeDxfPhysicalSourceGraphs* physical_source_graphs) {
     auto staged = entities;
+    const bool physical = std::any_of(staged.begin(), staged.end(), physical_source_member);
+    if (physical && !actual_destination_entities) throw std::invalid_argument("V7 requires actual complete destination entities");
+    if (physical && !physical_source_graphs) throw std::invalid_argument("V7 requires source graph sidecar");
     NativeDxfWallSourceWorkBudget work_budget;
     auto* shared_work = std::any_of(staged.begin(), staged.end(), measured_source_member) ? &work_budget : nullptr;
+    if (physical) {
+        std::set<std::pair<std::string, std::string>> groups;
+        for (const auto& owner : staged) if (physical_source_member(owner)) {
+            const auto& ids = owner.extensions.at("vertex_dxf_boundary").at("member_ids");
+            if (!ids.is_array() || ids.empty() || !ids.front().is_string()) throw std::invalid_argument("invalid V7 support component");
+            groups.emplace(owner.extensions.at(kPhysicalGraph).at("source_graph_id").get<std::string>(), ids.front().get<std::string>());
+        }
+        const auto queries = physical_support_queries(*actual_destination_entities);
+        if (groups.size() > 4096) throw std::invalid_argument("V7 destination support consumer limit");
+        // Reserve the binder organizer and both final validation passes before
+        // pending source validation decodes any support model. The private
+        // final call below consumes this reservation without charging it twice.
+        admit_physical_support_work(*actual_destination_entities, work_budget,
+            1 + groups.size() * (3 + queries.rooms + 2 * queries.detections), groups.size() * queries.detections,
+            0, groups.size() * (2 + queries.detections), groups.size() * queries.rooms);
+    }
     // Desktop may already have assigned floor/layer; validate the untouched
     // pending graph by removing only those reviewed assignments in a copy.
     auto pending = staged;
@@ -3193,8 +4200,8 @@ void bind_native_dxf_wall_source_destinations(std::vector<Entity>& entities,
     // not original-source evidence. Source closure has already been proved in
     // the mapper/broker. Include these outsiders only in the final destination
     // inventory, without mixing their actual contexts into the pending proof.
-    std::erase_if(pending, [](const Entity& entity) {
-        return entity.type == "measurement_linework" && !wall_source_member(entity);
+    std::erase_if(pending, [physical](const Entity& entity) {
+        return (entity.type == "measurement_linework" || (physical && (entity.type == "wall" || entity.type == "opening"))) && !wall_source_member(entity);
     });
     for (auto& entity : pending) if (wall_source_member(entity)) {
         const auto actual = actual_contexts.find(entity.id);
@@ -3211,7 +4218,7 @@ void bind_native_dxf_wall_source_destinations(std::vector<Entity>& entities,
             entity.properties.erase(key);
         }
     }
-    validate_native_dxf_wall_source_groups(pending, shared_work);
+    validate_native_dxf_wall_source_groups(pending, shared_work, false, physical_source_graphs);
     for (auto& entity : staged) if (entity.type == "measurement_linework" && !wall_source_member(entity)) {
         const auto actual = actual_contexts.find(entity.id);
         if (actual == actual_contexts.end() || !actual->second.complete())
@@ -3231,6 +4238,24 @@ void bind_native_dxf_wall_source_destinations(std::vector<Entity>& entities,
         for (const auto& [key, value] : destination.items()) entity.properties[key] = value;
         binding["destination_context"] = destination;
         if (measured_source_member(entity)) binding["destination_resolved_context"] = resolved_context_json(context);
+#ifdef SKETCH_PHYSICAL_ROOMS
+        if (physical_source_member(entity) && entity.extensions.contains("physical_wall_room")) {
+            const auto refs = physical_wall_room_source_references(entity);
+            const auto& original_context = binding.at("source_resolved_context");
+            const auto source_context = read_resolved_context(original_context, true);
+            if (source_context.level_id != context.level_id)
+                throw std::invalid_argument("V7 reviewed destination changes local floor level");
+            std::map<std::string, std::string, std::less<>> walls, contexts, phases;
+            contexts.emplace(source_context.property_id, context.property_id);
+            contexts.emplace(source_context.building_id, context.building_id);
+            contexts.emplace(source_context.floor_id, context.floor_id);
+            contexts.emplace(source_context.layer_id, context.layer_id);
+            for (const auto& id : refs.wall_ids) walls.emplace(id, id);
+            for (const auto& id : refs.context_ids) if (!contexts.contains(id)) contexts.emplace(id, id);
+            for (const auto& id : refs.phase_registry_ids) phases.emplace(id, id);
+            entity = remap_physical_wall_room_source_references(entity, walls, contexts, phases);
+        }
+#endif
         const auto stair = entity.extensions.find("vertex_dxf_stair_floor_binding");
         if (stair != entity.extensions.end()) {
             entity.properties["appraisal_facts"]["ansi"]["ceiling"]["stair_from_floor_id"] = context.floor_id;
@@ -3248,7 +4273,53 @@ void bind_native_dxf_wall_source_destinations(std::vector<Entity>& entities,
     for (auto& entity : staged) if (wall_source_member(entity) && entity.properties.contains("wall_measurement_source"))
         for (auto& record : entity.properties.at("wall_measurement_source").at("walls"))
             record.at("context") = direct_source_context(final_graph.at(record.at("id").get<std::string>()));
-    validate_native_dxf_wall_source_groups(staged, shared_work);
+    if (physical) {
+        // Check candidates against the caller's real staging graph before
+        // overlaying bound transport fields. Owner geometry cannot be replaced
+        // here, including plain imported or existing destination wall outsiders.
+        auto actual = *actual_destination_entities;
+        const auto organization = organize_project(actual);
+        for (const auto& entity : staged) if (physical_source_member(entity)) {
+            const auto found = actual.find(entity.id);
+            if (found == actual.end() || found->second.type != entity.type)
+                throw std::invalid_argument("V7 actual staged destination owner missing");
+            const auto context = organization.drawing_context(entity.id);
+            if (!context || *context != actual_contexts.at(entity.id))
+                throw std::invalid_argument("V7 destination context differs from actual hierarchy");
+            auto supplied = physical_evidence_entity(found->second);
+            auto bound = physical_evidence_entity(entity);
+            // The supplied owner is pending: its raw room lineage still names
+            // source contexts. Independently bind that typed copy for equality.
+#ifdef SKETCH_PHYSICAL_ROOMS
+            if (supplied.extensions.contains("physical_wall_room")) {
+                const auto& source = entity.extensions.at(kWallSourceContextBinding).at("source_resolved_context");
+                const auto original = read_resolved_context(source, true);
+                const auto refs = physical_wall_room_source_references(supplied);
+                std::map<std::string, std::string, std::less<>> walls, contexts, phases;
+                contexts.emplace(original.property_id, context->property_id); contexts.emplace(original.building_id, context->building_id);
+                contexts.emplace(original.floor_id, context->floor_id); contexts.emplace(original.layer_id, context->layer_id);
+                for (const auto& id : refs.wall_ids) walls.emplace(id, id);
+                for (const auto& id : refs.context_ids) if (!contexts.contains(id)) contexts.emplace(id, id);
+                for (const auto& id : refs.phase_registry_ids) phases.emplace(id, id);
+                supplied = remap_physical_wall_room_source_references(supplied, walls, contexts, phases);
+            }
+#endif
+            // Actual placement includes caller-stamped effective context fields;
+            // equalize these only after proving them through organize_project.
+            for (const auto* key : {"property_id", "building_id", "floor_id", "layer_id", "phase_id"}) supplied.properties.erase(key);
+            for (const auto& [key, value] : entity.extensions.at(kWallSourceContextBinding).at("destination_context").items()) supplied.properties[key] = value;
+            if (supplied.properties.contains("wall_measurement_source"))
+                for (auto& record : supplied.properties["wall_measurement_source"]["walls"])
+                    record["context"] = direct_source_context(final_graph.at(record.at("id").get<std::string>()));
+            if (entity.extensions.contains("vertex_dxf_stair_floor_binding"))
+                supplied.properties["appraisal_facts"]["ansi"]["ceiling"]["stair_from_floor_id"] = context->floor_id;
+            if (bound.properties.dump() != supplied.properties.dump() || bound.extensions.dump() != supplied.extensions.dump())
+                throw std::invalid_argument("V7 actual staged owner differs from imported raw owner");
+            actual.at(entity.id) = entity;
+        }
+        validate_native_dxf_wall_source_groups_impl(staged, shared_work, false, physical_source_graphs, &actual, true);
+    }
+    if (!physical) validate_native_dxf_wall_source_groups(staged, shared_work);
     entities = std::move(staged);
 }
 
@@ -3256,6 +4327,19 @@ DxfProjectExportResult export_project_dxf(const DocumentSnapshot& document,
                                           const DxfExchangeLimits& limits) {
     DxfProjectExportResult result;
     result.drawing.insertion_units = 6; // SI metres are authoritative in the project model.
+    NativeDxfWallSourceWorkBudget wall_source_budget;
+    const bool physical_operation = std::any_of(document.entities().begin(), document.entities().end(), [](const auto& owner) {
+        return owner.second.extensions.contains("physical_wall_room");
+    });
+    try {
+        // Reserve the initial full-source organization and phase selection
+        // before either can decode a shared level/phase graph repeatedly.
+        if (physical_operation) admit_physical_support_work(document.entities(), wall_source_budget, 1, 0, 0, 2);
+        if (physical_operation) admit_physical_plan_work(document.entities(), wall_source_budget);
+    } catch (const std::exception&) {
+        diagnostic(result.diagnostics, {}, "PROJECT", "physical_source_support_work_not_admitted");
+        return result;
+    }
     ConstraintPhaseScope scope;
     try {
         // Evaluate every registry against the complete source before deriving
@@ -3275,15 +4359,44 @@ DxfProjectExportResult export_project_dxf(const DocumentSnapshot& document,
         if (host != document.entities().end() && host->second.type == "wall" &&
             scope.inactive_owner_ids.contains(host->first)) scope.inactive_owner_ids.insert(id);
     }
-#ifdef SKETCH_PHYSICAL_ROOMS
-    const auto physical_rooms = physical_wall_room_checks(document);
-#endif
-    NativeDxfWallSourceWorkBudget wall_source_budget;
     const bool measured_operation = std::any_of(document.entities().begin(), document.entities().end(), [&](const auto& owner) {
         return !scope.inactive_owner_ids.contains(owner.first) && (owner.second.type == "measurement_linework" ||
             owner.second.extensions.contains("measurement_linework_sources") || owner.second.extensions.contains("measurement_linework_group"));
     });
     const auto [native_boundaries, fallback_boundaries] = export_boundary_groups(document, scope, result, wall_source_budget);
+#ifdef SKETCH_PHYSICAL_ROOMS
+    std::map<std::string, PhysicalWallRoomCheck, std::less<>> physical_rooms;
+    const bool physical_fallback = std::any_of(document.entities().begin(), document.entities().end(), [&](const auto& owner) {
+        return !native_boundaries.contains(owner.first) && !scope.inactive_owner_ids.contains(owner.first) && owner.second.extensions.contains("physical_wall_room");
+    });
+    if (physical_fallback) try {
+        // Currentness organizes/places selected walls for every retained room
+        // and solves each distinct context once. Admit support replay first.
+        const auto queries = physical_support_queries(document.entities());
+        admit_physical_support_work(document.entities(), wall_source_budget, 1 + queries.rooms + 2 * queries.detections,
+            queries.detections, 0, 3 + queries.detections, queries.rooms);
+        // Failed native admission grants no fresh geometry allowance. Bound
+        // the complete fallback operation before the currentness cache runs.
+        std::size_t walls = 0, rooms = 0, edges = 0;
+        for (const auto& [id, owner] : document.entities()) {
+            (void)id;
+            if (owner.type == "wall") ++walls;
+            if (owner.extensions.contains("physical_wall_room")) {
+                auto raw = owner; raw.extensions["vertex_dxf_boundary"] = {{"version", 7}};
+                const auto count = raw_boundary_segment_count(raw);
+                if (count > 512 || edges > 50'000 - count) throw std::invalid_argument("physical fallback raw geometry budget");
+                edges += count; ++rooms;
+            }
+        }
+        if (walls > 2048 || rooms > 128 || edges > 512) throw std::invalid_argument("physical fallback inventory budget");
+        const auto work = walls * walls * (rooms + 1) * 16 + edges * edges * 16;
+        if (work > 250'000 - wall_source_budget.source_work) throw std::invalid_argument("physical fallback cumulative work limit");
+        wall_source_budget.source_work += work;
+        physical_rooms = physical_wall_room_checks(document);
+    } catch (const std::exception&) {
+        diagnostic(result.diagnostics, {}, "PROJECT", "physical_room_fallback_work_not_admitted");
+    }
+#endif
     for (const auto& [id, entity] : document.entities()) {
         if (native_boundaries.contains(id)) continue;
         if (scope.inactive_owner_ids.contains(id)) {

@@ -38047,7 +38047,8 @@ public:
             const auto wall_source_member = [](const Entity& entity) {
                 const auto marker = entity.extensions.find("vertex_dxf_boundary");
                 return marker != entity.extensions.end() && marker->is_object() &&
-                    (marker->value("version", 0) == 5 || marker->value("version", 0) == 6);
+                    (marker->value("version", 0) == 5 || marker->value("version", 0) == 6 ||
+                     marker->value("version", 0) == 7);
             };
             const auto native_member = [&](const Entity& entity) {
                 return entity.extensions.contains("vertex_dxf_boundary") &&
@@ -38203,7 +38204,7 @@ public:
             // Appraisal deductions are floor-scoped even when the original CAD
             // layers differ. Reject a split destination before publishing any
             // part of the imported group or its newly allocated layers.
-            validate_native_dxf_boundary_groups(mapped.entities);
+            validate_native_dxf_boundary_groups(mapped.entities, &mapped.physical_source_graphs);
             std::map<std::string, const Entity*, std::less<>> native_boundaries;
             for (const auto& candidate : mapped.entities)
                 if (native_member(candidate))
@@ -38227,6 +38228,9 @@ public:
                     if (wall_source_member(*candidate) && dependency->second->type == "measurement_linework" &&
                         destination.layer_id != destinations.at(source_layer(*dependency->second)).layer_id)
                         throw std::invalid_argument("A measured area and its source lines must be assigned to the same drawing layer.");
+                    if (candidate->extensions.contains("physical_wall_room") && dependency->second->type == "wall" &&
+                        destination.layer_id != destinations.at(source_layer(*dependency->second)).layer_id)
+                        throw std::invalid_argument("A physical room and its source walls must be assigned to the same drawing layer.");
                 }
             }
             std::vector<std::string> imported_boundary_ids;
@@ -38323,7 +38327,8 @@ public:
             }
             if (std::any_of(imported_native_boundaries.begin(), imported_native_boundaries.end(), [](const Entity& member) {
                 const auto marker = member.extensions.find("vertex_dxf_boundary");
-                return marker != member.extensions.end() && marker->is_object() && marker->value("version", 0) == 6;
+                return marker != member.extensions.end() && marker->is_object() &&
+                    (marker->value("version", 0) == 6 || marker->value("version", 0) == 7);
             })) {
                 const auto destination_scope = constraint_phase_scope(reviewed_hierarchy.entities());
                 for (const auto& [id, existing] : reviewed_hierarchy.entities()) {
@@ -38336,13 +38341,44 @@ public:
                     // entities, raw history and isolated-copy scope stay intact.
                     auto observation = existing;
                     for (const auto* key : {"vertex_dxf_boundary", "vertex_dxf_wall_source_context_binding",
-                        "vertex_dxf_wall_source_hosted_openings", "vertex_dxf_measured_graph", "vertex_dxf_resolved_context"})
+                        "vertex_dxf_wall_source_hosted_openings", "vertex_dxf_measured_graph", "vertex_dxf_resolved_context",
+                        "vertex_dxf_physical_source_graph"})
                         observation.extensions.erase(key);
                     imported_native_boundaries.push_back(std::move(observation));
                     imported_wall_source_contexts.emplace(id, *context);
                 }
             }
-            bind_native_dxf_wall_source_destinations(imported_native_boundaries, imported_wall_source_contexts);
+            // Physical rooms require the actual staged destination graph,
+            // including existing walls, levels, phases and ordinary imported
+            // walls. A context tuple alone cannot establish room currentness.
+            const bool has_physical_room_group = std::any_of(imported_native_boundaries.begin(),
+                imported_native_boundaries.end(), [](const Entity& member) {
+                    const auto marker = member.extensions.find("vertex_dxf_boundary");
+                    return marker != member.extensions.end() && marker->is_object() && marker->value("version", 0) == 7;
+                });
+            std::map<std::string, Entity, std::less<>> actual_destination_entities;
+            if (has_physical_room_group) {
+                actual_destination_entities = reviewed_hierarchy.entities();
+                for (const auto& change : changes) {
+                    if (change.kind != EntityChangeKind::upsert) continue;
+                    auto staged = change.entity;
+                    if (const auto context = imported_wall_source_contexts.find(staged.id);
+                        context != imported_wall_source_contexts.end()) {
+                        staged.properties["property_id"] = context->second.property_id;
+                        staged.properties["building_id"] = context->second.building_id;
+                        staged.properties["floor_id"] = context->second.floor_id;
+                        staged.properties["layer_id"] = context->second.layer_id;
+                    }
+                    actual_destination_entities.insert_or_assign(staged.id, std::move(staged));
+                }
+            }
+            bind_native_dxf_wall_source_destinations(imported_native_boundaries, imported_wall_source_contexts,
+                has_physical_room_group ? &actual_destination_entities : nullptr, &mapped.physical_source_graphs);
+            if (has_physical_room_group)
+                for (const auto& member : imported_native_boundaries)
+                    if (wall_source_member(member)) actual_destination_entities.insert_or_assign(member.id, member);
+            validate_native_dxf_boundary_groups(imported_native_boundaries, &mapped.physical_source_graphs,
+                has_physical_room_group ? &actual_destination_entities : nullptr);
             for (auto& change : changes) {
                 if (change.kind != EntityChangeKind::upsert || !wall_source_member(change.entity)) continue;
                 const auto bound = std::find_if(imported_native_boundaries.begin(), imported_native_boundaries.end(),
@@ -38350,8 +38386,17 @@ public:
                 if (bound == imported_native_boundaries.end())
                     throw std::invalid_argument("A reviewed DXF wall-source member is missing from the final group.");
                 change.entity = *bound;
+                if (change.entity.extensions.at("vertex_dxf_boundary").value("version", 0) == 7) {
+                    // Shared proofs exist only during this reviewed transfer.
+                    // The published graph owns its real references and can be
+                    // saved, copied and exported without that discarded table.
+                    // Original DXF bytes and opaque provenance remain retained.
+                    for (const auto* key : {"vertex_dxf_boundary", "vertex_dxf_wall_source_context_binding",
+                        "vertex_dxf_wall_source_hosted_openings", "vertex_dxf_measured_graph", "vertex_dxf_resolved_context",
+                        "vertex_dxf_physical_source_graph", "vertex_dxf_stair_floor_binding"})
+                        change.entity.extensions.erase(key);
+                }
             }
-            validate_native_dxf_boundary_groups(imported_native_boundaries);
             if (merged_annotations) {
                 const auto annotation_id = existing_annotation != source.entities().end()
                     ? existing_annotation->second.id : "annotations-" + new_id("dxf");

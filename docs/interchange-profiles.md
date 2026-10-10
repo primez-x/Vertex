@@ -132,6 +132,28 @@ work.
 
 ## Native project mapping
 
+### Physical-room groups (2026-10-10, source implementation)
+
+V7 source work adds retained physical-room boundaries with complete active
+source walls, hosted openings, analytical voids and supported mixed appraisal
+and measured-source dependencies. Shared bounded metadata carriers retain the
+actual original hierarchy and referenced vertical graphs once. A result-level
+proof table crosses the isolated worker boundary; no repeated full snapshot is
+embedded in each entity. Phase observations are retained as evidence, rather
+than silently assigned as destination authoring state.
+
+Actual staged destination hierarchy and all applicable existing/imported walls
+participate in admission. Completed V7 transfer-only markers are removed before
+live publication; raw DXF assets and opaque source provenance remain. Save,
+copy and later export derive from the current Document. Full phase/material/
+assembly authoring exchange and external-consumer fidelity remain open.
+
+Integrated root and independent source review approved this scope. Cumulative
+admission includes repeated level/phase replay, hosted-opening/layer solid
+construction, retained history and proof object-key limits. No compilation,
+test, probe, launch, package or installation has run; the installed candidate
+is unchanged. This section records the source contract, not accepted fidelity.
+
 ### Standalone boundary records and project unit authority (2026-10-09)
 
 The subsequent source implementation adds a version-2 JSON envelope for closed

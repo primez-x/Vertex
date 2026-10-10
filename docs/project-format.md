@@ -1,5 +1,46 @@
 # Vertex project formats v1 through v159
 
+## Physical-room DXF source transfer
+
+The source V7 DXF extension carries complete active physical-wall room groups,
+including hosted openings and supported mixed appraisal/measured dependencies.
+It adds a shared original source snapshot with actual property/building/floor/
+layer entities, referenced vertical graphs and inert source phase observations.
+It does not import that snapshot as destination hierarchy authority.
+
+Each thin member names `physical_source_graph_id`; its original properties and
+extensions come from the indexed snapshot. Metadata-only canonical BLOCK/INSERT
+carriers use `PHYSICAL_SOURCE_GRAPH_CHUNK_V1`, version 7, with `graph_id`,
+`chunk_index`, `chunk_count` and ASCII JSON `data`. The existing per-carrier
+XDATA ceiling remains unchanged. Partial, duplicate, conflicting or invalid
+proofs cannot activate their referencing group. Ordinary analytical geometry
+and the original source bytes remain recoverable.
+
+The isolated candidate protocol adds `PSIP0002` for a nonempty DXF-only
+`physical_source_graphs` table. Its other fields retain `PSIP0001` meanings:
+`kind`, `entities`, `diagnostics`, and `source_retention_required`. Without that
+table, the original exact `PSIP0001` contract remains. The table's snapshots
+contain `{version: 1, entities: [...]}`; each source entity records `id`, `type`,
+`properties`, `required` and `extensions` once. Runtime member references are
+exactly `{version: 1, source_graph_id, source_owner_id}` beneath
+`vertex_dxf_physical_source_graph` and are valid only during that transfer.
+
+Desktop review must validate the actual staged destination, including its
+existing wall inventory, hierarchy, levels and phases. A source context tuple
+cannot substitute for that graph. After complete binding/admission, V7 owners
+lose the temporary DXF membership, context, inventory and proof-reference
+markers before publication. Raw DXF assets and opaque source provenance remain.
+Saved objects, copies and later exports therefore use the current Document
+without requiring a discarded import table.
+
+Integrated root and independent source review approved this source scope.
+Cumulative admission reserves level/phase replay and repeated hosted-opening/
+layer solid construction before deep consumers; producer and reader also share
+proof object-key limits. No native project schema floor changes are required by
+these transfer-only fields. These changes are uncompiled and runtime-unverified;
+full phase/material/assembly
+authoring exchange, external fidelity and production acceptance remain open.
+
 ## Typed physical-room source copies
 
 The shared physical-room copy codec admits the existing version-one descriptor

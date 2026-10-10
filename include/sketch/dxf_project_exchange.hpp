@@ -33,12 +33,17 @@ struct DxfProjectExportResult {
     std::vector<DxfProjectDiagnostic> diagnostics;
 };
 
+using NativeDxfPhysicalSourceGraphs = std::map<std::string, nlohmann::json, std::less<>>;
+
 struct DxfProjectImportResult {
     std::vector<Entity> entities;
     std::vector<DxfProjectDiagnostic> diagnostics;
     // A caller must retain the original input bytes when this is true if
     // unsupported transport/project records need to remain recoverable.
     bool source_retention_required{};
+    // V7 shared source evidence. Never install these snapshots as entities;
+    // keep the table through pending admission and reviewed destination binding.
+    NativeDxfPhysicalSourceGraphs physical_source_graphs;
 
     bool complete() const noexcept { return diagnostics.empty(); }
 };
@@ -48,6 +53,10 @@ struct DxfProjectImportResult {
 // source-owner inventories. V6 wire contexts are captured from organize_project;
 // pending version-2 context bindings retain direct and resolved observations.
 // Destination organization activates only after complete reviewed graph binding.
+// V7 adds retained physical rooms and actual hierarchy/level/phase source proof.
+// Its small member references resolve through the operation's shared sidecar;
+// completed transfer markers are removed before live publication. Raw input and
+// opaque provenance remain evidence; the next export rebuilds from Document.
 [[nodiscard]] nlohmann::json native_dxf_wall_source_dependency_graph(const Entity& entity);
 [[nodiscard]] std::vector<std::string> native_dxf_wall_source_dependency_ids(const Entity& entity);
 // A mapper processing components separately shares this ledger across the
@@ -57,28 +66,40 @@ struct DxfProjectImportResult {
 // V6 uses the complete provided measured inventory and captured contexts,
 // including observation copies outside a component. Original source inventory
 // must be supplied before remapping; destination separation cannot prove it.
+// V7 uses a shared bounded graph table containing actual source snapshots and
+// requires complete active same-context wall membership. The source proof and
+// fresh owner references stay separate. Bound V7 groups require the actual
+// destination map; resolved context tuples alone cannot prove physical currentness.
 struct NativeDxfWallSourceWorkBudget {
     std::size_t segments{};
     std::size_t source_work{};
-    // Applies V6 topology admission to every component/fallback in an operation
-    // that also contains measured sources. V5-only callers keep their contract.
+    // Applies V6/V7 topology admission to every component/fallback in an
+    // operation that contains either source family. V5-only callers keep their
+    // contract. Physical detection/replay shares source_work across components.
     bool measured_operation{};
 };
 void validate_native_dxf_wall_source_groups(const std::vector<Entity>& entities,
-    NativeDxfWallSourceWorkBudget* work_budget = nullptr, bool preflight_only = false);
+    NativeDxfWallSourceWorkBudget* work_budget = nullptr, bool preflight_only = false,
+    const NativeDxfPhysicalSourceGraphs* physical_source_graphs = nullptr,
+    const std::map<std::string, Entity, std::less<>>* actual_destination_entities = nullptr);
 void validate_native_dxf_wall_source_member(const Entity& entity);
 // Owner identity is changed separately with the boundary owner codec where
 // applicable. Only graph-owned references and membership change here.
 void remap_native_dxf_wall_source_dependency_ids(Entity& entity,
     const std::map<std::string, std::string, std::less<>>& ids);
 // Contexts must come from the caller's actual staged destination hierarchy and
-// cover every V5/V6 member. For V6, include active destination measured stroke
+// cover every V5/V6/V7 member. For V6/V7, include active destination measured stroke
 // outsiders and their actual contexts, with old DXF admission markers removed
 // from private observation copies. Changed shared-layer inventory refuses.
 // This changes the vector atomically on successful proof.
 // Phase references are dropped; retained observations/report digests are inert.
+// V7 additionally requires the shared original proof table and complete actual
+// destination map, including existing/imported wall outsiders and real hierarchy,
+// level graphs and phase registries. Source level IDs are floor-local and retained.
 void bind_native_dxf_wall_source_destinations(std::vector<Entity>& entities,
-    const std::map<std::string, DrawingContext, std::less<>>& actual_contexts);
+    const std::map<std::string, DrawingContext, std::less<>>& actual_contexts,
+    const std::map<std::string, Entity, std::less<>>* actual_destination_entities = nullptr,
+    const NativeDxfPhysicalSourceGraphs* physical_source_graphs = nullptr);
 
 // V2 carries one standalone boundary, not an appraisal/source dependency graph.
 // Document's generic reference vocabulary does not cover these consumer-owned
@@ -262,7 +283,8 @@ inline void remap_native_dxf_boundary_dependency_ids(Entity& entity,
     const std::map<std::string, std::string, std::less<>>& ids) {
     const auto source_marker = entity.extensions.find("vertex_dxf_boundary");
     if (source_marker != entity.extensions.end() && source_marker->is_object() &&
-        (source_marker->value("version", 0) == 5 || source_marker->value("version", 0) == 6)) {
+        (source_marker->value("version", 0) == 5 || source_marker->value("version", 0) == 6 ||
+         source_marker->value("version", 0) == 7)) {
         remap_native_dxf_wall_source_dependency_ids(entity, ids);
         return;
     }
@@ -306,8 +328,10 @@ inline void remap_native_dxf_boundary_dependency_ids(Entity& entity,
 // V3/V4 validate topology. V5 additionally proves its bounded complete raw
 // wall-source graph through pending context evidence or reviewed destinations;
 // the mapper proves exact plans and an editable Document before publication.
-inline void validate_native_dxf_boundary_groups(const std::vector<Entity>& entities) {
-    validate_native_dxf_wall_source_groups(entities);
+inline void validate_native_dxf_boundary_groups(const std::vector<Entity>& entities,
+    const NativeDxfPhysicalSourceGraphs* physical_source_graphs = nullptr,
+    const std::map<std::string, Entity, std::less<>>* actual_destination_entities = nullptr) {
+    validate_native_dxf_wall_source_groups(entities, nullptr, false, physical_source_graphs, actual_destination_entities);
     std::map<std::string, const Entity*, std::less<>> owners;
     for (const auto& entity : entities)
         if (!owners.emplace(entity.id, &entity).second) throw std::invalid_argument("duplicate imported identity");
