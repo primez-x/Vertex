@@ -14,6 +14,35 @@ changed source does not acquire runtime acceptance without later qualification.
 
 ## Current delivery state
 
+### October 10 complete catalog transfer — implementation in progress
+
+The shared assembly adapter now provides bounded raw admission, complete source
+reference inventory, actual-snapshot catalog capture and explicit owner/host/
+context remapping. It preserves unused material/type definitions, embedded
+instances, raw model dialects, numeric forms, authored order, metadata,
+extensions and the required bit. Minimal clipboard extraction remains separate.
+Unsupported canonical owner references, including phase bindings, are refused
+until their authoring transfer is implemented.
+
+Independent source review identified insufficient reservation for repeated
+certified arc arithmetic. The reservation now includes contact retries, nested
+clearance contact and repeated cross-boundary clearance. The bounds are
+conservative and can refuse valid large catalogs; capacity/performance has not
+been qualified.
+
+DXF V8 core transport, the isolated protocol and desktop destination binding
+are being connected. The contract uses one original catalog store, an explicit
+live authoring subset, complete embedded-host closure and a single-valued
+reviewed context map. Original source support remains private evidence. New
+catalogs and bodies must be admitted together against the actual destination
+before the existing atomic import command can publish them. A material-bearing
+wall without a retained physical room is part of this contract.
+
+This is unfinished integration, not completed catalog exchange or production
+acceptance. No build, test, new test, probe, script, native job, launch, package
+or installation has run. The installed candidate remains unchanged and all
+new source is uncompiled and runtime-unverified.
+
 ### October 10 wall/slab layer material copying — source implementation
 
 Clipboard dependency collection and reference remapping now include each typed

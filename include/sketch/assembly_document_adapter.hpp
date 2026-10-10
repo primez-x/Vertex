@@ -78,6 +78,47 @@ struct ArchitecturalMaterialSourceReference {
 // Catalog transport and destination admission remain the caller's responsibility.
 [[nodiscard]] Entity remap_architectural_material_source_refs(const Entity& source,
     const std::map<std::string, std::string, std::less<>>& catalog_mapping);
+// One operation shares this budget across capture, inventory and both sides of
+// remapping. Limits may be lowered, never raised. Failed work stays charged.
+// Bytes are a conservative JSON encoding bound, not a serialized byte count;
+// work includes quadratic profile topology and repeated graph/model validation.
+struct AssemblyCatalogTransferBudget {
+    std::size_t max_json_bytes{16777216};
+    std::size_t max_json_nodes{262144};
+    std::size_t max_validation_work{67108864};
+    std::size_t consumed_json_bytes{};
+    std::size_t consumed_json_nodes{};
+    std::size_t consumed_validation_work{};
+};
+struct AssemblyCatalogSourceReferences {
+    std::vector<std::string> hosted_entity_ids;
+    std::vector<std::string> context_owner_ids;
+    bool operator==(const AssemblyCatalogSourceReferences&) const = default;
+};
+// Raw shape, graph and work admission only; does not decode a model. Admit all
+// catalogs in an operation before allowing the first semantic model decode.
+void admit_complete_assembly_catalog_source(const Entity& source, AssemblyCatalogTransferBudget& budget);
+// Validates the complete actual catalog after raw work admission. Inventories
+// only persisted placement hosts and property/building/floor/layer owner slots.
+// Other canonical owner references (including phase) are explicitly refused;
+// opaque nested metadata is not scanned for reference-looking strings.
+[[nodiscard]] AssemblyCatalogSourceReferences complete_assembly_catalog_source_refs(
+    const Entity& source, AssemblyCatalogTransferBudget& budget);
+// Requires mappings for the actual catalog owner and all reached hosts/context.
+// Patches only Entity.id, placement.host_entity_id and the four context slots;
+// complete rows, dialect/order, local identities, numeric forms and metadata
+// remain raw. Destination snapshot admission remains the caller's responsibility.
+[[nodiscard]] Entity remap_complete_assembly_catalog_source_refs(const Entity& source,
+    const std::map<std::string, std::string, std::less<>>& catalog_owner_mapping,
+    const std::map<std::string, std::string, std::less<>>& host_owner_mapping,
+    const std::map<std::string, std::string, std::less<>>& context_owner_mapping,
+    AssemblyCatalogTransferBudget& budget);
+// Copies real requested assembly_model owners from an actual captured snapshot;
+// validates reached hosts/context against that source's identities and roles.
+// No catalog pruning, fabricated owners or destination authority is supplied.
+[[nodiscard]] AssemblyDocumentEntities capture_complete_assembly_catalog_sources(
+    const DocumentSnapshot& source, const std::vector<std::string>& catalog_ids,
+    AssemblyCatalogTransferBudget& budget);
 // Detached minimal catalogs for selected independent roots. Validates the entire
 // source first; catalogs contain no legacy instances or host references.
 [[nodiscard]] AssemblyDocumentEntities assembly_clipboard_dependencies(
