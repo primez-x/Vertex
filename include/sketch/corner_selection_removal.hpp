@@ -9,9 +9,11 @@ struct CornerSelectionRemovalIntent {
     // into selection authority. The additive lane keeps historical codecs.
     std::vector<std::string> corner_ids;
     ArchitecturalDrawingRemovalIntent other;
-    // Version two alone admits actual corner-owner catalog copies and owner
-    // dominance. Retained version-one producers keep their original authority.
+    // Versions two and three admit actual corner-owner catalog copies. Version
+    // two retains explicit owner dominance; version three requires selected
+    // qualified rows and cannot grant actual corner-owner removal authority.
     bool complete_corner_catalog_hosts{false};
+    bool component_only{false};
 };
 
 using CornerSelectionRemovalEntities = DrawingSelectionRemovalEntities;

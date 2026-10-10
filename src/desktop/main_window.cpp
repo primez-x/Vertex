@@ -33112,7 +33112,8 @@ public:
     }
 
     ArchitecturalDrawingRemovalIntent captureExplicitSelectionRemoval(
-        const DocumentSnapshot& source,const QStringList& selection) const {
+        const DocumentSnapshot& source,const QStringList& selection,
+        bool complete_corner_catalog_hosts=false) const {
         ArchitecturalDrawingRemovalIntent selected;
         const auto annotations=annotation_selection_owners(source,selection);
         const auto aliases=embedded_assembly_presentation_ids(source.entities());
@@ -33129,7 +33130,12 @@ public:
                 continue;
             }
             const auto* binding=canvas_embedded_assembly_binding(source,wanted);
-            if (!binding || !*binding->geometric)
+            bool actual_corner_copy=false;
+            if (binding && complete_corner_catalog_hosts && binding->value.instance.placement) {
+                const auto host=source.entities().find(binding->value.instance.placement->host_entity_id);
+                actual_corner_copy=host!=source.entities().end() && host->second.type=="corner_window";
+            }
+            if (!binding || (!*binding->geometric && !actual_corner_copy))
                 throw std::invalid_argument("The selected ordinary identity has no actual object or geometric component source. The selection has been preserved.");
             const auto key=std::pair{binding->value.assembly_catalog_id,binding->value.instance.id};
             if (aliases.at(key)!=wanted)
@@ -34472,6 +34478,35 @@ public:
         }
     }
 
+    bool hasCornerCatalogComponentSelection(const DocumentSnapshot& source,const QStringList& selection) const {
+        if (selection.size()>1000)
+            throw std::invalid_argument("Deletion supports at most 1000 selected objects. The complete selection has been preserved.");
+        std::set<std::string,std::less<>> selected_aliases;
+        for (const auto& id:selection)
+            if (!source.entities().contains(id.toStdString())) selected_aliases.insert(id.toStdString());
+        if (selected_aliases.empty()) return false;
+        // Only exact computed aliases identify actual catalog rows. Their
+        // physical hosts never become selected owner roots.
+        const auto aliases=embedded_assembly_presentation_ids(source.entities());
+        std::map<std::string,AssemblyModel,std::less<>> models;
+        std::map<std::string,std::map<std::string,const AssemblyInstance*,std::less<>>,std::less<>> rows;
+        for (const auto& [key,alias]:aliases) {
+            if (!selected_aliases.contains(alias)) continue;
+            auto indexed=rows.find(key.first);
+            if (indexed==rows.end()) {
+                const auto model=models.emplace(key.first,
+                    AssemblyModel::from_json(source.entities().at(key.first).properties.at("model"))).first;
+                indexed=rows.emplace(key.first,std::map<std::string,const AssemblyInstance*,std::less<>>{}).first;
+                for (const auto& instance:model->second.instances()) indexed->second.emplace(instance.id,&instance);
+            }
+            const auto row=indexed->second.find(key.second);
+            if (row==indexed->second.end() || !row->second->placement) continue;
+            const auto host=source.entities().find(row->second->placement->host_entity_id);
+            if (host!=source.entities().end() && host->second.type=="corner_window") return true;
+        }
+        return false;
+    }
+
     std::optional<PreparedSelectionRemoval> prepareOrdinarySelectionRemoval(const DocumentSnapshot& source) {
             std::optional<PreparedSelectionRemoval> prepared;
             if (!source.is_editable()) throw std::invalid_argument("This document is read-only.");
@@ -34486,7 +34521,8 @@ public:
                 const auto actual=source.entities().find(id.toStdString());
                 return actual!=source.entities().end() && actual->second.type=="corner_window";
             });
-            if (has_corner) {
+            const bool has_corner_component=!has_corner && hasCornerCatalogComponentSelection(source,ordinary_selection);
+            if (has_corner || has_corner_component) {
                 const auto authority=captureSourceEditAuthority(source);
                 if (authority.ordinary_selection.isEmpty() || authority.ordinary_selection.size()>1000 ||
                     (authority.roof_opening_cohort.empty() && !authority.ordinary_selection.contains(authority.context.selected_id)))
@@ -34496,7 +34532,8 @@ public:
                 // not manufacture additional selection authority.
                 CornerSelectionRemovalIntent intent;
                 intent.complete_corner_catalog_hosts=true;
-                intent.other=captureExplicitSelectionRemoval(source,authority.ordinary_selection);
+                intent.component_only=!has_corner;
+                intent.other=captureExplicitSelectionRemoval(source,authority.ordinary_selection,true);
                 std::vector<std::string> other_ids;
                 for (const auto& id:intent.other.architectural.object_ids) {
                     const auto& actual=source.entities().at(id);
@@ -34620,12 +34657,20 @@ public:
         const auto source=selectedRoofOpeningCohortSource(false);
         if (!source->is_editable()) throw std::invalid_argument("This document is read-only.");
         const auto authority=captureSourceEditAuthority(*source);
-        // Normalize the complete displayed ordinary roster against the captured
-        // source before preparation can open a review. Child hosts and derived
-        // cleanup never supply selection authority.
-        const auto selected=captureExplicitSelectionRemoval(*source,ordinary_selection);
+        // Ordinary preparation can open a review, so capture its full roster
+        // first. Corner preparation captures its complete roster itself before
+        // any candidate and provides the explicit catalog-copy admission below.
+        const bool corner_selection=std::any_of(ordinary_selection.begin(),ordinary_selection.end(),[&](const auto& id) {
+            const auto actual=source->entities().find(id.toStdString());
+            return actual!=source->entities().end() && actual->second.type=="corner_window";
+        }) || hasCornerCatalogComponentSelection(*source,ordinary_selection);
+        std::optional<ArchitecturalDrawingRemovalIntent> captured_selection;
+        if (!corner_selection) captured_selection=captureExplicitSelectionRemoval(*source,ordinary_selection);
         const auto prepared=prepareOrdinarySelectionRemoval(*source);
         if (!prepared) { clearError();refreshInspector();return false; }
+        prepared->require_current();
+        const auto selected=captured_selection ? std::move(*captured_selection) : captureExplicitSelectionRemoval(
+            *source,ordinary_selection,prepared->corner_intent && prepared->corner_intent->complete_corner_catalog_hosts);
         prepared->require_current();
         if (!sourceEditAuthorityUnchanged(authority) || ordinary_selection!=ordinarySelectionIDs() ||
             targets!=m_selected_roof_openings)
@@ -57050,7 +57095,7 @@ private:
                             ? ordinary_selection_removal_authority(decode_ordinary_selection_removal_intent(intent.at("ordinary")))
                             : intent.at("version")==4
                             ? phase_selection_removal_authority(decode_phase_selection_removal_intent(intent.at("ordinary")))
-                            : (intent.at("version")==5 || intent.at("version")==6)
+                            : (intent.at("version")==5 || intent.at("version")==6 || intent.at("version")==7)
                             ? corner_selection_removal_authority(decode_corner_selection_removal_intent(intent.at("ordinary")))
                             : decode_architectural_drawing_removal_intent(intent.at("ordinary"));
                         targets.insert(ordinary.architectural.object_ids.begin(),ordinary.architectural.object_ids.end());

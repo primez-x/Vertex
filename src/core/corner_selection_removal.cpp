@@ -44,7 +44,11 @@ bool other_present(const ArchitecturalDrawingRemovalIntent& intent) {
     return architectural(intent) || drawing(intent);
 }
 void bounded(const CornerSelectionRemovalIntent& intent) {
-    if (intent.corner_ids.empty() || intent.corner_ids.size() > selection_limit)
+    if (intent.component_only) {
+        if (!intent.complete_corner_catalog_hosts || !intent.corner_ids.empty() ||
+            intent.other.architectural.components.empty())
+            reject("component-only authority requires complete corner catalog hosts, no corner owners and qualified components");
+    } else if (intent.corner_ids.empty() || intent.corner_ids.size() > selection_limit)
         reject("requires 1..1000 explicit actual corner owners");
     if (!std::is_sorted(intent.corner_ids.begin(), intent.corner_ids.end()) ||
         std::adjacent_find(intent.corner_ids.begin(), intent.corner_ids.end()) != intent.corner_ids.end())
@@ -133,7 +137,7 @@ void metadata(const DocumentSnapshot& source, const DocumentSnapshot& preview) {
 
 Json encode_corner_selection_removal_intent(const CornerSelectionRemovalIntent& intent) {
     bounded(intent);
-    Json result{{"version", intent.complete_corner_catalog_hosts ? 2 : 1}, {"kind", "corner_removal"}, {"corner_ids", intent.corner_ids},
+    Json result{{"version", intent.component_only ? 3 : intent.complete_corner_catalog_hosts ? 2 : 1}, {"kind", "corner_removal"}, {"corner_ids", intent.corner_ids},
         {"other", other_present(intent.other) ? encode_architectural_drawing_removal_intent(intent.other) : Json(nullptr)}};
     if (result.dump().size() > intent_byte_limit) reject("intent exceeds one MiB");
     return result;
@@ -145,12 +149,14 @@ CornerSelectionRemovalIntent decode_corner_selection_removal_intent(const Json& 
     if (value.dump().size() > intent_byte_limit) reject("intent exceeds one MiB");
     if (!value.is_object() || value.size() != 4 || !value.contains("version") || !value.contains("kind") ||
         !value.contains("corner_ids") || !value.contains("other")) reject("unsupported intent field set");
-    if (!value.at("version").is_number_integer() || (value.at("version") != 1 && value.at("version") != 2) ||
+    if (!value.at("version").is_number_integer() || (value.at("version") != 1 && value.at("version") != 2 && value.at("version") != 3) ||
         !value.at("kind").is_string() || value.at("kind") != "corner_removal") reject("unsupported intent version/kind");
     const auto& ids = value.at("corner_ids");
-    if (!ids.is_array() || ids.empty() || ids.size() > selection_limit) reject("invalid explicit corner inventory");
+    if (!ids.is_array() || (ids.empty() && value.at("version") != 3) || ids.size() > selection_limit)
+        reject("invalid explicit corner inventory");
     CornerSelectionRemovalIntent result;
-    result.complete_corner_catalog_hosts = value.at("version") == 2;
+    result.complete_corner_catalog_hosts = value.at("version") != 1;
+    result.component_only = value.at("version") == 3;
     for (const auto& id : ids) {
         if (!id.is_string()) reject("corner owner must be an identity");
         result.corner_ids.push_back(id.get<std::string>());
@@ -181,10 +187,39 @@ Entities replay_corner_selection_removal_architectural(const Entities& actual,
     }
     constraints(actual, active_phase_constraints);
     const auto original_aliases = embedded_assembly_presentation_ids(actual);
+    std::map<std::string, AssemblyModel, std::less<>> selected_catalogs;
+    std::map<std::string, std::map<std::string, const AssemblyInstance*, std::less<>>, std::less<>> selected_rows;
+    const auto selected_source_row = [&](const std::pair<std::string, std::string>& key) -> const AssemblyInstance& {
+        if (!original_aliases.contains(key)) reject("selected component lacks an actual qualified source row");
+        auto rows = selected_rows.find(key.first);
+        if (rows == selected_rows.end()) {
+            const auto catalog = actual.find(key.first);
+            if (catalog == actual.end() || catalog->second.type != "assembly_model")
+                reject("selected component lacks its actual catalog");
+            const auto model = selected_catalogs.emplace(key.first,
+                AssemblyModel::from_json(catalog->second.properties.at("model"))).first;
+            rows = selected_rows.emplace(key.first, std::map<std::string, const AssemblyInstance*, std::less<>>{}).first;
+            for (const auto& row : model->second.instances()) rows->second.emplace(row.id, &row);
+        }
+        const auto row = rows->second.find(key.second);
+        if (row == rows->second.end()) reject("selected component lacks its actual source row");
+        return *row->second;
+    };
+    if (intent.component_only) {
+        bool selected_corner_row = false;
+        for (const auto& key : intent.other.architectural.components) {
+            const auto& row = selected_source_row(key);
+            if (!row.placement) continue;
+            const auto host = actual.find(row.placement->host_entity_id);
+            if (host != actual.end() && host->second.type == "corner_window") selected_corner_row = true;
+        }
+        if (!selected_corner_row) reject("component-only authority requires an explicit row on an actual corner owner");
+    }
     auto expected_aliases = original_aliases;
     auto expected_inactive = constraint_phase_scope(actual).inactive_owner_ids;
     std::vector<Entities> candidates;
-    candidates.push_back(replay_corner_window_removal(actual, intent.corner_ids, active_phase_constraints,
+    if (intent.component_only) candidates.push_back(actual);
+    else candidates.push_back(replay_corner_window_removal(actual, intent.corner_ids, active_phase_constraints,
         intent.complete_corner_catalog_hosts));
     auto other=intent.other.architectural;
     const auto corner_aliases=embedded_assembly_presentation_ids(candidates.front());
@@ -201,16 +236,9 @@ Entities replay_corner_selection_removal_architectural(const Entities& actual,
     if (intent.complete_corner_catalog_hosts) std::erase_if(other.components,[&](const auto& key) {
         if (!original_aliases.contains(key)) reject("selected component lacks an actual qualified source row");
         if (corner_aliases.contains(key)) return false;
-        const auto catalog=actual.find(key.first);
-        if (catalog==actual.end() || catalog->second.type!="assembly_model")
-            reject("selected component lacks its actual catalog");
-        const auto model=AssemblyModel::from_json(catalog->second.properties.at("model"));
-        const auto row=std::find_if(model.instances().begin(),model.instances().end(),[&](const auto& value) {
-            return value.id==key.second;
-        });
-        if (row==model.instances().end() || !row->placement ||
-            !corner_closure.contains(row->placement->host_entity_id) ||
-            candidates.front().contains(row->placement->host_entity_id))
+        const auto& row=selected_source_row(key);
+        if (!row.placement || !corner_closure.contains(row.placement->host_entity_id) ||
+            candidates.front().contains(row.placement->host_entity_id))
             reject("component retirement is not a consequence of the explicit corner owners");
         return true;
     });

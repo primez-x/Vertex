@@ -14,6 +14,42 @@ changed source does not acquire runtime acceptance without later qualification.
 
 ## Current delivery state
 
+### October 10 standalone corner-copy deletion - source integration
+
+The preceding group clipboard/catalog-copy source batch is committed and
+pushed as 535fb2c1, with exact local/remote ref verification. Independent source
+review identified remaining standalone copy-row controller routing. The new
+component-only intent version three/mixed dialect seven now carries actual
+qualified selected rows without promoting corner hosts into selected owner
+roots. An actual-row proof requires at least one selected row on an actual
+corner owner; the helper starts with the unchanged source and invokes no empty
+owner-removal kernel. Existing row-only admission preserves exact owner, cuts,
+hosts and phase membership, including protected-baseline refusal.
+
+Current controller detection resolves exact computed aliases. Its default-false
+capture opt-in permits genuine corner host-copy rows without inventing profile
+geometry. Complete corner capture precedes candidate preparation; mixed
+recapture is guarded before and after by the prepared source/selection fence.
+Typed roof-child selection remains captured first. Historical inner/outer
+one/five and two/six pairs remain unchanged; new three/seven alone requires
+reader182/extraction180 across current, retained and undone history. Document
+dependent/lifetime/phase guards and Site target authority include seven.
+
+Independent read-only review found and corrected repeated full-catalog
+decoding/expansion. Controller selection is capped before alias work; controller
+and source replay each decode and index reached catalogs once per operation.
+Indexed rows retain stable immutable model storage. Independent review approves
+the bounded source integration with no remaining concrete P1/P2 finding. Root
+reviewed integrated interfaces, actual component authority, complete capture,
+source/publication fences and historical compatibility. `git diff --check` is
+clean. Scoped commit/push/ref verification back up this next source batch.
+No builds, tests/new tests, scripts, probes, native jobs, UI launches, packages
+or installations run. Compilation, interaction, native geometry, Undo/reopen,
+migration and measured responsiveness remain unqualified. The installed
+candidate is unchanged; all ten production gates remain open. Corner/wall and
+hosted-opening cohort integration, mixed clipboard/Properties/transforms and
+the full consolidated production scope remain required work.
+
 ### October 10 corner-window group clipboard - source integration
 
 Corner-only Copy/Cut/Paste/Duplicate now captures the complete selected roster

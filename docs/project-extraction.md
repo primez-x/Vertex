@@ -1,5 +1,11 @@
 # Portable project extraction
 
+Exchange version 180 requires native reader182 for mixed-removal dialect seven
+and qualified component-only corner-copy row authority. Inner version three
+does not promote its placement host into selected owner roots. Retained and
+undone history keep the complete source/stage and destination lifetime bindings.
+Older inner/outer pairs and their extraction floors remain unchanged.
+
 Exchange version 179 requires native reader181 for mixed-removal dialect six
 and its version-two corner-owner catalog host-copy admission. Retained and
 undone history preserve the complete original command, source/stage bindings,

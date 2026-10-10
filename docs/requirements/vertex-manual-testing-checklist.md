@@ -3456,6 +3456,8 @@ Blocked / missing until testing a candidate that contains it.
 - [ ] **CORNER-MIXED-DELETE - Delete corner windows with furniture, drawing items and skylights**
   - Steps: Ctrl-select a corner window, a furniture component, a drawing label and a skylight on another roof. Press Delete, Undo once and redo. Repeat with several corner windows, then in a remodeling alternative. Save and reopen. Try selecting a corner window with a wall as well.
   - Expected: Supported selections are removed together and one Undo restores every selected item and its physical openings. Remodeling retains the existing baseline. Any combination whose integration is still missing preserves the entire selection and identifies the unavailable workflow, without deleting only part of it.
+  - Attached component: In a project containing a separate component copy attached to a corner window, select only that copy and delete it. Repeat with several copies, furniture, a drawing label and a skylight. Undo once, redo, save and reopen.
+  - Expected for a copy: Only selected component copies and other selected items are removed. The host corner window, both walls and their openings remain unchanged. Protected existing-baseline content refuses the entire operation with an explanation. One Undo restores the complete selection.
   - Result: Not tested
   - Notes: ______________________________
 

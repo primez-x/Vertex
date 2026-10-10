@@ -1,4 +1,25 @@
-# Vertex project formats v1 through v181
+# Vertex project formats v1 through v182
+
+## Qualified corner-copy row deletion (v182, source integration)
+
+Corner-selection version three is the component-only lane: `corner_ids` is
+empty and qualified selected components are nonempty. It uses the same four
+closed fields, enables the actual catalog-host completion and requires proof
+that at least one selected source row has an actual corner-window placement
+host. The host remains a derived dependency, never an explicit selected owner
+root. The source-owning helper does not invoke an empty owner-removal kernel;
+it reconstructs the qualified row and other supported selection leaves from
+the original complete source. Protected baseline/inactive/required/ambiguous
+data retains its existing refusal policy.
+
+Mixed dialect seven alone carries inner version three. Historical inner/outer
+pairs one/five and two/six remain unchanged. Current, retained and undone
+dialect-seven history requires reader182/extraction180; ordinary raw command
+storage and asset tables do not change. Actual alias identity, complete source
+and selection fences, Site target comparison, preserved dependents, lifetime
+reservation and one-event publication remain required.
+
+Compilation, native interaction, Undo/reopen and migration remain unqualified.
 
 ## Corner-owner catalog copy completion (v181, source integration)
 
@@ -25,8 +46,8 @@ and placement dependencies. No asset-storage schema changes.
 
 Compilation, native display, coordinates, deletion, history and migration
 remain unqualified. This source integration does not close a production gate.
-Standalone copy-row controller routing remains a gap; current version-two
-dispatch requires an actual corner owner in the ordinary selected cohort.
+Version-two dispatch requires an actual corner owner in the ordinary selected
+cohort. Standalone copy-row routing is added by version three/v182 above.
 
 ## Coordinated corner-window mixed deletion (v180, source integration)
 

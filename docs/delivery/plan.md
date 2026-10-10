@@ -285,9 +285,13 @@ polling timeout does not permit restarting it.
    default-false source-budget/catalog-host completion under reader181/
    extraction179; historical version one/dialect five retain their authority.
    This source change does not close a production gate.
-   Route standalone qualified corner-copy row Delete through explicit actual
-   component authority; a copy host must not become a selected owner root.
-   The row-only kernel is currently reached only alongside a selected corner.
+   Subsequent standalone qualified corner-copy row Delete uses explicit actual
+   component-only authority under inner version three/mixed dialect seven and
+   reader182/extraction180. Its copy host cannot become a selected owner root;
+   complete actual row proof, protected bodies/membership, source/selection
+   capture and one-event publication remain. Catalogs are decoded/indexed once
+   per source operation. Qualify individual/cohort row deletion, mixed children,
+   unchanged host bodies, Undo/reopen and historical reader behavior.
    Subsequent corner-only group clipboard version three captures the full
    roster and shared material pool. Destination picks stay passive until one
    final source-bound publication; cancellation cannot partially place a group.
