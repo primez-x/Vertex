@@ -247,7 +247,9 @@ public:
     // their exact codecs and admission behavior.
     // v172 adds persistent corner-window leg targets and aligned linked-view
     // dimensions (sheet/view schema 9), including retained/undone history.
-    static constexpr std::uint32_t format_version = 172;
+    // v173 adds independently replayed physical wall-group scaling, its room
+    // review enclosure and ordinary active-design scale intent in retained history.
+    static constexpr std::uint32_t format_version = 173;
     static constexpr std::uint32_t recovery_format_version = 4;
     [[nodiscard]] static std::uint32_t required_format_version(const DocumentSnapshot& snapshot);
     static constexpr std::uint64_t maximum_file_bytes = 4ULL * 1024ULL * 1024ULL * 1024ULL;

@@ -14,6 +14,56 @@ changed source does not acquire runtime acceptance without later qualification.
 
 ## Current delivery state
 
+### October 10 connected wall-group scaling - source integration
+
+The corner exchange batch is committed and pushed as 84aef05e; exact remote
+identity was checked. Its final independent source review accepted separate raw
+host provenance and resolved geometry descriptors. It remains unqualified.
+
+The canvas now requests physical wall-group scaling through the connected
+solver. Root integrated controller, reader-floor and source documentation with
+the separate connected replay, canvas, phase-codec and room-review owners.
+Independent source review required corrections for active alternative baseline
+protection, coordinated corner receipts, slope derivation and passive quantity
+archives during subsequent deletion. These corrections are implemented and the
+final bounded independent source review accepted them with no remaining concrete
+blocker in the reviewed scope. Root reviewed the integrated interfaces and
+limitations. Scoped Git backup and exact remote identity verification accompany
+this batch; neither establishes runtime acceptance.
+
+The additive intent names the actual selected walls, one shared XYZ pivot and
+one positive uniform physical factor. Rotation remains a separate rigid
+operator. Canvas corners pin the displayed group center and the common resolved
+floor/base elevation, then request exact regenerated previews; release binds the
+admitted serial, source and command. Different-floor/base-plane, Site, embedded
+and mixed selections do not receive these scale handles. Walls, material layer
+thicknesses, hosted profiles and coordinated corner geometry share the physical
+factor. Dimension consumers resolve current geometry; entered measurements stay
+retained provenance when they no longer describe the scaled geometry.
+Fixed dimensional relations remain fixed and must conflict rather than disappear.
+Room correspondence and retirement decisions remain mandatory. New command
+43, room enclosure 44 and ordinary phase intent 18 require reader 173 and
+extraction 171 across retained and undone history. Historical modes keep their
+existing shape and meaning. Baseline scaling inside an active alternative still
+needs complete source-derived replacement authority; it must not mutate baseline
+records through ordinary phase authoring. Both quantity archive dialects have
+bounded closed envelopes and passive reference semantics in retirement
+inspection; original saved archive bytes and unrelated extension data remain.
+
+The manual checklist retains 450 original tasks plus twenty-four focused tasks;
+the two new wall-group scaling tasks are Not tested. Static registry inspection
+retains all 277 requirements and their acceptance/source bindings unchanged;
+three delivery notes describe this batch. Compilation, native geometry,
+interaction, history/migration and output remain unverified. No builds, tests/new
+tests, scripts/probes, native jobs, UI launches, packages or installs ran. The
+installed candidate, acceptance bindings and full production scope remain
+unchanged; all ten release gates remain open.
+
+Next implementation work still includes source-derived baseline group scaling
+within an active alternative, skylight rotation/group/3D picking, IFC associative
+dimensions/catalog recovery and the remaining full delivery plan. The protected
+refusals are visible gaps, not completed workflows.
+
 ### October 10 coordinated corner-window IFC/DXF exchange - source integration
 
 Corner-window exchange now carries the actual owner, both hosts and both bare

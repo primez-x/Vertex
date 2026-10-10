@@ -4401,6 +4401,7 @@ QRectF PlanCanvas::labelLayoutBounds(const CanvasLabel& label, double pixels_per
 std::optional<QPointF> PlanCanvas::selectionRotationHandlePosition() const {
     const QRectF viewport(rect());
     if (!m_selection_controls_visible || !m_selection_rotate_enabled ||
+        (selectedIds().size() > 1 && !m_wall_group_rotation_enabled) ||
         (selectedIds().size()!=1 && !wallGroupRotationAxes()) ||
         selectedOpening() || !selectionFrame(viewport)) return std::nullopt;
     return selectionControlTransform(viewport).map(selectionRotationPoint(
@@ -4584,11 +4585,20 @@ std::optional<CanvasSelectionFrame> PlanCanvas::selectionAxes() const {
 std::optional<CanvasSelectionFrame> PlanCanvas::computeSelectionAxes() const {
     if (selectedIds().size() != 1) {
         if (m_transform_group_frame && !m_transform_group_ids.isEmpty()) {
-            // The rigid control frame is UI feedback, not substitute geometry.
-            // Exact provider geometry alone paints the rotated wall bodies.
+            // Exact provider geometry alone paints the transformed wall bodies.
+            // Retain the press-time orientation and pivot for the control frame.
             auto frame = *m_transform_group_frame;
-            if (m_transform_preview_valid)
+            if (m_transform_preview_valid) {
                 frame.rotation_radians += m_transform_rotation_preview;
+                if (const auto exact = wallGroupFrameForAxes(frame, true)) {
+                    const auto dx = exact->center.x - m_transform_pivot.x;
+                    const auto dy = exact->center.y - m_transform_pivot.y;
+                    const auto c = std::cos(frame.rotation_radians);
+                    const auto s = std::sin(frame.rotation_radians);
+                    frame.width_metres = exact->width_metres + 2 * std::abs(c * dx + s * dy);
+                    frame.depth_metres = exact->depth_metres + 2 * std::abs(-s * dx + c * dy);
+                }
+            }
             return frame;
         }
         return wallGroupRotationAxes();
@@ -4640,7 +4650,7 @@ std::optional<CanvasSelectionFrame> PlanCanvas::computeSelectionAxes() const {
 }
 
 std::optional<CanvasSelectionFrame> PlanCanvas::wallGroupRotationAxes() const {
-    if (!m_wall_group_rotation_enabled || !m_entities_transform_started ||
+    if ((!m_wall_group_rotation_enabled && !m_wall_group_scale_enabled) || !m_entities_transform_started ||
         !m_entities_transform_preview_requested || !m_entities_transform_requested)
         return std::nullopt;
     const auto& ids = selectedIds();
@@ -4694,8 +4704,13 @@ std::optional<CanvasSelectionFrame> PlanCanvas::wallGroupRotationAxes() const {
                                      baseline.end.x-baseline.start.x);
         orientation = CanvasSelectionFrame{{}, angle, 0, 0};
     }
-    const auto c = std::cos(orientation->rotation_radians);
-    const auto s = std::sin(orientation->rotation_radians);
+    return wallGroupFrameForAxes(*orientation, false);
+}
+
+std::optional<CanvasSelectionFrame> PlanCanvas::wallGroupFrameForAxes(
+    const CanvasSelectionFrame& orientation, bool exact_preview) const {
+    const auto c = std::cos(orientation.rotation_radians);
+    const auto s = std::sin(orientation.rotation_radians);
     std::optional<Bounds2> combined;
     const auto include = [&](const Boundary& boundary, double padding = 0.0) {
         if (boundary.empty()) return true;
@@ -4723,7 +4738,7 @@ std::optional<CanvasSelectionFrame> PlanCanvas::wallGroupRotationAxes() const {
         } catch (const std::exception&) { return false; }
     };
     for (const auto index : m_selected_entity_indices) {
-        const auto& entity = m_entities[index];
+        const auto& entity = exact_preview ? interactiveEntity(m_entities[index]) : m_entities[index];
         const auto stroke_width = wall_baseline_only(entity)
             ? std::max(entity.thickness_metres, .04) : entity.stroke_width_metres;
         const auto padding = std::isfinite(stroke_width) && stroke_width > 0 ? stroke_width*.5 : 0.0;
@@ -4734,9 +4749,9 @@ std::optional<CanvasSelectionFrame> PlanCanvas::wallGroupRotationAxes() const {
     if (!combined) return std::nullopt;
     const auto x = (combined->minimum.x+combined->maximum.x)*.5;
     const auto y = (combined->minimum.y+combined->maximum.y)*.5;
-    const CanvasSelectionFrame frame{{c*x-s*y,s*x+c*y}, orientation->rotation_radians,
+    const CanvasSelectionFrame frame{{c*x-s*y,s*x+c*y}, orientation.rotation_radians,
         combined->maximum.x-combined->minimum.x, combined->maximum.y-combined->minimum.y,
-        orientation->source_rotation_radians, orientation->source_rotation_direction};
+        orientation.source_rotation_radians, orientation.source_rotation_direction};
     if (!std::isfinite(frame.center.x) || !std::isfinite(frame.center.y) ||
         !std::isfinite(frame.width_metres) || !std::isfinite(frame.depth_metres) ||
         !(frame.width_metres > 0 || frame.depth_metres > 0)) return std::nullopt;
@@ -5253,10 +5268,9 @@ PlanCanvas::SelectionHandle PlanCanvas::selectionHandleAt(
         return QRectF(center.x() - hit_size * 0.5, center.y() - hit_size * 0.5,
                       hit_size, hit_size).contains(point);
     };
-    if (m_selection_rotate_enabled &&
+    if (m_selection_rotate_enabled && (!group || m_wall_group_rotation_enabled) &&
         hit(selectionRotationPoint(viewport, annotation_footprints)))
         return SelectionHandle::rotate;
-    if (group) return SelectionHandle::none;
     // Resolve overlaps by proximity. Small objects can put a corner's touch
     // region over a side handle; the point actually nearest the pointer wins.
     SelectionHandle nearest = SelectionHandle::none;
@@ -5266,7 +5280,7 @@ PlanCanvas::SelectionHandle PlanCanvas::selectionHandleAt(
         const auto candidate = QLineF(point, transform.map(center)).length();
         if (candidate < distance) { distance = candidate; nearest = handle; }
     };
-    if (m_selection_axis_resize_enabled && m_entity_axis_resize_requested) {
+    if (!group && m_selection_axis_resize_enabled && m_entity_axis_resize_requested) {
         if (const auto axes = selectionAxes()) {
             if (axes->width_metres > 1e-9) {
                 consider(selectionHandlePoint({frame.left(), frame.center().y()}, {-1, 0},
@@ -5282,7 +5296,7 @@ PlanCanvas::SelectionHandle PlanCanvas::selectionHandleAt(
             }
         }
     }
-    if (m_selection_resize_enabled) {
+    if (m_selection_resize_enabled && (!group || m_wall_group_scale_enabled)) {
         const std::array<std::pair<QPointF, QPointF>, 4> corners{{
             {frame.topLeft(), {-1, -1}}, {frame.topRight(), {1, -1}},
             {frame.bottomLeft(), {-1, 1}}, {frame.bottomRight(), {1, 1}}}};
@@ -6346,8 +6360,11 @@ void PlanCanvas::drawSelectionFrame(QPainter& painter, const QRectF& viewport,
         visible_frame = visible_frame.subtracted(annotation_mask);
 
     const bool singleton = selectedIds().size() == 1;
-    const bool controls = (singleton || (m_selection_rotate_enabled && wallGroupRotationAxes())) && !selectedOpening() &&
-        (m_selection_resize_enabled || m_selection_rotate_enabled || m_selection_axis_resize_enabled);
+    const bool group_controls = !singleton && wallGroupRotationAxes().has_value();
+    const bool resize = m_selection_resize_enabled && (singleton || (group_controls && m_wall_group_scale_enabled));
+    const bool rotate = m_selection_rotate_enabled && (singleton || (group_controls && m_wall_group_rotation_enabled));
+    const bool controls = !selectedOpening() &&
+        (resize || rotate || (singleton && m_selection_axis_resize_enabled));
     painter.save();
     painter.setClipPath(visible_frame, Qt::IntersectClip);
     painter.setBrush(Qt::NoBrush);
@@ -6356,7 +6373,7 @@ void PlanCanvas::drawSelectionFrame(QPainter& painter, const QRectF& viewport,
     painter.drawPolygon(polygon);
     painter.setPen(QPen(QColor(37, 99, 235), 1.5));
     painter.drawPolygon(polygon);
-    if (controls && m_selection_rotate_enabled) {
+    if (controls && rotate) {
         const auto handle = transform.map(selectionRotationPoint(viewport, annotation_footprints));
         painter.drawLine(transform.map(QPointF(frame.center().x(), frame.top())), handle);
     }
@@ -6373,7 +6390,7 @@ void PlanCanvas::drawSelectionFrame(QPainter& painter, const QRectF& viewport,
             painter.setPen(link_pen);
             painter.drawLine(transform.map(anchor), transform.map(point));
         };
-        if (singleton && m_selection_resize_enabled) {
+        if (resize) {
             const std::array<std::pair<QPointF, QPointF>, 4> corners{{
                 {frame.topLeft(), {-1, -1}}, {frame.topRight(), {1, -1}},
                 {frame.bottomLeft(), {-1, 1}}, {frame.bottomRight(), {1, 1}}}};
@@ -6418,7 +6435,7 @@ void PlanCanvas::drawSelectionFrame(QPainter& painter, const QRectF& viewport,
                 }
             }
         }
-        if (m_selection_rotate_enabled) {
+        if (rotate) {
             painter.setBrush(QColor(255, 255, 255));
             painter.setPen(QPen(QColor(37, 99, 235), 1.5));
             const auto handle = transform.map(selectionRotationPoint(viewport, annotation_footprints));
@@ -6510,6 +6527,9 @@ void PlanCanvas::drawSelectionDimensions(QPainter& painter, const QRectF& viewpo
         if (invalid_opening) text += QStringLiteral("  ·  Invalid");
         else if (editing_opening && m_opening_width_preview_pending) text += QStringLiteral("  ·  Checking");
         if (transforming && m_transform_preview_exact) {
+            if (!m_transform_group_ids.isEmpty() && m_left_gesture == LeftGesture::selection_resize)
+                text += QStringLiteral("  ·  Uniform scale %1%")
+                    .arg(m_transform_scale_preview * 100.0, 0, 'f', 1);
             if (m_transform_preview_pending) text += QStringLiteral("  ·  Checking");
             else if (!m_transform_preview_valid) text += QStringLiteral("  ·  Invalid");
         }
@@ -6616,9 +6636,9 @@ void PlanCanvas::drawSelectionDimensions(QPainter& painter, const QRectF& viewpo
     };
     if (m_selection_controls_visible) {
         QSet<QString> measured_entities;
-        if (!m_transform_group_ids.isEmpty()) {
-            if (const auto axes = selectionAxes()) draw(*axes, m_transform_group_ids.front());
-            for (const auto& id : m_transform_group_ids) measured_entities.insert(id);
+        if (selectedIds().size() > 1 && wallGroupRotationAxes()) {
+            if (const auto axes = selectionAxes()) draw(*axes, selectedIds().front());
+            for (const auto& id : selectedIds()) measured_entities.insert(id);
         }
         for (const auto& entity : m_entities) {
             // A dimension guide is presentation geometry. Its selection extent is
@@ -8608,6 +8628,15 @@ void PlanCanvas::setWallGroupRotationEnabled(bool enabled) {
     update();
 }
 
+void PlanCanvas::setWallGroupScaleEnabled(bool enabled) {
+    if (m_wall_group_scale_enabled == enabled) return;
+    if (!m_transform_group_ids.isEmpty() && m_left_gesture == LeftGesture::selection_resize) resetGesture();
+    m_wall_group_scale_enabled = enabled;
+    invalidateRetainedSelection();
+    if (m_last_mouse_position) updatePointerCursor(*m_last_mouse_position);
+    update();
+}
+
 std::optional<Vec2> PlanCanvas::wallGroupRotationPivot() const {
     if (!m_transform_group_ids.isEmpty() && m_transform_group_frame)
         return m_transform_pivot;
@@ -8624,14 +8653,14 @@ void PlanCanvas::setEntitiesTransformStarted(std::function<void(QStringList)> ca
 
 void PlanCanvas::setEntitiesTransformPreviewRequested(
     std::function<std::optional<std::vector<CanvasEntity>>(
-        QStringList, double, Vec2, std::uint64_t)> callback) {
+        QStringList, double, double, Vec2, std::uint64_t)> callback) {
     if (!m_transform_group_ids.isEmpty()) resetGesture();
     m_entities_transform_preview_requested = std::move(callback);
     invalidateRetainedSelection();
     update();
 }
 
-void PlanCanvas::setEntitiesTransformRequested(std::function<bool(QStringList, double, Vec2)> callback) {
+void PlanCanvas::setEntitiesTransformRequested(std::function<bool(QStringList, double, double, Vec2)> callback) {
     if (!m_transform_group_ids.isEmpty()) resetGesture();
     m_entities_transform_requested = std::move(callback);
     invalidateRetainedSelection();
@@ -8660,8 +8689,10 @@ void PlanCanvas::updateEntityTransformPreview() {
     const auto callback = axis_resize ? m_entity_axis_resize_preview_requested
                                      : m_entity_transform_preview_requested;
     const auto group_callback = m_entities_transform_preview_requested;
-    if (group ? (!group_callback || !m_wall_group_rotation_enabled ||
-                 m_left_gesture != LeftGesture::selection_rotate)
+    const bool group_transform_enabled =
+        (m_wall_group_rotation_enabled && m_left_gesture == LeftGesture::selection_rotate) ||
+        (m_wall_group_scale_enabled && m_left_gesture == LeftGesture::selection_resize);
+    if (group ? (!group_callback || !group_transform_enabled)
               : (!callback || m_transform_source_id.isEmpty())) return;
     m_transform_preview_request_in_progress = true;
     std::optional<std::vector<CanvasEntity>> proposed;
@@ -8669,7 +8700,7 @@ void PlanCanvas::updateEntityTransformPreview() {
     const QPointer<PlanCanvas> guard(this);
     try {
         if (group) proposed = group_callback(m_transform_group_ids,
-            m_transform_rotation_preview, m_transform_pivot, serial);
+            m_transform_scale_preview, m_transform_rotation_preview, m_transform_pivot, serial);
         else proposed = callback(m_transform_source_id,
                 axis_resize ? m_axis_scale_x_preview : m_transform_scale_preview,
                 axis_resize ? m_axis_scale_y_preview : m_transform_rotation_preview,
@@ -8725,10 +8756,14 @@ bool PlanCanvas::applyEntityTransformPreview(std::uint64_t serial,
     const bool group = !m_transform_group_ids.isEmpty();
     bool covered = false;
     if (result && group) {
-        covered = m_wall_group_rotation_enabled && m_left_gesture == LeftGesture::selection_rotate &&
+        covered = ((m_wall_group_rotation_enabled && m_left_gesture == LeftGesture::selection_rotate &&
+                    m_transform_scale_preview == 1.0) ||
+                   (m_wall_group_scale_enabled && m_left_gesture == LeftGesture::selection_resize &&
+                    m_transform_rotation_preview == 0.0)) &&
             m_transform_group_ids == selectedIds() &&
             m_transform_group_presentations == selectedEntityPresentations() &&
             m_transform_group_presentations.size() == static_cast<std::size_t>(m_transform_group_ids.size()) &&
+            std::isfinite(m_transform_scale_preview) && m_transform_scale_preview > 0.0 &&
             std::isfinite(m_transform_rotation_preview) &&
             std::isfinite(m_transform_pivot.x) && std::isfinite(m_transform_pivot.y);
         const auto valid_boundary = [](const Boundary& boundary) {
@@ -8835,10 +8870,12 @@ void PlanCanvas::finishEntityTransformPreview(std::uint64_t serial) {
     // The host admits the captured exact command using this live serial.
     // Scene replacement in the callback may itself invalidate the gesture.
     const QPointer<PlanCanvas> guard(this);
-    if (accepted && !group_ids.isEmpty() && gesture == LeftGesture::selection_rotate) {
+    if (accepted && !group_ids.isEmpty()) {
         const auto callback = m_entities_transform_requested;
+        const bool enabled = (m_wall_group_rotation_enabled && gesture == LeftGesture::selection_rotate) ||
+            (m_wall_group_scale_enabled && gesture == LeftGesture::selection_resize);
         try {
-            if (callback && m_wall_group_rotation_enabled) (void)callback(group_ids, radians, pivot);
+            if (callback && enabled) (void)callback(group_ids, scale, radians, pivot);
         } catch (...) {
             if (guard && serial == m_transform_preview_serial) resetGesture();
             return;

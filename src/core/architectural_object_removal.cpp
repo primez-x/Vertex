@@ -25,6 +25,7 @@
 #include <cmath>
 #include <set>
 #include <stdexcept>
+#include <string_view>
 
 namespace sketch {
 namespace {
@@ -437,10 +438,55 @@ Entity catalog_local_remainder(Entity entity) {
     return entity;
 }
 
+// Wall scaling captures complete old properties as passive quantity provenance,
+// including formerly live corner host/cut bindings. Admit only its closed,
+// bounded dialects before omitting historical slots from this inspection copy.
+// Unknown archive siblings and unrelated extension data remain unqualified.
+void wall_scale_quantity_reference_remainder(Entity& entity) {
+    for (const auto* key : {"wall_scale_quantity_archive", "wall_scale_hosted_quantity_archive"}) {
+        const auto found=entity.extensions.find(key);
+        if (found==entity.extensions.end()) continue;
+        const bool hosted=std::string_view(key)=="wall_scale_hosted_quantity_archive";
+        if ((hosted && entity.type!="wall") || (!hosted && entity.type!="wall" &&
+            entity.type!="opening" && entity.type!="door" && entity.type!="window"))
+            reject("wall scale quantity archive has unsupported owner: " + entity.id);
+        auto& archive=*found;
+        const auto version=field(archive,"version"),entries=field(archive,"entries");
+        if (!archive.is_object() || archive.size()!=2 || !version || !version->is_number_integer() ||
+            *version!=1 || !entries || !entries->is_array() || entries->empty() || entries->size()>4096)
+            reject("unsupported wall scale quantity archive: " + entity.id);
+        Budget budget; budget.read(archive);
+        if (archive.dump().size()>1024*1024)
+            reject("wall scale quantity archive exceeds its byte budget: " + entity.id);
+        for (const auto& row : *entries) {
+            const auto properties=field(row,"source_properties"),pivot=field(row,"pivot"),scale=field(row,"scale");
+            const auto quantities=properties ? field(*properties,"quantity_entries") : nullptr;
+            if (!row.is_object() || row.size()!=(hosted ? 4 : 3) || !properties || !properties->is_object() ||
+                !quantities || !quantities->is_object() || !pivot || !pivot->is_array() || pivot->size()!=3 ||
+                !scale || !scale->is_number() || !std::isfinite(scale->get<double>()) ||
+                scale->get<double>()<=0 || scale->get<double>()==1)
+                reject("malformed wall scale quantity archive row: " + entity.id);
+            for (const auto& coordinate : *pivot)
+                if (!coordinate.is_number() || !std::isfinite(coordinate.get<double>()))
+                    reject("wall scale quantity archive has invalid pivot: " + entity.id);
+            if (hosted) {
+                const auto owner=field(row,"source_owner_id");
+                if (!owner || !owner->is_string()) reject("hosted wall scale archive lacks source identity: " + entity.id);
+                identity(owner->get_ref<const std::string&>());
+            }
+        }
+        for (auto& row : archive.at("entries")) {
+            row.erase("source_properties");
+            if (hosted) row.erase("source_owner_id");
+        }
+    }
+}
+
 // Local material/type references cannot name a document owner merely because
 // their spelling matches it. Mask only validated codec-owned local slots in
 // this inspection copy; authoritative catalog and assignment bytes stay raw.
 Entity global_reference_remainder(Entity entity,bool completed) {
+    wall_scale_quantity_reference_remainder(entity);
     // Validate on the original envelope before declaration/reference scratch
     // filtering removes fields required by the analytical codecs.
     std::vector<const char*> local_host_fields,local_dimension_fields;

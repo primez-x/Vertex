@@ -3287,6 +3287,18 @@ Blocked / missing until testing a candidate that contains it.
   - Result: Not tested
   - Notes: ______________________________
 
+- [ ] **WALL-GROUP-SCALE - Resize connected walls and their hosted windows together**
+  - Steps: Draw two adjoining walls on the same floor. Place a corner window and a neighboring door or window. Ctrl-click both walls, then drag a corner of the group selection frame. Inspect the displayed group size, both wall lengths, thicknesses, heights and hosted opening sizes. Release a valid preview, review affected rooms if prompted, then undo/redo, save and reopen. Delete the resized corner window and undo its deletion. Repeat with a sloping wall top.
+  - Expected: The center and floor base remain anchored. Both walls and their physical profiles scale by the same factor; the corner window keeps its shared corner and both cuts. The sloping top retains its gradient and scales its rise once. Dimensions, plan, 3D and schedules agree with the committed geometry. Undo restores the entire operation and reopen preserves it. Deleting the resized window removes its owner and cuts without old measurement history blocking it. A pending or invalid preview cannot commit.
+  - Result: Not tested
+  - Notes: ______________________________
+
+- [ ] **WALL-GROUP-SCALE-LOCK - Keep locked measurements and cancel a group resize**
+  - Steps: Apply a fixed-length constraint to one of two connected walls. Select both walls and try a group corner resize that changes the locked length. Cancel it. Remove the lock and begin another resize, then cancel before release. Select only one host of a corner window and try to resize that incomplete group.
+  - Expected: The locked-length conflict is shown and no wall, opening or room changes. Cancelling leaves the original geometry and history intact. An incomplete corner-window host selection cannot partially resize its owner or cuts.
+  - Result: Not tested
+  - Notes: ______________________________
+
 ## Issue report template
 
 

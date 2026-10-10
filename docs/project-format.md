@@ -1,4 +1,33 @@
-# Vertex project formats v1 through v172
+# Vertex project formats v1 through v173
+
+## Connected physical wall-group scaling (v173, source integration)
+
+The additive `WallGroupScaleIntent` names two through 128 unique actual wall IDs,
+one finite XYZ pivot, one positive factor other than one and an explicit connected
+movement choice. The operator uniformly scales physical host/profile sizes;
+rotation remains a separate rigid operation. The canvas anchors Z at the common
+resolved wall base plane, preserving the floor base while scaling height and
+thickness. Different-floor/base-plane, Site, embedded and mixed selections do not
+receive these canvas scale handles.
+
+Command dialect 43 retains only the independently replayed scale intent. It does
+not carry caller-supplied replacement wall payloads or endpoint proofs. Selected
+baseline targets derive from the actual source; persistent fixed measurements
+remain binding during the connected solve. Actual hosted geometry and coordinated
+corner ownership must remain complete. Incompatible or partially selected corner
+cohorts refuse. Existing wall/curve receipts remain retained provenance when the
+scaled geometry no longer matches the entered measurement.
+
+Room review uses the separate dialect 44 enclosure around the admitted direct
+scale command; ordinary phase intent 18 carries the exclusive scale lane. Earlier
+phase intents retain their original closed fields. Current, nested and undone
+history require reader 173/extraction 171, with the existing asset-table schema.
+Shared baseline records in alternatives cannot be edited by ordinary scaling;
+complete proposed replacement authority remains required.
+
+This source addition is unqualified: compilation, native geometry, interaction,
+history/migration and output have not been run against it. The installed candidate
+remains unchanged.
 
 ## Coordinated corner-window source exchange (source integration)
 

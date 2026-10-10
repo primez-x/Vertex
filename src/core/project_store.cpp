@@ -535,6 +535,8 @@ std::uint32_t required_format_version_internal(const DocumentSnapshot& snapshot,
             required = std::max(required, 53U);
         if (revision.boundary_constraint_changes) {
             const auto& edits=*revision.boundary_constraint_changes;
+            if (edits.wall_group_scale_completion || edits.wall_group_scale)
+                required=std::max(required,173U);
             if (std::any_of(edits.boundary_edits.begin(), edits.boundary_edits.end(), [](const auto& edit) { return edit.wall_source_translation.has_value(); }) ||
                 std::any_of(edits.exterior_source_edits.begin(), edits.exterior_source_edits.end(), [](const auto& edit) { return edit.wall_source_translation.has_value(); }))
                 required = std::max(required, 53U);
@@ -624,6 +626,7 @@ std::uint32_t required_format_version_internal(const DocumentSnapshot& snapshot,
                 return false;
             };
             const auto profile_intent=[&](const nlohmann::json& intent)->std::uint32_t {
+                if (intent.is_object() && intent.value("version",0)==18) return 173U;
                 if (intent.is_object() && intent.value("version",0)==17 && intent.size()==9 &&
                     intent.contains("ordinary_roof_edits") && intent.contains("source_snapshot_digest"))
                     return 169U;
@@ -786,6 +789,8 @@ std::uint32_t required_format_version_internal(const DocumentSnapshot& snapshot,
             };
             const auto profile_proof=[&](const auto& self,const nlohmann::json& proof,unsigned depth)->std::uint32_t {
                 if (depth>3 || !proof.is_object()) return 0;
+                if (proof.value("kind",std::string{})=="apply_boundary_constraint_changes" &&
+                    (proof.value("version",0)==43 || proof.value("version",0)==44)) return 173U;
                 if (proof.value("kind",std::string{})=="apply_boundary_constraint_changes" &&
                     (proof.value("version",0)==42 || proof.value("version",0)==41) && proof.contains("proof"))
                     return std::max(proof.value("version",0)==42 ? 146U : 145U,
@@ -2881,6 +2886,7 @@ bool verify_sqlite_schema(sqlite3* database, bool allow_recovery = false) {
          sqlite3_column_int(user_version.get(), 0) != 170 &&
          sqlite3_column_int(user_version.get(), 0) != 171 &&
          sqlite3_column_int(user_version.get(), 0) != 172 &&
+         sqlite3_column_int(user_version.get(), 0) != 173 &&
          sqlite3_column_int(user_version.get(), 0) != 169 &&
          sqlite3_column_int(user_version.get(), 0) != 163 &&
          sqlite3_column_int(user_version.get(), 0) != 143 &&
@@ -3602,6 +3608,8 @@ DocumentSnapshot read_snapshot(sqlite3* database, RecoveryLedger* recovery = nul
     // here and authenticate the manifest with its stored version below.
     const auto required_format = required_format_version_internal(snapshot, format_number < 28);
     if (required_format > format_number) {
+        if (required_format>=173)
+            storage_error(StorageErrorCode::unsupported_format,"This project requires reader 173 for connected wall-group scaling and its retained review/design history");
         if (required_format>=172)
             storage_error(StorageErrorCode::unsupported_format,"This project requires reader 172 for associative corner-window leg dimensions and their retained history");
         if (required_format>=171)

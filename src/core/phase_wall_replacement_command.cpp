@@ -83,7 +83,7 @@ struct Stage {
     std::set<std::string,std::less<>> deferred_removals;
 };
 bool has_geometry_or_relation_intent(const ConstraintAuthoringIntent& intent) {
-    return intent.wall_resize || intent.wall_geometry_move || intent.wall_curve_construction ||
+    return intent.wall_resize || intent.wall_geometry_move || intent.wall_group_scale || intent.wall_curve_construction ||
         intent.boundary_resize || intent.boundary_vertex_move || intent.exterior_corner_move ||
         intent.exterior_segment_resize || intent.exterior_segment_arc || intent.measured_stroke_resize ||
         intent.measured_stroke_vertex_move || intent.measured_stroke_transform || intent.joint_translation ||

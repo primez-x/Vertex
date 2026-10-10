@@ -199,6 +199,10 @@ Json encode_intent(const ConstraintAuthoringIntent& value) {
         result["measured_stroke_transform"]={{"targets",targets},{"move_related_objects",value.measured_stroke_transform->move_related_objects}};
     }
     if (value.joint_translation) result["joint_translation"]=joint(*value.joint_translation);
+    // Historical ordinary intents retain their exact sixteen-field shape.
+    // Only the dedicated scale wrapper admits this additional semantic field.
+    if (value.wall_group_scale)
+        result["wall_group_scale"]=encode_wall_group_scale_intent(*value.wall_group_scale);
     for (const auto& mutation : value.relation_mutations) {
         if (mutation.kind==ConstraintRelationMutationKind::remove)
             result["relation_mutations"].push_back({{"kind","remove"},{"constraint_id",id(mutation.constraint_id)}});
@@ -212,12 +216,21 @@ Json encode_intent(const ConstraintAuthoringIntent& value) {
     return result;
 }
 
-ConstraintAuthoringIntent decode_intent(const Json& value) {
-    keys(value,{"wall_resize","wall_geometry_move","wall_curve_construction","boundary_resize","boundary_vertex_move",
+ConstraintAuthoringIntent decode_intent(const Json& value,bool wall_group_scale=false) {
+    if (wall_group_scale) keys(value,{"wall_resize","wall_geometry_move","wall_curve_construction","boundary_resize","boundary_vertex_move",
+        "exterior_corner_move","exterior_segment_resize","exterior_segment_arc","measured_stroke_resize",
+        "measured_stroke_vertex_move","measured_stroke_transform","joint_translation","relation_mutations",
+        "relation_anchor","relation_move_connected_walls","message","wall_group_scale"});
+    else keys(value,{"wall_resize","wall_geometry_move","wall_curve_construction","boundary_resize","boundary_vertex_move",
         "exterior_corner_move","exterior_segment_resize","exterior_segment_arc","measured_stroke_resize",
         "measured_stroke_vertex_move","measured_stroke_transform","joint_translation","relation_mutations",
         "relation_anchor","relation_move_connected_walls","message"});
     ConstraintAuthoringIntent result;
+    if (wall_group_scale) {
+        if (value.at("wall_group_scale").is_null())
+            invalid("Version eighteen requires wall group scale intent");
+        result.wall_group_scale=decode_wall_group_scale_intent(value.at("wall_group_scale"));
+    }
     result.message=value.at("message").get<std::string>();
     result.relation_move_connected_walls=flag(value.at("relation_move_connected_walls"));
     if (!value.at("relation_anchor").is_null()) result.relation_anchor=binding(value.at("relation_anchor"));
@@ -1198,11 +1211,19 @@ nlohmann::json encode_phase_constraint_authoring_intent(const PhaseConstraintAut
         static_cast<int>(!value.stair_demolition_retirement.is_null()) +
         static_cast<int>(!value.coordinated_demolition.is_null()) +
         static_cast<int>(!value.wall_demolition.is_null()) +
-        static_cast<int>(!value.ordinary_roof_edits.is_null());
+        static_cast<int>(!value.ordinary_roof_edits.is_null()) +
+        static_cast<int>(value.intent.wall_group_scale.has_value());
     if (exclusive_operations > 1)
         invalid("Active design operations cannot borrow another replacement or demolition authority");
+    if (value.intent.wall_group_scale) {
+        ConstraintAuthoringIntent only_scale;
+        only_scale.wall_group_scale=value.intent.wall_group_scale;
+        only_scale.message=value.intent.message;
+        if (encode_intent(value.intent)!=encode_intent(only_scale))
+            invalid("Wall group scale cannot borrow sibling geometry or relationship authority");
+    }
     const auto coordinated_version=value.coordinated_replacements.is_null()?0:coordinated(value.coordinated_replacements,value).version;
-    Json result={{"version",!value.ordinary_roof_edits.is_null()?17:!value.wall_demolition.is_null()?16:!value.coordinated_demolition.is_null()?15:!value.stair_demolition_retirement.is_null()?13:!value.stair_replacement.is_null()?12:!value.stair_demolition.is_null()?11:!value.structural_replacement.is_null()?9:coordinated_version==4?14:coordinated_version==3?10:coordinated_version==2?8:coordinated_version==1?7:!value.slab_demolition.is_null()?6:!value.slab_replacement.is_null()?5:!value.roof_replacement.is_null()?4:!value.opening_demolition.is_null()?3:value.wall_replacement.is_null()?1:2},{"expected_revision",value.expected_revision},
+    Json result={{"version",value.intent.wall_group_scale?18:!value.ordinary_roof_edits.is_null()?17:!value.wall_demolition.is_null()?16:!value.coordinated_demolition.is_null()?15:!value.stair_demolition_retirement.is_null()?13:!value.stair_replacement.is_null()?12:!value.stair_demolition.is_null()?11:!value.structural_replacement.is_null()?9:coordinated_version==4?14:coordinated_version==3?10:coordinated_version==2?8:coordinated_version==1?7:!value.slab_demolition.is_null()?6:!value.slab_replacement.is_null()?5:!value.roof_replacement.is_null()?4:!value.opening_demolition.is_null()?3:value.wall_replacement.is_null()?1:2},{"expected_revision",value.expected_revision},
         {"source_snapshot_digest",value.source_snapshot_digest},{"source_authoring_digest",value.source_authoring_digest},
         {"source_entities_digest",value.source_entities_digest},
         {"source_saved_revision",value.source_saved_revision ? Json(*value.source_saved_revision) : Json(nullptr)},
@@ -1348,6 +1369,7 @@ PhaseConstraintAuthoringIntent decode_phase_constraint_authoring_intent(const Js
     const bool coordinated_demolition=value.is_object() && value.contains("version") && value.at("version")==15;
     const bool wall_demolition=value.is_object() && value.contains("version") && value.at("version")==16;
     const bool ordinary_roofs=value.is_object() && value.contains("version") && value.at("version")==17;
+    const bool wall_group_scale=value.is_object() && value.contains("version") && value.at("version")==18;
     if (replacement) keys(value,{"version","expected_revision","source_snapshot_digest","source_authoring_digest",
         "source_entities_digest","source_saved_revision","phase_selections","intent","wall_replacement"});
     else if (demolition) keys(value,{"version","expected_revision","source_snapshot_digest","source_authoring_digest",
@@ -1376,7 +1398,7 @@ PhaseConstraintAuthoringIntent decode_phase_constraint_authoring_intent(const Js
         "source_entities_digest","source_saved_revision","phase_selections","intent","ordinary_roof_edits"});
     else keys(value,{"version","expected_revision","source_snapshot_digest","source_authoring_digest",
         "source_entities_digest","source_saved_revision","phase_selections","intent"});
-    if (!value.at("version").is_number_integer() || (value.at("version")!=1 && value.at("version")!=2 && value.at("version")!=3 && value.at("version")!=4 && value.at("version")!=5 && value.at("version")!=6 && value.at("version")!=7 && value.at("version")!=8 && value.at("version")!=9 && value.at("version")!=10 && value.at("version")!=11 && value.at("version")!=12 && value.at("version")!=13 && value.at("version")!=14 && value.at("version")!=15 && value.at("version")!=16 && value.at("version")!=17) ||
+    if (!value.at("version").is_number_integer() || (value.at("version")!=1 && value.at("version")!=2 && value.at("version")!=3 && value.at("version")!=4 && value.at("version")!=5 && value.at("version")!=6 && value.at("version")!=7 && value.at("version")!=8 && value.at("version")!=9 && value.at("version")!=10 && value.at("version")!=11 && value.at("version")!=12 && value.at("version")!=13 && value.at("version")!=14 && value.at("version")!=15 && value.at("version")!=16 && value.at("version")!=17 && value.at("version")!=18) ||
         !value.at("expected_revision").is_number_unsigned()) invalid("Phase constraint proof version or revision is invalid");
     if (!value.at("source_saved_revision").is_null() && !value.at("source_saved_revision").is_number_unsigned())
         invalid("Phase constraint saved revision is invalid");
@@ -1384,7 +1406,7 @@ PhaseConstraintAuthoringIntent decode_phase_constraint_authoring_intent(const Js
         value.at("source_snapshot_digest").get<std::string>(),value.at("source_authoring_digest").get<std::string>(),
         value.at("source_entities_digest").get<std::string>(),
         value.at("source_saved_revision").is_null() ? std::nullopt : std::optional<Revision>{value.at("source_saved_revision").get<Revision>()},
-        value.at("phase_selections"),decode_intent(value.at("intent"))};
+        value.at("phase_selections"),decode_intent(value.at("intent"),wall_group_scale)};
     if (replacement) {
         result.wall_replacement=value.at("wall_replacement");
         if (result.wall_replacement.is_null()) invalid("Version two requires wall replacement decisions");

@@ -1,5 +1,11 @@
 # Portable project extraction
 
+Exchange version 171 requires native reader 173 for connected physical wall-group
+scaling. Direct command 43, room-review enclosure 44 and ordinary phase intent 18
+retain source-derived scale authority through nested and undone history. Original
+command and phase dialects keep their earlier shapes; asset tables are unchanged.
+Source integration does not establish compile, runtime or migration acceptance.
+
 Exchange version 162 requires native reader 164 for compound stair-edit v2.
 Its explicit profile-hosted coordination remains present in nested and retained
 history, including undone edits. Older compound v1 keeps its original meaning;

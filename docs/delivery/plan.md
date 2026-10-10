@@ -127,7 +127,12 @@ polling timeout does not permit restarting it.
    manufactured previews, retained quantity/profile edits and coordinated host
    movement/rotation replay. Equal explicit host scaling is implemented in
    architectural transactions, with cumulative temporary hosted rosters for
-   repeated transforms; wall group UI scaling remains. Qualify source-derived
+   repeated transforms. Qualify the subsequent connected wall-group canvas scale
+   source, exact manufactured previews, common floor/base-plane pivot, fixed
+   relations, hosted consequences, mandatory room review and retained command
+   43/44/phase intent 18 under reader 173/extraction 171. Scaling baseline walls
+   inside an active alternative still requires source-derived replacement;
+   ordinary authoring refuses it. Qualify source-derived
    active-baseline owner/two-host/two-cut replacement and leaf-eight corner
    name/dimension/profile editing, Properties and canvas preview/publication,
    mandatory room review and reader 171/extraction 169 retained history.

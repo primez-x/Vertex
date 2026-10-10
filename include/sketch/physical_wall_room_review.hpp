@@ -137,6 +137,10 @@ void validate_physical_wall_room_dimension_placements(
 // receipts and position-only presentation proofs keep that child authority;
 // competing intents and asset mutation/reference lanes do not qualify.
 [[nodiscard]] bool is_physical_wall_room_joint_review_command(const Command& command);
+// One unwrapped canonical v43 holds only a typed positive uniform scale for
+// at least two selected walls. Source geometry and connected consequences
+// remain independently replayed by Document; no raw payload grants authority.
+[[nodiscard]] bool is_physical_wall_room_scale_review_command(const Command& command);
 // One existing wall and its supported hosted openings, saved dimensions and
 // attached constraints are removed together. Known phase/view/presentation
 // memberships are reconstructed from the exact original source; room owners

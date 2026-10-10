@@ -21,6 +21,12 @@ void validate_wall_split_archive(const Entity& wall);
 [[nodiscard]] nlohmann::json encode_constraint_wall_edit(const ConstraintWallGeometryEdit& edit);
 [[nodiscard]] ConstraintWallGeometryEdit decode_constraint_wall_edit(const nlohmann::json& value);
 void rebase_wall_length_receipt(Entity& wall, const Segment& transformed_baseline);
+// Retire the active measurement after a proved scale, retaining its complete
+// exact/opaque receipt as source provenance rather than a new measurement.
+void archive_scaled_wall_length_receipt(Entity& wall, const Segment& transformed_baseline,
+    Vec3 pivot, double scale);
+[[nodiscard]] std::map<std::string,Entity,std::less<>> stage_wall_group_scale_entities(
+    const std::map<std::string,Entity,std::less<>>& actual_entities,const WallGroupScaleIntent& intent);
 // Independently checks understood section v1 receipts: straight v1 and
 // physical curved v2. Missing/future optional versions remain opaque on open;
 // editing or rebasing unsupported metadata still refuses without loss.

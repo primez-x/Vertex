@@ -4,6 +4,11 @@
 #include "sketch/document_wall.hpp"
 #include "sketch/boundary_receipt.hpp"
 #include "sketch/constraint_entity.hpp"
+#include "sketch/constraint_phase_scope.hpp"
+#include "sketch/corner_window_edit.hpp"
+#include "sketch/project_organization.hpp"
+#include "sketch/opening_assembly.hpp"
+#include "sketch/corner_window.hpp"
 #include <algorithm>
 #include <cmath>
 #include <stdexcept>
@@ -259,6 +264,34 @@ void validate_or_clear_length_receipt(Entity& wall, bool write_receipt,
 }
 
 void validate_wall_length_input(const Entity& wall) {
+    if (const auto archive=wall.extensions.find("wall_scale_length_archive"); archive!=wall.extensions.end()) {
+        if (!archive->is_object() || archive->size()!=2 || !archive->contains("version") ||
+            archive->at("version")!=1 || !archive->contains("entries") || !archive->at("entries").is_array() ||
+            archive->at("entries").empty() || archive->at("entries").size()>4096 || archive->dump().size()>1024*1024)
+            invalid("Unsupported wall scale length archive: " + wall.id);
+        for (const auto& entry : archive->at("entries")) {
+            if (!entry.is_object() || entry.size()!=5 || !entry.contains("receipt") ||
+                !entry.contains("source_baseline") || !entry.contains("baseline") || !entry.contains("pivot") ||
+                !entry.contains("scale") || !entry.at("pivot").is_array() || entry.at("pivot").size()!=3)
+                invalid("Malformed wall scale length archive: " + wall.id);
+            const auto factor=finite_number(entry.at("scale"),"Archived wall scale");
+            if (!(factor>0) || factor==1) invalid("Archived wall scale must change length");
+            const Vec3 pivot{finite_number(entry.at("pivot").at(0),"Archived scale pivot"),
+                finite_number(entry.at("pivot").at(1),"Archived scale pivot"),
+                finite_number(entry.at("pivot").at(2),"Archived scale pivot")};
+            auto original=wall; original.properties["baseline"]=entry.at("source_baseline");
+            (void)validate_length_receipt(entry.at("receipt"),original);
+            const auto old=read_baseline(original);
+            const auto scale_point=[&](Vec2 p) { return Vec2{pivot.x+(p.x-pivot.x)*factor,pivot.y+(p.y-pivot.y)*factor}; };
+            auto expected=original;
+            update_baseline_json(expected.properties["baseline"],{scale_point(old.start),scale_point(old.end),old.sweep_radians});
+            const auto derived=read_baseline(expected);
+            if (!std::isfinite(segment_length(derived)) || segment_length(derived)<=constraint_linear_tolerance_metres)
+                invalid("Wall scale archive contains a collapsed or unrepresentable baseline");
+            if (expected.properties.at("baseline")!=entry.at("baseline"))
+                invalid("Wall scale archive does not reconstruct its source baseline: " + wall.id);
+        }
+    }
     const auto section=wall.extensions.find("constraint_authoring");
     if (section==wall.extensions.end() || !section->is_object() ||
         !section->contains("version") || !section->at("version").is_number_integer() || section->at("version")!=1) return;
@@ -267,6 +300,140 @@ void validate_wall_length_input(const Entity& wall) {
         !receipt->at("version").is_number_integer() ||
         (receipt->at("version")!=1 && receipt->at("version")!=2)) return;
     (void)validate_length_receipt(*receipt,wall);
+}
+
+void archive_scaled_wall_length_receipt(Entity& wall,const Segment& transformed,Vec3 pivot,double scale) {
+    validate_wall_length_input(wall);
+    auto section=wall.extensions.find("constraint_authoring");
+    if (section==wall.extensions.end()) return;
+    if (!section->is_object() || !section->contains("version") || section->at("version")!=1)
+        invalid("Cannot scale unsupported wall measurement metadata: " + wall.id);
+    const auto receipt=section->find("last_length_entry");
+    if (receipt==section->end()) return;
+    (void)validate_length_receipt(*receipt,wall);
+    auto result=wall;
+    if (!result.extensions.contains("wall_scale_length_archive"))
+        result.extensions["wall_scale_length_archive"]={{"version",1},{"entries",json::array()}};
+    auto baseline=wall.properties.at("baseline"); update_baseline_json(baseline,transformed);
+    result.extensions["wall_scale_length_archive"]["entries"].push_back({{"receipt",*receipt},
+        {"source_baseline",wall.properties.at("baseline")},{"baseline",std::move(baseline)},
+        {"pivot",json::array({pivot.x,pivot.y,pivot.z})},{"scale",scale}});
+    result.extensions["constraint_authoring"].erase("last_length_entry");
+    validate_wall_length_input(result);
+    wall=std::move(result);
+}
+
+std::map<std::string,Entity,std::less<>> stage_wall_group_scale_entities(
+    const std::map<std::string,Entity,std::less<>>& source,const WallGroupScaleIntent& raw) {
+    const auto intent=decode_wall_group_scale_intent(encode_wall_group_scale_intent(raw));
+    auto result=source;
+    const auto scope=constraint_phase_scope(source);
+    const auto scaled_scalar=[&](json& values,const char* field) {
+        if (!values.contains(field)) return;
+        const auto amount=finite_number(values.at(field),field)*intent.scale;
+        if (!std::isfinite(amount)) invalid("Wall group scale exceeds supported numeric range");
+        values[field]=amount;
+    };
+    std::map<std::string,double,std::less<>> scales;
+    for (const auto& id : intent.wall_ids) {
+        const auto found=source.find(id);
+        if (found==source.end() || found->second.type!="wall" || found->second.id!=id)
+            invalid("Wall group scale requires actual persisted walls");
+        if (scope.inactive_owner_ids.contains(id)) invalid("Wall group scale cannot edit an inactive wall");
+        std::vector<const Entity*> openings;
+        for (const auto& [child_id,child] : source) {
+            (void)child_id;
+            if (!scope.inactive_owner_ids.contains(child_id) &&
+                (child.type=="opening" || child.type=="door" || child.type=="window") &&
+                child.properties.contains("wall_id") && child.properties.at("wall_id")==id) openings.push_back(&child);
+        }
+        Wall wall; std::string error;
+        if (!read_document_wall(found->second,openings,wall,error)) invalid(error);
+        validate_wall_semantics(wall);
+        const auto effective=resolve_vertical_placement(source,found->second);
+        const auto elevation=[](const Entity& entity) {
+            return finite_number(entity.properties.at(entity.properties.contains("elevation_m") ? "elevation_m" : "elevation"),"Wall elevation");
+        };
+        const auto shift=elevation(effective)-wall.elevation;
+        const auto scale_point=[&](Vec2 p) { return Vec2{intent.pivot.x+(p.x-intent.pivot.x)*intent.scale,
+            intent.pivot.y+(p.y-intent.pivot.y)*intent.scale}; };
+        const Segment baseline{scale_point(wall.baseline.start),scale_point(wall.baseline.end),wall.baseline.sweep_radians};
+        auto& entity=result.at(id);
+        archive_scaled_wall_length_receipt(entity,baseline,intent.pivot,intent.scale);
+        if (entity.extensions.contains("curve_input")) rebase_wall_curve_input(entity,baseline);
+        set_baseline(entity,baseline);
+        for (const auto* key : {"thickness_m","thickness","height_m","height"}) scaled_scalar(entity.properties,key);
+        entity.properties["thickness_m"]=wall.thickness*intent.scale;
+        entity.properties["height_m"]=wall.height*intent.scale;
+        const double raw_elevation=intent.pivot.z+(wall.elevation+shift-intent.pivot.z)*intent.scale-shift;
+        if (!std::isfinite(raw_elevation)) invalid("Wall scale elevation exceeds supported numeric range");
+        entity.properties["elevation_m"]=raw_elevation;
+        if (entity.properties.contains("elevation")) entity.properties["elevation"]=raw_elevation;
+        // set_baseline already derives the rise from the unchanged gradient
+        // and the scaled chord when a top plane is present.
+        if (!entity.properties.contains("top_plane"))
+            for (const auto* key : {"slope_rise_m","slope_rise"}) scaled_scalar(entity.properties,key);
+        if (entity.properties.contains("layers"))
+            for (auto& layer : entity.properties.at("layers")) scaled_scalar(layer,"thickness_m");
+        if (entity.properties.contains("transform")) invalid("Wall scale cannot borrow opaque legacy transform metadata");
+        for (const auto* child : openings) {
+            if (child->properties.contains("corner_window_id")) continue;
+            auto& p=result.at(child->id).properties;
+            for (const auto* key : {"offset_m","offset","width_m","width","sill_m","sill","height_m","height"}) scaled_scalar(p,key);
+            if (p.contains("opening_assembly")) {
+                (void)parse_opening_assembly(p.at("opening_assembly"));
+                for (const auto* key : {"frame_width_m","frame_depth_m","panel_thickness_m","glazing_thickness_m","inset_m","window_bay_projection_m","window_bow_projection_m"})
+                    scaled_scalar(p.at("opening_assembly"),key);
+                (void)parse_opening_assembly(p.at("opening_assembly"));
+            }
+        }
+        validate_wall_curve_input(entity);
+        validate_wall_length_input(entity);
+        scales.emplace(id,intent.scale);
+    }
+    complete_corner_window_geometry(source,result,scales);
+    for (auto& [id,entity] : result) {
+        const auto& before=source.at(id);
+        if (entity==before || !before.properties.contains("quantity_entries")) continue;
+        if (before.type=="corner_window" || before.properties.contains("corner_window_id")) {
+            // Coordinated corner replay owns its receipt dialect and exact
+            // retained envelope. Preserve original measurements on an actual
+            // scaled host without modifying that owner/cut envelope.
+            const auto host=before.type=="corner_window" ? parse_corner_window(before).wall_ids[0] :
+                before.properties.at("wall_id").get<std::string>();
+            if (!scales.contains(host)) invalid("Corner scale receipt lacks a selected actual host");
+            auto& archive=result.at(host).extensions["wall_scale_hosted_quantity_archive"];
+            if (archive.is_null()) archive={{"version",1},{"entries",json::array()}};
+            if (!archive.is_object() || archive.size()!=2 || !archive.contains("version") || archive.at("version")!=1 ||
+                !archive.contains("entries") || !archive.at("entries").is_array() || archive.at("entries").size()>=4096)
+                invalid("Unsupported hosted wall scale quantity archive");
+            archive["entries"].push_back({{"source_owner_id",id},{"source_properties",before.properties},
+                {"pivot",json::array({intent.pivot.x,intent.pivot.y,intent.pivot.z})},{"scale",intent.scale}});
+            if (archive.dump().size()>1024*1024) invalid("Hosted scale quantity archive exceeds its budget");
+            continue;
+        }
+        const auto original=before.properties.at("quantity_entries");
+        if (!original.is_object() || !entity.properties.contains("quantity_entries") || !entity.properties.at("quantity_entries").is_object())
+            invalid("Wall scale cannot discard opaque quantity metadata");
+        for (const auto& [pointer,receipt] : original.items()) {
+            (void)receipt;
+            try {
+                const json::json_pointer path(pointer);
+                if (before.properties.contains(path) && (!entity.properties.contains(path) || before.properties.at(path)!=entity.properties.at(path)))
+                    entity.properties.at("quantity_entries").erase(pointer);
+            } catch (const json::exception&) { /* Opaque paths retain their exact payload. */ }
+        }
+        if (entity.properties.at("quantity_entries")==original) continue;
+        auto& archive=entity.extensions["wall_scale_quantity_archive"];
+        if (archive.is_null()) archive={{"version",1},{"entries",json::array()}};
+        if (!archive.is_object() || archive.size()!=2 || !archive.contains("version") || archive.at("version")!=1 ||
+            !archive.contains("entries") || !archive.at("entries").is_array() || archive.at("entries").size()>=4096)
+            invalid("Unsupported wall scale quantity archive");
+        archive["entries"].push_back({{"source_properties",before.properties},
+            {"pivot",json::array({intent.pivot.x,intent.pivot.y,intent.pivot.z})},{"scale",intent.scale}});
+        if (archive.dump().size()>1024*1024) invalid("Wall scale quantity archive exceeds its budget");
+    }
+    return result;
 }
 
 void clear_wall_length_input(Entity& wall) {

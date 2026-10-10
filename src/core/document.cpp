@@ -2622,6 +2622,22 @@ static bool has_phase_constraint_authoring(const ApplyBoundaryConstraintChanges&
     return command.phase_constraint_authoring_completion || !command.phase_constraint_authoring_intent.is_null();
 }
 
+static bool has_wall_group_scale(const ApplyBoundaryConstraintChanges& command) {
+    return command.wall_group_scale_completion || command.wall_group_scale.has_value();
+}
+static void validate_wall_group_scale_mode(const ApplyBoundaryConstraintChanges& command) {
+    if (!command.wall_group_scale_completion || !command.wall_group_scale)
+        throw std::invalid_argument("Wall group scale requires its retained semantic authority");
+    (void)encode_wall_group_scale_intent(*command.wall_group_scale);
+    auto ordinary=command;
+    ordinary.wall_group_scale.reset(); ordinary.wall_group_scale_completion=false;
+    const auto empty=nlohmann::json{{"version",1},{"kind","apply_boundary_constraint_changes"},
+        {"expected_revision",command.expected_revision},{"message",command.message},
+        {"entity_changes",nlohmann::json::array()},{"boundary_edits",nlohmann::json::array()}};
+    if (command_to_json(Command{ordinary})!=empty)
+        throw std::invalid_argument("Wall group scale cannot borrow another edit, asset or raw geometry authority");
+}
+
 static bool has_room_review_geometry_completion(const ApplyBoundaryConstraintChanges& command) {
     return command.room_review_geometry_completion || !command.room_review_geometry_proof.is_null();
 }
@@ -2914,7 +2930,7 @@ static Command room_review_geometry_command(const ApplyBoundaryConstraintChanges
     const bool mixed_opening_deletion=proof.at("kind")=="mixed_wall_opening_deletion";
     if ((mixed_opening_deletion && version!=40) || (mixed_deletion && version!=37 && version!=39) ||
         (grouped_deletion && version!=31 && version!=35 && version!=36 && version!=38) || (!grouped_deletion && !mixed_deletion && !mixed_opening_deletion &&
-        version!=1 && version!=10 && version!=17 && version!=19 && version!=21 && version!=22 && version!=23 && version!=34 && !ordinary_room_wall_proof_version(version)))
+        version!=1 && version!=10 && version!=17 && version!=19 && version!=21 && version!=22 && version!=23 && version!=34 && version!=43 && !ordinary_room_wall_proof_version(version)))
         throw std::invalid_argument("Room review cannot wrap another geometry intent");
     const auto decoded=[&]()->Command {
 #ifdef VERTEX_HAS_PHYSICAL_ROOM_REVIEW
@@ -2969,7 +2985,10 @@ static Command room_review_geometry_command(const ApplyBoundaryConstraintChanges
 #endif
     if (!geometry || proof.at("kind")!="apply_boundary_constraint_changes")
         throw std::invalid_argument("Room review ordinary payload must be one supported wall profile edit");
-    if (version==34) {
+    if (version==43) {
+        validate_wall_group_scale_mode(*geometry);
+        if (command_to_json(decoded)!=proof) throw std::invalid_argument("Room scale review must retain canonical source intent");
+    } else if (version==34) {
         validate_phase_constraint_authoring_mode(*geometry);
         if (command_to_json(decoded)!=proof)
             throw std::invalid_argument("Room review must retain the canonical active design intent");
@@ -3008,6 +3027,7 @@ static int room_review_geometry_dialect(const ApplyBoundaryConstraintChanges& co
     if (is_physical_wall_room_joint_review_command(geometry)) return 32;
 #endif
     const auto* constrained=std::get_if<ApplyBoundaryConstraintChanges>(&geometry);
+    if (constrained && has_wall_group_scale(*constrained)) return 44;
     if (constrained && has_phase_constraint_authoring(*constrained)) return 32;
     if (!constrained || constrained->wall_edits.empty()) return 26;
     return constrained->curve_construction_completion ? 24 : 25;
@@ -4197,6 +4217,18 @@ void validate_completed_constraint_change(const std::map<std::string, Entity, st
     // Both original-source lanes and their union are validated during complete
     // reconstruction; applying a child's partial authority to the union is unsafe.
     if (has_selection_completion(command)) return;
+    if (has_wall_group_scale(command)) {
+        try {
+            validate_wall_group_scale_mode(command);
+#ifdef VERTEX_HAS_CONSTRAINT_AUTHORING
+            if (reconstruct_wall_group_scale(before,*command.wall_group_scale)!=after)
+                throw std::invalid_argument("Wall scale differs from complete connected source reconstruction");
+#else
+            throw std::invalid_argument("Wall group scaling requires constraint authoring");
+#endif
+        } catch (const std::exception& error) { document_error(DocumentErrorCode::constraint_violation,error.what()); }
+        return;
+    }
     try { validate_room_aware_wall_split_mode(command); validate_wall_merge_mode(command); validate_curve_construction_completion(command); }
     catch (const std::exception& error) { document_error(DocumentErrorCode::constraint_violation, error.what()); }
     if (has_disto_measurement_completion(command)) {
@@ -5805,6 +5837,20 @@ std::map<std::string, Entity, std::less<>> completed_boundary_constraint_entitie
     const ApplyBoundaryConstraintChanges& command, bool retained_replay = false,
     bool active_phase_constraints = false,
     const std::map<std::string,Entity,std::less<>>* original_dimension_source = nullptr) {
+    if (has_wall_group_scale(command)) {
+        try {
+            validate_wall_group_scale_mode(command);
+#ifdef VERTEX_HAS_CONSTRAINT_AUTHORING
+            auto result=reconstruct_wall_group_scale(source,*command.wall_group_scale);
+            validate_boundary_identity_transition(history,source,result);
+            (void)validate_state(result,source_assets,active_phase_constraints);
+            return result;
+#else
+            throw std::invalid_argument("Wall group scale requires the production constraint authoring engine");
+#endif
+        } catch (const DocumentError&) { throw; }
+        catch (const std::exception& error) { document_error(DocumentErrorCode::invalid_entity,error.what()); }
+    }
     const bool active_policy=active_phase_constraints || !phase_constraint_authoring_proofs(command).empty();
     if (has_independent_drawing_removal(command)) {
         try {
@@ -7538,6 +7584,35 @@ PhaseEntityImportProof phase_entity_import_proof_from_json(const nlohmann::json&
     return result;
 }
 
+nlohmann::json encode_wall_group_scale_intent(const WallGroupScaleIntent& intent) {
+    if (intent.wall_ids.size()<2 || intent.wall_ids.size()>128 || !std::isfinite(intent.scale) ||
+        intent.scale<=0 || intent.scale==1 || !std::isfinite(intent.pivot.x) ||
+        !std::isfinite(intent.pivot.y) || !std::isfinite(intent.pivot.z))
+        throw std::invalid_argument("Wall group scale requires two to 128 walls and a finite positive changed factor/pivot");
+    auto ids=intent.wall_ids; std::sort(ids.begin(),ids.end());
+    for (std::size_t i=0;i<ids.size();++i)
+        if (!is_valid_identifier(ids[i]) || (i && ids[i]==ids[i-1]))
+            throw std::invalid_argument("Wall group scale IDs must be valid and unique");
+    return {{"version",1},{"wall_ids",ids},{"pivot_m",nlohmann::json::array({intent.pivot.x,intent.pivot.y,intent.pivot.z})},
+        {"scale",intent.scale},{"move_connected_walls",intent.move_connected_walls}};
+}
+WallGroupScaleIntent decode_wall_group_scale_intent(const nlohmann::json& value) {
+    command_exact_fields(value,{"version","wall_ids","pivot_m","scale","move_connected_walls"},
+        DocumentErrorCode::invalid_entity,"serialized wall group scale intent");
+    if (!value.at("version").is_number_integer() || value.at("version")!=1 ||
+        !value.at("wall_ids").is_array() || value.at("wall_ids").size()<2 || value.at("wall_ids").size()>128 ||
+        !value.at("pivot_m").is_array() || value.at("pivot_m").size()!=3 || !value.at("scale").is_number() ||
+        !value.at("move_connected_walls").is_boolean()) throw std::invalid_argument("Malformed wall group scale intent");
+    for (const auto& id : value.at("wall_ids")) if (!id.is_string()) throw std::invalid_argument("Wall scale ID must be a string");
+    for (const auto& coordinate : value.at("pivot_m")) if (!coordinate.is_number()) throw std::invalid_argument("Wall scale pivot must be numeric");
+    WallGroupScaleIntent result{value.at("wall_ids").get<std::vector<std::string>>(),
+        {value.at("pivot_m").at(0).get<double>(),value.at("pivot_m").at(1).get<double>(),value.at("pivot_m").at(2).get<double>()},
+        value.at("scale").get<double>(),value.at("move_connected_walls").get<bool>()};
+    (void)encode_wall_group_scale_intent(result);
+    std::sort(result.wall_ids.begin(),result.wall_ids.end());
+    return result;
+}
+
 nlohmann::json command_to_json(const Command& command) {
     return std::visit([](const auto& typed) -> nlohmann::json {
         using T = std::decay_t<decltype(typed)>;
@@ -7651,6 +7726,14 @@ nlohmann::json command_to_json(const Command& command) {
             }
             return encoded;
         } else if constexpr (std::is_same_v<T, ApplyBoundaryConstraintChanges>) {
+            if (has_wall_group_scale(typed)) {
+                validate_wall_group_scale_mode(typed);
+                if (typed.message.size()>1024 || !is_valid_utf8_without_nul(typed.message))
+                    throw std::invalid_argument("Wall group scale message is invalid");
+                return nlohmann::json{{"version",43},{"kind","apply_boundary_constraint_changes"},
+                    {"expected_revision",typed.expected_revision},{"message",typed.message},
+                    {"wall_group_scale_completion",true},{"wall_group_scale",encode_wall_group_scale_intent(*typed.wall_group_scale)}};
+            }
             if (has_independent_drawing_removal(typed)) {
                 try {
                     validate_independent_drawing_removal_mode(typed);
@@ -8104,7 +8187,7 @@ Command command_from_json(const nlohmann::json& value,
     try {
         if (!value.is_object() || !value.contains("version") || !value.contains("kind") ||
             !value.at("version").is_number_integer() ||
-            (value.at("version")<1 || value.at("version")>42) ||
+            (value.at("version")<1 || value.at("version")>44) ||
             !value.at("kind").is_string()) {
             document_error(DocumentErrorCode::invalid_entity, "serialized command envelope is invalid");
         }
@@ -8225,6 +8308,20 @@ Command command_from_json(const nlohmann::json& value,
             return result;
         }
         if (kind == "apply_boundary_constraint_changes") {
+            if (value.at("version")==43) {
+                command_exact_fields(value,{"version","kind","expected_revision","message","wall_group_scale_completion","wall_group_scale"},
+                    DocumentErrorCode::invalid_entity,"serialized connected wall group scale");
+                if (value.dump().size()>1024*1024 || !value.at("wall_group_scale_completion").is_boolean() ||
+                    !value.at("wall_group_scale_completion").get<bool>() || !value.at("message").is_string())
+                    throw std::invalid_argument("Wall group scale marker, message or proof budget is invalid");
+                ApplyBoundaryConstraintChanges result;
+                result.expected_revision=command_revision(value.at("expected_revision"),"Wall scale revision");
+                result.message=value.at("message").get<std::string>();
+                result.wall_group_scale_completion=true;
+                result.wall_group_scale=decode_wall_group_scale_intent(value.at("wall_group_scale"));
+                (void)command_to_json(Command{result});
+                return result;
+            }
             if (value.at("version")==41 || value.at("version")==42) {
                 const bool phase_enclosure=value.at("version")==42;
                 command_exact_fields(value,{"version","kind","expected_revision","message",
@@ -8403,7 +8500,7 @@ Command command_from_json(const nlohmann::json& value,
                 (void)command_to_json(Command{result});
                 return result;
             }
-            if (value.at("version")==18 || value.at("version")==24 || value.at("version")==25 || value.at("version")==26 || value.at("version")==27 || value.at("version")==28 || value.at("version")==29 || value.at("version")==30 || value.at("version")==31 || value.at("version")==32 || value.at("version")==35 || value.at("version")==36 || value.at("version")==37 || value.at("version")==38 || value.at("version")==39 || value.at("version")==40) {
+            if (value.at("version")==18 || value.at("version")==24 || value.at("version")==25 || value.at("version")==26 || value.at("version")==27 || value.at("version")==28 || value.at("version")==29 || value.at("version")==30 || value.at("version")==31 || value.at("version")==32 || value.at("version")==35 || value.at("version")==36 || value.at("version")==37 || value.at("version")==38 || value.at("version")==39 || value.at("version")==40 || value.at("version")==44) {
                 const bool geometry=value.at("version")!=18 && value.at("version")!=29;
                 const bool batch=value.at("version")==27;
                 if (batch)
@@ -9651,7 +9748,8 @@ Document Document::restore(DocumentSnapshot snapshot) {
             has_phase_room_review_completion(*record.boundary_constraint_changes) ||
             has_phase_constraint_authoring(*record.boundary_constraint_changes) ||
             has_disto_measurement_completion(*record.boundary_constraint_changes) || has_selection_completion(*record.boundary_constraint_changes) ||
-            has_curve_construction_completion(*record.boundary_constraint_changes)))
+            has_curve_construction_completion(*record.boundary_constraint_changes) ||
+            has_wall_group_scale(*record.boundary_constraint_changes)))
             validate_completed_constraint_change(previous.entities, record.entities, *record.boundary_constraint_changes, true);
         else validate_constraint_change(previous.entities, record.entities,
                 record.boundary_constraint_changes.has_value(), !record.source_revision.has_value(),

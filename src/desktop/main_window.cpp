@@ -5994,6 +5994,7 @@ class MainWindow::Impl {
         QString id;
         QStringList wall_ids;
         std::optional<Vec2> wall_group_pivot;
+        std::optional<double> wall_group_base_elevation;
         bool embedded{};
         bool measured{};
         std::optional<BuildingViewFrame> frame;
@@ -27458,10 +27459,27 @@ public:
             return ApplyEntityChanges{source.revision(),{}, {},"Transform geometry"};
         const PlanarTransform planar{intent.source_pivot,intent.source_radians,false,false,{}};
         if (!capture.wall_ids.isEmpty()) {
-            if (capture.wall_ids.size()<2 || intent.scale!=1.0 || capture.site_input || capture.embedded ||
+            if (capture.wall_ids.size()<2 || capture.site_input || capture.embedded ||
                 !capture.wall_group_pivot || intent.canvas_pivot.x!=capture.wall_group_pivot->x ||
                 intent.canvas_pivot.y!=capture.wall_group_pivot->y)
-                throw std::invalid_argument("The captured wall-group rotation authority changed.");
+                throw std::invalid_argument("The captured wall-group transform authority changed.");
+            if (intent.scale!=1.0) {
+                if (intent.radians!=0.0 || intent.source_radians!=0.0)
+                    throw std::invalid_argument("Resize and rotate the wall group in separate gestures.");
+                if (!capture.wall_group_base_elevation)
+                    throw std::invalid_argument("Scale walls together on one floor and resolved base plane.");
+                WallGroupScaleIntent scale;
+                for (const auto& id : capture.wall_ids) scale.wall_ids.push_back(id.toStdString());
+                scale.pivot={intent.source_pivot.x,intent.source_pivot.y,*capture.wall_group_base_elevation};
+                scale.scale=intent.scale;
+                ConstraintAuthoringIntent semantic;
+                semantic.wall_group_scale=std::move(scale);
+                semantic.message="Scale connected wall group";
+                const auto preview=preview_constraint_authoring(source,semantic);
+                requireAcceptedConstraintPreview(preview);
+                return augmentAuthoredCommandForRegistry(
+                    constraint_authoring_verified_command(source,preview,nullptr),source);
+            }
             return augmentAuthoredCommandForRegistry(makeSelectionGeometryTransformCommand(source,capture.wall_ids,planar),source);
         }
         const auto c=std::cos(intent.source_radians),s=std::sin(intent.source_radians);
@@ -27551,6 +27569,8 @@ public:
                         const auto command=ordinaryGeometryTransformCommand(*source,*ordinary_capture,intent);
                         if (cancellation.is_cancelled()) return RegenerationReceipt{source->revision(),{}};
                         const auto candidate=prepareCanvasEdit(*source,command,edit_source,*prepared_move);
+                        if (!ordinary_capture->wall_ids.isEmpty() && intent.scale!=1.0)
+                            validate_architectural_geometry_changes(*source,candidate);
                         *ordinary_command=command;
                         if (intent.scale==1.0 && intent.radians==0.0) {
                             VertexPreviewProjection projection;
@@ -28688,7 +28708,7 @@ public:
     void captureWallGroupTransformFromCanvas(PlanCanvas* canvas,const QStringList& ids) {
         if (!canvas || canvas!=(m_workspace==Workspace::measurement ? m_measurementCanvas : m_architecturalCanvas) ||
             siteCanvas(canvas) || ids.size()<2 || !sameSelectionMembership(ids,m_selected_ids))
-            throw std::invalid_argument("Select a physical wall group in a horizontal plan to rotate it.");
+            throw std::invalid_argument("Select a physical wall group in a horizontal plan to transform it.");
         const auto pivot=canvas->wallGroupRotationPivot();
         if (!pivot || !std::isfinite(pivot->x) || !std::isfinite(pivot->y))
             throw std::invalid_argument("The captured wall-group frame is unavailable.");
@@ -28700,10 +28720,11 @@ public:
         if (!m_ordinary_transform_capture || m_ordinary_transform_capture->site_input ||
             m_ordinary_transform_capture->embedded || m_ordinary_transform_capture->measured ||
             !m_entity_transform_source || fullSnapshotDigest(*m_entity_transform_source)!=fullSnapshotDigest(*source))
-            throw std::invalid_argument("The wall-group rotation source changed during capture.");
+            throw std::invalid_argument("The wall-group transform source changed during capture.");
         auto capture=std::make_shared<OrdinaryGeometryTransformCapture>(*m_ordinary_transform_capture);
         capture->wall_ids=ids;
         capture->wall_group_pivot=*pivot;
+        capture->wall_group_base_elevation=wallGroupScaleBasePlane(*source,ids);
         // The original group frame owns its pivot; a selected wall's midpoint
         // must not replace the displayed multi-object rotation centre.
         capture->architectural_pivot.reset();
@@ -28993,7 +29014,7 @@ public:
             if (!canvas || !capture || !m_entity_transform_source || !m_entity_transform_edit_source ||
                 !m_document->is_editable() || !entityTransformContextUnchanged() || m_entity_transform_canvas!=canvas ||
                 m_entity_transform_id!=id || capture->id!=id ||
-                (wall_group ? !sameSelectionMembership(capture->wall_ids,m_selected_ids) || scale!=1.0 ||
+                (wall_group ? !sameSelectionMembership(capture->wall_ids,m_selected_ids) ||
                     !capture->wall_group_pivot || canvas_pivot.x!=capture->wall_group_pivot->x ||
                     canvas_pivot.y!=capture->wall_group_pivot->y
                     : m_selected_ids.size()!=1 || m_selected_ids.front()!=id) ||
@@ -30632,7 +30653,7 @@ public:
             !preview->edit_source || preview->edit_source!=m_entity_transform_edit_source || !entityTransformContextUnchanged() ||
             !m_document->is_editable() || !canvas || canvas!=m_entity_transform_canvas || capture->id!=id ||
             m_entity_transform_id!=id || m_entity_transform_axis_resize ||
-            (wall_group ? !sameSelectionMembership(capture->wall_ids,m_selected_ids) || scale!=1.0
+            (wall_group ? !sameSelectionMembership(capture->wall_ids,m_selected_ids)
                 : m_selected_ids.size()!=1 || m_selected_ids.front()!=id) ||
             canvas->entityTransformPreviewSerial()!=preview->serial || m_entity_transform_serial!=preview->serial ||
             canvas->font()!=capture->font || canvas->logicalDpiX()!=capture->dpi_x || canvas->logicalDpiY()!=capture->dpi_y ||
@@ -30647,7 +30668,7 @@ public:
         const bool no_op=scale==1.0 && radians==0.0;
         const auto source=m_entity_transform_source;
         const auto selected=source->entities().find(id.toStdString());
-        if (!no_op && scale==1.0 && !siteCanvas(canvas) && !capture->site_input && !capture->embedded &&
+        if (!no_op && (scale==1.0 || wall_group) && !siteCanvas(canvas) && !capture->site_input && !capture->embedded &&
             selected!=source->entities().end() && selected->second.type=="wall") {
             const auto prepared=preview->prepared;
             const auto edit_source=preview->edit_source;
@@ -53483,30 +53504,30 @@ private:
             }
         });
         canvas->setEntitiesTransformPreviewRequested(
-            [this,canvas](QStringList ids,double radians,Vec2 pivot,std::uint64_t serial)
+            [this,canvas](QStringList ids,double scale,double radians,Vec2 pivot,std::uint64_t serial)
                 -> std::optional<std::vector<CanvasEntity>> {
                 const auto capture=m_ordinary_transform_capture;
                 if (!capture || ids!=capture->wall_ids || ids.size()<2 || !capture->wall_group_pivot ||
                     pivot.x!=capture->wall_group_pivot->x || pivot.y!=capture->wall_group_pivot->y) {
                     m_ordinary_transform_preview.reset(); m_entity_transform_ready=false;
-                    setError(QStringLiteral("The captured wall-group frame or selection changed. Start the rotation again."));
+                    setError(QStringLiteral("The captured wall-group frame or selection changed. Start the transform again."));
                     return std::vector<CanvasEntity>{};
                 }
-                return previewEntityTransformFromCanvas(canvas,capture->id,1.0,radians,pivot,serial);
+                return previewEntityTransformFromCanvas(canvas,capture->id,scale,radians,pivot,serial);
             });
         canvas->setEntitiesTransformRequested(
-            [this,canvas](QStringList ids,double radians,Vec2 pivot) {
+            [this,canvas](QStringList ids,double scale,double radians,Vec2 pivot) {
                 try {
                     const auto capture=m_ordinary_transform_capture;
                     if (!capture || canvas!=m_entity_transform_canvas || ids!=capture->wall_ids || ids.size()<2 ||
                         !capture->wall_group_pivot || pivot.x!=capture->wall_group_pivot->x ||
                         pivot.y!=capture->wall_group_pivot->y) {
                         m_ordinary_transform_preview.reset(); m_entity_transform_ready=false;
-                        throw std::invalid_argument("The captured wall-group release changed. Start the rotation again.");
+                        throw std::invalid_argument("The captured wall-group release changed. Start the transform again.");
                     }
-                    return commitOrdinaryGeometryTransformFromCanvas(capture->id,1.0,radians);
+                    return commitOrdinaryGeometryTransformFromCanvas(capture->id,scale,radians);
                 } catch (const std::exception& error) {
-                    setError(QStringLiteral("Rotate walls: %1").arg(QString::fromUtf8(error.what())));
+                    setError(QStringLiteral("Transform walls: %1").arg(QString::fromUtf8(error.what())));
                     return false;
                 }
             });
@@ -58465,6 +58486,8 @@ private:
         }
         m_measurementCanvas->setWallGroupRotationEnabled(snapshot.is_editable());
         m_architecturalCanvas->setWallGroupRotationEnabled(architectural_wall_group_rotation);
+        m_measurementCanvas->setWallGroupScaleEnabled(snapshot.is_editable());
+        m_architecturalCanvas->setWallGroupScaleEnabled(architectural_wall_group_rotation);
         if(m_workspace==Workspace::architectural && !siteCanvas(m_architecturalCanvas) && m_selected_ids.size()==1) {
             const auto owner_entity=snapshot.entities().find(m_selected_id.toStdString());
             if(owner_entity!=snapshot.entities().end() && owner_entity->second.type=="opening") {
@@ -61159,6 +61182,7 @@ private:
         if (m_selected_ids.size()>1 && m_document->is_editable()) {
             const auto source=authoringSnapshot();
             rotate_selection=physicalWallRoomReviewSelection(source,m_selected_ids,m_selected_id.toStdString());
+            resize_selection=rotate_selection && wallGroupScaleBasePlane(source,m_selected_ids).has_value();
         }
         bool axis_resize = false;
         if (m_selected_ids.size() == 1 && m_document->is_editable()) {
@@ -64865,6 +64889,36 @@ public:
                 return false;
         }
         return true;
+    }
+
+    std::optional<double> wallGroupScaleBasePlane(const DocumentSnapshot& source,
+        const QStringList& selection) const {
+        if (selection.size()<2 || selection.size()>128) return std::nullopt;
+        try {
+            const auto organization=organize_project(source);
+            std::optional<DrawingContext> first_context;
+            std::optional<double> elevation;
+            std::set<std::string> owners;
+            for (const auto& id : selection) {
+                const auto found=source.entities().find(id.toStdString());
+                if (found==source.entities().end() || found->second.type!="wall" ||
+                    !owners.insert(found->first).second || embeddedAssemblyChild(source,found->first)) return std::nullopt;
+                const auto context=organization.drawing_context(found->first);
+                if (!context || !context->complete()) return std::nullopt;
+                if (first_context && (context->property_id!=first_context->property_id ||
+                    context->building_id!=first_context->building_id || context->floor_id!=first_context->floor_id))
+                    return std::nullopt;
+                first_context=context;
+                Wall wall;
+                std::string diagnostic;
+                if (!read_document_wall(resolve_vertical_placement(source,found->second),{},wall,diagnostic) ||
+                    !std::isfinite(wall.elevation)) return std::nullopt;
+                if (elevation && std::abs(*elevation-wall.elevation)>default_geometry_tolerance_metres)
+                    return std::nullopt;
+                if (!elevation) elevation=wall.elevation;
+            }
+            return elevation;
+        } catch (const std::exception&) { return std::nullopt; }
     }
 
     std::optional<std::string> coordinatedOrdinaryWallRoomReviewRoot(const DocumentSnapshot& source,

@@ -170,6 +170,7 @@ struct ConstraintAuthoringIntent {
     // One translation pins all selected lanes in the same hard-connected solve.
     std::optional<JointTranslationIntent> joint_translation;
     std::optional<WallCurveConstructionIntent> wall_curve_construction;
+    std::optional<WallGroupScaleIntent> wall_group_scale;
 };
 
 struct ConstraintWallChange {
@@ -251,6 +252,10 @@ private:
 [[nodiscard]] std::map<std::string,Entity,std::less<>> reconstruct_active_phase_constraint_authoring(
     const std::map<std::string,Entity,std::less<>>& source,
     const ConstraintAuthoringIntent& intent);
+// Entity-only historical replay; saved-active authoring retains its separate
+// phase wrapper and calls reconstruct_active_phase_constraint_authoring.
+[[nodiscard]] std::map<std::string,Entity,std::less<>> reconstruct_wall_group_scale(
+    const std::map<std::string,Entity,std::less<>>& source, const WallGroupScaleIntent& intent);
 
 // Preview is side-effect free. Invalid, contradictory, unsupported, or no-op
 // intents return accepted()==false with diagnostics and the original entity map.

@@ -85,6 +85,11 @@ struct PhaseConstraintAuthoringIntent {
     // cannot recover. No sibling geometry, relationship, replacement or
     // demolition authority accompanies it. Null preserves historical codecs.
     nlohmann::json ordinary_roof_edits=nullptr;
+    // Dialect eighteen: intent.wall_group_scale alone carries canonical
+    // uniform physical scale authority for actual ordinary/proposed walls.
+    // Its closed intent gains exactly the wall_group_scale field; historical
+    // dialects retain their sixteen fields and cannot admit this operation.
+    // There is no replacement, demolition or coordinated scale authority.
 };
 
 [[nodiscard]] PhaseConstraintAuthoringIntent decode_phase_constraint_authoring_intent(

@@ -4,6 +4,7 @@
 #include "sketch/boundary_identity_history.hpp"
 #include "sketch/stair_identity_history.hpp"
 #include "sketch/geometry.hpp"
+#include "sketch/stair_semantics.hpp"
 #include "sketch/quantity.hpp"
 #include "sketch/field_adapter_contract.hpp"
 #include "sketch/physical_room_split_ids.hpp"
@@ -206,6 +207,18 @@ struct ConstraintWallGeometryEdit {
     std::optional<nlohmann::json> curve_construction;
     std::optional<std::string> wall_classification;
 };
+
+// One source-derived physical similarity for actual selected walls. XYZ
+// positions, sections and hosted profiles share this positive factor; fixed
+// persisted measurements remain unchanged and may reject the connected solve.
+struct WallGroupScaleIntent {
+    std::vector<std::string> wall_ids;
+    Vec3 pivot{};
+    double scale{1.0};
+    bool move_connected_walls{true};
+};
+[[nodiscard]] nlohmann::json encode_wall_group_scale_intent(const WallGroupScaleIntent& intent);
+[[nodiscard]] WallGroupScaleIntent decode_wall_group_scale_intent(const nlohmann::json& value);
 
 // An exterior analytical corner edit is replayed through the physical source
 // walls, never through an independently editable measured-outline payload.
@@ -465,6 +478,10 @@ struct ApplyBoundaryConstraintChanges {
     // The semantic intent has no raw entity-change or geometry authority.
     nlohmann::json independent_drawing_removal_intent=nullptr;
     bool independent_drawing_removal_completion{};
+    // Envelope forty-three independently repeats the connected solve and all
+    // source consequences. No raw geometry payload lends scale authority.
+    std::optional<WallGroupScaleIntent> wall_group_scale;
+    bool wall_group_scale_completion{};
 };
 
 using Command = std::variant<ApplyEntityChanges, ImportPhaseEntities, NameRevision, TranslateBoundary,

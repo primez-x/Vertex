@@ -1881,6 +1881,7 @@ Json qualified_ordinary_geometry(const Command& geometry_command) {
         geometry->exterior_segment_resize || geometry->exterior_segment_arc ||
         geometry->rigid_wall_transform_completion || geometry->rigid_group_completion || geometry->rigid_group_transform ||
         geometry->joint_translation_completion || geometry->joint_translation ||
+        geometry->wall_group_scale_completion || geometry->wall_group_scale ||
         geometry->room_review_completion || !geometry->room_review_intent.is_null() ||
         geometry->room_review_geometry_completion || !geometry->room_review_geometry_proof.is_null() ||
         geometry->room_review_batch_completion || !geometry->room_review_additional_intents.empty() ||
@@ -1936,6 +1937,7 @@ Json room_review_geometry_proof(const DocumentSnapshot& source,const Command& ge
     if (is_physical_wall_room_profile_review_command(geometry_command)) return command_to_json(geometry_command);
     if (is_physical_wall_room_rigid_review_command(geometry_command)) return command_to_json(geometry_command);
     if (is_physical_wall_room_joint_review_command(geometry_command)) return command_to_json(geometry_command);
+    if (is_physical_wall_room_scale_review_command(geometry_command)) return command_to_json(geometry_command);
     if (is_physical_wall_room_active_constraint_review_command(geometry_command)) return command_to_json(geometry_command);
     if (is_physical_wall_room_selection_geometry_review_command(geometry_command)) return command_to_json(geometry_command);
     return qualified_ordinary_geometry(geometry_command);
@@ -1956,6 +1958,7 @@ Json plain_room_review_proof(const ApplyBoundaryConstraintChanges& command) {
         command.supplemental_asset_reference_completion || command.rigid_wall_transform_completion ||
         command.measured_source_completion || command.dimension_placement_completion ||
         command.rigid_group_completion || command.rigid_group_transform || command.wall_split || command.wall_merge ||
+        command.wall_group_scale_completion || command.wall_group_scale ||
         command.exterior_corner_move || command.exterior_segment_resize || command.exterior_segment_arc ||
         command.joint_translation_completion || command.joint_translation || command.wall_dimension_completion ||
         command.curve_construction_completion || command.disto_measurement_completion || command.disto_measurement ||
@@ -1973,7 +1976,8 @@ Json plain_room_review_proof(const ApplyBoundaryConstraintChanges& command) {
 bool unwrapped_room_geometry_review_command(const Command& command) {
     try {
         if (is_physical_wall_room_deletion_review_command(command) || is_physical_wall_room_profile_review_command(command) ||
-            is_physical_wall_room_rigid_review_command(command) || is_physical_wall_room_joint_review_command(command)) return true;
+            is_physical_wall_room_rigid_review_command(command) || is_physical_wall_room_joint_review_command(command) ||
+            is_physical_wall_room_scale_review_command(command)) return true;
         if (is_physical_wall_room_active_constraint_review_command(command))
             return command_to_json(command).dump().size()<=1024*1024;
         (void)qualified_ordinary_geometry(command);
@@ -2020,10 +2024,44 @@ bool is_physical_wall_room_geometry_review_command(const Command& command) {
     return unwrapped_room_geometry_review_command(command);
 }
 
+bool is_physical_wall_room_scale_review_command(const Command& command) {
+    try {
+        const auto* geometry=std::get_if<ApplyBoundaryConstraintChanges>(&command);
+        if (!geometry || !geometry->wall_group_scale_completion || !geometry->wall_group_scale ||
+            geometry->wall_group_scale->wall_ids.size()<2 ||
+            !geometry->boundary_edits.empty() || !geometry->entity_changes.empty() || !geometry->wall_edits.empty() ||
+            !geometry->physical_entity_changes.empty() || !geometry->exterior_source_edits.empty() ||
+            !geometry->supplemental_entity_changes.empty() || !geometry->supplemental_asset_changes.empty() ||
+            !geometry->measured_stroke_edits.empty() || !geometry->dimension_placement_moves.empty() ||
+            !geometry->selection_entity_changes.empty() || geometry->exterior_source_completion ||
+            geometry->supplemental_source_completion || geometry->supplemental_asset_reference_completion ||
+            geometry->exterior_corner_move || geometry->exterior_segment_resize || geometry->exterior_segment_arc ||
+            geometry->wall_split || geometry->wall_merge || geometry->rigid_wall_transform_completion ||
+            geometry->rigid_group_completion || geometry->rigid_group_transform ||
+            geometry->joint_translation_completion || geometry->joint_translation || geometry->measured_source_completion ||
+            geometry->dimension_placement_completion || geometry->wall_dimension_completion ||
+            geometry->curve_construction_completion || geometry->disto_measurement_completion || geometry->disto_measurement ||
+            geometry->selection_completion || geometry->room_review_completion || !geometry->room_review_intent.is_null() ||
+            geometry->room_review_geometry_completion || !geometry->room_review_geometry_proof.is_null() ||
+            geometry->room_review_batch_completion || !geometry->room_review_additional_intents.empty() ||
+            geometry->phase_room_review_completion || !geometry->phase_room_review_intent.is_null() ||
+            geometry->phase_constraint_authoring_completion || !geometry->phase_constraint_authoring_intent.is_null() ||
+            geometry->independent_drawing_removal_completion || !geometry->independent_drawing_removal_intent.is_null()) return false;
+        // The scale codec owns finite pivot/factor and sorted unique wall IDs.
+        // Check the direct dialect before round-trip admission, so no wrapper
+        // can recursively acquire room geometry authority from this predicate.
+        const auto proof=command_to_json(command);
+        if (proof.dump().size()>1024*1024 || proof.at("version")!=43 ||
+            proof.at("kind")!="apply_boundary_constraint_changes") return false;
+        return command_to_json(command_from_json(proof)).dump()==proof.dump();
+    } catch (const std::exception&) { return false; }
+}
+
 bool is_physical_wall_room_rigid_review_command(const Command& command) {
     try {
         const auto* geometry=std::get_if<ApplyBoundaryConstraintChanges>(&command);
         if (!geometry || geometry->wall_edits.empty()) return false;
+        if (geometry->wall_group_scale_completion || geometry->wall_group_scale) return false;
         // Refuse every other typed intent before entering the codec. In
         // particular, an outer room proof must never recursively use this
         // predicate while serializing or decoding its geometry child.
@@ -2068,6 +2106,7 @@ bool is_physical_wall_room_rigid_review_command(const Command& command) {
 bool is_physical_wall_room_active_constraint_review_command(const Command& command) {
     try {
         const auto* geometry=std::get_if<ApplyBoundaryConstraintChanges>(&command);
+        if (geometry && (geometry->wall_group_scale_completion || geometry->wall_group_scale)) return false;
         if (!geometry || !geometry->phase_constraint_authoring_completion ||
             geometry->phase_constraint_authoring_intent.is_null() || geometry->selection_completion ||
             !geometry->selection_entity_changes.empty()) return false;
@@ -2082,6 +2121,7 @@ bool is_physical_wall_room_active_constraint_review_command(const Command& comma
 bool is_physical_wall_room_joint_review_command(const Command& command) {
     try {
         const auto* geometry=std::get_if<ApplyBoundaryConstraintChanges>(&command);
+        if (geometry && (geometry->wall_group_scale_completion || geometry->wall_group_scale)) return false;
         if (!geometry || geometry->wall_edits.empty() || !geometry->joint_translation_completion ||
             !geometry->joint_translation || geometry->joint_translation->partial_wall_ids.empty()) return false;
         // Inspect typed markers before invoking the codec: a competing wrapper
@@ -2542,6 +2582,7 @@ bool is_physical_wall_room_profile_review_command(const Command& command) {
         if (raw) {
             if (!profile_upsert(raw->entity_changes) || !raw->asset_changes.empty()) return false;
         } else if (completed) {
+            if (completed->wall_group_scale_completion || completed->wall_group_scale) return false;
             if (!profile_upsert(completed->physical_entity_changes) || !completed->wall_edits.empty() ||
                 !completed->boundary_edits.empty() || !completed->entity_changes.empty() ||
                 !completed->exterior_source_completion || completed->exterior_source_edits.empty() ||
@@ -2638,6 +2679,21 @@ DocumentSnapshot preview_physical_wall_room_review_geometry(const DocumentSnapsh
     }
     // The original child command owns all ordinary admission and consequences.
     auto derived=Document::preview_command(source,geometry_command);
+    if (const auto* geometry=std::get_if<ApplyBoundaryConstraintChanges>(&geometry_command)) {
+        const Command base{without_room_geometry_selection(*geometry)};
+        if (is_physical_wall_room_scale_review_command(base)) {
+            std::size_t changed_selected_walls=0;
+            for (const auto& id:geometry->wall_group_scale->wall_ids) {
+                const auto previous=source.entities().find(id),proposed=derived.entities().find(id);
+                if (previous==source.entities().end() || previous->second.type!="wall" ||
+                    proposed==derived.entities().end() || proposed->second.type!="wall")
+                    invalid("wall group scale review requires existing selected physical walls");
+                if (!exact_entity(previous->second,proposed->second)) ++changed_selected_walls;
+            }
+            if (changed_selected_walls<2)
+                invalid("wall group scale review requires actual changes to at least two selected physical walls");
+        }
+    }
     const bool deletion=is_physical_wall_room_deletion_review_command(geometry_command);
     if (deletion) validate_physical_wall_room_deletion_review_source(source.entities(),derived.entities(),geometry_command,proof,
         source.uses_active_phase_constraints());
