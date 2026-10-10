@@ -57,28 +57,54 @@ constexpr const char* kLineworkDepiction = "LINEWORK_PLAN_V1";
 constexpr const char* kMeasuredGraph = "vertex_dxf_measured_graph";
 constexpr const char* kResolvedContext = "vertex_dxf_resolved_context";
 constexpr const char* kPhysicalGraph = "vertex_dxf_physical_source_graph";
+constexpr const char* kCatalogTableIdentity = "vertex.catalog.sources";
+Entity read_catalog_source(const std::string& id, const Json& record);
+std::vector<std::string> catalog_identity_list(const Json& values);
+AssemblyDocumentEntities merged_catalog_source_graph(const NativeDxfPhysicalSourceGraphs& proofs,
+    const NativeDxfCatalogSources& catalogs);
+void reserve_catalog_document_passes(const Entity& owner, AssemblyCatalogTransferBudget& budget,
+    std::size_t passes, bool transferable = true);
+
+// Presence is a raw transport decision. Legacy walls with non-material layers
+// keep their existing admission contract; malformed assignments still refuse
+// within the affected component rather than disappearing from discovery.
+bool raw_material_assignment(const Entity& entity) {
+    if (entity.properties.contains("material_assignment")) return true;
+    if (entity.type != "wall" && entity.type != "slab") return false;
+    const auto layers = entity.properties.find("layers");
+    return layers != entity.properties.end() && layers->is_array() &&
+        std::any_of(layers->begin(), layers->end(), [](const auto& layer) {
+            return layer.is_object() && layer.contains("material_assignment");
+        });
+}
+
+bool catalog_source_member(const Entity& entity) {
+    const auto marker = entity.extensions.find("vertex_dxf_boundary");
+    return marker != entity.extensions.end() && marker->is_object() && marker->value("version", 0) == 8;
+}
 
 bool physical_source_member(const Entity& entity) {
     const auto marker = entity.extensions.find("vertex_dxf_boundary");
-    return marker != entity.extensions.end() && marker->is_object() && marker->value("version", 0) == 7;
+    return marker != entity.extensions.end() && marker->is_object() &&
+        (marker->value("version", 0) == 7 || marker->value("version", 0) == 8);
 }
 
 bool resolved_source_member(const Entity& entity) {
     const auto marker = entity.extensions.find("vertex_dxf_boundary");
     return marker != entity.extensions.end() && marker->is_object() &&
-        (marker->value("version", 0) == 6 || marker->value("version", 0) == 7);
+        (marker->value("version", 0) == 6 || marker->value("version", 0) == 7 || marker->value("version", 0) == 8);
 }
 
 bool measured_source_member(const Entity& entity) {
     const auto marker = entity.extensions.find("vertex_dxf_boundary");
     return marker != entity.extensions.end() && marker->is_object() &&
-        (marker->value("version", 0) == 6 || marker->value("version", 0) == 7);
+        (marker->value("version", 0) == 6 || marker->value("version", 0) == 7 || marker->value("version", 0) == 8);
 }
 
 bool wall_source_member(const Entity& entity) {
     const auto marker = entity.extensions.find("vertex_dxf_boundary");
     return marker != entity.extensions.end() && marker->is_object() &&
-        (marker->value("version", 0) == 5 || marker->value("version", 0) == 6 || marker->value("version", 0) == 7);
+        (marker->value("version", 0) == 5 || marker->value("version", 0) == 6 || marker->value("version", 0) == 7 || marker->value("version", 0) == 8);
 }
 
 Json resolved_context_json(const DrawingContext& context) {
@@ -436,8 +462,10 @@ Json physical_graph_json(const std::map<std::string, Entity, std::less<>>& entit
 }
 
 std::map<std::string, Entity, std::less<>> read_physical_graph(const Json& proof) {
-    if (!proof.is_object() || proof.size() != 2 || !proof.at("version").is_number_integer() ||
-        proof.at("version") != 1 || !proof.at("entities").is_array() || proof.at("entities").empty() ||
+    if (!proof.is_object() || !proof.at("version").is_number_integer() ||
+        !((proof.at("version") == 1 && proof.size() == 2) ||
+          (proof.at("version") == 2 && proof.size() == 3 && proof.at("catalog_ids").is_array())) ||
+        !proof.at("entities").is_array() || proof.at("entities").empty() ||
         proof.at("entities").size() > 4096) throw std::invalid_argument("invalid V7 source graph schema");
     admit_physical_graph_json_shape(proof);
     std::map<std::string, Entity, std::less<>> entities;
@@ -463,7 +491,7 @@ std::map<std::string, Entity, std::less<>> read_physical_graph(const Json& proof
 }
 
 Json physical_source_proof(const DocumentSnapshot& document, const std::vector<std::string>& members,
-    NativeDxfWallSourceWorkBudget& budget) {
+    NativeDxfWallSourceWorkBudget& budget, NativeDxfCatalogSources* catalog_sources = nullptr) {
     const auto registries = static_cast<std::size_t>(std::count_if(document.entities().begin(), document.entities().end(), [](const auto& owner) {
         return owner.second.type == "model_phases";
     }));
@@ -500,8 +528,71 @@ Json physical_source_proof(const DocumentSnapshot& document, const std::vector<s
         if (layers.contains(context->layer_id)) { graph.emplace(id, entity); capture_context(id); }
     }
     bool expanded = true;
+    std::set<std::string, std::less<>> catalog_ids;
     while (expanded) {
         expanded = false;
+        // Hosts introduced by complete catalogs can introduce opening hosts,
+        // measured/appraisal dependencies and further physical source bodies.
+        std::vector<std::string> dependencies;
+        if (catalog_sources && !catalog_ids.empty()) {
+        for (const auto& [id, owner] : graph) {
+            (void)id;
+            if (owner.type != "wall" && owner.type != "opening" && owner.type != "room_boundary" &&
+                owner.type != "boundary" && owner.type != "measurement_boundary" && owner.type != "measurement_linework") continue;
+            const auto reached = native_dxf_wall_source_dependency_ids(owner);
+            dependencies.insert(dependencies.end(), reached.begin(), reached.end());
+        }
+        for (const auto& dependency : dependencies) if (!graph.contains(dependency)) {
+            const auto& actual = document.entities().at(dependency);
+            if (!physical_proof_type(actual.type)) throw std::invalid_argument("V8 source reaches unsupported body dependency");
+            graph.emplace(dependency, actual); capture_context(dependency); expanded = true;
+        }
+        }
+        if (catalog_sources) {
+            std::set<std::string, std::less<>> requested;
+            for (const auto& [id, owner] : graph) {
+                (void)id;
+                for (const auto& reference : architectural_material_source_refs(owner))
+                    if (!catalog_ids.contains(reference.catalog_id)) requested.insert(reference.catalog_id);
+            }
+            if (!requested.empty()) {
+                const auto captured = capture_complete_assembly_catalog_sources(document,
+                    {requested.begin(), requested.end()}, budget.catalog_transfer);
+                for (const auto& [id, owner] : captured) {
+                    const Json record{{"id", owner.id}, {"type", owner.type}, {"properties", owner.properties},
+                        {"required", owner.required}, {"extensions", owner.extensions}};
+                    const auto [found, inserted] = catalog_sources->emplace(id, record);
+                    if (!inserted && found->second.dump() != record.dump())
+                        throw std::invalid_argument("conflicting V8 catalog source snapshots");
+                    catalog_ids.insert(id);
+                    const auto references = complete_assembly_catalog_source_refs(owner, budget.catalog_transfer);
+                    for (const auto& host : references.hosted_entity_ids) {
+                        const auto& actual = document.entities().at(host);
+                        if (!physical_proof_type(actual.type)) throw std::invalid_argument("V8 catalog host is unsupported");
+                        if (graph.emplace(host, actual).second) { capture_context(host); expanded = true; }
+                    }
+                    for (const auto& context : references.context_owner_ids)
+                        graph.emplace(context, document.entities().at(context));
+                    // Canonical context owners retain their actual ancestors.
+                    std::vector<std::string> context_owners = references.context_owner_ids;
+                    for (std::size_t index = 0; index < context_owners.size(); ++index) {
+                        const auto& context_owner = document.entities().at(context_owners[index]);
+                        for (const auto* slot : {"property_id", "building_id", "floor_id", "layer_id"})
+                            if (context_owner.properties.contains(slot)) {
+                                const auto ancestor = context_owner.properties.at(slot).get<std::string>();
+                                if (graph.emplace(ancestor, document.entities().at(ancestor)).second) context_owners.push_back(ancestor);
+                            }
+                        if (context_owner.type == "floor" && context_owner.properties.contains("vertical_level_binding")) {
+                            const auto& binding = context_owner.properties.at("vertical_level_binding");
+                            const auto graph_id = binding.at("graph_id").get<std::string>();
+                            const auto& levels = document.entities().at(graph_id);
+                            if (levels.type != "vertical_levels") throw std::invalid_argument("V8 catalog floor level graph type differs");
+                            graph.emplace(graph_id, levels);
+                        }
+                    }
+                }
+            }
+        }
         for (const auto& [id, entity] : document.entities()) {
             if (entity.type == "opening" && entity.properties.contains("wall_id") &&
                 entity.properties.at("wall_id").is_string() && graph.contains(entity.properties.at("wall_id").get<std::string>())) {
@@ -524,14 +615,17 @@ Json physical_source_proof(const DocumentSnapshot& document, const std::vector<s
             if (context && layers.contains(context->layer_id) && graph.emplace(id, entity).second) expanded = true;
         }
     }
-    return physical_graph_json(graph);
+    auto proof = physical_graph_json(graph);
+    if (!catalog_ids.empty()) { proof["version"] = 2; proof["catalog_ids"] = std::vector<std::string>(catalog_ids.begin(), catalog_ids.end()); }
+    return proof;
 }
 
 void validate_physical_source_groups(const std::vector<Entity>& entities,
     NativeDxfWallSourceWorkBudget& budget, bool preflight_only,
     const NativeDxfPhysicalSourceGraphs* proofs,
     const std::map<std::string, Entity, std::less<>>* destination,
-    const PhysicalSourceGraphIndex& source_index);
+    const PhysicalSourceGraphIndex& source_index,
+    const std::map<std::string, std::string, std::less<>>* catalog_mapping = nullptr);
 
 std::string block_identity(std::string_view name) {
     std::string result(name);
@@ -697,16 +791,20 @@ std::string valid_layer(std::string value, std::vector<DxfProjectDiagnostic>& di
     return value;
 }
 
-std::optional<std::string> layer_name(const DocumentSnapshot& document, const std::string& layer_id) {
-    const auto found = document.entities().find(layer_id);
-    if (found == document.entities().end() || found->second.type != "layer" ||
+std::optional<std::string> layer_name(const AssemblyDocumentEntities& entities, const std::string& layer_id) {
+    const auto found = entities.find(layer_id);
+    if (found == entities.end() || found->second.type != "layer" ||
         !found->second.properties.contains("name") || !found->second.properties.at("name").is_string())
         return std::nullopt;
     const auto name = found->second.properties.at("name").get<std::string>();
     return name.empty() ? std::nullopt : std::optional<std::string>{name};
 }
 
-std::string layer_for(const DocumentSnapshot& document, const Entity& entity,
+std::optional<std::string> layer_name(const DocumentSnapshot& document, const std::string& layer_id) {
+    return layer_name(document.entities(), layer_id);
+}
+
+std::string layer_for(const AssemblyDocumentEntities& entities, const Entity& entity,
                       std::vector<DxfProjectDiagnostic>& diagnostics) {
     std::string layer;
     if (entity.properties.is_object()) {
@@ -719,10 +817,15 @@ std::string layer_for(const DocumentSnapshot& document, const Entity& entity,
         if (layer.empty() && entity.properties.contains("layer_id") &&
             entity.properties.at("layer_id").is_string()) {
             const auto layer_id = entity.properties.at("layer_id").get<std::string>();
-            if (const auto name = layer_name(document, layer_id)) layer = *name;
+            if (const auto name = layer_name(entities, layer_id)) layer = *name;
         }
     }
     return valid_layer(std::move(layer), diagnostics, entity.id, entity.type);
+}
+
+std::string layer_for(const DocumentSnapshot& document, const Entity& entity,
+                      std::vector<DxfProjectDiagnostic>& diagnostics) {
+    return layer_for(document.entities(), entity, diagnostics);
 }
 
 std::string annotation_layer_for(const DocumentSnapshot& document, const AnnotationPlacement& placement,
@@ -1339,7 +1442,9 @@ void validate_boundary_group_ceiling_sources(const std::vector<Entity>& members)
 
 bool export_boundary_group(const DocumentSnapshot& document, const std::vector<std::string>& ids,
                            const ConstraintPhaseScope& scope, DxfProjectExportResult& result,
-                           NativeDxfWallSourceWorkBudget& wall_source_budget, bool preflight_only = false) {
+                           NativeDxfWallSourceWorkBudget& wall_source_budget,
+                           NativeDxfCatalogSources& operation_catalogs, std::set<std::string, std::less<>>& operation_authoring_catalogs,
+                           bool preflight_only = false) {
     try {
         std::vector<Entity> source, detached;
         std::map<std::string, std::string> unchanged;
@@ -1353,10 +1458,14 @@ bool export_boundary_group(const DocumentSnapshot& document, const std::vector<s
             else if (version != 6 && found != document.entities().end() && found->second.properties.contains("wall_measurement_source")) version = 5;
             else if (version < 5 && found != document.entities().end() && boundary_has_stair_declaration(found->second)) version = 4;
         }
+        const bool has_material = std::any_of(ids.begin(), ids.end(), [&](const auto& id) {
+            return document.entities().contains(id) && raw_material_assignment(document.entities().at(id));
+        });
+        if (has_material) version = 8;
         std::map<std::string, DrawingContext, std::less<>> captured_contexts;
         std::set<std::string, std::less<>> visible;
-        if (version == 6 || version == 7) {
-            if (version == 7) admit_physical_support_work(document.entities(), wall_source_budget, 1, 0, 0, 0);
+        if (version >= 6) {
+            if (version >= 7) admit_physical_support_work(document.entities(), wall_source_budget, 1, 0, 0, 0);
             const auto organization = organize_project(document);
             for (const auto& [id, entity] : document.entities()) {
                 if (scope.inactive_owner_ids.contains(id)) continue;
@@ -1377,8 +1486,8 @@ bool export_boundary_group(const DocumentSnapshot& document, const std::vector<s
             if (found == document.entities().end() || scope.inactive_owner_ids.contains(id) ||
                 (version >= 5 ? found->second.type != "boundary" && found->second.type != "measurement_boundary" &&
                     found->second.type != "wall" && found->second.type != "opening" &&
-                    !(version == 7 && found->second.type == "room_boundary") &&
-                    !((version == 6 || version == 7) && found->second.type == "measurement_linework") :
+                    !(version >= 7 && found->second.type == "room_boundary") &&
+                    !(version >= 6 && found->second.type == "measurement_linework") :
                     !can_recognize_boundary_entity_type(found->second.type)))
                 throw std::invalid_argument("inactive or unavailable boundary dependency");
             auto entity = found->second;
@@ -1390,7 +1499,7 @@ bool export_boundary_group(const DocumentSnapshot& document, const std::vector<s
             entity.extensions.erase(kMeasuredGraph);
             entity.extensions.erase(kPhysicalGraph);
             entity.extensions["vertex_dxf_boundary"] = marker;
-            if (version == 6 || version == 7) {
+            if (version >= 6) {
                 entity.extensions[kResolvedContext] = {{"version", 1}, {"context", resolved_context_json(captured_contexts.at(id))}};
                 entity.extensions[kMeasuredGraph] = {{"version", 1}, {"source_ids",
                     measured_graph_ids(entity, document.entities(), captured_contexts, &visible)}};
@@ -1414,8 +1523,17 @@ bool export_boundary_group(const DocumentSnapshot& document, const std::vector<s
         }
         Json physical_proof;
         NativeDxfPhysicalSourceGraphs physical_proofs;
-        if (version == 7) {
-            physical_proof = physical_source_proof(document, ids, wall_source_budget);
+        NativeDxfCatalogSources group_catalogs;
+        std::vector<std::string> group_authoring_catalogs;
+        if (version >= 7) {
+            physical_proof = physical_source_proof(document, ids, wall_source_budget, &group_catalogs);
+            if (physical_proof.at("version") == 2) {
+                version = 8;
+                for (auto& owner : source) owner.extensions["vertex_dxf_boundary"]["version"] = 8;
+                std::set<std::string, std::less<>> reached;
+                for (const auto& owner : source) for (const auto& ref : architectural_material_source_refs(owner)) reached.insert(ref.catalog_id);
+                group_authoring_catalogs.assign(reached.begin(), reached.end());
+            }
             physical_proofs.emplace(ids.front(), physical_proof);
             for (auto& entity : source) entity.extensions[kPhysicalGraph] = {{"version", 1},
                 {"source_graph_id", ids.front()}, {"source_owner_id", entity.id}};
@@ -1435,18 +1553,20 @@ bool export_boundary_group(const DocumentSnapshot& document, const std::vector<s
             metadata["member_ids"] = ids;
             metadata["dependency_graph"] = version >= 5 ? native_dxf_wall_source_dependency_graph(entity) :
                 native_dxf_boundary_dependency_graph(entity);
-            if (version == 6 || version == 7) metadata["resolved_context"] = resolved_context_json(captured_contexts.at(entity.id));
-            if (version == 7) metadata["physical_source_graph_id"] = ids.front();
-            if (version == 7) { metadata.erase("properties"); metadata.erase("extensions"); }
+            if (version >= 6) metadata["resolved_context"] = resolved_context_json(captured_contexts.at(entity.id));
+            if (version >= 7) metadata["physical_source_graph_id"] = ids.front();
+            if (version >= 7) { metadata.erase("properties"); metadata.erase("extensions"); }
             const auto payload = metadata.dump();
             if (payload.size() > 16 * 1024) throw std::invalid_argument("native payload byte limit");
             (void)bounded_native_json(payload);
         }
         if (preflight_only) {
-            if (version >= 5) validate_native_dxf_wall_source_groups(source, &wall_source_budget, true, &physical_proofs);
+            if (version == 8) validate_native_dxf_catalog_sources(source, physical_proofs, group_catalogs, group_authoring_catalogs, &wall_source_budget, true);
+            else if (version >= 5) validate_native_dxf_wall_source_groups(source, &wall_source_budget, true, &physical_proofs);
             return true;
         }
-        if (version >= 5) validate_native_dxf_wall_source_groups(source, &wall_source_budget, false, &physical_proofs);
+        if (version == 8) validate_native_dxf_catalog_sources(source, physical_proofs, group_catalogs, group_authoring_catalogs, &wall_source_budget);
+        else if (version >= 5) validate_native_dxf_wall_source_groups(source, &wall_source_budget, false, &physical_proofs);
         else validate_native_dxf_boundary_groups(source);
         std::vector<Entity> source_boundaries;
         for (const auto& entity : source)
@@ -1454,20 +1574,22 @@ bool export_boundary_group(const DocumentSnapshot& document, const std::vector<s
         if (version < 5) validate_boundary_group_source_contexts(source_boundaries);
         validate_boundary_group_ceiling_sources(source_boundaries);
         for (const auto& entity : source) detached.push_back(detached_native_entity(entity, unchanged, version >= 4));
-        if (version >= 5) validate_native_dxf_wall_source_groups(detached, &wall_source_budget, false, &physical_proofs);
+        if (version == 8) validate_native_dxf_catalog_sources(detached, physical_proofs, group_catalogs, group_authoring_catalogs, &wall_source_budget);
+        else if (version >= 5) validate_native_dxf_wall_source_groups(detached, &wall_source_budget, false, &physical_proofs);
         else validate_native_dxf_boundary_groups(detached);
-        const auto detached_document = Document::create(detached).snapshot();
+        const auto detached_document = Document::create(version == 8 ?
+            native_dxf_catalog_pending_admission_entities(detached, physical_proofs, group_catalogs, group_authoring_catalogs, &wall_source_budget) : detached).snapshot();
         if (!detached_document.is_editable())
             throw std::invalid_argument("native boundary group schema is not editable");
         DxfDrawing pending;
-        if (version == 7) {
+        if (version >= 7) {
             const auto encoded = physical_proof.dump(-1, ' ', true);
             if (encoded.size() > 16 * 1024 * 1024) throw std::invalid_argument("V7 source graph byte limit");
             constexpr std::size_t chunk_bytes = 6000;
             const auto chunks = (encoded.size() + chunk_bytes - 1) / chunk_bytes;
             for (std::size_t index = 0; index < chunks; ++index) {
                 const auto name = "VERTEX_PHYSICAL_PROOF_" + std::to_string(result.drawing.blocks.size() + pending.blocks.size() + 1);
-                Json chunk{{"version", 7}, {"depiction", "PHYSICAL_SOURCE_GRAPH_CHUNK_V1"}, {"graph_id", ids.front()},
+                Json chunk{{"version", version}, {"depiction", "PHYSICAL_SOURCE_GRAPH_CHUNK_V1"}, {"graph_id", ids.front()},
                     {"chunk_index", index}, {"chunk_count", chunks}, {"data", encoded.substr(index * chunk_bytes, chunk_bytes)}};
                 const auto bytes = chunk.dump(-1, ' ', true);
                 if (bytes.size() > 16 * 1024) throw std::invalid_argument("V7 graph carrier byte limit");
@@ -1492,9 +1614,9 @@ bool export_boundary_group(const DocumentSnapshot& document, const std::vector<s
             metadata["member_ids"] = ids;
             metadata["dependency_graph"] = version >= 5 ? native_dxf_wall_source_dependency_graph(entity) :
                 native_dxf_boundary_dependency_graph(entity);
-            if (version == 6 || version == 7) metadata["resolved_context"] = resolved_context_json(captured_contexts.at(entity.id));
-            if (version == 7) metadata["physical_source_graph_id"] = ids.front();
-            if (version == 7) { metadata.erase("properties"); metadata.erase("extensions"); }
+            if (version >= 6) metadata["resolved_context"] = resolved_context_json(captured_contexts.at(entity.id));
+            if (version >= 7) metadata["physical_source_graph_id"] = ids.front();
+            if (version >= 7) { metadata.erase("properties"); metadata.erase("extensions"); }
             const auto payload = metadata.dump();
             if (payload.size() > 16 * 1024) throw std::invalid_argument("native payload byte limit");
             (void)bounded_native_json(payload);
@@ -1521,6 +1643,11 @@ bool export_boundary_group(const DocumentSnapshot& document, const std::vector<s
             pending.blocks.push_back(std::move(block));
         }
         (void)export_dxf_ascii(pending);
+        for (const auto& [id, record] : group_catalogs) {
+            const auto [found, inserted] = operation_catalogs.emplace(id, record);
+            if (!inserted && found->second.dump() != record.dump()) throw std::invalid_argument("conflicting V8 global catalog snapshot");
+        }
+        operation_authoring_catalogs.insert(group_authoring_catalogs.begin(), group_authoring_catalogs.end());
         result.drawing.blocks.insert(result.drawing.blocks.end(), pending.blocks.begin(), pending.blocks.end());
         result.drawing.inserts.insert(result.drawing.inserts.end(), pending.inserts.begin(), pending.inserts.end());
         return true;
@@ -1547,8 +1674,9 @@ std::pair<std::set<std::string>, std::set<std::string>> export_boundary_groups(
     });
     wall_source_budget.measured_operation = measured_operation;
     std::optional<ProjectOrganization> organization;
-    const bool physical_operation = std::any_of(document.entities().begin(), document.entities().end(), [](const auto& owner) {
-        return owner.second.extensions.contains("physical_wall_room");
+    const bool physical_operation = std::any_of(document.entities().begin(), document.entities().end(), [&](const auto& owner) {
+        return !scope.inactive_owner_ids.contains(owner.first) &&
+            (owner.second.extensions.contains("physical_wall_room") || raw_material_assignment(owner.second));
     });
     // The physical export entry reserved this full-source organization before
     // its first phase decoder; legacy V6 organization retains its old contract.
@@ -1591,8 +1719,61 @@ std::pair<std::set<std::string>, std::set<std::string>> export_boundary_groups(
             if (can_recognize_boundary_entity_type(entity.type)) linked.insert(id);
         }
     }
+    // Catalog hosts are live authoring dependencies. Join every consumer and
+    // every complete embedded host before partitioning, including hosts whose
+    // own material assignments introduce another catalog (fixed-point closure).
+    std::map<std::string, std::string, std::less<>> catalog_anchor;
+    std::map<std::string, AssemblyCatalogSourceReferences, std::less<>> catalog_refs;
+    const bool catalog_operation = std::any_of(document.entities().begin(), document.entities().end(), [&](const auto& owner) {
+        return !scope.inactive_owner_ids.contains(owner.first) && adjacency.contains(owner.first) &&
+            raw_material_assignment(owner.second);
+    });
+    std::set<std::string> catalog_refusals;
+    bool catalog_inventory_admitted = true;
+    if (catalog_operation) try {
+        // Retained catalogs can be decoded by downstream Document admission.
+        // Reserve the full inventory before the first discovery model; only
+        // catalogs actually copied below require transferable owner references.
+        for (const auto& [id, owner] : document.entities()) {
+            (void)id;
+            if (owner.type == "assembly_model")
+                admit_existing_assembly_catalog_work(owner, wall_source_budget.catalog_transfer);
+        }
+    } catch (const std::exception&) {
+        catalog_inventory_admitted = false;
+    }
+    std::vector<std::string> catalog_pending;
+    for (const auto& [id, entity] : document.entities())
+        if (!scope.inactive_owner_ids.contains(id) && adjacency.contains(id) && raw_material_assignment(entity))
+            catalog_pending.push_back(id);
+    std::set<std::string> catalog_processed;
+    for (std::size_t index = 0; index < catalog_pending.size(); ++index) {
+        const auto id = catalog_pending[index];
+        if (!catalog_processed.insert(id).second) continue;
+        const auto found = document.entities().find(id);
+        if (found == document.entities().end() || scope.inactive_owner_ids.contains(id)) {
+            linked.insert(id); catalog_refusals.insert(id); continue;
+        }
+        const auto& entity = found->second;
+        try {
+            if (!catalog_inventory_admitted) throw std::invalid_argument("V8 retained catalog inventory work not admitted");
+            for (const auto& ref : architectural_material_source_refs(entity)) {
+                linked.insert(id);
+                const auto [anchor, inserted] = catalog_anchor.emplace(ref.catalog_id, id);
+                if (!inserted) { adjacency[id].insert(anchor->second); adjacency[anchor->second].insert(id); }
+                if (!catalog_refs.contains(ref.catalog_id))
+                    catalog_refs.emplace(ref.catalog_id, complete_assembly_catalog_source_refs(document.entities().at(ref.catalog_id), wall_source_budget.catalog_transfer));
+                for (const auto& host : catalog_refs.at(ref.catalog_id).hosted_entity_ids) {
+                    adjacency[id].insert(host); adjacency[host].insert(id);
+                    catalog_pending.push_back(host);
+                }
+            }
+        } catch (const std::exception&) { linked.insert(id); catalog_refusals.insert(id); }
+    }
     std::set<std::string> processed, activated, fallback;
     std::vector<std::vector<std::string>> components;
+    NativeDxfCatalogSources operation_catalogs;
+    std::set<std::string, std::less<>> operation_authoring_catalogs;
     for (const auto& root : linked) {
         if (processed.contains(root)) continue;
         std::set<std::string> members{root};
@@ -1602,15 +1783,43 @@ std::pair<std::set<std::string>, std::set<std::string>> export_boundary_groups(
         processed.insert(members.begin(), members.end());
         components.emplace_back(members.begin(), members.end());
     }
+    for (const auto& ids : components)
+        if (std::any_of(ids.begin(), ids.end(), [&](const auto& id) { return catalog_refusals.contains(id); })) {
+            fallback.insert(ids.begin(), ids.end());
+            for (const auto& id : ids) {
+                const auto found = document.entities().find(id);
+                if (found != document.entities().end())
+                    diagnostic(result.diagnostics, id, found->second.type, "native_catalog_source_not_admitted");
+            }
+        }
     // V6 operation admission preflights every component before any nonlinear
     // proof. V1..V5-only operations retain their prior work/schema contract.
     if (measured_operation || physical_operation) for (const auto& ids : components)
-        if (!export_boundary_group(document, ids, scope, result, wall_source_budget, true))
+        if (!std::any_of(ids.begin(), ids.end(), [&](const auto& id) { return fallback.contains(id); }) &&
+            !export_boundary_group(document, ids, scope, result, wall_source_budget, operation_catalogs, operation_authoring_catalogs, true))
             fallback.insert(ids.begin(), ids.end());
     for (const auto& ids : components) {
         if (std::any_of(ids.begin(), ids.end(), [&](const auto& id) { return fallback.contains(id); })) continue;
-        auto& destination = export_boundary_group(document, ids, scope, result, wall_source_budget) ? activated : fallback;
+        auto& destination = export_boundary_group(document, ids, scope, result, wall_source_budget, operation_catalogs, operation_authoring_catalogs) ? activated : fallback;
         destination.insert(ids.begin(), ids.end());
+    }
+    if (!operation_catalogs.empty()) {
+        Json records = Json::array();
+        for (const auto& [id, record] : operation_catalogs) { (void)id; records.push_back(record); }
+        const Json table{{"version", 1}, {"catalog_sources", records},
+            {"authoring_catalog_ids", std::vector<std::string>(operation_authoring_catalogs.begin(), operation_authoring_catalogs.end())}};
+        const auto encoded = table.dump(-1, ' ', true);
+        (void)parse_assembly_catalog_transport_json(encoded);
+        constexpr std::size_t chunk_bytes = 6000;
+        const auto count = (encoded.size() + chunk_bytes - 1) / chunk_bytes;
+        for (std::size_t part = 0; part < count; ++part) {
+            DxfBlock block; block.name = "VERTEX_CATALOG_PROOF_" + std::to_string(result.drawing.blocks.size() + 1);
+            block.vertex_entity_json = Json{{"version", 8}, {"depiction", "CATALOG_SOURCE_TABLE_CHUNK_V1"},
+                {"graph_id", kCatalogTableIdentity}, {"chunk_index", part}, {"chunk_count", count},
+                {"data", encoded.substr(part * chunk_bytes, chunk_bytes)}}.dump(-1, ' ', true);
+            (void)bounded_native_json(block.vertex_entity_json);
+            result.drawing.inserts.push_back({block.name, {}, 1, 1, 0, "0"}); result.drawing.blocks.push_back(std::move(block));
+        }
     }
     return {std::move(activated), std::move(fallback)};
 }
@@ -2437,7 +2646,8 @@ NativeCandidate decode_native_candidate(const DxfBlock& block, std::size_t inser
     std::set<std::string> expected{"version", "id", "type", "properties", "extensions", "hosted_opening_ids"};
     std::set<std::string> actual;
     if (!payload.is_object()) throw std::invalid_argument("native payload must be object");
-    const bool physical_source = payload.contains("version") && payload.at("version").is_number_integer() && payload.at("version") == 7;
+    const bool physical_source = payload.contains("version") && payload.at("version").is_number_integer() &&
+        (payload.at("version") == 7 || payload.at("version") == 8);
     const bool measured_source = payload.contains("version") && payload.at("version").is_number_integer() && (payload.at("version") == 6 || physical_source);
     const bool wall_source = payload.contains("version") && payload.at("version").is_number_integer() &&
         (payload.at("version") == 5 || measured_source);
@@ -2457,10 +2667,12 @@ NativeCandidate decode_native_candidate(const DxfBlock& block, std::size_t inser
             throw std::invalid_argument("boundary depiction contract missing");
     }
     Json original_properties, original_extensions;
+    bool original_required = false;
     if (physical_source) {
         const auto& original = source_index.at(payload.at("physical_source_graph_id").get<std::string>()).at(payload.at("id").get<std::string>());
         if (original.type != payload.at("type")) throw std::invalid_argument("V7 thin carrier source type differs");
         original_properties = original.properties; original_extensions = original.extensions;
+        if (payload.at("version") == 8) original_required = original.required;
     }
     const bool manufactured = physical_source ? original_properties.contains("opening_assembly") :
         payload.contains("properties") && payload.at("properties").is_object() && payload.at("properties").contains("opening_assembly");
@@ -2485,7 +2697,7 @@ NativeCandidate decode_native_candidate(const DxfBlock& block, std::size_t inser
         (!physical_source && (!payload.at("properties").is_object() || !payload.at("extensions").is_object())) ||
         !payload.at("hosted_opening_ids").is_array()) throw std::invalid_argument("invalid native payload schema");
     NativeCandidate candidate{{payload.at("id").get<std::string>(), payload.at("type").get<std::string>(),
-                               physical_source ? original_properties : payload.at("properties"), false,
+                               physical_source ? original_properties : payload.at("properties"), original_required,
                                physical_source ? original_extensions : payload.at("extensions")}, {}, insert_index, &block};
     if (candidate.entity.id.empty() || candidate.entity.id.size() > 255 ||
         (boundary ? !can_recognize_boundary_entity_type(candidate.entity.type) :
@@ -2523,7 +2735,7 @@ NativeCandidate decode_native_candidate(const DxfBlock& block, std::size_t inser
         candidate.entity.extensions[kMeasuredGraph] = {{"version", 1},
             {"source_ids", payload.at("dependency_graph").at("measurement_graph_ids")}};
         // The exact graph codec selects V6 by its admission marker.
-        candidate.entity.extensions["vertex_dxf_boundary"] = boundary_group_marker({}, physical_source ? 7 : 6);
+        candidate.entity.extensions["vertex_dxf_boundary"] = boundary_group_marker({}, candidate.version);
     }
     if (physical_source) {
         const auto graph_id = payload.at("physical_source_graph_id").get<std::string>();
@@ -2619,9 +2831,10 @@ Entity detached_native_entity(const Entity& source, const std::map<std::string, 
         result.properties.erase("layer_name");
     } else {
         if (!wall_source) result.properties.erase("vertical_placement");
-        for (const auto* key : {"level_connection", "material_assignment",
+        for (const auto* key : {"level_connection",
                                "wall_join_id", "room_id"}) result.properties.erase(key);
-        if (result.properties.contains("layers") && result.properties.at("layers").is_array())
+        if (!catalog_source_member(source)) result.properties.erase("material_assignment");
+        if (!catalog_source_member(source) && result.properties.contains("layers") && result.properties.at("layers").is_array())
             for (auto& layer : result.properties["layers"])
                 if (layer.is_object()) layer.erase("material_assignment");
     }
@@ -2654,6 +2867,8 @@ std::set<std::size_t> import_native_graphs(const DxfDrawing& drawing, bool sourc
     // Missing, duplicate, noncanonical or conflicting chunks leave no proof.
     struct ProofChunks { std::size_t count{}; std::map<std::size_t, std::string> data; std::vector<std::size_t> inserts; bool refused{}; };
     std::map<std::string, ProofChunks, std::less<>> chunks;
+    ProofChunks catalog_chunks;
+    enum class ProofFamily { unknown, physical, catalog };
     std::set<std::size_t> proof_inserts;
     std::size_t aggregate_proof_bytes = 0;
     for (std::size_t index = 0; index < drawing.inserts.size(); ++index) {
@@ -2664,6 +2879,7 @@ std::set<std::size_t> import_native_graphs(const DxfDrawing& drawing, bool sourc
         if (block == drawing.blocks.end() || block->vertex_entity_json.empty()) continue;
         Json payload;
         std::string graph_id;
+        ProofFamily family = ProofFamily::unknown;
         try {
             payload = bounded_native_json(block->vertex_entity_json);
             if (!payload.is_object()) continue;
@@ -2672,13 +2888,21 @@ std::set<std::size_t> import_native_graphs(const DxfDrawing& drawing, bool sourc
             // chunk schema. A malformed competing declaration must poison its
             // graph rather than disappear while a valid chunk set activates.
             const bool declares_graph = payload.contains("graph_id") ||
-                (depiction != payload.end() && depiction->is_string() && *depiction == "PHYSICAL_SOURCE_GRAPH_CHUNK_V1");
+                (depiction != payload.end() && depiction->is_string() &&
+                    (*depiction == "PHYSICAL_SOURCE_GRAPH_CHUNK_V1" || *depiction == "CATALOG_SOURCE_TABLE_CHUNK_V1"));
             if (!declares_graph) continue;
             proof_inserts.insert(index);
+            if (depiction != payload.end() && depiction->is_string()) {
+                if (*depiction == "PHYSICAL_SOURCE_GRAPH_CHUNK_V1") family = ProofFamily::physical;
+                else if (*depiction == "CATALOG_SOURCE_TABLE_CHUNK_V1") family = ProofFamily::catalog;
+            }
             graph_id = payload.at("graph_id").get<std::string>();
-            auto& proof = chunks[graph_id];
-            if (payload.size() != 6 || !payload.at("version").is_number_integer() || payload.at("version") != 7 ||
-                depiction == payload.end() || *depiction != "PHYSICAL_SOURCE_GRAPH_CHUNK_V1" ||
+            const bool catalog_chunk = family == ProofFamily::catalog;
+            auto& proof = catalog_chunk ? catalog_chunks : chunks[graph_id];
+            if (payload.size() != 6 || !payload.at("version").is_number_integer() ||
+                (catalog_chunk ? payload.at("version") != 8 : payload.at("version") != 7 && payload.at("version") != 8) ||
+                family == ProofFamily::unknown || (catalog_chunk && graph_id != kCatalogTableIdentity) ||
+                depiction == payload.end() || *depiction != (catalog_chunk ? "CATALOG_SOURCE_TABLE_CHUNK_V1" : "PHYSICAL_SOURCE_GRAPH_CHUNK_V1") ||
                 graph_id.empty() || graph_id.size() > 128 || !payload.at("chunk_index").is_number_unsigned() ||
                 !payload.at("chunk_count").is_number_unsigned() || !payload.at("data").is_string() || !source_is_metres ||
                 insert.insertion.x != 0 || insert.insertion.y != 0 || insert.scale_x != 1 || insert.scale_y != 1 || insert.rotation_degrees != 0 ||
@@ -2693,12 +2917,43 @@ std::set<std::size_t> import_native_graphs(const DxfDrawing& drawing, bool sourc
                 throw std::invalid_argument("partial/conflicting V7 graph chunks");
             aggregate_proof_bytes += data.size(); proof.count = count; proof.inserts.push_back(index);
         } catch (const std::exception&) {
-            if (!graph_id.empty()) chunks[graph_id].refused = true;
+            if (family == ProofFamily::catalog) catalog_chunks.refused = true;
+            else if (!graph_id.empty()) {
+                chunks[graph_id].refused = true;
+                if (family == ProofFamily::unknown && graph_id == kCatalogTableIdentity)
+                    catalog_chunks.refused = true;
+            }
             if (proof_inserts.contains(index)) diagnostic(result.diagnostics, block->name, "BLOCK", "physical_source_graph_not_activated");
         }
     }
     std::map<std::string, Json, std::less<>> physical_proofs;
+    NativeDxfCatalogSources catalog_sources;
+    std::vector<std::string> authoring_catalog_ids;
     PhysicalSourceGraphIndex source_index;
+    // Chunk families have separate namespaces. A historical physical graph can
+    // legally have the same ID spelling as the new global catalog carrier.
+    if (!catalog_chunks.refused && catalog_chunks.count && catalog_chunks.data.size() == catalog_chunks.count) {
+        try {
+            std::string encoded;
+            for (std::size_t part = 0; part < catalog_chunks.count; ++part) encoded += catalog_chunks.data.at(part);
+            auto proof = parse_assembly_catalog_transport_json(encoded);
+            if (!proof.is_object() || proof.size() != 3 || proof.at("version") != 1 ||
+                !proof.at("catalog_sources").is_array() || proof.at("catalog_sources").empty() ||
+                proof.at("catalog_sources").size() > 4096) throw std::invalid_argument("invalid V8 global catalog table");
+            std::string previous;
+            NativeDxfCatalogSources decoded;
+            for (const auto& record : proof.at("catalog_sources")) {
+                const auto owner_id = record.at("id").get<std::string>();
+                if (owner_id <= previous) throw std::invalid_argument("duplicate/unsorted V8 catalog snapshots");
+                (void)read_catalog_source(owner_id, record); previous = owner_id;
+                decoded.emplace(owner_id, record);
+            }
+            auto authoring = catalog_identity_list(proof.at("authoring_catalog_ids"));
+            catalog_sources = std::move(decoded); authoring_catalog_ids = std::move(authoring);
+        } catch (const std::exception&) {
+            diagnostic(result.diagnostics, kCatalogTableIdentity, "BLOCK", "catalog_source_table_not_activated");
+        }
+    }
     for (const auto& [id, parts] : chunks) {
         if (parts.refused || parts.data.size() != parts.count) continue;
         try {
@@ -2728,7 +2983,7 @@ std::set<std::size_t> import_native_graphs(const DxfDrawing& drawing, bool sourc
         Json observed_properties, observed_extensions;
         try {
             payload = bounded_native_json(block->vertex_entity_json);
-            if (payload.is_object() && payload.value("version", 0) == 7) {
+            if (payload.is_object() && (payload.value("version", 0) == 7 || payload.value("version", 0) == 8)) {
                 const auto& original = source_index.at(payload.at("physical_source_graph_id").get<std::string>()).at(payload.at("id").get<std::string>());
                 observed_properties = original.properties; observed_extensions = original.extensions;
             } else if (payload.is_object()) {
@@ -2740,7 +2995,7 @@ std::set<std::size_t> import_native_graphs(const DxfDrawing& drawing, bool sourc
             if (payload.is_object() && payload.contains("version") &&
                 payload.at("version").is_number_integer() &&
                 (payload.at("version") == 1 || payload.at("version") == 2 || payload.at("version") == 3 ||
-                 payload.at("version") == 4 || payload.at("version") == 5 || payload.at("version") == 6 || payload.at("version") == 7) &&
+                 payload.at("version") == 4 || payload.at("version") == 5 || payload.at("version") == 6 || payload.at("version") == 7 || payload.at("version") == 8) &&
                 payload.contains("id") && payload.at("id").is_string()) {
                 const auto id = payload.at("id").get<std::string>();
                 if (!id.empty() && id.size() <= 255 && !declared_ids.insert(id).second)
@@ -2750,7 +3005,7 @@ std::set<std::size_t> import_native_graphs(const DxfDrawing& drawing, bool sourc
             // A refused standalone stroke still participates in an unisolated
             // area's layer inventory; destination CAD-layer choices cannot
             // remove it from the source proof.
-            if (payload.is_object() && ((payload.contains("version") && (payload.at("version") == 6 || payload.at("version") == 7)) ||
+            if (payload.is_object() && ((payload.contains("version") && (payload.at("version") == 6 || payload.at("version") == 7 || payload.at("version") == 8)) ||
                 (payload.contains("type") && payload.at("type") == "measurement_linework"))) {
                 try {
                     Entity observation{payload.at("id").get<std::string>(), payload.at("type").get<std::string>(),
@@ -2758,7 +3013,7 @@ std::set<std::size_t> import_native_graphs(const DxfDrawing& drawing, bool sourc
                     if (observation.id.empty() || observation.id.size() > 255 ||
                         !observation.properties.is_object() || !observation.extensions.is_object())
                         throw std::invalid_argument("incomplete original V6 inventory");
-                    (void)read_resolved_context(payload.at("resolved_context"), payload.value("version", 0) == 7);
+                    (void)read_resolved_context(payload.at("resolved_context"), payload.value("version", 0) >= 7);
                     observation.extensions.erase("vertex_dxf_boundary");
                     observation.extensions.erase(kWallSourceContextBinding);
                     observation.extensions.erase(kMeasuredGraph);
@@ -2796,7 +3051,7 @@ std::set<std::size_t> import_native_graphs(const DxfDrawing& drawing, bool sourc
             if (payload.is_null()) { original_measured_context_incomplete = true; original_physical_inventory_incomplete = true; }
             if (payload.is_object() && payload.contains("version") &&
                 payload.at("version").is_number_integer() &&
-                (payload.at("version") == 1 || payload.at("version") == 2 || payload.at("version") == 3 || payload.at("version") == 4 || payload.at("version") == 5 || payload.at("version") == 6 || payload.at("version") == 7)) {
+                (payload.at("version") == 1 || payload.at("version") == 2 || payload.at("version") == 3 || payload.at("version") == 4 || payload.at("version") == 5 || payload.at("version") == 6 || payload.at("version") == 7 || payload.at("version") == 8)) {
                 const auto remember = [&](const Json& value) {
                     if (value.is_string()) {
                         const auto& id = value.get_ref<const std::string&>();
@@ -2844,11 +3099,16 @@ std::set<std::size_t> import_native_graphs(const DxfDrawing& drawing, bool sourc
     }
     std::set<std::string> allocated_ids;
     for (const auto& [id, candidate] : candidates) { (void)candidate; allocated_ids.insert(id); }
+    for (const auto& [graph_id, graph] : source_index) {
+        (void)graph_id;
+        for (const auto& [id, owner] : graph) { (void)owner; allocated_ids.insert(id); }
+    }
+    for (const auto& [id, owner] : catalog_sources) { (void)owner; allocated_ids.insert(id); }
     std::set<std::string> processed_groups;
     NativeDxfWallSourceWorkBudget wall_source_budget;
     std::set<std::string> preflight_refused;
     wall_source_budget.measured_operation = std::any_of(candidates.begin(), candidates.end(),
-        [](const auto& entry) { return entry.second.version == 6 || entry.second.version == 7; });
+        [](const auto& entry) { return entry.second.version >= 6; });
     const auto with_original_inventory = [&](std::vector<Entity> source) {
         std::set<std::string> members;
         for (const auto& member : source) members.insert(member.id);
@@ -2864,6 +3124,21 @@ std::set<std::size_t> import_native_graphs(const DxfDrawing& drawing, bool sourc
         for (const auto& observation : original_physical_inventory) if (!members.contains(observation.id)) source.push_back(observation);
         return source;
     };
+    std::vector<Entity> v8_source;
+    NativeDxfPhysicalSourceGraphs v8_proofs;
+    for (const auto& [id, candidate] : candidates) if (candidate.version == 8) {
+        (void)id;
+        auto owner = candidate.entity;
+        owner.extensions["vertex_dxf_boundary"] = boundary_group_marker(candidate.member_ids, 8);
+        v8_source.push_back(std::move(owner));
+        const auto graph_id = candidate.entity.extensions.at(kPhysicalGraph).at("source_graph_id").get<std::string>();
+        v8_proofs.emplace(graph_id, physical_proofs.at(graph_id));
+    }
+    if (!v8_source.empty()) try {
+        validate_native_dxf_catalog_sources(v8_source, v8_proofs, catalog_sources, authoring_catalog_ids, &wall_source_budget, true);
+    } catch (const std::exception&) {
+        for (const auto& owner : v8_source) preflight_refused.insert(owner.id);
+    }
     if (wall_source_budget.measured_operation) {
         std::set<std::string> preflight_seen;
         for (const auto& [id, candidate] : candidates) {
@@ -2880,21 +3155,21 @@ std::set<std::size_t> import_native_graphs(const DxfDrawing& drawing, bool sourc
                     entity.extensions["vertex_dxf_boundary"] = boundary_group_marker(candidate.member_ids, candidate.version);
                     source.push_back(std::move(entity));
                 }
-                if (candidate.version == 7) source = with_physical_inventory(std::move(source));
+                if (candidate.version >= 7) source = with_physical_inventory(std::move(source));
                 NativeDxfPhysicalSourceGraphs group_proofs;
-                if (candidate.version == 7) {
+                if (candidate.version >= 7) {
                     const auto graph_id = candidate.entity.extensions.at(kPhysicalGraph).at("source_graph_id").get<std::string>();
                     group_proofs.emplace(graph_id, physical_proofs.at(graph_id));
                 }
                 validate_native_dxf_wall_source_groups(candidate.version >= 6 ? with_original_inventory(std::move(source)) : source,
-                    &wall_source_budget, true, &group_proofs);
+                    &wall_source_budget, true, &group_proofs, nullptr, candidate.version == 8 ? &catalog_sources : nullptr);
             } catch (const std::exception&) {
                 preflight_refused.insert(candidate.member_ids.begin(), candidate.member_ids.end());
             }
         }
     }
     for (const auto& [id, candidate] : candidates) {
-        if ((candidate.version != 3 && candidate.version != 4 && candidate.version != 5 && candidate.version != 6 && candidate.version != 7) || processed_groups.contains(id)) continue;
+        if ((candidate.version < 3 || candidate.version > 8) || processed_groups.contains(id)) continue;
         // Mark the attempted declaration, but conflicting members are still
         // checked below. No member is published until every proof succeeds.
         processed_groups.insert(candidate.member_ids.begin(), candidate.member_ids.end());
@@ -2905,9 +3180,14 @@ std::set<std::size_t> import_native_graphs(const DxfDrawing& drawing, bool sourc
             std::map<std::string, std::string> ids;
             std::map<std::string, std::string, std::less<>> typed_ids;
             NativeDxfPhysicalSourceGraphs group_proofs;
-            if (candidate.version == 7) {
+            NativeDxfCatalogSources group_catalogs;
+            std::vector<std::string> group_authoring_catalogs;
+            if (candidate.version >= 7) {
                 const auto graph_id = candidate.entity.extensions.at(kPhysicalGraph).at("source_graph_id").get<std::string>();
                 group_proofs.emplace(graph_id, physical_proofs.at(graph_id));
+                if (candidate.version == 8) for (const auto& catalog_id : physical_proofs.at(graph_id).at("catalog_ids")) {
+                    const auto key = catalog_id.get<std::string>(); group_catalogs.emplace(key, catalog_sources.at(key));
+                }
             }
             const auto marker = boundary_group_marker(candidate.member_ids, candidate.version);
             for (const auto& member_id : candidate.member_ids) {
@@ -2924,6 +3204,11 @@ std::set<std::size_t> import_native_graphs(const DxfDrawing& drawing, bool sourc
                 while (!allocated_ids.insert(fresh).second) fresh = make_stable_id();
                 ids.emplace(member_id, fresh); typed_ids.emplace(member_id, std::move(fresh));
             }
+            if (candidate.version == 8) {
+                std::set<std::string, std::less<>> live;
+                for (const auto& owner : source) for (const auto& ref : architectural_material_source_refs(owner)) live.insert(ref.catalog_id);
+                group_authoring_catalogs.assign(live.begin(), live.end());
+            }
             // Any incoming V3/V4 declaration must share this exact complete group.
             for (const auto& [other_id, other] : candidates) {
                 if (std::binary_search(candidate.member_ids.begin(), candidate.member_ids.end(), other_id)) continue;
@@ -2935,8 +3220,8 @@ std::set<std::size_t> import_native_graphs(const DxfDrawing& drawing, bool sourc
                         throw std::invalid_argument("overlapping native boundary graph");
             }
             if (candidate.version >= 5)
-                validate_native_dxf_wall_source_groups(candidate.version >= 6 ? with_original_inventory(candidate.version == 7 ? with_physical_inventory(source) : source) : source,
-                    &wall_source_budget, false, &group_proofs);
+                validate_native_dxf_wall_source_groups(candidate.version >= 6 ? with_original_inventory(candidate.version >= 7 ? with_physical_inventory(source) : source) : source,
+                    &wall_source_budget, false, &group_proofs, nullptr, candidate.version == 8 ? &catalog_sources : nullptr);
             else validate_native_dxf_boundary_groups(source);
             if (candidate.version >= 5) {
                 for (const auto* item : group) if (item->entity.type == "wall") {
@@ -2957,36 +3242,47 @@ std::set<std::size_t> import_native_graphs(const DxfDrawing& drawing, bool sourc
                 remap_native_dxf_boundary_dependency_ids(fresh, typed_ids);
                 detached.push_back(std::move(fresh));
             }
-            if (candidate.version >= 5) validate_native_dxf_wall_source_groups(detached, &wall_source_budget, false, &group_proofs);
+            if (candidate.version >= 5) validate_native_dxf_wall_source_groups(detached, &wall_source_budget, false, &group_proofs, nullptr,
+                candidate.version == 8 ? &catalog_sources : nullptr);
             else validate_native_dxf_boundary_groups(detached);
-            const auto document = Document::create(detached).snapshot();
+            const auto document = Document::create(candidate.version == 8 ?
+                native_dxf_catalog_pending_admission_entities(detached, group_proofs, group_catalogs, group_authoring_catalogs, &wall_source_budget) : detached).snapshot();
             if (!document.is_editable()) throw std::invalid_argument("native boundary group schema is not editable");
+            const auto& fresh_graph = document.entities();
             for (std::size_t i = 0; i < group.size(); ++i) {
                 const auto& item = *group[i];
                 const auto& block = *item.block;
                 const auto layer = !block.lines.empty() ? block.lines.front().layer :
                     !block.arcs.empty() ? block.arcs.front().layer :
                     !block.polylines.empty() ? block.polylines.front().layer : std::string("0");
-                const auto& fresh = document.entities().at(ids.at(item.entity.id));
+                // V8 pending/source raw parity and typed identity remapping
+                // were proved above. Regenerate from the authentic source
+                // owner; detached physical placement has no live authority.
+                const auto& fresh = fresh_graph.at(candidate.version == 8 ? item.entity.id : ids.at(item.entity.id));
                 std::vector<DxfProjectDiagnostic> geometry_diagnostics;
                 if (candidate.version >= 5) {
-                    const auto source_graph = wall_source_context_graph(source);
+                    const auto source_graph = candidate.version == 8 ? merged_catalog_source_graph(group_proofs, group_catalogs) : wall_source_context_graph(source);
                     const auto& original = source_graph.at(item.entity.id);
                     const auto source_plan = source_plan_block(source_graph, original, block.name, layer, geometry_diagnostics);
                     if (!geometry_diagnostics.empty() || !same_block_geometry(block, source_plan, true))
                         throw std::invalid_argument("native V5 source plan differs");
                 }
-                const auto expected = source_plan_block(document.entities(), fresh, block.name, layer, geometry_diagnostics);
+                const auto expected = source_plan_block(fresh_graph, fresh, block.name, layer, geometry_diagnostics);
                 if (!geometry_diagnostics.empty() || !same_block_geometry(block, expected, true))
                     throw std::invalid_argument("native group geometry differs");
                 const auto effective_layer = layer == "0" ? drawing.inserts.at(item.insert_index).layer : layer;
                 detached[i].extensions["dxf_source"] = source_extension(effective_layer, "INSERT");
             }
             for (const auto* item : group) activated.insert(item->insert_index);
-            if (candidate.version == 7) {
+            if (candidate.version >= 7) {
                 const auto graph_id = bounded_native_json(candidate.block->vertex_entity_json).at("physical_source_graph_id").get<std::string>();
                 for (const auto index : chunks.at(graph_id).inserts) activated.insert(index);
                 result.physical_source_graphs.try_emplace(graph_id, physical_proofs.at(graph_id));
+                if (candidate.version == 8) {
+                    for (const auto& [catalog_id, record] : group_catalogs) result.catalog_sources.try_emplace(catalog_id, record);
+                    result.authoring_catalog_ids.insert(result.authoring_catalog_ids.end(), group_authoring_catalogs.begin(), group_authoring_catalogs.end());
+                    for (const auto index : catalog_chunks.inserts) activated.insert(index);
+                }
             }
             result.entities.insert(result.entities.end(), detached.begin(), detached.end());
             for (const auto* item : group) {
@@ -2997,7 +3293,7 @@ std::set<std::size_t> import_native_graphs(const DxfDrawing& drawing, bool sourc
                     properties.at("appraisal_facts").at("ansi").at("ceiling").value("kind", std::string{}) == "sloped";
                 if (candidate.version >= 5 && properties.contains("phase_id"))
                     diagnostic(result.diagnostics, item->entity.id, item->entity.type, "source_phase_not_transported");
-                if (candidate.version == 7 && std::any_of(physical_proofs.at(item->entity.extensions.at(kPhysicalGraph).at("source_graph_id").get<std::string>()).at("entities").begin(),
+                if (candidate.version >= 7 && std::any_of(physical_proofs.at(item->entity.extensions.at(kPhysicalGraph).at("source_graph_id").get<std::string>()).at("entities").begin(),
                     physical_proofs.at(item->entity.extensions.at(kPhysicalGraph).at("source_graph_id").get<std::string>()).at("entities").end(), [](const auto& record) {
                         return record.at("type") == "model_phases";
                     })) diagnostic(result.diagnostics, item->entity.id, item->entity.type, "source_phase_registry_retained_inert");
@@ -3009,7 +3305,7 @@ std::set<std::size_t> import_native_graphs(const DxfDrawing& drawing, bool sourc
         }
     }
     for (const auto& [id, candidate] : candidates) {
-        if (!can_recognize_boundary_entity_type(candidate.entity.type) || candidate.version == 3 || candidate.version == 4 || candidate.version == 5 || candidate.version == 6 || candidate.version == 7) continue;
+        if (!can_recognize_boundary_entity_type(candidate.entity.type) || candidate.version >= 3) continue;
         try {
             if (duplicate_ids.contains(id) || rejected_boundary_group_ids.contains(id) || processed_groups.contains(id))
                 throw std::invalid_argument("conflicting native identity declaration");
@@ -3084,6 +3380,8 @@ std::set<std::size_t> import_native_graphs(const DxfDrawing& drawing, bool sourc
     for (const auto& [id, candidate] : candidates)
         if (!activated.contains(candidate.insert_index))
             diagnostic(result.diagnostics, id, candidate.entity.type, "native_metadata_visual_fallback");
+    std::sort(result.authoring_catalog_ids.begin(), result.authoring_catalog_ids.end());
+    result.authoring_catalog_ids.erase(std::unique(result.authoring_catalog_ids.begin(), result.authoring_catalog_ids.end()), result.authoring_catalog_ids.end());
     return activated;
 }
 
@@ -3334,8 +3632,11 @@ void validate_native_dxf_wall_source_member(const Entity& entity) {
         (void)measurement_linework_copy_isolated(entity);
     }
     for (const auto* key : {"parent_id", "room_id", "wall_join_id", "level_connection",
-                           "material_assignment", "assembly_catalog_id", "refs", "references"})
+                           "assembly_catalog_id", "refs", "references"})
         if (entity.properties.contains(key)) throw std::invalid_argument("untransported V5 dependency");
+    if (entity.properties.contains("material_assignment") && !catalog_source_member(entity))
+        throw std::invalid_argument("untransported V5 material dependency");
+    if (catalog_source_member(entity)) (void)architectural_material_source_refs(entity);
     for (const auto* key : {"boundary_id", "opening_id", "slab_id", "roof_id", "stair_id", "sheet_id", "view_id",
                            "constraint_id", "label_id", "column_id", "beam_id", "railing_id", "host_id", "target_id",
                            "entity_id", "source_entity_id", "assembly_catalog_id", "room_id", "wall_id", "parent_id"}) {
@@ -3354,7 +3655,7 @@ void validate_native_dxf_wall_source_member(const Entity& entity) {
     }
     if (entity.properties.contains("layers") && entity.properties.at("layers").is_array())
         for (const auto& layer : entity.properties.at("layers"))
-            if (layer.is_object() && layer.contains("material_assignment"))
+            if (!catalog_source_member(entity) && layer.is_object() && layer.contains("material_assignment"))
                 throw std::invalid_argument("untransported V5 material dependency");
     if (entity.type == "wall" || entity.type == "opening" || entity.type == "measurement_linework")
         for (const auto* key : {"deduction_ids", "appraisal_facts", "wall_measurement_source"})
@@ -3439,7 +3740,8 @@ void remap_native_dxf_wall_source_dependency_ids(Entity& entity,
             result = remap_physical_wall_room_source_references(result, walls, contexts, phases);
         }
 #else
-        throw std::invalid_argument("physical room runtime unavailable");
+        if (result.extensions.contains("physical_wall_room"))
+            throw std::invalid_argument("physical room runtime unavailable");
 #endif
     }
     if (result.type == "wall") {
@@ -3481,7 +3783,8 @@ static void validate_native_dxf_wall_source_groups_impl(const std::vector<Entity
     NativeDxfWallSourceWorkBudget* work_budget, bool preflight_only,
     const NativeDxfPhysicalSourceGraphs* physical_source_graphs,
     const std::map<std::string, Entity, std::less<>>* actual_destination_entities,
-    bool destination_support_reserved) {
+    bool destination_support_reserved, const NativeDxfCatalogSources* catalog_sources = nullptr,
+    const std::map<std::string, std::string, std::less<>>* catalog_mapping = nullptr) {
     for (const auto& entity : entities) if (!physical_source_member(entity) && entity.extensions.contains(kPhysicalGraph))
         throw std::invalid_argument("physical graph proof requires V7");
     PhysicalSourceGraphIndex source_index;
@@ -3496,7 +3799,18 @@ static void validate_native_dxf_wall_source_groups_impl(const std::vector<Entity
             const auto size = proof.dump().size();
             if (size > 16 * 1024 * 1024 - bytes) throw std::invalid_argument("V7 aggregate sidecar byte limit");
             bytes += size;
-            source_index.emplace(id, read_physical_graph(proof));
+            auto graph = read_physical_graph(proof);
+            if (proof.at("version") == 2) {
+                if (!catalog_sources) throw std::invalid_argument("V8 source catalog sidecar missing");
+                for (const auto& catalog_id : proof.at("catalog_ids")) {
+                    const auto& record = catalog_sources->at(catalog_id.get<std::string>());
+                    Entity owner{record.at("id").get<std::string>(), record.at("type").get<std::string>(),
+                        record.at("properties"), record.at("required").get<bool>(), record.at("extensions")};
+                    if (!graph.emplace(owner.id, std::move(owner)).second)
+                        throw std::invalid_argument("V8 catalog and body identity overlap");
+                }
+            }
+            source_index.emplace(id, std::move(graph));
         }
     }
     NativeDxfWallSourceWorkBudget local_budget;
@@ -3544,7 +3858,7 @@ static void validate_native_dxf_wall_source_groups_impl(const std::vector<Entity
         }
     }
     if (std::any_of(entities.begin(), entities.end(), physical_source_member))
-        validate_physical_source_groups(entities, physical_budget, true, physical_source_graphs, actual_destination_entities, source_index);
+        validate_physical_source_groups(entities, physical_budget, true, physical_source_graphs, actual_destination_entities, source_index, catalog_mapping);
     std::map<std::string, const Entity*, std::less<>> owners;
     for (const auto& entity : entities)
         if (!owners.emplace(entity.id, &entity).second) throw std::invalid_argument("duplicate imported identity");
@@ -3621,9 +3935,29 @@ static void validate_native_dxf_wall_source_groups_impl(const std::vector<Entity
         std::map<std::string, std::vector<std::string>> deductions;
         std::map<std::string, std::size_t> incoming;
         std::vector<Entity> boundaries;
-        bool live_source = physical_source_member(root) && std::any_of(members.begin(), members.end(), [](const auto& member) {
+        bool live_source = catalog_source_member(root) || (physical_source_member(root) && std::any_of(members.begin(), members.end(), [](const auto& member) {
             return member.extensions.contains("physical_wall_room");
-        });
+        }));
+        if (catalog_source_member(root)) {
+            const auto graph_id = root.extensions.at(kPhysicalGraph).at("source_graph_id").get<std::string>();
+            const auto& source_graph = source_index.at(graph_id);
+            std::map<std::string, std::string, std::less<>> mapped_bodies, anchors;
+            for (const auto& member : members)
+                mapped_bodies.emplace(member.extensions.at(kPhysicalGraph).at("source_owner_id").get<std::string>(), member.id);
+            for (const auto& member : members) {
+                const auto original_id = member.extensions.at(kPhysicalGraph).at("source_owner_id").get<std::string>();
+                for (const auto& ref : architectural_material_source_refs(source_graph.at(original_id))) {
+                    const auto [anchor, inserted] = anchors.emplace(ref.catalog_id, member.id);
+                    if (!inserted) { adjacency[member.id].insert(anchor->second); adjacency[anchor->second].insert(member.id); }
+                    for (const auto& instance : source_graph.at(ref.catalog_id).properties.at("model").at("instances")) {
+                        if (!instance.contains("placement")) continue;
+                        const auto host = instance.at("placement").at("host_entity_id").get<std::string>();
+                        if (!mapped_bodies.contains(host)) throw std::invalid_argument("V8 live catalog host cohort missing");
+                        adjacency[member.id].insert(mapped_bodies.at(host)); adjacency[mapped_bodies.at(host)].insert(member.id);
+                    }
+                }
+            }
+        }
         std::size_t measured_segments = 0;
         std::size_t measured_replay_work = 0;
         std::optional<int> binding_state;
@@ -3812,7 +4146,7 @@ static void validate_native_dxf_wall_source_groups_impl(const std::vector<Entity
     }
     if (preflight_only) return;
     if (std::any_of(entities.begin(), entities.end(), physical_source_member))
-        validate_physical_source_groups(entities, physical_budget, false, physical_source_graphs, actual_destination_entities, source_index);
+        validate_physical_source_groups(entities, physical_budget, false, physical_source_graphs, actual_destination_entities, source_index, catalog_mapping);
     for (const auto& pending : pending_checks) {
         if (pending.measured) {
             for (const auto& [id, member] : pending.graph) if (member.type == "measurement_linework") {
@@ -3838,9 +4172,10 @@ static void validate_native_dxf_wall_source_groups_impl(const std::vector<Entity
 void validate_native_dxf_wall_source_groups(const std::vector<Entity>& entities,
     NativeDxfWallSourceWorkBudget* work_budget, bool preflight_only,
     const NativeDxfPhysicalSourceGraphs* physical_source_graphs,
-    const std::map<std::string, Entity, std::less<>>* actual_destination_entities) {
+    const std::map<std::string, Entity, std::less<>>* actual_destination_entities,
+    const NativeDxfCatalogSources* catalog_sources) {
     validate_native_dxf_wall_source_groups_impl(entities, work_budget, preflight_only,
-        physical_source_graphs, actual_destination_entities, false);
+        physical_source_graphs, actual_destination_entities, false, catalog_sources);
 }
 
 namespace {
@@ -3848,11 +4183,8 @@ void validate_physical_source_groups(const std::vector<Entity>& entities,
     NativeDxfWallSourceWorkBudget& budget, bool preflight_only,
     const NativeDxfPhysicalSourceGraphs* proofs,
     const std::map<std::string, Entity, std::less<>>* actual_destination,
-    const PhysicalSourceGraphIndex& source_index) {
-#ifndef SKETCH_PHYSICAL_ROOMS
-    (void)entities; (void)budget; (void)preflight_only; (void)proofs; (void)actual_destination; (void)source_index;
-    throw std::invalid_argument("physical room runtime unavailable");
-#else
+    const PhysicalSourceGraphIndex& source_index,
+    const std::map<std::string, std::string, std::less<>>* catalog_mapping) {
     if (!proofs || proofs->size() > 4096 || budget.source_work > 250'000 || budget.segments > 50'000)
         throw std::invalid_argument("V7 source graph sidecar missing/over budget");
     std::map<std::string, const Entity*, std::less<>> owners;
@@ -3871,6 +4203,20 @@ void validate_physical_source_groups(const std::vector<Entity>& entities,
             throw std::invalid_argument("invalid V7 runtime graph proof");
         const auto graph_id = proof.at("source_graph_id").get<std::string>();
         const auto& original_graph = source_index.at(graph_id);
+#ifndef SKETCH_PHYSICAL_ROOMS
+        // Catalog cohorts without a room still require authentic hierarchy,
+        // owner parity, material remapping and Document admission. Only actual
+        // room descriptors need the optional detection runtime.
+        const auto has_room = [](const auto& graph) {
+            return std::any_of(graph.begin(), graph.end(), [](const auto& owner) {
+                return owner.second.extensions.contains("physical_wall_room");
+            });
+        };
+        if (has_room(original_graph) || (actual_destination && has_room(*actual_destination)) ||
+            std::any_of(entities.begin(), entities.end(), [](const auto& owner) {
+                return owner.extensions.contains("physical_wall_room");
+            })) throw std::invalid_argument("physical room runtime unavailable");
+#endif
         std::map<std::string, std::string, std::less<>> ids;
         std::map<std::string, std::string, std::less<>> original_ids;
         std::string previous;
@@ -3912,7 +4258,7 @@ void validate_physical_source_groups(const std::vector<Entity>& entities,
             if (destination && binding == member.extensions.end()) throw std::invalid_argument("V7 bound graph has no reviewed context");
             members.push_back(member);
         }
-        if (!rooms) throw std::invalid_argument("V7 component requires a retained physical room");
+        if (!rooms && !catalog_source_member(root)) throw std::invalid_argument("V7 component requires a retained physical room");
         std::size_t proof_edges = 0, proof_rooms = 0, proof_replay = 0;
         const auto admit_raw = [&](const auto& graph) {
             for (const auto& [id, owner] : graph) {
@@ -3996,7 +4342,7 @@ void validate_physical_source_groups(const std::vector<Entity>& entities,
         if (preflight_only) {
             // Source checks cache one solve per actual context/plane. Bound
             // destination detection below shares that same cache discipline.
-            const auto detection_work = walls * walls * std::max<std::size_t>(1, detection_keys.size()) * 16;
+            const auto detection_work = walls * walls * detection_keys.size() * 16;
             if (detection_work > 250'000 || topology_work > 250'000 ||
                 detection_work > 250'000 - budget.source_work || topology_work > 250'000 - budget.source_work - detection_work)
                 throw std::invalid_argument("V7 cumulative physical detection/topology work limit");
@@ -4039,6 +4385,7 @@ void validate_physical_source_groups(const std::vector<Entity>& entities,
             expected.id = member.id;
             if (original.type == "measurement_linework" && original.id != member.id)
                 expected.properties["model"] = remap_measurement_linework_owner_identity(original.properties.at("model"), member.id);
+#ifdef SKETCH_PHYSICAL_ROOMS
             if (expected.extensions.contains("physical_wall_room")) {
                 const auto refs = physical_wall_room_source_references(expected);
                 auto wall_ids = ids;
@@ -4049,6 +4396,7 @@ void validate_physical_source_groups(const std::vector<Entity>& entities,
                 }
                 expected = remap_physical_wall_room_source_references(expected, wall_ids, unchanged_contexts, unchanged_phases);
             }
+#endif
             // Existing graph codecs also own appraisal, exterior-source and
             // measured lineage references. Reuse them without altering proof.
             auto working = expected;
@@ -4072,8 +4420,13 @@ void validate_physical_source_groups(const std::vector<Entity>& entities,
                 expected.properties.erase("layer"); expected.properties.erase("layer_name");
             }
             if (destination) {
+                if (catalog_source_member(member)) {
+                    if (!catalog_mapping) throw std::invalid_argument("V8 destination catalog map missing");
+                    expected = remap_architectural_material_source_refs(expected, *catalog_mapping);
+                }
                 const auto target = member_resolved_context(member);
                 if (source_context->level_id != target.level_id) throw std::invalid_argument("V7 destination local level differs");
+#ifdef SKETCH_PHYSICAL_ROOMS
                 if (expected.extensions.contains("physical_wall_room")) {
                     const auto refs = physical_wall_room_source_references(expected);
                     std::map<std::string, std::string, std::less<>> wall_ids, context_ids, phase_ids;
@@ -4086,6 +4439,7 @@ void validate_physical_source_groups(const std::vector<Entity>& entities,
                     for (const auto& id : refs.phase_registry_ids) phase_ids.emplace(id, id);
                     expected = remap_physical_wall_room_source_references(expected, wall_ids, context_ids, phase_ids);
                 }
+#endif
                 for (const auto* key : {"property_id", "building_id", "floor_id", "layer_id", "phase_id"}) expected.properties.erase(key);
                 for (const auto& [key, value] : binding->at("destination_context").items()) expected.properties[key] = value;
                 if (expected.properties.contains("wall_measurement_source"))
@@ -4126,15 +4480,19 @@ void validate_physical_source_groups(const std::vector<Entity>& entities,
         for (const auto& [id, owner] : original_graph) { (void)id; source_values.push_back(owner); }
         const auto source_document = Document::create(source_values).snapshot();
         if (!source_document.is_editable()) throw std::invalid_argument("V7 original graph is not editable");
+#ifdef SKETCH_PHYSICAL_ROOMS
         const auto source_checks = physical_wall_room_checks(source_document);
         for (const auto& member : members) if (member.extensions.contains("physical_wall_room"))
             if (!source_checks.at(original_ids.at(member.id)).current) throw std::invalid_argument("V7 original physical room is stale");
+#endif
         if (destination) {
             const auto& actual_graph = *actual_destination;
             const auto destination_organization = organize_project(actual_graph);
+#ifdef SKETCH_PHYSICAL_ROOMS
             const auto active_rooms = active_physical_wall_room_ids(actual_graph);
             using DetectionKey = std::tuple<std::string, std::string, std::string, std::string, std::string, double>;
             std::map<DetectionKey, PhysicalWallSpaces> detections;
+#endif
             for (const auto& member : members) {
                 const auto actual = physical_evidence_entity(actual_graph.at(member.id));
                 const auto candidate = physical_evidence_entity(candidate_graph.at(member.id));
@@ -4143,6 +4501,7 @@ void validate_physical_source_groups(const std::vector<Entity>& entities,
                 const auto context = destination_organization.drawing_context(member.id);
                 if (!context || *context != member_resolved_context(member)) throw std::invalid_argument("V7 actual destination hierarchy differs");
             }
+#ifdef SKETCH_PHYSICAL_ROOMS
             for (const auto& member : members) if (member.extensions.contains("physical_wall_room")) {
                 if (!std::binary_search(active_rooms.begin(), active_rooms.end(), member.id))
                     throw std::invalid_argument("V7 actual destination room is phase-inactive");
@@ -4160,22 +4519,25 @@ void validate_physical_source_groups(const std::vector<Entity>& entities,
                     return physical_wall_room_lineage_matches_current_inventory(member, *context, fresh);
                 }) != 1) throw std::invalid_argument("V7 actual destination physical inventory/plane differs");
             }
+#endif
         }
         for (const auto& member : members) checked.insert(member.id);
     }
-#endif
 }
 } // namespace
 
 void bind_native_dxf_wall_source_destinations(std::vector<Entity>& entities,
     const std::map<std::string, DrawingContext, std::less<>>& actual_contexts,
     const std::map<std::string, Entity, std::less<>>* actual_destination_entities,
-    const NativeDxfPhysicalSourceGraphs* physical_source_graphs) {
+    const NativeDxfPhysicalSourceGraphs* physical_source_graphs,
+    const NativeDxfCatalogSources* catalog_sources, NativeDxfWallSourceWorkBudget* operation_work_budget,
+    const std::map<std::string, std::string, std::less<>>* catalog_mapping) {
     auto staged = entities;
     const bool physical = std::any_of(staged.begin(), staged.end(), physical_source_member);
     if (physical && !actual_destination_entities) throw std::invalid_argument("V7 requires actual complete destination entities");
     if (physical && !physical_source_graphs) throw std::invalid_argument("V7 requires source graph sidecar");
-    NativeDxfWallSourceWorkBudget work_budget;
+    NativeDxfWallSourceWorkBudget local_work_budget;
+    auto& work_budget = operation_work_budget ? *operation_work_budget : local_work_budget;
     auto* shared_work = std::any_of(staged.begin(), staged.end(), measured_source_member) ? &work_budget : nullptr;
     if (physical) {
         std::set<std::pair<std::string, std::string>> groups;
@@ -4218,7 +4580,7 @@ void bind_native_dxf_wall_source_destinations(std::vector<Entity>& entities,
             entity.properties.erase(key);
         }
     }
-    validate_native_dxf_wall_source_groups(pending, shared_work, false, physical_source_graphs);
+    validate_native_dxf_wall_source_groups(pending, shared_work, false, physical_source_graphs, nullptr, catalog_sources);
     for (auto& entity : staged) if (entity.type == "measurement_linework" && !wall_source_member(entity)) {
         const auto actual = actual_contexts.find(entity.id);
         if (actual == actual_contexts.end() || !actual->second.complete())
@@ -4262,6 +4624,8 @@ void bind_native_dxf_wall_source_destinations(std::vector<Entity>& entities,
             (*stair)["destination_floor_id"] = context.floor_id;
         }
     }
+    if (catalog_mapping) for (auto& owner : staged) if (catalog_source_member(owner))
+        owner = remap_architectural_material_source_refs(owner, *catalog_mapping);
     std::map<std::string, Entity, std::less<>> final_graph;
     for (const auto& entity : staged) final_graph.emplace(entity.id, entity);
     for (const auto& entity : staged) if (measured_source_member(entity) &&
@@ -4317,9 +4681,331 @@ void bind_native_dxf_wall_source_destinations(std::vector<Entity>& entities,
                 throw std::invalid_argument("V7 actual staged owner differs from imported raw owner");
             actual.at(entity.id) = entity;
         }
-        validate_native_dxf_wall_source_groups_impl(staged, shared_work, false, physical_source_graphs, &actual, true);
+        validate_native_dxf_wall_source_groups_impl(staged, shared_work, false, physical_source_graphs, &actual, true, catalog_sources, catalog_mapping);
     }
     if (!physical) validate_native_dxf_wall_source_groups(staged, shared_work);
+    entities = std::move(staged);
+}
+
+namespace {
+Entity read_catalog_source(const std::string& id, const Json& record) {
+    if (!record.is_object() || record.size() != 5 || !record.at("id").is_string() ||
+        record.at("id") != id || record.at("type") != "assembly_model" ||
+        !record.at("properties").is_object() || !record.at("extensions").is_object() ||
+        !record.at("required").is_boolean()) throw std::invalid_argument("invalid V8 complete catalog snapshot");
+    return {id, "assembly_model", record.at("properties"), record.at("required").get<bool>(), record.at("extensions")};
+}
+
+std::vector<std::string> catalog_identity_list(const Json& values) {
+    if (!values.is_array() || values.size() > 4096) throw std::invalid_argument("invalid V8 catalog inventory");
+    std::vector<std::string> result;
+    for (const auto& value : values) {
+        if (!value.is_string() || value.get_ref<const std::string&>().empty() ||
+            value.get_ref<const std::string&>().size() > 128) throw std::invalid_argument("invalid V8 catalog identity");
+        result.push_back(value.get<std::string>());
+    }
+    if (!std::is_sorted(result.begin(), result.end()) ||
+        std::adjacent_find(result.begin(), result.end()) != result.end()) throw std::invalid_argument("unsorted/duplicate V8 catalog inventory");
+    return result;
+}
+
+bool same_raw_entity(const Entity& left, const Entity& right) {
+    return left.id == right.id && left.type == right.type && left.required == right.required &&
+        left.properties.dump() == right.properties.dump() && left.extensions.dump() == right.extensions.dump();
+}
+
+void reserve_catalog_document_passes(const Entity& owner, AssemblyCatalogTransferBudget& budget,
+    std::size_t passes, bool transferable) {
+    const auto before = budget.consumed_validation_work;
+    if (transferable) admit_complete_assembly_catalog_source(owner, budget);
+    else admit_existing_assembly_catalog_work(owner, budget);
+    const auto cost = budget.consumed_validation_work - before;
+    const auto remaining = budget.max_validation_work - budget.consumed_validation_work;
+    if (passes && cost > remaining / passes) {
+        budget.consumed_validation_work = budget.max_validation_work;
+        throw std::invalid_argument("V8 cumulative catalog document work limit");
+    }
+    budget.consumed_validation_work += cost * passes;
+}
+
+AssemblyDocumentEntities merged_catalog_source_graph(const NativeDxfPhysicalSourceGraphs& proofs,
+    const NativeDxfCatalogSources& catalogs) {
+    AssemblyDocumentEntities result;
+    for (const auto& [id, proof] : proofs) {
+        (void)id;
+        for (auto& [owner_id, owner] : read_physical_graph(proof)) {
+            const auto [found, inserted] = result.emplace(owner_id, owner);
+            if (!inserted && !same_raw_entity(found->second, owner))
+                throw std::invalid_argument("conflicting V8 original owner snapshots");
+        }
+    }
+    for (const auto& [id, record] : catalogs) {
+        const auto owner = read_catalog_source(id, record);
+        if (!result.emplace(id, owner).second) throw std::invalid_argument("V8 catalog/body source identity overlap");
+    }
+    return result;
+}
+} // namespace
+
+std::map<std::string, NativeDxfCatalogSourceContext, std::less<>> native_dxf_catalog_source_contexts(
+    const NativeDxfPhysicalSourceGraphs& proofs, const NativeDxfCatalogSources& catalogs,
+    const std::vector<std::string>& authoring_catalog_ids, NativeDxfWallSourceWorkBudget* work_budget) {
+    NativeDxfWallSourceWorkBudget local;
+    auto& budget = work_budget ? *work_budget : local;
+    if (catalogs.size() > 4096 || proofs.size() > 4096 ||
+        catalog_identity_list(Json(authoring_catalog_ids)) != authoring_catalog_ids)
+        throw std::invalid_argument("V8 source catalog context inventory differs");
+    const std::set<std::string, std::less<>> authoring(authoring_catalog_ids.begin(), authoring_catalog_ids.end());
+    for (const auto& id : authoring)
+        if (!catalogs.contains(id)) throw std::invalid_argument("V8 authoring catalog context owner missing");
+    std::size_t proof_bytes = 0;
+    for (const auto& [id, proof] : proofs) {
+        if (id.empty() || id.size() > 128) throw std::invalid_argument("invalid V8 catalog context graph identity");
+        admit_physical_graph_json_shape(proof);
+        const auto bytes = proof.dump().size();
+        if (bytes > 16 * 1024 * 1024 - proof_bytes)
+            throw std::invalid_argument("V8 catalog context aggregate proof byte limit");
+        proof_bytes += bytes;
+    }
+    // This helper never decodes a catalog model. Reserve all raw catalog and
+    // support work before organize_project can decode a floor's level graph.
+    for (const auto& [id, record] : catalogs) {
+        const auto owner = read_catalog_source(id, record);
+        if (authoring.contains(id)) admit_complete_assembly_catalog_source(owner, budget.catalog_transfer);
+        else admit_existing_assembly_catalog_work(owner, budget.catalog_transfer);
+    }
+    const auto source = merged_catalog_source_graph(proofs, catalogs);
+    admit_physical_support_work(source, budget, 1, 0, 0, 0);
+    const auto organization = organize_project(source);
+    std::map<std::string, NativeDxfCatalogSourceContext, std::less<>> result;
+    for (const auto& id : authoring_catalog_ids) {
+        const auto& catalog = source.at(id);
+        NativeDxfCatalogSourceContext resolved;
+        bool present = false, valid = true;
+        const auto merge = [&](const DrawingContext& context) {
+            for (const auto& [target, original] : {std::pair{&resolved.context.property_id, &context.property_id},
+                std::pair{&resolved.context.building_id, &context.building_id},
+                std::pair{&resolved.context.floor_id, &context.floor_id},
+                std::pair{&resolved.context.layer_id, &context.layer_id},
+                std::pair{&resolved.context.level_id, &context.level_id}}) {
+                if (original->empty()) continue;
+                if (!target->empty() && *target != *original) valid = false;
+                else *target = *original;
+            }
+        };
+        for (const auto& [slot, role] : {std::pair{"property_id", "property"}, std::pair{"building_id", "building"},
+            std::pair{"floor_id", "floor"}, std::pair{"layer_id", "layer"}}) {
+            const auto ref = catalog.properties.find(slot);
+            if (ref == catalog.properties.end()) continue;
+            present = true;
+            if (!ref->is_string() || ref->get_ref<const std::string&>().empty()) { valid = false; break; }
+            const auto owner = source.find(ref->get_ref<const std::string&>());
+            if (owner == source.end() || owner->second.type != role) { valid = false; break; }
+            const auto node = organization.nodes.find(owner->first);
+            if (node == organization.nodes.end() || !node->second.issues.empty() || node->second.context.property_id.empty()) {
+                valid = false; break;
+            }
+            merge(node->second.context);
+        }
+        if (!present || !valid || (!resolved.context.layer_id.empty() && !resolved.context.complete())) continue;
+        std::vector<DxfProjectDiagnostic> diagnostics;
+        resolved.cad_layer = layer_for(source, catalog, diagnostics);
+        result.emplace(id, std::move(resolved));
+    }
+    return result;
+}
+
+void validate_native_dxf_catalog_sources(const std::vector<Entity>& pending,
+    const NativeDxfPhysicalSourceGraphs& proofs, const NativeDxfCatalogSources& catalogs,
+    const std::vector<std::string>& authoring_catalog_ids,
+    NativeDxfWallSourceWorkBudget* work_budget, bool preflight_only) {
+    NativeDxfWallSourceWorkBudget local;
+    auto& budget = work_budget ? *work_budget : local;
+    if (catalogs.empty() || catalogs.size() > 4096 || proofs.size() > 4096 ||
+        catalog_identity_list(Json(authoring_catalog_ids)) != authoring_catalog_ids)
+        throw std::invalid_argument("V8 source catalog table/subset missing");
+    AssemblyDocumentEntities catalog_owners;
+    std::size_t material_consumers = 0;
+    for (const auto& [id, proof] : proofs) {
+        (void)id;
+        for (const auto& [owner_id, body] : read_physical_graph(proof)) {
+            (void)owner_id;
+            material_consumers += architectural_material_source_refs(body).size();
+            if (material_consumers > 65536) throw std::invalid_argument("V8 source material consumer limit");
+        }
+    }
+    // Entire raw table, including proof-only catalogs, is admitted before any
+    // catalog model decoder. Reserve repeated Document passes at the same time.
+    for (const auto& [id, record] : catalogs) {
+        auto owner = read_catalog_source(id, record);
+        reserve_catalog_document_passes(owner, budget.catalog_transfer, 8 + proofs.size() * 4 + material_consumers * 4);
+        catalog_owners.emplace(id, std::move(owner));
+    }
+    std::map<std::string, AssemblyCatalogSourceReferences, std::less<>> refs;
+    for (const auto& [id, owner] : catalog_owners)
+        refs.emplace(id, complete_assembly_catalog_source_refs(owner, budget.catalog_transfer));
+    const auto source = merged_catalog_source_graph(proofs, catalogs);
+    std::set<std::string, std::less<>> used_catalogs, live_catalogs;
+    std::map<std::string, const Entity*, std::less<>> live_bodies;
+    std::map<std::string, Json, std::less<>> catalog_cohorts;
+    for (const auto& body : pending) if (catalog_source_member(body)) {
+        const auto& binding = body.extensions.at(kPhysicalGraph);
+        const auto graph_id = binding.at("source_graph_id").get<std::string>();
+        const auto original_id = binding.at("source_owner_id").get<std::string>();
+        const auto& proof = proofs.at(graph_id);
+        if (proof.at("version") != 2 || !live_bodies.emplace(original_id, &body).second)
+            throw std::invalid_argument("V8 original body/proof binding conflict");
+        const auto graph = read_physical_graph(proof);
+        const auto& original = graph.at(original_id);
+        if (body.type != original.type || body.required != original.required)
+            throw std::invalid_argument("V8 required/type differs from original body");
+        for (const auto& reference : architectural_material_source_refs(original)) {
+            live_catalogs.insert(reference.catalog_id);
+            const auto& cohort = body.extensions.at("vertex_dxf_boundary").at("member_ids");
+            const auto [found, inserted] = catalog_cohorts.emplace(reference.catalog_id, cohort);
+            if (!inserted && found->second != cohort) throw std::invalid_argument("V8 shared live catalog crosses authoring cohorts");
+        }
+    }
+    if (live_bodies.empty()) throw std::invalid_argument("V8 catalog table has no authoring bodies");
+    for (const auto& [graph_id, proof] : proofs) {
+        (void)graph_id;
+        if (proof.at("version") != 2) continue;
+        const auto declared = catalog_identity_list(proof.at("catalog_ids"));
+        if (declared.empty()) throw std::invalid_argument("V8 proof requires reached catalogs");
+        auto graph = read_physical_graph(proof);
+        std::set<std::string, std::less<>> reached;
+        for (const auto& [id, body] : graph) {
+            (void)id;
+            for (const auto& reference : architectural_material_source_refs(body)) reached.insert(reference.catalog_id);
+        }
+        if (std::vector<std::string>(reached.begin(), reached.end()) != declared)
+            throw std::invalid_argument("V8 proof catalog closure differs");
+        for (const auto& id : declared) {
+            used_catalogs.insert(id);
+            const auto& owner = catalog_owners.at(id);
+            for (const auto& host : refs.at(id).hosted_entity_ids)
+                if (!graph.contains(host) || (graph.at(host).type != "wall" && graph.at(host).type != "opening"))
+                    throw std::invalid_argument("V8 catalog source host closure missing/unsupported");
+            for (const auto& [slot, role] : {std::pair{"property_id", "property"}, std::pair{"building_id", "building"},
+                std::pair{"floor_id", "floor"}, std::pair{"layer_id", "layer"}}) if (owner.properties.contains(slot)) {
+                const auto context_id = owner.properties.at(slot).get<std::string>();
+                if (!graph.contains(context_id) || graph.at(context_id).type != role)
+                    throw std::invalid_argument("V8 catalog source context closure missing");
+            }
+            graph.emplace(id, owner);
+        }
+    }
+    if (used_catalogs.size() != catalogs.size() ||
+        std::vector<std::string>(live_catalogs.begin(), live_catalogs.end()) != authoring_catalog_ids)
+        throw std::invalid_argument("V8 orphan catalog or inexact authoring catalog subset");
+    for (const auto& id : authoring_catalog_ids) for (const auto& host : refs.at(id).hosted_entity_ids) {
+        if (!live_bodies.contains(host) ||
+            live_bodies.at(host)->extensions.at("vertex_dxf_boundary").at("member_ids") != catalog_cohorts.at(id))
+            throw std::invalid_argument("V8 live catalog host omitted from authoring cohort");
+    }
+    validate_native_dxf_wall_source_groups(pending, &budget, preflight_only, &proofs, nullptr, &catalogs);
+    // Legacy appraisal groups may coexist in an operation with V8 bodies.
+    std::vector<Entity> legacy;
+    for (const auto& owner : pending) if (!wall_source_member(owner)) legacy.push_back(owner);
+    validate_native_dxf_boundary_groups(legacy);
+}
+
+std::vector<Entity> native_dxf_catalog_pending_admission_entities(const std::vector<Entity>& pending,
+    const NativeDxfPhysicalSourceGraphs& proofs, const NativeDxfCatalogSources& catalogs,
+    const std::vector<std::string>& authoring_catalog_ids, NativeDxfWallSourceWorkBudget* work_budget) {
+    NativeDxfWallSourceWorkBudget local;
+    auto& budget = work_budget ? *work_budget : local;
+    validate_native_dxf_catalog_sources(pending, proofs, catalogs, authoring_catalog_ids, &budget);
+    auto source = merged_catalog_source_graph(proofs, catalogs);
+    std::vector<Entity> result;
+    // Full pending/source parity was proved above. Admit the authentic V8
+    // graph without duplicating physical rooms in detached false contexts.
+    // Legacy candidates are independent and may be admitted alongside it.
+    for (const auto& body : pending) if (!physical_source_member(body)) {
+        if (source.contains(body.id)) throw std::invalid_argument("V8 private admission outsider identity collision");
+        result.push_back(body);
+    }
+    for (const auto& [id, owner] : source) { (void)id; result.push_back(owner); }
+    return result;
+}
+
+void bind_native_dxf_catalog_destinations(std::vector<Entity>& entities,
+    const std::map<std::string, DrawingContext, std::less<>>& actual_contexts,
+    const std::map<std::string, Entity, std::less<>>& actual_destination_entities,
+    const NativeDxfPhysicalSourceGraphs& proofs, const NativeDxfCatalogSources& catalogs,
+    const std::vector<std::string>& authoring_catalog_ids,
+    const std::map<std::string, std::string, std::less<>>& body_mapping,
+    const std::map<std::string, std::string, std::less<>>& catalog_mapping,
+    const std::map<std::string, std::string, std::less<>>& context_mapping,
+    NativeDxfWallSourceWorkBudget* work_budget) {
+    NativeDxfWallSourceWorkBudget local;
+    auto& budget = work_budget ? *work_budget : local;
+    // Every actual catalog can be decoded by Document and physical checks,
+    // including unrelated existing catalogs. Raw-admit the entire inventory
+    // and reserve per-body repeated material admission before those passes.
+    std::size_t material_consumers = 0;
+    for (const auto& [id, body] : actual_destination_entities) {
+        (void)id;
+        material_consumers += architectural_material_source_refs(body).size();
+        if (material_consumers > 65536) throw std::invalid_argument("V8 destination material consumer limit");
+    }
+    for (const auto& [id, owner] : actual_destination_entities) {
+        (void)id;
+        if (owner.type == "assembly_model")
+            reserve_catalog_document_passes(owner, budget.catalog_transfer, 8 + proofs.size() * 4 + material_consumers * 4, false);
+    }
+    auto pending = entities;
+    for (auto& owner : pending) if (catalog_source_member(owner)) {
+        for (const auto* key : {"property_id", "building_id", "floor_id", "layer_id"}) owner.properties.erase(key);
+    }
+    validate_native_dxf_catalog_sources(pending, proofs, catalogs, authoring_catalog_ids, &budget);
+    if (catalog_mapping.size() != authoring_catalog_ids.size()) throw std::invalid_argument("V8 live catalog owner mapping differs");
+    std::set<std::string, std::less<>> destinations;
+    for (const auto& [source_id, target] : body_mapping) {
+        (void)source_id;
+        if (!destinations.insert(target).second) throw std::invalid_argument("V8 body mapping is not injective");
+    }
+    for (const auto& id : authoring_catalog_ids)
+        if (!destinations.insert(catalog_mapping.at(id)).second) throw std::invalid_argument("V8 catalog destination collision");
+    std::map<std::string, std::string, std::less<>> observed_context_map;
+    const auto remember = [&](const std::string& original, const std::string& destination) {
+        const auto [found, inserted] = observed_context_map.emplace(original, destination);
+        if ((!inserted && found->second != destination) || context_mapping.at(original) != destination)
+            throw std::invalid_argument("V8 global source context mapping conflict");
+    };
+    for (const auto& body : entities) if (catalog_source_member(body)) {
+        const auto original_id = body.extensions.at(kPhysicalGraph).at("source_owner_id").get<std::string>();
+        if (body_mapping.at(original_id) != body.id) throw std::invalid_argument("V8 original body owner map differs");
+        const auto source_context = read_resolved_context(body.extensions.at(kWallSourceContextBinding).at("source_resolved_context"), true);
+        const auto& target = actual_contexts.at(body.id);
+        remember(source_context.property_id, target.property_id); remember(source_context.building_id, target.building_id);
+        remember(source_context.floor_id, target.floor_id); remember(source_context.layer_id, target.layer_id);
+    }
+    std::vector<Entity> mapped_catalogs;
+    for (const auto& id : authoring_catalog_ids) {
+        auto mapped = remap_complete_assembly_catalog_source_refs(read_catalog_source(id, catalogs.at(id)),
+            catalog_mapping, body_mapping, context_mapping, budget.catalog_transfer);
+        const auto found = actual_destination_entities.find(mapped.id);
+        if (found == actual_destination_entities.end() || !same_raw_entity(mapped, found->second))
+            throw std::invalid_argument("V8 actual staged complete catalog differs");
+        mapped_catalogs.push_back(std::move(mapped));
+    }
+    auto staged = entities;
+    bind_native_dxf_wall_source_destinations(staged, actual_contexts, &actual_destination_entities, &proofs, &catalogs, &budget, &catalog_mapping);
+    auto final_actual = actual_destination_entities;
+    for (auto& body : staged) if (catalog_source_member(body)) {
+        auto supplied = physical_evidence_entity(actual_destination_entities.at(body.id));
+        auto bound = physical_evidence_entity(body);
+        // Physical binding has already proved the supplied pending body and its
+        // resolved hierarchy. Compare material slots separately after mapping.
+        if (architectural_material_source_refs(supplied) != architectural_material_source_refs(bound) ||
+            supplied.required != bound.required) throw std::invalid_argument("V8 actual staged body material/required differs");
+        final_actual.at(body.id) = body;
+    }
+    std::vector<Entity> final_values;
+    for (const auto& [id, owner] : final_actual) { (void)id; final_values.push_back(owner); }
+    if (!Document::create(final_values).snapshot().is_editable()) throw std::invalid_argument("V8 staged destination is not editable");
+    staged.insert(staged.end(), mapped_catalogs.begin(), mapped_catalogs.end());
     entities = std::move(staged);
 }
 
@@ -4329,7 +5015,7 @@ DxfProjectExportResult export_project_dxf(const DocumentSnapshot& document,
     result.drawing.insertion_units = 6; // SI metres are authoritative in the project model.
     NativeDxfWallSourceWorkBudget wall_source_budget;
     const bool physical_operation = std::any_of(document.entities().begin(), document.entities().end(), [](const auto& owner) {
-        return owner.second.extensions.contains("physical_wall_room");
+        return owner.second.extensions.contains("physical_wall_room") || raw_material_assignment(owner.second);
     });
     try {
         // Reserve the initial full-source organization and phase selection

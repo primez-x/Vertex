@@ -308,6 +308,10 @@ int main(int argc, char** argv) {
                 candidate.source_retention_required = result.source_retention_required;
                 if constexpr (requires { result.physical_source_graphs; })
                     candidate.physical_source_graphs = std::move(result.physical_source_graphs);
+                if constexpr (requires { result.catalog_sources; result.authoring_catalog_ids; }) {
+                    candidate.catalog_sources = std::move(result.catalog_sources);
+                    candidate.authoring_catalog_ids = std::move(result.authoring_catalog_ids);
+                }
                 for (auto& diagnostic : result.diagnostics)
                     candidate.diagnostics.push_back({std::move(diagnostic.source_id),
                         std::move(diagnostic.source_kind), std::move(diagnostic.code)});

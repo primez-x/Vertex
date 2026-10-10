@@ -38032,9 +38032,44 @@ public:
             const auto mapped = importProjectCandidate(raw, ProjectImportKind::dxf);
             if (!mapped.isolation_controls_attested)
                 throw std::runtime_error("The DXF import worker did not attest its sandbox controls.");
+            const bool complete_catalog_transfer = !mapped.catalog_sources.empty();
+            NativeDxfWallSourceWorkBudget catalog_operation_budget;
             const auto source = authoringSnapshot();
             if (!m_document->is_editable()) throw std::invalid_argument("This document is read-only.");
             const auto source_document = m_document;
+            const auto reserve_destination_catalog = [&](const Entity& existing, std::size_t passes) {
+                auto& budget = catalog_operation_budget.catalog_transfer;
+                const auto before = budget.consumed_validation_work;
+                admit_existing_assembly_catalog_work(existing, budget);
+                const auto cost = budget.consumed_validation_work - before;
+                const auto remaining = budget.max_validation_work - budget.consumed_validation_work;
+                if (passes && cost > remaining / passes) {
+                    budget.consumed_validation_work = budget.max_validation_work;
+                    throw std::invalid_argument("The destination catalog history exceeds the DXF import work limit.");
+                }
+                budget.consumed_validation_work += cost * passes;
+            };
+            if (complete_catalog_transfer) {
+                // Preview/publication forks restore the complete retained
+                // history, including catalogs deleted from the current head.
+                // Admit every historical payload before the first semantic
+                // preview. The conservative reservation includes repeated
+                // restore/state admissions and constraint replay admissions;
+                // do not deduplicate revisions merely by catalog identity.
+                constexpr std::size_t retained_catalog_passes = 128;
+                for (const auto& record : source.history())
+                    for (const auto& [id, existing] : record.entities) {
+                        (void)id;
+                        if (existing.type == "assembly_model")
+                            reserve_destination_catalog(existing, retained_catalog_passes);
+                    }
+                constexpr std::size_t current_catalog_passes = 32;
+                for (const auto& [id, existing] : source.entities()) {
+                    (void)id;
+                    if (existing.type == "assembly_model")
+                        reserve_destination_catalog(existing, current_catalog_passes);
+                }
+            }
 
             std::string layer_id = m_active_layer_id.toStdString();
             auto layer = source.entities().find(layer_id);
@@ -38073,7 +38108,7 @@ public:
                 const auto marker = entity.extensions.find("vertex_dxf_boundary");
                 return marker != entity.extensions.end() && marker->is_object() &&
                     (marker->value("version", 0) == 5 || marker->value("version", 0) == 6 ||
-                     marker->value("version", 0) == 7);
+                     marker->value("version", 0) == 7 || marker->value("version", 0) == 8);
             };
             const auto native_member = [&](const Entity& entity) {
                 return entity.extensions.contains("vertex_dxf_boundary") &&
@@ -38085,6 +38120,17 @@ public:
                     for (const auto& item : state.labels) ++source_layer_counts[source_layer(candidate, item.id)];
                     for (const auto& item : state.symbols) ++source_layer_counts[source_layer(candidate, item.id)];
                 } else ++source_layer_counts[source_layer(candidate)];
+            }
+            const auto catalog_source_contexts = complete_catalog_transfer
+                ? native_dxf_catalog_source_contexts(mapped.physical_source_graphs, mapped.catalog_sources,
+                    mapped.authoring_catalog_ids, &catalog_operation_budget)
+                : std::map<std::string, NativeDxfCatalogSourceContext, std::less<>>{};
+            // A catalog can live on a library layer without any drawing body
+            // on that layer. Give that actual source context its own reviewed
+            // destination instead of inferring it from a consuming wall.
+            for (const auto& [id, catalog_context] : catalog_source_contexts) {
+                (void)id;
+                ++source_layer_counts[catalog_context.cad_layer];
             }
             std::set<std::string, std::less<>> reserved_ids;
             for (const auto& [id, entity] : source.entities()) { (void)entity; reserved_ids.insert(id); }
@@ -38229,7 +38275,11 @@ public:
             // Appraisal deductions are floor-scoped even when the original CAD
             // layers differ. Reject a split destination before publishing any
             // part of the imported group or its newly allocated layers.
-            validate_native_dxf_boundary_groups(mapped.entities, &mapped.physical_source_graphs);
+            if (complete_catalog_transfer)
+                validate_native_dxf_catalog_sources(mapped.entities, mapped.physical_source_graphs,
+                    mapped.catalog_sources, mapped.authoring_catalog_ids, &catalog_operation_budget);
+            else
+                validate_native_dxf_boundary_groups(mapped.entities, &mapped.physical_source_graphs);
             std::map<std::string, const Entity*, std::less<>> native_boundaries;
             for (const auto& candidate : mapped.entities)
                 if (native_member(candidate))
@@ -38264,6 +38314,57 @@ public:
                 if (can_recognize_boundary_entity_type(candidate.type) || candidate.type == "wall" || candidate.type == "opening" ||
                     (candidate.type == "measurement_linework" && native_member(candidate)))
                     identities.emplace(candidate.id, allocate_id(candidate.type));
+            }
+            // Catalog, body and context identities have separate namespaces.
+            // Never reuse an existing catalog just because its ID has the same
+            // spelling as a foreign owner or a geometry-local feature.
+            std::map<std::string, std::string, std::less<>> catalog_identities;
+            std::map<std::string, std::string, std::less<>> source_body_identities;
+            std::map<std::string, std::string, std::less<>> source_context_identities;
+            if (complete_catalog_transfer) {
+                for (const auto& id : mapped.authoring_catalog_ids) {
+                    if (!mapped.catalog_sources.contains(id) ||
+                        !catalog_identities.emplace(id, allocate_id("assembly-catalog")).second)
+                        throw std::invalid_argument("The DXF catalog authoring inventory is inconsistent.");
+                }
+                const auto bind_context = [&](const std::string& original, const std::string& destination) {
+                    if (original.empty()) return;
+                    if (destination.empty())
+                        throw std::invalid_argument("A DXF source context has no reviewed destination.");
+                    const auto [found, inserted] = source_context_identities.emplace(original, destination);
+                    if (!inserted && found->second != destination)
+                        throw std::invalid_argument("A shared DXF source context has conflicting destination assignments. Review its layers together.");
+                };
+                for (const auto& candidate : mapped.entities) {
+                    const auto marker = candidate.extensions.find("vertex_dxf_boundary");
+                    if (marker == candidate.extensions.end() || !marker->is_object() ||
+                        marker->value("version", 0) != 8) continue;
+                    const auto& evidence = candidate.extensions.at("vertex_dxf_physical_source_graph");
+                    const auto original_id = evidence.at("source_owner_id").get<std::string>();
+                    if (!source_body_identities.emplace(original_id, identities.at(candidate.id)).second)
+                        throw std::invalid_argument("A DXF catalog host has multiple imported identities.");
+                    const auto& destination = destinations.at(source_layer(candidate));
+                    const auto context = reviewed_organization.drawing_context(destination.layer_id);
+                    if (!context || !context->complete() || context->floor_id != destination.floor_id)
+                        throw std::invalid_argument("A DXF catalog destination needs a complete drawing context.");
+                    const auto& original = candidate.extensions.at("vertex_dxf_wall_source_context_binding")
+                        .at("source_resolved_context");
+                    bind_context(original.at("property_id").get<std::string>(), context->property_id);
+                    bind_context(original.at("building_id").get<std::string>(), context->building_id);
+                    bind_context(original.at("floor_id").get<std::string>(), context->floor_id);
+                    bind_context(original.at("layer_id").get<std::string>(), context->layer_id);
+                }
+                for (const auto& [id, catalog_context] : catalog_source_contexts) {
+                    (void)id;
+                    const auto& destination = destinations.at(catalog_context.cad_layer);
+                    const auto context = reviewed_organization.drawing_context(destination.layer_id);
+                    if (!context || !context->complete() || context->floor_id != destination.floor_id)
+                        throw std::invalid_argument("A DXF catalog needs a valid reviewed building, floor and layer.");
+                    bind_context(catalog_context.context.property_id, context->property_id);
+                    bind_context(catalog_context.context.building_id, context->building_id);
+                    bind_context(catalog_context.context.floor_id, context->floor_id);
+                    bind_context(catalog_context.context.layer_id, context->layer_id);
+                }
             }
             const auto existing_annotation = std::find_if(source.entities().begin(), source.entities().end(),
                 [](const auto& item) { return item.second.type == kAnnotationEntityType; });
@@ -38353,7 +38454,8 @@ public:
             if (std::any_of(imported_native_boundaries.begin(), imported_native_boundaries.end(), [](const Entity& member) {
                 const auto marker = member.extensions.find("vertex_dxf_boundary");
                 return marker != member.extensions.end() && marker->is_object() &&
-                    (marker->value("version", 0) == 6 || marker->value("version", 0) == 7);
+                    (marker->value("version", 0) == 6 || marker->value("version", 0) == 7 ||
+                     marker->value("version", 0) == 8);
             })) {
                 const auto destination_scope = constraint_phase_scope(reviewed_hierarchy.entities());
                 for (const auto& [id, existing] : reviewed_hierarchy.entities()) {
@@ -38382,7 +38484,7 @@ public:
                     return marker != member.extensions.end() && marker->is_object() && marker->value("version", 0) == 7;
                 });
             std::map<std::string, Entity, std::less<>> actual_destination_entities;
-            if (has_physical_room_group) {
+            if (has_physical_room_group || complete_catalog_transfer) {
                 actual_destination_entities = reviewed_hierarchy.entities();
                 for (const auto& change : changes) {
                     if (change.kind != EntityChangeKind::upsert) continue;
@@ -38394,16 +38496,44 @@ public:
                         staged.properties["floor_id"] = context->second.floor_id;
                         staged.properties["layer_id"] = context->second.layer_id;
                     }
+                    if (complete_catalog_transfer && wall_source_member(staged) &&
+                        staged.extensions.at("vertex_dxf_boundary").value("version", 0) == 8)
+                        staged = remap_architectural_material_source_refs(staged, catalog_identities);
                     actual_destination_entities.insert_or_assign(staged.id, std::move(staged));
                 }
             }
-            bind_native_dxf_wall_source_destinations(imported_native_boundaries, imported_wall_source_contexts,
-                has_physical_room_group ? &actual_destination_entities : nullptr, &mapped.physical_source_graphs);
-            if (has_physical_room_group)
+            if (complete_catalog_transfer) {
+                for (const auto& id : mapped.authoring_catalog_ids) {
+                    const auto& record = mapped.catalog_sources.at(id);
+                    Entity original{record.at("id").get<std::string>(), record.at("type").get<std::string>(),
+                        record.at("properties"), record.at("required").get<bool>(), record.at("extensions")};
+                    auto staged = remap_complete_assembly_catalog_source_refs(original, catalog_identities,
+                        source_body_identities, source_context_identities, catalog_operation_budget.catalog_transfer);
+                    // New owners enter both the final preview and the atomic
+                    // command. Their admission is part of this same ledger.
+                    reserve_destination_catalog(staged, 32);
+                    const auto staged_id = staged.id;
+                    if (!actual_destination_entities.emplace(staged_id, std::move(staged)).second)
+                        throw std::invalid_argument("A new DXF catalog identity conflicts with the staged destination.");
+                }
+                // This binds the wall/source cohort and catalogs together,
+                // proving the mapped source against the actual staged graph.
+                // Evidence-only hierarchy/catalog owners cannot enter changes.
+                bind_native_dxf_catalog_destinations(imported_native_boundaries, imported_wall_source_contexts,
+                    actual_destination_entities, mapped.physical_source_graphs, mapped.catalog_sources,
+                    mapped.authoring_catalog_ids, source_body_identities, catalog_identities,
+                    source_context_identities, &catalog_operation_budget);
                 for (const auto& member : imported_native_boundaries)
-                    if (wall_source_member(member)) actual_destination_entities.insert_or_assign(member.id, member);
-            validate_native_dxf_boundary_groups(imported_native_boundaries, &mapped.physical_source_graphs,
-                has_physical_room_group ? &actual_destination_entities : nullptr);
+                    if (member.type == "assembly_model") changes.push_back(EntityChange::upsert(member));
+            } else {
+                bind_native_dxf_wall_source_destinations(imported_native_boundaries, imported_wall_source_contexts,
+                    has_physical_room_group ? &actual_destination_entities : nullptr, &mapped.physical_source_graphs);
+                if (has_physical_room_group)
+                    for (const auto& member : imported_native_boundaries)
+                        if (wall_source_member(member)) actual_destination_entities.insert_or_assign(member.id, member);
+                validate_native_dxf_boundary_groups(imported_native_boundaries, &mapped.physical_source_graphs,
+                    has_physical_room_group ? &actual_destination_entities : nullptr);
+            }
             for (auto& change : changes) {
                 if (change.kind != EntityChangeKind::upsert || !wall_source_member(change.entity)) continue;
                 const auto bound = std::find_if(imported_native_boundaries.begin(), imported_native_boundaries.end(),
@@ -38411,7 +38541,7 @@ public:
                 if (bound == imported_native_boundaries.end())
                     throw std::invalid_argument("A reviewed DXF wall-source member is missing from the final group.");
                 change.entity = *bound;
-                if (change.entity.extensions.at("vertex_dxf_boundary").value("version", 0) == 7) {
+                if (change.entity.extensions.at("vertex_dxf_boundary").value("version", 0) >= 7) {
                     // Shared proofs exist only during this reviewed transfer.
                     // The published graph owns its real references and can be
                     // saved, copied and exported without that discarded table.
@@ -38454,7 +38584,7 @@ public:
             const auto command = ApplyEntityChanges{source.revision(), std::move(changes),
                 {AssetChange::upsert(std::move(asset))}, "Import DXF"};
             validateImportedHostedGeometry(Document::preview_command(source, command), imported_boundary_ids);
-            applyDocumentCommand(command);
+            if (!applyDocumentCommand(command)) return false;
             if (!imported_boundary_ids.empty()) m_selected_id = id_from(imported_boundary_ids.front());
             m_active_layer_id = id_from(review_layers && !selected_import_layer.empty() ? selected_import_layer : layer_id);
             clearError();

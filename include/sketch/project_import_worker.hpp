@@ -50,6 +50,10 @@ struct ProjectImportCandidate {
     // Transfer-only source proofs are shared by V7 members. They are never
     // embedded in live entities or treated as destination hierarchy authority.
     NativeDxfPhysicalSourceGraphs physical_source_graphs;
+    // Original complete catalog snapshots are transfer evidence. The separate
+    // live closure declares which owners reviewed destination binding may copy.
+    NativeDxfCatalogSources catalog_sources;
+    std::vector<std::string> authoring_catalog_ids;
 };
 
 inline const char* project_import_kind_name(ProjectImportKind kind) {
@@ -246,7 +250,7 @@ inline void validate_native_dxf_boundary(const Entity& entity, GeometryBudget& b
     const auto& marker = entity.extensions.at("vertex_dxf_boundary");
     if (!marker.is_object() || !marker.contains("version") ||
         !marker.at("version").is_number_integer()) reject();
-    const bool physical_source_group = marker.at("version") == 7;
+    const bool physical_source_group = marker.at("version") == 7 || marker.at("version") == 8;
     const bool measured_source_group = marker.at("version") == 6 || physical_source_group;
     const bool wall_source_group = marker.at("version") == 5 || measured_source_group;
     const bool floor_group = marker.at("version") == 4 || wall_source_group;
@@ -567,16 +571,55 @@ inline void validate(const ProjectImportCandidate& result) {
     if (result.entities.size() > project_import_entity_limit ||
         result.diagnostics.size() > project_import_diagnostic_limit ||
         (!result.diagnostics.empty() && !result.source_retention_required)) reject();
-    if (result.kind != ProjectImportKind::dxf && !result.physical_source_graphs.empty()) reject();
+    if (result.kind != ProjectImportKind::dxf && (!result.physical_source_graphs.empty() ||
+        !result.catalog_sources.empty() || !result.authoring_catalog_ids.empty())) reject();
+    if (result.catalog_sources.size() > project_import_entity_limit ||
+        result.authoring_catalog_ids.size() > result.catalog_sources.size() ||
+        !std::is_sorted(result.authoring_catalog_ids.begin(), result.authoring_catalog_ids.end()) ||
+        std::adjacent_find(result.authoring_catalog_ids.begin(), result.authoring_catalog_ids.end()) !=
+            result.authoring_catalog_ids.end()) reject();
+    for (const auto& id : result.authoring_catalog_ids) {
+        (void)text(nlohmann::json(id), false, 128);
+        if (!result.catalog_sources.contains(id)) reject();
+    }
+    for (const auto& [id, snapshot] : result.catalog_sources) {
+        (void)text(nlohmann::json(id), false, 128);
+        fields(snapshot, {"id", "type", "properties", "required", "extensions"});
+        if (text(snapshot.at("id"), false, 128) != id || snapshot.at("type") != "assembly_model" ||
+            !snapshot.at("required").is_boolean() || !snapshot.at("properties").is_object() ||
+            !snapshot.at("extensions").is_object()) reject();
+        // The core's shared catalog ledger admits raw model size/work before
+        // decoding. Do not normalize or prune any row at the wire boundary.
+    }
     if (result.physical_source_graphs.size() > project_import_entity_limit) reject();
     std::size_t physical_proof_bytes = 0;
     std::set<std::string, std::less<>> referenced_physical_graphs;
     for (const auto& [id, proof] : result.physical_source_graphs) {
         (void)text(nlohmann::json(id), false, 128);
-        fields(proof, {"version", "entities"});
-        if (!proof.at("version").is_number_integer() || proof.at("version") != 1 ||
+        const bool catalog_proof = proof.is_object() && proof.contains("version") && proof.at("version") == 2;
+        if (catalog_proof) fields(proof, {"version", "entities", "catalog_ids"});
+        else fields(proof, {"version", "entities"});
+        if (!proof.at("version").is_number_integer() || (!catalog_proof && proof.at("version") != 1) ||
             !proof.at("entities").is_array() || proof.at("entities").empty() ||
             proof.at("entities").size() > 4096) reject();
+        if (catalog_proof) {
+            if (result.catalog_sources.empty() || !proof.at("catalog_ids").is_array() ||
+                proof.at("catalog_ids").empty() || proof.at("catalog_ids").size() > result.catalog_sources.size()) reject();
+            std::string previous;
+            for (const auto& value : proof.at("catalog_ids")) {
+                const auto catalog_id = text(value, false, 128);
+                if ((!previous.empty() && previous >= catalog_id) || !result.catalog_sources.contains(catalog_id)) reject();
+                previous = catalog_id;
+            }
+            for (const auto& snapshot : proof.at("entities")) {
+                fields(snapshot, {"id", "type", "properties", "required", "extensions"});
+                if (!snapshot.at("required").is_boolean() ||
+                    snapshot.at("type") == "assembly_model" || !snapshot.at("properties").is_object() ||
+                    !snapshot.at("extensions").is_object()) reject();
+                (void)text(snapshot.at("id"), false, 128);
+                (void)text(snapshot.at("type"), false, 128);
+            }
+        }
         const auto bytes = proof.dump().size();
         constexpr std::size_t physical_proof_limit = 16 * 1024 * 1024;
         if (bytes > physical_proof_limit - physical_proof_bytes) reject();
@@ -596,7 +639,11 @@ inline void validate(const ProjectImportCandidate& result) {
     GeometryBudget geometry_budget;
     for (const auto& entity : result.entities) {
         (void)text(entity.id, false);
-        if (!entity_ids.insert(entity.id).second || entity.required ||
+        const auto transfer_marker = entity.extensions.find("vertex_dxf_boundary");
+        const bool complete_catalog_body = result.kind == ProjectImportKind::dxf &&
+            transfer_marker != entity.extensions.end() && transfer_marker->is_object() &&
+            transfer_marker->value("version", 0) == 8;
+        if (!entity_ids.insert(entity.id).second || (entity.required && !complete_catalog_body) ||
             !entity.properties.is_object() || !entity.extensions.is_object()) reject();
         const bool native_dxf_boundary = result.kind == ProjectImportKind::dxf &&
             can_recognize_boundary_entity_type(entity.type) && entity.extensions.contains("vertex_dxf_boundary");
@@ -604,15 +651,20 @@ inline void validate(const ProjectImportCandidate& result) {
             entity.extensions.contains("vertex_dxf_boundary") && entity.extensions.at("vertex_dxf_boundary").is_object() &&
             (entity.extensions.at("vertex_dxf_boundary").value("version", 0) == 5 ||
              entity.extensions.at("vertex_dxf_boundary").value("version", 0) == 6 ||
-             entity.extensions.at("vertex_dxf_boundary").value("version", 0) == 7);
+             entity.extensions.at("vertex_dxf_boundary").value("version", 0) == 7 ||
+             entity.extensions.at("vertex_dxf_boundary").value("version", 0) == 8);
+        const bool native_dxf_catalog_source = native_dxf_wall_source &&
+            entity.extensions.at("vertex_dxf_boundary").at("version") == 8;
         const bool native_dxf_physical_source = native_dxf_wall_source &&
-            entity.extensions.at("vertex_dxf_boundary").at("version") == 7;
+            (entity.extensions.at("vertex_dxf_boundary").at("version") == 7 || native_dxf_catalog_source);
         const bool native_dxf_measured_source = native_dxf_wall_source &&
             (entity.extensions.at("vertex_dxf_boundary").at("version") == 6 || native_dxf_physical_source);
         validate_pending_dxf_physical_graph(entity, native_dxf_physical_source);
+        if (native_dxf_catalog_source && result.catalog_sources.empty()) reject();
         if (native_dxf_physical_source) {
             const auto graph_id = text(entity.extensions.at("vertex_dxf_physical_source_graph").at("source_graph_id"), false, 128);
             if (!result.physical_source_graphs.contains(graph_id)) reject();
+            if (result.physical_source_graphs.at(graph_id).at("version") != (native_dxf_catalog_source ? 2 : 1)) reject();
             referenced_physical_graphs.insert(graph_id);
         }
         const bool shared = entity.type == "boundary" || entity.type == "wall" || entity.type == "opening";
@@ -722,6 +774,20 @@ inline void validate(const ProjectImportCandidate& result) {
     }
     // Validate the detached graph using the same native entity, reference and
     // geometry checks as an ordinary command. No live document is mutated.
+    if (result.kind == ProjectImportKind::dxf && !result.catalog_sources.empty()) {
+        NativeDxfWallSourceWorkBudget source_budget;
+        try {
+            // All candidate shape charges precede catalog/model decoding. The
+            // same ledger includes preflight, authentication and private-copy
+            // admission; downstream repeats do not receive a fresh budget.
+            validate_native_dxf_catalog_sources(result.entities, result.physical_source_graphs,
+                result.catalog_sources, result.authoring_catalog_ids, &source_budget, true);
+            auto document = Document::create(native_dxf_catalog_pending_admission_entities(result.entities,
+                result.physical_source_graphs, result.catalog_sources, result.authoring_catalog_ids, &source_budget));
+            if (!document.snapshot().is_editable()) reject();
+        } catch (...) { reject(); }
+        return;
+    }
     if (result.kind == ProjectImportKind::dxf) {
         try { validate_native_dxf_boundary_groups(result.entities, &result.physical_source_graphs); } catch (...) { reject(); }
     }
@@ -736,16 +802,26 @@ inline void validate(const ProjectImportCandidate& result) {
 // every candidate through Document. Callers still commit an ordinary command.
 inline std::vector<std::byte> encode_project_import_candidate(const ProjectImportCandidate& result) {
     project_import_detail::validate(result);
+    const bool catalog_protocol = !result.catalog_sources.empty();
     nlohmann::json entities = nlohmann::json::array(), diagnostics = nlohmann::json::array();
-    for (const auto& e : result.entities)
-        entities.push_back({{"id", e.id}, {"type", e.type}, {"properties", e.properties}, {"extensions", e.extensions}});
+    for (const auto& e : result.entities) {
+        auto record = nlohmann::json{{"id", e.id}, {"type", e.type}, {"properties", e.properties}, {"extensions", e.extensions}};
+        if (catalog_protocol) record["required"] = e.required;
+        entities.push_back(std::move(record));
+    }
     for (const auto& d : result.diagnostics)
         diagnostics.push_back({{"source_id", d.source_id}, {"source_kind", d.source_kind}, {"code", d.code}});
-    auto value = nlohmann::json{{"protocol", result.physical_source_graphs.empty() ? "PSIP0001" : "PSIP0002"},
+    auto value = nlohmann::json{{"protocol", catalog_protocol ? "PSIP0003" :
+            result.physical_source_graphs.empty() ? "PSIP0001" : "PSIP0002"},
         {"kind", project_import_kind_name(result.kind)},
         {"entities", std::move(entities)}, {"diagnostics", std::move(diagnostics)},
         {"source_retention_required", result.source_retention_required}};
-    if (!result.physical_source_graphs.empty()) value["physical_source_graphs"] = result.physical_source_graphs;
+    if (catalog_protocol || !result.physical_source_graphs.empty())
+        value["physical_source_graphs"] = result.physical_source_graphs;
+    if (catalog_protocol) {
+        value["catalog_sources"] = result.catalog_sources;
+        value["authoring_catalog_ids"] = result.authoring_catalog_ids;
+    }
     const auto wire = value.dump();
     if (wire.size() > project_import_output_limit) project_import_detail::reject();
     std::vector<std::byte> output(wire.size());
@@ -761,13 +837,12 @@ inline ProjectImportCandidate decode_project_import_candidate(
     std::size_t nodes = 0;
     std::vector<std::set<std::string>> object_keys;
     const auto callback = [&](int depth, nlohmann::json::parse_event_t event, nlohmann::json& value) {
-        if (depth > 32 || ++nodes > 1'000'000) reject();
+        if (depth > assembly_catalog_transport_depth_limit || ++nodes > assembly_catalog_transport_node_limit) reject();
         if (event == nlohmann::json::parse_event_t::object_start) object_keys.emplace_back();
         if (event == nlohmann::json::parse_event_t::key &&
             (object_keys.empty() || !object_keys.back().insert(value.get<std::string>()).second)) reject();
         if (event == nlohmann::json::parse_event_t::object_end) object_keys.pop_back();
-        if (value.is_string() && (value.get_ref<const std::string&>().size() > 1024 * 1024 ||
-            value.get_ref<const std::string&>().find('\0') != std::string::npos)) reject();
+        if (value.is_string() && value.get_ref<const std::string&>().size() > assembly_catalog_transport_byte_limit) reject();
         if (event == nlohmann::json::parse_event_t::value && value.is_number_float() &&
             !std::isfinite(value.get<double>())) reject();
         return true;
@@ -775,10 +850,33 @@ inline ProjectImportCandidate decode_project_import_candidate(
     const auto* begin = reinterpret_cast<const char*>(report.output.data());
     const auto value = nlohmann::json::parse(begin, begin + report.output.size(), callback);
     const bool physical_protocol = value.is_object() && value.contains("protocol") && value.at("protocol") == "PSIP0002";
-    if (physical_protocol)
+    const bool catalog_protocol = value.is_object() && value.contains("protocol") && value.at("protocol") == "PSIP0003";
+    // The initial parser has one bounded ceiling. Only the exact PSIP0003
+    // catalog field uses the complete-catalog framing allowance. Preserve the
+    // original limits for every other field and for the entire PSIP0001/2
+    // payload, regardless of incoming object-key order.
+    const auto legacy_json_limits = [&](const auto& self, const nlohmann::json& item, int depth) -> void {
+        if (depth > 32) reject();
+        const auto check_string = [&](const std::string& text) {
+            if (text.size() > 1024 * 1024 || text.find('\0') != std::string::npos) reject();
+        };
+        if (item.is_string()) check_string(item.get_ref<const std::string&>());
+        else if (item.is_object()) for (auto field = item.begin(); field != item.end(); ++field) {
+            if (depth + 1 > 32) reject();
+            check_string(field.key());
+            if (catalog_protocol && depth == 0 && field.key() == "catalog_sources") continue;
+            self(self, field.value(), depth + 1);
+        }
+        else if (item.is_array()) for (const auto& child : item) self(self, child, depth + 1);
+    };
+    legacy_json_limits(legacy_json_limits, value, 0);
+    if (catalog_protocol)
+        fields(value, {"protocol", "kind", "entities", "diagnostics", "source_retention_required",
+            "physical_source_graphs", "catalog_sources", "authoring_catalog_ids"});
+    else if (physical_protocol)
         fields(value, {"protocol", "kind", "entities", "diagnostics", "source_retention_required", "physical_source_graphs"});
     else fields(value, {"protocol", "kind", "entities", "diagnostics", "source_retention_required"});
-    if ((!physical_protocol && value.at("protocol") != "PSIP0001") ||
+    if ((!physical_protocol && !catalog_protocol && value.at("protocol") != "PSIP0001") ||
         value.at("kind") != project_import_kind_name(expected_kind) ||
         !value.at("source_retention_required").is_boolean() || !value.at("entities").is_array() ||
         !value.at("diagnostics").is_array() || value.at("entities").size() > project_import_entity_limit ||
@@ -786,17 +884,30 @@ inline ProjectImportCandidate decode_project_import_candidate(
     ProjectImportCandidate result;
     result.kind = expected_kind;
     result.source_retention_required = value.at("source_retention_required").get<bool>();
-    if (physical_protocol) {
+    if (physical_protocol || catalog_protocol) {
         const auto& proofs = value.at("physical_source_graphs");
-        if (expected_kind != ProjectImportKind::dxf || !proofs.is_object() || proofs.empty() ||
+        if (expected_kind != ProjectImportKind::dxf || !proofs.is_object() || (!catalog_protocol && proofs.empty()) ||
             proofs.size() > project_import_entity_limit) reject();
         for (const auto& [id, proof] : proofs.items())
             result.physical_source_graphs.emplace(text(nlohmann::json(id), false, 128), proof);
     }
+    if (catalog_protocol) {
+        const auto& catalogs = value.at("catalog_sources");
+        const auto& authoring = value.at("authoring_catalog_ids");
+        if (expected_kind != ProjectImportKind::dxf || !catalogs.is_object() || catalogs.empty() ||
+            catalogs.size() > project_import_entity_limit || !authoring.is_array() ||
+            authoring.size() > catalogs.size()) reject();
+        for (const auto& [id, snapshot] : catalogs.items())
+            result.catalog_sources.emplace(text(nlohmann::json(id), false, 128), snapshot);
+        for (const auto& id : authoring) result.authoring_catalog_ids.push_back(text(id, false, 128));
+    }
     for (const auto& e : value.at("entities")) {
-        fields(e, {"id", "type", "properties", "extensions"});
+        if (catalog_protocol) {
+            fields(e, {"id", "type", "properties", "required", "extensions"});
+            if (!e.at("required").is_boolean()) reject();
+        } else fields(e, {"id", "type", "properties", "extensions"});
         result.entities.push_back({text(e.at("id"), false), text(e.at("type"), false),
-            e.at("properties"), false, e.at("extensions")});
+            e.at("properties"), catalog_protocol && e.at("required").get<bool>(), e.at("extensions")});
     }
     for (const auto& d : value.at("diagnostics")) {
         fields(d, {"source_id", "source_kind", "code"});

@@ -1,5 +1,53 @@
 # Vertex project formats v1 through v159
 
+## Material catalog DXF transfer (V8 source implementation)
+
+V8 carries catalog-bearing wall/opening groups and their supported boundary,
+measured-source and retained physical-room dependencies. A material-bearing
+wall does not require a physical room. One operation-wide catalog table stores
+the complete original `assembly_model` snapshots as `id`, `type`, `properties`,
+`required` and `extensions`. Unused definitions, embedded instances, model
+dialects, authored ordering, raw numeric forms and opaque metadata stay intact.
+Local material/type/profile/part/instance IDs are not global entity identities.
+
+Physical source proofs use `{version: 2, entities: [...], catalog_ids: [...]}`
+and reference that global store. Canonical metadata-only BLOCK/INSERT carriers
+use `CATALOG_SOURCE_TABLE_CHUNK_V1`, version 8, reserved `graph_id`
+`vertex.catalog.sources`, zero-based `chunk_index`, `chunk_count` and ASCII JSON
+`data`. The assembled table contains `version: 1`, a `catalog_sources` snapshot
+array and sorted `authoring_catalog_ids`. The live subset is exact; catalogs
+needed only to validate original source observations remain evidence. Full
+embedded host closure joins authoring cohorts before export or activation.
+
+The DXF-only `PSIP0003` candidate protocol has exactly eight fields: `protocol`,
+`kind`, `entities`, `diagnostics`, `source_retention_required`,
+`physical_source_graphs`, `catalog_sources`, and `authoring_catalog_ids`.
+Catalogs are keyed by their original owner ID. PSIP0003 entity records also
+carry the boolean `required` field; PSIP0001/2 retain their existing exact
+entity schemas. Raw operation admission precedes semantic catalog decoding.
+Repeated Document/catalog consumers share the cumulative work ledger, including
+retained destination history before desktop preview. Catalog framing admits
+opaque metadata under shared 16 MiB, depth-68 and one-million parse-event limits;
+raw model admission remains stricter. Ordinary protocol fields retain their
+original limits. Physical and catalog chunk families have separate namespaces,
+so a historical physical graph ID can equal the catalog carrier's ID spelling.
+
+Destination review allocates each live catalog once and uses separate explicit
+catalog, body and context maps. Conflicting destinations for one source context
+refuse the operation. Mapped catalogs, typed root/layer material references and
+embedded hosts must match the actual staged destination graph before one
+atomic import command publishes them. Foreign IDs never implicitly capture
+existing catalogs. Transfer markers disappear from live V8 objects; source
+bytes and opaque provenance remain recoverable.
+
+Current native host transport is limited to supported wall/opening cohorts.
+Other hosted architectural families, independent assembly instance transport,
+full phase authoring and changed local level identities remain implementation
+gaps. Unsupported canonical catalog references are refused, not removed.
+This adds no native project schema floor. Integrated source review approved the
+corrected scope; compilation, runtime exchange, capacity, external fidelity and
+production acceptance remain unverified. The installed candidate is unchanged.
+
 ## Physical-room DXF source transfer
 
 The source V7 DXF extension carries complete active physical-wall room groups,

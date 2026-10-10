@@ -132,6 +132,28 @@ work.
 
 ## Native project mapping
 
+### Complete material catalogs (V8, reviewed source integration)
+
+V8 adds complete original material/assembly catalogs to supported editable
+wall/opening cohorts, including material-bearing walls without a retained room.
+One bounded operation-wide table retains unused definitions, embedded instances,
+raw model dialect/order/numeric forms, metadata, extensions and required flags.
+Proofs reference catalog IDs; a separate exact subset identifies live catalog
+owners. Observer-only catalogs cannot become live authoring by inference.
+
+Catalog consumers and all embedded hosts share a dependency cohort. Desktop
+review allocates catalog owners once, rejects conflicting context assignments,
+and stages bodies, catalogs, hosts and root/layer material references together
+against the actual project before the existing atomic import command. Private
+source admission uses authentic source evidence; it grants no destination
+hierarchy authority. PSIP0003 carries the new tables and complete entity flags;
+PSIP0001/2 keep their existing schemas.
+
+Unsupported host families, independent assembly instances and full phase/level
+authoring remain explicit implementation gaps. Current source integration has
+not been compiled or exercised. External-consumer fidelity, capacity and
+production qualification remain open; no installed candidate has changed.
+
 ### Physical-room groups (2026-10-10, source implementation)
 
 V7 source work adds retained physical-room boundaries with complete active

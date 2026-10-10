@@ -14,7 +14,7 @@ changed source does not acquire runtime acceptance without later qualification.
 
 ## Current delivery state
 
-### October 10 complete catalog transfer — implementation in progress
+### October 10 complete catalog DXF transfer — source integration
 
 The shared assembly adapter now provides bounded raw admission, complete source
 reference inventory, actual-snapshot catalog capture and explicit owner/host/
@@ -31,17 +31,39 @@ conservative and can refuse valid large catalogs; capacity/performance has not
 been qualified.
 
 DXF V8 core transport, the isolated protocol and desktop destination binding
-are being connected. The contract uses one original catalog store, an explicit
+are connected for the supported wall/opening cohorts. The contract uses one
+original catalog store, an explicit
 live authoring subset, complete embedded-host closure and a single-valued
 reviewed context map. Original source support remains private evidence. New
 catalogs and bodies must be admitted together against the actual destination
 before the existing atomic import command can publish them. A material-bearing
 wall without a retained physical room is part of this contract.
 
-This is unfinished integration, not completed catalog exchange or production
+This is reviewed source integration, not qualified catalog exchange or production
 acceptance. No build, test, new test, probe, script, native job, launch, package
 or installation has run. The installed candidate remains unchanged and all
 new source is uncompiled and runtime-unverified.
+
+Integrated source review returned four required corrections: reserve retained
+destination catalog history before preview/publication; separate raw inventory
+work admission from copied-owner transfer restrictions; review catalog-only
+library contexts alongside drawing layers; and avoid applying physical/material
+operation limits to ordinary layered walls without material assignments.
+Those corrections are implemented. Retained/deleted historical payloads share
+the operation ledger with current and new catalogs; catalog-only layers receive
+real reviewed destinations. Two additional review findings are corrected:
+physical and catalog chunk families have separate namespaces, preserving legal
+legacy graph IDs, and complete catalog framing now shares bounded producer/
+reader limits. Only PSIP0003's catalog subtree uses the larger opaque metadata
+allowance; ordinary fields retain their original limits. Identifier checks stay
+strict, while opaque catalog strings retain escaped NUL as ordinary JSON.
+
+Integrated root and independent source review approved the corrected scope
+with no remaining actionable P1/P2 finding. Scoped diff checks and registry JSON
+parsing passed. This evidence does not establish compilation, numerical replay,
+capacity, save/reopen/re-export, external consumer fidelity or production
+acceptance. Other host families, independent assembly transport, full phase
+authoring and changed local level identities remain implementation gaps.
 
 ### October 10 wall/slab layer material copying — source implementation
 

@@ -184,7 +184,8 @@ bool unsupported_catalog_owner_slot(std::string_view key) {
     return key == "refs" || key == "references" || key == "vertical_level_binding" ||
         key == "material_assignment";
 }
-void preflight_complete_catalog(const Entity& source, AssemblyCatalogTransferBudget& budget) {
+void preflight_complete_catalog(const Entity& source, AssemblyCatalogTransferBudget& budget,
+    bool transport_owner_references = true) {
     validate_catalog_transfer_budget(budget);
     require(source.type == "assembly_model" && source.properties.is_object() && source.extensions.is_object(),
         "complete assembly catalog requires an actual assembly_model owner");
@@ -201,7 +202,7 @@ void preflight_complete_catalog(const Entity& source, AssemblyCatalogTransferBud
     admit_catalog_json(source.extensions, 2, budget);
     for (const auto& [key, value] : source.properties.items()) {
         (void)value;
-        require(!unsupported_catalog_owner_slot(key),
+        require(!transport_owner_references || !unsupported_catalog_owner_slot(key),
             "complete assembly catalog contains an unsupported canonical owner reference");
     }
     const auto& model = source.properties.at("model");
@@ -397,6 +398,35 @@ void admit_complete_assembly_catalog_source(const Entity& source, AssemblyCatalo
     } catch (const nlohmann::json::exception& error) {
         throw std::invalid_argument(std::string("invalid complete assembly catalog source: ") + error.what());
     }
+}
+void admit_existing_assembly_catalog_work(const Entity& existing, AssemblyCatalogTransferBudget& budget) {
+    try {
+        preflight_complete_catalog(existing, budget, false);
+    } catch (const nlohmann::json::exception& error) {
+        throw std::invalid_argument(std::string("invalid existing assembly catalog work: ") + error.what());
+    }
+}
+nlohmann::json parse_assembly_catalog_transport_json(std::string_view bytes) {
+    require(bytes.size() <= assembly_catalog_transport_byte_limit,
+        "complete assembly catalog transport byte limit exceeded");
+    std::size_t nodes = 0;
+    std::vector<std::set<std::string>> keys;
+    const auto callback = [&](int depth, nlohmann::json::parse_event_t event, nlohmann::json& value) {
+        require(depth <= assembly_catalog_transport_depth_limit && ++nodes <= assembly_catalog_transport_node_limit,
+            "complete assembly catalog transport JSON limit exceeded");
+        if (event == nlohmann::json::parse_event_t::object_start) keys.emplace_back();
+        else if (event == nlohmann::json::parse_event_t::object_end) keys.pop_back();
+        else if (event == nlohmann::json::parse_event_t::key)
+            require(!keys.empty() && keys.back().insert(value.get<std::string>()).second,
+                "duplicate complete assembly catalog transport key");
+        if (value.is_string())
+            require(value.get_ref<const std::string&>().size() <= assembly_catalog_transport_byte_limit,
+                "complete assembly catalog transport string limit exceeded");
+        if (value.is_number_float())
+            require(std::isfinite(value.get<double>()), "complete assembly catalog transport number must be finite");
+        return true;
+    };
+    return nlohmann::json::parse(bytes, callback);
 }
 AssemblyCatalogSourceReferences complete_assembly_catalog_source_refs(
     const Entity& source, AssemblyCatalogTransferBudget& budget) {

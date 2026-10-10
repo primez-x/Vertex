@@ -3,6 +3,7 @@
 #include "sketch/document.hpp"
 #include "sketch/dxf_exchange.hpp"
 #include "sketch/project_organization.hpp"
+#include "sketch/assembly_document_adapter.hpp"
 
 #include <cstddef>
 #include <algorithm>
@@ -34,6 +35,7 @@ struct DxfProjectExportResult {
 };
 
 using NativeDxfPhysicalSourceGraphs = std::map<std::string, nlohmann::json, std::less<>>;
+using NativeDxfCatalogSources = std::map<std::string, nlohmann::json, std::less<>>;
 
 struct DxfProjectImportResult {
     std::vector<Entity> entities;
@@ -44,6 +46,10 @@ struct DxfProjectImportResult {
     // V7 shared source evidence. Never install these snapshots as entities;
     // keep the table through pending admission and reviewed destination binding.
     NativeDxfPhysicalSourceGraphs physical_source_graphs;
+    // V8 authentic complete catalogs, globally deduplicated by original owner.
+    // The authoring subset alone may be allocated and published as live owners.
+    NativeDxfCatalogSources catalog_sources;
+    std::vector<std::string> authoring_catalog_ids;
 
     bool complete() const noexcept { return diagnostics.empty(); }
 };
@@ -77,11 +83,51 @@ struct NativeDxfWallSourceWorkBudget {
     // operation that contains either source family. V5-only callers keep their
     // contract. Physical detection/replay shares source_work across components.
     bool measured_operation{};
+    AssemblyCatalogTransferBudget catalog_transfer;
 };
+// Authenticates V8 source closure and the exact live subset before admission.
+// All attempts share the ledger; preflight reserves downstream catalog passes.
+void validate_native_dxf_catalog_sources(const std::vector<Entity>& pending,
+    const NativeDxfPhysicalSourceGraphs& physical_source_graphs,
+    const NativeDxfCatalogSources& catalog_sources,
+    const std::vector<std::string>& authoring_catalog_ids,
+    NativeDxfWallSourceWorkBudget* work_budget = nullptr, bool preflight_only = false);
+struct NativeDxfCatalogSourceContext {
+    DrawingContext context;
+    std::string cad_layer;
+};
+// Actual source hierarchy for the live authoring catalogs only. Partial direct
+// bindings retain their genuinely resolved ancestors; unbound or unresolved
+// catalogs produce no row. CAD names follow the exporter's layer producer.
+// Share the operation ledger when additional admission/binding follows.
+[[nodiscard]] std::map<std::string, NativeDxfCatalogSourceContext, std::less<>> native_dxf_catalog_source_contexts(
+    const NativeDxfPhysicalSourceGraphs& physical_source_graphs,
+    const NativeDxfCatalogSources& catalog_sources, const std::vector<std::string>& authoring_catalog_ids,
+    NativeDxfWallSourceWorkBudget* work_budget = nullptr);
+// Private admission graph: authentic V8 source support/catalog/body evidence
+// plus independent legacy candidates. Pending/source parity is proved first;
+// no detached duplicate physical rooms are inserted. Never publish this graph.
+[[nodiscard]] std::vector<Entity> native_dxf_catalog_pending_admission_entities(
+    const std::vector<Entity>& pending, const NativeDxfPhysicalSourceGraphs& physical_source_graphs,
+    const NativeDxfCatalogSources& catalog_sources, const std::vector<std::string>& authoring_catalog_ids,
+    NativeDxfWallSourceWorkBudget* work_budget = nullptr);
+// Performs wall/physical destination binding internally. Caller stages actual
+// mapped bodies and catalogs first. Explicit original-to-destination maps must
+// agree globally. Appends each mapped authoring catalog once, only on success.
+void bind_native_dxf_catalog_destinations(std::vector<Entity>& entities,
+    const std::map<std::string, DrawingContext, std::less<>>& actual_contexts,
+    const std::map<std::string, Entity, std::less<>>& actual_destination_entities,
+    const NativeDxfPhysicalSourceGraphs& physical_source_graphs,
+    const NativeDxfCatalogSources& catalog_sources, const std::vector<std::string>& authoring_catalog_ids,
+    const std::map<std::string, std::string, std::less<>>& body_owner_mapping,
+    const std::map<std::string, std::string, std::less<>>& catalog_owner_mapping,
+    const std::map<std::string, std::string, std::less<>>& context_owner_mapping,
+    NativeDxfWallSourceWorkBudget* work_budget = nullptr);
 void validate_native_dxf_wall_source_groups(const std::vector<Entity>& entities,
     NativeDxfWallSourceWorkBudget* work_budget = nullptr, bool preflight_only = false,
     const NativeDxfPhysicalSourceGraphs* physical_source_graphs = nullptr,
-    const std::map<std::string, Entity, std::less<>>* actual_destination_entities = nullptr);
+    const std::map<std::string, Entity, std::less<>>* actual_destination_entities = nullptr,
+    const NativeDxfCatalogSources* catalog_sources = nullptr);
 void validate_native_dxf_wall_source_member(const Entity& entity);
 // Owner identity is changed separately with the boundary owner codec where
 // applicable. Only graph-owned references and membership change here.
@@ -99,7 +145,10 @@ void remap_native_dxf_wall_source_dependency_ids(Entity& entity,
 void bind_native_dxf_wall_source_destinations(std::vector<Entity>& entities,
     const std::map<std::string, DrawingContext, std::less<>>& actual_contexts,
     const std::map<std::string, Entity, std::less<>>* actual_destination_entities = nullptr,
-    const NativeDxfPhysicalSourceGraphs* physical_source_graphs = nullptr);
+    const NativeDxfPhysicalSourceGraphs* physical_source_graphs = nullptr,
+    const NativeDxfCatalogSources* catalog_sources = nullptr,
+    NativeDxfWallSourceWorkBudget* work_budget = nullptr,
+    const std::map<std::string, std::string, std::less<>>* catalog_owner_mapping = nullptr);
 
 // V2 carries one standalone boundary, not an appraisal/source dependency graph.
 // Document's generic reference vocabulary does not cover these consumer-owned
@@ -284,7 +333,7 @@ inline void remap_native_dxf_boundary_dependency_ids(Entity& entity,
     const auto source_marker = entity.extensions.find("vertex_dxf_boundary");
     if (source_marker != entity.extensions.end() && source_marker->is_object() &&
         (source_marker->value("version", 0) == 5 || source_marker->value("version", 0) == 6 ||
-         source_marker->value("version", 0) == 7)) {
+         source_marker->value("version", 0) == 7 || source_marker->value("version", 0) == 8)) {
         remap_native_dxf_wall_source_dependency_ids(entity, ids);
         return;
     }

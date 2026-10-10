@@ -98,6 +98,16 @@ struct AssemblyCatalogSourceReferences {
 // Raw shape, graph and work admission only; does not decode a model. Admit all
 // catalogs in an operation before allowing the first semantic model decode.
 void admit_complete_assembly_catalog_source(const Entity& source, AssemblyCatalogTransferBudget& budget);
+// Reserves decoding of an existing catalog without treating its canonical
+// owner references as transport candidates. Those references stay in place.
+void admit_existing_assembly_catalog_work(const Entity& existing, AssemblyCatalogTransferBudget& budget);
+// Complete catalog carriers and isolated catalog fields share these framing
+// limits. Opaque strings (including escaped NUL) remain ordinary JSON; typed
+// identity and model admission still enforce their own stricter contracts.
+inline constexpr int assembly_catalog_transport_depth_limit = 68;
+inline constexpr std::size_t assembly_catalog_transport_byte_limit = 16 * 1024 * 1024;
+inline constexpr std::size_t assembly_catalog_transport_node_limit = 1'000'000;
+[[nodiscard]] nlohmann::json parse_assembly_catalog_transport_json(std::string_view bytes);
 // Validates the complete actual catalog after raw work admission. Inventories
 // only persisted placement hosts and property/building/floor/layer owner slots.
 // Other canonical owner references (including phase) are explicitly refused;
