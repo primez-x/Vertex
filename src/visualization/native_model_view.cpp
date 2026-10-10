@@ -36,6 +36,8 @@
 #include <V3d_Viewer.hxx>
 #include <WNT_Window.hxx>
 #include <gp_Pnt.hxx>
+#include <gp_Ax2.hxx>
+#include <gp_Dir.hxx>
 #include <gp_Trsf.hxx>
 #include <gp_Vec.hxx>
 
@@ -303,6 +305,9 @@ public:
     bool roof_transform_metric_units{};
     double roof_transform_length_step{0.00635};
     double roof_transform_reference_length{1.0};
+    std::array<double,2> roof_transform_axis_lengths{1.0,1.0};
+    std::optional<int> roof_transform_resize_axis;
+    bool roof_directional_resize_enabled{};
 
     struct WheelScroll {
         SelectionCapture context;
@@ -924,6 +929,7 @@ public:
 
     void detach_manipulator() noexcept {
         manipulation_transform.reset();
+        roof_transform_resize_axis.reset();
         if (!manipulator.IsNull()) {
             try {
                 if (manipulator->HasActiveTransformation())
@@ -980,6 +986,9 @@ public:
         auto group = occ::handle<NCollection_HSequence<occ::handle<AIS_InteractiveObject>>>(
             new NCollection_HSequence<occ::handle<AIS_InteractiveObject>>());
         manipulator->SetPart(2, AIS_MM_Translation, !children);
+        // Restore the ordinary/single-child scaler handles when switching away
+        // from a cohort whose projected extent disabled a directional axis.
+        manipulator->SetPart(AIS_MM_Scaling, true);
         if (children) {
             if (!published_snapshot || !published_snapshot->is_editable() ||
                 !owner->onRoofOpeningTransformPreviewRequested || !owner->onRoofOpeningTransformRequested) return;
@@ -998,7 +1007,13 @@ public:
             const auto low = bounds.CornerMin(), high = bounds.CornerMax();
             roof_transform_pivot = {(low.X()+high.X())*0.5,(low.Y()+high.Y())*0.5,(low.Z()+high.Z())*0.5};
             roof_transform_reference_length = std::max({high.X()-low.X(),high.Y()-low.Y(),high.Z()-low.Z()});
+            roof_transform_axis_lengths = {high.X()-low.X(),high.Y()-low.Y()};
             if (!std::isfinite(roof_transform_reference_length) || roof_transform_reference_length <= 1.0e-9) return;
+            if (roof_directional_resize_enabled && selected_roof_openings.size()>1) {
+                for (int axis=0;axis<2;++axis)
+                    manipulator->SetPart(axis,AIS_MM_Scaling,
+                        std::isfinite(roof_transform_axis_lengths[axis]) && roof_transform_axis_lengths[axis]>1.0e-9);
+            }
             // This undisplayed proxy is the only affine-transformed object.
             // Actual hosts and fills wait for manufactured candidate geometry.
             roof_transform_proxy = new AIS_Shape(compound);
@@ -1011,6 +1026,12 @@ public:
             }
         }
         manipulator->Attach(group, options);
+        if (children && roof_directional_resize_enabled && selected_roof_openings.size()>1) {
+            // Explicit world axes avoid inheriting the preceding owner's or
+            // preview's manipulator orientation as unreported proposal axes.
+            manipulator->SetPosition(gp_Ax2(gp_Pnt(roof_transform_pivot[0],roof_transform_pivot[1],
+                roof_transform_pivot[2]),gp_Dir(0,0,1),gp_Dir(1,0,0)));
+        }
         if (children) context->Display(manipulator,false);
         if (!children) manipulator_entity_id = selected_entity_id;
         restore_selection_highlights();
@@ -1025,6 +1046,13 @@ public:
         try {
             context->MoveTo(point.x, point.y, view, false);
             if (!manipulator->HasActiveMode()) return false;
+            roof_transform_resize_axis.reset();
+            if (roof_directional_resize_enabled && selected_roof_openings.size()>1 &&
+                manipulator->ActiveMode()==AIS_MM_Scaling) {
+                const int axis=manipulator->ActiveAxisIndex();
+                if (axis<0 || axis>2) return false;
+                if (axis<2) roof_transform_resize_axis=axis;
+            }
             manipulator->StartTransform(point.x, point.y, view);
             manipulation_transform.reset();
             return true;
@@ -1256,6 +1284,7 @@ public:
         const bool notify = roof_transform_capture.has_value() && !roof_committing;
         roof_transform_capture.reset();
         roof_transform_proposal.reset();
+        roof_transform_resize_axis.reset();
         roof_release_pending = false;
         roof_candidate_serial = 0;
         roof_candidate.reset();
@@ -1308,9 +1337,35 @@ public:
         const auto angle_step = fine ? pi/180.0 : pi/4.0;
         proposal.rotation_radians = std::round(angle/angle_step)*angle_step;
         const double step = fine ? (roof_transform_metric_units ? 0.001 : 0.00635) : roof_transform_length_step;
+        if (roof_transform_resize_axis) {
+            // OCCT supplies a uniform gp_Trsf for its scaling handle. For the
+            // cohort X/Y controls only its scalar is used; the undisplayed proxy
+            // never substitutes for the manufactured rectangular-facet result.
+            const int resize_axis=*roof_transform_resize_axis;
+            const double reference=roof_transform_axis_lengths[resize_axis];
+            if (manipulator.IsNull() || manipulator->ActiveMode()!=AIS_MM_Scaling ||
+                manipulator->ActiveAxisIndex()!=resize_axis || std::abs(angle)>epsilon ||
+                std::abs(proposal.translation_world_m[0])>epsilon ||
+                std::abs(proposal.translation_world_m[1])>epsilon ||
+                !std::isfinite(reference) || reference<=epsilon) {
+                owner->cancelInteraction(); return;
+            }
+            proposal.translation_world_m={0.0,0.0,0.0};
+            proposal.rotation_radians=0.0;
+            proposal.uniform_scale=1.0;
+            // Returning to the press point must supersede any earlier preview
+            // with identity, even when the original span is off the magnet.
+            if (std::abs(scale-1.0)>epsilon) {
+                const double length=std::max(step,std::round(reference*scale/step)*step);
+                proposal.axis_scale[resize_axis]=length/reference;
+            }
+            if (!std::isfinite(proposal.axis_scale[resize_axis]) || proposal.axis_scale[resize_axis]<=0.0) {
+                owner->cancelInteraction(); return;
+            }
+        }
         for (int i=0;i<2;++i) proposal.translation_world_m[i] =
             std::round(proposal.translation_world_m[i]/step)*step;
-        if (std::abs(scale-1.0) > epsilon) {
+        if (!roof_transform_resize_axis && std::abs(scale-1.0) > epsilon) {
             const auto length = std::max(step,std::round(roof_transform_reference_length*scale/step)*step);
             proposal.uniform_scale = length/roof_transform_reference_length;
             if (!std::isfinite(proposal.uniform_scale) || proposal.uniform_scale <= 0.0) {
@@ -1336,6 +1391,17 @@ public:
             .arg(proposal.rotation_radians*180.0/pi,0,'f',1)
             .arg(roof_transform_reference_length*proposal.uniform_scale*display_factor,0,'f',3)
             .arg(roof_transform_metric_units ? QStringLiteral("m") : QStringLiteral("in"));
+        if (roof_transform_resize_axis) {
+            const int axis=*roof_transform_resize_axis;
+            // Rectangular facets retain their real angles, so the final cohort
+            // bounds need not equal an affine-scaled bounding box. Show the
+            // exact proposal factor and its length magnet, not a fabricated span.
+            roof_transform_feedback=QStringLiteral("Skylights: %1 factor %2 · step %3 %4 — checking")
+                .arg(axis==0 ? QStringLiteral("X") : QStringLiteral("Y"))
+                .arg(proposal.axis_scale[axis],0,'f',3)
+                .arg(step*display_factor,0,'f',3)
+                .arg(roof_transform_metric_units ? QStringLiteral("m") : QStringLiteral("in"));
+        }
         refresh_status_label();
         try {
             const auto callback = owner->onRoofOpeningTransformPreviewRequested;
@@ -2065,6 +2131,16 @@ void NativeModelView::setRoofOpeningTransformMetricUnits(bool metric) {
     if (guard) m_impl->roof_transform_metric_units = metric;
 }
 
+void NativeModelView::setRoofOpeningDirectionalResizeEnabled(bool enabled) {
+    if (m_impl->roof_directional_resize_enabled==enabled) return;
+    const QPointer<NativeModelView> guard(this);
+    cancelInteraction();
+    if (!guard) return;
+    m_impl->roof_directional_resize_enabled=enabled;
+    try { m_impl->attach_manipulator(); }
+    catch (...) { m_impl->detach_manipulator(); }
+}
+
 bool NativeModelView::exportViewImage(const QString& path) {
     return m_impl->export_view_image(path);
 }
@@ -2185,7 +2261,13 @@ std::optional<NativeModelView::TransformControl> NativeModelView::transformContr
     switch (detected->Mode()) {
     case AIS_MM_Translation: return TransformControl::translation;
     case AIS_MM_Rotation: return TransformControl::rotation;
-    case AIS_MM_Scaling: return TransformControl::scale;
+    case AIS_MM_Scaling:
+        if (m_impl->roof_directional_resize_enabled && m_impl->selected_entity_ids.isEmpty() &&
+            m_impl->selected_roof_openings.size()>1) {
+            if (detected->Index()==0) return TransformControl::axis_resize_x;
+            if (detected->Index()==1) return TransformControl::axis_resize_y;
+        }
+        return TransformControl::scale;
     default: return std::nullopt;
     }
 }

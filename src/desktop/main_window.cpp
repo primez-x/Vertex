@@ -53800,6 +53800,7 @@ private:
             m_nativeModelView->onRoofOpeningTransformRequested=[this](visualization::NativeRoofOpeningTransform gesture,std::uint64_t serial) {
                 return commitNativeRoofOpeningGesture(std::move(gesture),serial);
             };
+            m_nativeModelView->setRoofOpeningDirectionalResizeEnabled(true);
             m_nativeModelView->onRoofOpeningTransformCanceled=[this] { cancelNativeRoofOpeningPreview(); };
             m_nativeModelView->setEntityTranslationRequestedCallback(
                 [this](QString id, double x, double y, double z) {
@@ -67735,8 +67736,10 @@ private:
         if (gesture.targets.empty() || gesture.targets.size()>4096 || !finite(gesture.pivot_world_m) ||
             !finite(gesture.translation_world_m) || std::abs(gesture.translation_world_m[2])>1e-9 ||
             !std::isfinite(gesture.rotation_radians) || std::abs(gesture.rotation_radians)>std::numbers::pi ||
-            !std::isfinite(gesture.uniform_scale) || gesture.uniform_scale<=0.0)
-            throw std::invalid_argument("Skylights slide on their roof hosts; use XY movement, face rotation or positive uniform scaling.");
+            !std::isfinite(gesture.uniform_scale) || gesture.uniform_scale<=0.0 ||
+            !finite(gesture.axis_scale) || gesture.axis_scale[0]<=0.0 || gesture.axis_scale[1]<=0.0 ||
+            !std::isfinite(gesture.axis_rotation_radians))
+            throw std::invalid_argument("Skylights slide on their roof hosts; use XY movement, face rotation or positive scaling.");
         std::map<std::string,std::vector<RoofOpeningGroupMember>,std::less<>> members;
         std::set<std::pair<std::string,std::string>> identities;
         for (const auto& target:gesture.targets) {
@@ -67752,10 +67755,16 @@ private:
             const auto placement=resolve_site_presentation(source,roof);
             const auto pivot=site_transform_point({gesture.pivot_world_m[0],gesture.pivot_world_m[1],gesture.pivot_world_m[2]},placement.inverse);
             const auto delta=site_transform_delta({gesture.translation_world_m[0],gesture.translation_world_m[1],0.0},placement.inverse);
+            const auto axis=site_transform_delta({std::cos(gesture.axis_rotation_radians),
+                std::sin(gesture.axis_rotation_radians),0.0},placement.inverse);
+            if (!std::isfinite(axis.x) || !std::isfinite(axis.y) || std::hypot(axis.x,axis.y)<1e-9)
+                throw std::invalid_argument("The skylight resize axis has no usable source plan direction.");
             RoofOpeningGroupTransform transform;
             transform.members=children; transform.world_pivot={pivot.x,pivot.y};
             transform.world_translation={delta.x,delta.y}; transform.rotation_radians=gesture.rotation_radians;
             transform.uniform_scale=gesture.uniform_scale;
+            transform.axis_scale={gesture.axis_scale[0],gesture.axis_scale[1]};
+            transform.axis_rotation_radians=std::atan2(axis.y,axis.x);
             auto edits=prepare_roof_opening_group_transform(source.entities(),transform);
             result.insert(result.end(),std::make_move_iterator(edits.begin()),std::make_move_iterator(edits.end()));
         }

@@ -14,6 +14,35 @@ changed source does not acquire runtime acceptance without later qualification.
 
 ## Current delivery state
 
+### October 10 native directional group resizing - reviewed source integration
+
+The ordinary clipboard spacing and selected corner-cut batch is committed and
+pushed as c2da6f06, with exact local/remote ref verification. The next source
+batch adds X/Y resize controls for native selected skylight cohorts. The shell
+consumes explicit directional factors in each actual roof's inverse Site frame;
+the existing typed roof-face producer retains rectangular physical dimensions,
+individual facet angles and construction profiles. Z keeps uniform scaling;
+ordinary objects and single-child scaling retain their existing behavior.
+Directional feedback reports the proposal factor and unit magnet. It does not
+promise an affine bounding-box span for rectangular members on different faces.
+
+Independent source review found that a drag returning to its starting point
+could snap an originally off-magnet span and change history. Identity now
+supersedes the earlier preview without quantizing that original span. Bounded
+re-review approves the correction with no remaining concrete P1/P2 finding.
+Root reviewed directional field consumption, Site conversion, default behavior,
+exact preview/release comparison and cancellation; source whitespace checks
+are clean. No project-format meaning changes in this batch.
+
+Mixed Properties/transforms remain in progress. A separate candidate composer
+is being implemented for independently admitted leaves from one original
+snapshot. Complete source-bound ordinary and roof edit commands, desktop
+Properties/transform routing and mixed native gestures remain required work;
+the composer alone is not a user feature. Compilation and native interaction
+are unqualified. No builds, tests/new tests, scripts, probes, native jobs,
+launches, packages or installations run. The installed app is unchanged and
+all ten production gates remain open.
+
 ### October 10 ordinary placement and selected corner-cut source follow-up
 
 The reviewed mixed clipboard desktop integration is committed and pushed as

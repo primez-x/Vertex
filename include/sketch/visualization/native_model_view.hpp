@@ -43,6 +43,12 @@ struct NativeRoofOpeningTransform {
     std::array<double, 3> translation_world_m{};
     double rotation_radians{};
     double uniform_scale{1.0};
+    // In displayed world XY, A = R(axis_rotation) diag(axis_scale) R(-axis_rotation).
+    // Apply A about the captured pivot before common rotation/uniform scaling.
+    // The shell resizes actual rectangular facet dimensions; this is not an
+    // affine deformation of the displayed fills or authority over their roofs.
+    std::array<double, 2> axis_scale{1.0, 1.0};
+    double axis_rotation_radians{};
     bool operator==(const NativeRoofOpeningTransform&) const = default;
 };
 
@@ -125,6 +131,10 @@ public:
     [[nodiscard]] bool rejectRoofOpeningTransformPreview(std::uint64_t serial, QString message);
     // Unit changes retire a press-owned proposal before changing its magnet.
     void setRoofOpeningTransformMetricUnits(bool metric);
+    // Opt in only after the shell consumes both directional proposal fields.
+    // Child cohorts use X/Y scale handles for world-axis resize about their
+    // common pivot; Z keeps uniform scale. Single-child gestures are unchanged.
+    void setRoofOpeningDirectionalResizeEnabled(bool enabled);
     // Export the OCCT framebuffer directly. This deliberately does not use
     // QWidget::grab(), which cannot capture the native OCCT child surface.
     // Qt encodes and atomically writes the captured pixels, avoiding the native
@@ -160,7 +170,7 @@ public:
     // exported image alone cannot detect a stale native OpenGL viewport.
     [[nodiscard]] std::optional<QSize> nativeRenderSizePixels() const noexcept;
 
-    enum class TransformControl { translation, rotation, scale };
+    enum class TransformControl { translation, rotation, scale, axis_resize_x, axis_resize_y };
     // Native picker diagnostic in Qt logical pixels; changes only hover state.
     [[nodiscard]] std::optional<TransformControl> transformControlAt(const QPointF& point);
     // Actual derived presentation's 3x4 local transform, row-major. These
