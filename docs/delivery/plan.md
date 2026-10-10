@@ -134,9 +134,13 @@ polling timeout does not permit restarting it.
    Qualify the subsequent persistent owner-plus-leg dimensions, actual host/cut
    resolution, linked-view aligned jamb projections, Properties, saved-view
    editing, phase preview and atomic clipboard/duplicate transport. Reader
-   172/extraction 170 carries these targets through retained history. Complete
-   corner-owner exchange; source integration does not close
-   those lifecycles. Qualify the roof-hosted fixed
+   172/extraction 170 carries these targets through retained history. Qualify
+   subsequent corner-owner exchange source: actual IFC assembly/frame/two-pane
+   and host/void proof, complete DXF graph-five transport including unphased
+   projects and leg/view dimensions, raw provenance, destination remapping and
+   atomic publication. General IFC associative dimension activation and native
+   recovery of unproved catalog material references remain gaps. Source
+   integration does not close these lifecycles. Qualify the roof-hosted fixed
    skylight source across both catalog entries, actual sloped
    frame/glazing, roster editing, scaling/resizing, cloning/removal, phases,
    history, material quantities and separate IFC roof/window relationships.

@@ -28,6 +28,7 @@
 #include "sketch/corner_window.hpp"
 #include "sketch/corner_window_transfer.hpp"
 #include "sketch/corner_window_edit.hpp"
+#include "sketch/dxf_architectural_source.hpp"
 #include "sketch/phase_corner_window_edit.hpp"
 #include "sketch/hosted_opening_plan.hpp"
 #include "sketch/workspace_regeneration_queue.hpp"
@@ -777,6 +778,8 @@ void remap_entity_references(Entity& entity,
         reference(properties, key);
         reference(properties, (std::string(key) + "s").c_str());
     }
+    if (entity.type == "opening" && properties.contains("corner_window_id"))
+        reference(properties, "corner_window_id");
     reference(properties, "refs");
     reference(properties, "references");
     if (entity.type == "floor" && properties.contains("vertical_level_binding")) {
@@ -39109,13 +39112,17 @@ public:
         }
     }
 
-    void validateImportedHostedGeometry(const DocumentSnapshot& snapshot, const std::vector<std::string>& imported_ids) {
+    void validateImportedHostedGeometry(const DocumentSnapshot& snapshot, const std::vector<std::string>& imported_ids,
+        NativeDxfWallSourceWorkBudget* work_budget = nullptr) {
+        NativeDxfWallSourceWorkBudget local_budget;
+        auto& budget = work_budget ? *work_budget : local_budget;
         const std::set<std::string, std::less<>> imported(imported_ids.begin(), imported_ids.end());
+        const auto scope = constraint_phase_scope(snapshot.entities());
         std::vector<const Entity*> openings;
         for (const auto& [id, entity] : snapshot.entities())
-            if (entity.type == "opening") openings.push_back(&entity);
+            if (entity.type == "opening" && !scope.inactive_owner_ids.contains(id)) openings.push_back(&entity);
         for (const auto& [id, entity] : snapshot.entities()) {
-            if (entity.type != "wall" || !imported.contains(id)) continue;
+            if (entity.type != "wall" || !imported.contains(id) || scope.inactive_owner_ids.contains(id)) continue;
             Wall wall;
             std::string error;
             const auto resolved = resolve_vertical_placement(snapshot, entity);
@@ -39137,6 +39144,13 @@ public:
                     operation = decode_door_operation(opening->properties.at("door_operation"));
                 (void)make_opening_assembly(wall, *hosted, assembly, operation);
             }
+        }
+        for (const auto& [id, entity] : snapshot.entities()) {
+            if (entity.type != "corner_window" || !imported.contains(id) || scope.inactive_owner_ids.contains(id)) continue;
+            admit_native_dxf_corner_window_source_work(entity, snapshot.entities(), budget, true);
+            const auto corner = parse_corner_window(entity);
+            const auto hosts = corner_window_plan_hosts(snapshot, corner);
+            (void)make_corner_window(hosts, corner_window_cuts(corner, hosts), corner.assembly);
         }
     }
 
@@ -40115,7 +40129,10 @@ public:
             // Include original-file receipts and transferred payloads. Native
             // storage shares actual equal content but retains all metadata rows.
             admit_native_dxf_phase_retained_asset_capacity(final_import_preview, &catalog_operation_budget);
-            validateImportedHostedGeometry(final_import_preview, imported_boundary_ids);
+            auto native_import_ids = imported_boundary_ids;
+            if (phase_import) for (const auto& entity : phase_import->entities)
+                if (entity.type == "wall" || entity.type == "corner_window") native_import_ids.push_back(entity.id);
+            validateImportedHostedGeometry(final_import_preview, native_import_ids, &catalog_operation_budget);
             if (phase_import && !phase_import->source_current())
                 throw std::invalid_argument("The project changed during design-set preparation. Reopen Import DXF.");
             // V9 carries explicit complete source membership, including owners
@@ -40251,22 +40268,29 @@ public:
             std::map<std::string, std::string, std::less<>> identities;
             auto diagnostics = mapped.diagnostics;
             std::size_t rejected_entity_count = 0;
+            auto reserved_ids = retainedSlabIdentityNames(source, true);
+            for (const auto& [id, asset] : source.assets()) { (void)asset; reserved_ids.insert(id); }
+            const auto allocate_import_id = [&](const std::string& kind) {
+                auto id = new_id(kind);
+                while (!reserved_ids.insert(id).second) id = new_id(kind);
+                return id;
+            };
             for (const auto& candidate : mapped.entities) {
                 if (candidate.type != "boundary" && candidate.type != "wall" &&
                     candidate.type != "slab" && candidate.type != "opening" &&
                     candidate.type != "roof" && candidate.type != "room" &&
                     candidate.type != "stair" && candidate.type != "railing" &&
-                    candidate.type != "ifc_reference") {
+                    candidate.type != "corner_window" && candidate.type != "ifc_reference") {
                     ++rejected_entity_count;
                     diagnostics.push_back({candidate.id, candidate.type, "desktop_entity_type_unsupported"});
                     continue;
                 }
-                if (!identities.emplace(candidate.id, new_id(candidate.type)).second)
+                if (!identities.emplace(candidate.id, allocate_import_id(candidate.type)).second)
                     throw std::invalid_argument("IFC mapping produced duplicate entity identities.");
                 if (multi_flight_stair(candidate)) {
                     const auto stair = decode_stair_properties(candidate.id, candidate.properties);
                     for (const auto& child : stair_child_ids(stair))
-                        if (!identities.emplace(child, new_id("stair-child")).second)
+                        if (!identities.emplace(child, allocate_import_id("stair-child")).second)
                             throw std::invalid_argument("IFC stair child identity is duplicated.");
                 }
             }
@@ -40287,7 +40311,7 @@ public:
                 imported_ids.push_back(imported.id);
                 changes.push_back(EntityChange::upsert(std::move(imported)));
             }
-            const auto asset_id = new_id("ifc-source");
+            const auto asset_id = allocate_import_id("ifc-source");
             std::vector<std::byte> source_bytes;
             source_bytes.reserve(static_cast<std::size_t>(raw.size()));
             for (const auto value : raw) source_bytes.push_back(static_cast<std::byte>(value));
@@ -40307,6 +40331,7 @@ public:
                 provenance);
             provenance["asset_id"] = asset_id;
             auto source_entity = Entity::create("ifc_source", std::move(provenance));
+            source_entity.id = allocate_import_id("ifc-source-receipt");
             changes.push_back(EntityChange::upsert(std::move(source_entity)));
             const auto command = ApplyEntityChanges{source.revision(), std::move(changes),
                 {AssetChange::upsert(std::move(asset))}, "Import IFC"};

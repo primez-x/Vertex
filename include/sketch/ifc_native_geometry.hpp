@@ -53,6 +53,13 @@ inline constexpr double ifc_native_mesh_deviation_m = 0.001;
     const std::optional<DoorOperation>& operation,
     std::size_t vertex_budget, std::size_t triangle_budget);
 
+// Exact make_corner_window solid order: shared connected frame/post, then
+// first and second glazing panes. No frame material is repeated in either leg.
+[[nodiscard]] std::array<IfcNativeMesh, 3> ifc_native_corner_window_mesh(
+    const std::array<Wall, 2>& walls, const std::array<HostedOpening, 2>& cuts,
+    const OpeningAssembly& assembly,
+    std::size_t vertex_budget, std::size_t triangle_budget);
+
 // Canonical authored roofs (panel/gable/hip, including through-openings) and
 // architectural room volumes use the same validated solids as native views.
 // Entity placement must already have been resolved exactly once by the caller.

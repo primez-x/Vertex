@@ -14,6 +14,54 @@ changed source does not acquire runtime acceptance without later qualification.
 
 ## Current delivery state
 
+### October 10 coordinated corner-window IFC/DXF exchange - source integration
+
+Corner-window exchange now carries the actual owner, both hosts and both bare
+cuts. DXF uses graph five inside the existing complete-source V9 carrier,
+including unphased projects. Complete host rosters, source hierarchy, saved
+design alternatives, supported leg dimensions and linked-view bindings travel
+together. Historical single-host carriers retain their original contracts.
+Typed destination remapping preserves leg order, numeric representations and
+metadata; native projected assemblies supply the visible CAD geometry.
+
+IFC exports one spatially contained assembly with a shared frame/post part and
+two separate glazing parts. Each glazing leg fills one actual wall void;
+components aggregate under the owner without extra spatial containment.
+Coordinated cuts are staged together before owners, supporting multiple corner
+windows sharing a host independently of source-ID ordering. Failed corner batch
+export rolls back the batch while unrelated products remain available with a
+fidelity diagnostic.
+
+Typed IFC import requires linked metre units, unique actual relationships,
+proper composed placements, complete opening rosters and exact regenerated
+native geometry. Owner and cuts publish atomically. Active imported fields are
+canonical and elevations flattened to world metres. Separate bounded authored
+host envelopes preserve original elevation, level/context and metadata; they
+are provenance, not geometry authority. Original owner/cut envelopes persist
+through re-export without recursive carrier growth. Unproved catalog material
+references are detached from active records and retained with diagnostics.
+
+Integration corrections include guarded malformed IFC field access, shared-host
+export ordering, raw host retention, legacy thickness/elevation aliases, typed
+DXF corner closure before legacy dependency helpers, whole-object saved-view
+dimensions, structural versus native work charges, and final destination native
+admission for phase-carried hosts. Import identities reserve current and retained
+history names. General IFC associative dimension activation and material-catalog
+recovery remain implementation gaps. Reader 172/extraction 170 is unchanged.
+
+The manual checklist retains 450 original tasks plus twenty-two focused tasks;
+the new exchange tasks are Not tested. Root integration and independent source
+review accompany this batch, with scoped Git backup. No builds, tests/new tests,
+scripts/probes, native jobs, UI launches, packages or installs ran. Compilation,
+round trips, native geometry, migration/history, output, independent consumers
+and production acceptance remain unverified. The installed candidate and
+historical acceptance bindings remain unchanged; all ten gates remain open.
+
+Next source work addresses connected wall-group UI scaling. Backend coordinated
+equal-host scaling exists, but the canvas path still needs complete native
+preview and typed atomic publication. Skylight rotation/group/3D picking, general
+IFC dimensions/catalog recovery, adapters and assistance remain in the full plan.
+
 ### October 10 persistent corner-window dimensions - source integration
 
 Corner-window leg widths now have persistent owner-plus-leg targets. The new

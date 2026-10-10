@@ -55,9 +55,14 @@ struct NativeDxfPhaseSourceGraph {
 // support_ids array for annotations, dimensions and constraints; support-free
 // graphs retain version 1. Version 3 uses the same inventory fields and is
 // mandatory for asset-free coordinated sheet/view companions.
-// Version 4 is required exactly when assets are retained. It adds an exact
+// Version 4 is required when assets are retained without version 5 semantics. It adds an exact
 // asset_manifest and always carries support_ids (which may be empty). Payloads
 // are supplied separately to this graph API; this does not provide a DXF carrier.
+// Version 5 is required exactly for coordinated corner owners/cuts, v5 leg
+// dimensions or v9 sheet/view companions. It always carries support_ids (which
+// may be empty), and includes asset_manifest exactly when assets are retained.
+// Earlier versions refuse these semantics. Owner/host/cut closure is complete;
+// ordered leg indices and all other raw local values remain unchanged.
 // No canonical entity/model encoder is used.
 // Admission precedes semantic decoders and the organizer;
 // failed attempts remain charged to the shared catalog/architectural ledger.

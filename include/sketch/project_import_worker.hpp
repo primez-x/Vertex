@@ -11,6 +11,7 @@
 #include "sketch/wall_semantics.hpp"
 #include "sketch/opening_assembly.hpp"
 #include "sketch/door_operation.hpp"
+#include "sketch/corner_window.hpp"
 #include "sketch/stair_semantics.hpp"
 #include "sketch/windows_import_worker.hpp"
 #include <algorithm>
@@ -654,9 +655,13 @@ inline std::vector<Entity> detached_ifc_validation_entities(const std::vector<En
     std::vector<Entity> copy = entities;
     std::set<std::string, std::less<>> used;
     bool needs_context = false;
+    const bool has_corner = std::any_of(entities.begin(), entities.end(), [](const Entity& entity) {
+        return entity.type == "corner_window";
+    });
     for (const auto& entity : entities) {
         used.insert(entity.id);
-        if (entity.type != "stair" && entity.type != "railing") continue;
+        if (entity.type != "stair" && entity.type != "railing" &&
+            !(has_corner && (entity.type == "corner_window" || entity.type == "wall" || entity.type == "opening"))) continue;
         needs_context = true;
         validate_native_context(entity);
         if (entity.properties.contains("vertical_placement")) reject();
@@ -678,7 +683,8 @@ inline std::vector<Entity> detached_ifc_validation_entities(const std::vector<En
     };
     const auto property = unique("property"), building = unique("building"),
         floor = unique("floor"), layer = unique("layer");
-    for (auto& entity : copy) if (entity.type == "stair" || entity.type == "railing") {
+    for (auto& entity : copy) if (entity.type == "stair" || entity.type == "railing" ||
+        (has_corner && (entity.type == "corner_window" || entity.type == "wall" || entity.type == "opening"))) {
         entity.properties["property_id"] = property;
         entity.properties["building_id"] = building;
         entity.properties["floor_id"] = floor;
@@ -804,7 +810,7 @@ inline void validate(const ProjectImportCandidate& result) {
             (native_dxf_catalog_source && native_dxf_architectural_source_type(entity.type));
         const bool ifc = entity.type == "wall" || entity.type == "slab" || entity.type == "roof" || entity.type == "room" ||
             entity.type == "opening" || entity.type == "ifc_reference" ||
-            entity.type == "stair" || entity.type == "railing";
+            entity.type == "stair" || entity.type == "railing" || entity.type == "corner_window";
         if (!shared && !(result.kind == ProjectImportKind::dxf ? dxf : ifc)) reject();
         if (entity.properties.contains("parent_id") || entity.properties.contains("layer_id")) reject();
         if (native_dxf_wall_source && !native_dxf_boundary) {
@@ -882,6 +888,13 @@ inline void validate(const ProjectImportCandidate& result) {
             openings.emplace_back(std::move(wall_id), std::move(hosted));
         } else if (entity.type == "ifc_reference") {
             validate_ifc_reference(entity);
+        } else if (entity.type == "corner_window") {
+            // The actual complete host/cut graph is checked below through a
+            // private context. An owner payload alone never grants admission.
+            if (result.kind != ProjectImportKind::ifc) reject();
+            validate_native_context(entity);
+            geometry_budget.charge(2);
+            try { (void)parse_corner_window(entity); } catch (...) { reject(); }
         } else if (entity.type == "stair" || entity.type == "railing") {
             validate_native_context(entity);
             const auto& p = entity.properties;
@@ -1125,7 +1138,8 @@ inline ProjectImportCandidate decode_project_import_candidate(
         result.phase_source_graph = value.at("phase_source_graph");
         if (asset_protocol) {
             const auto& graph = *result.phase_source_graph;
-            if (!graph.contains("version") || graph.at("version") != 4 || !graph.contains("asset_manifest")) reject();
+            if (!graph.contains("version") || (graph.at("version") != 4 && graph.at("version") != 5) ||
+                !graph.contains("asset_manifest")) reject();
             NativeDxfPhaseAssetWorkBudget budget;
             const auto manifest = decode_native_dxf_phase_asset_manifest(graph.at("asset_manifest"), &budget);
             if (manifest.empty()) reject();

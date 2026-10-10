@@ -305,6 +305,21 @@ std::vector<IfcNativeMesh> ifc_native_fill_mesh(const Wall& wall, const HostedOp
     return tessellate(make_opening_assembly(wall, opening, assembly, operation), vertices, triangles);
 }
 
+std::array<IfcNativeMesh, 3> ifc_native_corner_window_mesh(
+    const std::array<Wall, 2>& walls, const std::array<HostedOpening, 2>& cuts,
+    const OpeningAssembly& assembly, std::size_t vertices, std::size_t triangles) {
+    std::size_t work = 32;
+    for (const auto& wall : walls) {
+        preflight(wall, vertices, triangles);
+        work += wall.openings.size() * 4 + wall.pocket_recesses.size() * 4;
+    }
+    if (work > std::min(vertices, triangles) / 64)
+        throw std::invalid_argument("ifc_mesh_budget_exceeded");
+    auto meshes = tessellate(make_corner_window(walls, cuts, assembly), vertices, triangles);
+    if (meshes.size() != 3) throw std::invalid_argument("ifc_native_corner_parts_invalid");
+    return {std::move(meshes[0]), std::move(meshes[1]), std::move(meshes[2])};
+}
+
 std::vector<IfcNativeMesh> ifc_native_roof_mesh(const Entity& roof,
     std::size_t vertices, std::size_t triangles) {
     if (roof.type != "roof") throw std::invalid_argument("ifc_native_roof_type_invalid");

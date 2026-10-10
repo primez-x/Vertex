@@ -17,6 +17,7 @@
 #include "sketch/vertical_levels.hpp"
 #include "sketch/roof_join_semantics.hpp"
 #include "sketch/document_wall.hpp"
+#include "sketch/corner_window.hpp"
 
 #include <algorithm>
 #include <charconv>
@@ -578,6 +579,8 @@ struct ExportContext {
     std::map<std::string,SitePresentationPlacement,std::less<>> site_placements;
     std::map<std::string,AssemblyExpansion,std::less<>> assembly_expansions;
     std::map<std::string,std::vector<const Entity*>,std::less<>> hosted_openings;
+    std::set<std::string,std::less<>> corner_hosts;
+    bool corner_batch_attempted{};
     std::set<std::string,std::less<>> inactive_design_ids;
     const Entity* authored_entity{};
     std::size_t ordinal{};
@@ -691,7 +694,10 @@ void retain_properties(const Entity& input, int product_id, ExportContext& conte
         const bool retained_provenance = retained_type == "property" || retained_type == "building" ||
             retained_type == "floor" || retained_type == "annotation_state" || retained_type == "ifc_source";
         if (((entity.type == "room_boundary" && entity.extensions.contains("physical_wall_room")) || retained_room ||
-             retained_provenance || entity.type=="assembly_instance" || entity.type=="terrain_surface" ||
+             retained_provenance || retained_type=="corner_window" ||
+             (retained_type=="opening" && native->contains("properties") && native->at("properties").contains("corner_window_id")) ||
+             entity.type=="assembly_instance" || entity.type=="terrain_surface" ||
+             entity.properties.contains("_vertex_ifc_corner_window") || entity.properties.contains("_vertex_ifc_corner_cut") ||
              entity.properties.contains("_vertex_ifc_site_source") || entity.properties.contains("_vertex_ifc_join") ||
              ((entity.type == "roof" || entity.type == "room" || entity.type == "stair" || entity.type == "railing") && entity.properties.contains("_vertex_ifc_entity"))) &&
             context.limits.max_string_bytes >= 512 && payload.size() <= 8*1024*1024) {
@@ -857,9 +863,15 @@ Wall native_wall(const Entity& entity, const std::vector<const Entity*>& opening
 }
 
 HostedOpening native_opening(const Entity& entity) {
-    return {entity.id, entity.properties.at("offset_m").get<double>(),
-        entity.properties.at("width_m").get<double>(), entity.properties.at("sill_m").get<double>(),
-        entity.properties.at("height_m").get<double>()};
+    const auto scalar=[&](const char* canonical,const char* legacy) {
+        const auto& p=entity.properties;
+        const auto value=p.at(p.contains(canonical) ? canonical : legacy).get<double>();
+        require(std::isfinite(value));
+        if (p.contains(canonical) && p.contains(legacy)) require(p.at(legacy).get<double>()==value);
+        return value;
+    };
+    return {entity.id,scalar("offset_m","offset"),scalar("width_m","width"),
+        scalar("sill_m","sill"),scalar("height_m","height")};
 }
 
 std::optional<DoorOperation> native_operation(const Entity& entity) {
@@ -1608,7 +1620,8 @@ bool export_curved_native(const DocumentSnapshot& document, const Entity& entity
     if (!axis) return false;
     const auto operation = entity.type == "opening" ? native_operation(entity) : std::nullopt;
     const bool pocket = operation && operation->kind == DoorOperationKind::pocket_sliding;
-    if (!pocket && std::abs(axis->sweep_radians) <= kTolerance && !host.properties.contains("top_plane") &&
+    const bool corner_host = context.corner_hosts.contains(host.id);
+    if (!corner_host && !pocket && std::abs(axis->sweep_radians) <= kTolerance && !host.properties.contains("top_plane") &&
         std::abs(host.properties.contains("slope_rise_m")
             ? host.properties.value("slope_rise_m", 0.0)
             : host.properties.value("slope_rise", 0.0)) <= kTolerance)
@@ -1617,7 +1630,7 @@ bool export_curved_native(const DocumentSnapshot& document, const Entity& entity
     // complete mouth/cavity tool. Pocket voids alone need hydrated children.
     const auto wall = pocket ? native_wall(host, context.hosted_openings[host.id]) : native_wall(host);
     const auto gradient = wall_top_gradient(wall);
-    if (!pocket && std::abs(axis->sweep_radians) <= kTolerance && gradient.x == 0.0 && gradient.y == 0.0)
+    if (!corner_host && !pocket && std::abs(axis->sweep_radians) <= kTolerance && gradient.x == 0.0 && gradient.y == 0.0)
         return false;
     const auto meshes = entity.type == "wall"
         ? ifc_native_wall_mesh(wall, context.limits.max_mesh_vertices - context.mesh_vertices,
@@ -1631,9 +1644,16 @@ bool export_curved_native(const DocumentSnapshot& document, const Entity& entity
         (entity.type == "wall" ? ",$,.NOTDEFINED." : ",$,.OPENING."));
     context.product_ids[entity.id] = product;
     auto retained = mesh_metadata(entity, entity.type == "wall" ? "wall" : "void");
+    if (corner_host) retained.properties["_vertex_ifc_corner_host"] = host.id;
     if (entity.type == "wall") {
         context.contain(product);
-        export_wall_construction(entity, product, context, diagnostics);
+        if (corner_host) {
+            auto construction=entity;
+            construction.properties["thickness_m"]=wall.thickness;
+            construction.properties["height_m"]=wall.height;
+            construction.properties["elevation_m"]=wall.elevation;
+            export_wall_construction(construction,product,context,diagnostics);
+        } else export_wall_construction(entity, product, context, diagnostics);
     } else {
         context.opening_host_links.emplace_back(entity.id, host.id);
         retained.properties["_vertex_ifc_host"] = host.properties;
@@ -1641,6 +1661,223 @@ bool export_curved_native(const DocumentSnapshot& document, const Entity& entity
     retain_properties(retained, product, context, diagnostics);
     if (entity.type == "opening") export_fill(document, entity, product, context, diagnostics);
     return true;
+}
+
+Json corner_source_entity(const Entity& entity) {
+    auto extensions=entity.extensions;
+    const auto prior=extensions.find("ifc_vertex_properties");
+    if (prior!=extensions.end() && prior->is_object() && prior->contains("_vertex_ifc_entity")) {
+        const auto source=prior->at("_vertex_ifc_entity");
+        if (source.is_object() && source.contains("extensions") && source.at("extensions").is_object()) {
+            extensions.erase("ifc_vertex_properties"); extensions.erase("ifc_source");
+            for (const auto& [key,item] : source.at("extensions").items())
+                if (!extensions.contains(key)) extensions[key]=item;
+        }
+    }
+    return {{"id",entity.id},{"type",entity.type},{"required",entity.required},
+        {"properties",entity.properties},{"extensions",std::move(extensions)}};
+}
+
+void retain_corner_original(const Entity& source, Json& properties, const char* key) {
+    const auto prior=source.extensions.find("ifc_vertex_properties");
+    if (prior==source.extensions.end() || !prior->is_object()) return;
+    if (prior->contains(key)) properties[key]=prior->at(key);
+    else if (prior->contains("_vertex_ifc_entity")) properties[key]=prior->at("_vertex_ifc_entity");
+}
+
+std::array<double,2> corner_pane_size(const IfcNativeMesh& pane, const RigidFrame& frame) {
+    double low=std::numeric_limits<double>::infinity(),high=-low,zlow=low,zhigh=high;
+    for (const auto& p : pane.vertices) {
+        const auto x=(p[0]-frame.origin.x)*frame.x.x+(p[1]-frame.origin.y)*frame.x.y;
+        low=std::min(low,x); high=std::max(high,x); zlow=std::min(zlow,p[2]); zhigh=std::max(zhigh,p[2]);
+    }
+    require(high>low && zhigh>zlow);
+    return {zhigh-zlow,high-low};
+}
+
+int export_corner_cut(const Entity& child, const Entity& host, const Wall& wall,
+    const HostedOpening& cut, ExportContext& context, std::vector<IfcProjectDiagnostic>& diagnostics) {
+    require(native_opening(child)==cut);
+    const auto shape=mesh_shape(ifc_native_void_mesh(wall,cut,
+        context.limits.max_mesh_vertices-context.mesh_vertices,
+        context.limits.max_mesh_triangles-context.mesh_triangles),context);
+    const auto product=context.builder.add("IFCOPENINGELEMENT",context.root(child.id,child.id)+
+        ",$,"+ref(context.placement)+","+ref(shape)+",$,.OPENING.");
+    context.product_ids[child.id]=product; context.opening_host_links.emplace_back(child.id,host.id);
+    auto retained=mesh_metadata(child,"void");
+    retained.properties["_vertex_ifc_corner_cut"]={{"version",1},
+        {"owner_id",child.properties.at("corner_window_id")},{"leg",child.properties.at("corner_leg")}};
+    retained.properties["_vertex_ifc_entity"]=corner_source_entity(child);
+    retain_corner_original(child,retained.properties,"_vertex_ifc_corner_original_cut");
+    retained.properties["_vertex_ifc_host"]=host.properties;
+    retain_properties(retained,product,context,diagnostics);
+    return product;
+}
+
+void export_corner_window(const DocumentSnapshot& document, const Entity& entity,
+    ExportContext& context, std::vector<IfcProjectDiagnostic>& diagnostics) {
+    const auto checkpoint = context.builder.checkpoint();
+    const auto ordinal = context.ordinal, vertices = context.mesh_vertices,
+        triangles = context.mesh_triangles, metadata_bytes = context.retained_metadata_charge;
+    const auto products = context.product_ids;
+    const auto contained = context.contained_products;
+    const auto links = context.opening_host_links.size(), diagnostic_count = diagnostics.size();
+    try {
+        const auto value = parse_corner_window(entity);
+        std::array<Entity,2> hosts;
+        std::array<Wall,2> walls;
+        Json roster = Json::array();
+        for (std::size_t leg=0; leg<2; ++leg) {
+            require(!context.inactive_design_ids.contains(value.wall_ids[leg]) &&
+                !context.inactive_design_ids.contains(value.opening_ids[leg]));
+            require(context.product_ids.contains(value.wall_ids[leg]));
+            hosts[leg] = resolve_vertical_placement(document,document.entities().at(value.wall_ids[leg]));
+            const auto& pose = context.site_placements.at(hosts[leg].id).forward;
+            const auto& own = context.presentation.forward;
+            require(pose.translation_m.x == own.translation_m.x && pose.translation_m.y == own.translation_m.y &&
+                pose.translation_m.z == own.translation_m.z && pose.rotation_radians == own.rotation_radians);
+            walls[leg] = native_wall(hosts[leg],context.hosted_openings[hosts[leg].id]);
+            context.native_work.charge(32 + walls[leg].openings.size()*4 + walls[leg].pocket_recesses.size()*4);
+            context.native_work.charge_cross(walls[leg].openings.size());
+        }
+        const auto cuts = corner_window_cuts(value,walls);
+        auto parts = ifc_native_corner_window_mesh(walls,cuts,value.assembly,
+            context.limits.max_mesh_vertices-context.mesh_vertices,
+            context.limits.max_mesh_triangles-context.mesh_triangles);
+        const auto owner = context.builder.add("IFCELEMENTASSEMBLY",context.root(entity.id,entity.id) +
+            ",'VertexCornerWindow'," + ref(context.placement) + ",$,$,.FACTORY.,.USERDEFINED.");
+        context.product_ids[entity.id] = owner;
+        context.contain(owner);
+        std::array<int,3> part_ids{};
+        std::array<int,2> void_ids{};
+        for (std::size_t index=0; index<3; ++index) {
+            auto part_mesh=parts[index];
+            int placement=context.placement;
+            std::array<double,2> pane_size{};
+            if (index>0) {
+                const auto frame=fill_frame(walls[index-1],cuts[index-1],std::nullopt);
+                pane_size=corner_pane_size(part_mesh,frame);
+                placement=fill_placement(frame,context);
+                for (auto& p : part_mesh.vertices) {
+                    const auto dx=p[0]-frame.origin.x,dy=p[1]-frame.origin.y;
+                    p={dx*frame.x.x+dy*frame.x.y,-dx*frame.x.y+dy*frame.x.x,p[2]-frame.origin.z};
+                }
+            }
+            const auto shape = mesh_shape({part_mesh},context);
+            part_ids[index] = context.builder.add(index == 0 ? "IFCBUILDINGELEMENTPART" : "IFCWINDOW",
+                context.root(entity.id+":part:"+std::to_string(index),entity.id+":part:"+std::to_string(index)) +
+                ",$," + ref(placement) + "," + ref(shape) +
+                (index == 0 ? ",$,.NOTDEFINED." : ",$,"+real_text(pane_size[0])+","+
+                    real_text(pane_size[1])+",.WINDOW.,.SINGLE_PANEL.,$"));
+            context.aggregate(owner,part_ids[index],entity.id+":part-link:"+std::to_string(index));
+            auto retained = mesh_metadata(entity,"corner_part");
+            retained.properties = {{"_vertex_ifc_mesh",retained.properties.at("_vertex_ifc_mesh")},
+                {"_vertex_ifc_corner_part",{{"version",1},{"owner_id",entity.id},{"index",index}}}};
+            retain_properties(retained,part_ids[index],context,diagnostics);
+        }
+        for (std::size_t leg=0; leg<2; ++leg) {
+            const auto& child = document.entities().at(value.opening_ids[leg]);
+            require(child.properties.value("corner_window_id",std::string{}) == entity.id &&
+                child.properties.at("corner_leg") == leg && native_opening(child) == cuts[leg]);
+            const auto existing=context.product_ids.find(child.id);
+            void_ids[leg] = existing==context.product_ids.end() ?
+                export_corner_cut(child,hosts[leg],walls[leg],cuts[leg],context,diagnostics) : existing->second;
+            context.builder.add("IFCRELFILLSELEMENT",context.root(entity.id+":fills:"+std::to_string(leg),"")+
+                ","+ref(void_ids[leg])+","+ref(part_ids[leg+1]));
+        }
+        for (std::size_t leg=0; leg<2; ++leg) {
+            Json children = Json::array();
+            for (const auto* child : context.hosted_openings.at(hosts[leg].id)) {
+                require(context.product_ids.contains(child->id));
+                children.push_back({{"product",context.product_ids.at(child->id)},
+                    {"entity",corner_source_entity(*child)}});
+            }
+            Json row{{"host_product",context.product_ids.at(hosts[leg].id)},
+                {"host",corner_source_entity(hosts[leg])},
+                {"authored_host",corner_source_entity(document.entities().at(hosts[leg].id))},
+                {"openings",std::move(children)}};
+            const auto& extensions=document.entities().at(hosts[leg].id).extensions;
+            if (extensions.contains("ifc_vertex_properties") && extensions.at("ifc_vertex_properties").is_object() &&
+                extensions.at("ifc_vertex_properties").contains("_vertex_ifc_entity"))
+                row["original_authored_host"]=extensions.at("ifc_vertex_properties").at("_vertex_ifc_entity");
+            roster.push_back(std::move(row));
+        }
+        auto retained = entity;
+        retained.properties["_vertex_ifc_entity"] = corner_source_entity(entity);
+        retain_corner_original(entity,retained.properties,"_vertex_ifc_corner_original_owner");
+        retained.properties["_vertex_ifc_corner_window"] = {{"version",1},{"parts",part_ids},
+            {"voids",void_ids},{"hosts",std::move(roster)}};
+        retain_properties(retained,owner,context,diagnostics);
+        require(diagnostics.size() == diagnostic_count);
+        context.builder.bounded_add(checkpoint.bounded);
+    } catch (const std::exception&) {
+        context.builder.rollback(checkpoint);
+        context.ordinal=ordinal; context.mesh_vertices=vertices; context.mesh_triangles=triangles;
+        context.retained_metadata_charge=metadata_bytes; context.product_ids=products;
+        context.contained_products=contained; context.opening_host_links.resize(links);
+        diagnostics.resize(diagnostic_count);
+        add_diagnostic(diagnostics,entity.id,entity.type,"native_corner_window_cohort_not_exported");
+    }
+}
+
+void export_corner_batch(const DocumentSnapshot& document, ExportContext& context,
+    std::vector<IfcProjectDiagnostic>& diagnostics) {
+    if (context.corner_batch_attempted) return;
+    context.corner_batch_attempted=true;
+    const auto checkpoint=context.builder.checkpoint();
+    const auto ordinal=context.ordinal,vertices=context.mesh_vertices,triangles=context.mesh_triangles,
+        metadata_bytes=context.retained_metadata_charge,links=context.opening_host_links.size(),diagnostic_count=diagnostics.size();
+    const auto products=context.product_ids;
+    const auto contained=context.contained_products;
+    const auto* authored=context.authored_entity;
+    const auto presentation=context.presentation;
+    const auto placement=context.placement,storey=context.storey;
+    const auto prepare=[&](const Entity& owner) {
+        context.authored_entity=&owner;
+        context.presentation=context.site_placements.at(owner.id);
+        context.placement=context.rigid_placement(context.presentation.forward);
+        const auto& drawing=context.presentation.drawing_context;
+        const auto spatial=!drawing.floor_id.empty() ? drawing.floor_id :
+            !drawing.building_id.empty() ? drawing.building_id : drawing.property_id;
+        if (spatial.empty()) context.default_hierarchy();
+        else { require(context.spatial_ids.contains(spatial)); context.storey=context.spatial_ids.at(spatial); }
+    };
+    try {
+        // Publish real cuts first, so opposite ends of a shared host have a
+        // complete actual roster independent of owner/source-ID order.
+        for (const auto& [id,owner] : document.entities()) {
+            if (owner.type!="corner_window" || context.inactive_design_ids.contains(id)) continue;
+            prepare(owner); const auto value=parse_corner_window(owner);
+            std::array<Entity,2> hosts;
+            std::array<Wall,2> walls;
+            for (std::size_t leg=0; leg<2; ++leg) {
+                require(!context.inactive_design_ids.contains(value.wall_ids[leg]) &&
+                    !context.inactive_design_ids.contains(value.opening_ids[leg]) && context.product_ids.contains(value.wall_ids[leg]));
+                hosts[leg]=resolve_vertical_placement(document,document.entities().at(value.wall_ids[leg]));
+                context.native_work.charge(32+context.hosted_openings[value.wall_ids[leg]].size()*4);
+                walls[leg]=native_wall(hosts[leg],context.hosted_openings[value.wall_ids[leg]]);
+            }
+            const auto cuts=corner_window_cuts(value,walls);
+            for (std::size_t leg=0; leg<2; ++leg)
+                export_corner_cut(document.entities().at(value.opening_ids[leg]),hosts[leg],walls[leg],cuts[leg],context,diagnostics);
+            require(diagnostics.size()==diagnostic_count);
+        }
+        for (const auto& [id,owner] : document.entities()) {
+            if (owner.type!="corner_window" || context.inactive_design_ids.contains(id)) continue;
+            prepare(owner); export_corner_window(document,owner,context,diagnostics);
+            require(context.product_ids.contains(id) && diagnostics.size()==diagnostic_count);
+        }
+        context.builder.bounded_add(checkpoint.bounded);
+    } catch (const std::exception&) {
+        context.builder.rollback(checkpoint); context.ordinal=ordinal; context.mesh_vertices=vertices;
+        context.mesh_triangles=triangles; context.retained_metadata_charge=metadata_bytes;
+        context.product_ids=products; context.contained_products=contained; context.opening_host_links.resize(links);
+        diagnostics.resize(diagnostic_count);
+        for (const auto& [id,owner] : document.entities())
+            if (owner.type=="corner_window" && !context.inactive_design_ids.contains(id))
+                add_diagnostic(diagnostics,id,owner.type,"native_corner_cohort_batch_not_exported");
+    }
+    context.authored_entity=authored; context.presentation=presentation; context.placement=placement; context.storey=storey;
 }
 #endif
 
@@ -2381,7 +2618,8 @@ bool is_product(std::string_view type) {
            type == "IFCROOF" || type == "IFCSPACE" || type == "IFCDOOR" ||
            type == "IFCWINDOW" || type == "IFCOPENINGELEMENT" || type == "IFCSTAIR" ||
            type == "IFCSTAIRFLIGHT" || type == "IFCRAILING" ||
-           type == "IFCBUILDINGELEMENTPROXY" || type == "IFCELEMENTASSEMBLY" || type == "IFCGEOGRAPHICELEMENT";
+           type == "IFCBUILDINGELEMENTPROXY" || type == "IFCBUILDINGELEMENTPART" ||
+           type == "IFCELEMENTASSEMBLY" || type == "IFCGEOGRAPHICELEMENT";
 }
 
 bool is_structural(std::string_view type) {
@@ -2670,7 +2908,7 @@ bool metre_units(const ParsedStep& parsed, std::size_t& count, const IfcExchange
 
 std::optional<std::vector<IfcNativeMesh>> product_meshes(const ParsedStep& parsed,
     const StepRecord& product, std::size_t& count, const IfcExchangeLimits& limits,
-    std::size_t& vertices, std::size_t& triangles) {
+    std::size_t& vertices, std::size_t& triangles, bool corner_frame = false) {
     const auto fields = split_top_level(product.args, count, limits);
     require(fields.size() >= 7);
     const auto shape_id = reference(fields[6]);
@@ -2750,7 +2988,7 @@ std::optional<std::vector<IfcNativeMesh>> product_meshes(const ParsedStep& parse
     }
     if (result.empty()) return std::nullopt;
     const bool passage = passage_product(product.type, fields, limits);
-    if (product.type == "IFCDOOR" || product.type == "IFCWINDOW" || passage ||
+    if (corner_frame || product.type == "IFCDOOR" || product.type == "IFCWINDOW" || passage ||
         product.type == "IFCROOF" || product.type == "IFCSPACE" || product.type == "IFCSTAIR" ||
         product.type == "IFCRAILING") {
         const auto frame = product_frame(parsed, fields, count, limits);
@@ -3128,12 +3366,314 @@ std::string reconstructed_opening_kind(const Entity& opening) {
     return kind;
 }
 
+#ifdef SKETCH_IFC_NATIVE_GEOMETRY
+Entity corner_source(const Json& source, std::string_view type) {
+    require(source.is_object() && source.at("id").is_string() && source.at("type") == type &&
+        source.at("properties").is_object() && source.at("extensions").is_object() && source.at("required").is_boolean());
+    return {source.at("id").get<std::string>(),std::string(type),source.at("properties"),
+        source.at("required").get<bool>(),source.at("extensions")};
+}
+
+void corner_detach(Entity& entity) {
+    detach_native_context(entity.properties);
+    entity.properties.erase("vertical_placement");
+    entity.properties.erase("level_id");
+    entity.properties.erase("presentation_frame");
+    for (auto i=entity.properties.begin(); i!=entity.properties.end();) {
+        if (i.key().starts_with("_vertex_ifc_")) i=entity.properties.erase(i);
+        else ++i;
+    }
+    entity.required=false;
+}
+
+void corner_scalar(Entity& entity, const char* canonical, const char* legacy, double value) {
+    entity.properties[canonical]=value;
+    if (entity.properties.contains(legacy)) entity.properties[legacy]=value;
+}
+
+void corner_cut_scalars(Entity& entity, const HostedOpening& cut) {
+    corner_scalar(entity,"offset_m","offset",cut.offset);
+    corner_scalar(entity,"width_m","width",cut.width);
+    corner_scalar(entity,"sill_m","sill",cut.sill);
+    corner_scalar(entity,"height_m","height",cut.height);
+}
+
+std::vector<IfcNativeMesh> corner_world_mesh(std::vector<IfcNativeMesh> meshes, const RigidFrame& frame) {
+    for (auto& mesh : meshes) for (auto& point : mesh.vertices) {
+        const auto p=world_point(frame,{point[0],point[1],point[2]});
+        require(bounded_point(p)); point={p.x,p.y,p.z};
+    }
+    return meshes;
+}
+
+void reconstruct_corner_windows(const ParsedStep& parsed, const std::map<int,Json>& metadata,
+    const std::map<int,std::vector<IfcNativeMesh>>& meshes, const NativeRoofRelations& relations,
+    const std::map<int,std::vector<int>>& parents, NativeReconstructionLedger& ledger,
+    std::size_t& count, const IfcExchangeLimits& limits, IfcProjectImportResult& result) {
+    for (const auto& record : parsed.records) {
+        const auto found=metadata.find(record.id);
+        if (found == metadata.end() || !found->second.contains("_vertex_ifc_corner_window")) continue;
+        try {
+            ledger.begin_attempt();
+            require(record.type == "IFCELEMENTASSEMBLY");
+            const auto& properties=found->second;
+            const auto& manifest=properties.at("_vertex_ifc_corner_window");
+            require(manifest.at("version").is_number_integer() && manifest.at("version") == 1 &&
+                manifest.at("hosts").is_array() && manifest.at("hosts").size()==2 &&
+                manifest.at("parts").is_array() && manifest.at("parts").size()==3 &&
+                manifest.at("voids").is_array() && manifest.at("voids").size()==2);
+            auto owner=corner_source(properties.at("_vertex_ifc_entity"),"corner_window");
+            const auto value=parse_corner_window(owner);
+            for (const auto& [key,item] : owner.properties.items()) require(properties.contains(key) && properties.at(key)==item);
+            const auto fields=split_top_level(record.args,count,limits);
+            require(fields.size()==10 && fields[4]=="'VertexCornerWindow'" && fields[6]=="$" &&
+                fields[8]==".FACTORY." && fields[9]==".USERDEFINED." && decode_string(fields[2],limits)==owner.id &&
+                !relations.fill_use.contains(record.id));
+            const auto frame=product_frame(parsed,fields,count,limits); require(frame.has_value());
+            std::array<Entity,2> source_hosts;
+            std::array<Wall,2> walls;
+            std::array<int,2> host_ids{},void_ids{};
+            std::array<int,3> part_ids{};
+            std::map<int,Entity> source_openings;
+            std::map<int,Entity> replacements;
+            std::map<std::string,Entity,std::less<>> local_state;
+            std::set<int> consumed{record.id};
+            std::set<int> identities{record.id};
+            std::size_t work=64;
+            for (std::size_t leg=0; leg<2; ++leg) {
+                const auto& row=manifest.at("hosts")[leg];
+                require(row.at("host_product").is_number_integer());
+                host_ids[leg]=row.at("host_product").get<int>();
+                require(identities.insert(host_ids[leg]).second);
+                source_hosts[leg]=corner_source(row.at("host"),"wall");
+                const auto authored_host=corner_source(row.at("authored_host"),"wall");
+                require(authored_host.id==source_hosts[leg].id);
+                // Raw level/context payload is retained provenance only. The
+                // separately labelled resolved descriptor must prove meshes.
+                if (row.contains("original_authored_host"))
+                    (void)corner_source(row.at("original_authored_host"),"wall");
+                require(source_hosts[leg].id==value.wall_ids[leg] && metadata.contains(host_ids[leg]) && meshes.contains(host_ids[leg]));
+                const auto* host_record=find_record(parsed,host_ids[leg]); require(host_record && host_record->type=="IFCWALL");
+                const auto& host_metadata=metadata.at(host_ids[leg]);
+                require(native_mesh_role(host_metadata,"wall") && host_metadata.at("_vertex_ifc_corner_host")==source_hosts[leg].id);
+                for (const auto& [key,item] : source_hosts[leg].properties.items())
+                    require(host_metadata.contains(key) && host_metadata.at(key)==item);
+                const auto host_fields=split_top_level(host_record->args,count,limits);
+                const auto host_frame=product_frame(parsed,host_fields,count,limits);
+                require(host_frame && same_frame(*host_frame,*frame) && decode_string(host_fields[2],limits)==source_hosts[leg].id);
+                require(row.at("openings").is_array() && row.at("openings").size()<=128);
+                std::vector<const Entity*> roster;
+                std::set<int> roster_ids;
+                for (const auto& entry : row.at("openings")) {
+                    require(entry.at("product").is_number_integer());
+                    const auto id=entry.at("product").get<int>();
+                    require(roster_ids.insert(id).second && identities.insert(id).second);
+                    const auto* cut_record=find_record(parsed,id);
+                    require(cut_record && cut_record->type=="IFCOPENINGELEMENT" && metadata.contains(id) && meshes.contains(id));
+                    auto cut=corner_source(entry.at("entity"),"opening");
+                    const auto cut_fields=split_top_level(cut_record->args,count,limits);
+                    require(cut_fields.size()==9 && cut_fields[8]==".OPENING." &&
+                        cut.properties.at("wall_id")==source_hosts[leg].id && decode_string(cut_fields[2],limits)==cut.id);
+                    for (const auto& [key,item] : cut.properties.items()) require(metadata.at(id).contains(key) && metadata.at(id).at(key)==item);
+                    require(native_mesh_role(metadata.at(id),"void") && relations.void_parents.contains(id) &&
+                        relations.void_parents.at(id).size()==1 && relations.void_parents.at(id)[0].first==host_ids[leg]);
+                    const auto cut_frame=product_frame(parsed,cut_fields,count,limits);
+                    require(cut_frame && same_frame(*cut_frame,*frame));
+                    auto [inserted,unique]=source_openings.emplace(id,std::move(cut)); require(unique);
+                    roster.push_back(&inserted->second);
+                    consumed.insert(relations.void_parents.at(id)[0].second);
+                }
+                require(relations.roof_voids.contains(host_ids[leg]) && relations.roof_voids.at(host_ids[leg]).size()==roster_ids.size());
+                for (const auto id : relations.roof_voids.at(host_ids[leg])) require(roster_ids.contains(id));
+                walls[leg]=native_wall(source_hosts[leg],roster);
+                work += 32+walls[leg].openings.size()*4+walls[leg].pocket_recesses.size()*4;
+                ledger.geometry.charge_cross(walls[leg].openings.size());
+                auto detached=source_hosts[leg]; corner_detach(detached); local_state.emplace(detached.id,std::move(detached));
+            }
+            ledger.geometry.charge(work);
+            if (work > std::min(ledger.vertices,ledger.triangles)/256) NativeReconstructionLedger::exhausted();
+            const auto storage=work*256; ledger.vertices-=storage; ledger.triangles-=storage;
+            for (const auto& [id,source] : source_openings) {
+                const auto leg=source.properties.at("wall_id")==source_hosts[0].id ? 0 : 1;
+                require(matching_meshes(meshes.at(id),corner_world_mesh(ifc_native_void_mesh(walls[leg],native_opening(source),storage,storage),*frame)));
+                if (!source.properties.contains("corner_window_id") || source.properties.at("corner_window_id")==owner.id) {
+                    auto detached=source; corner_detach(detached); local_state.emplace(detached.id,std::move(detached));
+                }
+            }
+            auto local_owner=owner; corner_detach(local_owner); local_state.emplace(owner.id,std::move(local_owner));
+            validate_corner_window_state(local_state);
+            const auto cuts=corner_window_cuts(value,walls);
+            const auto expected_parts=ifc_native_corner_window_mesh(walls,cuts,value.assembly,storage,storage);
+            for (std::size_t leg=0; leg<2; ++leg) {
+                require(manifest.at("voids")[leg].is_number_integer());
+                void_ids[leg]=manifest.at("voids")[leg].get<int>();
+                require(source_openings.contains(void_ids[leg]) && source_openings.at(void_ids[leg]).id==value.opening_ids[leg]);
+                const auto& tag=metadata.at(void_ids[leg]).at("_vertex_ifc_corner_cut");
+                require(tag.at("version").is_number_integer() && tag.at("version")==1 &&
+                    tag.at("owner_id")==owner.id && tag.at("leg").is_number_integer() && tag.at("leg")==leg &&
+                    metadata.at(void_ids[leg]).at("_vertex_ifc_entity")==corner_source_entity(source_openings.at(void_ids[leg])));
+            }
+            for (std::size_t index=0; index<3; ++index) {
+                require(manifest.at("parts")[index].is_number_integer());
+                part_ids[index]=manifest.at("parts")[index].get<int>(); require(identities.insert(part_ids[index]).second);
+                const auto* part=find_record(parsed,part_ids[index]);
+                require(part && part->type==(index==0 ? "IFCBUILDINGELEMENTPART" : "IFCWINDOW") &&
+                    parents.contains(part->id) && parents.at(part->id)==std::vector<int>{record.id} && metadata.contains(part->id) && meshes.contains(part->id));
+                const auto& tag=metadata.at(part->id).at("_vertex_ifc_corner_part");
+                require(native_mesh_role(metadata.at(part->id),"corner_part") && tag.at("version").is_number_integer() &&
+                    tag.at("version")==1 && tag.at("owner_id")==owner.id && tag.at("index").is_number_integer() && tag.at("index")==index);
+                const auto pf=split_top_level(part->args,count,limits);
+                const auto part_frame=product_frame(parsed,pf,count,limits); require(part_frame.has_value());
+                if (index>0) {
+                    const auto local=fill_frame(walls[index-1],cuts[index-1],std::nullopt);
+                    const RigidFrame placed{world_point(*frame,local.origin),
+                        {frame->x.x*local.x.x-frame->x.y*local.x.y,frame->x.y*local.x.x+frame->x.x*local.x.y}};
+                    require(same_frame(*part_frame,placed));
+                    const auto pane_size=corner_pane_size(expected_parts[index],local);
+                    require(pf.size()==13 && pf[10]==".WINDOW." && pf[11]==".SINGLE_PANEL." && pf[12]=="$" &&
+                        std::abs(number<double>(pf[8])-pane_size[0])<=kTolerance && std::abs(number<double>(pf[9])-pane_size[1])<=kTolerance);
+                    const auto fill=relations.void_fills.find(void_ids[index-1]);
+                    require(fill!=relations.void_fills.end() && fill->second.size()==1 && fill->second[0].first==part->id && relations.fill_use.at(part->id)==1);
+                    consumed.insert(fill->second[0].second);
+                } else require(same_frame(*part_frame,*frame) && !relations.fill_use.contains(part->id) &&
+                    pf.size()==9 && pf[8]==".NOTDEFINED.");
+                require(matching_meshes(meshes.at(part->id),corner_world_mesh({expected_parts[index]},*frame)));
+                consumed.insert(part->id);
+            }
+            for (const auto& [child,ps] : parents) if (std::find(ps.begin(),ps.end(),record.id)!=ps.end())
+                require(std::find(part_ids.begin(),part_ids.end(),child)!=part_ids.end());
+            for (const auto& relation : parsed.records) {
+                if (relation.type=="IFCRELAGGREGATES") {
+                    const auto f=split_top_level(relation.args,count,limits);
+                    require(f.size()==6);
+                    if (reference(f[4])==record.id) consumed.insert(relation.id);
+                } else if (relation.type=="IFCRELCONTAINEDINSPATIALSTRUCTURE") {
+                    const auto f=split_top_level(relation.args,count,limits);
+                    require(f.size()==6);
+                    const auto target=reference(f[5]); require(target && find_record(parsed,*target));
+                    for (const auto child : list_references(f[4],count,limits)) {
+                        require(find_record(parsed,child));
+                        require(std::find(part_ids.begin(),part_ids.end(),child)==part_ids.end());
+                    }
+                }
+            }
+            std::set<int> detached_materials;
+            const auto provenance=[&](Entity candidate,int id) {
+                const auto* source=find_record(parsed,id); require(source);
+                corner_detach(candidate); candidate.id="ifc-"+std::to_string(id);
+                candidate.extensions["ifc_source"]={{"record_id",id},{"record_type",source->type},{"arguments",source->args}};
+                candidate.extensions["ifc_vertex_properties"]=metadata.at(id);
+                if (candidate.properties.erase("material_assignment")) detached_materials.insert(id);
+                if (candidate.type=="wall" && candidate.properties.contains("layers"))
+                    for (auto& layer : candidate.properties.at("layers"))
+                        if (layer.erase("material_assignment")) detached_materials.insert(id);
+                return candidate;
+            };
+            for (std::size_t leg=0; leg<2; ++leg) {
+                require(matching_meshes(meshes.at(host_ids[leg]),corner_world_mesh(ifc_native_wall_mesh(native_wall(source_hosts[leg]),storage,storage),*frame)));
+                auto host=provenance(source_hosts[leg],host_ids[leg]);
+                const auto& row=manifest.at("hosts")[leg];
+                host.extensions["ifc_vertex_properties"]["_vertex_ifc_entity"]=
+                    row.contains("original_authored_host") ? row.at("original_authored_host") : row.at("authored_host");
+                host.extensions["ifc_vertex_properties"]["_vertex_ifc_corner_authored_host"]=row.at("authored_host");
+                const auto& baseline=walls[leg].baseline;
+                const auto a=world_point(*frame,{baseline.start.x,baseline.start.y,walls[leg].elevation});
+                const auto b=world_point(*frame,{baseline.end.x,baseline.end.y,walls[leg].elevation});
+                host.properties["baseline"]=boundary_json(Boundary{{{a.x,a.y},{b.x,b.y},0.0}})[0];
+                corner_scalar(host,"thickness_m","thickness",walls[leg].thickness);
+                corner_scalar(host,"height_m","height",walls[leg].height);
+                corner_scalar(host,"elevation_m","elevation",a.z);
+                host.properties["ifc_name"]=source_hosts[leg].id;
+                if (walls[leg].top_gradient_m_per_m) {
+                    const auto g=*walls[leg].top_gradient_m_per_m;
+                    host.properties["top_plane"]=wall_top_plane_json(
+                        {g.x*frame->x.x-g.y*frame->x.y,g.x*frame->x.y+g.y*frame->x.x});
+                }
+                replacements.emplace(host_ids[leg],std::move(host));
+            }
+            std::set<int> unproved_assemblies;
+            for (const auto& [id,source] : source_openings) {
+                // Adjacent ordinary voids are part of the proved host roster.
+                // Their separate manufacturing assemblies still use the
+                // existing independent fill proof and retained-source route.
+                if (source.properties.contains("corner_window_id")) continue;
+                auto cut=provenance(source,id);
+                corner_cut_scalars(cut,native_opening(source));
+                const auto leg=source.properties.at("wall_id")==source_hosts[0].id ? 0 : 1;
+                cut.properties["wall_id"]="ifc-"+std::to_string(host_ids[leg]);
+                const auto existing=std::find_if(result.entities.begin(),result.entities.end(),[&](const auto& e) {
+                    return e.id==cut.id && e.type=="opening" && e.properties.contains("opening_assembly");
+                });
+                if (existing!=result.entities.end()) {
+                    cut.properties["opening_assembly"]=existing->properties.at("opening_assembly");
+                    if (existing->properties.contains("door_operation")) cut.properties["door_operation"]=existing->properties.at("door_operation");
+                } else if (cut.properties.erase("opening_assembly")) {
+                    const auto operation=native_operation(source);
+                    // Compound pocket voids require their proved operating
+                    // assembly. They cannot become mouth-only active cuts.
+                    require(!operation || operation->kind!=DoorOperationKind::pocket_sliding);
+                    cut.properties.erase("door_operation"); unproved_assemblies.insert(id);
+                }
+                replacements.emplace(id,std::move(cut)); consumed.insert(id);
+            }
+            for (std::size_t leg=0; leg<2; ++leg) {
+                auto cut=provenance(source_openings.at(void_ids[leg]),void_ids[leg]);
+                corner_cut_scalars(cut,cuts[leg]);
+                cut.properties["wall_id"]="ifc-"+std::to_string(host_ids[leg]);
+                cut.properties["corner_window_id"]="ifc-"+std::to_string(record.id);
+                replacements.emplace(void_ids[leg],std::move(cut)); consumed.insert(void_ids[leg]);
+            }
+            owner=provenance(std::move(owner),record.id);
+            for (std::size_t leg=0; leg<2; ++leg) {
+                owner.properties["wall_ids"][leg]="ifc-"+std::to_string(host_ids[leg]);
+                owner.properties["opening_ids"][leg]="ifc-"+std::to_string(void_ids[leg]);
+            }
+            replacements.emplace(record.id,std::move(owner));
+            // All proof and allocation completes before publishing any cohort member.
+            auto entities=result.entities;
+            for (auto& candidate : entities) {
+                const auto id=candidate.extensions.at("ifc_source").at("record_id").get<int>();
+                if (replacements.contains(id)) candidate=replacements.at(id);
+            }
+            std::erase_if(entities,[&](const Entity& candidate) {
+                const auto id=candidate.extensions.at("ifc_source").at("record_id").get<int>();
+                return consumed.contains(id) && !replacements.contains(id);
+            });
+            const auto detached=project_import_detail::detached_ifc_validation_entities(entities);
+            std::map<std::string,Entity,std::less<>> graph;
+            for (const auto& candidate : detached)
+                require(graph.emplace(candidate.id,candidate).second);
+            validate_corner_window_state(graph);
+            require(Document::create(detached).snapshot().is_editable());
+            result.entities=std::move(entities);
+            std::erase_if(result.diagnostics,[&](const auto& diagnostic) {
+                return std::any_of(consumed.begin(),consumed.end(),[&](int id){return diagnostic.source_id=="#"+std::to_string(id);});
+            });
+            for (const auto id : unproved_assemblies) add_diagnostic(result.diagnostics,"#"+std::to_string(id),
+                "IFCOPENINGELEMENT","adjacent_opening_assembly_retained_not_reconstructed");
+            for (const auto id : detached_materials) add_diagnostic(result.diagnostics,"#"+std::to_string(id),
+                find_record(parsed,id)->type,"native_corner_material_references_retained_not_reconstructed");
+            add_diagnostic(result.diagnostics,"#"+std::to_string(record.id),record.type,"native_corner_context_retained_not_reconstructed");
+        } catch (const std::exception& error) {
+            add_diagnostic(result.diagnostics,"#"+std::to_string(record.id),record.type,
+                std::string_view(error.what())=="ifc_native_reconstruction_budget_exceeded" || std::string_view(error.what())=="ifc_mesh_budget_exceeded" ?
+                    "native_corner_reconstruction_budget_exceeded" : "native_corner_geometry_metadata_inconsistent");
+        }
+    }
+}
+#endif
+
 } // namespace
 
 IfcProjectExportResult export_project_ifc(const DocumentSnapshot& document,
                                           const IfcExchangeLimits& limits) {
     validate_limits(limits);
     IfcProjectExportResult result;
+    try { validate_corner_window_state(document.entities()); }
+    catch (const std::exception&) {
+        add_diagnostic(result.diagnostics,{},"PROJECT","corner_window_source_graph_inconsistent");
+        return result;
+    }
     ConstraintPhaseScope scope;
     try {
         // Saved registry choices are evaluated against the complete immutable
@@ -3189,6 +3729,14 @@ IfcProjectExportResult export_project_ifc(const DocumentSnapshot& document,
             if (host != entity.properties.end() && host->is_string())
                 context.hosted_openings[host->get<std::string>()].push_back(&entity);
         }
+        if (entity.type == "corner_window") {
+            try {
+                const auto corner = parse_corner_window(entity);
+                for (const auto& host : corner.wall_ids) context.corner_hosts.insert(host);
+            } catch (const std::exception&) {
+                add_diagnostic(result.diagnostics,id,entity.type,"native_corner_window_metadata_invalid");
+            }
+        }
     }
     std::vector<std::string> site_ids;
     site_ids.reserve(document.entities().size());
@@ -3232,11 +3780,15 @@ IfcProjectExportResult export_project_ifc(const DocumentSnapshot& document,
     }
     for (const auto& [id, entity] : document.entities()) {
         if (context.inactive_design_ids.contains(id)) continue;
-        if (entity.type != "wall_join" && entity.type != "roof_join") export_order.push_back(&entity);
+        if (entity.type != "wall_join" && entity.type != "roof_join" && entity.type != "corner_window")
+            export_order.push_back(&entity);
     }
+    for (const auto& [id,entity] : document.entities())
+        if (entity.type == "corner_window" && !context.inactive_design_ids.contains(id)) export_order.push_back(&entity);
     for (const auto* source_entity : export_order) {
         const auto& entity = *source_entity;
         const auto& id = entity.id;
+        if (entity.type == "opening" && entity.properties.contains("corner_window_id")) continue;
         context.authored_entity=&entity;
         context.presentation={}; context.placement=context.world_placement;
         if (entity.type == "annotation_state") {
@@ -3300,7 +3852,11 @@ IfcProjectExportResult export_project_ifc(const DocumentSnapshot& document,
                 const auto prior_id = prior_product == context.product_ids.end() ? std::optional<int>{} : prior_product->second;
                 try {
                     const auto resolved=resolve_vertical_placement(document,entity);
-                    export_product(document,resolved,context,result.diagnostics,physical_room);
+#ifdef SKETCH_IFC_NATIVE_GEOMETRY
+                    if (entity.type == "corner_window") export_corner_batch(document,context,result.diagnostics);
+                    else
+#endif
+                        export_product(document,resolved,context,result.diagnostics,physical_room);
                 } catch (const std::exception&) {
                     if (entity.type == "opening") {
                         context.builder.rollback(checkpoint);
@@ -3325,11 +3881,22 @@ IfcProjectExportResult export_project_ifc(const DocumentSnapshot& document,
             (entity.required || (!result.diagnostics.empty() && result.diagnostics.back().source_id == id) ||
              entity.type == "wall" || entity.type == "slab" ||
              entity.type == "opening" || entity.type == "roof" || entity.type == "room" ||
-             entity.type == "stair" || entity.type == "railing" ||
+             entity.type == "stair" || entity.type == "railing" || entity.type == "corner_window" ||
              entity.type == "ifc_reference" ||
              entity.type == "building" || entity.type == "floor" || entity.type == "property"))
             export_native_reference(entity, context, result.diagnostics);
     }
+    for (const auto& [id,entity] : document.entities())
+        if (entity.type == "opening" && entity.properties.contains("corner_window_id") &&
+            !context.inactive_design_ids.contains(id) && !context.product_ids.contains(id))
+        {
+            context.authored_entity=&entity; context.presentation={}; context.placement=context.world_placement;
+            if (context.site_placements.contains(id)) {
+                context.presentation=context.site_placements.at(id);
+                context.placement=context.rigid_placement(context.presentation.forward);
+            }
+            export_native_reference(entity,context,result.diagnostics);
+        }
     for (const auto& [rail_id, stair_id] : context.railing_host_links) {
         const auto rail = context.product_ids.find(rail_id);
         const auto stair = context.product_ids.find(stair_id);
@@ -3404,7 +3971,11 @@ IfcProjectImportResult import_project_ifc(std::string_view bytes,
         }
 #endif
         if (!supported_units) continue;
-        if (auto mesh = product_meshes(parsed, record, argument_count, limits, mesh_vertices, mesh_triangles))
+        const auto metadata = metadata_by_id.find(record.id);
+        const bool corner_frame = metadata != metadata_by_id.end() &&
+            (metadata->second.contains("_vertex_ifc_corner_host") || metadata->second.contains("_vertex_ifc_corner_cut") ||
+                metadata->second.contains("_vertex_ifc_corner_part"));
+        if (auto mesh = product_meshes(parsed, record, argument_count, limits, mesh_vertices, mesh_triangles,corner_frame))
             meshes_by_id.emplace(record.id, std::move(*mesh));
     }
     if (!supported_units) add_diagnostic(result.diagnostics, {}, "PROJECT", "length_units_not_reconstructed");
@@ -3513,7 +4084,11 @@ IfcProjectImportResult import_project_ifc(std::string_view bytes,
                 continue;
             }
             if (metadata_by_id.contains(record.id) &&
-                metadata_by_id.at(record.id).contains("_vertex_ifc_roof_child")) {
+                (metadata_by_id.at(record.id).contains("_vertex_ifc_roof_child") ||
+                 metadata_by_id.at(record.id).contains("_vertex_ifc_corner_cut") ||
+                 metadata_by_id.at(record.id).contains("corner_window_id") ||
+                 metadata_by_id.at(record.id).contains("_vertex_ifc_corner_part") ||
+                 metadata_by_id.at(record.id).contains("_vertex_ifc_corner_window"))) {
                 // A nested roof fill/void has no independent editable route.
                 // Until its owning roof passes the whole product proof keep
                 // both the foreign body and semantic provenance inert.
@@ -3522,7 +4097,8 @@ IfcProjectImportResult import_project_ifc(std::string_view bytes,
                     Json{{"ifc_source",{{"record_id",record.id},{"record_type",record.type},{"arguments",record.args}}},
                         {"ifc_vertex_properties",metadata_by_id.at(record.id)}}});
                 add_diagnostic(result.diagnostics, "#" + std::to_string(record.id), record.type,
-                    "roof_skylight_semantics_not_reconstructed");
+                    metadata_by_id.at(record.id).contains("_vertex_ifc_roof_child") ?
+                        "roof_skylight_semantics_not_reconstructed" : "corner_window_cohort_not_reconstructed");
                 continue;
             }
 #ifdef SKETCH_IFC_NATIVE_GEOMETRY
@@ -3763,6 +4339,9 @@ IfcProjectImportResult import_project_ifc(std::string_view bytes,
     std::map<std::string, Entity, std::less<>> pending_pocket_voids;
 #endif
     for (auto& opening : result.entities) {
+        if (opening.extensions.contains("ifc_vertex_properties") &&
+            (opening.extensions.at("ifc_vertex_properties").contains("_vertex_ifc_corner_cut") ||
+                opening.extensions.at("ifc_vertex_properties").contains("corner_window_id"))) continue;
         if (opening.properties.value("classification", "") != "ifc_opening" &&
             opening.properties.value("ifc_type", "") != "IFCOPENINGELEMENT") continue;
         const auto relation = hosts.find(opening.id);
@@ -3995,6 +4574,8 @@ IfcProjectImportResult import_project_ifc(std::string_view bytes,
             add_diagnostic(result.diagnostics, "#" + std::to_string(record.id), record.type,
                 "fill_semantics_not_reconstructed");
 #ifdef SKETCH_IFC_NATIVE_GEOMETRY
+    if (supported_units) reconstruct_corner_windows(parsed,metadata_by_id,meshes_by_id,roof_relations,
+        aggregate_parents,native_ledger,argument_count,limits,result);
     // Reserve the existing candidates' cost first, then admit native additions
     // against one file-wide budget. A declined native carrier stays retained;
     // it cannot make an otherwise usable worker response exceed admission cost.
@@ -4052,15 +4633,17 @@ IfcProjectImportResult import_project_ifc(std::string_view bytes,
         // A cross-product child/host collision must not escape as an active
         // native graph. Preserve every implicated native carrier as source.
         for (auto& entity : result.entities) if (entity.type == "stair" || entity.type == "railing" ||
+            entity.type == "corner_window" || (entity.type == "opening" && entity.properties.contains("corner_window_id")) ||
             (entity.type == "roof" && roof_has_skylights(entity.properties))) {
             const auto source = entity.extensions.at("ifc_source");
             const auto metadata = entity.extensions.at("ifc_vertex_properties");
             const bool roof = entity.type == "roof";
+            const bool corner = entity.type == "corner_window" || entity.properties.contains("corner_window_id");
             entity.type = "ifc_reference";
             entity.properties = {{"ifc_name",entity.id},{"ifc_type",source.at("record_type")}};
             entity.extensions = {{"ifc_source",source},{"ifc_vertex_properties",metadata}};
             add_diagnostic(result.diagnostics,"#"+std::to_string(source.at("record_id").get<int>()),
-                source.at("record_type").get<std::string>(), roof ?
+                source.at("record_type").get<std::string>(), corner ? "native_corner_detached_graph_inconsistent" : roof ?
                     "native_roof_detached_graph_inconsistent" : "native_stair_or_railing_detached_graph_inconsistent");
         }
     }

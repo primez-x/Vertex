@@ -67,4 +67,35 @@ void validate_native_dxf_phase_auxiliary_source(const Entity& source,
     const std::map<std::string, Entity, std::less<>>& authored);
 [[nodiscard]] Boundary native_dxf_phase_auxiliary_source_plan(const Entity& source,
     const std::map<std::string, Entity, std::less<>>& authored);
+
+// Corner aggregates use graph V5 inside the V9 complete-source carrier. They
+// never enter the historical V8 family allowlist or single-host contracts.
+// Owners return their four sorted host/cut IDs; marked opening children return
+// their owner ID (their wall_id is handled by the ordinary opening contract).
+// Either backlink marker requires a complete typed pair and a bare indexed cut.
+[[nodiscard]] std::vector<std::string> native_dxf_corner_window_source_dependencies(const Entity& source);
+// Changes only wall_ids/opening_ids or corner_window_id, retaining metadata and
+// numeric representation. Owner identity is changed separately. Atomic on
+// failure; the complete destination map/reservation is the caller's authority.
+void remap_native_dxf_corner_window_source_dependencies(Entity& source,
+    const std::map<std::string, std::string, std::less<>>& body_mapping);
+[[nodiscard]] std::optional<DrawingContext> native_dxf_corner_window_source_context(
+    const Entity& source, const std::map<std::string, Entity, std::less<>>& authored,
+    const ProjectOrganization& organization);
+// Reserve raw complete-state, full host-roster and ownership/placement work
+// before any corner codec or global phase replay. Native construction consumers
+// additionally request native_geometry; structural/dimension passes do not
+// charge native nonlinear work or projected primitives. No-op for non-owners;
+// attempts share architectural_work and failed work stays charged.
+void admit_native_dxf_corner_window_source_work(const Entity& source,
+    const std::map<std::string, Entity, std::less<>>& authored,
+    NativeDxfWallSourceWorkBudget& budget, bool native_geometry = false);
+// Actual map identity/envelope equality and global saved-state ownership are
+// required, including inactive alternatives and every actual hosted opening.
+void validate_native_dxf_corner_window_source(const Entity& source,
+    const std::map<std::string, Entity, std::less<>>& authored);
+// Uses the actual active graph, resolved physical hosts, derived cuts and the
+// native fused frame/two-pane factory. Without native geometry it refuses.
+[[nodiscard]] Boundary native_dxf_corner_window_source_plan(const Entity& source,
+    const std::map<std::string, Entity, std::less<>>& authored);
 } // namespace sketch

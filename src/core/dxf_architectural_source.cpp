@@ -1,6 +1,7 @@
 #include "sketch/dxf_architectural_source.hpp"
 #include "sketch/dxf_project_exchange.hpp"
 #include "sketch/document_wall.hpp"
+#include "sketch/corner_window.hpp"
 #include "sketch/roof_join_semantics.hpp"
 #include "sketch/terrain_surface.hpp"
 #ifdef SKETCH_DXF_NATIVE_GEOMETRY
@@ -794,6 +795,243 @@ Boundary native_dxf_phase_auxiliary_source_plan(const Entity& source,
 #else
     (void)members;
     throw std::invalid_argument("phase auxiliary wall join native geometry unavailable");
+#endif
+}
+
+namespace {
+bool corner_marked(const Entity& source) {
+    return source.properties.is_object() &&
+        (source.properties.contains("corner_window_id") || source.properties.contains("corner_leg"));
+}
+
+std::vector<std::string> raw_corner_members(const Entity& source) {
+    (void)phase_owner_id(Json(source.id));
+    if (!source.properties.is_object() || !source.extensions.is_object())
+        throw std::invalid_argument("corner source envelope invalid");
+    const auto& properties = source.properties;
+    if (source.type != "corner_window") {
+        if (source.type != "opening" || !corner_marked(source) ||
+            !properties.contains("corner_window_id") || !properties.contains("corner_leg") ||
+            !properties.at("corner_leg").is_number_integer() ||
+            (properties.at("corner_leg") != 0 && properties.at("corner_leg") != 1) ||
+            !properties.contains("wall_id") || !properties.contains("opening_kind") ||
+            properties.at("opening_kind") != "opening" || properties.contains("opening_assembly") ||
+            properties.contains("door_operation") || properties.contains("vertical_placement"))
+            throw std::invalid_argument("corner source child requires indexed bare cut");
+        const auto owner = phase_owner_id(properties.at("corner_window_id"));
+        const auto wall = phase_owner_id(properties.at("wall_id"));
+        if (owner == source.id || wall == source.id || owner == wall)
+            throw std::invalid_argument("corner source child identities overlap");
+        return {owner};
+    }
+    if (!properties.contains("version") || !properties.at("version").is_number_integer() ||
+        properties.at("version") != 1 || properties.contains("corner_window_id") ||
+        properties.contains("corner_leg") || properties.contains("door_operation") ||
+        properties.contains("vertical_placement"))
+        throw std::invalid_argument("corner source owner dialect invalid");
+    std::set<std::string, std::less<>> members{source.id};
+    for (const auto* slot : {"wall_ids", "opening_ids"}) {
+        const auto& values = properties.at(slot);
+        if (!values.is_array() || values.size() != 2)
+            throw std::invalid_argument("corner source requires exactly two hosts and cuts");
+        for (const auto& value : values)
+            if (!members.insert(phase_owner_id(value)).second)
+                throw std::invalid_argument("corner source identities overlap");
+    }
+    const auto& ends = properties.at("at_start");
+    const auto& widths = properties.at("widths_m");
+    if (!ends.is_array() || ends.size() != 2 || !ends[0].is_boolean() || !ends[1].is_boolean() ||
+        !widths.is_array() || widths.size() != 2 || !widths[0].is_number() || !widths[1].is_number() ||
+        !properties.at("sill_m").is_number() || !properties.at("height_m").is_number() ||
+        !properties.at("opening_assembly").is_object())
+        throw std::invalid_argument("corner source raw shape invalid");
+    members.erase(source.id);
+    return {members.begin(), members.end()};
+}
+
+void require_actual_corner(const Entity& source,
+    const std::map<std::string, Entity, std::less<>>& authored) {
+    const auto found = authored.find(source.id);
+    if (source.type != "corner_window" || found == authored.end() || found->second.id != source.id ||
+        found->second.type != source.type || found->second.required != source.required ||
+        found->second.properties.dump() != source.properties.dump() ||
+        found->second.extensions.dump() != source.extensions.dump())
+        throw std::invalid_argument("corner source requires its actual authored owner");
+}
+}
+
+std::vector<std::string> native_dxf_corner_window_source_dependencies(const Entity& source) {
+    return raw_corner_members(source);
+}
+
+void remap_native_dxf_corner_window_source_dependencies(Entity& source,
+    const std::map<std::string, std::string, std::less<>>& mapping) {
+    if (source.type != "corner_window" && !corner_marked(source)) return;
+    // The caller has already moved the owner identity. An allocated target may
+    // legally reuse another original source spelling; do not validate a mixed
+    // source/destination namespace as though it were the final actual graph.
+    auto original = source;
+    std::optional<std::string> original_id;
+    for (const auto& [id, target] : mapping) if (target == source.id) {
+        if (original_id) throw std::invalid_argument("corner source owner mapping not injective");
+        original_id = phase_owner_id(Json(id));
+    }
+    if (!original_id) throw std::invalid_argument("corner source mapped owner identity missing");
+    original.id = *original_id;
+    const auto members = raw_corner_members(original);
+    auto result = source;
+    std::set<std::string, std::less<>> targets{phase_owner_id(Json(source.id))};
+    for (const auto& id : members)
+        if (!targets.insert(phase_owner_id(Json(mapping.at(id)))).second)
+            throw std::invalid_argument("corner source destination identities overlap");
+    if (source.type == "corner_window") {
+        for (const auto* slot : {"wall_ids", "opening_ids"})
+            for (auto& id : result.properties[slot]) id = mapping.at(phase_owner_id(id));
+    } else {
+        result.properties["corner_window_id"] = mapping.at(phase_owner_id(source.properties.at("corner_window_id")));
+        const auto wall = phase_owner_id(Json(mapping.at(phase_owner_id(original.properties.at("wall_id")))));
+        if (!targets.insert(wall).second) throw std::invalid_argument("corner source child destination identities overlap");
+        auto checked = result;
+        checked.properties["wall_id"] = wall;
+        (void)raw_corner_members(checked);
+    }
+    if (source.type == "corner_window") (void)raw_corner_members(result);
+    source = std::move(result);
+}
+
+std::optional<DrawingContext> native_dxf_corner_window_source_context(const Entity& source,
+    const std::map<std::string, Entity, std::less<>>& authored, const ProjectOrganization& organization) {
+    require_actual_corner(source, authored);
+    const auto members = raw_corner_members(source);
+    const auto result = organization.drawing_context(source.id);
+    if (!result || !result->complete())
+        throw std::invalid_argument("corner source owner hierarchy unresolved");
+    for (const auto& id : members) {
+        const auto found = authored.find(id);
+        const auto context = organization.drawing_context(id);
+        const bool host = source.properties.at("wall_ids")[0] == id || source.properties.at("wall_ids")[1] == id;
+        if (found == authored.end() || found->second.id != id || found->second.type != (host ? "wall" : "opening") ||
+            !context || *context != *result)
+            throw std::invalid_argument("corner source actual member hierarchy/type differs");
+    }
+    return result;
+}
+
+void admit_native_dxf_corner_window_source_work(const Entity& source,
+    const std::map<std::string, Entity, std::less<>>& authored, NativeDxfWallSourceWorkBudget& budget,
+    bool native_geometry) {
+    if (source.type != "corner_window") return;
+    constexpr std::size_t limit = 67'108'864;
+    const auto charge = [&](std::size_t amount) {
+        if (budget.architectural_work > limit || amount > limit - budget.architectural_work) {
+            budget.architectural_work = limit;
+            throw std::invalid_argument("cumulative corner source architectural work limit");
+        }
+        budget.architectural_work += amount;
+    };
+    charge(1);
+    const auto admit_raw = [&](const Entity& owner) {
+        std::size_t nodes = 0;
+        try { nodes = phase_raw_envelope(owner); }
+        catch (...) { charge(2 * 65'536 * 32); throw; }
+        charge(nodes * 32);
+        return nodes;
+    };
+    (void)admit_raw(source);
+    require_actual_corner(source, authored);
+    (void)raw_corner_members(source);
+    // The global corner validator reads every owner, indexed cut and registry,
+    // including inactive saved states. Placement also reads the shared hierarchy.
+    if (authored.size() > limit / 128) throw std::invalid_argument("corner source actual graph size limit");
+    charge(authored.size() * 128);
+    std::size_t corner_count = 0, raw_openings = 0, phase_work = 0, floors = 0, level_work = 0;
+    for (const auto& [id, owner] : authored) {
+        if (id != owner.id) throw std::invalid_argument("corner source actual map identity differs");
+        if (owner.type == "corner_window") ++corner_count;
+        if (owner.type == "opening") ++raw_openings;
+        if (owner.type != "corner_window" && owner.type != "wall" && owner.type != "opening" &&
+            owner.type != "model_phases" && owner.type != "vertical_levels" && owner.type != "property" &&
+            owner.type != "building" && owner.type != "floor" && owner.type != "layer") continue;
+        const auto nodes = id == source.id ? 0 : admit_raw(owner);
+        if (owner.type == "corner_window") (void)raw_corner_members(owner);
+        if (corner_marked(owner)) (void)raw_corner_members(owner);
+        if (owner.type == "model_phases") {
+            const auto& model = owner.properties.at("model");
+            const auto& members = model.at("entity_ids");
+            const auto& alternatives = model.at("alternatives");
+            if (!members.is_array() || members.size() > 16'384 || !alternatives.is_array() || alternatives.size() > 256)
+                throw std::invalid_argument("corner source saved phase work limit");
+            const auto amount = (members.size() + 1) * (alternatives.size() + 1) * 32;
+            if (amount > limit || phase_work > limit - amount)
+                throw std::invalid_argument("corner source cumulative saved phase work limit");
+            phase_work += amount;
+        }
+        if (owner.type == "floor" && owner.properties.contains("vertical_level_binding")) ++floors;
+        if (owner.type == "vertical_levels") {
+            const auto& model = owner.properties.at("model");
+            const auto& levels = model.at("levels"); const auto& links = model.at("links");
+            if (!levels.is_array() || levels.size() > 4096 || !links.is_array() || links.size() > 8192)
+                throw std::invalid_argument("corner source raw level graph limit");
+            const auto cost = nodes + links.size() * (links.size() + 2 * levels.size()) +
+                (levels.size() + links.size() + 1) * 64;
+            level_work = std::max(level_work, cost);
+        }
+    }
+    if (corner_count > limit / 1024 || raw_openings > limit / 1024 / std::max<std::size_t>(1, corner_count))
+        throw std::invalid_argument("corner source global ownership work limit");
+    charge(corner_count * (raw_openings + 1) * 1024);
+    charge(phase_work);
+    const auto passes = (native_geometry ? 4 : 1) * (floors + 3);
+    if (level_work > limit / 32 / passes) throw std::invalid_argument("corner source level placement work limit");
+    charge(level_work * passes * 32);
+    std::vector<std::string> hosts;
+    for (const auto& id : source.properties.at("wall_ids")) hosts.push_back(phase_owner_id(id));
+    const auto openings = phase_wall_openings(hosts, authored);
+    std::size_t primitives = 96; // Joined frame, post and two distinct panes.
+    for (const auto& id : hosts) {
+        const auto& wall = authored.at(id);
+        if (wall.type != "wall" || !wall.properties.contains("baseline") || !wall.properties.at("baseline").is_object())
+            throw std::invalid_argument("corner source requires actual physical host baselines");
+        std::size_t layers = 1;
+        if (const auto rows = wall.properties.find("layers"); rows != wall.properties.end()) {
+            if (!rows->is_array() || rows->size() > 32) throw std::invalid_argument("corner source host layer limit");
+            layers = std::max<std::size_t>(1, rows->size());
+        }
+        // Every opening may also derive a pocket recess from its operation.
+        // Recesses are decoded from actual openings, never from opaque wall
+        // metadata; reserve both cut and recess edge families before decoding.
+        const auto edges = layers * (48 + openings.at(id).size() * 64);
+        if (edges > 8192 || primitives > 8192 - edges) throw std::invalid_argument("corner source host topology limit");
+        charge(edges * 32); // Structural decoding of the actual host roster.
+        primitives += edges;
+    }
+    if (!native_geometry) return;
+    if (primitives > limit / 32 / primitives) throw std::invalid_argument("corner source nonlinear geometry work limit");
+    charge(primitives * primitives * 32);
+    if (budget.segments > 50'000 || primitives > 50'000 - budget.segments)
+        throw std::invalid_argument("corner source cumulative primitive limit");
+    budget.segments += primitives;
+}
+
+void validate_native_dxf_corner_window_source(const Entity& source,
+    const std::map<std::string, Entity, std::less<>>& authored) {
+    require_actual_corner(source, authored);
+    (void)raw_corner_members(source);
+    validate_corner_window_state(authored);
+}
+
+Boundary native_dxf_corner_window_source_plan(const Entity& source,
+    const std::map<std::string, Entity, std::less<>>& authored) {
+    validate_native_dxf_corner_window_source(source, authored);
+#ifdef SKETCH_DXF_NATIVE_GEOMETRY
+    const auto value = parse_corner_window(source);
+    const std::vector<std::string> members(value.wall_ids.begin(), value.wall_ids.end());
+    const auto decoded = phase_decode_join_walls(source, members, authored);
+    const std::array<Wall, 2> walls{decoded.at(0), decoded.at(1)};
+    const auto cuts = corner_window_cuts(value, walls);
+    return project_building_shape_plan(make_corner_window(walls, cuts, value.assembly));
+#else
+    throw std::invalid_argument("corner source manufactured native geometry unavailable");
 #endif
 }
 } // namespace sketch

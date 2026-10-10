@@ -64,6 +64,9 @@ struct DxfProjectImportResult {
     // active CAD block against this graph; entities contains disjoint legacy
     // candidates only. Inactive owners have no geometry-currentness claim.
     // Source evidence cannot become live owners without actual destination binding.
+    // Graph V5 adds complete corner-window cohorts and their owner/leg support
+    // inside the unchanged V9 carrier, including unphased authoring graphs.
+    // Historical V5/V7/V8 single-host records cannot transport these cohorts.
     std::optional<nlohmann::json> phase_source_graph;
     NativeDxfPhaseSourceAssets phase_source_assets;
 

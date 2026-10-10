@@ -10,6 +10,7 @@
 #include "sketch/measurement_linework_source.hpp"
 #include "sketch/wall_measurement.hpp"
 #include "sketch/boundary_integrity.hpp"
+#include "sketch/boundary_dimension.hpp"
 #include "sketch/site_frame.hpp"
 #include "sketch/measurement_linework.hpp"
 #ifdef SKETCH_PHYSICAL_ROOMS
@@ -166,6 +167,19 @@ bool support_type(std::string_view type) {
 bool source_type(std::string_view type) {
     return body_type(type) || context_type(type) || support_type(type) || type == "assembly_model" || type == "model_phases";
 }
+bool corner_graph_semantics(const Owners& owners) {
+    return std::any_of(owners.begin(), owners.end(), [](const auto& row) {
+        const auto& owner = row.second;
+        const auto& properties = owner.properties;
+        if (owner.type == "corner_window" || properties.contains("corner_window_id") || properties.contains("corner_leg"))
+            return true;
+        if (can_recognize_boundary_dimension_entity_type(owner.type) && properties.contains("dimension_version") &&
+            properties.at("dimension_version") == 5) return true;
+        return native_dxf_sheet_view_source_type(owner.type) && properties.contains("model") &&
+            properties.at("model").is_object() && properties.at("model").contains("version") &&
+            properties.at("model").at("version") == 9;
+    });
+}
 const Entity& actual(const Owners& owners, const std::string& id, std::string_view type = {}) {
     const auto found = owners.find(id);
     require(found != owners.end(), "missing source owner " + id);
@@ -264,7 +278,17 @@ References dependencies(const Entity& owner, const Owners& owners, NativeDxfWall
         }
         return result; // Other catalog fields and nested metadata stay opaque.
     } else if (body_type(owner.type)) {
-        for (const auto& id : native_dxf_wall_source_dependency_ids(owner)) add(id);
+        const bool corner_source = owner.type == "corner_window" || (owner.type == "opening" &&
+            (owner.properties.contains("corner_window_id") || owner.properties.contains("corner_leg")));
+        if (corner_source) {
+            // Legacy V5-V8 helpers deliberately refuse coordinated corners.
+            // Retain a cut's actual host through this graph's typed contract.
+            if (owner.type == "opening") add(reference(owner.properties.at("wall_id")), "wall");
+            for (const auto& id : native_dxf_corner_window_source_dependencies(owner))
+                add(id, owner.type == "opening" ? "corner_window" : "");
+        } else {
+            for (const auto& id : native_dxf_wall_source_dependency_ids(owner)) add(id);
+        }
         for (const auto& id : native_dxf_architectural_source_catalog_ids(owner)) add(id, "assembly_model");
         if (native_dxf_phase_auxiliary_source_type(owner.type))
             for (const auto& id : native_dxf_phase_auxiliary_source_dependencies(owner)) add(id);
@@ -462,11 +486,12 @@ public:
             host = reference(value.at("stair_id")); (void)target(host, "stair");
         }
         if (!host.empty()) merge(result, resolve(host));
-        else if (owner.type == "wall_join" || owner.type == "roof_join") {
-            const bool wall = owner.type == "wall_join";
+        else if (owner.type == "wall_join" || owner.type == "roof_join" || owner.type == "corner_window") {
+            const bool wall = owner.type != "roof_join";
             const auto& members = owner.properties.at(wall ? "wall_ids" : "roof_ids");
             require(members.is_array() && members.size() >= 2 && members.size() <= limits_.maximum_join_members,
                 "frame join member inventory limit");
+            require(owner.type != "corner_window" || members.size() == 2, "frame corner host inventory differs");
             Ids distinct;
             for (const auto& member : members) {
                 const auto member_id = reference(member);
@@ -745,6 +770,8 @@ std::optional<DrawingContext> source_context(const Entity& owner, const Owners& 
     }
     if (native_dxf_phase_auxiliary_source_type(owner.type))
         return native_dxf_phase_auxiliary_source_context(owner, owners, organization);
+    if (owner.type == "corner_window")
+        return native_dxf_corner_window_source_context(owner, owners, organization);
     return native_dxf_architectural_source_context(owner, owners, organization);
 }
 std::vector<std::string> context_owners(const Entity& owner, const Owners& owners,
@@ -819,8 +846,14 @@ void semantic_graph(const NativeDxfPhaseSourceGraph& graph, NativeDxfWallSourceW
     // can inspect actual hosts. The raw source remains the representation.
     for (const auto& id : graph.catalog_ids) admit_complete_assembly_catalog_source(graph.entities.at(id), budget.catalog_transfer,
         AssemblyCatalogSourceReferencePolicy::document_authoring);
+    // Sheet dependency gathering can resolve an actual corner leg. Reserve the
+    // complete owner/host/cut and saved-state passes before support consumers.
+    for (const auto& id : graph.body_ids)
+        admit_native_dxf_corner_window_source_work(graph.entities.at(id), graph.entities, budget);
     std::map<std::string, References, std::less<>> reached;
     for (const auto& [id, owner] : graph.entities) {
+        require(!(owner.properties.contains("corner_window_id") || owner.properties.contains("corner_leg")) ||
+            owner.type == "opening", "corner cut qualifier on wrong role " + id);
         auto refs = dependencies(owner, graph.entities, budget);
         for (const auto& [dependency, role] : refs) (void)actual(graph.entities, dependency, role);
         if (owner.type == "assembly_model") {
@@ -887,6 +920,7 @@ void semantic_graph(const NativeDxfPhaseSourceGraph& graph, NativeDxfWallSourceW
             require(proof == owner, "local stair child witness changed source");
         }
         if (native_dxf_phase_auxiliary_source_type(owner.type)) validate_native_dxf_phase_auxiliary_source(owner, graph.entities);
+        if (owner.type == "corner_window") validate_native_dxf_corner_window_source(owner, graph.entities);
         if (native_dxf_annotation_source_type(owner.type)) {
             admit_native_dxf_annotation_source_work(owner, graph.entities, budget);
             validate_native_dxf_annotation_source(owner, graph.entities, &budget);
@@ -943,10 +977,11 @@ Json unchecked_encode(const NativeDxfPhaseSourceGraph& graph, NativeDxfWallSourc
     const bool sheet_companions = std::any_of(graph.support_ids.begin(), graph.support_ids.end(), [&](const auto& id) {
         return native_dxf_sheet_view_source_type(graph.entities.at(id).type);
     });
-    Json value{{"version", !graph.assets.empty() ? 4 : graph.support_ids.empty() ? 1 : sheet_companions ? 3 : 2}, {"entities", std::move(entities)}, {"body_ids", graph.body_ids},
+    const bool corners = corner_graph_semantics(graph.entities);
+    Json value{{"version", corners ? 5 : !graph.assets.empty() ? 4 : graph.support_ids.empty() ? 1 : sheet_companions ? 3 : 2}, {"entities", std::move(entities)}, {"body_ids", graph.body_ids},
         {"catalog_ids", graph.catalog_ids}, {"registry_ids", graph.registry_ids}, {"context_ids", graph.context_ids},
         {"enrolled_hierarchy_ids", graph.enrolled_hierarchy_ids}, {"depicted_body_ids", graph.depicted_body_ids}};
-    if (!graph.support_ids.empty() || !graph.assets.empty()) value["support_ids"] = graph.support_ids;
+    if (!graph.support_ids.empty() || !graph.assets.empty() || corners) value["support_ids"] = graph.support_ids;
     if (!graph.assets.empty()) value["asset_manifest"] = encode_native_dxf_phase_asset_manifest(graph.assets, &budget.phase_assets);
     return value;
 }
@@ -1276,6 +1311,9 @@ NativeDxfPhaseSourceGraph mapped_source(const NativeDxfPhaseSourceGraph& source,
         if (original.type == "measurement_linework")
             owner.properties.at("model") = remap_measurement_linework_owner_identity(original.properties.at("model"), owner.id);
         if (body_type(original.type)) {
+            if (original.type == "corner_window" || (original.type == "opening" &&
+                (original.properties.contains("corner_window_id") || original.properties.contains("corner_leg"))))
+                remap_native_dxf_corner_window_source_dependencies(owner, maps.body_owner_ids);
             owner = remap_architectural_material_source_refs(owner, maps.catalog_owner_ids);
             const Entity* host = nullptr;
             if (original.type == "railing" && original.properties.contains("host")) {
@@ -1493,6 +1531,7 @@ void admit_destination_owners(const Owners& owners, NativeDxfWallSourceWorkBudge
         if (body_type(owner.type)) {
             admit_native_dxf_architectural_source_work(owner, owners, budget);
             admit_native_dxf_phase_auxiliary_source_work(owner, owners, budget);
+            admit_native_dxf_corner_window_source_work(owner, owners, budget);
         }
     }
 }
@@ -1630,6 +1669,7 @@ NativeDxfPhaseDestinationBinding destination_binding(const NativeDxfPhaseSourceG
         if (owner.type == "railing" && owner.properties.contains("host"))
             hosted_phase(owner, reference(owner.properties.at("host").at("stair_id")), phases, budget);
         if (native_dxf_phase_auxiliary_source_type(owner.type)) validate_native_dxf_phase_auxiliary_source(owner, combined);
+        if (owner.type == "corner_window") validate_native_dxf_corner_window_source(owner, combined);
     }
     validate_roof_join_ownership(combined);
     if (std::any_of(mapped.support_ids.begin(), mapped.support_ids.end(), [&](const auto& id) {
@@ -1714,12 +1754,15 @@ NativeDxfPhaseSourceGraph decode_native_dxf_phase_source_graph(const Json& value
         require(value.is_object() && value.at("version").is_number_integer() &&
             ((value.at("version") == 1 && value.size() == 8 && !value.contains("support_ids")) ||
              ((value.at("version") == 2 || value.at("version") == 3) && value.size() == 9 && value.contains("support_ids")) ||
-             (value.at("version") == 4 && value.size() == 10 && value.contains("support_ids") && value.contains("asset_manifest"))),
+             (value.at("version") == 4 && value.size() == 10 && value.contains("support_ids") && value.contains("asset_manifest")) ||
+             (value.at("version") == 5 && value.contains("support_ids") &&
+                ((!value.contains("asset_manifest") && value.size() == 9) || (value.contains("asset_manifest") && value.size() == 10)))),
             "unsupported graph schema/version");
-        const bool assets_present = value.at("version") == 4;
+        const bool corner_version = value.at("version") == 5;
+        const bool assets_present = value.contains("asset_manifest");
         if (assets_present) {
             const auto manifest = decode_native_dxf_phase_asset_manifest(value.at("asset_manifest"), &budget.phase_assets);
-            require(!manifest.empty(), "version four requires a nonempty asset manifest");
+            require(!manifest.empty(), "asset-bearing graph requires a nonempty asset manifest");
             bind_native_dxf_phase_asset_manifest(manifest, external_assets, &budget.phase_assets);
         } else require(external_assets.empty() && !value.contains("asset_manifest"), "legacy graph cannot bind external assets");
         const auto& rows = value.at("entities");
@@ -1739,14 +1782,15 @@ NativeDxfPhaseSourceGraph decode_native_dxf_phase_source_graph(const Json& value
         };
         result.body_ids = read_ids("body_ids"); result.catalog_ids = read_ids("catalog_ids");
         result.registry_ids = read_ids("registry_ids"); result.context_ids = read_ids("context_ids");
-        if (value.at("version") == 2 || value.at("version") == 3 || assets_present) {
+        require(corner_version == corner_graph_semantics(result.entities), "corner semantics require exactly graph version five");
+        if (value.at("version") == 2 || value.at("version") == 3 || assets_present || corner_version) {
             result.support_ids = read_ids("support_ids");
-            require(assets_present || !result.support_ids.empty(), "support inventory cannot be empty");
+            require(assets_present || corner_version || !result.support_ids.empty(), "support inventory cannot be empty");
         }
         const bool sheet_companions = std::any_of(result.entities.begin(), result.entities.end(), [](const auto& item) {
             return native_dxf_sheet_view_source_type(item.second.type);
         });
-        require(assets_present || (value.at("version") == 3) == sheet_companions, "sheet/view companions require graph version three");
+        require(assets_present || corner_version || (value.at("version") == 3) == sheet_companions, "sheet/view companions require graph version three");
         result.enrolled_hierarchy_ids = read_ids("enrolled_hierarchy_ids"); result.depicted_body_ids = read_ids("depicted_body_ids");
         asset_pass(external_assets, budget, 1);
         result.assets = external_assets;
@@ -1814,6 +1858,10 @@ NativeDxfPhaseSourceGraph capture_native_dxf_phase_source_graph(const DocumentSn
                     continue;
                 }
                 if (other.type == "opening" && other.properties.contains("wall_id") && reference(other.properties.at("wall_id")) == id) include(other_id);
+                else if (other.type == "corner_window") {
+                    const auto cohort = native_dxf_corner_window_source_dependencies(other);
+                    if (std::find(cohort.begin(), cohort.end(), id) != cohort.end()) include(other_id);
+                }
                 else if (other.type == "railing" && other.properties.contains("host") && reference(other.properties.at("host").at("stair_id")) == id) include(other_id);
                 else if (other.type == "wall_join" || other.type == "roof_join") {
                     const auto reached = other.type == "wall_join" ? native_dxf_phase_auxiliary_source_dependencies(other) :

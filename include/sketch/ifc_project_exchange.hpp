@@ -75,6 +75,10 @@ struct IfcProjectImportResult {
 // curved width_m continues to measure stations along the host arc.
 // Unsupported required objects retain native payload
 // references with diagnostics; this subset does not claim MVD conformance.
+// Coordinated corner windows use one IfcElementAssembly, one connected frame
+// part and two glazing-leg window parts. Each leg fills exactly one actual
+// wall void; parts only aggregate under the spatially contained owner. Exact
+// pane dimensions and proper opening-local frames describe those real solids.
 [[nodiscard]] IfcProjectExportResult export_project_ifc(
     const DocumentSnapshot& document,
     const IfcExchangeLimits& limits = {});
@@ -120,6 +124,13 @@ struct IfcProjectImportResult {
 // and exact meshes; hosted rails require one actual aggregate to a proved
 // same-model stair. Only validated identities are remapped; source organization,
 // level context and extensions remain opaque retained provenance.
+// Corner owners and their two bare cuts publish atomically only after proving
+// the complete actual host/void rosters, unique fill/aggregate relations, proper
+// composed frames, linked metre units and exact native meshes. Malformed,
+// incomplete and mismatching cohorts remain inert retained source. Native
+// owner/host/cut context is detached and resolved elevations are world metres;
+// opaque original properties/extensions remain in the source envelope. Linked
+// dimension annotation source is retained without inventing active targets.
 [[nodiscard]] IfcProjectImportResult import_project_ifc(
     std::string_view bytes,
     const IfcExchangeLimits& limits = {});

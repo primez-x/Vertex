@@ -2,6 +2,7 @@
 
 #include "sketch/annotation_entity_codec.hpp"
 #include "sketch/boundary_dimension.hpp"
+#include "sketch/dxf_architectural_source.hpp"
 #include "sketch/dxf_phase_source.hpp"
 #include "sketch/dxf_project_exchange.hpp"
 #include "sketch/svg_admission.hpp"
@@ -65,10 +66,18 @@ void supported_source(const Entity& source) {
         const auto& kind = p.at("dimension_kind");
         require(((version == 1 || version == 2) &&
                 (kind == "segment_length" || kind == "angle" || kind == "area")) ||
-            (version == 3 && kind == "segment_length") || (version == 4 && kind == "wall_axis_length"),
+            (version == 3 && kind == "segment_length") || (version == 4 && kind == "wall_axis_length") ||
+            (version == 5 && kind == "corner_window_leg_length"),
             "unsupported dimension schema/version/kind");
         require(p.contains("target") && p.at("target").is_object() && p.at("target").contains("entity_id"),
             "missing dimension target owner");
+        if (version == 5) {
+            const auto& target = p.at("target");
+            require(target.size() == 2 && target.contains("corner_leg") &&
+                target.at("corner_leg").is_number_integer() &&
+                target.at("corner_leg") >= 0 && target.at("corner_leg") <= 1,
+                "corner-window target requires only entity_id and numeric corner_leg zero or one");
+        }
     }
 }
 bool owner_override(std::string_view kind) {
@@ -93,7 +102,8 @@ template<class Callback> void references(const Entity& source, const Owners& aut
     NativeDxfWallSourceWorkBudget* work_budget) {
     supported_source(source);
     if (source.type != kAnnotationEntityType) {
-        visit(source.properties.at("target").at("entity_id"), std::string_view{});
+        visit(source.properties.at("target").at("entity_id"),
+            source.properties.at("dimension_version") == 5 ? std::string_view{"corner_window"} : std::string_view{});
         return;
     }
     const auto& state = source.properties.at("state");
@@ -256,7 +266,7 @@ void reserve_target(const Entity& target, NativeDxfWallSourceWorkBudget& budget)
     } else if (can_recognize_boundary_entity_type(target.type)) {
         require(target.properties.contains("segments"), "missing retained target segments");
         count_edges(target.properties.at("segments"));
-    } else require(target.type == "wall", "unsupported dimension target type");
+    } else require(target.type == "wall" || target.type == "corner_window", "unsupported dimension target type");
     require(edges <= 16'384 - growth, "retained target final topology limit");
     edges += growth;
     // Decode/replay and stable-edge/chain resolution may each repeat topology.
@@ -358,6 +368,8 @@ void remap_native_dxf_annotation_source_dependencies(Entity& source,
     // Mapped owners are not present in the source evidence map. Recheck only
     // intrinsic shape/local identities; destination closure is the graph's job.
     (void)native_dxf_annotation_child_identity_ids(result);
+    if (result.type != kAnnotationEntityType && result.properties.at("dimension_version") == 5)
+        require(decode_boundary_dimension_entity(result).supported(), "invalid remapped corner-window dimension");
     source = std::move(result);
 }
 void admit_native_dxf_annotation_source_work(const Entity& source, const Owners& authored,
@@ -410,17 +422,23 @@ void admit_native_dxf_annotation_source_work(const Entity& source, const Owners&
 }
 void validate_native_dxf_annotation_source(const Entity& source, const Owners& authored,
     NativeDxfWallSourceWorkBudget* work_budget) {
+    NativeDxfWallSourceWorkBudget local;
+    auto& budget = work_budget ? *work_budget : local;
     supported_source(source);
     const auto& owner = actual(authored, source.id, source.type);
     require(owner == source, "support owner differs from actual source inventory");
-    for (const auto& [id, role] : native_dxf_annotation_source_dependencies(source, authored, work_budget)) (void)actual(authored, id, role);
+    for (const auto& [id, role] : native_dxf_annotation_source_dependencies(source, authored, &budget)) (void)actual(authored, id, role);
     if (source.type == kAnnotationEntityType) {
         validate_annotation_entity(source);
     }
     else {
         const auto decoded = decode_boundary_dimension_entity(source);
         require(decoded.supported(), "unsupported retained dimension: " + decoded.unsupported_reason);
+        if (decoded.dimension->kind == BoundaryDimensionKind::corner_window_leg_length)
+            admit_native_dxf_corner_window_source_work(actual(authored, decoded.dimension->boundary_id), authored, budget);
         validate_boundary_dimension_target(*decoded.dimension, actual(authored, decoded.dimension->boundary_id));
+        if (decoded.dimension->kind == BoundaryDimensionKind::corner_window_leg_length)
+            (void)resolve_dimension_corner_window_leg_owner(*decoded.dimension, authored);
     }
 }
 } // namespace sketch

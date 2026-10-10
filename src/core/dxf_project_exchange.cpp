@@ -70,6 +70,19 @@ constexpr const char* kPhaseGraphIdentity = "vertex.phase.sources";
 constexpr const char* kPhaseGraphChunk = "PHASE_SOURCE_GRAPH_CHUNK_V1";
 constexpr const char* kPhaseBodyPlan = "PHASE_BODY_PLAN_V1";
 constexpr const char* kPhaseSupportPlan = "PHASE_SUPPORT_PLAN_V1";
+bool corner_source_semantics(const Entity& entity) {
+    return entity.type == "corner_window" || (entity.properties.is_object() &&
+        (entity.properties.contains("corner_window_id") || entity.properties.contains("corner_leg")));
+}
+bool coordinated_corner_source_semantics(const Entity& entity) {
+    if (corner_source_semantics(entity)) return true;
+    if (!entity.properties.is_object()) return false;
+    const auto& properties = entity.properties;
+    return (entity.type == "dimension" && properties.contains("dimension_version") &&
+        properties.at("dimension_version") == 5) ||
+        (entity.type == "sheet_view_model" && properties.contains("model") && properties.at("model").is_object() &&
+            properties.at("model").contains("version") && properties.at("model").at("version") == 9);
+}
 Entity read_catalog_source(const std::string& id, const Json& record);
 std::vector<std::string> catalog_identity_list(const Json& values);
 AssemblyDocumentEntities merged_catalog_source_graph(const NativeDxfPhysicalSourceGraphs& proofs,
@@ -1181,6 +1194,8 @@ DxfBlock architectural_block(const DocumentSnapshot& document, const Entity& ent
 
 Json native_payload(const DocumentSnapshot& document, const Entity& entity,
                     const ConstraintPhaseScope& scope) {
+    if (corner_source_semantics(entity))
+        throw std::invalid_argument("corner aggregate requires complete graph V5 transport");
     Json ids = Json::array();
     if (entity.type == "wall") for (const auto* opening : host_openings(document, entity.id, scope))
         ids.push_back(opening->id);
@@ -1292,6 +1307,17 @@ DxfBlock linework_plan_block(const Entity& entity, std::string name, const std::
 DxfBlock source_plan_block(const std::map<std::string, Entity, std::less<>>& graph,
     const Entity& entity, std::string name, const std::string& layer,
     std::vector<DxfProjectDiagnostic>& diagnostics) {
+    if (entity.type == "corner_window") {
+        DxfDrawing plan;
+        const auto edges = native_dxf_corner_window_source_plan(entity, graph);
+        if (edges.empty() || edges.size() > 4096)
+            throw std::invalid_argument("corner manufactured projected primitive limit");
+        const auto previous = diagnostics.size();
+        for (const auto& edge : edges) add_segment_as_dxf(plan, edge, layer, diagnostics, entity.id, entity.type);
+        if (diagnostics.size() != previous)
+            throw std::invalid_argument("corner manufactured plan not representable");
+        return {std::move(name), {}, std::move(plan.lines), std::move(plan.arcs), {}, {}, {}};
+    }
     if (native_dxf_architectural_source_type(entity.type)) {
         DxfDrawing plan;
         const auto edges = native_dxf_architectural_source_plan(entity, graph);
@@ -2130,6 +2156,8 @@ void export_native_entity(const DocumentSnapshot& document, const Entity& entity
             }
             // Export uses the actual current document inventory. Entity-only
             // resolution cannot admit physical-room targets or their holes.
+            if (source_budget && decoded.dimension->kind == BoundaryDimensionKind::corner_window_leg_length)
+                admit_native_dxf_corner_window_source_work(owner->second, document.entities(), *source_budget);
             const auto resolved = resolve_current_boundary_dimension(*decoded.dimension, document);
             const auto text = entity.properties.value("display_text", std::string{});
             const auto text_rotation = decoded.dimension->presentation
@@ -2747,6 +2775,8 @@ NativeCandidate decode_native_candidate(const DxfBlock& block, std::size_t inser
     NativeCandidate candidate{{payload.at("id").get<std::string>(), payload.at("type").get<std::string>(),
                                physical_source ? original_properties : payload.at("properties"), original_required,
                                physical_source ? original_extensions : payload.at("extensions")}, {}, insert_index, &block};
+    if (corner_source_semantics(candidate.entity))
+        throw std::invalid_argument("legacy native carrier cannot transport a corner aggregate");
     if (candidate.entity.id.empty() || candidate.entity.id.size() > 255 ||
         (boundary ? !can_recognize_boundary_entity_type(candidate.entity.type) :
          candidate.entity.type != "wall" && candidate.entity.type != "opening" && !linework &&
@@ -3090,7 +3120,7 @@ PhasePlans phase_support_plans(const NativeDxfPhaseSourceGraph& graph,
                 if (graph.entities.at(dimension.boundary_id).extensions.contains("physical_wall_room"))
                     admit_native_dxf_phase_physical_room_checks(graph.entities, &budget);
                 DxfProjectExportResult projected;
-                export_native_entity(*snapshot, owner, projected, scope);
+                export_native_entity(*snapshot, owner, projected, scope, true, &budget);
                 for (const auto& item : projected.diagnostics)
                     if (item.code != "dimension_area_exported_as_quantity_callout" && item.code != "dimension_chain_exported_as_total_callout")
                         throw std::invalid_argument("V9 support dimension CAD projection unavailable: " + item.code);
@@ -3118,6 +3148,10 @@ PhasePlans phase_support_plans(const NativeDxfPhaseSourceGraph& graph,
 
 PhasePlans phase_source_plans(const NativeDxfPhaseSourceGraph& graph,
     NativeDxfWallSourceWorkBudget& budget) {
+    for (const auto& [id, owner] : graph.entities) {
+        (void)id;
+        admit_native_dxf_corner_window_source_work(owner, graph.entities, budget);
+    }
     // Keep full source ownership for validation and saved phase evaluation.
     // Only the private geometry observation omits inactive bodies: otherwise
     // an inactive opening would cut its still-active wall's CAD depiction.
@@ -3180,7 +3214,9 @@ PhasePlans phase_source_plans(const NativeDxfPhaseSourceGraph& graph,
     PhasePlans result;
     for (const auto& id : graph.depicted_body_ids) {
         const auto& owner = graph.entities.at(id);
-        const auto context = native_dxf_phase_auxiliary_source_type(owner.type)
+        const auto context = owner.type == "corner_window"
+            ? native_dxf_corner_window_source_context(owner, graph.entities, organization)
+            : native_dxf_phase_auxiliary_source_type(owner.type)
             ? native_dxf_phase_auxiliary_source_context(owner, graph.entities, organization)
             : native_dxf_architectural_source_context(owner, graph.entities, organization);
         if (!context) throw std::invalid_argument("V9 active source context missing");
@@ -3217,6 +3253,8 @@ PhasePlans phase_source_plans(const NativeDxfPhaseSourceGraph& graph,
         } else {
             // V9 raw graph admission owns phase/qualified-join metadata. The
             // V8 source validator is deliberately not used on this graph.
+            if (owner.type == "corner_window")
+                admit_native_dxf_corner_window_source_work(owner, active, budget, true);
             block = source_plan_block(active, owner, "", layer, diagnostics);
         }
         if (!diagnostics.empty()) throw std::invalid_argument("V9 active source plan unavailable");
@@ -3466,7 +3504,8 @@ std::set<std::size_t> import_phase_carrier(const DxfDrawing& drawing, bool sourc
     auto value = bounded_phase_carrier_json(encoded, budget);
     NativeDxfPhaseSourceAssets source_assets;
     const NativeDxfPhaseSourceAssets* actual_assets = &source_assets;
-    if (value.is_object() && value.contains("version") && value.at("version") == 4) {
+    if (value.is_object() && value.contains("version") &&
+        (value.at("version") == 4 || (value.at("version") == 5 && value.contains("asset_manifest")))) {
         const auto manifest = decode_native_dxf_phase_asset_manifest(value.at("asset_manifest"), &budget.phase_assets);
         if (serialization_assets) {
             // Complete export checks the actual payloads before encoding them;
@@ -3480,7 +3519,8 @@ std::set<std::size_t> import_phase_carrier(const DxfDrawing& drawing, bool sourc
     } else if (asset_carrier.has_assets || (serialization_assets && !serialization_assets->empty()))
         throw std::invalid_argument("Unexpected V9 asset payload carrier");
     const auto graph = decode_native_dxf_phase_source_graph(value, &budget, *actual_assets);
-    if (graph.registry_ids.empty() || bodies.size() != graph.depicted_body_ids.size() || support.size() != graph.support_ids.size())
+    if ((graph.registry_ids.empty() && value.at("version") != 5) ||
+        bodies.size() != graph.depicted_body_ids.size() || support.size() != graph.support_ids.size())
         throw std::invalid_argument("V9 registry/depicted inventory differs");
     // Legacy and V9 owners have one source identity namespace, including failed
     // legacy declarations. A rejected competing body may not disappear and
@@ -4180,6 +4220,8 @@ void preflight_project_expansion(const DxfDrawing& drawing, const DxfExchangeLim
 } // namespace
 
 Json native_dxf_wall_source_dependency_graph(const Entity& entity) {
+    if (corner_source_semantics(entity))
+        throw std::invalid_argument("historical wall-source graph cannot transport corner ownership");
     const bool boundary = can_recognize_boundary_entity_type(entity.type);
     auto graph = boundary ? native_dxf_boundary_dependency_graph(entity) :
         native_dxf_boundary_dependency_graph(Entity{"dependencies", "boundary", Json::object(), false, Json::object()});
@@ -4261,6 +4303,8 @@ std::vector<std::string> native_dxf_wall_source_dependency_ids(const Entity& ent
 }
 
 void validate_native_dxf_wall_source_member(const Entity& entity) {
+    if (corner_source_semantics(entity))
+        throw std::invalid_argument("corner ownership requires complete graph V5 transport");
     if (!wall_source_member(entity)) throw std::invalid_argument("V5 marker required");
     const auto& marker = entity.extensions.at("vertex_dxf_boundary");
     if (!marker.at("version").is_number_integer() || marker.size() != 3 ||
@@ -5801,7 +5845,7 @@ DxfProjectExportResult export_project_dxf(const DocumentSnapshot& document,
     NativeDxfWallSourceWorkBudget wall_source_budget;
     std::set<std::string> phase_owned;
     const bool phase_operation = std::any_of(document.entities().begin(), document.entities().end(), [](const auto& owner) {
-        return owner.second.type == "model_phases";
+        return owner.second.type == "model_phases" || coordinated_corner_source_semantics(owner.second);
     });
     if (phase_operation) {
         try {
@@ -5810,7 +5854,8 @@ DxfProjectExportResult export_project_dxf(const DocumentSnapshot& document,
             // inventory. Include unregistered supported bodies/catalogs too,
             // so a legacy proof cannot take ownership of shared source context.
             for (const auto& [id, owner] : document.entities())
-                if (owner.type == "model_phases" || native_dxf_annotation_source_type(owner.type) || native_dxf_constraint_source_type(owner.type) ||
+                if (owner.type == "model_phases" || coordinated_corner_source_semantics(owner) ||
+                    native_dxf_annotation_source_type(owner.type) || native_dxf_constraint_source_type(owner.type) ||
                     native_dxf_sheet_view_source_type(owner.type) ||
                     (is_model_phase_entity_type(owner.type) && owner.type != "building" && owner.type != "floor"))
                     seeds.push_back(id);

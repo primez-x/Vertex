@@ -19,7 +19,7 @@ Adapter IDs are proposed local worker identities, not registered implementations
 | `local.proj.worker` | PROJ bundled-resource coordinate operations | Local resources only; networking and remote callbacks disabled; `proj.db` mandatory |
 
 These are target subsets, not conformance or round-trip claims. IFC editable
-reconstruction requires a future adapter to prove reliability per entity and
+reconstruction requires each adapter to prove reliability per entity and
 preserve identifiable unreconstructed content. PDF declares no editable text or
 geometry extraction. Existing reference-asset calibration remains a separate
 contract. The PDF allowlist is exactly Qt6Core, Qt6Gui, Qt6Pdf, Qt6PrintSupport;
@@ -62,6 +62,37 @@ monitor; and measured worker failure recovery. The local PROJ preflight test
 does not prove the full import-worker sandbox or external network observation.
 Profile unit tests exercise only the portable declaration and fail-closed
 readiness decision, using synthetic attestations.
+
+## Coordinated corner-window exchange (source integration)
+
+The source implementation adds actual two-host corner windows to both native
+exchange paths. DXF uses graph five inside the complete-source V9 carrier,
+including projects without a phase registry. It carries actual owner/host/cut
+closure, full opening rosters, source context, design alternatives and supported
+owner/leg dimensions. A native projected assembly supplies its visible CAD plan;
+metadata alone does not activate an editable corner. Historical single-host
+carriers retain their narrower contracts.
+
+IFC4 uses one assembly with a shared frame/post part and two glazing-leg window
+parts, each filling one actual wall void. This follows the single-fill inverse
+cardinality and assembly containment rules in the official
+[IfcElement](https://standards.buildingsmart.org/IFC/RELEASE/IFC4/ADD2_TC1/HTML/schema/ifcproductextension/lexical/ifcelement.htm)
+and [IfcElementAssembly](https://standards.buildingsmart.org/IFC/RELEASE/IFC4/FINAL/HTML/schema/ifcproductextension/lexical/ifcelementassembly.htm)
+definitions. Only the assembly has spatial containment; its parts have
+nonduplicated real solids. Complete active corner cuts are staged together so
+windows sharing a wall do not depend on one another's export order. Typed
+recovery requires the actual linked metre units, both unique host/void
+relationships, exact manufactured geometry and original cohort evidence.
+
+Separate authored host envelopes preserve raw elevation, level/context and
+metadata beside resolved geometry descriptors, including world-frame exports.
+Original provenance survives re-export without recursive carrier growth.
+Source context/elevation authoring remains retained provenance while imported
+geometry uses resolved world metres and reviewed destination context. Adjacent
+ordinary opening assemblies require their independent fill proof. General IFC
+associative dimension activation remains a gap; retained annotation source is
+not a live binding. No native round trip, external viewer, Reference View,
+performance, migration or production acceptance is established by source review.
 
 ## Recovering original imported files
 

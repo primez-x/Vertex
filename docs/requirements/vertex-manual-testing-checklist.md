@@ -3275,6 +3275,18 @@ Blocked / missing until testing a candidate that contains it.
   - Result: Not tested
   - Notes: ______________________________
 
+- [ ] **WINDOW-CORNER-DXF - Export and reopen a dimensioned corner window in DXF**
+  - Steps: Draw two adjoining walls, place a corner window with different leg widths and add both saved leg dimensions. Add a neighboring ordinary window and a saved plan with a leg dimension. Export DXF, then import it into another project. Inspect the window, both host walls, dimensions and window schedule; edit either leg, undo/redo and save/reopen. Repeat with a design alternative and an unphased project. Open the DXF in an independent CAD viewer.
+  - Expected: CAD shows the actual two-leg window and readable dimensions. Vertex imports one corner window with both cuts and its attached dimensions together; editing a leg updates its own dimension. The neighboring opening, saved design options and styles remain distinct. Failed or altered source proof is reported without partially inserting a corner window. The original DXF remains retained.
+  - Result: Not tested
+  - Notes: ______________________________
+
+- [ ] **WINDOW-CORNER-IFC - Export and reopen a manufactured corner window in IFC**
+  - Steps: Place a corner window with different widths and a neighboring ordinary window. Place another corner window at the opposite end of a shared wall. Export IFC and open it in an independent IFC viewer. Inspect both wall openings, the shared frame/post and two panes for each window. Import into another Vertex project, double-click each corner window and edit either leg. Inspect plan, 3D and the window schedule, then undo/redo and save/reopen. Repeat with rotated Site placement and level-bound elevated host walls; export and import the result again.
+  - Expected: IFC contains one assembly with a shared frame and two separate panes, correctly placed against both wall voids. Vertex reconstructs one editable corner window and two coordinated cuts, preserving both widths and one schedule row. Invalid or incomplete geometry/ownership proof produces a fidelity report and retained source instead of a partial active window. This check does not certify associative IFC dimension import, which remains a separate gap.
+  - Result: Not tested
+  - Notes: ______________________________
+
 ## Issue report template
 
 

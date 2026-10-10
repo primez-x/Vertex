@@ -1,5 +1,7 @@
 #include "sketch/dxf_sheet_view_source.hpp"
 
+#include "sketch/boundary_dimension.hpp"
+#include "sketch/dxf_architectural_source.hpp"
 #include "sketch/dxf_phase_source.hpp"
 #include "sketch/dxf_project_exchange.hpp"
 #include "sketch/sheet_view_entity_codec.hpp"
@@ -84,7 +86,7 @@ const Json& supported_model(const Entity& source) {
     const auto& model = p.at("model");
     require(model.contains("schema") && model.at("schema") == "sketch.sheet_view_model" &&
         model.contains("version") && model.at("version").is_number_integer() &&
-        model.at("version") >= 1 && model.at("version") <= 8, "unsupported model schema/version");
+        model.at("version") >= 1 && model.at("version") <= 9, "unsupported model schema/version");
     return model;
 }
 const Json& rows(const Json& parent, const char* slot) {
@@ -199,7 +201,7 @@ template<class Model, class Visit> void global_slots(Model& model, Visit visit) 
         }
     }
 }
-void validate_globals(const Entity& source, const Owners& authored) {
+void validate_globals(const Entity& source, const Owners& authored, NativeDxfWallSourceWorkBudget& budget) {
     require(authored.size() <= native_dxf_phase_source_owner_limit, "actual owner inventory limit");
     require(actual(authored, global_id(Json(source.id))) == source, "companion differs from actual source inventory");
     global_slots(source.properties.at("model"), [&](const Json& value, ReferenceKind kind) {
@@ -213,10 +215,38 @@ void validate_globals(const Entity& source, const Owners& authored) {
             static constexpr std::array<std::string_view, 12> types{
                 "wall", "opening", "room", "slab", "roof", "stair", "railing",
                 "column", "beam", "wall_join", "roof_join", "assembly_instance"};
-            require(std::find(types.begin(), types.end(), target.type) != types.end(),
+            require(std::find(types.begin(), types.end(), target.type) != types.end() || target.type == "corner_window",
                 "associative dimension references unsupported actual object " + target.id);
         }
     });
+    // The codec checks the aligned-axis/leg pairing. Complete actual-map
+    // resolution proves that the saved leg names real hosts and owned cuts;
+    // retained admission does not demand a currently active phase cohort.
+    for (const auto& view : source.properties.at("model").at("views")) {
+        if (!view.contains("overlays")) continue;
+        for (const auto& overlay : view.at("overlays")) {
+            if (!overlay.contains("dimension_binding") || overlay.at("dimension_binding").is_null()) continue;
+            const auto& binding = overlay.at("dimension_binding");
+            const auto& target = actual(authored, global_id(binding.at("object_id")));
+            if (!binding.contains("corner_leg")) {
+                // Original three-field horizontal/vertical bindings measure
+                // the complete corner silhouette, without selecting a leg.
+                if (target.type == "corner_window") {
+                    admit_native_dxf_corner_window_source_work(target, authored, budget);
+                    validate_native_dxf_corner_window_source(target, authored);
+                }
+                continue;
+            }
+            require(target.type == "corner_window", "corner leg binding requires an actual corner-window owner");
+            BoundaryDimension dimension;
+            dimension.id = target.id;
+            dimension.boundary_id = target.id;
+            dimension.kind = BoundaryDimensionKind::corner_window_leg_length;
+            dimension.corner_leg = binding.at("corner_leg").get<std::uint32_t>();
+            admit_native_dxf_corner_window_source_work(target, authored, budget);
+            (void)resolve_dimension_corner_window_leg_owner(dimension, authored);
+        }
+    }
 }
 std::vector<std::string> view_ids(const SheetViewModel& model) {
     std::vector<std::string> result;
@@ -325,7 +355,7 @@ References native_dxf_sheet_view_source_dependencies(const Entity& source, const
     auto& budget = work_budget ? *work_budget : local;
     admit_native_dxf_sheet_view_source_work(source, budget);
     (void)decode_sheet_view_entity(source);
-    validate_globals(source, authored);
+    validate_globals(source, authored, budget);
     References result;
     global_slots(source.properties.at("model"), [&](const Json& value, ReferenceKind kind) {
         if (kind == ReferenceKind::optional_witness &&
@@ -341,7 +371,7 @@ std::vector<std::string> native_dxf_sheet_view_source_unresolved_witness_ids(con
     auto& budget = work_budget ? *work_budget : local;
     admit_native_dxf_sheet_view_source_work(source, budget);
     (void)decode_sheet_view_entity(source);
-    validate_globals(source, authored);
+    validate_globals(source, authored, budget);
     return unresolved_witness_ids(source, authored, budget);
 }
 
@@ -351,7 +381,7 @@ void validate_native_dxf_sheet_view_source(const Entity& source, const Owners& a
     auto& budget = work_budget ? *work_budget : local;
     admit_native_dxf_sheet_view_source_work(source, budget);
     (void)decode_sheet_view_entity(source);
-    validate_globals(source, authored);
+    validate_globals(source, authored, budget);
 }
 
 void validate_native_dxf_sheet_view_witness_binding(const Entity& source,
@@ -362,7 +392,7 @@ void validate_native_dxf_sheet_view_witness_binding(const Entity& source,
     auto& budget = work_budget ? *work_budget : local;
     admit_native_dxf_sheet_view_source_work(source, budget);
     (void)decode_sheet_view_entity(source);
-    validate_globals(source, original_owners);
+    validate_globals(source, original_owners, budget);
     require(candidate_owners.size() <= native_dxf_phase_source_owner_limit, "candidate owner inventory limit");
     const auto* scope = unresolved_witness_mapping.empty() ? nullptr : unresolved_witness_scope(source,
         unresolved_witness_ids(source, original_owners, budget), unresolved_witness_mapping,
@@ -389,7 +419,7 @@ void remap_native_dxf_sheet_view_source_dependencies(Entity& source, const Owner
     auto& budget = work_budget ? *work_budget : local;
     admit_native_dxf_sheet_view_source_work(source, budget);
     const auto identities = view_ids(decode_sheet_view_entity(source));
-    validate_globals(source, authored);
+    validate_globals(source, authored, budget);
     const auto* witness_scope = unresolved_witness_mapping.empty() ? nullptr : unresolved_witness_scope(source,
         unresolved_witness_ids(source, authored, budget), unresolved_witness_mapping,
         authored, &owner_mapping, budget);

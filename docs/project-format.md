@@ -1,5 +1,40 @@
 # Vertex project formats v1 through v172
 
+## Coordinated corner-window source exchange (source integration)
+
+DXF carries corner windows through the existing complete-source V9 carrier.
+Its additive graph version five is required for corner owners, indexed bare
+cuts, BoundaryDimension v5 targets and sheet/view model nine. It always has
+`support_ids`; `asset_manifest` appears only for nonempty actual assets. Versions
+one through four and historical V5/V7/V8 single-host carriers reject these forms.
+Graph five also supports an unphased project. The complete actual host/cut,
+hierarchy, phase and annotation closure is validated before a destination is
+staged. Only typed owner arrays and cut backlinks remap; numeric leg indices,
+quantities and opaque metadata remain retained. Actual manufactured plan geometry
+and current dimensions authenticate the CAD depiction. Structural admission and
+native construction use separate charges within the same operation budget.
+
+IFC4 represents one corner-window owner as `IfcElementAssembly`, with one shared
+frame/post part and two glazing-leg `IfcWindow` parts. The assembly alone has
+spatial containment; each pane fills its own wall void once. Parts carry
+nonduplicated native solids. A bounded source manifest retains actual hosts,
+cuts and complete opening rosters. Typed reimport requires linked metre units,
+unique actual relationships, proper placement and exact regenerated native
+geometry before the owner and cuts activate together. Separate bounded authored
+host envelopes preserve raw elevations, level/context and metadata alongside
+resolved geometry descriptors. Original provenance persists across re-export
+without recursive envelope growth. Source context and level authoring remain
+provenance; active imported geometry uses resolved world metres
+and reviewed destination context. Failed proofs retain inert source data.
+
+The project reader remains 172/extraction 170: these exchanges introduce no new
+active project entity or history codec. The DXF source graph and IFC provenance
+are exchange contracts. General IFC annotations are retained source; this
+addition does not activate associative IFC dimension bindings. Adjacent ordinary
+opening assemblies still require their independent manufacturing proof.
+Compilation, round trips, native geometry, history, output and external-consumer
+acceptance remain unverified. The installed candidate is unchanged.
+
 ## Associative corner-window leg dimensions (v172, source integration)
 
 BoundaryDimension version five supports only `corner_window_leg_length`. Its
