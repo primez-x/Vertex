@@ -122,9 +122,10 @@ void active_owner(const ModelPhases& model, const std::string& id) {
     if (state == states.end() || state->second == ModelPhase::demolished)
         reject("changed structural target is inactive: " + id);
 }
+template<class Intent>
 std::optional<PhaseStructuralEditReplacementRequest> classify(
     const PhaseStructuralReplacementEntities& actual, const PhaseStructuralReplacementEntities& physical,
-    const std::vector<StructuralObjectEditIntent>& edits) {
+    const std::vector<Intent>& edits) {
     Ids changed, targets;
     for (const auto& edit : edits) {
         if (!targets.insert(edit.object_id).second) reject("duplicate structural edit target");
@@ -452,6 +453,15 @@ std::optional<PhaseStructuralEditReplacementRequest> phase_structural_edit_repla
     } catch (const Json::exception& error) { reject(std::string("malformed structural edit source: ") + error.what()); }
 }
 
+std::optional<PhaseStructuralEditReplacementRequest> phase_structural_profile_replacement_request(
+    const PhaseStructuralReplacementEntities& actual, const std::vector<StructuralProfileEditIntent>& scalar_profiles) {
+    try {
+        (void)occupied_strings(actual);
+        const auto physical = replay_structural_profile_entities(actual, scalar_profiles);
+        return classify(actual, physical, scalar_profiles);
+    } catch (const Json::exception& error) { reject(std::string("malformed structural profile source: ") + error.what()); }
+}
+
 std::optional<PhaseStructuralEditReplacementRequest> phase_structural_demolition_request(
     const PhaseStructuralReplacementEntities& actual, const std::vector<std::string>& seed_object_ids) {
     try {
@@ -491,7 +501,8 @@ nlohmann::json encode_phase_structural_replacement_authoring(const PhaseStructur
     identity(authoring.registry_id); identity(authoring.alternative_id);
     if (authoring.demolition) {
         if (authoring.complete_hosted || !authoring.hosted_instance_identities.empty() ||
-            !authoring.identities.empty() || !authoring.edits.empty() || authoring.seed_object_ids.empty() ||
+            !authoring.identities.empty() || !authoring.edits.empty() || !authoring.scalar_profiles.empty() ||
+            authoring.seed_object_ids.empty() ||
             authoring.seed_object_ids.size() > maximum_replacements)
             reject("demolition authoring requires bounded seeds and no identity or physical edit authority");
         Ids seeds;
@@ -505,9 +516,13 @@ nlohmann::json encode_phase_structural_replacement_authoring(const PhaseStructur
     }
     if (!authoring.complete_hosted && !authoring.hosted_instance_identities.empty())
         reject("v1 cannot author qualified hosted identities");
+    const bool scalar = !authoring.scalar_profiles.empty();
+    if (scalar && (!authoring.edits.empty() || !authoring.complete_hosted))
+        reject("scalar profiles require complete_hosted and no full-profile edit authority");
     if (authoring.seed_object_ids.empty() || authoring.seed_object_ids.size() > maximum_replacements ||
         authoring.identities.empty() || authoring.identities.size() > maximum_replacements ||
-        authoring.edits.empty() || authoring.edits.size() > maximum_replacements)
+        (scalar ? authoring.scalar_profiles.size() > maximum_replacements :
+            authoring.edits.empty() || authoring.edits.size() > maximum_replacements))
         reject("authoring requires bounded nonempty seeds, identities and edits");
     if (authoring.hosted_instance_identities.size() > maximum_replacements - authoring.identities.size())
         reject("authoring entity/child/hosted identity budget exceeded");
@@ -532,17 +547,21 @@ nlohmann::json encode_phase_structural_replacement_authoring(const PhaseStructur
     }
     Json rows = Json::array();
     std::size_t bytes{};
-    for (const auto& edit : authoring.edits) {
+    const auto append = [&](const auto& edit, Json row) {
         if (!targets.insert(edit.object_id).second) reject("authoring requires unique structural edit targets");
-        auto row = encode_structural_object_edit_intent(edit);
         const auto size = row.dump().size() + 1;
         if (size > maximum_authoring_bytes - bytes) reject("authoring byte budget exceeded");
         bytes += size; rows.push_back(std::move(row));
-    }
+    };
+    if (scalar) for (const auto& edit : authoring.scalar_profiles)
+        append(edit, encode_structural_profile_edit_intent(edit));
+    else for (const auto& edit : authoring.edits) append(edit, encode_structural_object_edit_intent(edit));
     for (const auto& id : seeds) if (!authoring.identities.contains(id) || !targets.contains(id))
         reject("every authoring seed requires its mapped identity and actual typed edit");
-    Json result{{"version", authoring.complete_hosted ? 3 : 1}, {"registry_id", authoring.registry_id}, {"alternative_id", authoring.alternative_id},
-        {"seed_object_ids", authoring.seed_object_ids}, {"identities", authoring.identities}, {"edits", std::move(rows)}};
+    Json result{{"version", scalar ? 4 : authoring.complete_hosted ? 3 : 1},
+        {"registry_id", authoring.registry_id}, {"alternative_id", authoring.alternative_id},
+        {"seed_object_ids", authoring.seed_object_ids}, {"identities", authoring.identities},
+        {scalar ? "scalar_profiles" : "edits", std::move(rows)}};
     if (authoring.complete_hosted) {
         result["complete_hosted"] = true;
         result["hosted_instance_identities"] = std::move(hosted_rows);
@@ -574,22 +593,25 @@ PhaseStructuralReplacementAuthoring decode_phase_structural_replacement_authorin
             if (canonical != value || canonical.dump() != value.dump()) reject("demolition authoring differs from its canonical typed encoding");
             return result;
         }
-        const bool hosted = value.is_object() && value.contains("version") &&
-            value.at("version").is_number_integer() && value.at("version") == 3;
+        const bool scalar = value.is_object() && value.contains("version") &&
+            value.at("version").is_number_integer() && value.at("version") == 4;
+        const bool hosted = scalar || (value.is_object() && value.contains("version") &&
+            value.at("version").is_number_integer() && value.at("version") == 3);
+        const auto* lane = scalar ? "scalar_profiles" : "edits";
         if (!value.is_object() || value.size() != (hosted ? 8U : 6U) || !value.contains("version") ||
             !value.at("version").is_number_integer() || (!hosted && value.at("version") != 1) ||
             !value.contains("registry_id") || !value.at("registry_id").is_string() ||
             !value.contains("alternative_id") || !value.at("alternative_id").is_string() ||
             !value.contains("seed_object_ids") || !value.at("seed_object_ids").is_array() ||
             !value.contains("identities") || !value.at("identities").is_object() ||
-            !value.contains("edits") || !value.at("edits").is_array())
-            reject("authoring must contain exactly its six v1 fields or eight v3 fields");
+            !value.contains(lane) || !value.at(lane).is_array())
+            reject("authoring must contain exactly its six v1 fields or eight v3/v4 fields");
         if (hosted && (!value.contains("complete_hosted") || !value.at("complete_hosted").is_boolean() ||
             value.at("complete_hosted") != true || !value.contains("hosted_instance_identities") ||
             !value.at("hosted_instance_identities").is_array()))
-            reject("v3 requires complete_hosted:true and a qualified hosted identity array");
+            reject("v3/v4 require complete_hosted:true and a qualified hosted identity array");
         if (value.at("seed_object_ids").size() > maximum_replacements ||
-            value.at("identities").size() > maximum_replacements || value.at("edits").size() > maximum_replacements)
+            value.at("identities").size() > maximum_replacements || value.at(lane).size() > maximum_replacements)
             reject("authoring item budget exceeded");
         if (hosted && value.at("hosted_instance_identities").size() > maximum_replacements - value.at("identities").size())
             reject("authoring entity/child/hosted identity budget exceeded");
@@ -612,7 +634,9 @@ PhaseStructuralReplacementAuthoring decode_phase_structural_replacement_authorin
                 row.at("proposed_instance_id").get<std::string>()).second)
                 reject("duplicate qualified hosted source identity");
         }
-        for (const auto& row : value.at("edits")) result.edits.push_back(decode_structural_object_edit_intent(row));
+        if (scalar) for (const auto& row : value.at(lane))
+            result.scalar_profiles.push_back(decode_structural_profile_edit_intent(row));
+        else for (const auto& row : value.at(lane)) result.edits.push_back(decode_structural_object_edit_intent(row));
         const auto canonical = encode_phase_structural_replacement_authoring(result);
         if (canonical != value || canonical.dump() != value.dump()) reject("authoring differs from its canonical typed encoding");
         return result;
@@ -626,8 +650,11 @@ PhaseStructuralReplacementEntities replay_phase_structural_replacement_authoring
         (void)decode_phase_structural_replacement_authoring(encoded);
         if (authoring.demolition) return replay_demolition(actual, authoring);
         // All mathematical/profile/receipt intents read the same unchanged map.
-        const auto physical = replay_structural_object_edit_entities(actual, authoring.edits);
-        const auto request = classify(actual, physical, authoring.edits);
+        const bool scalar = !authoring.scalar_profiles.empty();
+        const auto physical = scalar ? replay_structural_profile_entities(actual, authoring.scalar_profiles) :
+            replay_structural_object_edit_entities(actual, authoring.edits);
+        const auto request = scalar ? classify(actual, physical, authoring.scalar_profiles) :
+            classify(actual, physical, authoring.edits);
         if (!request || request->registry_id != authoring.registry_id || request->alternative_id != authoring.alternative_id ||
             Ids(request->seed_object_ids.begin(), request->seed_object_ids.end()) !=
                 Ids(authoring.seed_object_ids.begin(), authoring.seed_object_ids.end()))
@@ -668,27 +695,39 @@ PhaseStructuralReplacementEntities replay_phase_structural_replacement_authoring
         // Also reserve authored opaque content: proposed tokens cannot silently
         // turn an intent's unrelated key or value into a live entity identity.
         Strings authored;
-        for (const auto& edit : authoring.edits) authored.read(encode_structural_object_edit_intent(edit));
+        if (scalar) for (const auto& edit : authoring.scalar_profiles)
+            authored.read(encode_structural_profile_edit_intent(edit));
+        else for (const auto& edit : authoring.edits) authored.read(encode_structural_object_edit_intent(edit));
         for (const auto& id : fresh) if (authored.values.contains(id)) reject("fresh identity collides with authored content: " + id);
         std::vector<StructuralObjectEditIntent> baseline_edits, ordinary_edits;
+        std::vector<StructuralProfileEditIntent> baseline_profiles, ordinary_profiles;
+        std::vector<std::string> targets;
         StructuralHostedIdentityMap host_ids, catalog_ids;
-        for (const auto& edit : authoring.edits)
+        for (const auto& edit : authoring.edits) {
             (seeds.contains(edit.object_id) ? baseline_edits : ordinary_edits).push_back(edit);
+            targets.push_back(edit.object_id);
+        }
+        for (const auto& edit : authoring.scalar_profiles) {
+            (seeds.contains(edit.object_id) ? baseline_profiles : ordinary_profiles).push_back(edit);
+            targets.push_back(edit.object_id);
+        }
         for (const auto& id : seeds) host_ids.emplace(id, authoring.identities.at(id));
         for (const auto& id : plan.required_entity_ids) if (!seeds.contains(id))
             catalog_ids.emplace(id, authoring.identities.at(id));
         // These independently replay disjoint edit partitions against the same
         // actual source. An ordinary hosted row may share a retained catalog
         // with baseline rows; only the latter enter the new private catalog.
-        auto candidate = authoring.complete_hosted
-            ? replay_structural_hosted_component_geometry(actual, ordinary_edits) : actual;
+        auto candidate = scalar ? replay_structural_profile_entities(actual, ordinary_profiles) :
+            authoring.complete_hosted ? replay_structural_hosted_component_geometry(actual, ordinary_edits) : actual;
         StructuralHostedComponentCopyResult hosted_copy;
-        if (authoring.complete_hosted)
+        if (scalar)
+            hosted_copy = copy_structural_profile_hosted_components(actual, baseline_profiles, host_ids,
+                catalog_ids, authoring.hosted_instance_identities);
+        else if (authoring.complete_hosted)
             hosted_copy = copy_structural_hosted_components(actual, baseline_edits, host_ids,
                 catalog_ids, authoring.hosted_instance_identities);
         Ids final_owners;
-        for (const auto& edit : authoring.edits) {
-            const auto& id = edit.object_id;
+        for (const auto& id : targets) {
             if (seeds.contains(id)) {
                 auto copy = physical.at(id); copy.id = authoring.identities.at(id);
                 if (!candidate.emplace(copy.id, copy).second) reject("proposed owner identity already exists");

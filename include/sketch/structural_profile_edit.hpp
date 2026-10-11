@@ -24,6 +24,11 @@ struct StructuralProfileEditIntent {
     const nlohmann::json& value);
 void validate_structural_profile_source_entity(const Entity& source);
 
+// Derive one exact raw owner from its actual source. This carries scalar-only
+// authority; callers own complete-map context, native and hosted admission.
+[[nodiscard]] Entity prepare_structural_profile_edit_entity(
+    const Entity& source, const StructuralProfileEditIntent& intent);
+
 // Patches only supplied changed applicable scalars on each actual raw owner.
 // Rectangular columns permit width/depth/height, circular columns radius/height,
 // and straight beams width/depth. Dormant form-inapplicable source fields and

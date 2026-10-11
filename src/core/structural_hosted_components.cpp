@@ -5,12 +5,14 @@
 #include "sketch/constraint_phase_scope.hpp"
 #include "sketch/project_organization.hpp"
 #include "sketch/site_frame.hpp"
+#include "sketch/structural_profile_edit.hpp"
 
 #include <algorithm>
 #include <cmath>
 #include <numbers>
 #include <set>
 #include <stdexcept>
+#include <utility>
 
 #include <Standard_Failure.hxx>
 
@@ -350,14 +352,13 @@ StructuralHostedEntities replay_structural_hosted_component_geometry(
     return result;
 }
 
-StructuralHostedComponentCopyResult copy_structural_hosted_components(
-    const StructuralHostedEntities& actual, const std::vector<StructuralObjectEditIntent>& edits,
+namespace {
+template<class CatalogReplay>
+StructuralHostedComponentCopyResult copy_prepared_hosted_components(
+    const StructuralHostedEntities& actual, const StructuralHostedEntities& physical, const Ids& hosts,
     const StructuralHostedIdentityMap& object_ids, const StructuralHostedIdentityMap& catalog_ids,
-    const StructuralHostedInstanceIdentityMap& hosted_instance_ids, bool include_unchanged_hosts) {
-    auto occupied = occupied_strings(actual);
-    const auto physical = replay_structural_object_edit_entities(actual, edits);
-    auto hosts = changed_hosts(actual, physical, edits);
-    if (include_unchanged_hosts) for (const auto& edit : edits) hosts.insert(edit.object_id);
+    const StructuralHostedInstanceIdentityMap& hosted_instance_ids, Strings occupied,
+    const CatalogReplay& replay) {
     if (object_ids.size() != hosts.size()) reject("requires exact authored-host mapping");
     for (const auto& [id, proposed] : object_ids) {
         (void)proposed;
@@ -396,8 +397,7 @@ StructuralHostedComponentCopyResult copy_structural_hosted_components(
     StructuralHostedComponentCopyResult result;
     for (const auto& id : plan.catalog_ids) {
         auto copy = actual.at(id); copy.id = catalog_ids.at(id);
-        const auto model = AssemblyModel::from_json(actual.at(id).properties.at("model"));
-        auto raw = replay_catalog(actual,actual.at(id), model, hosts, edits);
+        auto raw = replay(actual.at(id));
         auto selected = Json::array();
         for (auto row : raw.at("instances")) {
             const StructuralHostedInstanceKey key{id, row.at("id").get<std::string>()};
@@ -437,6 +437,55 @@ StructuralHostedComponentCopyResult copy_structural_hosted_components(
         result.fresh_aliases.assign(aliases.begin(), aliases.end());
     }
     return result;
+}
+} // namespace
+
+StructuralHostedComponentCopyResult copy_structural_hosted_components(
+    const StructuralHostedEntities& actual, const std::vector<StructuralObjectEditIntent>& edits,
+    const StructuralHostedIdentityMap& object_ids, const StructuralHostedIdentityMap& catalog_ids,
+    const StructuralHostedInstanceIdentityMap& hosted_instance_ids, bool include_unchanged_hosts) {
+    auto occupied = occupied_strings(actual);
+    const auto physical = replay_structural_object_edit_entities(actual, edits);
+    auto hosts = changed_hosts(actual, physical, edits);
+    if (include_unchanged_hosts) for (const auto& edit : edits) hosts.insert(edit.object_id);
+    return copy_prepared_hosted_components(actual, physical, hosts, object_ids, catalog_ids,
+        hosted_instance_ids, std::move(occupied), [&](const Entity& catalog) {
+            const auto model = AssemblyModel::from_json(catalog.properties.at("model"));
+            return replay_catalog(actual, catalog, model, hosts, edits);
+        });
+}
+
+StructuralHostedComponentCopyResult copy_structural_profile_hosted_components(
+    const StructuralHostedEntities& actual, const std::vector<StructuralProfileEditIntent>& edits,
+    const StructuralHostedIdentityMap& object_ids, const StructuralHostedIdentityMap& catalog_ids,
+    const StructuralHostedInstanceIdentityMap& hosted_instance_ids) {
+    constexpr std::size_t target_limit = 1000;
+    constexpr std::size_t proof_limit = 1024 * 1024;
+    auto occupied = occupied_strings(actual);
+    if (edits.size() > target_limit) reject("scalar copy target budget exceeded");
+    Ids targets;
+    std::size_t bytes = 0;
+    for (const auto& edit : edits) {
+        const auto count = encode_structural_profile_edit_intent(edit).dump().size();
+        if (count > proof_limit - bytes) reject("scalar copy batch proof byte budget exceeded");
+        bytes += count;
+        if (!targets.insert(edit.object_id).second) reject("scalar copy contains duplicate targets");
+        if (!actual.contains(edit.object_id)) reject("scalar copy target is missing");
+    }
+    // Admit retained targets too against the complete actual source, including
+    // phase, resolved context, native geometry and qualified hosted components.
+    require_ready(inspect_structural_hosted_components(actual, {targets.begin(), targets.end()}));
+    auto physical = actual;
+    Ids hosts;
+    for (const auto& edit : edits) {
+        auto prepared = prepare_structural_profile_edit_entity(actual.at(edit.object_id), edit);
+        if (!exact(actual.at(edit.object_id), prepared)) hosts.insert(edit.object_id);
+        physical.at(edit.object_id) = std::move(prepared);
+    }
+    return copy_prepared_hosted_components(actual, physical, hosts, object_ids, catalog_ids,
+        hosted_instance_ids, std::move(occupied), [](const Entity& catalog) {
+            return catalog.properties.at("model");
+        });
 }
 
 } // namespace sketch

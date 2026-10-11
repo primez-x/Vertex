@@ -57,6 +57,11 @@ struct PhaseWallReplacementAuthoring {
     // completes copied corner cohorts. Profile rows are exclusive edit authority.
     bool complete_corner_windows{false};
     std::vector<CornerWindowProfileEditIntent> corner_profiles;
+    // Leaf nine: one original-source scalar wall/opening cohort. Actual changed
+    // baseline hosts derive the seeds; ordinary/proposed members retain their
+    // identities. Both scalar families stage before final physical admission.
+    // Complete presentations/corners are mandatory; other edit lanes refuse.
+    bool complete_scalar_profiles{false};
 };
 struct PhaseWallReplacementAuthoringPreview {
     PhaseWallReplacementResult replacement;
@@ -74,6 +79,10 @@ struct PhaseWallReplacementAuthoringPreview {
 // Fresh row IDs still need document reservations by the publishing controller.
 [[nodiscard]] std::optional<PhaseWallReplacementRequest> phase_wall_layer_stack_replacement_request(
     const PhaseWallReplacementEntities& source,const std::vector<WallLayerStackEditIntent>& stacks);
+[[nodiscard]] std::optional<PhaseWallReplacementRequest> phase_wall_scalar_profile_replacement_request(
+    const PhaseWallReplacementEntities& source,
+    const std::vector<WallProfileEditIntent>& walls,
+    const std::vector<HostedOpeningProfileEditIntent>& openings);
 [[nodiscard]] PhaseWallReplacementAuthoringPreview inspect_phase_wall_replacement_authoring(
     const DocumentSnapshot& source,const PhaseConstraintAuthoringIntent& intent);
 [[nodiscard]] PhaseWallReplacementEntities replay_phase_wall_replacement_authoring(

@@ -1,6 +1,7 @@
 #pragma once
 
 #include "sketch/structural_object_edit.hpp"
+#include "sketch/structural_profile_edit.hpp"
 
 #include <map>
 #include <optional>
@@ -46,6 +47,7 @@ struct PhaseStructuralReplacementAuthoring {
     bool demolition{};
     bool complete_hosted{};
     std::map<std::pair<std::string, std::string>, std::string> hosted_instance_identities;
+    std::vector<StructuralProfileEditIntent> scalar_profiles;
 };
 
 // Closed v1: version, registry_id, alternative_id, seed_object_ids, identities,
@@ -59,6 +61,10 @@ struct PhaseStructuralReplacementAuthoring {
 // hosted_instance_identities array of catalog_id, instance_id and
 // proposed_instance_id rows. Catalogs use identities; render aliases are
 // computed from actual source and the complete candidate, never authored keys.
+// Closed v4: the eight v3 fields with scalar_profiles replacing edits. Scalar
+// profiles are mutually exclusive with full edits and require complete_hosted.
+// Every proposed body derives from the actual raw source, preserving dormant
+// dimension fields and opaque quantity receipt siblings exactly.
 [[nodiscard]] nlohmann::json encode_phase_structural_replacement_authoring(
     const PhaseStructuralReplacementAuthoring& authoring);
 [[nodiscard]] PhaseStructuralReplacementAuthoring decode_phase_structural_replacement_authoring(
@@ -78,6 +84,9 @@ struct PhaseStructuralEditReplacementRequest {
 // memberships refuse. No source-equivalent target gains replacement authority.
 [[nodiscard]] std::optional<PhaseStructuralEditReplacementRequest> phase_structural_edit_replacement_request(
     const PhaseStructuralReplacementEntities& actual, const std::vector<StructuralObjectEditIntent>& edits);
+
+[[nodiscard]] std::optional<PhaseStructuralEditReplacementRequest> phase_structural_profile_replacement_request(
+    const PhaseStructuralReplacementEntities& actual, const std::vector<StructuralProfileEditIntent>& scalar_profiles);
 
 // Ordinary selections return nullopt. Once one active shared-baseline owner is
 // selected, every target must be an active baseline column/beam from that same

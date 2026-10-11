@@ -377,6 +377,9 @@ std::uint32_t required_format_version_internal(const DocumentSnapshot& snapshot,
             const auto& value=*pending.back(); pending.pop_back();
             if (++nodes>ProjectStore::maximum_json_values)
                 storage_error(StorageErrorCode::resource_limit,"Typed edit reader-floor scan exceeds its JSON budget");
+            if (value.is_object() && value.contains("phase_selections") && value.contains("source_snapshot_digest") &&
+                value.contains("intent") && (value.value("version",nlohmann::json())==23 || value.value("version",nlohmann::json())==24 || value.value("version",nlohmann::json())==25))
+                floor=std::max(floor,199U);
             if (value.is_object() &&
                 ((value.value("kind",nlohmann::json())=="apply_boundary_constraint_changes" &&
                     value.value("version",nlohmann::json())==53) ||
@@ -602,9 +605,9 @@ std::uint32_t required_format_version_internal(const DocumentSnapshot& snapshot,
     };
     for (const auto& revision : snapshot.history()) {
         if (revision.phase_entity_import) required=std::max(required,160U);
-        if (required<198 && revision.boundary_geometry_edit)
+        if (required<199 && revision.boundary_geometry_edit)
             required=std::max(required,typed_edit_reader_floor(encode_boundary_geometry_edit(*revision.boundary_geometry_edit)));
-        if (required<198 && revision.boundary_constraint_changes)
+        if (required<199 && revision.boundary_constraint_changes)
             required=std::max(required,typed_edit_reader_floor(command_to_json(Command{*revision.boundary_constraint_changes})));
         if (required<122 && revision.boundary_geometry_edit)
             required=std::max(required,quantity_reader_floor(encode_boundary_geometry_edit(*revision.boundary_geometry_edit)));
@@ -744,6 +747,8 @@ std::uint32_t required_format_version_internal(const DocumentSnapshot& snapshot,
                 return false;
             };
             const auto profile_intent=[&](const nlohmann::json& intent)->std::uint32_t {
+                if (intent.is_object() && (intent.value("version",0)==23 || intent.value("version",0)==24 || intent.value("version",0)==25) &&
+                    intent.contains("phase_selections") && intent.contains("source_snapshot_digest")) return 199U;
                 if (intent.is_object() && (intent.value("version",0)==20 || intent.value("version",0)==21)) return 175U;
                 if (intent.is_object() && intent.value("version",0)==19) return 174U;
                 if (intent.is_object() && intent.value("version",0)==18) return 173U;
@@ -3056,6 +3061,7 @@ bool verify_sqlite_schema(sqlite3* database, bool allow_recovery = false) {
          sqlite3_column_int(user_version.get(), 0) != 196 &&
          sqlite3_column_int(user_version.get(), 0) != 197 &&
          sqlite3_column_int(user_version.get(), 0) != 198 &&
+         sqlite3_column_int(user_version.get(), 0) != 199 &&
          sqlite3_column_int(user_version.get(), 0) != 174 &&
          sqlite3_column_int(user_version.get(), 0) != 169 &&
          sqlite3_column_int(user_version.get(), 0) != 163 &&
@@ -3778,6 +3784,8 @@ DocumentSnapshot read_snapshot(sqlite3* database, RecoveryLedger* recovery = nul
     // here and authenticate the manifest with its stored version below.
     const auto required_format = required_format_version_internal(snapshot, format_number < 28);
     if (required_format > format_number) {
+        if (required_format>=199)
+            storage_error(StorageErrorCode::unsupported_format,"This project requires reader 199 for original-source compound wall/opening, structural and stair scalar replacements");
         if (required_format>=198)
             storage_error(StorageErrorCode::unsupported_format,"This project requires reader 198 for qualified assembly instance/path Properties and retained mixed history");
         if (required_format>=197)

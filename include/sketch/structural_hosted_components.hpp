@@ -5,6 +5,8 @@
 
 namespace sketch {
 
+struct StructuralProfileEditIntent;
+
 using StructuralHostedEntities = std::map<std::string, Entity, std::less<>>;
 using StructuralHostedIdentityMap = std::map<std::string, std::string, std::less<>>;
 using StructuralHostedInstanceKey = std::pair<std::string, std::string>;
@@ -69,6 +71,15 @@ struct StructuralHostedComponentCopyResult {
     const StructuralHostedIdentityMap& object_ids, const StructuralHostedIdentityMap& catalog_ids,
     const StructuralHostedInstanceIdentityMap& hosted_instance_ids,
     bool include_unchanged_hosts = false);
+
+// Scalar copies derive exact raw owners through scalar preparation. Only actual
+// changed scalar targets may be mapped. Hosted rows retain all raw placement,
+// definition, override and opaque fields except fresh instance/host identities.
+// The same exact qualified roster, original aliases and fresh-name guards apply.
+[[nodiscard]] StructuralHostedComponentCopyResult copy_structural_profile_hosted_components(
+    const StructuralHostedEntities& actual, const std::vector<StructuralProfileEditIntent>& edits,
+    const StructuralHostedIdentityMap& object_ids, const StructuralHostedIdentityMap& catalog_ids,
+    const StructuralHostedInstanceIdentityMap& hosted_instance_ids);
 
 // Admission scratch copy only. Validate the actual supported catalog, then omit
 // only known instance-ID and placement-host slots. Unknown siblings stay exact.

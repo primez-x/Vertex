@@ -2,6 +2,7 @@
 #include "sketch/phase_constraint_authoring.hpp"
 #include "sketch/phase_wall_replacement_authoring.hpp"
 #include "sketch/annotation_entity_codec.hpp"
+#include "sketch/boundary_integrity.hpp"
 #include "sketch/constraint_integrity.hpp"
 #include "sketch/constraint_phase_scope.hpp"
 #include "sketch/corner_window.hpp"
@@ -10,6 +11,7 @@
 #include "sketch/model_phases.hpp"
 #include "sketch/physical_wall_room.hpp"
 #include "sketch/sheet_view_entity_codec.hpp"
+#include "sketch/wall_measurement.hpp"
 
 #include <algorithm>
 #include <cctype>
@@ -93,6 +95,17 @@ Stage physical_stage(const Entities& source,const PhaseConstraintAuthoringIntent
     const PhaseWallReplacementAuthoring& edit) {
     if (intent.source_entities_digest!=entity_map_digest(source) ||
         intent.phase_selections!=phase_constraint_authoring_selections(source)) invalid("actual source or saved choice changed");
+    if (edit.complete_scalar_profiles) {
+        if (!edit.complete_presentations || !edit.complete_corner_windows ||
+            !edit.opening_rehosts.empty() || !edit.opening_families.empty() ||
+            !edit.wall_stacks.empty() || !edit.corner_profiles.empty() ||
+            has_geometry_or_relation_intent(intent.intent))
+            invalid("scalar cohort requires complete leaf-nine authority without sibling edit operations");
+        const auto request=phase_wall_scalar_profile_replacement_request(source,edit.wall_profiles,edit.opening_profiles);
+        if (!request || request->registry_id!=edit.registry_id || request->alternative_id!=edit.alternative_id ||
+            request->seed_wall_ids!=edit.seed_wall_ids)
+            invalid("scalar cohort seeds differ from actually changed saved baseline hosts");
+    }
     if (intent.intent.wall_group_scale) {
         // Detached inspection must obey the same additive outer dialect as
         // retained publication, including exclusive scale/replacement keys.
@@ -228,7 +241,47 @@ Stage physical_stage(const Entities& source,const PhaseConstraintAuthoringIntent
         stage.replacement.fresh_identity_ids.insert(stage.replacement.fresh_identity_ids.end(),new_layers.begin(),new_layers.end());
         std::sort(stage.replacement.fresh_identity_ids.begin(),stage.replacement.fresh_identity_ids.end());
     }
-    if (!edit.wall_profiles.empty()) {
+    if (edit.complete_scalar_profiles) {
+        std::set<std::string,std::less<>> original_walls,final_walls;
+        const auto map_id=[&](std::string& id) {
+            if (const auto found=stage.replacement.original_to_proposed.find(id);
+                found!=stage.replacement.original_to_proposed.end()) id=found->second;
+        };
+        for (const auto& [original,proposed]:stage.replacement.original_to_proposed) {
+            const auto found=source.find(original);
+            if (found!=source.end() && found->second.type=="wall") {
+                original_walls.insert(original);final_walls.insert(proposed);
+            }
+        }
+        for (const auto& profile:edit.wall_profiles) original_walls.insert(profile.wall_id);
+        for (const auto& profile:edit.opening_profiles) original_walls.insert(profile.wall_id);
+        validate_active_wall_physical_dependencies(source,original_walls,true);
+        // Each intent is admitted against its actual original owner first.
+        // The copied envelope comes solely from the reconstructed replacement;
+        // remapping typed owned IDs is the only change to its scalar authority.
+        // Stage both families before fit checks: a shorter wall and resized cut
+        // must not be rejected because an intermediate half-edit cannot fit.
+        for (auto profile:edit.wall_profiles) {
+            (void)replay_wall_profile_entity(source.at(profile.wall_id),profile);
+            map_id(profile.wall_id);
+            if (profile.layer_thicknesses) for (auto& layer:*profile.layer_thicknesses) map_id(layer.layer_id);
+            stage.entities.at(profile.wall_id)=replay_wall_profile_entity(
+                stage.replacement.entities.at(profile.wall_id),profile);
+            final_walls.insert(profile.wall_id);
+        }
+        for (auto profile:edit.opening_profiles) {
+            (void)replay_hosted_opening_profile_entity(source.at(profile.opening_id),profile);
+            map_id(profile.opening_id);map_id(profile.wall_id);
+            stage.entities.at(profile.opening_id)=replay_hosted_opening_profile_entity(
+                stage.replacement.entities.at(profile.opening_id),profile);
+            final_walls.insert(profile.wall_id);
+        }
+        validate_active_wall_physical_dependencies(stage.entities,final_walls,true);
+        const auto measurements=exterior_wall_measurement_source_updates_active_phase(
+            stage.replacement.entities,stage.entities,false);
+        stage.entities=edited_boundary_entities_batch(stage.entities,measurements);
+    }
+    if (!edit.complete_scalar_profiles && !edit.wall_profiles.empty()) {
         const bool strict_profiles=std::any_of(edit.wall_profiles.begin(),edit.wall_profiles.end(),
             strict_profile_admission);
         std::set<std::string,std::less<>> original_walls,copied_walls;
@@ -255,7 +308,7 @@ Stage physical_stage(const Entities& source,const PhaseConstraintAuthoringIntent
         stage.entities=replay_wall_profile_entities(stage.entities,profiles,false);
         if (strict_profiles) validate_active_wall_physical_dependencies(stage.entities,copied_walls,true);
     }
-    if (!edit.opening_profiles.empty()) {
+    if (!edit.complete_scalar_profiles && !edit.opening_profiles.empty()) {
         if (!edit.wall_profiles.empty() || has_geometry_or_relation_intent(mapped))
             invalid("opening profiles require a separate reviewed operation from wall geometry or relationships");
         auto profiles = edit.opening_profiles;
@@ -537,7 +590,89 @@ std::optional<PhaseWallReplacementRequest> phase_wall_layer_stack_replacement_re
     return request;
 }
 
+std::optional<PhaseWallReplacementRequest> phase_wall_scalar_profile_replacement_request(
+    const Entities& source,const std::vector<WallProfileEditIntent>& walls,
+    const std::vector<HostedOpeningProfileEditIntent>& openings) {
+    if (walls.size()>2048 || openings.size()>2048-walls.size()) invalid("scalar cohort target budget exceeded");
+    const auto scope=constraint_phase_scope(source);
+    std::set<std::string,std::less<>> targets,seeds;
+    std::optional<PhaseWallReplacementRequest> request;
+    std::size_t bytes{};
+    const auto record=[&](const std::string& owner,const std::string& host,const Entity& candidate,
+                          const Json& encoded) {
+        const auto count=encoded.dump().size();
+        if (count>1024*1024-bytes) invalid("scalar cohort proof byte budget exceeded");
+        bytes+=count;
+        if (!targets.insert(owner).second) invalid("duplicate scalar cohort owner");
+        const auto original=source.find(owner),wall=source.find(host);
+        if (original==source.end() || original->first!=original->second.id ||
+            wall==source.end() || wall->first!=wall->second.id || wall->second.type!="wall")
+            invalid("scalar cohort owner or host is missing or inconsistent");
+        if (scope.inactive_owner_ids.contains(owner) || scope.inactive_owner_ids.contains(host))
+            invalid("scalar cohort owner or host is inactive in the saved design");
+        // Even a retained member is admitted, but an exact no-op cannot grant
+        // fresh identity or baseline demolition authority to another operation.
+        if (exact(original->second,candidate)) return;
+        const PhysicalWallPhaseState* membership=nullptr;
+        for (const auto& registry:scope.registries)
+            if (std::find(registry.registered_entity_ids.begin(),registry.registered_entity_ids.end(),host)!=
+                registry.registered_entity_ids.end()) {
+                if (membership) invalid("scalar host has overlapping registry membership");
+                membership=&registry;
+            }
+        if (!membership) return;
+        const auto model=ModelPhases::from_json(source.at(membership->registry_id).properties.at("model"));
+        if (!model.active_alternative() ||
+            std::find(model.baseline_ids().begin(),model.baseline_ids().end(),host)==model.baseline_ids().end()) return;
+        if (request && (request->registry_id!=membership->registry_id || request->alternative_id!=*model.active_alternative()))
+            invalid("changed scalar baseline hosts span saved-active registries");
+        if (!request) request=PhaseWallReplacementRequest{membership->registry_id,*model.active_alternative(),{}};
+        seeds.insert(host);
+    };
+    for (const auto& profile:walls) {
+        const auto encoded=encode_wall_profile_edit_intent(profile);
+        const auto original=source.find(profile.wall_id);
+        if (original==source.end()) invalid("scalar wall target is missing");
+        record(profile.wall_id,profile.wall_id,replay_wall_profile_entity(original->second,profile),encoded);
+    }
+    for (const auto& profile:openings) {
+        const auto encoded=encode_hosted_opening_profile_edit_intent(profile);
+        const auto original=source.find(profile.opening_id);
+        if (original==source.end()) invalid("scalar opening target is missing");
+        record(profile.opening_id,profile.wall_id,replay_hosted_opening_profile_entity(original->second,profile),encoded);
+    }
+    if (request) request->seed_wall_ids.assign(seeds.begin(),seeds.end());
+    return request;
+}
+
 Json encode_phase_wall_replacement_authoring(const PhaseWallReplacementAuthoring& value) {
+    if (value.complete_scalar_profiles) {
+        if (!value.complete_presentations || !value.complete_corner_windows ||
+            (value.wall_profiles.empty() && value.opening_profiles.empty()) ||
+            value.wall_profiles.size()>2048 || value.opening_profiles.size()>2048-value.wall_profiles.size() ||
+            !value.opening_rehosts.empty() || !value.opening_families.empty() ||
+            !value.wall_stacks.empty() || !value.corner_profiles.empty())
+            invalid("scalar cohort requires bounded wall/opening authority and complete presentation/corner admission");
+        auto base=value;
+        base.complete_scalar_profiles=false;base.complete_presentations=false;base.complete_corner_windows=false;
+        base.wall_profiles.clear();base.opening_profiles.clear();
+        // The old flat record's envelope/room decisions are reused verbatim;
+        // version nine alone admits both independently typed scalar arrays.
+        Json result{{"version",9},{"complete_presentations",true},
+            {"authoring",encode_phase_wall_replacement_authoring(base)},
+            {"wall_profiles",Json::array()},{"opening_profiles",Json::array()}};
+        std::set<std::string,std::less<>> targets;
+        for (const auto& profile:value.wall_profiles) {
+            if (!targets.insert(profile.wall_id).second) invalid("duplicate scalar wall target");
+            result["wall_profiles"].push_back(encode_wall_profile_edit_intent(profile));
+        }
+        for (const auto& profile:value.opening_profiles) {
+            if (!targets.insert(profile.opening_id).second) invalid("duplicate scalar opening target");
+            result["opening_profiles"].push_back(encode_hosted_opening_profile_edit_intent(profile));
+        }
+        if (result.dump().size()>1024*1024) invalid("replacement decisions exceed one MiB");
+        return result;
+    }
     if (value.opening_families.size() > 2048) invalid("invalid opening family inventory");
     if (value.wall_stacks.size()>2048) invalid("invalid wall stack inventory");
     if (value.corner_profiles.size()>2048) invalid("invalid corner profile inventory");
@@ -618,6 +753,24 @@ Json encode_phase_wall_replacement_authoring(const PhaseWallReplacementAuthoring
 }
 PhaseWallReplacementAuthoring decode_phase_wall_replacement_authoring(const Json& value) {
     if (value.dump().size()>1024*1024) invalid("replacement decisions exceed one MiB");
+    if (value.is_object() && value.contains("version") && value.at("version").is_number_integer() &&
+        value.at("version")==9) {
+        keys(value,{"version","complete_presentations","authoring","wall_profiles","opening_profiles"});
+        if (!value.at("complete_presentations").is_boolean() || value.at("complete_presentations")!=true)
+            invalid("scalar cohort requires complete presentations");
+        const auto& base=value.at("authoring");
+        if (!base.is_object() || !base.contains("version") || !base.at("version").is_number_integer() || base.at("version")!=1)
+            invalid("scalar cohort requires one flat identity/room envelope");
+        auto result=decode_flat_phase_wall_replacement_authoring(base,true);
+        result.complete_presentations=true;result.complete_corner_windows=true;result.complete_scalar_profiles=true;
+        const auto& walls=value.at("wall_profiles");const auto& openings=value.at("opening_profiles");
+        if (!walls.is_array() || !openings.is_array() || walls.size()>2048 || openings.size()>2048-walls.size())
+            invalid("scalar cohort target budget exceeded");
+        for (const auto& row:walls) result.wall_profiles.push_back(decode_wall_profile_edit_intent(row));
+        for (const auto& row:openings) result.opening_profiles.push_back(decode_hosted_opening_profile_edit_intent(row));
+        if (encode_phase_wall_replacement_authoring(result).dump()!=value.dump()) invalid("scalar cohort is not canonical");
+        return result;
+    }
     if (value.is_object() && value.contains("version") && value.at("version").is_number_integer() &&
         value.at("version")==8) {
         keys(value,{"version","complete_presentations","authoring","corner_profiles"});

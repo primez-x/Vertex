@@ -41,6 +41,7 @@
 #include <set>
 #include <stdexcept>
 #include <string_view>
+#include <tuple>
 
 namespace sketch {
 namespace {
@@ -426,7 +427,7 @@ CoordinatedReplacements coordinated(const Json& value,const PhaseConstraintAutho
     if (stairs && !value.at("stair_replacement").is_null()) {
         const auto& leaf=value.at("stair_replacement");
         result.stair=decode_phase_stair_replacement_authoring(leaf);
-        if (encode_phase_stair_replacement_authoring(*result.stair).dump()!=leaf.dump())
+        if (result.stair->complete_scalar_dependencies || encode_phase_stair_replacement_authoring(*result.stair).dump()!=leaf.dump())
             invalid("Coordinated stair replacement requires canonical typed authority");
     }
     std::set<std::string,std::less<>> roof_targets, slab_targets;
@@ -1273,6 +1274,7 @@ nlohmann::json encode_phase_constraint_authoring_intent(const PhaseConstraintAut
         const auto replacement=decode_phase_wall_replacement_authoring(value.wall_replacement);
         if (encode_phase_wall_replacement_authoring(replacement).dump()!=value.wall_replacement.dump())
             invalid("Wall replacement decisions are not canonical");
+        if (replacement.complete_scalar_profiles) result["version"]=23;
         if (baseline_wall_group_scale && (value.wall_replacement.at("version")!=8 ||
             !replacement.complete_presentations || !replacement.complete_corner_windows ||
             !replacement.wall_profiles.empty() || !replacement.opening_profiles.empty() ||
@@ -1338,6 +1340,7 @@ nlohmann::json encode_phase_constraint_authoring_intent(const PhaseConstraintAut
         if (encode_intent(value.intent)!=encode_intent(empty))
             invalid("Structural replacement cannot borrow geometry or relationship authority");
         result["structural_replacement"]=value.structural_replacement;
+        if (value.structural_replacement.at("version")==4) result["version"]=24;
     }
     if (!value.stair_demolition.is_null()) {
         const auto demolition=decode_stair_demolition_intent(value.stair_demolition);
@@ -1351,6 +1354,7 @@ nlohmann::json encode_phase_constraint_authoring_intent(const PhaseConstraintAut
     }
     if (!value.stair_replacement.is_null()) {
         const auto replacement=decode_phase_stair_replacement_authoring(value.stair_replacement);
+        if (replacement.complete_scalar_dependencies) result["version"]=25;
         if (encode_phase_stair_replacement_authoring(replacement).dump()!=value.stair_replacement.dump())
             invalid("Stair replacement decisions are not canonical");
         ConstraintAuthoringIntent empty;
@@ -1404,7 +1408,8 @@ nlohmann::json encode_phase_constraint_authoring_intent(const PhaseConstraintAut
 PhaseConstraintAuthoringIntent decode_phase_constraint_authoring_intent(const Json& value) {
     resource_shape(value);
     if (value.dump().size()>proof_budget) invalid("Phase constraint proof exceeds its byte budget");
-    const bool replacement=value.is_object() && value.contains("version") && value.at("version")==2;
+    const bool scalar_walls=value.is_object() && value.contains("version") && value.at("version")==23;
+    const bool replacement=scalar_walls || (value.is_object() && value.contains("version") && value.at("version")==2);
     const bool demolition=value.is_object() && value.contains("version") && value.at("version")==3;
     const bool roof_rotation=value.is_object() && value.contains("version") && value.at("version")==21;
     const bool roof=roof_rotation || (value.is_object() && value.contains("version") && value.at("version")==4);
@@ -1412,9 +1417,11 @@ PhaseConstraintAuthoringIntent decode_phase_constraint_authoring_intent(const Js
     const bool slab_demolition=value.is_object() && value.contains("version") && value.at("version")==6;
     const bool coordinated_replacements=value.is_object() && value.contains("version") &&
         (value.at("version")==7 || value.at("version")==8 || value.at("version")==10 || value.at("version")==14);
-    const bool structural=value.is_object() && value.contains("version") && value.at("version")==9;
+    const bool scalar_structural=value.is_object() && value.contains("version") && value.at("version")==24;
+    const bool structural=scalar_structural || (value.is_object() && value.contains("version") && value.at("version")==9);
     const bool stair_demolition=value.is_object() && value.contains("version") && value.at("version")==11;
-    const bool stair_replacement=value.is_object() && value.contains("version") && value.at("version")==12;
+    const bool scalar_stairs=value.is_object() && value.contains("version") && value.at("version")==25;
+    const bool stair_replacement=scalar_stairs || (value.is_object() && value.contains("version") && value.at("version")==12);
     const bool stair_retirement=value.is_object() && value.contains("version") && value.at("version")==13;
     const bool coordinated_demolition=value.is_object() && value.contains("version") && value.at("version")==15;
     const bool wall_demolition=value.is_object() && value.contains("version") && value.at("version")==16;
@@ -1450,7 +1457,7 @@ PhaseConstraintAuthoringIntent decode_phase_constraint_authoring_intent(const Js
         "source_entities_digest","source_saved_revision","phase_selections","intent","ordinary_roof_edits"});
     else keys(value,{"version","expected_revision","source_snapshot_digest","source_authoring_digest",
         "source_entities_digest","source_saved_revision","phase_selections","intent"});
-    if (!value.at("version").is_number_integer() || (value.at("version")!=1 && value.at("version")!=2 && value.at("version")!=3 && value.at("version")!=4 && value.at("version")!=5 && value.at("version")!=6 && value.at("version")!=7 && value.at("version")!=8 && value.at("version")!=9 && value.at("version")!=10 && value.at("version")!=11 && value.at("version")!=12 && value.at("version")!=13 && value.at("version")!=14 && value.at("version")!=15 && value.at("version")!=16 && value.at("version")!=17 && value.at("version")!=18 && value.at("version")!=19 && value.at("version")!=20 && value.at("version")!=21 && value.at("version")!=22) ||
+    if (!value.at("version").is_number_integer() || (value.at("version")!=1 && value.at("version")!=2 && value.at("version")!=3 && value.at("version")!=4 && value.at("version")!=5 && value.at("version")!=6 && value.at("version")!=7 && value.at("version")!=8 && value.at("version")!=9 && value.at("version")!=10 && value.at("version")!=11 && value.at("version")!=12 && value.at("version")!=13 && value.at("version")!=14 && value.at("version")!=15 && value.at("version")!=16 && value.at("version")!=17 && value.at("version")!=18 && value.at("version")!=19 && value.at("version")!=20 && value.at("version")!=21 && value.at("version")!=22 && value.at("version")!=23 && value.at("version")!=24 && value.at("version")!=25) ||
         !value.at("expected_revision").is_number_unsigned()) invalid("Phase constraint proof version or revision is invalid");
     if (!value.at("source_saved_revision").is_null() && !value.at("source_saved_revision").is_number_unsigned())
         invalid("Phase constraint saved revision is invalid");
@@ -1462,7 +1469,9 @@ PhaseConstraintAuthoringIntent decode_phase_constraint_authoring_intent(const Js
     if (replacement || baseline_wall_group_scale) {
         result.wall_replacement=value.at("wall_replacement");
         if (result.wall_replacement.is_null()) invalid("Wall replacement dialect requires wall replacement decisions");
-        (void)decode_phase_wall_replacement_authoring(result.wall_replacement);
+        const auto leaf=decode_phase_wall_replacement_authoring(result.wall_replacement);
+        if (leaf.complete_scalar_profiles!=scalar_walls)
+            invalid("Wall scalar cohort outer and leaf versions do not match");
     }
     if (demolition) {
         result.opening_demolition = value.at("opening_demolition");
@@ -1498,6 +1507,8 @@ PhaseConstraintAuthoringIntent decode_phase_constraint_authoring_intent(const Js
         result.structural_replacement=value.at("structural_replacement");
         if (result.structural_replacement.is_null()) invalid("Version nine requires structural replacement decisions");
         (void)decode_phase_structural_replacement_authoring(result.structural_replacement);
+        if ((result.structural_replacement.at("version")==4)!=scalar_structural)
+            invalid("Structural scalar cohort outer and leaf versions do not match");
     }
     if (stair_demolition) {
         result.stair_demolition=value.at("stair_demolition");
@@ -1507,7 +1518,9 @@ PhaseConstraintAuthoringIntent decode_phase_constraint_authoring_intent(const Js
     if (stair_replacement) {
         result.stair_replacement=value.at("stair_replacement");
         if (result.stair_replacement.is_null()) invalid("Version twelve requires stair replacement decisions");
-        (void)decode_phase_stair_replacement_authoring(result.stair_replacement);
+        const auto leaf=decode_phase_stair_replacement_authoring(result.stair_replacement);
+        if (leaf.complete_scalar_dependencies!=scalar_stairs)
+            invalid("Stair scalar dependency authority requires its matching outer version");
     }
     if (stair_retirement) {
         result.stair_demolition_retirement=value.at("stair_demolition_retirement");
@@ -2062,20 +2075,31 @@ Entity merge_stair_review_instance_rows(const Entity& source,const Entity& revie
     return merge_mixed_edit_instance_rows(baseline,changes,allow_legacy_assembly_promotion);
 }
 
+struct PhasePropertyCompositionRetirements {
+    std::set<std::string,std::less<>> erased;
+    std::set<std::pair<std::string,std::string>> bindings;
+};
+
 Entities compose_mixed_selection_edit_candidates_impl(const Entities& actual,
     const std::vector<Entities>& independently_admitted_candidates,
     const std::set<std::string,std::less<>>* retired_rooms=nullptr,
     const std::set<std::string,std::less<>>* removed_annotation_targets=nullptr,
     const StairPropertyReviewPreparation* stair_review=nullptr,
-    const std::set<std::string,std::less<>>* assembly_promoted_catalogs=nullptr) {
+    const std::set<std::string,std::less<>>* assembly_promoted_catalogs=nullptr,
+    const PhasePropertyCompositionRetirements* phase_properties=nullptr) {
     coordinated_map_budget(actual);
-    if (independently_admitted_candidates.empty() || independently_admitted_candidates.size()>(stair_review ? 6u : 5u))
+    if (independently_admitted_candidates.empty() || independently_admitted_candidates.size()>
+        (phase_properties ? 2u : stair_review ? 6u : 5u))
         invalid("Mixed edit composition requires one to five independently admitted actual-source candidates");
     for (const auto& candidate:independently_admitted_candidates) coordinated_map_budget(candidate);
     const auto original_owners=mixed_edit_identity_owners(actual);
     const auto original_aliases=embedded_assembly_presentation_ids(actual);
     std::set<std::string,std::less<>> reviewed_erased;
     std::set<std::pair<std::string,std::string>> reviewed_retired_bindings;
+    if (phase_properties) {
+        reviewed_erased=phase_properties->erased;
+        reviewed_retired_bindings=phase_properties->bindings;
+    }
     if (stair_review) {
         reviewed_erased.insert(stair_review->erased_entity_ids().begin(),stair_review->erased_entity_ids().end());
         const auto review_aliases=embedded_assembly_presentation_ids(stair_review->entities());
@@ -2136,10 +2160,11 @@ Entities compose_mixed_selection_edit_candidates_impl(const Entities& actual,
     for (const auto& [key,entity]:actual) if (entity.type=="model_phases") {
         (void)key;
         const auto model=ModelPhases::from_json(entity.properties.at("model"));
-        if (model.active_alternative() || (stair_review && !model.alternatives().empty()))
+        if (model.active_alternative() || ((stair_review || (phase_properties &&
+            (!phase_properties->erased.empty() || !phase_properties->bindings.empty()))) && !model.alternatives().empty()))
             retained_baselines.insert(model.baseline_ids().begin(),model.baseline_ids().end());
     }
-    const auto inactive=stair_review ? constraint_phase_scope(actual).inactive_owner_ids :
+    const auto inactive=(stair_review || phase_properties) ? constraint_phase_scope(actual).inactive_owner_ids :
         std::set<std::string,std::less<>>{};
     auto result=actual;
     for (const auto& [key,original]:actual) {
@@ -2160,8 +2185,8 @@ Entities compose_mixed_selection_edit_candidates_impl(const Entities& actual,
             const bool annotation=original.type==kAnnotationEntityType;
             if (annotation) validate_annotation_entity(original);
             const bool reviewed_room=retired_rooms && retired_rooms->contains(key);
-            const bool reviewed_retirement=stair_review && reviewed_erased.contains(key);
-            if (stair_review && !reviewed_retirement)
+            const bool reviewed_retirement=(stair_review || phase_properties) && reviewed_erased.contains(key);
+            if ((stair_review || phase_properties) && !reviewed_retirement)
                 invalid("Reviewed stair composition erased an owner outside its authenticated removal closure");
             if (!dimension && !constraint && !annotation && !reviewed_room && !reviewed_retirement)
                 invalid("Mixed edit erasure lacks a supported reference-cleanup owner");
@@ -2169,14 +2194,22 @@ Entities compose_mixed_selection_edit_candidates_impl(const Entities& actual,
             continue;
         }
         if (changes.empty()) continue;
-        if (stair_review && (inactive.contains(key) || (original.required &&
+        if (((stair_review || phase_properties) && inactive.contains(key)) || (stair_review && original.required &&
             original.type!="assembly_model" && original.type!=kAnnotationEntityType &&
-            original.type!="model_phases" && original.type!=kSheetViewEntityType)))
+            original.type!="model_phases" && original.type!=kSheetViewEntityType))
             invalid("Reviewed stair composition changed a required or inactive physical owner");
         if (retained_baselines.contains(key) && original.type!="assembly_model")
             invalid("Mixed edit changed an actual retained baseline owner");
         if (original.type=="assembly_model") {
-            if (stair_review) {
+            if (phase_properties && !reviewed_retired_bindings.empty()) {
+                auto deletion=original;
+                auto& rows=deletion.properties.at("model").at("instances");
+                rows.erase(std::remove_if(rows.begin(),rows.end(),[&](const auto& row) {
+                    return reviewed_retired_bindings.contains({key,row.at("id").template get<std::string>()});
+                }),rows.end());
+                result.at(key)=merge_stair_review_instance_rows(original,deletion,changes,reviewed_retired_bindings,
+                    assembly_promoted_catalogs && assembly_promoted_catalogs->contains(key));
+            } else if (stair_review) {
                 std::vector<const Entity*> ordinary;
                 for (std::size_t index=1;index<independently_admitted_candidates.size();++index)
                     ordinary.push_back(&independently_admitted_candidates[index].at(key));
@@ -2210,11 +2243,11 @@ Entities compose_mixed_selection_edit_candidates_impl(const Entities& actual,
         const auto& before=entity.properties.at("model").at("instances");
         const auto& after=result.at(key).properties.at("model").at("instances");
         std::map<std::string,const Json*,std::less<>> retained_rows;
-        if (stair_review) for (const auto& row:after) retained_rows.emplace(row.at("id").get<std::string>(),&row);
+        if (stair_review || phase_properties) for (const auto& row:after) retained_rows.emplace(row.at("id").get<std::string>(),&row);
         for (std::size_t i=0;i<before.size();++i) if (before[i].contains("placement") &&
             (retained_baselines.contains(before[i].at("placement").at("host_entity_id").get<std::string>()) ||
-             (stair_review && inactive.contains(before[i].at("placement").at("host_entity_id").get<std::string>())))) {
-            if (stair_review) {
+             ((stair_review || phase_properties) && inactive.contains(before[i].at("placement").at("host_entity_id").get<std::string>())))) {
+            if (stair_review || phase_properties) {
                 const auto retained=retained_rows.find(before[i].at("id").get<std::string>());
                 if (retained==retained_rows.end() || !exact_json(before[i],*retained->second))
                     invalid("Mixed edit changed an actual retained baseline hosted row");
@@ -2227,7 +2260,7 @@ Entities compose_mixed_selection_edit_candidates_impl(const Entities& actual,
     const auto preserve_aliases=[&](const auto& aliases) {
         for (const auto& [binding,alias]:aliases) {
             const auto found=final_aliases.find(binding);
-            if (stair_review && reviewed_retired_bindings.contains(binding)) {
+            if ((stair_review || phase_properties) && reviewed_retired_bindings.contains(binding)) {
                 if (found!=final_aliases.end()) invalid("Reviewed stair composition restored a retired catalog row");
                 continue;
             }
@@ -2248,7 +2281,7 @@ Entities compose_mixed_selection_edit_candidates_impl(const Entities& actual,
     }
     (void)constraint_phase_scope(result);
     validate_document_assembly_instances(result);
-    if (stair_review) validate_stair_attachment_state(result);
+    if (stair_review || phase_properties) validate_stair_attachment_state(result);
     return result;
 }
 
@@ -2428,6 +2461,109 @@ Entities compose_assembly_property_selection_edit_candidates(const DocumentSnaps
     if (stair_review)
         return compose_stair_property_review_selection_edit_candidates_impl(source,*stair_review,leaves,&promoted);
     return compose_mixed_selection_edit_candidates_impl(source.entities(),leaves,nullptr,nullptr,nullptr,&promoted);
+}
+
+Entities compose_phase_property_selection_edit_candidates(const DocumentSnapshot& source,
+    const std::vector<Json>& authorings,const std::vector<Entities>& ordinary,
+    const StairPropertyReviewPreparation* ordinary_stair_review) {
+    if (!source.is_editable() || authorings.size()>1000 || ordinary.size()>4 ||
+        (authorings.empty() && ordinary.empty() && !ordinary_stair_review))
+        invalid("Phase Properties composition requires bounded actual-source contributions");
+    const auto& actual=source.entities();
+    const auto snapshot_digest=document_snapshot_digest(source);
+    const auto authoring_digest=document_authoring_source_digest_v2(source);
+    const auto entities_digest=entity_map_digest(actual);
+    const auto choices=phase_constraint_authoring_selections(actual);
+    Entities result=actual;
+    PhasePropertyCompositionRetirements retirements;
+    std::set<std::string,std::less<>> retired_rails;
+    std::set<std::tuple<int,std::string,std::string>> groups;
+    std::size_t bytes{};
+    const auto collect=[&](const Entities& replay) {
+        for (const auto& [id,entity]:actual) if (!replay.contains(id)) {
+            if (entity.type=="railing" && !retired_rails.contains(id))
+                invalid("Phase Properties physical retirement lacks an explicit actual rail decision");
+            if (entity.type!="railing" && entity.type!="constraint" && entity.type!=kAnnotationEntityType &&
+                !can_recognize_boundary_dimension_entity_type(entity.type))
+                invalid("Phase Properties erased an unsupported physical owner");
+            retirements.erased.insert(id);
+        }
+        const auto aliases=embedded_assembly_presentation_ids(replay);
+        for (const auto& [binding,alias]:embedded_assembly_presentation_ids(actual)) {
+            const auto next=aliases.find(binding);
+            if (next!=aliases.end()) {
+                if (next->second!=alias) invalid("Phase Properties changed an actual surviving render alias");
+                continue;
+            }
+            const auto& catalog=actual.at(binding.first).properties.at("model").at("instances");
+            const auto row=std::find_if(catalog.begin(),catalog.end(),[&](const auto& value) { return value.at("id")==binding.second; });
+            if (row==catalog.end() || !row->contains("placement") ||
+                !retired_rails.contains(row->at("placement").at("host_entity_id").template get<std::string>()))
+                invalid("Phase Properties hosted retirement lacks an explicit actual rail decision");
+            retirements.bindings.insert(binding);
+        }
+    };
+    // Fold original-source contributions in pairs, keeping the exact original
+    // map as every merge's authority. The accumulated map is a derived result,
+    // never a projected snapshot. This retains the 1000-target request budget
+    // without holding one whole-document candidate for every phase cohort.
+    const auto merge=[&](const Entities& replay) {
+        result=compose_mixed_selection_edit_candidates_impl(actual,{result,replay},nullptr,nullptr,nullptr,nullptr,&retirements);
+    };
+    for (const auto& wire:authorings) {
+        const auto count=wire.dump().size();
+        if (count>4*1024*1024-bytes) invalid("Phase Properties combined proof byte budget exceeded");
+        bytes+=count;
+        const auto intent=decode_phase_constraint_authoring_intent(wire);
+        if (intent.expected_revision!=source.revision() || intent.source_saved_revision!=source.saved_revision_optional() ||
+            intent.source_snapshot_digest!=snapshot_digest || intent.source_authoring_digest!=authoring_digest ||
+            intent.source_entities_digest!=entities_digest || intent.phase_selections.dump()!=choices.dump())
+            invalid("Phase Properties contribution differs from its complete original source");
+        const auto version=wire.at("version").get<int>();
+        std::string registry,alternative;
+        Entities replay;
+        if (version==23) {
+            const auto leaf=decode_phase_wall_replacement_authoring(intent.wall_replacement);
+            registry=leaf.registry_id;alternative=leaf.alternative_id;
+            // Explicit room decisions, when present, complete their own leaf.
+            // Otherwise only detached physical inspection is reconstructed.
+            replay=leaf.room_review_intent.is_null() ? inspect_phase_wall_replacement_authoring(source,intent).edited_entities :
+                replay_phase_constraint_authoring(actual,wire);
+        } else if (version==24) {
+            const auto leaf=decode_phase_structural_replacement_authoring(intent.structural_replacement);
+            registry=leaf.registry_id;alternative=leaf.alternative_id;
+            replay=replay_phase_constraint_authoring(actual,wire);
+        } else if (version==5) {
+            const auto leaf=decode_phase_slab_replacement_authoring(intent.slab_replacement);
+            registry=leaf.registry_id;alternative=leaf.alternative_id;
+            replay=replay_phase_constraint_authoring(actual,wire);
+        } else if (version==4) {
+            const auto leaf=decode_phase_roof_replacement_authoring(intent.roof_replacement);
+            if (leaf.demolition) invalid("Phase Properties cannot borrow roof demolition authority");
+            registry=leaf.registry_id;alternative=leaf.alternative_id;
+            replay=replay_phase_constraint_authoring(actual,wire);
+        } else if (version==25) {
+            const auto leaf=decode_phase_stair_replacement_authoring(intent.stair_replacement);
+            registry=leaf.registry_id;alternative=leaf.alternative_id;
+            for (const auto& decision:leaf.dependency_dispositions)
+                if (decision.action==PhaseStairReplacementDependencyAction::retire && !retired_rails.insert(decision.rail_id).second)
+                    invalid("Phase Properties repeats an explicit rail retirement");
+            replay=replay_phase_constraint_authoring(actual,wire);
+        } else invalid("Phase Properties contribution has unsupported replacement authority");
+        if (!groups.emplace(version,registry,alternative).second)
+            invalid("Phase Properties repeats a family/registry/alternative contribution");
+        collect(replay);merge(replay);
+    }
+    if (ordinary_stair_review) {
+        const auto reviewed=replay_stair_property_review_preparation(source,ordinary_stair_review->request());
+        for (const auto& id:reviewed.retired_rail_ids()) if (!retired_rails.insert(id).second)
+            invalid("Ordinary and replacement Properties overlap explicit rail retirement");
+        collect(reviewed.entities());merge(reviewed.entities());
+    }
+    for (const auto& replay:ordinary) merge(replay);
+    for (const auto& id:retirements.erased) if (result.contains(id))
+        invalid("Phase Properties restored a source-derived retired owner");
+    return result;
 }
 
 namespace {

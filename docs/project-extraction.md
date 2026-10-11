@@ -1,5 +1,13 @@
 # Portable project extraction
 
+Exchange version197 requires native reader199 for phase outer23/24/25 scalar
+replacements. Wall leaf9 stages original-source wall and opening edits together;
+structural leaf4 preserves dormant dimensions and raw receipt metadata while
+deriving proposed owners and qualified hosted copies. Stair leaf6 explicitly
+opts into final scalar dependency fit and reviewed binding merges. Old outer/leaf dialects
+remain closed. Direct, wrapped, retained and undone history preserve this floor.
+Compilation, runtime and round-trip qualification remain open.
+
 Exchange version196 requires native reader198 for mixed Properties dialect ten.
 Its authenticated assembly request carries exact catalog/instance/entity/path
 targets, declared-slot keep/set/clear operations and partial source-frame poses.

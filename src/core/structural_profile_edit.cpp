@@ -141,6 +141,10 @@ void validate_structural_profile_source_entity(const Entity& source) {
     validate_structural_object_source_entity(source);
     (void)applicable_dimensions(source);
 }
+Entity prepare_structural_profile_edit_entity(const Entity& source, const StructuralProfileEditIntent& intent) {
+    (void)encode_structural_profile_edit_intent(intent);
+    return replay_entity(source, intent);
+}
 Entities replay_structural_profile_entities(const Entities& source,
     const std::vector<StructuralProfileEditIntent>& intents) {
     if (intents.size() > target_limit) invalid("target budget exceeded");
@@ -171,7 +175,8 @@ Entities replay_structural_profile_entities(const Entities& source,
     // physical hosts and every qualified hosted geometry must remain admitted.
     const auto original_plan = admit(source);
     auto result = source;
-    for (const auto& intent : intents) result.at(intent.object_id) = replay_entity(source.at(intent.object_id), intent);
+    for (const auto& intent : intents)
+        result.at(intent.object_id) = prepare_structural_profile_edit_entity(source.at(intent.object_id), intent);
     const auto final_plan = admit(result);
     if (final_plan.catalog_ids != original_plan.catalog_ids || final_plan.instance_ids != original_plan.instance_ids ||
         final_plan.original_presentation_ids != original_plan.original_presentation_ids)

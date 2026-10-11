@@ -14,6 +14,46 @@ changed source does not acquire runtime acceptance without later qualification.
 
 ## Current delivery state
 
+### October 10 baseline group scalar Properties - source foundation
+
+Qualified component Properties are committed and pushed as 5ec6a601, with exact
+local and remote branch references matched. The current source adds a closed
+complete-selection scalar replacement preparation for active remodeling
+alternatives. Actual original owners derive changed baseline cohorts, identity
+inventories, explicit stair dependency choices, selected-owner remapping and
+retained ordinary/no-op contributions. Captured source/history/assets/save
+fences remain authoritative; caller maps do not supply replacement geometry.
+
+Wall leaf9 and phase outer23 admit one wall/opening scalar cohort, including
+ordinary/proposed members, with both families staged before final host fit.
+Structural leaf4 and phase outer24 retain dormant scalar fields and opaque
+receipt siblings instead of converting through full-profile descriptors. A
+separate scalar hosted-copy path retains raw source catalogs and row order,
+remapping only independently inventoried identity and host slots. Stair leaf6
+and phase outer25 explicitly opt into final edited-rail dimension fit and
+reviewed rehosting, preserving historical stair interpretation. Reader199 and
+extraction197 retain direct, wrapped, retained and undone authority.
+
+A source-bound composer reconstructs phase contributions independently before
+joining ordinary edits. Explicit typed stair retirement owns its exact erased
+closure and qualified hosted rows; retained baselines, inactive physical owners
+and surviving render aliases stay protected. Pending wall room/relationship
+decisions remain exposed as detached review inventory. The foundation is added
+to the existing architectural authoring target. It is not yet a user-accessible
+complete Properties operation: mixed command integration, identity allocation,
+room-review completion, controller publication and selection restoration still
+require implementation. Independent source review approved the corrected
+foundation. It identified historical stair replay drift, concurrent railing
+scalar/rehost conflicts and ordinary saved-Baseline/required-owner refusal.
+The additive stair leaf preserves historical replay; the compositor retains
+ordinary scalar editing while protecting required erasures and reviewed
+retirement closure. Scoped whitespace checking passed.
+
+No builds, tests/new tests, scripts/probes, native jobs, launches, packages or
+installations have run. The installed app is unchanged. Compilation, native
+interaction, Undo/Redo and save/reopen remain unverified; all ten production
+gates remain open.
+
 ### October 10 qualified component Properties - source integration
 
 Reviewed stair/railing Properties are committed and pushed as a221716b, with

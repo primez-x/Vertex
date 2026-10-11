@@ -284,7 +284,9 @@ public:
     // v197 retains mixed dialect nine with closed actual-source stair/rail
     // dependency decisions and their exact independently derived retirements.
     // v198 retains qualified assembly instance/path Properties in mixed ten.
-    static constexpr std::uint32_t format_version = 198;
+    // v199 retains compound wall/opening, exact structural scalar phase
+    // replacements and explicitly opted-in complete stair scalar dependencies.
+    static constexpr std::uint32_t format_version = 199;
     static constexpr std::uint32_t recovery_format_version = 4;
     [[nodiscard]] static std::uint32_t required_format_version(const DocumentSnapshot& snapshot);
     static constexpr std::uint64_t maximum_file_bytes = 4ULL * 1024ULL * 1024ULL * 1024ULL;

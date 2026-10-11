@@ -1,4 +1,29 @@
-# Vertex project formats v1 through v198
+# Vertex project formats v1 through v199
+
+Reader199 adds original-source scalar replacement authority for remodeling
+alternatives. Phase outer23 carries wall leaf9, with one flat identity/room
+envelope and separate closed wall/opening profile arrays. Both families stage
+before final fit admission; changed baseline hosts alone derive replacement
+seeds. Ordinary/proposed members retain their actual identities unless copied
+by the independently discovered host closure. Complete presentation and corner
+admission is mandatory. Historical wall leaves and outer versions retain their
+exclusive meanings.
+
+Phase outer24 carries structural leaf4. Its scalar_profiles array replaces the
+full edits lane and requires complete_hosted:true with exact source-derived
+entity/child and qualified hosted-instance allocations. Scalar preparation
+patches only supplied applicable changed dimensions, retaining dormant fields,
+opaque receipt siblings and unchanged raw catalogs. Full structural descriptors
+in historical leaves1/2/3 retain their original authority. Direct, wrapped,
+retained and undone proofs require reader199; extraction emits version197.
+
+Phase outer25 carries stair leaf6 with complete_scalar_dependencies:true and
+explicit dependency arrays, including empty arrays when no rail is affected.
+It evaluates jointly edited railing dimensions against the edited stair and
+merges explicit rehosts into retained original bindings. Historical leaves1-5
+and outer12 retain their prior dependency interpretation; historical coordinated
+authoring refuses leaf6. This authority shares reader199/extraction197.
+This source integration does not establish runtime or migration acceptance.
 
 ## Qualified component instance and part Properties (v198, source implementation)
 

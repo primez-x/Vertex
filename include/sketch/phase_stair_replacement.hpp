@@ -59,12 +59,15 @@ struct PhaseStairReplacementDependencyPlan {
 // entity-map, registry or child mapping grants dependency authority.
 // Retirement offers can be conditional on retiring the complete affected
 // eligible proposed cohort; retirement_reason explains that requirement.
+// The complete scalar Entity overload opts into v6 final-dimension inspection;
+// its default preserves the original dependency interpretation.
 [[nodiscard]] PhaseStairReplacementDependencyPlan inspect_phase_stair_replacement_dependencies(
     const PhaseStairReplacementEntities& actual, const std::vector<StairObjectEditIntent>& edits);
 [[nodiscard]] PhaseStairReplacementDependencyPlan inspect_phase_stair_replacement_dependencies(
     const PhaseStairReplacementEntities& actual, const std::vector<StairCompoundEditIntent>& edits);
 [[nodiscard]] PhaseStairReplacementDependencyPlan inspect_phase_stair_replacement_dependencies(
-    const PhaseStairReplacementEntities& actual, const std::vector<Entity>& edited_entities);
+    const PhaseStairReplacementEntities& actual, const std::vector<Entity>& edited_entities,
+    bool complete_scalar_dependencies = false);
 
 // Analytical dialog admission only: exactly one explicit choice per actual
 // affected owner, with the precise retirement subset checked jointly against
@@ -72,7 +75,8 @@ struct PhaseStairReplacementDependencyPlan {
 // choices; never constructs native bodies or adds unchosen retirement owners.
 void validate_phase_stair_dependency_dispositions(
     const PhaseStairReplacementEntities& actual, const std::vector<Entity>& edited_entities,
-    const std::vector<PhaseStairReplacementDependencyDisposition>& dispositions);
+    const std::vector<PhaseStairReplacementDependencyDisposition>& dispositions,
+    bool complete_scalar_dependencies = false);
 
 struct PhaseStairReplacementRequest {
     std::string registry_id;
@@ -128,7 +132,8 @@ struct PhaseStairReplacementPlan {
     const PhaseStairReplacementEntities& actual, const std::vector<Entity>& edited_entities);
 [[nodiscard]] std::vector<StairCompoundEditIntent> capture_phase_stair_replacement_compound_edits(
     const PhaseStairReplacementEntities& actual, const std::vector<Entity>& edited_entities,
-    const std::vector<PhaseStairReplacementDependencyDisposition>& dispositions);
+    const std::vector<PhaseStairReplacementDependencyDisposition>& dispositions,
+    bool complete_scalar_dependencies = false);
 
 struct PhaseStairReplacementAuthoring {
     std::string registry_id;
@@ -145,10 +150,14 @@ struct PhaseStairReplacementAuthoring {
     // Nonempty, ascending actual-source witness selects v4 for any one lane.
     // Empty preserves the original v1/v2/v3 staging and replay meanings.
     std::vector<std::string> preserved_inactive_rail_ids;
-    // Closed v5 only: exact ascending actual affected dependency witness and
+    // Closed v5/v6: exact ascending actual affected dependency witness and
     // one explicit ascending decision for each owner. Neither supplies rows.
     std::vector<std::string> dependency_rail_ids;
     std::vector<PhaseStairReplacementDependencyDisposition> dependency_dispositions;
+    // Closed v6 only: inspect complete typed rail dimensions against original
+    // attachment roles and merge explicit rehosts into retained-bound edits.
+    // The dependency arrays remain explicit even when no rail is affected.
+    bool complete_scalar_dependencies{};
 };
 
 [[nodiscard]] PhaseStairReplacementPlan inspect_phase_stair_replacement_plan(
@@ -171,6 +180,10 @@ struct PhaseStairReplacementAuthoring {
 // {rail_id, action:"retire"} or {rail_id, action:"rehost", target_key}. The
 // actual complete-source retirement producer precedes edited staging; rehost
 // targets retain attachment shape and derive resulting child/incident witnesses.
+// Closed v6 retains the v5 fields and requires complete_scalar_dependencies:true.
+// Its exact dependency witness may be empty; final typed rail dimensions own
+// attachment fit, while immutable actual host roles and explicit choices retain
+// dependency authority. Versions 1..5 preserve their historical interpretation.
 [[nodiscard]] nlohmann::json encode_phase_stair_replacement_authoring(
     const PhaseStairReplacementAuthoring& authoring);
 [[nodiscard]] PhaseStairReplacementAuthoring decode_phase_stair_replacement_authoring(

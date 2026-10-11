@@ -191,6 +191,16 @@ struct PhaseConstraintAuthoringIntent {
     const std::vector<std::map<std::string,Entity,std::less<>>>& independently_admitted_ordinary_candidates,
     const StairPropertyReviewPreparation* stair_review = nullptr);
 
+// Reconstruct bounded scalar replacement leaves against the full original
+// snapshot before composing ordinary contributions. Pending wall room review
+// remains a detached stage. Only independently replayed explicit stair
+// retirement admits physical erasure; this grants no publication authority.
+[[nodiscard]] std::map<std::string,Entity,std::less<>> compose_phase_property_selection_edit_candidates(
+    const DocumentSnapshot& actual,
+    const std::vector<nlohmann::json>& phase_authorings,
+    const std::vector<std::map<std::string,Entity,std::less<>>>& independently_admitted_ordinary_candidates,
+    const StairPropertyReviewPreparation* ordinary_stair_review = nullptr);
+
 // Internal composition of independently admitted demolition leaves. Complete
 // typed leaf replay owns removals and fresh destinations; overlapping changes
 // compose only through codec-known phase/presentation rows and catalog removals.
