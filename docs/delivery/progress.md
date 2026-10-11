@@ -14,6 +14,28 @@ changed source does not acquire runtime acceptance without later qualification.
 
 ## Current delivery state
 
+### October 11 mixed selection component dimension carry
+
+The embedded move/copy batch is committed and pushed as 213453ea, with the exact
+remote branch ref matching local HEAD. The preceding status-only turn made no
+implementation progress. Current work adds ordinary request5 and separate mixed
+transform intent18; mixed5-17 retain their existing Properties meanings. The new
+pair preserves actual-source geometry, mandatory room decisions, text-baseline
+and invariant-child proofs while explicitly carrying component dimensions.
+Historical ordinary1-4 group replay remains body-only. Current mixed canvas and
+numeric transforms now request the new pair, and selected embedded callouts use
+their exact qualified owner rather than the whole catalog as selection authority.
+
+Reader220/extraction218 retain the new behavior in current, nested and undone
+history. Independent integrated source review approved the frozen batch with no
+proved P1/P2 finding. Root scoped whitespace review passes; the batch is being
+committed and backed up. Embedded retirement,
+host-driven carry, linked-view targets, protected phase replacement and the
+remaining mixed-family lifecycles remain required. No builds/tests/jobs,
+launches, packages or installations ran; compilation, interaction, cancellation,
+Undo/redo, storage/migration and production qualification remain unverified.
+All ten production gates remain open and the installed candidate is unchanged.
+
 ### October 11 embedded component group dimensions
 
 The preceding independent lifecycle batch is committed and pushed as 10e27ef1;

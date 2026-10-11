@@ -71209,7 +71209,7 @@ public:
             for (const auto& child:children) if (!ordinary.contains(child.roof_id))
                 throw std::invalid_argument("Select the skylight's roof to move them vertically together.");
         }
-        json request={{"version",4},{"expected_revision",source->revision()},{"transaction_id",new_id("mixed-transform")},
+        json request={{"version",5},{"expected_revision",source->revision()},{"transaction_id",new_id("mixed-transform")},
             {"architectural",json::array()},{"embedded",json::array()},{"annotations",json::array()},
             {"references",json::array()},{"geometry",nullptr},{"message",message}};
         const auto planar_json=[scale](const PlanarTransform& t,bool presentation) {
@@ -71326,6 +71326,7 @@ public:
         if (scale!=1.0) geometry.version=2;
         std::set<std::string,std::less<>> parents;
         std::map<std::string,std::map<std::string,AssemblyTransform,std::less<>>,std::less<>> carried_components;
+        std::optional<decltype(embedded_assembly_presentation_ids(source->entities()))> dimension_owner_aliases;
         for (const auto& id:ordinary) {
             const auto persisted=source->entities().find(id.toStdString());
             const auto embedded=embeddedAssemblyChild(*source,id.toStdString());
@@ -71379,7 +71380,21 @@ public:
             }
             if (can_recognize_boundary_dimension_entity_type(entity.type)) {
                 const auto dimension=decode_boundary_dimension_entity(entity);
-                if (!dimension.supported() || !ordinary.contains(id_from(dimension.dimension->boundary_id)))
+                bool measured_owner_selected = dimension.supported() &&
+                    ordinary.contains(id_from(dimension.dimension->boundary_id));
+                if (dimension.supported() && dimension.dimension->assembly_target) {
+                    const auto& owner = dimension.dimension->assembly_target->component;
+                    if (owner.document_entity_id)
+                        measured_owner_selected = ordinary.contains(id_from(*owner.document_entity_id));
+                    else {
+                        if (!dimension_owner_aliases)
+                            dimension_owner_aliases = embedded_assembly_presentation_ids(source->entities());
+                        const auto alias = dimension_owner_aliases->find({owner.catalog_id, owner.instance_id});
+                        measured_owner_selected = alias != dimension_owner_aliases->end() &&
+                            ordinary.contains(id_from(alias->second));
+                    }
+                }
+                if (!measured_owner_selected)
                     throw std::invalid_argument("Select a dimension's measured owner to transform it together.");
                 (void)resolve_current_boundary_dimension(*dimension.dimension,*source);continue;
             }

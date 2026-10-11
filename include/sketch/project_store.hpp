@@ -323,7 +323,8 @@ public:
     // v218 retains snapshot-bound private component definitions, proposed
     // replacements and associated presentation under exclusive command60.
     // v219 retains qualified root/part width, depth and height dimensions.
-    static constexpr std::uint32_t format_version = 219;
+    // v220 retains mixed transform dialect18/ordinary5 component dimension carry.
+    static constexpr std::uint32_t format_version = 220;
     static constexpr std::uint32_t recovery_format_version = 4;
     [[nodiscard]] static std::uint32_t required_format_version(const DocumentSnapshot& snapshot);
     static constexpr std::uint64_t maximum_file_bytes = 4ULL * 1024ULL * 1024ULL * 1024ULL;

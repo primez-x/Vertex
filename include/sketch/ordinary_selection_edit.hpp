@@ -10,7 +10,7 @@
 
 namespace sketch {
 
-// Closed v1/v2/v3/v4 source-producer request. Exact v1/v2 envelope fields are version,
+// Closed v1/v2/v3/v4/v5 source-producer request. Exact v1/v2 envelope fields are version,
 // expected_revision, transaction_id, architectural, embedded, annotations,
 // references and message. Each target carries its own explicit transform:
 // architectural {entity_id,transform}, embedded {catalog_id,instance_id,transform},
@@ -35,13 +35,19 @@ namespace sketch {
 // latter is linear-only authority for a unique actual model_plan label's
 // view-relative baseline; transform still owns model-XY anchor and scale.
 // Symbols and legacy labels refuse nonnull independent baseline authority.
+// Version five inherits version four's exact fields, typed geometry versions
+// and text-baseline semantics. Its architectural and embedded group producers
+// atomically carry existing qualified component dimensions with their actual
+// owners. This implicit carry allocates no dimension identities and grants no
+// additional editing permissions. Versions one through four retain their
+// historical body-only producer replay without component-dimension carry.
 // Canonicalization sorts structural target identities and retains losslessly
 // admitted numeric representations. There are 1..1000 total targets, with a
 // conservative 4 MiB compact-wire bound, 100000 values and maximum depth 64.
 // The nonempty UTF-8 action message is bounded to 1024 bytes.
 // Raw candidate entities, paths, copy IDs and producer/render aliases confer no
 // authority. Properties and phase replacement are not lanes. Walls/boundaries
-// require version three/four's typed geometry and complete explicit room review.
+// require version three/four/five's typed geometry and complete explicit room review.
 [[nodiscard]] nlohmann::json validate_ordinary_selection_edit_request(
     const nlohmann::json& request);
 
@@ -52,12 +58,12 @@ namespace sketch {
 // The caller owns captured-source, profile provenance and compatible stored-frame
 // selection authority; a matching revision alone is not a publication fence.
 // This historical raw-command API accepts v1/v2 only: raw entity changes cannot
-// carry version three/four's typed geometry/room-review authority.
+// carry version three/four/five's typed geometry/room-review authority.
 [[nodiscard]] ApplyEntityChanges replay_ordinary_selection_edit(
     const DocumentSnapshot& source, const nlohmann::json& request);
 
 // Returns the complete independently derived candidate map without publication
-// authority. v1/v2 reuse the historical fully admitted replay. v3/v4 replay all
+// authority. v1/v2 reuse the historical fully admitted replay. v3/v4/v5 replay all
 // nongeometry producers and typed reviewed geometry against the same original
 // snapshot, then composes their complete maps through the reviewed composer.
 // Authenticating the editable source and revision is required even for identity.
@@ -65,7 +71,7 @@ namespace sketch {
 [[nodiscard]] std::map<std::string, Entity, std::less<>> replay_ordinary_selection_edit_candidate(
     const DocumentSnapshot& source, const nlohmann::json& request);
 
-// Pre-review derivation only: validates the complete v4 request with an empty
+// Pre-review derivation only: validates the complete v4/v5 request with an empty
 // geometry.room_reviews roster, but independently admits only its nongeometry
 // producers against the original source. Geometry is neither replayed nor
 // approved by this helper. Geometry-only selections return the exact admitted
@@ -75,7 +81,7 @@ namespace sketch {
 replay_ordinary_selection_edit_nongeometry_preparation(
     const DocumentSnapshot& source, const nlohmann::json& request);
 
-// Validates the closed request and returns v3/v4's canonical room review intents in
+// Validates the closed request and returns v3/v4/v5's canonical room review intents in
 // their declared replay order, or an empty vector for v1/v2 or null geometry.
 [[nodiscard]] std::vector<nlohmann::json> ordinary_selection_edit_room_reviews(
     const nlohmann::json& request);
@@ -83,7 +89,7 @@ replay_ordinary_selection_edit_nongeometry_preparation(
 // Sorted closed structural roster: {kind:"object",entity_id},
 // {kind:"embedded",catalog_id,instance_id},
 // {kind:"annotation",owner_id,child_id}, {kind:"reference",entity_id}.
-// Versions three/four also include {kind:"geometry",entity_id} for explicit roots.
+// Versions three/four/five also include {kind:"geometry",entity_id} for explicit roots.
 // This validates the request shape, not source target existence or provenance.
 [[nodiscard]] nlohmann::json ordinary_selection_edit_semantic_targets(
     const nlohmann::json& request);

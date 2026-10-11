@@ -214,7 +214,8 @@ std::vector<RoofEditIntent> roof_edits(const Json& roof, const Json& enclosing) 
 void validate(const Json& value) {
     Budget budget; budget.json(value, 0);
     const bool identity_dialect = value.is_object() && value.contains("version") &&
-        value.at("version").is_number_integer() && value.at("version") == 4;
+        value.at("version").is_number_integer() &&
+        (value.at("version") == 4 || value.at("version") == 18);
     if (identity_dialect)
         fields(value, {"version", "expected_revision", "source_snapshot_digest", "source_authoring_digest",
             "source_entities_digest", "source_saved_revision", "ordinary_request", "roof_authoring", "roof_opening_members",
@@ -232,7 +233,8 @@ void validate(const Json& value) {
         reject("saved revision exceeds source head");
     message(value.at("message"));
     const auto ordinary = validate_ordinary_selection_edit_request(value.at("ordinary_request"));
-    if (ordinary.at("version") != value.at("version"))
+    const Json ordinary_version = value.at("version") == 18 ? Json(5) : value.at("version");
+    if (ordinary.at("version") != ordinary_version)
         reject("ordinary request requires its matching mixed intent dialect");
     if (ordinary.dump() != value.at("ordinary_request").dump() || revision(ordinary.at("expected_revision")) != expected)
         reject("ordinary request is not canonical or binds another revision");
@@ -390,13 +392,14 @@ bool mixed_selection_edit_active_phase_policy(const Json& value) {
         return mixed_selection_property_edit_active_phase_policy(value);
     validate(value);
     return !value.at("roof_authoring").is_null() ||
-        (value.at("version") == 4 && !value.at("roof_identity_requests").empty());
+        ((value.at("version") == 4 || value.at("version") == 18) &&
+            !value.at("roof_identity_requests").empty());
 }
 bool mixed_selection_edit_has_geometry(const Json& value) {
     if (properties_dialect(value))
         return mixed_selection_property_edit_has_geometry(value);
     validate(value);
-    return (value.at("version") == 3 || value.at("version") == 4) &&
+    return (value.at("version") == 3 || value.at("version") == 4 || value.at("version") == 18) &&
         !value.at("ordinary_request").at("geometry").is_null();
 }
 std::vector<Json> mixed_selection_edit_room_reviews(const Json& value) {
@@ -432,7 +435,7 @@ std::string authenticate_source(const DocumentSnapshot& source, const Json& valu
 // full replay always passes null and therefore always performs mandatory review.
 Entities derive_mixed_selection_edit(const DocumentSnapshot& source, const Json& value,
     std::optional<SelectionGeometryTransformPreparation>* unreviewed_geometry) {
-    const bool identity_dialect = value.at("version") == 4;
+    const bool identity_dialect = value.at("version") == 4 || value.at("version") == 18;
     const auto selected = members(value.at("roof_opening_members"),value.at("version") == 3 || identity_dialect,identity_dialect);
     for (const auto& member : selected) (void)child_row(source.entities(), member.key);
     if (identity_dialect && !value.at("roof_identity_requests").empty()) {
@@ -472,7 +475,7 @@ Entities derive_mixed_selection_edit(const DocumentSnapshot& source, const Json&
         ordinary_request.at("references").empty();
     auto ordinary_stage = source;
     Entities ordinary_entities=source.entities();
-    if (ordinary_request.at("version") == 4) {
+    if (ordinary_request.at("version") == 4 || ordinary_request.at("version") == 5) {
         // Retain the complete request, including explicit geometry roots and
         // text-baseline authority. This helper derives only original-source
         // nongeometry leaves; the typed geometry path below still owns review.
@@ -555,7 +558,11 @@ Json mixed_intent(const DocumentSnapshot& source, const Json& ordinary_request,
     budget.node(1); budget.quoted(text);
     if (text.size() > 1024 || text.find('\0') != std::string_view::npos) reject("invalid message");
     const auto canonical_ordinary = validate_ordinary_selection_edit_request(ordinary_request);
-    Json value = {{"version", roof_identity_requests.is_null() ? canonical_ordinary.at("version") : Json(4)},
+    const bool dimension_carry = canonical_ordinary.at("version") == 5;
+    if (dimension_carry && roof_identity_requests.is_null())
+        reject("dimension carry requires an explicit identity roster");
+    Json value = {{"version", dimension_carry ? Json(18) :
+            (roof_identity_requests.is_null() ? canonical_ordinary.at("version") : Json(4))},
         {"expected_revision", source.revision()},
         {"source_snapshot_digest", document_snapshot_digest(source)},
         {"source_authoring_digest", document_authoring_source_digest_v2(source)},
@@ -633,9 +640,9 @@ MixedSelectionEditPreparation prepare_mixed_selection_edit(const DocumentSnapsho
     const Json& ordinary_request, const Json& roof_authoring, const Json& roof_members,
     std::string_view text, const Json& roof_identity_requests) {
     const auto ordinary = validate_ordinary_selection_edit_request(ordinary_request);
-    if (ordinary.at("version") != 4 || roof_identity_requests.is_null() ||
+    if ((ordinary.at("version") != 4 && ordinary.at("version") != 5) || roof_identity_requests.is_null() ||
         (!ordinary.at("geometry").is_null() && !ordinary.at("geometry").at("room_reviews").empty()))
-        reject("preparation requires an unreviewed version-four request and explicit identity roster");
+        reject("preparation requires an unreviewed version-four/five request and explicit identity roster");
     if (ordinary.at("message").get_ref<const std::string&>() != text)
         reject("preparation message must match its ordinary and geometry request");
     auto value = mixed_intent(source, ordinary, roof_authoring, roof_members, text, roof_identity_requests);

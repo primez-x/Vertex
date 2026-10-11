@@ -1,4 +1,19 @@
-# Vertex project formats v1 through v219
+# Vertex project formats v1 through v220
+
+Reader220 retains mixed transform intent18 under command52, paired with ordinary
+selection request5. Both inherit the exact closed geometry, room-review,
+presentation and invariant-skylight authority of ordinary4/mixed4. The new
+ordinary dialect additionally carries existing qualified component extent
+dimensions with explicitly transformed independent and embedded roots. The
+actual source and candidate supply the nested physical frames; callout targets,
+paths, axes and raw metadata remain unchanged. It grants no dimension allocation,
+Properties, phase replacement or linked-view authority. Older stored requests
+retain their body-only consequences, including ordinary1-4 replay.
+
+Current, nested and undone command52/intent18 proofs retain reader220 even after
+their dimensions disappear from the current head. Portable extraction emits
+version218 through the required native-reader mapping. Compilation, retained
+history, migration and extraction round trips remain unverified.
 
 Reader219 retains dimension version6, kind `assembly_extent`. Its closed target
 contains `entity_id` and `assembly`; the nested version-one assembly target names

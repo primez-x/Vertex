@@ -1,5 +1,12 @@
 # Portable project extraction
 
+Exchange version218 requires native reader220 for mixed transform intent18 and
+ordinary selection request5. Original-source geometry/room decisions, exact
+invariant skylight proofs and existing qualified component dimension carry are
+retained together under command52. Nested and undone proofs keep the requirement
+after current annotations are deleted. Historical ordinary1-4/mixed1-4 meanings
+remain unchanged. No extraction or migration execution is claimed.
+
 Exchange version217 requires native reader219 for qualified component extent
 dimensions. Dimension version6 carries the actual catalog/root/document-owner,
 part path and physical width/depth/height axis in a closed target. Persisted

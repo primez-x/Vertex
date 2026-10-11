@@ -46,7 +46,9 @@ private:
         const nlohmann::json&, std::string_view, const nlohmann::json&);
 };
 
-// Accepts only ordinary/mixed dialect four, with geometry.room_reviews empty.
+// Accepts ordinary four/mixed four or ordinary five/mixed eighteen, with
+// geometry.room_reviews empty. Only the latter grants associated component
+// dimension carry; historical dialects retain their original consequences.
 // Every leaf and the geometry preparation derive the same original snapshot;
 // old room state in the drawing preview does not discharge review requirements.
 [[nodiscard]] MixedSelectionEditPreparation prepare_mixed_selection_edit(
@@ -99,6 +101,10 @@ private:
 // optionally beside the same authenticated stair dependency review.
 // Version eleven adds independently inventoried baseline replacements and
 // explicit phase room/relationship completion beside the complete selection.
+// Version eighteen is a separate transform dialect pairing ordinary five with
+// version four's explicit invariant-child roster. Actual independent/embedded
+// component transforms also carry qualified extent dimensions. It adds no
+// Properties, phase replacement, linked-view or new identity authority.
 [[nodiscard]] nlohmann::json make_mixed_selection_edit_intent(
     const DocumentSnapshot& source, const nlohmann::json& ordinary_request,
     const nlohmann::json& roof_authoring, const nlohmann::json& roof_members,
