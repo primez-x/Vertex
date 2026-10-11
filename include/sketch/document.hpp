@@ -160,6 +160,18 @@ struct RigidOwnerTransformation {
     PlanarTransform transform;
 };
 
+// Scale about the captured pivot, then apply the historical rigid basis.
+// This distinct lane never changes the meaning of a saved rigid operator.
+struct SimilarityOwnerTransformation {
+    std::string owner_id;
+    PlanarTransform transform;
+    double scale{1.0};
+
+    bool operator==(const SimilarityOwnerTransformation& other) const noexcept {
+        return owner_id == other.owner_id && transform == other.transform && scale == other.scale;
+    }
+};
+
 // Rigid geometry and its supplemental physical/relationship edits are admitted
 // only after every measured owner has been reconstructed. Dialects one/two
 // require a shared operator; dialect three captures each owner's operator.
@@ -345,6 +357,10 @@ struct JointTranslationIntent {
     // when both actual wall hosts have the same captured rigid operator.
     // Historical one-through-eight intents retain their original placement.
     bool corner_window_dimension_completion{};
+    // New nested similarity dialect: exact coverage includes identity owners.
+    // The marker survives damaged/missing rows, preventing historical fallback.
+    std::vector<SimilarityOwnerTransformation> owner_similarities;
+    bool per_owner_similarity_completion{};
 };
 
 // One observation of an existing owner's supported field. This carries no

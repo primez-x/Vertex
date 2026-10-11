@@ -10,6 +10,7 @@
 #include "sketch/corner_window.hpp"
 #include "sketch/document_digest.hpp"
 #include "sketch/document_wall.hpp"
+#include "sketch/joint_translation_replay.hpp"
 #include "sketch/measurement_linework_source.hpp"
 #include "sketch/physical_wall_room_review.hpp"
 #include "sketch/wall_measurement.hpp"
@@ -28,7 +29,17 @@ namespace {
 using Json = nlohmann::json;
 using Ids = std::set<std::string, std::less<>>;
 using Entities = std::map<std::string, Entity, std::less<>>;
-using Operators = std::map<std::string, PlanarTransform, std::less<>>;
+using Operators = std::map<std::string, SimilarityOwnerTransformation, std::less<>>;
+
+bool same_operator(const SimilarityOwnerTransformation& a, const SimilarityOwnerTransformation& b) {
+    return a.transform == b.transform && a.scale == b.scale;
+}
+bool literal_identity(const SimilarityOwnerTransformation& operation) {
+    const auto& transform = operation.transform;
+    return operation.scale == 1.0 && transform.rotation_radians == 0 &&
+        !transform.flip_horizontal && !transform.flip_vertical &&
+        transform.offset.x == 0 && transform.offset.y == 0;
+}
 
 [[noreturn]] void invalid(const std::string& reason) {
     throw std::invalid_argument("Selected geometry transform: " + reason);
@@ -53,6 +64,7 @@ void keys(const Json& value, std::initializer_list<std::string_view> expected) {
     for (const auto key : expected) if (!value.contains(key)) invalid("missing request field");
 }
 SelectionGeometryTransformRequest normalized(SelectionGeometryTransformRequest request) {
+    if (request.version != 1 && request.version != 2) invalid("unsupported request version");
     if (request.roots.empty()) invalid("select at least one geometric root");
     budget(request.roots.size());
     if (request.message.empty() || request.message.size() > 1024 ||
@@ -63,10 +75,13 @@ SelectionGeometryTransformRequest normalized(SelectionGeometryTransformRequest r
     Ids roots;
     for (const auto& root : request.roots) {
         validate_boundary_transform({root.root_id, root.transform});
+        if (!std::isfinite(root.scale) || root.scale <= 0 || (request.version == 1 && root.scale != 1.0))
+            invalid("scale must be positive finite and version one requires unit scale");
         if (!roots.insert(root.root_id).second) invalid("selected roots must be unique");
         // Finite parameters alone can still produce an overflowing affine offset.
         for (const auto point : {Vec2{}, Vec2{1, 0}, Vec2{0, 1}}) {
-            const auto affine = transform_point(point, root.transform);
+            const auto affine = request.version == 1 ? transform_point(point, root.transform) :
+                transform_joint_similarity_point(point, {root.root_id, root.transform, root.scale});
             if (!std::isfinite(affine.x) || !std::isfinite(affine.y))
                 invalid("captured affine operator overflows");
         }
@@ -130,20 +145,21 @@ Operators selected_operators(const DocumentSnapshot& source,
     const SelectionGeometryTransformRequest& request, const ConstraintPhaseScope& scope) {
     Operators operations;
     std::vector<std::string> pending;
-    const auto add = [&](const std::string& id, const PlanarTransform& transform) {
+    const auto add = [&](const std::string& id, const SimilarityOwnerTransformation& operation) {
         const auto found = source.entities().find(id);
         if (found == source.entities().end() || found->second.id != id || !geometric(found->second))
             invalid("selected root or required geometric source is unavailable: " + id);
         if (scope.inactive_owner_ids.contains(id)) invalid("inactive source cannot be transformed: " + id);
-        const auto [retained, inserted] = operations.emplace(id, transform);
+        const auto [retained, inserted] = operations.emplace(id,
+            SimilarityOwnerTransformation{id, operation.transform, operation.scale});
         // Exact captured operators keep the solver's own source inheritance
         // contract. Numerically approximate equality cannot grant authority.
-        if (!inserted && !(retained->second == transform))
+        if (!inserted && !same_operator(retained->second, operation))
             invalid("shared descendant has inconsistent captured operators: " + id);
         if (inserted) pending.push_back(id);
         budget(operations.size());
     };
-    for (const auto& root : request.roots) add(root.root_id, root.transform);
+    for (const auto& root : request.roots) add(root.root_id, {root.root_id, root.transform, root.scale});
     const auto organization = organize_project(source);
     Ids active;
     for (const auto& [id, entity] : source.entities()) {
@@ -162,13 +178,20 @@ Operators selected_operators(const DocumentSnapshot& source,
             Wall wall;
             std::string diagnostic;
             if (!read_document_wall(entity, {}, wall, diagnostic)) invalid(diagnostic);
+            if (request.version == 2) (void)transform_joint_similarity_segment(wall.baseline, transform);
         } else if (entity.type == "measurement_linework") {
             const auto decoded = decode_measurement_linework_model(entity.properties.at("model"));
             if (!decoded.supported()) invalid(decoded.diagnostic);
+            if (request.version == 2)
+                for (const auto& edge : replay_measurement_linework(*decoded.model).edges)
+                    (void)transform_joint_similarity_segment(edge.segment, transform);
         } else {
             if (inspect_boundary_entity_version(entity).format != BoundaryEntityFormat::identified_v1)
                 invalid("boundary requires an explicit identity upgrade: " + id);
-            (void)decode_identified_boundary_entity(entity);
+            const auto boundary = decode_identified_boundary_entity(entity);
+            if (request.version == 2)
+                for (const auto& edge : boundary.segments)
+                    (void)transform_joint_similarity_segment(edge.segment, transform);
             const auto children = deductions(entity);
             deduction_edges.emplace(id, children);
             if (!children.empty()) {
@@ -236,7 +259,7 @@ Operators selected_operators(const DocumentSnapshot& source,
         const auto corner = parse_corner_window(entity);
         const auto first = operations.find(corner.wall_ids[0]);
         const auto second = operations.find(corner.wall_ids[1]);
-        if (first != operations.end() && second != operations.end() && !(first->second == second->second))
+        if (first != operations.end() && second != operations.end() && !same_operator(first->second, second->second))
             invalid("shared corner-window descendant has inconsistent captured host operators: " + id);
     }
     return operations;
@@ -348,12 +371,12 @@ void verify_corner_callout_completion(const Entities& source, const Entities& ca
         const auto first = operations.find(corner.wall_ids[0]);
         const auto second = operations.find(corner.wall_ids[1]);
         if (first == operations.end() || second == operations.end()) continue;
-        if (!(first->second == second->second))
+        if (!same_operator(first->second, second->second))
             invalid("corner-window callout hosts have inconsistent captured operators: " + id);
         (void)resolve_current_boundary_dimension(*decoded.dimension, source);
         (void)resolve_current_boundary_dimension(*decoded.dimension, candidate);
         auto placed = *decoded.dimension;
-        placed.text_position = transform_point(placed.text_position, first->second);
+        placed.text_position = transform_joint_similarity_point(placed.text_position, first->second);
         // Compare the complete source-derived entity. Automatic placement and
         // opaque siblings survive just as they do for ordinary rigid owners.
         const auto expected = encode_boundary_dimension_entity(placed, &entity);
@@ -364,7 +387,8 @@ void verify_corner_callout_completion(const Entities& source, const Entities& ca
 }
 
 std::vector<SelectionGeometryRoomReviewRequirement> room_requirements(
-    const DocumentSnapshot& source, const Entities& candidate, const Operators& operations, Ids& dependencies) {
+    const DocumentSnapshot& source, const Entities& candidate, const Operators& operations, Ids& dependencies,
+    int version) {
     Ids changed_walls;
     for (const auto& [id, entity] : source.entities()) {
         const auto after = candidate.find(id);
@@ -377,10 +401,8 @@ std::vector<SelectionGeometryRoomReviewRequirement> room_requirements(
     }
     if (candidate.size() != source.entities().size()) invalid("rigid transformation cannot add identities");
     if (changed_walls.empty() && std::none_of(operations.begin(), operations.end(), [&](const auto& entry) {
-            const auto& transform = entry.second;
             return is_physical_wall_room(source.entities().at(entry.first)) &&
-                (transform.rotation_radians != 0 || transform.flip_horizontal || transform.flip_vertical ||
-                    transform.offset.x != 0 || transform.offset.y != 0);
+                !literal_identity(entry.second);
         })) return {};
     const auto organization = organize_project(source);
     std::vector<SelectionGeometryRoomReviewRequirement> result;
@@ -397,15 +419,14 @@ std::vector<SelectionGeometryRoomReviewRequirement> room_requirements(
                 if (!decoded.supported()) invalid(decoded.unsupported_reason);
                 if (decoded.dimension->boundary_id != id) continue;
                 const auto before = decoded.dimension->text_position;
-                const auto after = transform_point(before, operation->second);
+                const auto after = transform_joint_similarity_point(before, operation->second);
                 const Vec2 offset{after.x - before.x, after.y - before.y};
                 if (!std::isfinite(offset.x) || !std::isfinite(offset.y)) invalid("room callout displacement overflows");
                 if (offset.x != 0 || offset.y != 0) placements.push_back({dimension_id, offset});
             }
         const auto selected_room = operations.find(id);
         const bool selected_room_callouts = selected_room != operations.end() &&
-            (selected_room->second.rotation_radians != 0 || selected_room->second.flip_horizontal ||
-                selected_room->second.flip_vertical || selected_room->second.offset.x != 0 || selected_room->second.offset.y != 0);
+            !literal_identity(selected_room->second);
         // A selected room's independent area callout can move even if its
         // source walls are invariant and it has no saved dimension entity.
         if (!selected_room_callouts && placements.empty() && std::none_of(lineage.source_owner_ids.begin(), lineage.source_owner_ids.end(),
@@ -417,13 +438,15 @@ std::vector<SelectionGeometryRoomReviewRequirement> room_requirements(
                 std::abs(entry.effective_elevation_m - lineage.effective_elevation_m) <= default_geometry_tolerance_metres;
         });
         if (group == result.end()) {
-            result.push_back({*context, lineage.effective_elevation_m, {}, {}, {}, {}});
+            result.push_back({*context, lineage.effective_elevation_m, {}, {}, {}, {}, {}});
             group = std::prev(result.end());
         }
         group->retained_room_ids.push_back(id);
         group->source_wall_ids.insert(group->source_wall_ids.end(), lineage.source_owner_ids.begin(), lineage.source_owner_ids.end());
-        if (const auto operation = operations.find(id); operation != operations.end())
-            group->room_transformations.push_back({id, operation->second});
+        if (const auto operation = operations.find(id); operation != operations.end()) {
+            if (version == 1) group->room_transformations.push_back({id, operation->second.transform});
+            else group->room_similarities.push_back(operation->second);
+        }
         group->dimension_placements.insert(group->dimension_placements.end(), placements.begin(), placements.end());
         dependencies.insert(id); budget(dependencies.size());
     }
@@ -459,30 +482,36 @@ Json encode_selection_geometry_transform_request(const SelectionGeometryTransfor
     for (const auto& root : request.roots) {
         auto transform = encode_boundary_transform({root.root_id, root.transform});
         transform.erase("version"); transform.erase("boundary_id");
-        roots.push_back({{"root_id", root.root_id}, {"transform", std::move(transform)}});
+        Json encoded{{"root_id", root.root_id}, {"transform", std::move(transform)}};
+        if (request.version == 2) encoded["scale"] = root.scale;
+        roots.push_back(std::move(encoded));
     }
-    Json result{{"version", 1}, {"expected_revision", request.expected_revision},
+    Json result{{"version", request.version}, {"expected_revision", request.expected_revision},
         {"roots", std::move(roots)}, {"message", request.message}};
     if (result.dump().size() > 1024 * 1024) invalid("request exceeds the one MiB wire budget");
     return result;
 }
 SelectionGeometryTransformRequest decode_selection_geometry_transform_request(const Json& value) {
     keys(value, {"version", "expected_revision", "roots", "message"});
-    if (!value.at("version").is_number_integer() || value.at("version") != 1 ||
+    if (!value.at("version").is_number_integer() || (value.at("version") != 1 && value.at("version") != 2) ||
         !value.at("expected_revision").is_number_integer() || value.at("expected_revision") < 0 ||
         !value.at("roots").is_array() || !value.at("message").is_string()) invalid("invalid request field types");
     budget(value.at("roots").size());
     SelectionGeometryTransformRequest result;
+    result.version = value.at("version").get<int>();
     result.expected_revision = value.at("expected_revision").get<Revision>();
     result.message = value.at("message").get<std::string>();
     for (const auto& root : value.at("roots")) {
-        keys(root, {"root_id", "transform"});
+        if (result.version == 1) keys(root, {"root_id", "transform"});
+        else keys(root, {"root_id", "transform", "scale"});
         if (!root.at("root_id").is_string()) invalid("root_id must be a string");
+        if (result.version == 2 && !root.at("scale").is_number()) invalid("scale must be a number");
         keys(root.at("transform"), {"pivot", "rotation_radians", "flip_horizontal", "flip_vertical", "offset"});
         auto encoded = root.at("transform");
         encoded["version"] = 1; encoded["boundary_id"] = root.at("root_id");
         const auto decoded = decode_boundary_transform(encoded);
-        result.roots.push_back({decoded.boundary_id, decoded.transform});
+        result.roots.push_back({decoded.boundary_id, decoded.transform,
+            result.version == 2 ? root.at("scale").get<double>() : 1.0});
     }
     result = normalized(std::move(result));
     // Shape/primitive admission precedes serialization, so arbitrary nested
@@ -501,7 +530,8 @@ SelectionGeometryTransformPreparation prepare_selection_geometry_transform(
     const auto operations = selected_operators(source, request, scope);
     auto dependencies = dependency_closure(source, operations, scope);
     JointTranslationIntent joint;
-    joint.per_owner_rigid_completion = true;
+    joint.per_owner_rigid_completion = request.version == 1;
+    joint.per_owner_similarity_completion = request.version == 2;
     joint.corner_window_dimension_completion = true;
     for (const auto& [id, transform] : operations) {
         const auto& entity = source.entities().at(id);
@@ -509,7 +539,8 @@ SelectionGeometryTransformPreparation prepare_selection_geometry_transform(
         if (entity.type == "wall") joint.partial_wall_ids.push_back(id);
         else if (entity.type == "measurement_linework") joint.rigid_stroke_ids.push_back(id);
         else joint.rigid_boundary_ids.push_back(id);
-        joint.owner_transformations.push_back({id, transform});
+        if (request.version == 1) joint.owner_transformations.push_back({id, transform.transform});
+        else joint.owner_similarities.push_back(transform);
     }
     ConstraintAuthoringIntent intent;
     intent.joint_translation = std::move(joint); intent.message = request.message;
@@ -534,7 +565,7 @@ SelectionGeometryTransformPreparation prepare_selection_geometry_transform(
         invalid(preview.diagnostics().empty() ? "rigid solve rejected" : preview.diagnostics().front());
     }
     verify_corner_callout_completion(source.entities(), candidate.entities(), operations, dependencies);
-    auto rooms = room_requirements(source, candidate.entities(), operations, dependencies);
+    auto rooms = room_requirements(source, candidate.entities(), operations, dependencies, request.version);
     // A geometry-invariant operation may still move a selected room's owned
     // callouts. Review then starts directly from the unchanged original source;
     // it does not need a fabricated nonempty geometry proof.

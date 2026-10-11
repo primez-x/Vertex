@@ -1242,6 +1242,15 @@ nlohmann::json encode_phase_constraint_authoring_intent(const PhaseConstraintAut
     // The standalone baseline scale lane pairs only these two authorities.
     // Every other operation remains exclusive, including ordinary scale.
     const bool baseline_wall_group_scale=value.intent.wall_group_scale && !value.wall_replacement.is_null();
+    const bool joint_similarity=value.intent.joint_translation &&
+        (value.intent.joint_translation->per_owner_similarity_completion || !value.intent.joint_translation->owner_similarities.empty());
+    if (joint_similarity) {
+        ConstraintAuthoringIntent only_similarity;
+        only_similarity.joint_translation=value.intent.joint_translation;
+        only_similarity.message=value.intent.message;
+        if (exclusive_operations || encode_intent(value.intent)!=encode_intent(only_similarity))
+            invalid("Joint similarity cannot borrow replacement, sibling geometry or relationship authority");
+    }
     if (exclusive_operations > (baseline_wall_group_scale ? 2 : 1))
         invalid("Active design operations cannot borrow another replacement or demolition authority");
     if (value.intent.wall_group_scale) {
@@ -1257,6 +1266,7 @@ nlohmann::json encode_phase_constraint_authoring_intent(const PhaseConstraintAut
         {"source_entities_digest",value.source_entities_digest},
         {"source_saved_revision",value.source_saved_revision ? Json(*value.source_saved_revision) : Json(nullptr)},
         {"phase_selections",value.phase_selections},{"intent",encode_intent(value.intent)}};
+    if (joint_similarity) result["version"]=22;
     if (!value.wall_replacement.is_null()) {
         const auto replacement=decode_phase_wall_replacement_authoring(value.wall_replacement);
         if (encode_phase_wall_replacement_authoring(replacement).dump()!=value.wall_replacement.dump())
@@ -1438,7 +1448,7 @@ PhaseConstraintAuthoringIntent decode_phase_constraint_authoring_intent(const Js
         "source_entities_digest","source_saved_revision","phase_selections","intent","ordinary_roof_edits"});
     else keys(value,{"version","expected_revision","source_snapshot_digest","source_authoring_digest",
         "source_entities_digest","source_saved_revision","phase_selections","intent"});
-    if (!value.at("version").is_number_integer() || (value.at("version")!=1 && value.at("version")!=2 && value.at("version")!=3 && value.at("version")!=4 && value.at("version")!=5 && value.at("version")!=6 && value.at("version")!=7 && value.at("version")!=8 && value.at("version")!=9 && value.at("version")!=10 && value.at("version")!=11 && value.at("version")!=12 && value.at("version")!=13 && value.at("version")!=14 && value.at("version")!=15 && value.at("version")!=16 && value.at("version")!=17 && value.at("version")!=18 && value.at("version")!=19 && value.at("version")!=20 && value.at("version")!=21) ||
+    if (!value.at("version").is_number_integer() || (value.at("version")!=1 && value.at("version")!=2 && value.at("version")!=3 && value.at("version")!=4 && value.at("version")!=5 && value.at("version")!=6 && value.at("version")!=7 && value.at("version")!=8 && value.at("version")!=9 && value.at("version")!=10 && value.at("version")!=11 && value.at("version")!=12 && value.at("version")!=13 && value.at("version")!=14 && value.at("version")!=15 && value.at("version")!=16 && value.at("version")!=17 && value.at("version")!=18 && value.at("version")!=19 && value.at("version")!=20 && value.at("version")!=21 && value.at("version")!=22) ||
         !value.at("expected_revision").is_number_unsigned()) invalid("Phase constraint proof version or revision is invalid");
     if (!value.at("source_saved_revision").is_null() && !value.at("source_saved_revision").is_number_unsigned())
         invalid("Phase constraint saved revision is invalid");
@@ -1861,7 +1871,8 @@ MixedEditIdentityOwners mixed_edit_identity_owners(const Entities& entities) {
                     inspected.format==MeasurementLineworkFormat::supported_v2 ||
                     inspected.format==MeasurementLineworkFormat::supported_v3 ||
                     inspected.format==MeasurementLineworkFormat::supported_v4 ||
-                    inspected.format==MeasurementLineworkFormat::supported_v5) {
+                    inspected.format==MeasurementLineworkFormat::supported_v5 ||
+                    inspected.format==MeasurementLineworkFormat::supported_v6) {
                     topology(model.at("segments"));
                     if (model.contains("operations")) for (const auto& operation:model.at("operations")) {
                         if (operation.at("type")=="edit") edit(operation.at("edit"));

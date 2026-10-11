@@ -256,6 +256,10 @@ private:
 // phase wrapper and calls reconstruct_active_phase_constraint_authoring.
 [[nodiscard]] std::map<std::string,Entity,std::less<>> reconstruct_wall_group_scale(
     const std::map<std::string,Entity,std::less<>>& source, const WallGroupScaleIntent& intent);
+// Similarity owns its complete source replay; historical lower rigid/wall edits
+// cannot encode changed sections or measured scale provenance.
+[[nodiscard]] std::map<std::string,Entity,std::less<>> reconstruct_joint_similarity(
+    const std::map<std::string,Entity,std::less<>>& source, const JointTranslationIntent& intent);
 
 // Preview is side-effect free. Invalid, contradictory, unsupported, or no-op
 // intents return accepted()==false with diagnostics and the original entity map.

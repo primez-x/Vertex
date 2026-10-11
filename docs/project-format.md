@@ -1,4 +1,30 @@
-# Vertex project formats v1 through v191
+# Vertex project formats v1 through v192
+
+## Selected geometry similarity (v192, source implementation)
+
+Selected-geometry request dialect two retains explicit per-root positive finite
+`scale` alongside the existing rigid transform. Historical request one keeps its
+exact fields and rigid meaning. Ordinary/mixed four may contain geometry two;
+ordinary/mixed three cannot acquire scaling from this nested dialect.
+
+Joint intent eleven carries `owner_similarities` with exact original-source
+owner coverage and an explicit `per_owner_similarity_completion` marker. Its
+physical-room and corner-window dimension markers are explicit booleans. New
+command envelope53 is a closed source-only similarity command: raw geometry,
+lower edit receipts and supplemental candidate maps cannot supply its authority.
+Pure active-phase similarity uses phase intent22, without borrowing replacement
+or other sibling operations. Historical joint, command and phase dialects keep
+their original meanings.
+
+Measured linework schema/replay six adds a similarity operation retaining the
+original operation history and geometric provenance. Dimensions and reviewed
+room callouts follow their actual selected owners. Every required room context,
+correspondence and explicit retirement remains part of one completed edit.
+
+Reader192/extraction190 apply to direct, nested, retained and undone history,
+including measured schema/replay six and commands whose earlier content already
+required reader191. Compilation, replay, save/reopen and runtime qualification
+remain open. Complete directional mixed resizing remains a separate requirement.
 
 ## Mixed text frames and invariant roof children (v191, source integration)
 

@@ -1,5 +1,12 @@
 # Portable project extraction
 
+Exchange version190 requires native reader192 for selected-geometry request two,
+joint similarity intent eleven, source-only command53, pure phase intent22 and
+measured schema/replay six. Exact owner coverage, positive finite scales,
+retained provenance and mandatory room-review decisions survive direct, nested,
+retained and undone history. Historical dialects keep their original meanings.
+Runtime and round-trip qualification remain open.
+
 Exchange version189 requires native reader191 for mixed edit dialect four and
 paired ordinary four. It retains explicit model-plan text-baseline operators,
 separate from model anchors, and complete actual-source invariant roof-child

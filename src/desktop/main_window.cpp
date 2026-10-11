@@ -26170,7 +26170,11 @@ public:
         try {
             const auto& candidate = candidate_snapshot.entities();
             std::map<std::string,Vec2,std::less<>> annotation_deltas;
-            std::map<std::string,Vec2,std::less<>> annotation_source_deltas;
+            struct AnnotationSymbolPlacement {
+                AnnotationPlacement before,after;
+                bool model_plan{};
+            };
+            std::map<std::string,AnnotationSymbolPlacement,std::less<>> annotation_symbol_changes;
             for (const auto& [id,entity] : candidate) {
                 if (entity.type != kAnnotationEntityType || !source.entities().contains(id) || entity == source.entities().at(id)) continue;
                 const auto before=decode_annotation_entity(source.entities().at(id));
@@ -26186,8 +26190,6 @@ public:
                         render_id=alias->first.toStdString();
                     }
                     auto start=original.placement.position,end=proposed.placement.position;
-                    if (start.x!=end.x || start.y!=end.y)
-                        annotation_source_deltas.emplace(render_id,Vec2{end.x-start.x,end.y-start.y});
                     if (model_plan && view_context) {
                         start=project_plan_point(start,view_context->frame);
                         end=project_plan_point(end,view_context->frame);
@@ -26199,9 +26201,78 @@ public:
                     if (const auto old=std::find_if(before.labels.begin(),before.labels.end(),[&](const auto& value){return value.id==label.id;});old!=before.labels.end())
                         record_delta(*old,label,label.model_plan);
                 for (const auto& symbol : after.symbols)
-                    if (const auto old=std::find_if(before.symbols.begin(),before.symbols.end(),[&](const auto& value){return value.id==symbol.id;});old!=before.symbols.end())
+                    if (const auto old=std::find_if(before.symbols.begin(),before.symbols.end(),[&](const auto& value){return value.id==symbol.id;});old!=before.symbols.end()) {
                         record_delta(*old,symbol,symbol.model_plan);
+                        if (!site_input && (old->placement.position.x!=symbol.placement.position.x ||
+                            old->placement.position.y!=symbol.placement.position.y ||
+                            old->placement.rotation_radians!=symbol.placement.rotation_radians ||
+                            old->placement.scale!=symbol.placement.scale)) {
+                            if (!annotation_symbol_changes.emplace(symbol.id,
+                                AnnotationSymbolPlacement{old->placement,symbol.placement,symbol.model_plan}).second)
+                                throw std::invalid_argument("The component preview has an ambiguous annotation owner.");
+                        }
+                    }
             }
+            const auto placed_annotation_symbol=[&](const CanvasEntity& original,
+                const AnnotationSymbolPlacement& placement,bool projected) {
+                const auto& before=placement.before;
+                const auto& after=placement.after;
+                auto start=before.position,end=after.position;
+                auto angle=after.rotation_radians-before.rotation_radians;
+                auto rotation=after.rotation_radians;
+                const auto ratio=after.scale/before.scale;
+                if (!std::isfinite(angle) || !std::isfinite(ratio) || ratio<=0.0 ||
+                    !std::isfinite(start.x) || !std::isfinite(start.y) ||
+                    !std::isfinite(end.x) || !std::isfinite(end.y))
+                    throw std::invalid_argument("The component proposal has an invalid physical placement.");
+                // Canonical obstacle paths stay in source XY. Retained model
+                // symbols already use the saved frame, including its handedness;
+                // legacy overlays retain their explicit view-oriented axes.
+                if (projected && placement.model_plan && view_context) {
+                    start=project_plan_point(start,view_context->frame);
+                    end=project_plan_point(end,view_context->frame);
+                    angle=model_plan_rotation_delta(angle,view_context->frame);
+                    rotation=project_plan_angle(rotation,view_context->frame);
+                }
+                auto proposed=original;
+                const auto c=std::cos(angle),s=std::sin(angle);
+                const auto point=[&](Vec2& value) {
+                    const auto x=value.x-start.x,y=value.y-start.y;
+                    value={end.x+ratio*(c*x-s*y),end.y+ratio*(s*x+c*y)};
+                    if (!std::isfinite(value.x) || !std::isfinite(value.y))
+                        throw std::invalid_argument("The component proposal exceeds the supported geometry range.");
+                };
+                const auto path=[&](Boundary& value) {
+                    for (auto& edge:value) { point(edge.start);point(edge.end); }
+                };
+                path(proposed.segments);path(proposed.snap_segments);path(proposed.hit_segments);
+                path(proposed.drawing_alignment_segments);
+                if (proposed.stroke_segments) path(*proposed.stroke_segments);
+                for (auto& hole:proposed.holes) path(hole);
+                for (auto& value:proposed.snap_points) point(value);
+                for (auto& handle:proposed.vertex_handles) point(handle.position);
+                if (proposed.endpoint_baseline) {
+                    point(proposed.endpoint_baseline->start);point(proposed.endpoint_baseline->end);
+                }
+                const auto dimensions=[&](double& width,double& depth) {
+                    width*=ratio;depth*=ratio;
+                    if (!std::isfinite(width) || !std::isfinite(depth))
+                        throw std::invalid_argument("The component footprint exceeds the supported geometry range.");
+                };
+                if (proposed.resize_frame) {
+                    point(proposed.resize_frame->center);
+                    proposed.resize_frame->rotation_radians=rotation;
+                    dimensions(proposed.resize_frame->width_metres,proposed.resize_frame->depth_metres);
+                    if (placement.model_plan)
+                        proposed.resize_frame->source_rotation_radians=after.rotation_radians;
+                }
+                if (proposed.svg_symbol) {
+                    point(proposed.svg_symbol->position);
+                    proposed.svg_symbol->rotation_radians=rotation;
+                    dimensions(proposed.svg_symbol->width_metres,proposed.svg_symbol->depth_metres);
+                }
+                return proposed;
+            };
             const auto area_projection = appraisal_plan_area_projection(candidate_snapshot, metric_units);
             auto area_values = area_projection.values;
             for (const auto& [id,value]:measurement_plan_area_values(candidate_snapshot,metric_units))
@@ -26536,6 +26607,13 @@ public:
                         // caller presents all paths and labels exactly once.
                         result.entities.push_back(site_presented_canvas_entity(proposed,delta));
                         continue;
+                    }
+                    if (!site_input && item.type==QStringLiteral("symbol")) {
+                        if (const auto placement=annotation_symbol_changes.find(item.id.toStdString());
+                            placement!=annotation_symbol_changes.end()) {
+                            result.entities.push_back(placed_annotation_symbol(item,placement->second,true));
+                            continue;
+                        }
                     }
                     const auto moved=annotation_deltas.find(item.id.toStdString());
                     if (moved==annotation_deltas.end()) continue;
@@ -26938,14 +27016,14 @@ public:
                         continue;
                     }
                     if (before==source.entities().end()) {
-                        if (const auto moved=annotation_source_deltas.find(component.id.toStdString());
-                            moved!=annotation_source_deltas.end()) {
-                            auto plan=component.segments;
-                            for (auto& edge:plan) for (auto* point:{&edge.start,&edge.end}) {
-                                point->x+=moved->second.x;point->y+=moved->second.y;
+                        if (component.type==QStringLiteral("symbol")) {
+                            if (const auto placement=annotation_symbol_changes.find(component.id.toStdString());
+                                placement!=annotation_symbol_changes.end()) {
+                                const auto proposed=placed_annotation_symbol(component,placement->second,false);
+                                if (!proposed.segments.empty())
+                                    ordinary_component_bounds.push_back(boundary_bounds(proposed.segments));
+                                continue;
                             }
-                            if (!plan.empty()) ordinary_component_bounds.push_back(boundary_bounds(plan));
-                            continue;
                         }
                         const auto original=embedded;
                         if (original && !component.presentation_key.isEmpty() &&
@@ -55618,8 +55696,7 @@ private:
                 -> std::optional<std::vector<CanvasEntity>> {
                 if (m_mixed_plan_transform_capture) {
                     try {
-                        if (scale!=1.0) throw std::invalid_argument("Mixed scaling requires its complete geometry producer.");
-                        return previewMixedPlanTransform(canvas,ids,{},radians,pivot,serial);
+                        return previewMixedPlanTransform(canvas,ids,{},radians,pivot,serial,scale);
                     } catch (const std::exception& error) { setError(QString::fromUtf8(error.what()));return std::vector<CanvasEntity>{}; }
                 }
                 const auto capture=m_ordinary_transform_capture;
@@ -55635,8 +55712,7 @@ private:
             [this,canvas](QStringList ids,double scale,double radians,Vec2 pivot) {
                 try {
                     if (m_mixed_plan_transform_capture) {
-                        if (scale!=1.0) throw std::invalid_argument("Mixed scaling requires its complete geometry producer.");
-                        return commitMixedPlanTransform(canvas,ids,{},radians,pivot);
+                        return commitMixedPlanTransform(canvas,ids,{},radians,pivot,scale);
                     }
                     const auto capture=m_ordinary_transform_capture;
                     if (!capture || canvas!=m_entity_transform_canvas || ids!=capture->wall_ids || ids.size()<2 ||
@@ -56315,6 +56391,7 @@ private:
         Vec2 delta;
         double radians{};
         std::shared_ptr<MixedPlanTransformResult> result;
+        double scale{1.0};
     };
     struct AssemblyPreview {
         std::string child_id;
@@ -63547,7 +63624,10 @@ private:
         if (m_measurementCanvas) m_measurementCanvas->setMixedSelectionRigidTransformEnabled(mixed_rigid);
         if (m_architecturalCanvas) m_architecturalCanvas->setMixedSelectionRigidTransformEnabled(mixed_rigid &&
             (siteCanvas(m_architecturalCanvas) || m_architectural_view_kind==BuildingViewKind::plan));
-        if (mixed_rigid) rotate_selection=true;
+        if (m_measurementCanvas) m_measurementCanvas->setMixedSelectionScaleEnabled(mixed_rigid);
+        if (m_architecturalCanvas) m_architecturalCanvas->setMixedSelectionScaleEnabled(mixed_rigid &&
+            (siteCanvas(m_architecturalCanvas) || m_architectural_view_kind==BuildingViewKind::plan));
+        if (mixed_rigid) { rotate_selection=true;resize_selection=true; }
         if (m_measurementCanvas) m_measurementCanvas->setSelectionAxisResizeEnabled(axis_resize);
         if (m_architecturalCanvas) m_architecturalCanvas->setSelectionAxisResizeEnabled(
             axis_resize && (m_site_plan_active || m_architectural_view_kind == BuildingViewKind::plan));
@@ -69084,20 +69164,21 @@ public:
         const std::optional<BuildingViewFrame>& frame,
         const std::map<QString,SitePresentationPlacement>& ordinary_site_frames,
         const SiteCanvasPresentationFrames& source_frames,
-        const std::map<QString,SiteAnnotationTarget>& annotation_targets,const std::string& message) {
+        const std::map<QString,SiteAnnotationTarget>& annotation_targets,const std::string& message,double scale=1.0) {
         if (!source || ordinary.isEmpty() || children.empty() || ordinary.size()+children.size()>1000)
             throw std::invalid_argument("Select a supported group of at most 1000 objects and skylights.");
+        if (!std::isfinite(scale) || scale<=0.0) throw std::invalid_argument("Enter a positive finite scale factor.");
         json request={{"version",4},{"expected_revision",source->revision()},{"transaction_id",new_id("mixed-transform")},
             {"architectural",json::array()},{"embedded",json::array()},{"annotations",json::array()},
             {"references",json::array()},{"geometry",nullptr},{"message",message}};
-        const auto planar_json=[](const PlanarTransform& t,bool presentation) {
+        const auto planar_json=[scale](const PlanarTransform& t,bool presentation) {
             json value={{"pivot",json::array({t.pivot.x,t.pivot.y})},{"offset",json::array({t.offset.x,t.offset.y})},
                 {"rotation_radians",t.rotation_radians},{"flip_horizontal",t.flip_horizontal},{"flip_vertical",t.flip_vertical}};
-            if (presentation) value["scale"]=1.0;return value;
+            if (presentation) value["scale"]=scale;return value;
         };
-        const auto model_json=[](const PlanarTransform& t) { return json{{"pivot",json::array({t.pivot.x,t.pivot.y,0.0})},
+        const auto model_json=[scale](const PlanarTransform& t) { return json{{"pivot",json::array({t.pivot.x,t.pivot.y,0.0})},
             {"offset",json::array({t.offset.x,t.offset.y,0.0})},{"rotation_z_radians",t.rotation_radians},
-            {"scale",1.0},{"flip_horizontal",t.flip_horizontal},{"flip_vertical",t.flip_vertical}}; };
+            {"scale",scale},{"flip_horizontal",t.flip_horizontal},{"flip_vertical",t.flip_vertical}}; };
         const auto operation=[&](const QString& id) {
             if (!site) return world;
             if (const auto captured=ordinary_site_frames.find(id);captured!=ordinary_site_frames.end())
@@ -69120,6 +69201,7 @@ public:
             }
         }
         SelectionGeometryTransformRequest geometry; geometry.expected_revision=source->revision();geometry.message=message;
+        if (scale!=1.0) geometry.version=2;
         const auto annotation_owners=site ? std::map<std::string,std::string,std::less<>>{} : annotation_selection_owners(*source,ordinary);
         std::set<std::string,std::less<>> parents;
         for (const auto& id:ordinary) {
@@ -69151,7 +69233,7 @@ public:
             if (entity.type=="reference_asset") { request["references"].push_back({{"entity_id",entity.id},
                 {"transform",planar_json(site ? operation(id) : overlay,true)}});continue; }
             if (entity.type=="wall" || entity.type=="measurement_linework" || is_closed_boundary_entity(entity.type)) {
-                geometry.roots.push_back({entity.id,operation(id)});continue;
+                geometry.roots.push_back({entity.id,operation(id),scale});continue;
             }
             if (can_recognize_boundary_dimension_entity_type(entity.type)) {
                 const auto dimension=decode_boundary_dimension_entity(entity);
@@ -69188,6 +69270,7 @@ public:
             const auto local=operation(id_from(roof));RoofOpeningGroupTransform transform;
             transform.members=members;transform.world_pivot=local.pivot;transform.world_translation=local.offset;
             transform.rotation_radians=local.rotation_radians;transform.flip_horizontal=local.flip_horizontal;transform.flip_vertical=local.flip_vertical;
+            transform.uniform_scale=scale;
             transform.retain_invariant_members=true;
             const auto edits=prepare_roof_opening_group_transform(source->entities(),transform);
             const auto candidate=replay_roof_edit_entities(source->entities(),edits);
@@ -69350,7 +69433,7 @@ public:
             auto preparation=prepareMixedSelectionTransform(capture.source,capture.ordinary,capture.children,world,site!=nullptr,
                 capture.frame,site ? site->move_frames : std::map<QString,SitePresentationPlacement>{},
                 site ? site->frames : SiteCanvasPresentationFrames{},
-                site ? site->move_annotation_targets : std::map<QString,SiteAnnotationTarget>{},"Transform complete mixed selection");
+                site ? site->move_annotation_targets : std::map<QString,SiteAnnotationTarget>{},"Transform complete mixed selection",request.scale);
             if (cancellation.is_cancelled()) return RegenerationReceipt{capture.source->revision(),{}};
             const auto& snapshot=preparation.preview_snapshot();
             QImage device(1,1,QImage::Format_ARGB32_Premultiplied);
@@ -69376,7 +69459,7 @@ public:
             proposal.mixed_selection_edit_intent=preparation.intent();const Command identities{proposal};
             // Physical proposals retain the exact captured view identities,
             // clipping, appearance and eligibility. A generic floor scene is
-            // used only for explicitly selected annotation/reference values.
+            // used only for explicitly selected text/reference values.
             const auto& retained_local=site ? site->geometry : capture.retained;
             const auto& eligible_local=site ? site->geometry : capture.eligible;
             const auto& labels_local=site ? site->labels : capture.labels;
@@ -69442,13 +69525,8 @@ public:
                     continue;
                 }
                 const auto child=id_from(row.at("child_id").get<std::string>());
-                for (auto& item:geometry) if (item.id==child) {
-                    const auto fresh=std::find_if(scene.geometry.begin(),scene.geometry.end(),[&](const auto& value){return value.id==child;});
-                    if (fresh==scene.geometry.end()) continue;
-                    item.segments=fresh->segments;item.stroke_segments=fresh->stroke_segments;
-                    item.holes=fresh->holes;item.hit_segments=fresh->hit_segments;
-                    item.svg_symbol=fresh->svg_symbol;item.resize_frame=fresh->resize_frame;
-                }
+                // Symbol geometry and its full canonical obstacle footprint
+                // already use the candidate placement in the captured projector.
                 for (auto& label:labels) if (label.id==child) {
                     const auto fresh=std::find_if(scene.labels.begin(),scene.labels.end(),[&](const auto& value) {
                         return plan_label_instance_key(value)==plan_label_instance_key(label);
@@ -69507,15 +69585,16 @@ public:
     }
 
     std::optional<std::vector<CanvasEntity>> previewMixedPlanTransform(PlanCanvas* canvas,const QStringList& ids,
-        Vec2 delta,double radians,Vec2 pivot,std::uint64_t serial) {
+        Vec2 delta,double radians,Vec2 pivot,std::uint64_t serial,double scale=1.0) {
         const auto capture=m_mixed_plan_transform_capture;
         if (!mixedPlanTransformCaptureCurrent(capture) || canvas!=capture->viewport.canvas || ids!=capture->ordinary ||
-            !std::isfinite(delta.x) || !std::isfinite(delta.y) || !std::isfinite(radians) ||
+            !std::isfinite(delta.x) || !std::isfinite(delta.y) || !std::isfinite(radians) || !std::isfinite(scale) || scale<=0.0 ||
             (capture->rotation && (pivot.x!=capture->pivot.x || pivot.y!=capture->pivot.y)))
             throw std::invalid_argument("The complete mixed drag source changed. Start the drag again.");
         const bool pending=capture->rotation ? canvas->markEntityTransformPreviewPending(serial) : canvas->markEntitiesMovePreviewPending(serial);
         if (!pending) return std::nullopt;
         PendingMixedPlanTransform request{capture,serial,delta,radians,std::make_shared<MixedPlanTransformResult>()};
+        request.scale=scale;
         m_ready_mixed_plan_transform.reset();
         if (m_running_mixed_plan_transform) {
             (void)m_mixed_plan_transform_queue.cancel(m_mixed_plan_transform_sequence);
@@ -69559,17 +69638,18 @@ public:
         if (!m_running_mixed_plan_transform && !m_pending_mixed_plan_transform) m_mixed_plan_transform_timer->stop();
     }
 
-    bool commitMixedPlanTransform(PlanCanvas* canvas,const QStringList& ids,Vec2 delta,double radians,Vec2 pivot) {
+    bool commitMixedPlanTransform(PlanCanvas* canvas,const QStringList& ids,Vec2 delta,double radians,Vec2 pivot,double scale=1.0) {
         const auto ready=std::move(m_ready_mixed_plan_transform);m_ready_mixed_plan_transform.reset();
         const auto capture=m_mixed_plan_transform_capture;
         if (!ready || !mixedPlanTransformCaptureCurrent(capture) || ready->capture!=capture || canvas!=capture->viewport.canvas ||
             ids!=capture->ordinary || !ready->result->preparation || delta.x!=ready->delta.x || delta.y!=ready->delta.y || radians!=ready->radians ||
+            scale!=ready->scale ||
             (capture->rotation && (pivot.x!=capture->pivot.x || pivot.y!=capture->pivot.y)) ||
             (capture->rotation ? canvas->entityTransformPreviewSerial()!=ready->serial :
                 ready->serial==std::numeric_limits<std::uint64_t>::max() || canvas->entitiesMovePreviewSerial()!=ready->serial+1))
             throw std::invalid_argument("The released mixed selection differs from its exact preview.");
         cancelMixedPlanTransformPreview();
-        if (delta.x==0.0 && delta.y==0.0 && radians==0.0) { clearError();return true; }
+        if (scale==1.0 && delta.x==0.0 && delta.y==0.0 && radians==0.0) { clearError();return true; }
         const auto fence=[&] { if (!mixedPlanTransformCaptureCurrent(capture,false))
             throw std::invalid_argument("The project or displayed mixed selection changed during room review."); };
         std::vector<json> reviews;
@@ -69715,11 +69795,14 @@ public:
             auto* layout=new QVBoxLayout(&dialog);
             auto* form=new QFormLayout;
             auto* rotation=new QLineEdit(QStringLiteral("0"),&dialog);
+            auto* scale=new QLineEdit(QStringLiteral("1"),&dialog);
+            scale->setObjectName(QStringLiteral("mixedSelectionScaleFactor"));
             auto* offset_x=new QLineEdit(QStringLiteral("0"),&dialog);
             auto* offset_y=new QLineEdit(QStringLiteral("0"),&dialog);
             rotation->setObjectName(QStringLiteral("mixedSelectionRotationDegrees"));
             offset_x->setObjectName(QStringLiteral("mixedSelectionOffsetX")); offset_y->setObjectName(QStringLiteral("mixedSelectionOffsetY"));
             form->addRow(QStringLiteral("Rotation (degrees)"),rotation);
+            form->addRow(QStringLiteral("Scale factor"),scale);
             form->addRow(QStringLiteral("Offset X"),offset_x); form->addRow(QStringLiteral("Offset Y"),offset_y); layout->addLayout(form);
             auto* horizontal=new QCheckBox(QStringLiteral("Flip horizontally"),&dialog);
             auto* vertical=new QCheckBox(QStringLiteral("Flip vertically"),&dialog);
@@ -69735,7 +69818,7 @@ public:
             std::optional<Command> prepared_command;
             std::optional<DocumentSnapshot> prepared_snapshot;
             std::uint64_t generation{}; bool reviewing{};
-            const auto values=[&] { return QStringList{rotation->text(),offset_x->text(),offset_y->text(),
+            const auto values=[&] { return QStringList{rotation->text(),scale->text(),offset_x->text(),offset_y->text(),
                 QString::number(horizontal->isChecked()),QString::number(vertical->isChecked())}; };
             const auto draw=[&](const DocumentSnapshot& snapshot,const Command* command) {
                 PlanSceneCaches caches; SiteCanvasPresentationFrames frames;
@@ -69771,7 +69854,7 @@ public:
             };
             draw(*source,nullptr);
             const auto invalidate=[&] { ++generation;prepared_command.reset();prepared_snapshot.reset();apply_button->setEnabled(false); };
-            for (auto* field:{rotation,offset_x,offset_y}) QObject::connect(field,&QLineEdit::textChanged,&dialog,invalidate);
+            for (auto* field:{rotation,scale,offset_x,offset_y}) QObject::connect(field,&QLineEdit::textChanged,&dialog,invalidate);
             for (auto* field:{horizontal,vertical}) QObject::connect(field,&QCheckBox::toggled,&dialog,invalidate);
             QObject::connect(review_button,&QPushButton::clicked,&dialog,[&] {
                 if (reviewing) return;
@@ -69783,6 +69866,9 @@ public:
                     bool valid{};const auto degrees=rotation->text().trimmed().toDouble(&valid);
                     if (!valid || !std::isfinite(degrees) || std::abs(degrees)>360000)
                         throw std::invalid_argument("Enter a finite rotation between -360000 and 360000 degrees.");
+                    const auto factor=scale->text().trimmed().toDouble(&valid);
+                    if (!valid || !std::isfinite(factor) || factor<=0.0)
+                        throw std::invalid_argument("Enter a positive finite scale factor.");
                     const auto quantity=[&](const QString& text) { return text.trimmed().isEmpty() ? 0.0 :
                         parse_quantity(text.trimmed().toStdString(),authority.context.metric_units ? Unit::metre : Unit::foot).metres; };
                     PlanarTransform world{pivot,std::remainder(degrees,360.0)*std::numbers::pi/180.0,
@@ -69794,13 +69880,13 @@ public:
                     if (world.flip_horizontal && world.flip_vertical && std::abs(world.rotation_radians)==std::numbers::pi) {
                         world.rotation_radians=0.0;world.flip_horizontal=false;world.flip_vertical=false;
                     }
-                    if (world.rotation_radians==0 && !world.flip_horizontal && !world.flip_vertical && world.offset.x==0 && world.offset.y==0) {
-                        status->setText(QStringLiteral("Enter a movement, rotation or reflection.")); return;
+                    if (factor==1.0 && world.rotation_radians==0 && !world.flip_horizontal && !world.flip_vertical && world.offset.x==0 && world.offset.y==0) {
+                        status->setText(QStringLiteral("Enter a movement, rotation, scale or reflection.")); return;
                     }
                     const std::string message="Transform complete mixed selection";
                     input_fence();
                     const auto preparation=prepareMixedSelectionTransform(source,ordinary,children,world,site,frame,
-                        ordinary_site_frames,source_frames,original_scene.annotation_targets,message);
+                        ordinary_site_frames,source_frames,original_scene.annotation_targets,message,factor);
                     // Derive the complete proposal before asking for room
                     // decisions. The read-only proposal has no publication
                     // authority; completion still replays every required review.

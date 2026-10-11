@@ -377,6 +377,17 @@ std::uint32_t required_format_version_internal(const DocumentSnapshot& snapshot,
             const auto& value=*pending.back(); pending.pop_back();
             if (++nodes>ProjectStore::maximum_json_values)
                 storage_error(StorageErrorCode::resource_limit,"Typed edit reader-floor scan exceeds its JSON budget");
+            if (value.is_object() &&
+                ((value.value("kind",nlohmann::json())=="apply_boundary_constraint_changes" &&
+                    value.value("version",nlohmann::json())==53) ||
+                 (value.value("version",nlohmann::json())==22 && value.contains("phase_selections") &&
+                    value.contains("source_snapshot_digest") && value.contains("intent")) ||
+                 (value.value("version",nlohmann::json())==11 &&
+                    value.value("per_owner_similarity_completion",nlohmann::json())==true && value.contains("owner_similarities")) ||
+                 (value.value("version",nlohmann::json())==2 && value.contains("roots") &&
+                    value.contains("expected_revision") && value.contains("message")) ||
+                 (value.value("version",nlohmann::json())==6 && value.value("replay_version",nlohmann::json())==6)))
+                floor=std::max(floor,192U);
             if (value.is_object() && value.value("kind",nlohmann::json())=="apply_boundary_constraint_changes" &&
                 value.value("version",nlohmann::json())==52 &&
                 value.contains("mixed_selection_edit_completion") && value.contains("mixed_selection_edit_intent")) {
@@ -579,9 +590,9 @@ std::uint32_t required_format_version_internal(const DocumentSnapshot& snapshot,
     };
     for (const auto& revision : snapshot.history()) {
         if (revision.phase_entity_import) required=std::max(required,160U);
-        if (required<191 && revision.boundary_geometry_edit)
+        if (required<192 && revision.boundary_geometry_edit)
             required=std::max(required,typed_edit_reader_floor(encode_boundary_geometry_edit(*revision.boundary_geometry_edit)));
-        if (required<191 && revision.boundary_constraint_changes)
+        if (required<192 && revision.boundary_constraint_changes)
             required=std::max(required,typed_edit_reader_floor(command_to_json(Command{*revision.boundary_constraint_changes})));
         if (required<122 && revision.boundary_geometry_edit)
             required=std::max(required,quantity_reader_floor(encode_boundary_geometry_edit(*revision.boundary_geometry_edit)));
@@ -1002,6 +1013,9 @@ std::uint32_t required_format_version_internal(const DocumentSnapshot& snapshot,
             if (command.joint_translation && (command.joint_translation->per_owner_rigid_completion ||
                 !command.joint_translation->owner_transformations.empty()))
                 required=std::max(required,74U);
+            if (command.joint_translation && (command.joint_translation->per_owner_similarity_completion ||
+                !command.joint_translation->owner_similarities.empty()))
+                required=std::max(required,192U);
             if (command.joint_translation && command.joint_translation->physical_room_dimension_completion)
                 required=std::max(required,157U);
             if (command.joint_translation && command.joint_translation->corner_window_dimension_completion)
@@ -1268,6 +1282,9 @@ std::uint32_t required_format_version_internal(const DocumentSnapshot& snapshot,
             }
             if (entity.type == "measurement_linework") {
                 const auto model = entity.properties.find("model");
+                if (model!=entity.properties.end() && model->is_object() &&
+                    model->value("version",nlohmann::json())==6 && model->value("replay_version",nlohmann::json())==6)
+                    required=std::max(required,192U);
                 if(model!=entity.properties.end() && model->is_object() && model->contains("version") && model->at("version")==5 &&
                    model->contains("replay_version") && model->at("replay_version")==5)required=std::max(required,35U);
                 if (model!=entity.properties.end() && model->is_object() && model->contains("version") &&
@@ -3002,6 +3019,7 @@ bool verify_sqlite_schema(sqlite3* database, bool allow_recovery = false) {
          sqlite3_column_int(user_version.get(), 0) != 189 &&
          sqlite3_column_int(user_version.get(), 0) != 190 &&
          sqlite3_column_int(user_version.get(), 0) != 191 &&
+         sqlite3_column_int(user_version.get(), 0) != 192 &&
          sqlite3_column_int(user_version.get(), 0) != 174 &&
          sqlite3_column_int(user_version.get(), 0) != 169 &&
          sqlite3_column_int(user_version.get(), 0) != 163 &&
@@ -3724,6 +3742,8 @@ DocumentSnapshot read_snapshot(sqlite3* database, RecoveryLedger* recovery = nul
     // here and authenticate the manifest with its stored version below.
     const auto required_format = required_format_version_internal(snapshot, format_number < 28);
     if (required_format > format_number) {
+        if (required_format>=192)
+            storage_error(StorageErrorCode::unsupported_format,"This project requires reader 192 for selected similarity geometry and retained measured scaling history");
         if (required_format>=191)
             storage_error(StorageErrorCode::unsupported_format,"This project requires reader 191 for mixed text frames, invariant roof-child proofs and retained history");
         if (required_format>=190)

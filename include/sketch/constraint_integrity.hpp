@@ -45,6 +45,22 @@ void validate_active_phase_constraint_edit_topology(
     const std::set<std::string,std::less<>>& verified_rigid_wall_ids = {},
     const std::map<std::string,PlanarTransform,std::less<>>& verified_rigid_wall_transforms = {});
 
+// Independently reconstruct each actual selected physical wall's complete
+// similarity from the retained source. Contact and cycle witnesses use the
+// original geometry; an intermediate scale source cannot grant admission.
+// Reflected cycles require one shared rigid basis and positive scale factor.
+void validate_constraint_similarity_topology(
+    const std::map<std::string, Entity, std::less<>>& before,
+    const std::map<std::string, Entity, std::less<>>& after,
+    const std::map<std::string,SimilarityOwnerTransformation,std::less<>>& wall_operations);
+
+// Authenticate full retained records before resolving active wall elevations
+// for geometric analysis. Every supplied wall must be active in both states.
+void validate_active_phase_constraint_similarity_topology(
+    const std::map<std::string, Entity, std::less<>>& before,
+    const std::map<std::string, Entity, std::less<>>& after,
+    const std::map<std::string,SimilarityOwnerTransformation,std::less<>>& wall_operations);
+
 // Exterior-corner v8 alone validates active physical phase geometry at its
 // resolved elevations. Historical typed commands keep the original policy.
 void validate_exterior_corner_edit_topology(

@@ -130,10 +130,11 @@ struct Budget {
     void read(const JointAnnotationTranslationIntent& v) { text(v.owner_id); text(v.child_id); }
     void read(const JointReferenceTranslationIntent& v) { text(v.reference_id); }
     void read(const JointOwnerTranslationIntent& v) { text(v.owner_id); }
+    void read(const SimilarityOwnerTransformation& v) { text(v.owner_id); }
     void read(const JointTranslationIntent& v) {
         sequence(v.rigid_boundary_ids); sequence(v.rigid_stroke_ids); sequence(v.partial_wall_ids); sequence(v.dimension_ids);
         sequence(v.annotation_translations); sequence(v.reference_translations); sequence(v.owner_translations);
-        sequence(v.dimension_translations); sequence(v.owner_transformations);
+        sequence(v.dimension_translations); sequence(v.owner_transformations); sequence(v.owner_similarities);
         if (v.physical_room_dimension_completion) reserve(64);
     }
     void read(const DistoMeasurementAttachment& v) {

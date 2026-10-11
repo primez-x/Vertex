@@ -15,6 +15,7 @@ namespace sketch {
 namespace {
 using Json = nlohmann::json;
 using Operators = std::map<std::string, PlanarTransform, std::less<>>;
+using Similarities = std::map<std::string, SimilarityOwnerTransformation, std::less<>>;
 
 [[noreturn]] void invalid(const char* reason) {
     throw std::invalid_argument(std::string("Selected geometry review: ") + reason);
@@ -50,6 +51,7 @@ ReplayedPhysicalWallRoomReview replay_selection_geometry_review(
     const bool active_policy = saved_phases || source.uses_active_phase_constraints();
     std::vector<bool> covered(requirements.size(), false);
     Operators room_operators;
+    Similarities room_similarities;
     for (const auto& encoded : reviewed_room_intents) {
         const auto intent = decode_physical_wall_room_review_intent(encoded);
         if (encode_physical_wall_room_review_intent(intent).dump() != encoded.dump())
@@ -103,6 +105,9 @@ ReplayedPhysicalWallRoomReview replay_selection_geometry_review(
         for (const auto& transformation : found->room_transformations)
             if (!room_operators.emplace(transformation.owner_id, transformation.transform).second)
                 invalid("selected room has duplicate required operators");
+        for (const auto& transformation : found->room_similarities)
+            if (!room_similarities.emplace(transformation.owner_id, transformation).second)
+                invalid("selected room has duplicate required similarities");
     }
     if (std::any_of(covered.begin(), covered.end(), [](bool value) { return !value; }))
         invalid("required room review context/plane was omitted");
@@ -127,6 +132,12 @@ ReplayedPhysicalWallRoomReview replay_selection_geometry_review(
             result.retired_room_ids.end()) invalid("selected room disappeared without explicit retirement");
         operation = room_operators.erase(operation);
     }
+    for (auto operation = room_similarities.begin(); operation != room_similarities.end();) {
+        if (result.entities.contains(operation->first)) { ++operation; continue; }
+        if (std::find(result.retired_room_ids.begin(), result.retired_room_ids.end(), operation->first) ==
+            result.retired_room_ids.end()) invalid("selected room disappeared without explicit retirement");
+        operation = room_similarities.erase(operation);
+    }
     // Room review owns retirement/reference cleanup. Reflect only those
     // independently replayed removals in the callout merge base, so surviving
     // room placement cannot reintroduce a retired room's saved override.
@@ -150,7 +161,10 @@ ReplayedPhysicalWallRoomReview replay_selection_geometry_review(
     // This derived base still retains original surviving room placements,
     // unrelated rigid edits and their missing-role suffixes. The reviewed final
     // candidate supplies room geometry and cleanup, never placement authority.
-    for (const auto& change : transformed_area_callout_entities(callout_source, result.entities, room_operators)) {
+    const auto callout_changes = request.version == 1 ?
+        transformed_area_callout_entities(callout_source, result.entities, room_operators) :
+        transformed_area_callout_entities(callout_source, result.entities, room_similarities);
+    for (const auto& change : callout_changes) {
         const auto final = result.entities.find(change.entity.id);
         if (final == result.entities.end()) invalid("review removed a selected room callout provider");
         final->second = merge_selection_annotation_entities(callout_source.at(change.entity.id),

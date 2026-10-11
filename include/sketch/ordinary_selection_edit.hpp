@@ -27,8 +27,9 @@ namespace sketch {
 // room_reviews contains at most 32 exact canonical physical-wall-room intents.
 // Explicit geometry roots share the aggregate target limit and cannot overlap
 // any persisted object, catalog, annotation owner or reference owner. Geometry
-// currently admits rigid XY operators only; scale is not a geometry field.
-// Version four retains version three's envelope and geometry semantics. Its
+// in version three admits rigid XY operators only; scale is not a v1 root field.
+// Version four also admits geometry request two with positive finite per-root
+// similarity scales, preserving version three's rigid-only meaning. Its
 // annotation rows are exactly {owner_id,child_id,transform,text_baseline}, with
 // text_baseline null or {rotation_radians,flip_horizontal,flip_vertical}. The
 // latter is linear-only authority for a unique actual model_plan label's

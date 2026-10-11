@@ -2223,6 +2223,15 @@ bool is_physical_wall_room_active_constraint_review_command(const Command& comma
     try {
         const auto* geometry=std::get_if<ApplyBoundaryConstraintChanges>(&command);
         if (geometry && (geometry->wall_group_scale_completion || geometry->wall_group_scale)) return false;
+        if (geometry && geometry->joint_translation_completion && geometry->joint_translation &&
+            geometry->joint_translation->per_owner_similarity_completion &&
+            !geometry->joint_translation->partial_wall_ids.empty()) {
+            // Similarity v53 carries only its closed original-source intent;
+            // no lower wall edits or raw candidate maps supply authority.
+            const auto proof=command_to_json(command);
+            return proof.dump().size()<=1024*1024 && proof.at("kind")=="apply_boundary_constraint_changes" &&
+                proof.at("version")==53 && command_to_json(command_from_json(proof)).dump()==proof.dump();
+        }
         if (!geometry || !geometry->phase_constraint_authoring_completion ||
             geometry->phase_constraint_authoring_intent.is_null() || geometry->selection_completion ||
             !geometry->selection_entity_changes.empty()) return false;

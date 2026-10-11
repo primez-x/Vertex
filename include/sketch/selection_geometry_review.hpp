@@ -13,6 +13,8 @@ namespace sketch {
 // placement, and retiring rooms require acknowledged removal of their callouts.
 // Final selected room area callouts follow the
 // captured operators around the explicitly reviewed final room geometry.
+// Version one retains rigid placement; version two uses the distinct similarity
+// lane, including source-derived scaled offsets and unit-scale identity.
 // The result includes the complete entity map and existing typed room topology
 // transitions; neither a caller candidate map nor a supplemental lane is used.
 // An unchanged geometry stage starts directly at the actual original source.

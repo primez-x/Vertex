@@ -2929,10 +2929,66 @@ static void validate_joint_translation_mode(const ApplyBoundaryConstraintChanges
 }
 
 static bool joint_per_target_presentation(const JointTranslationIntent& intent) {
-    return intent.per_owner_rigid_completion || !intent.owner_transformations.empty() ||
+    return intent.per_owner_similarity_completion || !intent.owner_similarities.empty() ||
+        intent.per_owner_rigid_completion || !intent.owner_transformations.empty() ||
         intent.per_owner_translation_completion || !intent.owner_translations.empty() ||
         !intent.dimension_translations.empty() || intent.per_target_presentation_completion || !intent.annotation_translations.empty() ||
         !intent.reference_translations.empty();
+}
+
+// Similarity reconstruction belongs to the production authoring engine. Core
+// readers may preserve its codec, but cannot substitute a lower replay lane.
+static Vec2 document_joint_similarity_point(Vec2 point, const SimilarityOwnerTransformation& operation) {
+#ifdef VERTEX_HAS_CONSTRAINT_AUTHORING
+    return transform_joint_similarity_point(point, operation);
+#else
+    (void)point; (void)operation;
+    throw std::invalid_argument("Joint similarity requires the production constraint authoring engine");
+#endif
+}
+
+static Segment document_joint_similarity_segment(const Segment& segment, const SimilarityOwnerTransformation& operation) {
+#ifdef VERTEX_HAS_CONSTRAINT_AUTHORING
+    return transform_joint_similarity_segment(segment, operation);
+#else
+    (void)segment; (void)operation;
+    throw std::invalid_argument("Joint similarity requires the production constraint authoring engine");
+#endif
+}
+
+static std::map<std::string, Entity, std::less<>> document_joint_similarity_scale_source(
+    const std::map<std::string, Entity, std::less<>>& source, const JointTranslationIntent& intent) {
+#ifdef VERTEX_HAS_CONSTRAINT_AUTHORING
+    return joint_similarity_scale_source(source, intent);
+#else
+    (void)source; (void)intent;
+    throw std::invalid_argument("Joint similarity requires the production constraint authoring engine");
+#endif
+}
+
+static std::optional<SimilarityOwnerTransformation> document_joint_similarity_dimension_transform(
+    const std::map<std::string, Entity, std::less<>>& source,
+    const JointTranslationIntent& intent, const BoundaryDimension& dimension) {
+#ifdef VERTEX_HAS_CONSTRAINT_AUTHORING
+    return joint_similarity_dimension_transform(source, intent, dimension);
+#else
+    (void)source; (void)intent; (void)dimension;
+    throw std::invalid_argument("Joint similarity requires the production constraint authoring engine");
+#endif
+}
+
+static void validate_joint_similarity_mode(const ApplyBoundaryConstraintChanges& command) {
+    validate_joint_translation_mode(command, true);
+    if (!command.joint_translation->per_owner_similarity_completion)
+        throw std::invalid_argument("Joint similarity requires its explicit source intent marker");
+    (void)encode_joint_translation_intent(*command.joint_translation);
+    auto ordinary = command;
+    ordinary.joint_translation.reset(); ordinary.joint_translation_completion = false;
+    const auto empty = nlohmann::json{{"version",1},{"kind","apply_boundary_constraint_changes"},
+        {"expected_revision",command.expected_revision},{"message",command.message},
+        {"entity_changes",nlohmann::json::array()},{"boundary_edits",nlohmann::json::array()}};
+    if (command_to_json(Command{ordinary}) != empty)
+        throw std::invalid_argument("Joint similarity cannot borrow another edit, asset or raw geometry authority");
 }
 
 // These complete raw owners are redundant proofs, never an edit authority.
@@ -2952,7 +3008,8 @@ static void validate_joint_presentation_proof(const ApplyBoundaryConstraintChang
     std::set<std::string, std::less<>> touched;
     for (const auto& change : command.supplemental_entity_changes) {
         const auto target = targets.find(change.entity.id);
-        const bool derived_rigid_annotation = (command.joint_translation->per_owner_rigid_completion ||
+        const bool derived_rigid_annotation = (command.joint_translation->per_owner_similarity_completion ||
+            !command.joint_translation->owner_similarities.empty() || command.joint_translation->per_owner_rigid_completion ||
             !command.joint_translation->owner_transformations.empty()) &&
             change.entity.type == kAnnotationEntityType;
         if (change.kind != EntityChangeKind::upsert || (!derived_rigid_annotation && (target == targets.end() ||
@@ -3078,7 +3135,7 @@ static Command room_review_geometry_command(const ApplyBoundaryConstraintChanges
     const bool mixed_opening_deletion=proof.at("kind")=="mixed_wall_opening_deletion";
     if ((mixed_opening_deletion && version!=40 && version!=50) || (mixed_deletion && version!=37 && version!=39 && version!=49) ||
         (grouped_deletion && version!=31 && version!=35 && version!=36 && version!=38 && version!=48) || (!grouped_deletion && !mixed_deletion && !mixed_opening_deletion &&
-        version!=1 && version!=10 && version!=17 && version!=19 && version!=21 && version!=22 && version!=23 && version!=34 && version!=43 && version!=51 && !ordinary_room_wall_proof_version(version)))
+        version!=1 && version!=10 && version!=17 && version!=19 && version!=21 && version!=22 && version!=23 && version!=34 && version!=43 && version!=51 && version!=53 && !ordinary_room_wall_proof_version(version)))
         throw std::invalid_argument("Room review cannot wrap another geometry intent");
     const auto decoded=[&]()->Command {
 #ifdef VERTEX_HAS_PHYSICAL_ROOM_REVIEW
@@ -3141,7 +3198,10 @@ static Command room_review_geometry_command(const ApplyBoundaryConstraintChanges
 #endif
     if (!geometry || proof.at("kind")!="apply_boundary_constraint_changes")
         throw std::invalid_argument("Room review ordinary payload must be one supported wall profile edit");
-    if (version==43) {
+    if (version==53) {
+        validate_joint_similarity_mode(*geometry);
+        if (command_to_json(decoded)!=proof) throw std::invalid_argument("Room similarity review must retain canonical source intent");
+    } else if (version==43) {
         validate_wall_group_scale_mode(*geometry);
         if (command_to_json(decoded)!=proof) throw std::invalid_argument("Room scale review must retain canonical source intent");
     } else if (version==34) {
@@ -4446,8 +4506,9 @@ static void complete_dimension_placements(const std::map<std::string, Entity, st
 static void retain_joint_callout_placement(const std::map<std::string, Entity, std::less<>>& source,
     std::map<std::string, Entity, std::less<>>& candidate, const JointTranslationIntent& intent) {
     const auto offsets = resolve_joint_translation_offsets(source, intent);
+    const bool similarity_transform = intent.per_owner_similarity_completion || !intent.owner_similarities.empty();
     const bool rigid_transform = intent.per_owner_rigid_completion || !intent.owner_transformations.empty();
-    const bool per_owner = rigid_transform || intent.per_owner_translation_completion || !intent.owner_translations.empty() ||
+    const bool per_owner = similarity_transform || rigid_transform || intent.per_owner_translation_completion || !intent.owner_translations.empty() ||
         !intent.dimension_translations.empty();
     std::set<std::string, std::less<>> rigid(intent.rigid_boundary_ids.begin(), intent.rigid_boundary_ids.end());
     rigid.insert(intent.rigid_stroke_ids.begin(), intent.rigid_stroke_ids.end());
@@ -4459,18 +4520,22 @@ static void retain_joint_callout_placement(const std::map<std::string, Entity, s
         if (!decoded.supported()) throw std::invalid_argument(decoded.unsupported_reason);
         const auto carried_transform = rigid_transform
             ? joint_rigid_dimension_transform(source, intent, *decoded.dimension) : std::nullopt;
-        const bool rigid_owner = rigid.contains(decoded.dimension->boundary_id) || carried_transform.has_value();
+        const auto carried_similarity = similarity_transform
+            ? document_joint_similarity_dimension_transform(source, intent, *decoded.dimension) : std::nullopt;
+        const bool rigid_owner = rigid.contains(decoded.dimension->boundary_id) || carried_transform.has_value() || carried_similarity.has_value();
         if (!rigid_owner && !((per_owner || intent.physical_room_dimension_completion) &&
             offsets.dimension_offsets.contains(id))) continue;
         const auto found = candidate.find(id);
         if (found == candidate.end()) throw std::invalid_argument("Joint translation retired a rigid-owner callout");
         if (intent.physical_room_dimension_completion && is_physical_wall_room(source.at(decoded.dimension->boundary_id)))
             (void)resolve_current_boundary_dimension(*decoded.dimension, candidate);
-        if (intent.corner_window_dimension_completion && carried_transform &&
+        if (intent.corner_window_dimension_completion && (carried_transform || carried_similarity) &&
             decoded.dimension->kind == BoundaryDimensionKind::corner_window_leg_length)
             (void)resolve_current_boundary_dimension(*decoded.dimension, candidate);
         auto placed = *decoded.dimension;
-        if (carried_transform)
+        if (carried_similarity)
+            placed.text_position = document_joint_similarity_point(placed.text_position, *carried_similarity);
+        else if (carried_transform)
             placed.text_position = transform_point(placed.text_position, *carried_transform);
         else {
             const auto offset = rigid_owner ? offsets.owner_offsets.at(placed.boundary_id) : offsets.dimension_offsets.at(id);
@@ -6457,12 +6522,14 @@ std::map<std::string, Entity, std::less<>> completed_boundary_constraint_entitie
             validate_selection_changes(source, command);
             const auto geometry = without_selection_completion(command);
             bool rigid_annotation_merge=geometry.joint_translation &&
-                (geometry.joint_translation->per_owner_rigid_completion || !geometry.joint_translation->owner_transformations.empty());
+                (geometry.joint_translation->per_owner_similarity_completion || !geometry.joint_translation->owner_similarities.empty() ||
+                    geometry.joint_translation->per_owner_rigid_completion || !geometry.joint_translation->owner_transformations.empty());
 #ifdef VERTEX_HAS_CONSTRAINT_AUTHORING
             if (has_phase_constraint_authoring(geometry)) {
                 const auto intent=decode_phase_constraint_authoring_intent(geometry.phase_constraint_authoring_intent);
                 rigid_annotation_merge=intent.intent.joint_translation &&
-                    (intent.intent.joint_translation->per_owner_rigid_completion ||
+                    (intent.intent.joint_translation->per_owner_similarity_completion || !intent.intent.joint_translation->owner_similarities.empty() ||
+                        intent.intent.joint_translation->per_owner_rigid_completion ||
                         !intent.intent.joint_translation->owner_transformations.empty());
             }
 #endif
@@ -6652,6 +6719,15 @@ std::map<std::string, Entity, std::less<>> completed_boundary_constraint_entitie
             validate_joint_translation_mode(command, true);
             (void)command_to_json(Command{command});
 #ifdef VERTEX_HAS_CONSTRAINT_AUTHORING
+            if (command.joint_translation->per_owner_similarity_completion || !command.joint_translation->owner_similarities.empty()) {
+                validate_joint_similarity_mode(command);
+                auto result = reconstruct_joint_similarity(source,*command.joint_translation);
+                // This command has no submitted geometry payload. Reconstruct
+                // the whole cohort once, then admit ordinary state/history.
+                validate_boundary_identity_transition(history,source,result);
+                (void)validate_state(result,source_assets,active_policy);
+                return result;
+            }
             auto submitted = command;
             submitted.joint_translation.reset();
             submitted.joint_translation_completion = false;
@@ -7010,8 +7086,11 @@ PlanarTransform command_transform_from_json(const nlohmann::json& value);
 
 nlohmann::json joint_translation_to_json(const JointTranslationIntent& intent) {
     const bool rigid = intent.per_owner_rigid_completion || !intent.owner_transformations.empty();
+    const bool similarity = intent.per_owner_similarity_completion || !intent.owner_similarities.empty();
+    if (similarity && (rigid || intent.per_owner_translation_completion || !intent.owner_translations.empty()))
+        throw std::invalid_argument("Similarity joint intent cannot combine another geometry authority");
     if (!std::isfinite(intent.offset.x) || !std::isfinite(intent.offset.y) ||
-        (!rigid && intent.offset.x == 0.0 && intent.offset.y == 0.0))
+        (!rigid && !similarity && intent.offset.x == 0.0 && intent.offset.y == 0.0))
         throw std::invalid_argument("Joint translation requires a finite nonzero offset");
     if (intent.presentation_offset && (!std::isfinite(intent.presentation_offset->x) || !std::isfinite(intent.presentation_offset->y)))
         throw std::invalid_argument("Joint presentation offset must be finite");
@@ -7027,7 +7106,7 @@ nlohmann::json joint_translation_to_json(const JointTranslationIntent& intent) {
     validate_ids(intent.dimension_ids);
     if (rigid && (intent.per_owner_translation_completion || !intent.owner_translations.empty()))
         throw std::invalid_argument("Rigid joint intent cannot combine translation geometry authority");
-    const bool per_owner = rigid || intent.per_owner_translation_completion ||
+    const bool per_owner = rigid || similarity || intent.per_owner_translation_completion ||
         !intent.owner_translations.empty() || !intent.dimension_translations.empty();
     const bool empty_geometry = intent.partial_wall_ids.empty() &&
         intent.rigid_boundary_ids.empty() && intent.rigid_stroke_ids.empty();
@@ -7055,12 +7134,24 @@ nlohmann::json joint_translation_to_json(const JointTranslationIntent& intent) {
         return encoded_targets;
     };
     auto owners = nlohmann::json::array(), dimensions = nlohmann::json::array();
-    auto transformations = nlohmann::json::array();
+    auto transformations = nlohmann::json::array(), similarities = nlohmann::json::array();
     if (per_owner) {
         std::set<std::string, std::less<>> geometry(intent.rigid_boundary_ids.begin(), intent.rigid_boundary_ids.end());
         geometry.insert(intent.rigid_stroke_ids.begin(), intent.rigid_stroke_ids.end());
         geometry.insert(intent.partial_wall_ids.begin(), intent.partial_wall_ids.end());
-        if (rigid) {
+        if (similarity) {
+            if (!intent.per_owner_similarity_completion || intent.owner_similarities.size()!=geometry.size())
+                throw std::invalid_argument("Similarity joint operators require their explicit marker and exact target coverage");
+            std::set<std::string,std::less<>> seen;
+            for (const auto& target:intent.owner_similarities) {
+                validate_rigid_owner_transform({target.owner_id,target.transform});
+                if (!std::isfinite(target.scale) || target.scale<=0.0 || !geometry.contains(target.owner_id) ||
+                    !seen.insert(target.owner_id).second)
+                    throw std::invalid_argument("Similarity joint operators require unique owners and positive finite scales");
+                similarities.push_back({{"owner_id",target.owner_id},{"transform",command_transform_to_json(target.transform)},
+                    {"scale",target.scale}});
+            }
+        } else if (rigid) {
             if (intent.owner_transformations.size() != geometry.size())
                 throw std::invalid_argument("Rigid joint operators require exact selected target coverage");
             std::set<std::string, std::less<>> seen;
@@ -7097,7 +7188,7 @@ nlohmann::json joint_translation_to_json(const JointTranslationIntent& intent) {
             throw std::invalid_argument("Joint reference target aliases an annotation owner");
         references.push_back({{"reference_id", target.reference_id}, {"offset", command_vec2_to_json(target.offset)}});
     }
-    auto encoded = nlohmann::json{{"version", rigid ? 4 : per_owner ? 3 : per_target ? 2 : 1}, {"offset", command_vec2_to_json(intent.offset)},
+    auto encoded = nlohmann::json{{"version", similarity ? 11 : rigid ? 4 : per_owner ? 3 : per_target ? 2 : 1}, {"offset", command_vec2_to_json(intent.offset)},
         {"rigid_boundary_ids", intent.rigid_boundary_ids}, {"rigid_stroke_ids", intent.rigid_stroke_ids},
         {"partial_wall_ids", intent.partial_wall_ids}, {"move_connected_objects", intent.move_connected_objects},
         {"dimension_ids", intent.dimension_ids},
@@ -7107,14 +7198,25 @@ nlohmann::json joint_translation_to_json(const JointTranslationIntent& intent) {
         encoded["reference_translations"] = std::move(references);
     }
     if (per_owner) {
-        if (rigid) {
+        if (similarity) {
+            encoded["per_owner_similarity_completion"]=true;
+            encoded["owner_similarities"]=std::move(similarities);
+        } else if (rigid) {
             encoded["per_owner_rigid_completion"] = true;
             encoded["owner_transformations"] = std::move(transformations);
         } else encoded["owner_translations"] = std::move(owners);
         encoded["dimension_translations"] = std::move(dimensions);
     }
-    if (rigid && encoded.dump().size() > 1024 * 1024)
+    if ((rigid || similarity) && encoded.dump().size() > 1024 * 1024)
         throw std::invalid_argument("Rigid joint intent exceeds its proof budget");
+    if (similarity) {
+        if (intent.physical_room_dimension_completion && intent.dimension_ids.empty())
+            throw std::invalid_argument("Current physical-room similarity completion requires selected dimensions");
+        encoded["physical_room_dimension_completion"]=intent.physical_room_dimension_completion;
+        encoded["corner_window_dimension_completion"]=intent.corner_window_dimension_completion;
+        if (encoded.dump().size()>1024*1024) throw std::invalid_argument("Similarity joint intent exceeds its proof budget");
+        return encoded;
+    }
     if (intent.physical_room_dimension_completion) {
         if (intent.dimension_ids.empty())
             throw std::invalid_argument("Current physical-room callout completion requires selected dimensions");
@@ -7166,12 +7268,21 @@ JointTranslationIntent joint_translation_from_json(const nlohmann::json& value) 
         return result;
     }
     if (!value.is_object() || !value.contains("version") || !value.at("version").is_number_integer() ||
-        (value.at("version") != 1 && value.at("version") != 2 && value.at("version") != 3 && value.at("version") != 4))
+        (value.at("version") != 1 && value.at("version") != 2 && value.at("version") != 3 && value.at("version") != 4 && value.at("version") != 11))
         throw std::invalid_argument("Unsupported joint translation intent version");
+    const bool similarity=value.at("version")==11;
     const bool rigid = value.at("version") == 4;
-    const bool per_owner = rigid || value.at("version") == 3;
+    const bool per_owner = rigid || similarity || value.at("version") == 3;
     const bool per_target = per_owner || value.at("version") == 2;
-    if (rigid) {
+    if (similarity) {
+        command_exact_fields(value,{"version","offset","rigid_boundary_ids","rigid_stroke_ids","partial_wall_ids",
+            "move_connected_objects","dimension_ids","presentation_offset","annotation_translations","reference_translations",
+            "owner_similarities","dimension_translations","per_owner_similarity_completion",
+            "physical_room_dimension_completion","corner_window_dimension_completion"},DocumentErrorCode::invalid_entity,"similarity joint intent");
+        if (!value.at("per_owner_similarity_completion").is_boolean() || !value.at("per_owner_similarity_completion").get<bool>() ||
+            !value.at("physical_room_dimension_completion").is_boolean() || !value.at("corner_window_dimension_completion").is_boolean() ||
+            value.dump().size()>1024*1024) throw std::invalid_argument("Similarity joint intent requires explicit bounded completion markers");
+    } else if (rigid) {
         command_exact_fields(value, {"version", "offset", "rigid_boundary_ids", "rigid_stroke_ids",
             "partial_wall_ids", "move_connected_objects", "dimension_ids", "presentation_offset",
             "annotation_translations", "reference_translations", "owner_transformations", "dimension_translations",
@@ -7195,8 +7306,13 @@ JointTranslationIntent joint_translation_from_json(const nlohmann::json& value) 
         throw std::invalid_argument("Unsupported joint translation intent or movement flag");
     JointTranslationIntent result;
     result.per_target_presentation_completion = per_target;
-    result.per_owner_translation_completion = per_owner && !rigid;
+    result.per_owner_translation_completion = per_owner && !rigid && !similarity;
     result.per_owner_rigid_completion = rigid;
+    result.per_owner_similarity_completion=similarity;
+    if (similarity) {
+        result.physical_room_dimension_completion=value.at("physical_room_dimension_completion").get<bool>();
+        result.corner_window_dimension_completion=value.at("corner_window_dimension_completion").get<bool>();
+    }
     result.offset = command_vec2_from_json(value.at("offset"), "joint translation offset");
     if (!value.at("presentation_offset").is_null())
         result.presentation_offset = command_vec2_from_json(value.at("presentation_offset"), "joint presentation offset");
@@ -7221,7 +7337,15 @@ JointTranslationIntent joint_translation_from_json(const nlohmann::json& value) 
                     command_vec2_from_json(target.at("offset"), "joint owner offset")});
             }
         };
-        if (rigid) {
+        if (similarity) {
+            const auto& targets=value.at("owner_similarities");
+            if (!targets.is_array() || targets.size()>4096) throw std::invalid_argument("Similarity joint operators must be a bounded array");
+            for (const auto& target:targets) {
+                command_exact_fields(target,{"owner_id","transform","scale"},DocumentErrorCode::invalid_entity,"similarity joint owner");
+                result.owner_similarities.push_back({command_string(target.at("owner_id"),"similarity joint owner",kMaximumIdBytes),
+                    command_transform_from_json(target.at("transform")),command_number(target.at("scale"),"similarity scale")});
+            }
+        } else if (rigid) {
             const auto& targets = value.at("owner_transformations");
             if (!targets.is_array() || targets.size() > 4096)
                 throw std::invalid_argument("Rigid joint operators must be a bounded array");
@@ -7474,13 +7598,19 @@ JointTranslationOffsets resolve_joint_translation_offsets(
     const std::map<std::string, Entity, std::less<>>& source, const JointTranslationIntent& intent) {
     (void)joint_translation_to_json(intent);
     const bool rigid = intent.per_owner_rigid_completion || !intent.owner_transformations.empty();
-    const bool per_owner = rigid || intent.per_owner_translation_completion ||
+    const bool similarity = intent.per_owner_similarity_completion || !intent.owner_similarities.empty();
+    const bool captured_operator = rigid || similarity;
+    const bool per_owner = captured_operator || intent.per_owner_translation_completion ||
         !intent.owner_translations.empty() || !intent.dimension_translations.empty();
     JointTranslationOffsets result;
     if (per_owner) {
         for (const auto& target : intent.owner_translations) result.owner_offsets.emplace(target.owner_id, target.offset);
         for (const auto& target : intent.dimension_translations) result.dimension_offsets.emplace(target.owner_id, target.offset);
         for (const auto& target : intent.owner_transformations) result.owner_transforms.emplace(target.owner_id, target.transform);
+        for (const auto& target : intent.owner_similarities) {
+            result.owner_similarities.emplace(target.owner_id, target);
+            result.owner_transforms.emplace(target.owner_id, target.transform);
+        }
     }
     const auto require = [&](const std::string& id) -> const Entity& {
         const auto found = source.find(id);
@@ -7489,7 +7619,7 @@ JointTranslationOffsets resolve_joint_translation_offsets(
     };
     std::set<std::string,std::less<>> semantic_available;
     std::optional<std::map<std::string,MeasurementLineworkSourceCheck,std::less<>>> source_checks;
-    if (rigid) {
+    if (captured_operator) {
         for (const auto& [id, entity] : source) { (void)entity; semantic_available.insert(id); }
         for (const auto& [id, entity] : source) {
             (void)id;
@@ -7505,7 +7635,7 @@ JointTranslationOffsets resolve_joint_translation_offsets(
         if (!can_recognize_boundary_entity_type(entity.type))
             throw std::invalid_argument("Joint translation boundary source has the wrong owner type");
         (void)decode_identified_boundary_entity(entity);
-        if (rigid) {
+        if (captured_operator) {
             if (!semantic_available.contains(id) || entity.extensions.contains("physical_wall_room"))
                 throw std::invalid_argument("Rigid joint selected boundary is unavailable or requires reviewed physical-room repair");
             if (entity.properties.contains("wall_measurement_source") && !wall_measurement_source_current(source,entity))
@@ -7523,7 +7653,8 @@ JointTranslationOffsets resolve_joint_translation_offsets(
                     const auto child_id = child.get<std::string>();
                     if (child_id == id || !seen.insert(child_id).second ||
                         std::find(intent.rigid_boundary_ids.begin(),intent.rigid_boundary_ids.end(),child_id) == intent.rigid_boundary_ids.end() ||
-                        !(result.owner_transforms.at(id) == result.owner_transforms.at(child_id)))
+                        !(result.owner_transforms.at(id) == result.owner_transforms.at(child_id)) ||
+                        (similarity && result.owner_similarities.at(id).scale != result.owner_similarities.at(child_id).scale))
                         throw std::invalid_argument("Rigid joint deductions require complete compatible selected operators");
                 }
             }
@@ -7536,14 +7667,14 @@ JointTranslationOffsets resolve_joint_translation_offsets(
             throw std::invalid_argument("Joint translation stroke source has the wrong owner type");
         const auto decoded = decode_measurement_linework_model(entity.properties.at("model"));
         if (!decoded.supported()) throw std::invalid_argument(decoded.diagnostic);
-        if (rigid && !semantic_available.contains(id)) throw std::invalid_argument("Rigid joint stroke is unavailable in its semantic phase");
+        if (captured_operator && !semantic_available.contains(id)) throw std::invalid_argument("Rigid joint stroke is unavailable in its semantic phase");
         if (!per_owner) result.owner_offsets.emplace(id, intent.offset);
     }
     for (const auto& id : intent.partial_wall_ids) {
         const auto& entity = require(id);
         if (entity.type != "wall") throw std::invalid_argument("Joint translation wall source has the wrong owner type");
         validate_entity(entity);
-        if (rigid && !semantic_available.contains(id)) throw std::invalid_argument("Rigid joint wall is unavailable in its semantic phase");
+        if (captured_operator && !semantic_available.contains(id)) throw std::invalid_argument("Rigid joint wall is unavailable in its semantic phase");
         if (!per_owner) result.owner_offsets.emplace(id, intent.offset);
     }
     bool current_room_callout = false;
@@ -7567,7 +7698,16 @@ JointTranslationOffsets resolve_joint_translation_offsets(
                 std::find(intent.rigid_stroke_ids.begin(), intent.rigid_stroke_ids.end(), decoded.dimension->boundary_id) != intent.rigid_stroke_ids.end() ||
                 std::find(intent.partial_wall_ids.begin(), intent.partial_wall_ids.end(), decoded.dimension->boundary_id) != intent.partial_wall_ids.end();
             const auto selected = result.dimension_offsets.at(id);
-            if (rigid && selected_owner) {
+            const auto carried_similarity = similarity
+                ? document_joint_similarity_dimension_transform(source,intent,*decoded.dimension) : std::nullopt;
+            if (carried_similarity) {
+                const auto before = decoded.dimension->text_position;
+                const auto after = document_joint_similarity_point(before,*carried_similarity);
+                if (after.x != before.x + selected.x || after.y != before.y + selected.y)
+                    throw std::invalid_argument("Joint selected callout contradicts its captured similarity operator");
+            } else if (similarity && selected_owner) {
+                throw std::invalid_argument("Joint selected similarity callout has no captured owner operator");
+            } else if (rigid && selected_owner) {
                 const auto before = decoded.dimension->text_position;
                 const auto after = transform_point(before, result.owner_transforms.at(decoded.dimension->boundary_id));
                 if (after.x != before.x + selected.x || after.y != before.y + selected.y)
@@ -7585,7 +7725,8 @@ JointTranslationOffsets resolve_joint_translation_offsets(
 std::optional<PlanarTransform> joint_rigid_dimension_transform(
     const std::map<std::string, Entity, std::less<>>& source,
     const JointTranslationIntent& intent, const BoundaryDimension& dimension) {
-    if (!intent.per_owner_rigid_completion && intent.owner_transformations.empty()) return std::nullopt;
+    if (intent.per_owner_similarity_completion || !intent.owner_similarities.empty() ||
+        (!intent.per_owner_rigid_completion && intent.owner_transformations.empty())) return std::nullopt;
     const auto selected = [&](const std::vector<std::string>& ids, const std::string& id) {
         return std::find(ids.begin(), ids.end(), id) != ids.end();
     };
@@ -7782,6 +7923,8 @@ static std::map<std::string, Entity, std::less<>> joint_rigid_replay_source_impl
     const ConstraintPhaseScope* scope) {
     if (scope) validate_active_joint_targets(source,intent,*scope);
     const auto resolved = resolve_joint_translation_offsets(source, intent);
+    if (intent.per_owner_similarity_completion || !intent.owner_similarities.empty())
+        throw std::invalid_argument("Joint similarity requires its complete scale and operator preparation");
     if (!intent.per_owner_rigid_completion && intent.owner_transformations.empty()) return source;
     std::vector<BoundaryTransformation> boundaries;
     for (const auto& id : intent.rigid_boundary_ids) {
@@ -7814,8 +7957,9 @@ static void complete_joint_rigid_sources_impl(const std::map<std::string, Entity
         validate_active_joint_targets(source,intent,*scope);
         validate_inactive_joint_records(source,candidate,*scope);
     }
-    if (!intent.per_owner_rigid_completion && intent.owner_transformations.empty())
-        throw std::invalid_argument("Rigid source completion requires a captured v4 owner intent");
+    const bool similarity = intent.per_owner_similarity_completion || !intent.owner_similarities.empty();
+    if (!similarity && !intent.per_owner_rigid_completion && intent.owner_transformations.empty())
+        throw std::invalid_argument("Joint source completion requires a captured rigid or similarity owner intent");
     const auto resolved = resolve_joint_translation_offsets(source,intent);
     std::set<std::string,std::less<>> semantic_available;
     for (const auto& [id,entity] : candidate) { (void)entity; semantic_available.insert(id); }
@@ -7839,12 +7983,14 @@ static void complete_joint_rigid_sources_impl(const std::map<std::string, Entity
         auto boundary = decode_identified_boundary_entity(original);
         const auto& transform = resolved.owner_transforms.at(id);
         Boundary expected;
-        for (const auto& edge : boundary.segments) expected.push_back(transform_segment(edge.segment,transform));
+        for (const auto& edge : boundary.segments) expected.push_back(similarity
+            ? document_joint_similarity_segment(edge.segment,resolved.owner_similarities.at(id))
+            : transform_segment(edge.segment,transform));
         RigidExteriorAlignment correspondence;
         Boundary aligned;
         nlohmann::json lineage;
         if (walls) {
-            if (identity_rigid_transform(transform)) {
+            if (identity_rigid_transform(transform) && (!similarity || resolved.owner_similarities.at(id).scale == 1.0)) {
                 // A mixed group may explicitly retain an identity consumer.
                 // Keep its exact existing proof (including sequential v2
                 // lineage); no producer normalization owns a geometry edit.
@@ -7933,8 +8079,9 @@ static void validate_joint_rigid_topology_impl(const std::map<std::string, Entit
         validate_active_joint_targets(source,intent,*scope);
         validate_inactive_joint_records(source,candidate,*scope);
     }
-    if (!intent.per_owner_rigid_completion && intent.owner_transformations.empty())
-        throw std::invalid_argument("Rigid topology admission requires a captured v4 owner intent");
+    const bool similarity = intent.per_owner_similarity_completion || !intent.owner_similarities.empty();
+    if (!similarity && !intent.per_owner_rigid_completion && intent.owner_transformations.empty())
+        throw std::invalid_argument("Joint topology admission requires a captured rigid or similarity owner intent");
     const auto resolved = resolve_joint_translation_offsets(source,intent);
     std::set<std::string,std::less<>> semantic_available;
     for (const auto& [id,entity] : candidate) { (void)entity; semantic_available.insert(id); }
@@ -7947,6 +8094,8 @@ static void validate_joint_rigid_topology_impl(const std::map<std::string, Entit
             if (!active.contains(member) || active.at(member) == ModelPhase::demolished) semantic_available.erase(member);
     }
     const auto measured_checks = measurement_linework_source_checks(candidate,&semantic_available);
+    // Physical contact and cycle checks must start from the actual retained
+    // walls. Only independently verified boundary winding is normalized below.
     auto topology_source = source;
     for (const auto& id : intent.rigid_boundary_ids) {
         auto expected = decode_identified_boundary_entity(source.at(id));
@@ -7957,10 +8106,12 @@ static void validate_joint_rigid_topology_impl(const std::map<std::string, Entit
         const bool source_bound = source.at(id).properties.contains("wall_measurement_source") ||
             source.at(id).extensions.contains("measurement_linework_sources") || source.at(id).extensions.contains("measurement_linework_group");
         Boundary expected_geometry;
-        for (const auto& edge : expected.segments) expected_geometry.push_back(transform_segment(edge.segment,transform));
+        for (const auto& edge : expected.segments) expected_geometry.push_back(similarity
+            ? document_joint_similarity_segment(edge.segment,resolved.owner_similarities.at(id))
+            : transform_segment(edge.segment,transform));
         if (source_bound) {
             if (source.at(id).properties.contains("wall_measurement_source")) {
-                if (!identity_rigid_transform(transform)) {
+                if (!identity_rigid_transform(transform) || (similarity && resolved.owner_similarities.at(id).scale != 1.0)) {
                     const auto derived = derive_replacement_exterior_wall_measurement(candidate,source.at(id),
                         exterior_wall_measurement_source_ids(source.at(id)));
                     expected_geometry = uniquely_aligned_rigid_exterior(expected_geometry,derived.boundary,transform);
@@ -8018,11 +8169,21 @@ static void validate_joint_rigid_topology_impl(const std::map<std::string, Entit
         if (actual.x != decoded.constraint->anchor->x || actual.y != decoded.constraint->anchor->y)
             throw std::invalid_argument("Rigid joint final source redraw conflicts with an unchanged exact fixed anchor");
     }
-    std::map<std::string,PlanarTransform,std::less<>> wall_transforms;
-    for (const auto& id : intent.partial_wall_ids) wall_transforms.emplace(id,resolved.owner_transforms.at(id));
-    const std::set<std::string,std::less<>> rigid_walls(intent.partial_wall_ids.begin(),intent.partial_wall_ids.end());
-    if (scope) validate_active_phase_constraint_edit_topology(topology_source,candidate,rigid_walls,wall_transforms);
-    else validate_constraint_edit_topology(topology_source,candidate,rigid_walls,wall_transforms);
+    if (similarity) {
+        std::map<std::string,SimilarityOwnerTransformation,std::less<>> wall_operations;
+        for (const auto& id : intent.partial_wall_ids)
+            wall_operations.emplace(id,resolved.owner_similarities.at(id));
+        if (scope) validate_active_phase_constraint_similarity_topology(topology_source,candidate,wall_operations);
+        else validate_constraint_similarity_topology(topology_source,candidate,wall_operations);
+        if (scope) validate_exterior_corner_physical_contacts_active_phase(source,candidate);
+        else validate_exterior_corner_physical_contacts(source,candidate);
+    } else {
+        std::map<std::string,PlanarTransform,std::less<>> wall_transforms;
+        for (const auto& id : intent.partial_wall_ids) wall_transforms.emplace(id,resolved.owner_transforms.at(id));
+        const std::set<std::string,std::less<>> rigid_walls(intent.partial_wall_ids.begin(),intent.partial_wall_ids.end());
+        if (scope) validate_active_phase_constraint_edit_topology(topology_source,candidate,rigid_walls,wall_transforms);
+        else validate_constraint_edit_topology(topology_source,candidate,rigid_walls,wall_transforms);
+    }
 }
 
 void validate_joint_rigid_topology(const std::map<std::string, Entity, std::less<>>& source,
@@ -8043,8 +8204,10 @@ static void complete_joint_rigid_consequences_impl(const std::map<std::string, E
         validate_active_joint_targets(source,intent,*scope);
         validate_inactive_joint_records(source,candidate,*scope);
     }
-    if (!intent.per_owner_rigid_completion && intent.owner_transformations.empty()) return;
+    const bool similarity = intent.per_owner_similarity_completion || !intent.owner_similarities.empty();
+    if (!similarity && !intent.per_owner_rigid_completion && intent.owner_transformations.empty()) return;
     const auto resolved = resolve_joint_translation_offsets(source, intent);
+    const auto scaled_source = similarity ? document_joint_similarity_scale_source(source,intent) : source;
     for (const auto& [id, original] : source) {
         if (scope && scope->inactive_owner_ids.contains(id)) continue;
         if (original.type == "constraint") {
@@ -8080,8 +8243,9 @@ static void complete_joint_rigid_consequences_impl(const std::map<std::string, E
             if (scope && scope->inactive_owner_ids.contains(host)) continue;
             const auto found = resolved.owner_transforms.find(host);
             if (found == resolved.owner_transforms.end()) continue;
-            const auto replacement = replay_rigid_source_opening(original, found->second);
-            if (candidate.at(id) != original && candidate.at(id) != replacement)
+            const auto& scaled = scaled_source.at(id);
+            const auto replacement = replay_rigid_source_opening(scaled, found->second);
+            if (candidate.at(id) != original && candidate.at(id) != scaled && candidate.at(id) != replacement)
                 throw std::invalid_argument("Rigid joint completion overlaps a hosted opening edit");
             candidate.at(id) = replacement;
         } else if (original.type == kAnnotationEntityType) {
@@ -8099,12 +8263,15 @@ static void complete_joint_rigid_consequences_impl(const std::map<std::string, E
                 if (found == resolved.owner_transforms.end()) continue;
                 auto expected = record;
                 const auto& transform = found->second;
-                if (transform.rotation_radians == 0.0 && !transform.flip_horizontal && !transform.flip_vertical)
+                const auto factor = similarity ? resolved.owner_similarities.at(found->first).scale : 1.0;
+                if (factor == 1.0 && transform.rotation_radians == 0.0 && !transform.flip_horizontal && !transform.flip_vertical)
                     continue; // Translation does not change a relative label basis.
                 const PlanarTransform basis{{}, transform.rotation_radians, transform.flip_horizontal, transform.flip_vertical, {}};
                 if (record.contains("plan_label_offset_m")) {
                     const auto& offset = record.at("plan_label_offset_m");
-                    const auto next = transform_point({offset.at(0).get<double>(), offset.at(1).get<double>()}, basis);
+                    const Vec2 before{offset.at(0).get<double>(), offset.at(1).get<double>()};
+                    const auto next = factor == 1.0 ? transform_point(before,basis) :
+                        document_joint_similarity_point(before,{found->first,basis,factor});
                     if (!std::isfinite(next.x) || !std::isfinite(next.y)) throw std::invalid_argument("Rigid joint label offset overflows");
                     expected["plan_label_offset_m"] = nlohmann::json::array({next.x, next.y});
                 }
@@ -8124,9 +8291,17 @@ static void complete_joint_rigid_consequences_impl(const std::map<std::string, E
         }
     }
     if (complete_area_callouts) {
-        std::map<std::string,PlanarTransform,std::less<>> transforms;
-        for (const auto& id : intent.rigid_boundary_ids) transforms.emplace(id,resolved.owner_transforms.at(id));
-        for (const auto& change : transformed_area_callout_entities(source,candidate,transforms))
+        std::vector<EntityChange> changes;
+        if (similarity) {
+            std::map<std::string,SimilarityOwnerTransformation,std::less<>> transforms;
+            for (const auto& id : intent.rigid_boundary_ids) transforms.emplace(id,resolved.owner_similarities.at(id));
+            changes = transformed_area_callout_entities(source,candidate,transforms);
+        } else {
+            std::map<std::string,PlanarTransform,std::less<>> transforms;
+            for (const auto& id : intent.rigid_boundary_ids) transforms.emplace(id,resolved.owner_transforms.at(id));
+            changes = transformed_area_callout_entities(source,candidate,transforms);
+        }
+        for (const auto& change : changes)
             candidate.at(change.entity.id) = merge_selection_annotation_entities(source.at(change.entity.id),
                 change.entity,candidate.at(change.entity.id),AnnotationMergeMode::source_callout_proof);
     }
@@ -8594,6 +8769,18 @@ nlohmann::json command_to_json(const Command& command) {
             if (has_joint_translation_completion(typed)) {
                 try {
                     validate_joint_translation_mode(typed, false);
+                    if (typed.joint_translation && (typed.joint_translation->per_owner_similarity_completion ||
+                        !typed.joint_translation->owner_similarities.empty())) {
+                        validate_joint_similarity_mode(typed);
+                        if (typed.message.size()>1024 || !is_valid_utf8_without_nul(typed.message))
+                            throw std::invalid_argument("Joint similarity message is invalid");
+                        auto encoded = nlohmann::json{{"version",53},{"kind","apply_boundary_constraint_changes"},
+                            {"expected_revision",typed.expected_revision},{"message",typed.message},
+                            {"joint_translation_completion",true},{"joint_translation",joint_translation_to_json(*typed.joint_translation)}};
+                        if (encoded.dump().size()>1024*1024)
+                            throw std::invalid_argument("Joint similarity exceeds its persisted intent budget");
+                        return encoded;
+                    }
                     const bool per_target = typed.joint_translation && joint_per_target_presentation(*typed.joint_translation);
                     validate_joint_presentation_proof(typed);
                     auto proof = typed;
@@ -8858,7 +9045,7 @@ Command command_from_json(const nlohmann::json& value,
     try {
         if (!value.is_object() || !value.contains("version") || !value.contains("kind") ||
             !value.at("version").is_number_integer() ||
-            (value.at("version")<1 || value.at("version")>52) ||
+            (value.at("version")<1 || value.at("version")>53) ||
             !value.at("kind").is_string()) {
             document_error(DocumentErrorCode::invalid_entity, "serialized command envelope is invalid");
         }
@@ -9308,10 +9495,28 @@ Command command_from_json(const nlohmann::json& value,
                 (void)command_to_json(Command{result});
                 return result;
             }
+            if (value.at("version") == 53) {
+                command_exact_fields(value,{"version","kind","expected_revision","message",
+                    "joint_translation_completion","joint_translation"},DocumentErrorCode::invalid_entity,"serialized joint similarity");
+                if (value.dump().size()>1024*1024 || !value.at("joint_translation_completion").is_boolean() ||
+                    !value.at("joint_translation_completion").get<bool>() || !value.at("message").is_string())
+                    throw std::invalid_argument("Joint similarity marker, message or intent budget is invalid");
+                ApplyBoundaryConstraintChanges result;
+                result.expected_revision=command_revision(value.at("expected_revision"),"Joint similarity revision");
+                result.message=value.at("message").get<std::string>();
+                result.joint_translation_completion=true;
+                result.joint_translation=joint_translation_from_json(value.at("joint_translation"));
+                validate_joint_similarity_mode(result);
+                if (command_to_json(Command{result})!=value)
+                    throw std::invalid_argument("Joint similarity requires its canonical closed source envelope");
+                return result;
+            }
             if (value.at("version") == 17) {
                 std::optional<JointTranslationIntent> joint_intent;
                 if (value.contains("joint_translation") && !value.at("joint_translation").is_null())
                     joint_intent = joint_translation_from_json(value.at("joint_translation"));
+                if (joint_intent && (joint_intent->per_owner_similarity_completion || !joint_intent->owner_similarities.empty()))
+                    throw std::invalid_argument("Historical joint proof cannot admit a similarity source intent");
                 const bool per_target = joint_intent && joint_per_target_presentation(*joint_intent);
                 if (per_target)
                     command_exact_fields(value, {"version", "kind", "expected_revision", "message",

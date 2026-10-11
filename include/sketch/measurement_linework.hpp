@@ -16,15 +16,17 @@ inline constexpr std::uint32_t measurement_linework_schema_version_v2 = 2;
 inline constexpr std::uint32_t measurement_linework_schema_version_v3 = 3;
 inline constexpr std::uint32_t measurement_linework_schema_version_v4 = 4;
 inline constexpr std::uint32_t measurement_linework_schema_version_v5 = 5;
+inline constexpr std::uint32_t measurement_linework_schema_version_v6 = 6;
 inline constexpr std::uint32_t measurement_linework_schema_version = measurement_linework_schema_version_v1;
-inline constexpr std::uint32_t measurement_linework_latest_schema_version = measurement_linework_schema_version_v5;
+inline constexpr std::uint32_t measurement_linework_latest_schema_version = measurement_linework_schema_version_v6;
 inline constexpr std::uint32_t measurement_linework_replay_version_v1 = 1;
 inline constexpr std::uint32_t measurement_linework_replay_version_v2 = 2;
 inline constexpr std::uint32_t measurement_linework_replay_version_v3 = 3;
 inline constexpr std::uint32_t measurement_linework_replay_version_v4 = 4;
 inline constexpr std::uint32_t measurement_linework_replay_version_v5 = 5;
+inline constexpr std::uint32_t measurement_linework_replay_version_v6 = 6;
 inline constexpr std::uint32_t measurement_linework_replay_version = measurement_linework_replay_version_v1;
-inline constexpr std::uint32_t measurement_linework_latest_replay_version = measurement_linework_replay_version_v5;
+inline constexpr std::uint32_t measurement_linework_latest_replay_version = measurement_linework_replay_version_v6;
 
 struct MeasurementLineworkEdit {
     BoundaryGeometryEdit intent;
@@ -33,8 +35,12 @@ struct MeasurementLineworkEdit {
 struct MeasurementLineworkVertexBatch {
     std::vector<BoundaryGeometryEdit> edits;
 };
+struct MeasurementLineworkSimilarity {
+    PlanarTransform transform;
+    double scale{1};
+};
 using MeasurementLineworkOperation = std::variant<PlanarTransform, MeasurementLineworkEdit,
-    MeasurementLineworkVertexBatch>;
+    MeasurementLineworkVertexBatch, MeasurementLineworkSimilarity>;
 
 // One analytical measurement stroke, independent of physical walls and areas.
 // Entity adapters own property/building/floor/layer context and place this
@@ -51,7 +57,7 @@ struct MeasurementLinework {
     nlohmann::json extensions = nlohmann::json::object();
     // Schema/replay two: ordered world operations; all receipts stay local.
     std::vector<PlanarTransform> transforms;
-    // Schema/replay three/four/five: ordered derivations in the world frame at that
+    // Schema/replay three/four/five/six: ordered derivations in the world frame at that
     // operation. Receipts remain the original immutable authoring evidence.
     // The historical transforms member must be empty in this dialect.
     std::vector<MeasurementLineworkOperation> operations;
@@ -94,6 +100,14 @@ struct MeasurementLineworkReplay {
 [[nodiscard]] MeasurementLinework transformed_measurement_linework(
     const MeasurementLinework& model, const PlanarTransform& transform);
 
+// Scale the actual replayed geometry about transform.pivot first, then apply
+// its historical rigid rotation/reflection/translation. Positive finite scale
+// only. Real changes append one schema/replay-six operation while retaining
+// exact local receipts, identities and extensions. Geometric no-ops retain the
+// exact source; invalid, collapsed or precision-losing results throw atomically.
+[[nodiscard]] MeasurementLinework similarity_transformed_measurement_linework(
+    const MeasurementLinework& model, const MeasurementLineworkSimilarity& similarity);
+
 // Supports move_vertex and resize_segment only. Every occurrence of a stable
 // vertex moves together; open, crossing and retraced strokes remain valid.
 // Resize retains chord direction and signed sweep. move_connected translates
@@ -119,6 +133,7 @@ enum class MeasurementLineworkFormat {
     supported_v3,
     supported_v4,
     supported_v5,
+    supported_v6,
     unsupported_version,
     unsupported_replay_version,
 };
@@ -149,7 +164,7 @@ struct MeasurementLineworkDecodeResult {
 // field, and neither dialect accepts uniform scaling. Inspection reads only the object
 // and its positive integral version, plus a required positive integral
 // replay_version for a known schema. Decode validates/replays known pairs
-// (1,1)..(5,5); unknown positive schema/replay pairs return exact opaque JSON for a
+// (1,1)..(6,6); unknown positive schema/replay pairs return exact opaque JSON for a
 // caller to preserve without decoding. Encode validates and retains original
 // expressions and extensions. V3 forbids transforms and requires operations:
 // {type: "transform", transform: <v1 transform>} or {type: "edit", edit:
@@ -159,7 +174,10 @@ struct MeasurementLineworkDecodeResult {
 // V4 admits typed chord receipts. V5 additionally admits
 // {type: "vertex_batch", edits: [<strict plain move_vertex intent>, ...]}.
 // Batches require unique existing targets and a nonredundant final change;
-// earlier dialects reject this operation. Malformed known models throw invalid_argument.
+// earlier dialects reject this operation. V6 additionally admits
+// {type: "similarity", transform: <strict historical v1 transform>, scale:
+// <positive finite number>}. Scaling precedes rigid transformation; earlier
+// dialects reject similarity. Malformed known models throw invalid_argument.
 [[nodiscard]] MeasurementLineworkVersion inspect_measurement_linework_model(
     const nlohmann::json& model);
 [[nodiscard]] MeasurementLineworkDecodeResult decode_measurement_linework_model(

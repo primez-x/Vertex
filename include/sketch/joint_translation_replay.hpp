@@ -10,7 +10,21 @@ struct JointTranslationOffsets {
     std::map<std::string, Vec2, std::less<>> owner_offsets;
     std::map<std::string, Vec2, std::less<>> dimension_offsets;
     std::map<std::string, PlanarTransform, std::less<>> owner_transforms;
+    std::map<std::string, SimilarityOwnerTransformation, std::less<>> owner_similarities;
 };
+
+[[nodiscard]] Vec2 transform_joint_similarity_point(Vec2 point, const SimilarityOwnerTransformation& operation);
+[[nodiscard]] Segment transform_joint_similarity_segment(const Segment& segment, const SimilarityOwnerTransformation& operation);
+[[nodiscard]] std::map<std::string, Entity, std::less<>> joint_similarity_scale_source(
+    const std::map<std::string, Entity, std::less<>>& source, const JointTranslationIntent& intent);
+// Source-only scale preparation. Selected physical sections/hosted profiles,
+// ordinary receipt-backed boundaries and measured strokes retain provenance.
+// Rigid completion and the connected solve still run after this preparation.
+[[nodiscard]] std::map<std::string, Entity, std::less<>> joint_similarity_replay_source(
+    const std::map<std::string, Entity, std::less<>>& source, const JointTranslationIntent& intent);
+[[nodiscard]] std::optional<SimilarityOwnerTransformation> joint_similarity_dimension_transform(
+    const std::map<std::string, Entity, std::less<>>& source,
+    const JointTranslationIntent& intent, const BoundaryDimension& dimension);
 
 // Validate bounded exact target coverage and captured source owner types.
 // Legacy versions resolve every selection to their historical shared offset.

@@ -110,6 +110,9 @@ struct PhaseConstraintAuthoringIntent {
     // two; historical dialect two retains its sixteen-field intent. Complete
     // replacement replay derives and copies actual baseline roots before scale.
     // Neither scale dialect grants demolition or coordinated scale authority.
+    // Dialect twenty-two retains a pure per-owner similarity joint intent.
+    // It keeps the ordinary eight outer keys and grants no replacement lane;
+    // historical wrappers cannot carry the new nested operator dialect.
 };
 
 [[nodiscard]] PhaseConstraintAuthoringIntent decode_phase_constraint_authoring_intent(

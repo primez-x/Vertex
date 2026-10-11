@@ -326,19 +326,19 @@ void archive_scaled_wall_length_receipt(Entity& wall,const Segment& transformed,
     wall=std::move(result);
 }
 
-std::map<std::string,Entity,std::less<>> stage_wall_group_scale_entities(
-    const std::map<std::string,Entity,std::less<>>& source,const WallGroupScaleIntent& raw) {
-    const auto intent=decode_wall_group_scale_intent(encode_wall_group_scale_intent(raw));
+static std::map<std::string,Entity,std::less<>> stage_wall_scales(
+    const std::map<std::string,Entity,std::less<>>& source,
+    const std::map<std::string,WallGroupScaleIntent,std::less<>>& operations) {
     auto result=source;
     const auto scope=constraint_phase_scope(source);
-    const auto scaled_scalar=[&](json& values,const char* field) {
+    const auto scaled_scalar=[&](json& values,const char* field,double scale) {
         if (!values.contains(field)) return;
-        const auto amount=finite_number(values.at(field),field)*intent.scale;
+        const auto amount=finite_number(values.at(field),field)*scale;
         if (!std::isfinite(amount)) invalid("Wall group scale exceeds supported numeric range");
         values[field]=amount;
     };
     std::map<std::string,double,std::less<>> scales;
-    for (const auto& id : intent.wall_ids) {
+    for (const auto& [id,intent] : operations) {
         const auto found=source.find(id);
         if (found==source.end() || found->second.type!="wall" || found->second.id!=id)
             invalid("Wall group scale requires actual persisted walls");
@@ -365,7 +365,7 @@ std::map<std::string,Entity,std::less<>> stage_wall_group_scale_entities(
         archive_scaled_wall_length_receipt(entity,baseline,intent.pivot,intent.scale);
         if (entity.extensions.contains("curve_input")) rebase_wall_curve_input(entity,baseline);
         set_baseline(entity,baseline);
-        for (const auto* key : {"thickness_m","thickness","height_m","height"}) scaled_scalar(entity.properties,key);
+        for (const auto* key : {"thickness_m","thickness","height_m","height"}) scaled_scalar(entity.properties,key,intent.scale);
         entity.properties["thickness_m"]=wall.thickness*intent.scale;
         entity.properties["height_m"]=wall.height*intent.scale;
         const double raw_elevation=intent.pivot.z+(wall.elevation+shift-intent.pivot.z)*intent.scale-shift;
@@ -375,18 +375,18 @@ std::map<std::string,Entity,std::less<>> stage_wall_group_scale_entities(
         // set_baseline already derives the rise from the unchanged gradient
         // and the scaled chord when a top plane is present.
         if (!entity.properties.contains("top_plane"))
-            for (const auto* key : {"slope_rise_m","slope_rise"}) scaled_scalar(entity.properties,key);
+            for (const auto* key : {"slope_rise_m","slope_rise"}) scaled_scalar(entity.properties,key,intent.scale);
         if (entity.properties.contains("layers"))
-            for (auto& layer : entity.properties.at("layers")) scaled_scalar(layer,"thickness_m");
+            for (auto& layer : entity.properties.at("layers")) scaled_scalar(layer,"thickness_m",intent.scale);
         if (entity.properties.contains("transform")) invalid("Wall scale cannot borrow opaque legacy transform metadata");
         for (const auto* child : openings) {
             if (child->properties.contains("corner_window_id")) continue;
             auto& p=result.at(child->id).properties;
-            for (const auto* key : {"offset_m","offset","width_m","width","sill_m","sill","height_m","height"}) scaled_scalar(p,key);
+            for (const auto* key : {"offset_m","offset","width_m","width","sill_m","sill","height_m","height"}) scaled_scalar(p,key,intent.scale);
             if (p.contains("opening_assembly")) {
                 (void)parse_opening_assembly(p.at("opening_assembly"));
                 for (const auto* key : {"frame_width_m","frame_depth_m","panel_thickness_m","glazing_thickness_m","inset_m","window_bay_projection_m","window_bow_projection_m"})
-                    scaled_scalar(p.at("opening_assembly"),key);
+                    scaled_scalar(p.at("opening_assembly"),key,intent.scale);
                 (void)parse_opening_assembly(p.at("opening_assembly"));
             }
         }
@@ -405,6 +405,7 @@ std::map<std::string,Entity,std::less<>> stage_wall_group_scale_entities(
             const auto host=before.type=="corner_window" ? parse_corner_window(before).wall_ids[0] :
                 before.properties.at("wall_id").get<std::string>();
             if (!scales.contains(host)) invalid("Corner scale receipt lacks a selected actual host");
+            const auto& intent=operations.at(host);
             auto& archive=result.at(host).extensions["wall_scale_hosted_quantity_archive"];
             if (archive.is_null()) archive={{"version",1},{"entries",json::array()}};
             if (!archive.is_object() || archive.size()!=2 || !archive.contains("version") || archive.at("version")!=1 ||
@@ -432,11 +433,44 @@ std::map<std::string,Entity,std::less<>> stage_wall_group_scale_entities(
         if (!archive.is_object() || archive.size()!=2 || !archive.contains("version") || archive.at("version")!=1 ||
             !archive.contains("entries") || !archive.at("entries").is_array() || archive.at("entries").size()>=4096)
             invalid("Unsupported wall scale quantity archive");
+        const auto host=before.type=="wall" ? id : before.properties.at("wall_id").get<std::string>();
+        const auto& intent=operations.at(host);
         archive["entries"].push_back({{"source_properties",before.properties},
             {"pivot",json::array({intent.pivot.x,intent.pivot.y,intent.pivot.z})},{"scale",intent.scale}});
         if (archive.dump().size()>1024*1024) invalid("Wall scale quantity archive exceeds its budget");
     }
     return result;
+}
+
+std::map<std::string,Entity,std::less<>> stage_wall_group_scale_entities(
+    const std::map<std::string,Entity,std::less<>>& source,const WallGroupScaleIntent& raw) {
+    const auto intent=decode_wall_group_scale_intent(encode_wall_group_scale_intent(raw));
+    std::map<std::string,WallGroupScaleIntent,std::less<>> operations;
+    for (const auto& id : intent.wall_ids) operations.emplace(id,intent);
+    return stage_wall_scales(source,operations);
+}
+
+std::map<std::string,Entity,std::less<>> stage_wall_owner_similarity_scales(
+    const std::map<std::string,Entity,std::less<>>& source,
+    const std::vector<SimilarityOwnerTransformation>& targets) {
+    if (targets.size()>4096) invalid("Wall owner similarities exceed their budget");
+    std::map<std::string,WallGroupScaleIntent,std::less<>> operations;
+    std::set<std::string,std::less<>> selected;
+    for (const auto& target : targets) {
+        if (target.owner_id.empty() || !selected.insert(target.owner_id).second ||
+            !std::isfinite(target.scale) || !(target.scale>0))
+            invalid("Wall owner similarities require unique owners and positive finite factors");
+        (void)transform_point(target.transform.pivot,target.transform);
+        const auto found=source.find(target.owner_id);
+        if (found==source.end() || found->second.type!="wall") invalid("Wall similarity requires an actual wall");
+        if (target.scale==1.0) continue;
+        const auto effective=resolve_vertical_placement(source,found->second);
+        const auto base=finite_number(effective.properties.at(effective.properties.contains("elevation_m") ?
+            "elevation_m" : "elevation"),"Wall effective base plane");
+        operations.emplace(target.owner_id,WallGroupScaleIntent{{target.owner_id},
+            {target.transform.pivot.x,target.transform.pivot.y,base},target.scale,true});
+    }
+    return operations.empty() ? source : stage_wall_scales(source,operations);
 }
 
 void clear_wall_length_input(Entity& wall) {

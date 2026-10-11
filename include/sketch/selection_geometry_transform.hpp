@@ -12,17 +12,21 @@ namespace sketch {
 
 inline constexpr std::size_t maximum_selection_geometry_transform_entities = 4096;
 
-// Only explicitly selected geometric roots confer rigid placement authority.
+// Only explicitly selected geometric roots confer placement authority.
 // Each operator is captured in that source root's saved plan frame. Dependency
 // operators are inherited from actual source lineage, never supplied by callers.
 struct SelectionGeometryTransformRoot {
     std::string root_id;
     PlanarTransform transform;
+    double scale{1.0};
 };
 struct SelectionGeometryTransformRequest {
     Revision expected_revision{};
     std::vector<SelectionGeometryTransformRoot> roots;
     std::string message;
+    // Explicit dialect retention: decoded historical rigid requests remain v1.
+    // Similarity producers must opt into v2 even when their scale is one.
+    int version{1};
 };
 
 // Required explicit review of an affected retained physical-room context/plane.
@@ -39,6 +43,9 @@ struct SelectionGeometryRoomReviewRequirement {
     // carriers (including selected deduction descendants). These must enter
     // the room review's existing selected_dimension_placements typed lane.
     std::vector<PhysicalWallRoomDimensionPlacement> dimension_placements;
+    // Version two uses this distinct lane, including unit-scale operators;
+    // historical version one exclusively fills room_transformations above.
+    std::vector<SimilarityOwnerTransformation> room_similarities;
 };
 
 class SelectionGeometryTransformPreparation final {
@@ -72,8 +79,10 @@ private:
         const DocumentSnapshot&, const SelectionGeometryTransformRequest&);
 };
 
-// Closed nested v1 codec: version, expected_revision, roots, message; roots are
-// {root_id, transform}, with exactly the existing rigid XY operator fields.
+// Closed nested codec: version, expected_revision, roots, message. Historical
+// v1 roots are {root_id, transform}; v2 roots are {root_id, transform, scale}.
+// Both retain exactly the existing rigid XY transform fields. Version one
+// refuses nonunit scale; version two requires positive finite scale.
 // The codec validates shape, IDs, finite operators and budgets, not selection.
 [[nodiscard]] nlohmann::json encode_selection_geometry_transform_request(
     const SelectionGeometryTransformRequest& request);
@@ -82,7 +91,8 @@ private:
 
 // Pure original-snapshot preparation and replay. Authenticates identity requests
 // as well as changes, closes deduction/physical/measured sources, and delegates
-// the complete hard-connected solve and callouts to per-owner rigid completion.
+// the complete hard-connected solve and callouts to per-owner rigid (v1) or
+// similarity (v2) completion, including exact unit-scale identity requests.
 // Corner-window leg callouts retain their source placement metadata under the
 // same complete operator only when both actual hosts are explicit selections.
 // Raw supplements, candidate maps and incidental rendered owner IDs are absent.

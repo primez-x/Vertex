@@ -239,14 +239,28 @@ std::vector<EntityChange> transformed_area_callout_entities(
     const std::map<std::string, PlanarTransform, std::less<>>& owner_transforms) {
     require(owner_transforms.size() <= maximum_area_callout_placement_targets,
             "Area callout transformation supports at most 8192 targets.");
+    std::map<std::string, SimilarityOwnerTransformation, std::less<>> similarities;
+    for (const auto& [id, transform] : owner_transforms)
+        similarities.emplace(id, SimilarityOwnerTransformation{id, transform, 1.0});
+    return transformed_area_callout_entities(source_entities, final_geometry_entities, similarities);
+}
+
+std::vector<EntityChange> transformed_area_callout_entities(
+    const std::map<std::string, Entity, std::less<>>& source_entities,
+    const std::map<std::string, Entity, std::less<>>& final_geometry_entities,
+    const std::map<std::string, SimilarityOwnerTransformation, std::less<>>& owner_transforms) {
+    require(owner_transforms.size() <= maximum_area_callout_placement_targets,
+            "Area callout transformation supports at most 8192 targets.");
     if (owner_transforms.empty()) return {};
 
     struct Anchors { Vec2 before; Vec2 after; bool identity{}; };
     std::map<std::string, Anchors, std::less<>> anchors;
-    for (const auto& [id, transform] : owner_transforms) {
+    for (const auto& [id, operation] : owner_transforms) {
         require(!id.empty() && id.size() <= 256,
                 "Area callout owner IDs must be bounded and nonempty.");
-        const bool identity = rigid_identity(transform);
+        require(operation.owner_id == id, "Area callout similarity owner identity is inconsistent.");
+        factor(operation.scale);
+        const bool identity = rigid_identity(operation.transform) && operation.scale == 1.0;
         const auto before = source_entities.find(id);
         const auto after = final_geometry_entities.find(id);
         require(before != source_entities.end() && after != final_geometry_entities.end(),
@@ -281,7 +295,8 @@ std::vector<EntityChange> transformed_area_callout_entities(
 
     std::map<std::string, Entity> edits;
     std::size_t target_count = 0;
-    for (const auto& [id, transform] : owner_transforms) {
+    for (const auto& [id, operation] : owner_transforms) {
+        const auto& transform = operation.transform;
         const auto name = providers.find({id, "area_name"});
         const auto calculation = providers.find({id, "area_calculation"});
         const bool separated = name != providers.end() || calculation != providers.end();
@@ -318,7 +333,15 @@ std::vector<EntityChange> transformed_area_callout_entities(
                 const Vec2 old_position{anchor.before.x + old_offset.x, anchor.before.y + old_offset.y};
                 require(std::isfinite(old_position.x) && std::isfinite(old_position.y),
                         "The source area callout position must be finite.");
-                const auto position = transform_point(old_position, transform);
+                Vec2 position;
+                if (operation.scale == 1.0) position = transform_point(old_position, transform);
+                else {
+                    const Vec2 displacement{operation.scale * (old_position.x - transform.pivot.x),
+                                            operation.scale * (old_position.y - transform.pivot.y)};
+                    const auto projected = transform_point(displacement, linear);
+                    position = {transform.pivot.x + projected.x + transform.offset.x,
+                                transform.pivot.y + projected.y + transform.offset.y};
+                }
                 offset = {position.x - anchor.after.x, position.y - anchor.after.y};
                 require(std::isfinite(position.x) && std::isfinite(position.y) &&
                             std::isfinite(offset.x) && std::isfinite(offset.y),

@@ -80,6 +80,13 @@ Vec2 joint_owner_offset(const JointTranslationIntent& move, const std::string& o
 }
 
 PlanarTransform joint_owner_transform(const JointTranslationIntent& move, const std::string& owner_id) {
+    if (move.per_owner_similarity_completion) {
+        const auto found=std::lower_bound(move.owner_similarities.begin(),move.owner_similarities.end(),owner_id,
+            [](const auto& target,const auto& id) { return target.owner_id<id; });
+        if (found==move.owner_similarities.end() || found->owner_id!=owner_id)
+            invalid("Similarity joint owner has no explicit selected operator");
+        return found->transform;
+    }
     if (!move.per_owner_rigid_completion) return {{},0,false,false,joint_owner_offset(move,owner_id)};
     const auto found = std::lower_bound(move.owner_transformations.begin(), move.owner_transformations.end(), owner_id,
         [](const auto& target, const auto& id) { return target.owner_id < id; });
@@ -88,10 +95,29 @@ PlanarTransform joint_owner_transform(const JointTranslationIntent& move, const 
     return found->transform;
 }
 
+bool joint_operator_completion(const JointTranslationIntent& move) {
+    return move.per_owner_rigid_completion || move.per_owner_similarity_completion;
+}
+SimilarityOwnerTransformation joint_owner_similarity(const JointTranslationIntent& move,const std::string& id) {
+    if (!move.per_owner_similarity_completion) return {id,joint_owner_transform(move,id),1.0};
+    const auto found=std::find_if(move.owner_similarities.begin(),move.owner_similarities.end(),
+        [&](const auto& target) { return target.owner_id==id; });
+    if (found==move.owner_similarities.end() || found->owner_id!=id) invalid("Similarity selected owner is missing");
+    return *found;
+}
+Vec2 joint_owner_point(Vec2 point,const JointTranslationIntent& move,const std::string& id) {
+    return transform_joint_similarity_point(point,joint_owner_similarity(move,id));
+}
+Segment joint_owner_segment(const Segment& segment,const JointTranslationIntent& move,const std::string& id) {
+    if (!move.per_owner_similarity_completion)
+        return transform_segment(segment,joint_owner_transform(move,id));
+    return transform_joint_similarity_segment(segment,joint_owner_similarity(move,id));
+}
+
 Vec2 joint_dimension_offset(const JointTranslationIntent& move, const std::string& dimension_id,
     const std::string& owner_id, bool rigid_owner) {
     if (rigid_owner) return joint_owner_offset(move, owner_id);
-    if (!move.per_owner_translation_completion && !move.per_owner_rigid_completion) return move.offset;
+    if (!move.per_owner_translation_completion && !joint_operator_completion(move)) return move.offset;
     const auto found = std::lower_bound(move.dimension_translations.begin(), move.dimension_translations.end(), dimension_id,
         [](const auto& target, const auto& id) { return target.owner_id < id; });
     if (found == move.dimension_translations.end() || found->owner_id != dimension_id)
@@ -380,17 +406,21 @@ ConstraintAuthoringIntent normalize_intent(const ConstraintAuthoringIntent& inpu
     }
     if (result.joint_translation) {
         auto& move=*result.joint_translation;
+        if (!move.owner_similarities.empty()) move.per_owner_similarity_completion=true;
+        if (move.per_owner_similarity_completion && (move.per_owner_rigid_completion || !move.owner_transformations.empty() ||
+            move.per_owner_translation_completion || !move.owner_translations.empty()))
+            invalid("Joint similarity cannot combine historical geometry operator lanes");
         if (!move.owner_transformations.empty()) move.per_owner_rigid_completion = true;
-        if (!move.per_owner_rigid_completion && (!move.owner_translations.empty() || !move.dimension_translations.empty()))
+        if (!joint_operator_completion(move) && (!move.owner_translations.empty() || !move.dimension_translations.empty()))
             move.per_owner_translation_completion = true;
-        if (move.per_owner_translation_completion || move.per_owner_rigid_completion) move.per_target_presentation_completion = true;
+        if (move.per_owner_translation_completion || joint_operator_completion(move)) move.per_target_presentation_completion = true;
         if (move.owner_translations.size() > 4096 || move.dimension_translations.size() > 4096)
             invalid("Joint owner translation targets exceed their budget");
-        if (!std::isfinite(move.offset.x) || !std::isfinite(move.offset.y) || (!move.per_owner_rigid_completion && move.offset.x==0 && move.offset.y==0))
+        if (!std::isfinite(move.offset.x) || !std::isfinite(move.offset.y) || (!joint_operator_completion(move) && move.offset.x==0 && move.offset.y==0))
             invalid("Joint translation requires a finite nonzero offset");
         if (move.presentation_offset && (!std::isfinite(move.presentation_offset->x) || !std::isfinite(move.presentation_offset->y)))
             invalid("Joint translation presentation offset must be finite");
-        if (move.per_owner_translation_completion || move.per_owner_rigid_completion) {
+        if (move.per_owner_translation_completion || joint_operator_completion(move)) {
             if (move.partial_wall_ids.empty() && move.rigid_boundary_ids.empty() && move.rigid_stroke_ids.empty())
                 invalid("Joint owner translation requires selected geometry");
         } else if (move.partial_wall_ids.empty() || (move.rigid_boundary_ids.empty() && move.rigid_stroke_ids.empty()))
@@ -435,6 +465,8 @@ ConstraintAuthoringIntent normalize_intent(const ConstraintAuthoringIntent& inpu
             std::sort(targets->begin(), targets->end(), [](const auto& a, const auto& b) { return a.owner_id < b.owner_id; });
         std::sort(move.owner_transformations.begin(), move.owner_transformations.end(),
             [](const auto& a, const auto& b) { return a.owner_id < b.owner_id; });
+        std::sort(move.owner_similarities.begin(),move.owner_similarities.end(),
+            [](const auto& a,const auto& b) { return a.owner_id<b.owner_id; });
         // Validate the semantic typed lane without constructing child command
         // geometry or presentation authority.
         if (move.per_target_presentation_completion) {
@@ -1096,8 +1128,15 @@ ConstraintAuthoringPreview ConstraintAuthoringBuilder::build(Source snapshot,con
             const auto requested_offsets = resolve_joint_translation_offsets(snapshot.entities(), move);
             auto expanded_offsets = requested_offsets.owner_offsets;
             auto expanded_transforms = requested_offsets.owner_transforms;
+            auto expanded_similarities = requested_offsets.owner_similarities;
             const auto inherit_source_operator = [&](const std::string& source_id, const std::string& selected_id) {
-                if (move.per_owner_rigid_completion) {
+                if (move.per_owner_similarity_completion) {
+                    auto operation=requested_offsets.owner_similarities.at(selected_id);
+                    operation.owner_id=source_id;
+                    const auto [found,inserted]=expanded_similarities.emplace(source_id,operation);
+                    if (!inserted && !(found->second==operation))
+                        invalid("Joint selected sources have contradictory captured similarities");
+                } else if (move.per_owner_rigid_completion) {
                     const auto& transform = requested_offsets.owner_transforms.at(selected_id);
                     const auto [found, inserted] = expanded_transforms.emplace(source_id, transform);
                     if (!inserted && !(found->second == transform))
@@ -1124,10 +1163,10 @@ ConstraintAuthoringPreview ConstraintAuthoringBuilder::build(Source snapshot,con
                     if (!wall_measurement_source_current(snapshot.entities(),found->second)) invalid("Selected physical measured boundary is stale");
                     const auto perimeter=exterior_corner_perimeter_ids(snapshot.entities(),found->second);
                     walls.insert(perimeter.begin(),perimeter.end());
-                    if (move.per_owner_translation_completion || move.per_owner_rigid_completion)
+                    if (move.per_owner_translation_completion || joint_operator_completion(move))
                         for (const auto& wall : perimeter) inherit_source_operator(wall, id);
                 }
-                if ((move.per_owner_translation_completion || move.per_owner_rigid_completion) &&
+                if ((move.per_owner_translation_completion || joint_operator_completion(move)) &&
                     (found->second.extensions.contains("measurement_linework_sources") ||
                      found->second.extensions.contains("measurement_linework_group"))) {
                     if (!measured_checks) measured_checks = measurement_linework_source_checks(snapshot.entities(),
@@ -1161,9 +1200,13 @@ ConstraintAuthoringPreview ConstraintAuthoringBuilder::build(Source snapshot,con
                 move.owner_transformations.clear();
                 for (const auto& [id, transform] : expanded_transforms) move.owner_transformations.push_back({id, transform});
             }
+            if (move.per_owner_similarity_completion) {
+                move.owner_similarities.clear();
+                for (const auto& [id,operation] : expanded_similarities) { (void)id; move.owner_similarities.push_back(operation); }
+            }
             // Expanded dependencies are part of the retained intent. Validate
             // exact coverage again, including aliases with presentation/callouts.
-            if (move.per_owner_translation_completion || move.per_owner_rigid_completion) {
+            if (move.per_owner_translation_completion || joint_operator_completion(move)) {
                 move = *normalize_intent(result.normalized_intent_).joint_translation;
                 (void)resolve_joint_translation_offsets(snapshot.entities(), move);
             }
@@ -1278,7 +1321,7 @@ ConstraintAuthoringPreview ConstraintAuthoringBuilder::build(Source snapshot,con
             const auto& move=*intent.joint_translation;
             seeds.insert(move.rigid_boundary_ids.begin(),move.rigid_boundary_ids.end());
             seeds.insert(move.partial_wall_ids.begin(),move.partial_wall_ids.end());
-            if (move.per_owner_rigid_completion) {
+            if (joint_operator_completion(move)) {
                 exterior_contacts = physical_contacts();
                 for (const auto& contact : exterior_contacts)
                     if (contact.station != 0 && contact.station != 1) exterior_t_contacts.push_back(contact);
@@ -1371,11 +1414,12 @@ ConstraintAuthoringPreview ConstraintAuthoringBuilder::build(Source snapshot,con
         if (intent.measured_stroke_transform)
             for (const auto& target : intent.measured_stroke_transform->targets)
                 admit_stroke({target.stroke_id,std::nullopt,std::nullopt,target.transform,{}});
-        if (intent.joint_translation)
+        if (intent.joint_translation && !intent.joint_translation->per_owner_similarity_completion)
             for (const auto& id:intent.joint_translation->rigid_stroke_ids)
                 admit_stroke({id,std::nullopt,std::nullopt,joint_owner_transform(*intent.joint_translation,id),{}});
-        if (intent.joint_translation && intent.joint_translation->per_owner_rigid_completion) {
-            const auto prepared = result.saved_active_phase_policy_ ?
+        if (intent.joint_translation && joint_operator_completion(*intent.joint_translation)) {
+            const auto prepared = intent.joint_translation->per_owner_similarity_completion ?
+                joint_similarity_replay_source(snapshot.entities(),*intent.joint_translation) : result.saved_active_phase_policy_ ?
                 joint_rigid_replay_source_active_phase(snapshot.entities(),*intent.joint_translation) :
                 joint_rigid_replay_source(snapshot.entities(), *intent.joint_translation);
             for (const auto& id : intent.joint_translation->rigid_boundary_ids) {
@@ -1384,14 +1428,23 @@ ConstraintAuthoringPreview ConstraintAuthoringBuilder::build(Source snapshot,con
                     candidate.at(id).extensions.contains("measurement_linework_sources") ||
                     candidate.at(id).extensions.contains("measurement_linework_group")) {
                     auto boundary = decode_identified_boundary_entity(snapshot.entities().at(id));
-                    const auto transform = joint_owner_transform(*intent.joint_translation,id);
-                    for (auto& edge : boundary.segments) edge.segment = transform_segment(edge.segment,transform);
+                    for (auto& edge : boundary.segments) edge.segment = joint_owner_segment(edge.segment,*intent.joint_translation,id);
                     candidate.at(id).properties["segments"] = encode_identified_boundary_entity(boundary).properties.at("segments");
                 }
             }
+            if (intent.joint_translation->per_owner_similarity_completion)
+                for (const auto& id : intent.joint_translation->rigid_stroke_ids) {
+                    candidate.at(id)=prepared.at(id);
+                    seeds.insert(id);
+                    selected_stroke_edits.emplace(id,ApplyBoundaryConstraintChanges::MeasuredStrokeEdit{id,std::nullopt,std::nullopt,std::nullopt,{}});
+                }
             // Tangent and arc relations must read the transformed selected
             // sweeps before the solve, including reflection handedness.
             for (const auto& id : intent.joint_translation->partial_wall_ids) {
+                if (intent.joint_translation->per_owner_similarity_completion) {
+                    candidate.at(id)=prepared.at(id);
+                    continue;
+                }
                 const auto transform = joint_owner_transform(*intent.joint_translation,id);
                 const auto& original = snapshot.entities().at(id);
                 const auto old = read_baseline(original);
@@ -1522,7 +1575,7 @@ ConstraintAuthoringPreview ConstraintAuthoringBuilder::build(Source snapshot,con
                 WindingInvariant winding;
                 winding.orientation = signed_area(boundary_geometry(boundary)) > 0
                     ? WindingOrientation::counter_clockwise : WindingOrientation::clockwise;
-                if (intent.joint_translation && intent.joint_translation->per_owner_rigid_completion &&
+                if (intent.joint_translation && joint_operator_completion(*intent.joint_translation) &&
                     std::binary_search(intent.joint_translation->rigid_boundary_ids.begin(), intent.joint_translation->rigid_boundary_ids.end(), wall_id)) {
                     const auto transform = joint_owner_transform(*intent.joint_translation, wall_id);
                     if (transform.flip_horizontal != transform.flip_vertical)
@@ -1653,8 +1706,7 @@ ConstraintAuthoringPreview ConstraintAuthoringBuilder::build(Source snapshot,con
             selected.insert(move.partial_wall_ids.begin(),move.partial_wall_ids.end());
             for (const auto& [id,position]:positions) {
                 const auto& binding=point_bindings.at(id);
-                if (selected.contains(binding.owner_id)) add_fixed(binding,transform_point(position,
-                    joint_owner_transform(move,binding.owner_id)));
+                if (selected.contains(binding.owner_id)) add_fixed(binding,joint_owner_point(position,move,binding.owner_id));
                 else if (!move.move_connected_objects || snapshot.entities().at(binding.owner_id).extensions.contains("physical_wall_room"))
                     add_fixed(binding,position);
             }
@@ -1895,7 +1947,7 @@ ConstraintAuthoringPreview ConstraintAuthoringBuilder::build(Source snapshot,con
             add_fixed(anchor, positions.at(resolve(anchor)));
         }
 
-        if ((intent.joint_translation && intent.joint_translation->per_owner_rigid_completion) ||
+        if ((intent.joint_translation && joint_operator_completion(*intent.joint_translation)) ||
             intent.wall_curve_construction || intent.wall_group_scale) {
             for (const auto& [id, relation] : constraints) {
                 (void)id;
@@ -1948,7 +2000,7 @@ ConstraintAuthoringPreview ConstraintAuthoringBuilder::build(Source snapshot,con
             for (const auto& [id, position] : fixed_points)
                 if (!points_exact(solved_points.at(id), position))
                     invalid("Wall curve construction did not preserve every exact endpoint target");
-        if (intent.joint_translation && (intent.joint_translation->per_owner_translation_completion || intent.joint_translation->per_owner_rigid_completion))
+        if (intent.joint_translation && (intent.joint_translation->per_owner_translation_completion || joint_operator_completion(*intent.joint_translation)))
             for (const auto& [id, position] : fixed_points)
                 if (!points_exact(solved_points.at(id), position))
                     invalid("Joint translation did not preserve every exact owner target");
@@ -1967,6 +2019,17 @@ ConstraintAuthoringPreview ConstraintAuthoringBuilder::build(Source snapshot,con
         std::set<std::string,std::less<>> selected_rigid_ids;
         for (const auto& wall_id : affected_walls) {
             const auto old = old_baselines.at(wall_id);
+            if (intent.joint_translation && intent.joint_translation->per_owner_similarity_completion &&
+                std::binary_search(intent.joint_translation->partial_wall_ids.begin(),intent.joint_translation->partial_wall_ids.end(),wall_id)) {
+                const auto proposed=read_baseline(candidate.at(wall_id));
+                if (!points_exact(solved_points.at(point_id({wall_id,WallEndpointRole::start})),proposed.start) ||
+                    !points_exact(solved_points.at(point_id({wall_id,WallEndpointRole::end})),proposed.end))
+                    invalid("Connected solve did not retain selected wall similarity targets");
+                selected_rigid_ids.insert(wall_id);
+                if (candidate.at(wall_id)!=snapshot.entities().at(wall_id))
+                    result.changed_walls_.push_back({wall_id,old,proposed});
+                continue;
+            }
             if (scaled_wall_ids.contains(wall_id)) {
                 const auto scaled=read_baseline(candidate.at(wall_id));
                 if (!points_exact(solved_points.at(point_id({wall_id,WallEndpointRole::start})),scaled.start) ||
@@ -2055,7 +2118,7 @@ ConstraintAuthoringPreview ConstraintAuthoringBuilder::build(Source snapshot,con
                 continue;
             if (exterior_owner_ids.contains(binding.owner_id)) continue;
             if (joint_source_boundaries.contains(binding.owner_id)) continue;
-            if (selected_joint_boundary && intent.joint_translation->per_owner_rigid_completion)
+            if (selected_joint_boundary && joint_operator_completion(*intent.joint_translation))
                 continue; // Rigid receipts already replayed; sources redraw below.
             if (selected_joint_boundary && intent.joint_translation->per_owner_translation_completion &&
                 (snapshot.entities().at(binding.owner_id).extensions.contains("measurement_linework_sources") ||
@@ -2102,7 +2165,7 @@ ConstraintAuthoringPreview ConstraintAuthoringBuilder::build(Source snapshot,con
         // Recompute every redraw from the original measured owners and final
         // solved physical geometry; the intermediate derived copies are pins.
         for (const auto& id : exterior_owner_ids) candidate.at(id) = snapshot.entities().at(id);
-        if (intent.joint_translation && intent.joint_translation->per_owner_rigid_completion)
+        if (intent.joint_translation && joint_operator_completion(*intent.joint_translation))
             for (const auto& id : intent.joint_translation->rigid_boundary_ids)
                 if (snapshot.entities().at(id).properties.contains("wall_measurement_source") ||
                     snapshot.entities().at(id).extensions.contains("measurement_linework_sources") ||
@@ -2111,11 +2174,11 @@ ConstraintAuthoringPreview ConstraintAuthoringBuilder::build(Source snapshot,con
         std::map<std::string,Vec2,std::less<>> rigid_source_offsets;
         std::map<std::string,PlanarTransform,std::less<>> rigid_source_transforms;
         if (intent.joint_translation) for (const auto& id:intent.joint_translation->rigid_boundary_ids)
-            if (joint_source_boundaries.contains(id) && !intent.joint_translation->per_owner_rigid_completion)
+            if (joint_source_boundaries.contains(id) && !joint_operator_completion(*intent.joint_translation))
                 rigid_source_offsets.emplace(id,joint_owner_offset(*intent.joint_translation,id));
-            else if (joint_source_boundaries.contains(id))
+            else if (joint_source_boundaries.contains(id) && !intent.joint_translation->per_owner_similarity_completion)
                 rigid_source_transforms.emplace(id,joint_owner_transform(*intent.joint_translation,id));
-        const bool rigid_joint = intent.joint_translation && intent.joint_translation->per_owner_rigid_completion;
+        const bool rigid_joint = intent.joint_translation && joint_operator_completion(*intent.joint_translation);
         if (rigid_joint) complete_rigid_sources(candidate,*intent.joint_translation,false);
         result.exterior_source_edits_ = source_updates(candidate,!rigid_joint,rigid_source_offsets,rigid_source_transforms);
         for (const auto& edit : result.exterior_source_edits_) {
@@ -2132,7 +2195,7 @@ ConstraintAuthoringPreview ConstraintAuthoringBuilder::build(Source snapshot,con
                 (!candidate.contains(id) || !wall_measurement_source_current(candidate, candidate.at(id))))
                 invalid("Constraint authoring would stale the current source walls: " + id);
         const bool joint_measured_sources_completed = result.measured_source_completion_ &&
-            intent.joint_translation && (intent.joint_translation->per_owner_translation_completion || intent.joint_translation->per_owner_rigid_completion);
+            intent.joint_translation && (intent.joint_translation->per_owner_translation_completion || joint_operator_completion(*intent.joint_translation));
         if (joint_measured_sources_completed) {
             // Selected source-bound consumers are reconstructed from the final
             // solved strokes, after physical source transitions. Validate their
@@ -2153,12 +2216,13 @@ ConstraintAuthoringPreview ConstraintAuthoringBuilder::build(Source snapshot,con
             std::map<std::string,PlanarTransform,std::less<>> transforms;
             for (const auto& id : selected_rigid_ids)
                 if (const auto transform=selected_wall_rigid_transform(intent,id)) transforms.emplace(id,*transform);
-            validate_active_phase_constraint_edit_topology(snapshot.entities(),candidate,selected_rigid_ids,transforms);
-            if (intent.joint_translation && intent.joint_translation->per_owner_rigid_completion)
+            if (!intent.joint_translation || !joint_operator_completion(*intent.joint_translation))
+                validate_active_phase_constraint_edit_topology(snapshot.entities(),candidate,selected_rigid_ids,transforms);
+            if (intent.joint_translation && joint_operator_completion(*intent.joint_translation))
                 validate_joint_rigid_topology_active_phase(snapshot.entities(),candidate,*intent.joint_translation);
         }
         else if (exterior_edit) validate_exterior_corner_edit_topology(snapshot.entities(),candidate);
-        else if (intent.joint_translation && intent.joint_translation->per_owner_rigid_completion)
+        else if (intent.joint_translation && joint_operator_completion(*intent.joint_translation))
             validate_joint_rigid_topology(snapshot.entities(),candidate,*intent.joint_translation);
         else validate_constraint_edit_topology(snapshot.entities(),candidate,selected_rigid_ids);
         if (exterior_edit || intent.wall_curve_construction || intent.wall_group_scale) {
@@ -2223,7 +2287,7 @@ ConstraintAuthoringPreview ConstraintAuthoringBuilder::build(Source snapshot,con
         }
 
         for (const auto& [id, entity] : presentation_changes) {
-            if (intent.joint_translation && intent.joint_translation->per_owner_rigid_completion && entity.type == kAnnotationEntityType)
+            if (intent.joint_translation && joint_operator_completion(*intent.joint_translation) && entity.type == kAnnotationEntityType)
                 candidate.at(id) = merge_selection_annotation_entities(snapshot.entities().at(id),candidate.at(id),entity);
             else {
                 if (candidate.at(id) != snapshot.entities().at(id))
@@ -2271,7 +2335,7 @@ ConstraintAuthoringPreview ConstraintAuthoringBuilder::build(Source snapshot,con
                 const auto& move=*intent.joint_translation;
                 std::set<std::string,std::less<>> rigid(move.rigid_boundary_ids.begin(),move.rigid_boundary_ids.end());
                 rigid.insert(move.rigid_stroke_ids.begin(),move.rigid_stroke_ids.end());
-                if (move.per_owner_translation_completion || move.per_owner_rigid_completion) rigid.insert(move.partial_wall_ids.begin(),move.partial_wall_ids.end());
+                if (move.per_owner_translation_completion || joint_operator_completion(move)) rigid.insert(move.partial_wall_ids.begin(),move.partial_wall_ids.end());
                 for (const auto& [id,entity]:snapshot.entities()) {
                     if (scope.inactive_owner_ids.contains(id)) continue;
                     if (entity.type!="dimension") continue;
@@ -2280,7 +2344,8 @@ ConstraintAuthoringPreview ConstraintAuthoringBuilder::build(Source snapshot,con
                     if (scope.inactive_owner_ids.contains(decoded.dimension->boundary_id)) continue;
                     const bool rigid_owner=rigid.contains(decoded.dimension->boundary_id);
                     const auto rigid_transform=joint_rigid_dimension_transform(snapshot.entities(),move,*decoded.dimension);
-                    const bool owned_placement=rigid_owner || rigid_transform.has_value();
+                    const auto similarity_transform=joint_similarity_dimension_transform(snapshot.entities(),move,*decoded.dimension);
+                    const bool owned_placement=rigid_owner || rigid_transform.has_value() || similarity_transform.has_value();
                     if (!owned_placement && !std::binary_search(move.dimension_ids.begin(),move.dimension_ids.end(),id)) continue;
                     if (move.physical_room_dimension_completion &&
                         is_physical_wall_room(snapshot.entities().at(decoded.dimension->boundary_id)))
@@ -2292,14 +2357,14 @@ ConstraintAuthoringPreview ConstraintAuthoringBuilder::build(Source snapshot,con
                         (void)resolve_current_boundary_dimension(*decoded.dimension,result.candidate_entities_);
                     }
                     auto placed=*decoded.dimension;
-                    placed.text_position=transform_point(placed.text_position,rigid_transform ?
+                    placed.text_position=similarity_transform ? transform_joint_similarity_point(placed.text_position,*similarity_transform) : transform_point(placed.text_position,rigid_transform ?
                         *rigid_transform : PlanarTransform{{},0,false,false,
                             joint_dimension_offset(move,id,placed.boundary_id,rigid_owner)});
                     if (!owned_placement) { placed.placement=BoundaryDimensionPlacement::manual; placed.automatic_placement_version.reset(); }
                     result.candidate_entities_.at(id)=encode_boundary_dimension_entity(placed,&entity);
                 }
                 for (const auto& id:move.rigid_boundary_ids) {
-                    if (move.per_owner_rigid_completion &&
+                    if (joint_operator_completion(move) &&
                         (snapshot.entities().at(id).properties.contains("wall_measurement_source") ||
                          snapshot.entities().at(id).extensions.contains("measurement_linework_sources") ||
                          snapshot.entities().at(id).extensions.contains("measurement_linework_group")))
@@ -2309,17 +2374,17 @@ ConstraintAuthoringPreview ConstraintAuthoringBuilder::build(Source snapshot,con
                     if (before.segments.size()!=after.segments.size()) invalid("Joint translation changed selected boundary topology");
                     for (std::size_t i=0;i<before.segments.size();++i) {
                         const auto& a=before.segments[i]; const auto& b=after.segments[i];
-                        const auto expected=transform_segment(a.segment,joint_owner_transform(move,id));
+                        const auto expected=joint_owner_segment(a.segment,move,id);
                         if (a.segment_id!=b.segment_id || a.start_vertex_id!=b.start_vertex_id || a.end_vertex_id!=b.end_vertex_id ||
                             !points_exact(expected.start,b.segment.start) || !points_exact(expected.end,b.segment.end) ||
                             expected.sweep_radians!=b.segment.sweep_radians) invalid("Joint translation did not preserve exact selected boundary targets");
                     }
                 }
-                if (move.per_owner_translation_completion || move.per_owner_rigid_completion) {
+                if (move.per_owner_translation_completion || joint_operator_completion(move)) {
                     for (const auto& id : move.partial_wall_ids) {
                         const auto before = read_baseline(snapshot.entities().at(id));
                         const auto after = read_baseline(result.candidate_entities_.at(id));
-                        const auto expected = transform_segment(before, joint_owner_transform(move,id));
+                        const auto expected = joint_owner_segment(before,move,id);
                         if (!points_exact(expected.start,after.start) || !points_exact(expected.end,after.end) ||
                             expected.sweep_radians != after.sweep_radians)
                             invalid("Joint translation did not preserve exact selected wall targets");
@@ -2331,7 +2396,7 @@ ConstraintAuthoringPreview ConstraintAuthoringBuilder::build(Source snapshot,con
                             invalid("Joint translation changed selected measured stroke topology");
                         for (std::size_t i=0; i<before.segments.size(); ++i) {
                             const auto& a = before.segments[i]; const auto& b = after.segments[i];
-                            const auto expected = transform_segment(a.segment, joint_owner_transform(move,id));
+                            const auto expected = joint_owner_segment(a.segment,move,id);
                             if (a.segment_id != b.segment_id || a.start_vertex_id != b.start_vertex_id || a.end_vertex_id != b.end_vertex_id ||
                                 !points_exact(expected.start,b.segment.start) || !points_exact(expected.end,b.segment.end) ||
                                 expected.sweep_radians != b.segment.sweep_radians)
@@ -2340,7 +2405,7 @@ ConstraintAuthoringPreview ConstraintAuthoringBuilder::build(Source snapshot,con
                     }
                 }
             }
-            if (intent.joint_translation && intent.joint_translation->per_owner_rigid_completion)
+            if (intent.joint_translation && joint_operator_completion(*intent.joint_translation))
                 complete_rigid_consequences(result.candidate_entities_,*intent.joint_translation);
             complete_corner_window_geometry(snapshot.entities(),result.candidate_entities_);
             if (intent.exterior_segment_arc)
@@ -2398,7 +2463,7 @@ ConstraintAuthoringPreview ConstraintAuthoringBuilder::build(Source snapshot,con
             std::set<std::string,std::less<>> explicit_mutations;
             for (const auto& mutation : entered.relation_mutations) explicit_mutations.insert(mutation.constraint_id);
             std::optional<Entities> rigid_relation_consequences;
-            if (intent.joint_translation && intent.joint_translation->per_owner_rigid_completion) {
+            if (intent.joint_translation && joint_operator_completion(*intent.joint_translation)) {
                 // Re-derive qualified axis-lock substitutions from the actual
                 // source and captured operators. No candidate relation lends
                 // authority to this independent expected relation inventory.
@@ -2712,13 +2777,23 @@ Command ConstraintAuthoringBuilder::command_for(const DocumentSnapshot& current,
         command.message=recomputed.original_normalized_intent_.message;
         command.phase_constraint_authoring_completion=true;
         command.phase_constraint_authoring_intent=encode_phase_constraint_authoring_intent(
-            make_phase_constraint_authoring_intent(current,recomputed.original_normalized_intent_));
+            make_phase_constraint_authoring_intent(current,
+                recomputed.normalized_intent_.joint_translation && recomputed.normalized_intent_.joint_translation->per_owner_similarity_completion ?
+                    recomputed.normalized_intent_ : recomputed.original_normalized_intent_));
         return Command{std::move(command)};
     }
     return command_for(current.entities(),current.revision(),recomputed);
 }
 Command ConstraintAuthoringBuilder::command_for(const Entities& current,Revision revision,
     const ConstraintAuthoringPreview& recomputed,bool retain_joint) {
+    if (recomputed.normalized_intent_.joint_translation && recomputed.normalized_intent_.joint_translation->per_owner_similarity_completion) {
+        ApplyBoundaryConstraintChanges command;
+        command.expected_revision=revision;
+        command.message=recomputed.normalized_intent_.message;
+        command.joint_translation=recomputed.normalized_intent_.joint_translation;
+        command.joint_translation_completion=true;
+        return Command{std::move(command)};
+    }
     if (recomputed.normalized_intent_.wall_group_scale) {
         ApplyBoundaryConstraintChanges command;
         command.expected_revision=revision;
@@ -2851,6 +2926,12 @@ Entities reconstruct_active_phase_constraint_authoring(const Entities& source,co
     const auto preview=ConstraintAuthoringBuilder::build(
         ConstraintAuthoringBuilder::Source{source,nullptr,ConstraintPhasePolicy::saved_active},intent);
     if (!preview.accepted()) invalid(preview.diagnostics().empty() ? "Active phase constraint reconstruction rejected" : preview.diagnostics().front());
+    if (intent.joint_translation && (intent.joint_translation->per_owner_similarity_completion || !intent.joint_translation->owner_similarities.empty())) {
+        const auto produced=std::get<ApplyBoundaryConstraintChanges>(ConstraintAuthoringBuilder::command_for(source,0,preview));
+        if (encode_joint_translation_intent(*produced.joint_translation)!=
+            encode_joint_translation_intent(*normalize_intent(intent).joint_translation))
+            invalid("Similarity phase intent must retain every source dependency and captured operator");
+    }
     return preview.candidate_entities();
 }
 Entities reconstruct_wall_group_scale(const Entities& source,const WallGroupScaleIntent& intent) {
@@ -2863,6 +2944,8 @@ Entities reconstruct_wall_group_scale(const Entities& source,const WallGroupScal
 }
 
 ApplyBoundaryConstraintChanges reconstruct_joint_translation(const Entities& source,const JointTranslationIntent& intent) {
+    if (intent.per_owner_similarity_completion || !intent.owner_similarities.empty())
+        invalid("Similarity replay requires its complete source reconstruction lane");
     ConstraintAuthoringIntent authoring; authoring.joint_translation=intent;
     const auto preview=ConstraintAuthoringBuilder::build(ConstraintAuthoringBuilder::Source{source,nullptr},authoring);
     if (!preview.accepted()) invalid(preview.diagnostics().empty() ? "Joint translation reconstruction rejected" : preview.diagnostics().front());
@@ -2880,6 +2963,132 @@ ApplyBoundaryConstraintChanges reconstruct_joint_translation(const Entities& sou
         proof.joint_translation_completion = false;
     }
     return proof;
+}
+
+Entities reconstruct_joint_similarity(const Entities& source,const JointTranslationIntent& intent) {
+    if (!intent.per_owner_similarity_completion && intent.owner_similarities.empty())
+        invalid("Similarity reconstruction requires its explicit operator lane");
+    if (has_phase_registry(source)) invalid("Saved design similarity requires its active-phase semantic wrapper");
+    ConstraintAuthoringIntent authoring; authoring.joint_translation=intent;
+    const auto preview=ConstraintAuthoringBuilder::build(
+        ConstraintAuthoringBuilder::Source{source,nullptr,ConstraintPhasePolicy::legacy_all},authoring);
+    if (!preview.accepted()) invalid(preview.diagnostics().empty() ? "Joint similarity reconstruction rejected" : preview.diagnostics().front());
+    const auto produced=std::get<ApplyBoundaryConstraintChanges>(ConstraintAuthoringBuilder::command_for(source,0,preview));
+    if (encode_joint_translation_intent(*produced.joint_translation)!=
+        encode_joint_translation_intent(*normalize_intent(authoring).joint_translation))
+        invalid("Similarity intent must retain every source dependency and captured operator");
+    return preview.candidate_entities();
+}
+
+Vec2 transform_joint_similarity_point(Vec2 point,const SimilarityOwnerTransformation& operation) {
+    if (!std::isfinite(operation.scale) || !(operation.scale>0)) invalid("Similarity requires a positive finite factor");
+    if (operation.scale!=1.0) point={operation.transform.pivot.x+(point.x-operation.transform.pivot.x)*operation.scale,
+        operation.transform.pivot.y+(point.y-operation.transform.pivot.y)*operation.scale};
+    return transform_point(point,operation.transform);
+}
+Segment transform_joint_similarity_segment(const Segment& segment,const SimilarityOwnerTransformation& operation) {
+    auto scaled=segment;
+    const SimilarityOwnerTransformation scale_only{operation.owner_id,{operation.transform.pivot,0,false,false,{}},operation.scale};
+    scaled.start=transform_joint_similarity_point(segment.start,scale_only);
+    scaled.end=transform_joint_similarity_point(segment.end,scale_only);
+    auto result=transform_segment(scaled,operation.transform);
+    if (!std::isfinite(segment_length(result)) || segment_length(result)<=default_geometry_tolerance_metres)
+        invalid("Similarity collapses or overflows source geometry");
+    return result;
+}
+Entities joint_similarity_scale_source(const Entities& source,const JointTranslationIntent& intent) {
+    if (!intent.per_owner_similarity_completion) invalid("Similarity preparation requires its explicit lane");
+    const auto resolved=resolve_joint_translation_offsets(source,intent);
+    std::vector<SimilarityOwnerTransformation> walls;
+    for (const auto& id : intent.partial_wall_ids) walls.push_back(resolved.owner_similarities.at(id));
+    // Two physical corner hosts must share the complete operator, including
+    // pivot and rigid basis; equal scalar factors alone are insufficient.
+    for (const auto& [id,entity] : source) {
+        (void)id;
+        if (entity.type!="corner_window") continue;
+        const auto corner=parse_corner_window(entity);
+        const auto first=resolved.owner_similarities.find(corner.wall_ids[0]);
+        const auto second=resolved.owner_similarities.find(corner.wall_ids[1]);
+        if ((first==resolved.owner_similarities.end() || first->second.scale==1.0) &&
+            (second==resolved.owner_similarities.end() || second->second.scale==1.0)) continue;
+        if (first==resolved.owner_similarities.end() || second==resolved.owner_similarities.end() ||
+            first->second.scale!=second->second.scale || !(first->second.transform==second->second.transform))
+            invalid("Corner-window similarity requires both actual hosts with equal captured operators");
+    }
+    auto result=stage_wall_owner_similarity_scales(source,walls);
+    for (const auto& id : intent.rigid_boundary_ids) {
+        const auto& original=source.at(id);
+        if (original.properties.contains("wall_measurement_source") || original.extensions.contains("measurement_linework_sources") ||
+            original.extensions.contains("measurement_linework_group")) continue;
+        const auto& target=resolved.owner_similarities.at(id);
+        if (target.scale==1.0) continue;
+        auto boundary=decode_identified_boundary_entity(original);
+        const SimilarityOwnerTransformation scale_only{id,{target.transform.pivot,0,false,false,{}},target.scale};
+        for (auto& edge : boundary.segments) edge.segment=transform_joint_similarity_segment(edge.segment,scale_only);
+        BoundaryGeometryEdit edit; edit.kind=BoundaryGeometryEditKind::redefine_boundary;
+        edit.boundary_id=edit.target_id=id;
+        edit.replacement_segments=encode_identified_boundary_entity(boundary).properties.at("segments");
+        result=edited_boundary_entities(result,edit);
+    }
+    for (const auto& id : intent.rigid_stroke_ids) {
+        const auto& target=resolved.owner_similarities.at(id);
+        const auto decoded=decode_measurement_linework_model(source.at(id).properties.at("model"));
+        if (!decoded.supported()) invalid(decoded.diagnostic);
+        result.at(id).properties["model"]=encode_measurement_linework_model(similarity_transformed_measurement_linework(
+            *decoded.model,MeasurementLineworkSimilarity{{target.transform.pivot,0,false,false,{}},target.scale}));
+    }
+    return result;
+}
+Entities joint_similarity_replay_source(const Entities& source,const JointTranslationIntent& intent) {
+    const auto resolved=resolve_joint_translation_offsets(source,intent);
+    auto result=joint_similarity_scale_source(source,intent);
+    std::vector<BoundaryTransformation> boundaries;
+    for (const auto& id : intent.rigid_boundary_ids) {
+        const auto& entity=source.at(id);
+        if (!entity.properties.contains("wall_measurement_source") && !entity.extensions.contains("measurement_linework_sources") &&
+            !entity.extensions.contains("measurement_linework_group")) boundaries.push_back({id,resolved.owner_similarities.at(id).transform});
+    }
+    if (!boundaries.empty()) result=transformed_boundary_entities_per_owner_batch(result,boundaries);
+    for (const auto& id : intent.rigid_stroke_ids) {
+        const auto& target=resolved.owner_similarities.at(id);
+        const auto decoded=decode_measurement_linework_model(source.at(id).properties.at("model"));
+        result.at(id).properties["model"]=encode_measurement_linework_model(similarity_transformed_measurement_linework(
+            *decoded.model,MeasurementLineworkSimilarity{target.transform,target.scale}));
+    }
+    for (const auto& id : intent.partial_wall_ids) {
+        const auto& original=result.at(id);
+        const auto baseline=read_baseline(original);
+        const auto& transform=resolved.owner_similarities.at(id).transform;
+        const auto proposed=transform_segment(baseline,transform);
+        if (points_exact(baseline.start,proposed.start) && points_exact(baseline.end,proposed.end) &&
+            baseline.sweep_radians==proposed.sweep_radians && !rigid_wall_top_plane_changed(original,transform)) continue;
+        result.at(id)=replay_constraint_wall_edit(original,{id,proposed,unchanged_wall_length_entry(original,baseline,proposed),
+            baseline.sweep_radians==0.0 ? 5ULL : 4ULL,transform});
+    }
+    return result;
+}
+std::optional<SimilarityOwnerTransformation> joint_similarity_dimension_transform(const Entities& source,
+    const JointTranslationIntent& intent,const BoundaryDimension& dimension) {
+    if (!intent.per_owner_similarity_completion) return std::nullopt;
+    const auto selected=[&](const std::string& id) {
+        return std::find(intent.rigid_boundary_ids.begin(),intent.rigid_boundary_ids.end(),id)!=intent.rigid_boundary_ids.end() ||
+            std::find(intent.rigid_stroke_ids.begin(),intent.rigid_stroke_ids.end(),id)!=intent.rigid_stroke_ids.end() ||
+            std::find(intent.partial_wall_ids.begin(),intent.partial_wall_ids.end(),id)!=intent.partial_wall_ids.end();
+    };
+    if (selected(dimension.boundary_id)) return joint_owner_similarity(intent,dimension.boundary_id);
+    if (!intent.corner_window_dimension_completion) return std::nullopt;
+    const auto owner=source.find(dimension.boundary_id);
+    if (owner==source.end() || owner->second.type!="corner_window") return std::nullopt;
+    const auto scope=constraint_phase_scope(source);
+    if (scope.inactive_owner_ids.contains(dimension.boundary_id)) return std::nullopt;
+    const auto corner=parse_corner_window(owner->second);
+    if (!selected(corner.wall_ids[0]) || !selected(corner.wall_ids[1])) return std::nullopt;
+    if (scope.inactive_owner_ids.contains(corner.wall_ids[0]) || scope.inactive_owner_ids.contains(corner.wall_ids[1]))
+        invalid("Similarity corner callout has an inactive captured host");
+    const auto first=joint_owner_similarity(intent,corner.wall_ids[0]),second=joint_owner_similarity(intent,corner.wall_ids[1]);
+    if (first.scale!=second.scale || !(first.transform==second.transform)) invalid("Corner callout hosts require equal similarities");
+    (void)resolve_current_boundary_dimension(dimension,source);
+    return first;
 }
 
 DocumentSnapshot preview_constraint_authoring_snapshot(

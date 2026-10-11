@@ -73,7 +73,8 @@ private:
 // edits the same typed publication path. Versions one/two still require children.
 // A carried child requires its explicitly transformed parent; an independent
 // child is authenticated by its original qualified ID, even under replacement.
-// Version four pairs ordinary dialect four with explicit text-baseline and invariant-child
+// Version four pairs ordinary dialect four, including geometry request two's
+// explicit positive similarity scales, with text-baseline and invariant-child
 // proof. A nonnull roof_identity_requests array selects this version, including
 // an empty array. Its sorted unique rows are {roof_id, transform, opening_ids};
 // transform uses the canonical rigid selection-geometry root encoding, and

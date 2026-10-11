@@ -256,6 +256,8 @@ void shape(const Json& request) {
         if (!reviews.is_array() || reviews.size() > 32)
             reject("geometry room reviews must be an array of at most thirty-two intents");
         const auto decoded = decode_selection_geometry_transform_request(geometry.at("request"));
+        if (geometry.at("request").at("version")==2 && request.at("version")!=4)
+            reject("similarity geometry requires ordinary request dialect four");
         if (encode_selection_geometry_transform_request(decoded).dump() != geometry.at("request").dump())
             reject("geometry request must use its canonical typed encoding");
         if (decoded.expected_revision != revision(request.at("expected_revision")) || decoded.message != message)

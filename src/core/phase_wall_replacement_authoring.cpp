@@ -69,6 +69,7 @@ void remap_joint(JointTranslationIntent& joint, const IdentityMap& mapping) {
     remap_targets(joint.owner_translations, mapping, &JointOwnerTranslationIntent::owner_id);
     remap_targets(joint.dimension_translations, mapping, &JointOwnerTranslationIntent::owner_id);
     remap_targets(joint.owner_transformations, mapping, &RigidOwnerTransformation::owner_id);
+    remap_targets(joint.owner_similarities, mapping, &SimilarityOwnerTransformation::owner_id);
     remap_targets(joint.reference_translations, mapping, &JointReferenceTranslationIntent::reference_id);
     std::set<std::pair<std::string, std::string>> annotations;
     for (auto& annotation : joint.annotation_translations) {

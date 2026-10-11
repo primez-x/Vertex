@@ -78,6 +78,16 @@ struct AreaCalloutPlacement {
     const std::map<std::string, Entity, std::less<>>& final_geometry_entities,
     const std::map<std::string, PlanarTransform, std::less<>>& owner_transforms);
 
+// Separate similarity authority retains the rigid role/provider rules. Authored
+// offsets and separated positions follow pivot + linear(scale * (position -
+// pivot)) + offset, then subtract the independently reviewed final anchor.
+// Text size stays derived from presentation policy, and automatic combined
+// placement remains automatic. Unit scale retains exact rigid operation order.
+[[nodiscard]] std::vector<EntityChange> transformed_area_callout_entities(
+    const std::map<std::string, Entity, std::less<>>& source_entities,
+    const std::map<std::string, Entity, std::less<>>& final_geometry_entities,
+    const std::map<std::string, SimilarityOwnerTransformation, std::less<>>& owner_similarities);
+
 // Atomic rigid edit of selected label/symbol children and reference owners.
 // The caller must qualify one compatible stored position AND orientation frame
 // for every target and the shared pivot/offset. Plan/Site projection and frame

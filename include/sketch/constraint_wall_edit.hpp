@@ -30,6 +30,12 @@ void archive_scaled_wall_length_receipt(Entity& wall, const Segment& transformed
     Vec3 pivot, double scale);
 [[nodiscard]] std::map<std::string,Entity,std::less<>> stage_wall_group_scale_entities(
     const std::map<std::string,Entity,std::less<>>& actual_entities,const WallGroupScaleIntent& intent);
+// Single or multiple owner factors form one coordinated corner-host cohort.
+// Planar similarities scale the section about each actual effective base plane;
+// the separate rigid stage changes its plan basis and hosted handedness.
+[[nodiscard]] std::map<std::string,Entity,std::less<>> stage_wall_owner_similarity_scales(
+    const std::map<std::string,Entity,std::less<>>& actual_entities,
+    const std::vector<SimilarityOwnerTransformation>& operations);
 // Independently checks understood section v1 receipts: straight v1 and
 // physical curved v2. Missing/future optional versions remain opaque on open;
 // editing or rebasing unsupported metadata still refuses without loss.

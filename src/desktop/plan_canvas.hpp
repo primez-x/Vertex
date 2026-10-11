@@ -696,6 +696,10 @@ public:
     // every child mouth with its original captured target and presentation owner.
     // This capability never enables uniform or directional resizing.
     void setMixedSelectionRigidTransformEnabled(bool enabled);
+    // Separate opt-in uniform corner resize for complete ordinary/typed-child
+    // cohorts. The opposite actual frame corner is captured before start;
+    // exact completion must include every captured child mouth. No side resize.
+    void setMixedSelectionScaleEnabled(bool enabled);
     // Immutable canvas-world pivot is available before the start callback;
     // outside a gesture this is the eligible retained group's frame center.
     [[nodiscard]] std::optional<Vec2> wallGroupRotationPivot() const;
@@ -1071,6 +1075,10 @@ private:
     [[nodiscard]] bool mixedRigidSelectionEnabled() const noexcept {
         return m_mixed_selection_rigid_transform_enabled && hasMixedSemanticSelection();
     }
+    [[nodiscard]] bool mixedSelectionEnabled() const noexcept {
+        return (m_mixed_selection_rigid_transform_enabled || m_mixed_selection_scale_enabled) &&
+            hasMixedSemanticSelection();
+    }
     [[nodiscard]] std::optional<CanvasSelectionFrame> mixedSelectionAxes() const;
     bool captureMixedSelection();
     [[nodiscard]] bool mixedSelectionCaptureCurrent() const;
@@ -1079,6 +1087,7 @@ private:
     [[nodiscard]] bool validMixedOrdinaryPreview(const std::vector<CanvasEntity>& entities,
         const std::vector<CanvasLabel>& labels, const std::vector<CanvasReference>& references) const;
     [[nodiscard]] bool mixedRotationEnabled() const;
+    [[nodiscard]] bool mixedScaleEnabled() const;
     [[nodiscard]] const CanvasRoofOpeningControls* selectedRoofOpeningControls() const;
     [[nodiscard]] std::optional<CanvasRoofOpeningControls> roofOpeningAt(QPointF point) const;
     [[nodiscard]] std::vector<CanvasRoofOpeningTarget> roofOpeningTargetsAt(QPointF point) const;
@@ -1436,6 +1445,7 @@ private:
     CanvasSelectionFilter m_selection_filter{CanvasSelectionFilter::all};
     QStringList m_move_ids;
     bool m_mixed_selection_rigid_transform_enabled{};
+    bool m_mixed_selection_scale_enabled{};
     std::vector<CanvasRoofOpeningControls> m_mixed_selection_capture;
     std::vector<CanvasRoofOpeningControls> m_move_child_controls_preview;
     std::vector<CanvasRoofOpeningControls> m_transform_child_controls_preview;
@@ -1476,6 +1486,7 @@ private:
     QPointF m_transform_center;
     QPointF m_transform_start;
     double m_transform_resize_extent{};
+    Vec2 m_mixed_resize_diagonal{};
     double m_transform_scale_preview{1.0};
     double m_transform_rotation_preview{};
     std::optional<QPointF> m_transform_preview_pointer;

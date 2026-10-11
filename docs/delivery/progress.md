@@ -14,6 +14,42 @@ changed source does not acquire runtime acceptance without later qualification.
 
 ## Current delivery state
 
+### October 10 mixed uniform resizing - source integration
+
+The current source batch adds explicit uniform geometry scaling to the complete
+ordinary/typed-skylight selection. Numeric Transform and mixed corner grips use
+the same original-source preparation. Canvas capture records the actual opposite
+frame corner before requesting a proposal; grip padding does not move that
+anchor. Every selected ordinary presentation and typed child mouth must be
+covered before release. Directional mixed side resizing remains unfinished.
+
+The geometry producer carries actual selected wall sections and hosted openings,
+measurement boundaries, measured provenance, connected targets and required room
+decisions. Selected room callouts retain their explicit owner similarity. New
+source-only command53, joint intent11, phase intent22 and measured schema/replay6
+are documented under reader192/extraction190. Historical rigid request and
+command meanings remain separate. Typed identity/remapping and retained-history
+reader-floor scans include the new owners and nested dialects.
+
+Original-to-final topology admission now authenticates each selected wall's
+complete reconstruction before analyzing its actual original contacts and
+cycles. A scaled intermediate source cannot establish those contacts. Independent
+review identified a historical tiny-segment regression; non-similarity edits
+again use their original rigid segment transform. The new similarity helper uses
+the geometry family's tolerance. Normal-plan symbols now supply actual candidate
+position, rotation and scale to retained geometry and canonical obstacles before
+automatic label layout. Saved-view handedness and presentation identities remain
+captured; a later generic symbol overwrite no longer discards them. Independent
+integrated source review approves the corrected core and canvas integration.
+Root reviewed the interfaces, complete selection coverage, documented reader
+floors and remaining gaps; source whitespace checking is complete.
+
+No builds, tests/new tests, probes, native jobs, launches, packages or
+installations have run. This batch is not installed, compiled or behaviorally
+qualified. All ten production gates remain open. Mixed Properties, mixed-family
+clipboard, native mixed transforms, directional resizing, broader reflections
+and alternative replacement remain implementation work.
+
 ### October 10 Site mixed and skylight canvas editing - source implementation
 
 The direct mixed body-move and common-pivot rotation route now captures actual

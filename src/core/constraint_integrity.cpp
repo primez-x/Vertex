@@ -10,6 +10,7 @@
 #include "sketch/project_organization.hpp"
 #include "sketch/model_phases.hpp"
 #include "sketch/constraint_phase_scope.hpp"
+#include "sketch/joint_translation_replay.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -486,6 +487,7 @@ bool topology_same_plane(const Entity& first,const Entity& second,const ProjectO
 }
 
 using TopologyRigidTransforms = std::map<std::string,PlanarTransform,std::less<>>;
+using TopologySimilarities = std::map<std::string,SimilarityOwnerTransformation,std::less<>>;
 
 void validate_topology_rigid_transforms(const Entities& before,const Entities& after,
     const std::set<std::string,std::less<>>& verified_ids,const TopologyRigidTransforms& transforms) {
@@ -532,21 +534,122 @@ void validate_topology_rigid_transforms(const Entities& before,const Entities& a
     }
 }
 
+struct AdmittedTopologySimilarities {
+    std::set<std::string,std::less<>> wall_ids;
+    TopologyRigidTransforms rigid_bases;
+};
+
+AdmittedTopologySimilarities validate_topology_similarities(const Entities& before,
+    const Entities& after,const TopologySimilarities& operations) {
+#ifndef VERTEX_HAS_CONSTRAINT_AUTHORING
+    (void)before; (void)after; (void)operations;
+    invalid("Constraint similarity topology requires the production constraint authoring engine");
+#else
+    if (operations.size()>4096) invalid("Constraint topology similarities exceed their owner budget");
+    AdmittedTopologySimilarities admitted;
+    std::vector<SimilarityOwnerTransformation> targets;
+    targets.reserve(operations.size());
+    for (const auto& [id,operation] : operations) {
+        const auto& transform=operation.transform;
+        if (id.empty() || operation.owner_id!=id || !std::isfinite(operation.scale) || !(operation.scale>0) ||
+            !std::isfinite(transform.pivot.x) || !std::isfinite(transform.pivot.y) ||
+            !std::isfinite(transform.offset.x) || !std::isfinite(transform.offset.y) ||
+            !std::isfinite(transform.rotation_radians) ||
+            std::abs(transform.pivot.x)>1e12 || std::abs(transform.pivot.y)>1e12 ||
+            std::abs(transform.offset.x)>1e12 || std::abs(transform.offset.y)>1e12 ||
+            std::abs(transform.rotation_radians)>1e6)
+            invalid("Constraint topology similarity requires a bounded operator and positive finite factor: "+id);
+        const auto original=before.find(id); const auto current=after.find(id);
+        if (original==before.end() || current==after.end() ||
+            !topology_physical_wall(original->second) || !topology_physical_wall(current->second) ||
+            original->second.id!=id || current->second.id!=id)
+            invalid("Constraint topology similarity requires an actual selected physical wall: "+id);
+        Wall wall; std::string diagnostic;
+        if (!read_document_wall(original->second,{},wall,diagnostic)) invalid(diagnostic);
+        validate_wall_semantics(wall);
+        validate_wall_curve_input(original->second);
+        validate_wall_length_input(original->second);
+        targets.push_back(operation);
+        admitted.wall_ids.insert(id);
+        admitted.rigid_bases.emplace(id,transform);
+    }
+    // All actual hosts are staged together, including equal-factor cohorts.
+    // This copy proves sections and passive receipts; it never replaces the
+    // original source used by crossing, contact, closure or cycle admission.
+    const auto scaled_source=stage_wall_owner_similarity_scales(before,targets);
+    validate_topology_rigid_transforms(scaled_source,after,admitted.wall_ids,admitted.rigid_bases);
+    for (const auto& [id,operation] : operations) {
+        auto expected=scaled_source.at(id);
+        const auto original=topology_baseline(before.at(id));
+        const auto baseline=transform_joint_similarity_segment(original,operation);
+        const auto scaled=topology_baseline(expected);
+        const bool baseline_changed=!same_point(scaled.start,baseline.start) ||
+            !same_point(scaled.end,baseline.end) || scaled.sweep_radians!=baseline.sweep_radians;
+        std::optional<Vec2> gradient;
+        bool plane_changed=false;
+        if (const auto plane=expected.properties.find("top_plane"); plane!=expected.properties.end()) {
+            const auto old_gradient=parse_wall_top_plane(*plane);
+            const PlanarTransform basis{{},operation.transform.rotation_radians,
+                operation.transform.flip_horizontal,operation.transform.flip_vertical,{}};
+            gradient=transform_point(old_gradient,basis);
+            plane_changed=!same_point(old_gradient,*gradient);
+        }
+        // A no-op rigid completion must retain the scaled source byte for
+        // byte, including an omitted scalar or untouched curve archive.
+        if (baseline_changed || plane_changed) {
+            transform_wall_curve_input(expected,operation.transform);
+            rebase_wall_length_receipt(expected,baseline);
+            if (gradient) {
+                expected.properties["top_plane"]=wall_top_plane_json(*gradient);
+                const auto rise=gradient->x*(baseline.end.x-baseline.start.x)+
+                    gradient->y*(baseline.end.y-baseline.start.y);
+                if (!std::isfinite(rise)) invalid("Constraint topology similarity top plane exceeds supported range: "+id);
+                expected.properties["slope_rise_m"]=rise;
+                if (expected.properties.contains("slope_rise")) expected.properties["slope_rise"]=rise;
+            }
+            expected.properties["baseline"]["start"]={baseline.start.x,baseline.start.y};
+            expected.properties["baseline"]["end"]={baseline.end.x,baseline.end.y};
+            expected.properties["baseline"]["sweep_radians"]=baseline.sweep_radians;
+        }
+        Wall wall; std::string diagnostic;
+        if (!read_document_wall(expected,{},wall,diagnostic)) invalid(diagnostic);
+        validate_wall_semantics(wall);
+        validate_wall_curve_input(expected);
+        validate_wall_length_input(expected);
+        const auto& actual=after.at(id);
+        if (expected!=actual || expected.properties.dump()!=actual.properties.dump() ||
+            expected.extensions.dump()!=actual.extensions.dump())
+            invalid("Constraint topology similarity wall differs from its complete source reconstruction: "+id);
+    }
+    return admitted;
+#endif
+}
+
 template<class Range,class OwnerId>
 const PlanarTransform* topology_shared_reflection(const Range& members,
-    const TopologyRigidTransforms& transforms,OwnerId owner_id) {
+    const TopologyRigidTransforms& transforms,OwnerId owner_id,
+    const TopologySimilarities* similarities = nullptr) {
     const PlanarTransform* shared=nullptr;
+    std::optional<double> shared_scale;
     for (const auto& member : members) {
-        const auto found=transforms.find(owner_id(member));
+        const auto& id=owner_id(member);
+        const auto found=transforms.find(id);
         if (found==transforms.end() || found->second.flip_horizontal==found->second.flip_vertical ||
             (shared && !(found->second==*shared))) return nullptr;
+        if (similarities) {
+            const auto operation=similarities->find(id);
+            if (operation==similarities->end() ||
+                (shared_scale && operation->second.scale!=*shared_scale)) return nullptr;
+            shared_scale=operation->second.scale;
+        }
         shared=&found->second;
     }
     return shared;
 }
 
 void validate_topology_cycle(const std::vector<std::pair<std::string,bool>>& edges,
-    const Entities& before,const Entities& after,const TopologyRigidTransforms& transforms) {
+    const Entities& before,const Entities& after,const TopologyRigidTransforms& transforms,
+    const TopologySimilarities* similarities = nullptr) {
     const auto loop=[&](const Entities& entities) {
         Boundary result;
         for (const auto& [id,forward] : edges) {
@@ -563,7 +666,7 @@ void validate_topology_cycle(const std::vector<std::pair<std::string,bool>>& edg
     const auto old_area=signed_area(old_loop); const auto area=signed_area(new_loop);
     const auto reflection=topology_shared_reflection(edges,transforms,[](const auto& edge) -> const std::string& {
         return edge.first;
-    });
+    },similarities);
     if (!validate_boundary(new_loop,linear_tolerance).empty() || !std::isfinite(area) ||
         std::abs(area)<=linear_tolerance*linear_tolerance ||
         ((old_area>0)!=(area>0))!=(reflection!=nullptr))
@@ -576,11 +679,21 @@ bool topology_owner_active(const std::string& id,const ConstraintPhaseScope* sco
     return !scope || !scope->inactive_owner_ids.contains(id);
 }
 
+Entities topology_active_geometry(const Entities& source,const ConstraintPhaseScope& scope) {
+    auto result=source;
+    std::vector<std::string> walls;
+    for (const auto& [id,owner] : source)
+        if (topology_physical_wall(owner) && topology_owner_active(id,&scope)) walls.push_back(id);
+    for (auto& [id,placement] : resolve_vertical_placements(source,walls))
+        result.at(id)=std::move(placement);
+    return result;
+}
+
 void constraint_edit_topology(const Entities& before,const Entities& after,
     const std::set<std::string,std::less<>>& verified_rigid_wall_ids,
     const TopologyRigidTransforms& verified_rigid_wall_transforms,
     const ConstraintPhaseScope* before_scope,const ConstraintPhaseScope* after_scope,
-    bool rigid_transforms_admitted = false) {
+    bool rigid_transforms_admitted = false,const TopologySimilarities* similarities = nullptr) {
     if (!rigid_transforms_admitted)
         validate_topology_rigid_transforms(before,after,verified_rigid_wall_ids,verified_rigid_wall_transforms);
     std::set<std::string,std::less<>> changed_walls;
@@ -749,7 +862,7 @@ void constraint_edit_topology(const Entities& before,const Entities& after,
             return changed_walls.contains(edges[index].id);
         })) return;
         const auto reflection=topology_shared_reflection(block,verified_rigid_wall_transforms,
-            [&](const auto index) -> const std::string& { return edges[index].id; });
+            [&](const auto index) -> const std::string& { return edges[index].id; },similarities);
         std::map<std::string,std::vector<std::pair<std::size_t,bool>>,std::less<>> incident;
         for (const auto index : block) {
             incident[edges[index].first].emplace_back(index,true);
@@ -934,7 +1047,7 @@ void constraint_edit_topology(const Entities& before,const Entities& after,
             affected=affected || changed_walls.contains(selected.id);
             vertex=previous;
         }
-        if (affected) validate_topology_cycle(loop,before,after,verified_rigid_wall_transforms);
+        if (affected) validate_topology_cycle(loop,before,after,verified_rigid_wall_transforms,similarities);
     }
     };
     for (const auto& group : groups) {
@@ -968,18 +1081,34 @@ void validate_active_phase_constraint_edit_topology(const Entities& before,const
     // Resolve only active wall placements for geometric analysis. Keep complete
     // maps, identity bindings and organization in these temporary projections;
     // they are neither snapshots nor an authoritative candidate result.
-    const auto geometry = [](const Entities& source,const ConstraintPhaseScope& scope) {
-        auto result = source;
-        std::vector<std::string> walls;
-        for (const auto& [id,owner] : source)
-            if (topology_physical_wall(owner) && topology_owner_active(id,&scope)) walls.push_back(id);
-        for (auto& [id,placement] : resolve_vertical_placements(source,walls))
-            result.at(id) = std::move(placement);
-        return result;
-    };
-    const auto geometric_before = geometry(before,before_scope), geometric_after = geometry(after,after_scope);
+    const auto geometric_before=topology_active_geometry(before,before_scope);
+    const auto geometric_after=topology_active_geometry(after,after_scope);
     constraint_edit_topology(geometric_before,geometric_after,verified_rigid_wall_ids,
         verified_rigid_wall_transforms,&before_scope,&after_scope,true);
+}
+
+void validate_constraint_similarity_topology(const Entities& before,const Entities& after,
+    const TopologySimilarities& wall_operations) {
+    const auto admitted=validate_topology_similarities(before,after,wall_operations);
+    constraint_edit_topology(before,after,admitted.wall_ids,admitted.rigid_bases,
+        nullptr,nullptr,true,&wall_operations);
+}
+
+void validate_active_phase_constraint_similarity_topology(const Entities& before,const Entities& after,
+    const TopologySimilarities& wall_operations) {
+    const auto before_scope=constraint_phase_scope(before), after_scope=constraint_phase_scope(after);
+    for (const auto& [id,operation] : wall_operations) {
+        (void)operation;
+        if (!topology_owner_active(id,&before_scope) || !topology_owner_active(id,&after_scope))
+            invalid("Active constraint topology cannot qualify an inactive similarity wall: "+id);
+    }
+    // Authenticate complete original and candidate records before resolving
+    // placements. The projection carries no transform or receipt authority.
+    const auto admitted=validate_topology_similarities(before,after,wall_operations);
+    const auto geometric_before=topology_active_geometry(before,before_scope);
+    const auto geometric_after=topology_active_geometry(after,after_scope);
+    constraint_edit_topology(geometric_before,geometric_after,admitted.wall_ids,admitted.rigid_bases,
+        &before_scope,&after_scope,true,&wall_operations);
 }
 
 void validate_exterior_corner_edit_topology(const Entities& before,const Entities& after) {
