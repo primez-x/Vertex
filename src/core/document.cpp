@@ -4110,6 +4110,11 @@ static void validate_retained_authoring_receipt_identities(
             for (const auto& [original,copied]:request.at("copied_dimension_ids").items()) {
                 require_unused_id(original);require_unused_id(copied.get_ref<const std::string&>());
             }
+            if (request.at("version")==2)
+                for (const auto& [registry,companion]:request.at("membership_entity_ids").items()) {
+                    require_unused_id(registry);
+                    require_unused_id(companion.get_ref<const std::string&>());
+                }
         }
         for (const auto& request:historical_proofs.component_catalog_proofs) {
             const auto authoring=decode_phase_assembly_catalog_edit_authoring(request.at("authoring"));
@@ -4937,6 +4942,48 @@ void validate_retained_authoring_fresh_identities(
         if (history.at(index).boundary_constraint_changes)
             throw std::invalid_argument("Retained authoring receipt reservations require the production authoring engine");
 #endif
+}
+
+// Raw entity changes and phase imports carry no source-derived component-row
+// enrollment authority. Keep this current-write admission outside historical
+// replay so old records retain their original semantics. Typed transport and
+// replacement producers must supply their own independently derived transitions.
+static void validate_current_unsealed_component_membership_preservation(
+    const std::map<std::string,Entity,std::less<>>& source,
+    const std::map<std::string,Entity,std::less<>>& candidate) {
+    std::set<std::string,std::less<>> qualified_catalogs;
+    for (const auto& [id,entity]:source) {
+        if (entity.type!=assembly_phase_membership_entity_type) continue;
+        const auto after=candidate.find(id);
+        if (after==candidate.end() || !exact_entity_payload(entity,after->second))
+            document_error(DocumentErrorCode::invalid_entity,
+                "Component membership changes require a source-derived authoring command: "+id);
+        const auto membership=AssemblyPhaseMembership::from_json(entity.properties.at("model"));
+        for (const auto& root:membership.roots()) qualified_catalogs.insert(root.first);
+    }
+    for (const auto& [id,entity]:candidate) {
+        if (entity.type!=assembly_phase_membership_entity_type) continue;
+        const auto original=source.find(id);
+        if (original==source.end() || original->second.type!=assembly_phase_membership_entity_type)
+            document_error(DocumentErrorCode::invalid_entity,
+                "Component membership creation requires explicit source-derived allocation: "+id);
+    }
+    // Preserving the companion alone is insufficient: a legacy writer could
+    // append an undeclared row to its shared catalog and revive carrier-based
+    // visibility. Compare actual local identities, never presentation aliases.
+    for (const auto& catalog_id:qualified_catalogs) {
+        const auto after=candidate.find(catalog_id);
+        if (after==candidate.end() || after->second.type!="assembly_model")
+            document_error(DocumentErrorCode::invalid_entity,
+                "Qualified component catalogs require typed retirement: "+catalog_id);
+        std::set<std::string,std::less<>> original_rows;
+        for (const auto& row:source.at(catalog_id).properties.at("model").at("instances"))
+            original_rows.insert(row.at("id").get<std::string>());
+        for (const auto& row:after->second.properties.at("model").at("instances"))
+            if (!original_rows.contains(row.at("id").get_ref<const std::string&>()))
+                document_error(DocumentErrorCode::invalid_entity,
+                    "Qualified component copies require a source-derived enrollment command: "+catalog_id);
+    }
 }
 
 // Current authoring cannot silently rewrite a baseline architectural object while an
@@ -11249,6 +11296,13 @@ Revision Document::apply(const Command& command) {
                         const auto prepared=replay_qualified_embedded_assembly_copy_preparation(
                             snapshot(),typed_command.qualified_embedded_assembly_copy_intent);
                         next.entities=prepared.preview_entities();
+                        // Pure retained replay understands companion enrollment,
+                        // but current publication must not create a read-only
+                        // head that strands Undo while other writers are gated.
+                        if (std::any_of(next.entities.begin(),next.entities.end(),[](const auto& row) {
+                                return row.second.type==assembly_phase_membership_entity_type;
+                            }))
+                            throw std::invalid_argument("This component copy requires qualified alternatives that are not yet editable; the project was not changed");
                     } catch (const DocumentError&) { throw; }
                     catch (const std::exception& error) { document_error(DocumentErrorCode::invalid_entity,error.what()); }
 #else
@@ -11399,6 +11453,9 @@ Revision Document::apply(const Command& command) {
                 next.name = typed_command.name;
             }
 
+            if constexpr (std::is_same_v<CommandType,ApplyEntityChanges> ||
+                          std::is_same_v<CommandType,ImportPhaseEntities>)
+                validate_current_unsealed_component_membership_preservation(current.entities,next.entities);
             validate_current_baseline_physical_preservation(current.entities,next.entities);
             // Source-bound rooms cannot borrow an ordinary metadata edit to
             // detach their holes or their physical-wall evidence. Deletion is

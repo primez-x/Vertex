@@ -3,6 +3,7 @@
 #include "sketch/assembly_document_adapter.hpp"
 #include "sketch/constraint_phase_scope.hpp"
 #include "sketch/corner_window.hpp"
+#include "sketch/phase_assembly_instance_property_edit.hpp"
 
 #include <algorithm>
 #include <cctype>
@@ -249,7 +250,8 @@ void retirement_placement_host(const Entities& entities, const Phases& phases,
 }
 
 void retained_embedded_placement_host(const Entities& source, const Entities& candidate,
-    const Phases& phases, const std::string& host_id) {
+    const Phases& phases, const std::string& host_id,
+    std::set<std::string, std::less<>>* actual_registries = nullptr) {
     std::set<std::string, std::less<>> reached;
     const auto visit = [&](const auto& self, const std::string& id) -> void {
         if (reached.contains(id)) return;
@@ -264,6 +266,10 @@ void retained_embedded_placement_host(const Entities& source, const Entities& ca
             "embedded assembly phase transport changed or removed a retained placement ancestor");
         require(!phases.inactive.contains(id),
             "embedded assembly phase transport source placement ancestry is inactive");
+        if (actual_registries) {
+            const auto owner = phases.owners.find(id);
+            if (owner != phases.owners.end()) actual_registries->insert(owner->second);
+        }
         // These actual hosts are retained raw-exact. Their saved activity binds
         // the copy read, but their registry does not confer or restrict the
         // independently declared row's role in its own registry.
@@ -677,11 +683,22 @@ AssemblyPhaseTransportEntities transport_assembly_phase_memberships_for_independ
     }
 }
 
-AssemblyPhaseTransportEntities transport_assembly_phase_memberships_for_embedded_copies(
-    const Entities& source, const Entities& candidate, const AssemblyPhaseCopiedRoots& copied_roots) {
+static AssemblyPhaseTransportEntities transport_embedded_copies(
+    const Entities& source, const Entities& candidate, const AssemblyPhaseCopiedRoots& copied_roots,
+    const std::map<std::string, std::string, std::less<>>* membership_entity_ids) {
     try {
         require(copied_roots.size() <= 1000, "embedded assembly phase transport copied root budget exceeded");
+        require(!membership_entity_ids || membership_entity_ids->size() <= 1000,
+            "embedded assembly phase transport companion allocation budget exceeded");
         Budget budget;
+        std::set<std::string, std::less<>> fresh_companions;
+        if (membership_entity_ids) for (const auto& [registry_id, entity_id] : *membership_entity_ids) {
+            document_id(registry_id); document_id(entity_id);
+            budget.text(registry_id); budget.text(entity_id);
+            require(fresh_companions.insert(entity_id).second && !source.contains(entity_id) &&
+                !candidate.contains(entity_id),
+                "embedded assembly phase transport companion identity is duplicated or not fresh");
+        }
         std::map<std::string, std::set<std::string, std::less<>>, std::less<>> destinations;
         std::set<AssemblyPhaseRoot> fresh_roots;
         for (const auto& [from, to] : copied_roots) {
@@ -709,7 +726,22 @@ AssemblyPhaseTransportEntities transport_assembly_phase_memberships_for_embedded
         const auto candidate_scope = resolve_assembly_phase_memberships(candidate);
         const auto source_catalogs = catalogs(source, source_catalog_ids);
         const auto candidate_catalogs = catalogs(candidate, candidate_catalog_ids);
-        if (copied_roots.empty()) return candidate;
+        if (membership_entity_ids) {
+            const std::vector<std::string> ids(fresh_companions.begin(), fresh_companions.end());
+            validate_phase_assembly_instance_property_edit_fresh_identities(source, ids);
+            validate_phase_assembly_instance_property_edit_fresh_identities(candidate, ids);
+            for (const auto& [catalog_id, entry] : candidate_catalogs)
+                for (const auto& [instance_id, row] : entry.instances) {
+                    (void)row;
+                    require(!fresh_companions.contains(catalog_id + ":instance:" + instance_id),
+                        "embedded assembly phase transport companion collides with a raw presentation alias");
+                }
+        }
+        if (copied_roots.empty()) {
+            require(!membership_entity_ids || membership_entity_ids->empty(),
+                "embedded assembly phase transport has extraneous companion allocations");
+            return candidate;
+        }
         companions_exact(source, candidate, false);
         for (const auto& [id, registry] : source_phases.registries) {
             (void)registry;
@@ -742,6 +774,7 @@ AssemblyPhaseTransportEntities transport_assembly_phase_memberships_for_embedded
             std::size_t count{};
         };
         std::map<std::string, Additions, std::less<>> edits;
+        std::map<std::string, std::vector<AssemblyPhaseRoot>, std::less<>> unlisted_additions;
         for (const auto& [from, to] : copied_roots) {
             const auto& original = instance(source_catalogs, from);
             const auto& destination = instance(candidate_catalogs, to);
@@ -777,12 +810,35 @@ AssemblyPhaseTransportEntities transport_assembly_phase_memberships_for_embedded
             if (original.placement)
                 retained_embedded_placement_host(source, candidate, source_phases,
                     original.placement->host_entity_id);
-            if (!registry_id) continue; // Unlisted copies remain unlisted.
+            if (!registry_id) {
+                if (membership_entity_ids) {
+                    // An actual unlisted cohort comes only from its carrier and
+                    // complete active host ancestry. Dimensions do not invent it.
+                    std::set<std::string, std::less<>> actual_registries;
+                    const auto carrier_owner = source_phases.owners.find(from.first);
+                    if (carrier_owner != source_phases.owners.end()) actual_registries.insert(carrier_owner->second);
+                    if (original.placement) retained_embedded_placement_host(source, candidate, source_phases,
+                        original.placement->host_entity_id, &actual_registries);
+                    require(actual_registries.size() <= 1,
+                        "embedded assembly phase transport has conflicting actual carrier/host registries");
+                    if (!actual_registries.empty()) unlisted_additions[*actual_registries.begin()].push_back(to);
+                }
+                continue; // Historical transport leaves unlisted copies unlisted.
+            }
             const auto& registry = source_phases.registries.at(*registry_id);
             auto& edit = edits[owner->second.membership_entity_id];
             ++edit.count;
             if (registry.active_alternative()) edit.proposed[*registry.active_alternative()].push_back(to);
             else edit.baseline.push_back(to);
+        }
+        if (membership_entity_ids) {
+            require(membership_entity_ids->size() == unlisted_additions.size(),
+                "embedded assembly phase transport requires exact companion allocations");
+            for (const auto& [registry_id, roots] : unlisted_additions) {
+                (void)roots;
+                require(membership_entity_ids->contains(registry_id),
+                    "embedded assembly phase transport is missing an actual required companion allocation");
+            }
         }
         auto result = candidate;
         for (const auto& [id, edit] : edits) {
@@ -811,6 +867,19 @@ AssemblyPhaseTransportEntities transport_assembly_phase_memberships_for_embedded
                 std::move(baseline), std::move(alternatives));
             result.at(id).properties.at("model") = retain_assembly_phase_membership_source(saved, proposed);
         }
+        for (const auto& [registry_id, roots] : unlisted_additions) {
+            const auto& registry = source_phases.registries.at(registry_id);
+            std::vector<AssemblyPhaseRoot> baseline;
+            std::vector<AssemblyPhaseAlternative> alternatives;
+            if (registry.active_alternative()) alternatives.push_back({*registry.active_alternative(), {}, roots});
+            else baseline = roots;
+            const auto membership = AssemblyPhaseMembership::create(registry_id, roots,
+                std::move(baseline), std::move(alternatives));
+            const auto& id = membership_entity_ids->at(registry_id);
+            require(result.emplace(id, Entity{id, std::string(assembly_phase_membership_entity_type),
+                Json{{"model", membership.to_json()}}, true}).second,
+                "embedded assembly phase transport fresh companion identity is occupied");
+        }
         Budget final_budget;
         final_budget.entities(result);
         (void)resolve_assembly_phase_memberships(result);
@@ -818,6 +887,16 @@ AssemblyPhaseTransportEntities transport_assembly_phase_memberships_for_embedded
     } catch (const Json::exception& error) {
         throw std::invalid_argument(std::string("invalid embedded assembly phase copy transport: ") + error.what());
     }
+}
+
+AssemblyPhaseTransportEntities transport_assembly_phase_memberships_for_embedded_copies(
+    const Entities& source, const Entities& candidate, const AssemblyPhaseCopiedRoots& copied_roots) {
+    return transport_embedded_copies(source, candidate, copied_roots, nullptr);
+}
+AssemblyPhaseTransportEntities transport_assembly_phase_memberships_for_embedded_copies(
+    const Entities& source, const Entities& candidate, const AssemblyPhaseCopiedRoots& copied_roots,
+    const std::map<std::string, std::string, std::less<>>& membership_entity_ids) {
+    return transport_embedded_copies(source, candidate, copied_roots, &membership_entity_ids);
 }
 
 AssemblyPhaseTransportEntities prune_removed_assembly_phase_memberships(const Entities& source, const Entities& candidate) {

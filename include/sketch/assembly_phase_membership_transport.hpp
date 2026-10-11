@@ -77,6 +77,17 @@ transport_assembly_phase_memberships_for_embedded_copies(
     const AssemblyPhaseTransportEntities& candidate,
     const AssemblyPhaseCopiedRoots& copied_roots);
 
+// Independently derives actual unlisted carrier/complete host cohorts. Exact
+// registry-to-fresh-required-companion allocations enroll destinations only.
+// Missing/extraneous allocations and disagreeing physical registries refuse.
+// Declared roots retain the existing three-argument transport semantics.
+[[nodiscard]] AssemblyPhaseTransportEntities
+transport_assembly_phase_memberships_for_embedded_copies(
+    const AssemblyPhaseTransportEntities& source,
+    const AssemblyPhaseTransportEntities& candidate,
+    const AssemblyPhaseCopiedRoots& copied_roots,
+    const std::map<std::string, std::string, std::less<>>& membership_entity_ids);
+
 // A removal producer may leave unchanged source companions referencing rows
 // now absent from its independently admitted candidate. Prune only those actual
 // absences from every partition; present inactive rows remain declared. Removing

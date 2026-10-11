@@ -1452,6 +1452,17 @@ namespace {
 // A qualified declaration supplies a row's phase role independently of its
 // shared catalog carrier. Retained physical hosts still bind source activity.
 // Copy reads an active source without editing its role.
+enum class EmbeddedAssemblyPreparation {
+    ordinary,
+    detached_copy_source_poses,
+    qualified_embedded_copies,
+    qualified_copy_plan,
+    qualified_with_allocation
+};
+struct EmbeddedAssemblyRootAdmission {
+    bool declared{};
+    std::optional<std::string> registry_id;
+};
 struct EmbeddedAssemblySourceActivity {
     const AssemblyDocumentEntities& actual;
     AssemblyPhaseMembershipScope rows;
@@ -1495,8 +1506,8 @@ struct EmbeddedAssemblySourceActivity {
             "ordinary embedded assembly editing requires replacement of a protected baseline owner");
     }
 
-    bool admit_root(const EmbeddedAssemblyGroupTarget& target, const AssemblyInstance& instance,
-        bool mutation, bool require_copy_membership = false) const {
+    EmbeddedAssemblyRootAdmission admit_root(const EmbeddedAssemblyGroupTarget& target, const AssemblyInstance& instance,
+        bool mutation, EmbeddedAssemblyPreparation preparation) const {
         const AssemblyPhaseRoot root{target.catalog_id, target.instance_id};
         const auto declared = rows.owners.find(root);
         if (declared == rows.owners.end()) admit_owner(target.catalog_id, mutation);
@@ -1558,11 +1569,25 @@ struct EmbeddedAssemblySourceActivity {
             }
         };
         if (instance.placement) host(host, instance.placement->host_entity_id);
-        if (require_copy_membership && declared == rows.owners.end())
-            require(!owners.contains(target.catalog_id) &&
-                std::none_of(reached.begin(), reached.end(), [&](const std::string& id) { return owners.contains(id); }),
-                "Unlisted component copies with design-phase ownership require explicit companion allocation; the project was not changed");
-        return declared != rows.owners.end();
+        std::optional<std::string> registry_id;
+        if (declared != rows.owners.end()) registry_id = declared->second.registry_id;
+        else if (preparation == EmbeddedAssemblyPreparation::qualified_embedded_copies ||
+            preparation == EmbeddedAssemblyPreparation::qualified_copy_plan ||
+            preparation == EmbeddedAssemblyPreparation::qualified_with_allocation) {
+            const auto include = [&](const std::string& id) {
+                const auto owner = owners.find(id);
+                if (owner == owners.end()) return;
+                require(!registry_id || *registry_id == owner->second,
+                    "qualified embedded assembly copy has conflicting actual carrier/host registries");
+                registry_id = owner->second;
+            };
+            include(target.catalog_id);
+            for (const auto& id : reached) include(id);
+            if (preparation == EmbeddedAssemblyPreparation::qualified_embedded_copies)
+                require(!registry_id,
+                    "Unlisted component copies with design-phase ownership require explicit companion allocation; the project was not changed");
+        }
+        return {declared != rows.owners.end(), std::move(registry_id)};
     }
 };
 void validate_embedded_copy_document_history(const DocumentSnapshot& source,
@@ -1589,11 +1614,6 @@ void validate_embedded_copy_document_history(const DocumentSnapshot& source,
 }
 // Prepare exact raw catalog consequences without treating detached poses as a
 // publication of changes to the existing catalog or its phase memberships.
-enum class EmbeddedAssemblyPreparation {
-    ordinary,
-    detached_copy_source_poses,
-    qualified_embedded_copies
-};
 ApplyEntityChanges prepare_embedded_assembly_group_transform(const DocumentSnapshot& source,
     std::span<const EmbeddedAssemblyGroupTarget> targets,
     const ArchitecturalGroupTransform& transform, Revision expected_revision,
@@ -1614,7 +1634,8 @@ ApplyEntityChanges prepare_embedded_assembly_group_transform(const DocumentSnaps
     for (const auto& target : targets) {
         (void)embedded_group_transform(target, transform);
         identifier(target.catalog_id);
-        if (preparation == EmbeddedAssemblyPreparation::qualified_embedded_copies) {
+        if (preparation == EmbeddedAssemblyPreparation::qualified_embedded_copies ||
+            preparation == EmbeddedAssemblyPreparation::qualified_with_allocation) {
             local_identifier(target.instance_id);
             require(target.copy_instance_id.has_value(),
                 "qualified embedded assembly copies require a fresh local identity for every root");
@@ -1633,11 +1654,12 @@ ApplyEntityChanges prepare_embedded_assembly_group_transform(const DocumentSnaps
             "embedded assembly group instance is missing from its catalog");
         const bool declared = activity.admit_root(target, *instance,
             preparation == EmbeddedAssemblyPreparation::ordinary && !target.copy_instance_id,
-            preparation == EmbeddedAssemblyPreparation::qualified_embedded_copies);
+            preparation).declared;
         if (target.copy_instance_id) {
             // This raw command has no sealed companion-enrollment intent. A
             // declared source cannot silently create an unlisted destination.
-            require(!declared || preparation == EmbeddedAssemblyPreparation::qualified_embedded_copies,
+            require(!declared || preparation == EmbeddedAssemblyPreparation::qualified_embedded_copies ||
+                preparation == EmbeddedAssemblyPreparation::qualified_with_allocation,
                 "declared embedded assembly copies require a qualified phase enrollment command");
             identifier(*target.copy_instance_id);
             require(copies.emplace(target.catalog_id, *target.copy_instance_id).second &&
@@ -1872,17 +1894,92 @@ ApplyEntityChanges embedded_assembly_group_transform_command(const DocumentSnaps
     else (void)Document::preview_command(source, command);
     return command;
 }
-AssemblyDocumentEntities prepare_qualified_embedded_assembly_copy_entities(const DocumentSnapshot& source,
+namespace {
+using EmbeddedCopyCohorts = std::map<AssemblyPhaseRoot, EmbeddedAssemblyRootAdmission>;
+EmbeddedCopyCohorts inspect_qualified_embedded_copy_cohorts(const AssemblyDocumentEntities& entities,
+    std::span<const EmbeddedAssemblyGroupTarget> targets, const EmbeddedAssemblySourceActivity& activity) {
+    require(!targets.empty() && targets.size() <= maximum_architectural_group_targets,
+        "qualified embedded assembly copies require between 1 and 1000 roots");
+    EmbeddedCopyCohorts result;
+    std::map<std::string, AssemblyModel, std::less<>> models;
+    std::set<AssemblyPhaseRoot> sources;
+    std::set<AssemblyPhaseRoot> destinations;
+    // Frame the complete bounded target roster before the first selected model
+    // decoder; a later malformed target cannot be hidden behind earlier work.
+    for (const auto& target : targets) {
+        identifier(target.catalog_id); local_identifier(target.instance_id);
+        require(target.instance_id.size() <= 4096 && target.copy_instance_id.has_value(),
+            "qualified embedded assembly copies require bounded sources and fresh local identities");
+        identifier(*target.copy_instance_id);
+        const AssemblyPhaseRoot root{target.catalog_id, target.instance_id};
+        const AssemblyPhaseRoot destination{target.catalog_id, *target.copy_instance_id};
+        require(root != destination && destinations.insert(destination).second && sources.insert(root).second,
+            "qualified embedded assembly copy source or destination is duplicated");
+    }
+    for (const auto& destination : destinations)
+        require(!sources.contains(destination),
+            "qualified embedded assembly copy destination aliases another source");
+    for (const auto& target : targets) {
+        const AssemblyPhaseRoot root{target.catalog_id, target.instance_id};
+        const auto found = entities.find(target.catalog_id);
+        require(found != entities.end() && found->second.id == target.catalog_id,
+            "qualified embedded assembly copy source catalog is missing or inconsistent");
+        if (!models.contains(target.catalog_id)) models.emplace(target.catalog_id, catalog(found->second));
+        const auto& rows = models.at(target.catalog_id).instances();
+        const auto row = std::find_if(rows.begin(), rows.end(),
+            [&](const auto& value) { return value.id == target.instance_id; });
+        require(row != rows.end(), "qualified embedded assembly copy source row is missing");
+        require(std::none_of(rows.begin(), rows.end(),
+            [&](const auto& value) { return value.id == *target.copy_instance_id; }),
+            "qualified embedded assembly copy destination row already exists");
+        result.emplace(root, activity.admit_root(target, *row, false,
+            EmbeddedAssemblyPreparation::qualified_copy_plan));
+    }
+    return result;
+}
+std::set<std::string, std::less<>> required_copy_registries(const EmbeddedCopyCohorts& cohorts) {
+    std::set<std::string, std::less<>> result;
+    for (const auto& [root, admission] : cohorts) {
+        (void)root;
+        if (!admission.declared && admission.registry_id) result.insert(*admission.registry_id);
+    }
+    return result;
+}
+} // namespace
+
+std::set<std::string, std::less<>> required_qualified_embedded_copy_membership_registries(
+    const DocumentSnapshot& source, std::span<const EmbeddedAssemblyGroupTarget> targets) {
+#ifndef VERTEX_HAS_CONSTRAINT_AUTHORING
+    (void)source; (void)targets;
+    throw std::invalid_argument("qualified embedded assembly copies require the production authoring engine");
+#else
+    require(!targets.empty() && targets.size() <= maximum_architectural_group_targets,
+        "qualified embedded assembly copies require between 1 and 1000 roots");
+    admit_retained_assembly_authoring_source(source);
+    AssemblyCatalogTransferBudget catalog_budget;
+    for (const auto& [id, entity] : source.entities()) {
+        (void)id;
+        if (entity.type == "assembly_model") admit_existing_assembly_catalog_work(entity, catalog_budget);
+    }
+    const EmbeddedAssemblySourceActivity activity(source.entities());
+    return required_copy_registries(inspect_qualified_embedded_copy_cohorts(source.entities(), targets, activity));
+#endif
+}
+
+static AssemblyDocumentEntities prepare_qualified_embedded_assembly_copy_entities_impl(const DocumentSnapshot& source,
     std::span<const EmbeddedAssemblyGroupTarget> targets,
     const ArchitecturalGroupTransform& transform, Revision expected_revision,
-    const std::map<std::string, std::string, std::less<>>& copied_dimension_ids) {
+    const std::map<std::string, std::string, std::less<>>& copied_dimension_ids,
+    const std::map<std::string, std::string, std::less<>>* membership_entity_ids) {
     revision(source, expected_revision);
     require(!targets.empty() && targets.size() <= maximum_architectural_group_targets,
         "qualified embedded assembly copies require between 1 and 1000 roots");
     require(copied_dimension_ids.size() <= 1000,
         "qualified embedded assembly copy dimension identity roster exceeds bound");
+    require(!membership_entity_ids || membership_entity_ids->size() <= 1000,
+        "qualified embedded assembly copy companion identity roster exceeds bound");
 #ifndef VERTEX_HAS_CONSTRAINT_AUTHORING
-    (void)transform; (void)copied_dimension_ids;
+    (void)transform; (void)copied_dimension_ids; (void)membership_entity_ids;
     throw std::invalid_argument("qualified embedded assembly copies require the production authoring engine");
 #else
     // The public pure API also admits its complete retained source. A caller
@@ -1903,6 +2000,8 @@ AssemblyDocumentEntities prepare_qualified_embedded_assembly_copy_entities(const
     for (const auto& target : targets) {
         (void)embedded_group_transform(target, transform);
         identifier(target.catalog_id); local_identifier(target.instance_id);
+        require(target.instance_id.size() <= 4096,
+            "qualified embedded assembly copy source identity exceeds bound");
         require(target.copy_instance_id.has_value(),
             "qualified embedded assembly copies require a fresh local identity for every root");
         identifier(*target.copy_instance_id);
@@ -1924,6 +2023,11 @@ AssemblyDocumentEntities prepare_qualified_embedded_assembly_copy_entities(const
         identifier(old_id); identifier(new_id);
         require(fresh.insert(new_id).second,
             "qualified embedded assembly copy dimension identity collides with another allocation");
+    }
+    if (membership_entity_ids) for (const auto& [registry_id, entity_id] : *membership_entity_ids) {
+        identifier(registry_id); identifier(entity_id);
+        require(fresh.insert(entity_id).second,
+            "qualified embedded assembly copy companion identity collides with another allocation");
     }
     const std::vector<std::string> fresh_ids(fresh.begin(), fresh.end());
     const auto reserve = [&](const AssemblyDocumentEntities& retained) {
@@ -1954,18 +2058,40 @@ AssemblyDocumentEntities prepare_qualified_embedded_assembly_copy_entities(const
     // Inventory all affected associations before geometry/carry. Missing,
     // extraneous, malformed, future or inactive dimensions refuse, including
     // those omitted from the caller's mapping rather than merely supplied IDs.
+    const EmbeddedAssemblySourceActivity activity(source.entities());
+    const auto cohorts = inspect_qualified_embedded_copy_cohorts(source.entities(), targets, activity);
+    const auto required_registries = required_copy_registries(cohorts);
+    if (membership_entity_ids) {
+        require(membership_entity_ids->size() == required_registries.size(),
+            "qualified embedded assembly copy requires exact companion allocations");
+        for (const auto& registry_id : required_registries)
+            require(membership_entity_ids->contains(registry_id),
+                "qualified embedded assembly copy is missing an actual required companion allocation");
+    } else require(required_registries.empty(),
+        "Unlisted component copies with design-phase ownership require explicit companion allocation; the project was not changed");
     const auto dimensions = inspect_embedded_assembly_dimension_clone_roster(source.entities(), source_roots);
     require(dimensions.size() == copied_dimension_ids.size(),
         "qualified embedded assembly copy requires exact associated dimension identities");
-    const EmbeddedAssemblySourceActivity activity(source.entities());
     for (const auto& [id, component] : dimensions) {
-        (void)component;
         require(copied_dimension_ids.contains(id),
             "qualified embedded assembly copy is missing an associated dimension identity");
         activity.admit_owner(id, false);
+        const AssemblyPhaseRoot root{component.catalog_id, component.instance_id};
+        const auto& cohort = cohorts.at(root);
+        const auto owner = activity.owners.find(id);
+        if (owner != activity.owners.end()) {
+            require(cohort.registry_id && owner->second == *cohort.registry_id,
+                "qualified embedded assembly source dimension belongs to a conflicting or ambiguous registry cohort");
+            if (cohort.declared) {
+                const auto states = activity.registries.at(*cohort.registry_id).active_state();
+                require(states.at(id) == activity.rows.states.at(root),
+                    "qualified embedded assembly source dimension role differs from its actual declared row");
+            }
+        }
     }
     auto geometry = prepare_embedded_assembly_group_transform(source, targets, transform, expected_revision,
-        EmbeddedAssemblyPreparation::qualified_embedded_copies);
+        membership_entity_ids ? EmbeddedAssemblyPreparation::qualified_with_allocation :
+            EmbeddedAssemblyPreparation::qualified_embedded_copies);
     append_embedded_group_dimensions(source, targets, false, copied_dimension_ids, geometry);
     auto candidate = source.entities();
     for (const auto& change : geometry.entity_changes) {
@@ -1975,34 +2101,16 @@ AssemblyDocumentEntities prepare_qualified_embedded_assembly_copy_entities(const
     }
     // This is the real geometry/dimension map, with original companions still
     // exact. The transport derives enrollment from actual saved source choice.
-    candidate = transport_assembly_phase_memberships_for_embedded_copies(source.entities(), candidate, copied_roots);
+    candidate = membership_entity_ids ? transport_assembly_phase_memberships_for_embedded_copies(
+        source.entities(), candidate, copied_roots, *membership_entity_ids) :
+        transport_assembly_phase_memberships_for_embedded_copies(source.entities(), candidate, copied_roots);
     // Companion enrollment requires unchanged registries on its input. Only
     // after that exact transport may fresh dimensions join the copied root's
     // independently established source cohort; original roles never change.
-    std::map<AssemblyPhaseRoot, std::optional<std::string>> dimension_cohorts;
     std::map<std::string, std::set<std::string, std::less<>>, std::less<>> registry_dimensions;
     for (const auto& [old_id, component] : dimensions) {
         const AssemblyPhaseRoot root{component.catalog_id, component.instance_id};
-        if (!dimension_cohorts.contains(root)) {
-            const auto declared = activity.rows.owners.find(root);
-            std::optional<std::string> registry_id;
-            if (declared != activity.rows.owners.end()) registry_id = declared->second.registry_id;
-            // Phase-free unlisted rows retain no inferred partition. The
-            // geometry source read already refuses unlisted legacy cohorts:
-            // their destination needs an explicitly allocated companion.
-            dimension_cohorts.emplace(root, std::move(registry_id));
-        }
-        const auto& registry_id = dimension_cohorts.at(root);
-        const auto dimension_owner = activity.owners.find(old_id);
-        if (dimension_owner != activity.owners.end()) {
-            require(registry_id && dimension_owner->second == *registry_id,
-                "qualified embedded assembly source dimension belongs to a conflicting or ambiguous registry cohort");
-            if (activity.rows.owners.contains(root)) {
-                const auto states = activity.registries.at(*registry_id).active_state();
-                require(states.at(old_id) == activity.rows.states.at(root),
-                    "qualified embedded assembly source dimension role differs from its actual declared row");
-            }
-        }
+        const auto& registry_id = cohorts.at(root).registry_id;
         if (registry_id) registry_dimensions[*registry_id].insert(copied_dimension_ids.at(old_id));
     }
     for (const auto& [registry_id, ids] : registry_dimensions) {
@@ -2043,6 +2151,21 @@ AssemblyDocumentEntities prepare_qualified_embedded_assembly_copy_entities(const
             "qualified embedded assembly copy presentation differs from its reserved identity");
     return candidate;
 #endif
+}
+AssemblyDocumentEntities prepare_qualified_embedded_assembly_copy_entities(const DocumentSnapshot& source,
+    std::span<const EmbeddedAssemblyGroupTarget> targets,
+    const ArchitecturalGroupTransform& transform, Revision expected_revision,
+    const std::map<std::string, std::string, std::less<>>& copied_dimension_ids) {
+    return prepare_qualified_embedded_assembly_copy_entities_impl(source, targets, transform,
+        expected_revision, copied_dimension_ids, nullptr);
+}
+AssemblyDocumentEntities prepare_qualified_embedded_assembly_copy_entities(const DocumentSnapshot& source,
+    std::span<const EmbeddedAssemblyGroupTarget> targets,
+    const ArchitecturalGroupTransform& transform, Revision expected_revision,
+    const std::map<std::string, std::string, std::less<>>& copied_dimension_ids,
+    const std::map<std::string, std::string, std::less<>>& membership_entity_ids) {
+    return prepare_qualified_embedded_assembly_copy_entities_impl(source, targets, transform,
+        expected_revision, copied_dimension_ids, &membership_entity_ids);
 }
 ApplyEntityChanges embedded_assembly_group_copy_command(const DocumentSnapshot& source,
     std::span<const EmbeddedAssemblyGroupTarget> targets,

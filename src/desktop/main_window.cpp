@@ -67,6 +67,7 @@
 #include "sketch/stair_edit_dependencies.hpp"
 #include "sketch/stair_property_review.hpp"
 #include "sketch/assembly_instance_property_edit.hpp"
+#include "sketch/retained_authoring_identities.hpp"
 #include "sketch/opening_architectural_removal.hpp"
 #include "sketch/phase_roof_replacement.hpp"
 #include "sketch/phase_slab_replacement.hpp"
@@ -71164,6 +71165,9 @@ public:
                         authoring.intents=assembly_intents;
                         if (carry_presentation || edit_profile_geometry) {
                             auto occupied=retainedSlabIdentityNames(*source,true);
+                            for (const auto& [binding,alias]:embedded_assembly_presentation_ids(source->entities())) {
+                                (void)binding; occupied.insert(alias);
+                            }
                             if (base) {
                                 for (const auto& [id,entity]:base->preview_snapshot().entities()) {
                                     occupied.insert(id);
@@ -71174,15 +71178,36 @@ public:
                                     (void)binding; occupied.insert(alias);
                                 }
                             }
+                            std::set<std::string,std::less<>> allocated_component_ids;
                             const auto fresh=[&](const char* kind) {
-                                auto id=new_id(kind);while (!occupied.insert(id).second) id=new_id(kind);return id;
+                                auto id=new_id(kind);
+                                while (occupied.contains(id)) id=new_id(kind);
+                                occupied.insert(id);
+                                allocated_component_ids.insert(id);
+                                return id;
                             };
                             for (const auto& replacement:component_plan.replacement_roots) {
                                 PhaseAssemblyInstanceReplacementIdentity ids;
-                                ids.proposed_entity_id=fresh("proposed-component");
-                                ids.proposed_instance_id=*ids.proposed_entity_id;
+                                if (replacement.root.document_entity_id) {
+                                    ids.proposed_entity_id=fresh("proposed-component");
+                                    ids.proposed_instance_id=*ids.proposed_entity_id;
+                                } else {
+                                    ids.proposed_catalog_id=fresh("private-component-catalog");
+                                    std::string alias;
+                                    do {
+                                        ids.proposed_instance_id=fresh("proposed-component");
+                                        alias=*ids.proposed_catalog_id+":instance:"+ids.proposed_instance_id;
+                                    } while (occupied.contains(alias));
+                                    // Fresh catalog/row identities and a reserved unused raw
+                                    // alias keep the actual presentation resolver in its
+                                    // unambiguous mode. Retained names include escaped aliases.
+                                    occupied.insert(alias);
+                                    allocated_component_ids.insert(alias);
+                                }
                                 authoring.allocation.roots.emplace(replacement.root,std::move(ids));
                             }
+                            for (const auto& registry_id:component_plan.required_membership_registry_ids)
+                                authoring.allocation.membership_entity_ids.emplace(registry_id,fresh("requiredcompanion"));
                             authoring.carry_presentation_references=true;
                             for (const auto& id:inspect_phase_assembly_instance_property_presentation_overlay_ids(source->entities(),assembly_intents))
                                 authoring.presentation_overlay_identities.emplace(id,fresh("proposed-component-dimension"));
@@ -71191,6 +71216,9 @@ public:
                                     (void)target;
                                     authoring.dimension_identities.emplace(id,fresh("proposed-component-dimension"));
                                 }
+                            // Admit the complete allocation once, before preparation,
+                            // rather than replaying retained receipts for every ID.
+                            validate_retained_authoring_fresh_identities(source->history(),source->history().size(),allocated_component_ids);
                             return prepare_component_presentation_property_edit(*source,authoring,base ? &*base : nullptr,message);
                         }
                         return prepare_coordinated_component_property_edit(*source,authoring,*base,message);

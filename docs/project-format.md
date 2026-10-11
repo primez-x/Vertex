@@ -1,4 +1,20 @@
-# Vertex project formats v1 through v241
+# Vertex project formats v1 through v242
+
+Reader242 adds closed copy request2 under exclusive command67. It retains
+request1's source fences, targets, transforms, dimension identities and message,
+and adds `membership_entity_ids`: an exact map from actual source registry IDs
+to caller-reserved fresh required companion entity IDs. Actual source replay
+derives the required roster from unlisted rows' catalog and retained placement
+ancestry. Conflicting registries refuse. Only fresh destination rows enroll in
+the saved baseline or active proposed partition; originals remain unchanged
+and no demolition is inferred. Phase-free unlisted copies remain unlisted.
+Declared rows reuse their existing actual companion as before. Missing,
+extraneous or colliding allocations refuse before candidate publication.
+Current and undone typed receipts retain the companion identities even after
+the allocated entity leaves the head. Request1 retains its original refusal
+for phase-owned unlisted sources. Native extraction240 follows reader242.
+Companion-edit quarantine and controller integration remain separate unfinished
+work; this source contract does not establish runtime acceptance.
 
 Reader241 retains the exclusive source-bound qualified embedded assembly copy
 command67. Its closed envelope contains only `version`, `kind`,

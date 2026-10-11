@@ -384,7 +384,7 @@ std::uint32_t required_format_version_internal(const DocumentSnapshot& snapshot,
     };
     const auto qualified_copy_reader_floor=[](const nlohmann::json& root) {
         std::uint64_t nodes{};
-        const auto visit=[&](const auto& self,const nlohmann::json& value,unsigned depth)->bool {
+        const auto visit=[&](const auto& self,const nlohmann::json& value,unsigned depth)->std::uint32_t {
             if (++nodes>ProjectStore::maximum_json_values || depth>64)
                 storage_error(StorageErrorCode::resource_limit,"Qualified copy reader-floor scan exceeds its command budget");
             if (!value.is_object() || value.value("kind",nlohmann::json())!="apply_boundary_constraint_changes" ||
@@ -400,12 +400,12 @@ std::uint32_t required_format_version_internal(const DocumentSnapshot& snapshot,
                 if (version==67) {
                     if (!command->qualified_embedded_assembly_copy_completion ||
                         command->qualified_embedded_assembly_copy_intent.is_null()) return false;
-                    (void)validate_qualified_embedded_assembly_copy_request(command->qualified_embedded_assembly_copy_intent);
-                    return true;
+                    const auto request=validate_qualified_embedded_assembly_copy_request(command->qualified_embedded_assembly_copy_intent);
+                    return request.at("version")==2 ? 242U : 241U;
                 }
                 const auto child=[&](const nlohmann::json& owner,const char* name) {
                     const auto found=owner.find(name);
-                    return found!=owner.end() && !found->is_null() && self(self,*found,depth+1);
+                    return found!=owner.end() && !found->is_null() ? self(self,*found,depth+1) : 0U;
                 };
                 if (version==19 || version==21 || version==22 || version==23 || version==41 || version==42)
                     return child(value,"proof");
@@ -415,7 +415,7 @@ std::uint32_t required_format_version_internal(const DocumentSnapshot& snapshot,
                     return child(value.at("ordinary_selection_removal_intent"),"base_command");
                 if (version==45) {
                     const auto& intent=value.at("mixed_selection_removal_intent");
-                    return child(intent,"ordinary_command") || child(intent,"child_command");
+                    return std::max(child(intent,"ordinary_command"),child(intent,"child_command"));
                 }
                 // Canonical decoding above owns the historical room wrapper's
                 // exact dialect and permitted inner command. It still refuses
@@ -429,7 +429,7 @@ std::uint32_t required_format_version_internal(const DocumentSnapshot& snapshot,
             }
             return false;
         };
-        return visit(visit,root,0) ? 241U : 0U;
+        return visit(visit,root,0);
     };
     const auto typed_edit_reader_floor=[](const nlohmann::json& root) {
         std::uint64_t nodes{};
@@ -1511,7 +1511,7 @@ std::uint32_t required_format_version_internal(const DocumentSnapshot& snapshot,
     };
     for (const auto& revision : snapshot.history()) {
         if (revision.phase_entity_import) required=std::max(required,160U);
-        if (required<241 && revision.boundary_constraint_changes)
+        if (required<242 && revision.boundary_constraint_changes)
             required=std::max(required,qualified_copy_reader_floor(command_to_json(Command{*revision.boundary_constraint_changes})));
         if (required<240 && revision.boundary_geometry_edit)
             required=std::max(required,typed_edit_reader_floor(encode_boundary_geometry_edit(*revision.boundary_geometry_edit)));
@@ -4056,6 +4056,7 @@ bool verify_sqlite_schema(sqlite3* database, bool allow_recovery = false) {
          sqlite3_column_int(user_version.get(), 0) != 239 &&
          sqlite3_column_int(user_version.get(), 0) != 240 &&
          sqlite3_column_int(user_version.get(), 0) != 241 &&
+         sqlite3_column_int(user_version.get(), 0) != 242 &&
          sqlite3_column_int(user_version.get(), 0) != 207 &&
          sqlite3_column_int(user_version.get(), 0) != 202 &&
          sqlite3_column_int(user_version.get(), 0) != 200 &&
@@ -4781,6 +4782,8 @@ DocumentSnapshot read_snapshot(sqlite3* database, RecoveryLedger* recovery = nul
     // here and authenticate the manifest with its stored version below.
     const auto required_format = required_format_version_internal(snapshot, format_number < 28);
     if (required_format > format_number) {
+        if (required_format>=242)
+            storage_error(StorageErrorCode::unsupported_format,"This project requires reader 242 for explicit companion allocation in source-bound embedded component copies");
         if (required_format>=241)
             storage_error(StorageErrorCode::unsupported_format,"This project requires reader 241 for source-bound qualified embedded assembly copies and their dimensions");
         if (required_format>=240)

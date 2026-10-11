@@ -14,6 +14,53 @@ changed source does not acquire runtime acceptance without later qualification.
 
 ## Current delivery state
 
+### October 11 explicit component-copy allocation continuation
+
+The preceding status turn changed no source. This continuation implements the
+missing explicit companion-allocation lane for same-catalog component copies.
+Closed request2 retains request1's source fences and exact dimension roster,
+adding only caller-reserved registry-to-companion identities. The actual source
+derives the complete required roster from an unlisted row's catalog and full
+active opening/corner placement ancestry. Conflicting actual registries refuse.
+Fresh copies alone join the saved baseline or active proposed partition;
+originals remain unchanged and no demolition is added. Declared roots retain
+their actual companion. Request1 keeps its phase-owned unlisted-copy refusal.
+Current and undone source/typed identity reservations include fresh companions.
+
+Document retention and project reader242/extraction240 carry request2. The
+reader maximum was still 240 despite existing copy retention requiring 241;
+this continuation corrects that maximum as well as the new reader floor.
+Current raw entity edits and phase imports cannot create/rewrite companions or
+append undeclared rows to qualified catalogs; historical replay remains outside
+that guard. This closes those two raw publication paths; generic completed
+boundary commands and the remaining typed writers still need universal
+command-derived transition admission.
+
+Properties now prepares independent owner/row or embedded private catalog/row
+allocations as appropriate, plus its exact required companion roster. It reserves
+retained raw/escaped aliases and admits typed allocation lifetime in one pass.
+The existing embedded refusal remains before this construction; it is prepared
+for controller completion, not an unlocked user workflow.
+
+The companion read-only latch and controller embedded-Properties refusal remain
+until every typed writer and controller composition has the required admission.
+Independent source review found that request2 could otherwise publish its first
+companion and strand Undo behind that latch. Current command67 now refuses a
+companion-bearing result before publication, matching the existing catalog-edit
+quarantine. Pure and chronological copy replay retain their source-derived
+allocation semantics. This is an implemented preparation/retention lane, not a
+currently available phase-owned copy workflow.
+Independent correction review found no remaining proved introduced P1/P2 in the
+assigned adapter/transport/request, history/reader, raw-write and controller
+allocation scope. Root reviewed the integrated interfaces, exact roster/role
+derivation, original preservation and allocation fences; scoped diff checks pass.
+This evidence is manual source review only.
+Profile/edge dimensions and the broader production gaps remain required. No
+builds, tests, new tests, scripts, probes, jobs, launches, packages or installations
+run under the source-only instruction. The installed candidate is unchanged;
+compilation, runtime interaction and user acceptance remain unverified. All ten
+production gates remain open.
+
 ### October 11 source-bound embedded component copy integration
 
 The profile collection and qualified consumer batch is committed and pushed as

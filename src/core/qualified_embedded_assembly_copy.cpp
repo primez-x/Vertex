@@ -24,6 +24,8 @@ constexpr std::size_t byte_limit = 4 * 1024 * 1024;
 constexpr std::size_t target_limit = 1000;
 constexpr std::size_t dimension_limit = 1000;
 constexpr std::size_t fresh_identity_limit = target_limit + dimension_limit;
+constexpr std::size_t membership_limit = 1000;
+constexpr std::size_t v2_fresh_identity_limit = fresh_identity_limit + membership_limit;
 constexpr Revision safe_revision_limit = 9'007'199'254'740'991ULL;
 
 [[noreturn]] void reject(const char* reason) {
@@ -163,9 +165,13 @@ Json encode_transform(const ArchitecturalGroupTransform& value) {
 }
 void admit_request(const Json& request) {
     Budget{}.read(request);
-    fields(request, {"version", "expected_revision", "source_snapshot_digest", "source_authoring_digest",
+    if (!request.is_object() || !request.contains("version") || !request.at("version").is_number_integer() ||
+        (request.at("version") != 1 && request.at("version") != 2)) reject("unsupported request version");
+    const bool v2 = request.at("version") == 2;
+    if (v2) fields(request, {"version", "expected_revision", "source_snapshot_digest", "source_authoring_digest",
+        "source_entities_digest", "source_saved_revision", "targets", "copied_dimension_ids", "membership_entity_ids", "message"});
+    else fields(request, {"version", "expected_revision", "source_snapshot_digest", "source_authoring_digest",
         "source_entities_digest", "source_saved_revision", "targets", "copied_dimension_ids", "message"});
-    if (!request.at("version").is_number_integer() || request.at("version") != 1) reject("unsupported request version");
     const auto expected = revision(request.at("expected_revision"));
     for (const auto* name : {"source_snapshot_digest", "source_authoring_digest", "source_entities_digest"}) digest(request.at(name));
     if (!request.at("source_saved_revision").is_null() && revision(request.at("source_saved_revision")) > expected)
@@ -175,6 +181,8 @@ void admit_request(const Json& request) {
     const auto& dimensions = request.at("copied_dimension_ids");
     if (!targets.is_array() || targets.empty() || targets.size() > target_limit) reject("copy requires 1 to 1000 roots");
     if (!dimensions.is_object() || dimensions.size() > dimension_limit) reject("copy dimension roster exceeds 1000");
+    if (v2 && (!request.at("membership_entity_ids").is_object() || request.at("membership_entity_ids").size() > membership_limit))
+        reject("copy companion roster exceeds 1000");
     std::set<QualifiedId> sources, destinations;
     std::set<std::string, std::less<>> raw_fresh, fresh_dimensions;
     std::optional<QualifiedId> preceding;
@@ -197,12 +205,23 @@ void admit_request(const Json& request) {
             reject("copy dimension identities overlap or repeat");
     }
     raw_fresh.insert(fresh_dimensions.begin(), fresh_dimensions.end());
-    if (raw_fresh.size() > fresh_identity_limit) reject("aggregate fresh identity roster exceeds bound");
+    if (v2) {
+        const auto& memberships = request.at("membership_entity_ids");
+        for (const auto& [registry, companion] : memberships.items()) {
+            identity(registry); const auto& destination = text(companion); identity(destination);
+            if (raw_fresh.contains(registry) || memberships.contains(destination) || !raw_fresh.insert(destination).second)
+                reject("copy companion identities overlap allocations or registry identities");
+        }
+    }
+    if (raw_fresh.size() > (v2 ? v2_fresh_identity_limit : fresh_identity_limit))
+        reject("aggregate fresh identity roster exceeds bound");
 }
 void admit_typed(std::span<const EmbeddedAssemblyGroupTarget> targets,
-    const ArchitecturalGroupTransform& fallback, const DimensionIds& dimensions, std::string_view message) {
+    const ArchitecturalGroupTransform& fallback, const DimensionIds& dimensions, std::string_view message,
+    const DimensionIds* memberships = nullptr) {
     if (targets.empty() || targets.size() > target_limit || dimensions.size() > dimension_limit)
         reject("typed copy target/dimension roster exceeds bound");
+    if (memberships && memberships->size() > membership_limit) reject("typed copy companion roster exceeds 1000");
     action_message(message);
     Budget budget; budget.add(2048); budget.text(message);
     // Reserve numeric slots, field names and punctuation before creating JSON.
@@ -216,6 +235,28 @@ void admit_typed(std::span<const EmbeddedAssemblyGroupTarget> targets,
     for (const auto& [original, copy] : dimensions) {
         identity(original); identity(copy); budget.add(4); budget.text(original); budget.text(copy);
     }
+    if (!memberships) return; // Preserve the historical v1 typed admission.
+    // Complete v2 allocation/byte admission before JSON construction or digests.
+    std::set<QualifiedId> sources, destinations;
+    std::set<std::string, std::less<>> fresh;
+    for (const auto& target : targets) {
+        if (!sources.emplace(target.catalog_id, target.instance_id).second)
+            reject("duplicate qualified copy source");
+        if (!destinations.emplace(target.catalog_id, *target.copy_instance_id).second)
+            reject("duplicate qualified destination");
+        fresh.insert(*target.copy_instance_id);
+    }
+    for (const auto& destination : destinations)
+        if (sources.contains(destination)) reject("destination overlaps a selected source");
+    for (const auto& [original, copy] : dimensions)
+        if (original == copy || !fresh.insert(copy).second) reject("copy dimension identities overlap or repeat");
+    budget.add(32);
+    for (const auto& [registry, companion] : *memberships) {
+        identity(registry); identity(companion); budget.add(4); budget.text(registry); budget.text(companion);
+        if (fresh.contains(registry) || memberships->contains(companion) || !fresh.insert(companion).second)
+            reject("copy companion identities overlap allocations or registry identities");
+    }
+    if (fresh.size() > v2_fresh_identity_limit) reject("aggregate fresh identity roster exceeds bound");
 }
 std::vector<EmbeddedAssemblyGroupTarget> decode_targets(const Json& request) {
     std::vector<EmbeddedAssemblyGroupTarget> result; result.reserve(request.at("targets").size());
@@ -226,6 +267,12 @@ std::vector<EmbeddedAssemblyGroupTarget> decode_targets(const Json& request) {
 DimensionIds decode_dimensions(const Json& request) {
     DimensionIds result;
     for (const auto& [original, copy] : request.at("copied_dimension_ids").items()) result.emplace(original, text(copy));
+    return result;
+}
+DimensionIds decode_memberships(const Json& request) {
+    DimensionIds result;
+    for (const auto& [registry, companion] : request.at("membership_entity_ids").items())
+        result.emplace(registry, text(companion));
     return result;
 }
 void authenticate(const DocumentSnapshot& source, const Json& request) {
@@ -269,6 +316,37 @@ QualifiedEmbeddedAssemblyCopyPreparation prepare_qualified_embedded_assembly_cop
         {"targets", std::move(rows)}, {"copied_dimension_ids", dimensions}, {"message", std::move(message)}};
     return replay_qualified_embedded_assembly_copy_preparation(source, request);
 }
+QualifiedEmbeddedAssemblyCopyPreparation prepare_qualified_embedded_assembly_copy(const DocumentSnapshot& source,
+    std::span<const EmbeddedAssemblyGroupTarget> targets, const ArchitecturalGroupTransform& fallback,
+    const DimensionIds& dimensions, const DimensionIds& memberships, std::string message) {
+    admit_typed(targets, fallback, dimensions, message, &memberships);
+    if (source.revision() > safe_revision_limit) reject("source revision is not a safe integer");
+    if (source.saved_revision_optional() && *source.saved_revision_optional() > source.revision())
+        reject("saved revision exceeds captured revision");
+    std::vector<const EmbeddedAssemblyGroupTarget*> ordered; ordered.reserve(targets.size());
+    for (const auto& target : targets) ordered.push_back(&target);
+    std::sort(ordered.begin(), ordered.end(), [](const auto* a, const auto* b) {
+        return std::tie(a->catalog_id, a->instance_id) < std::tie(b->catalog_id, b->instance_id);
+    });
+    Json rows = Json::array();
+    for (const auto* target : ordered) rows.push_back({{"catalog_id", target->catalog_id},
+        {"instance_id", target->instance_id}, {"copy_instance_id", *target->copy_instance_id},
+        {"transform", encode_transform(target->transform ? *target->transform : fallback)}});
+    // Fixed-size digest placeholders permit complete raw request admission
+    // before hashing or deriving any source copy. Replace only those fields.
+    const std::string pending_digest(64, '0');
+    Json request{{"version", 2}, {"expected_revision", source.revision()},
+        {"source_snapshot_digest", pending_digest}, {"source_authoring_digest", pending_digest},
+        {"source_entities_digest", pending_digest},
+        {"source_saved_revision", source.saved_revision_optional() ? Json(*source.saved_revision_optional()) : Json(nullptr)},
+        {"targets", std::move(rows)}, {"copied_dimension_ids", dimensions},
+        {"membership_entity_ids", memberships}, {"message", std::move(message)}};
+    admit_request(request); admit_retained_assembly_authoring_source(source);
+    request.at("source_snapshot_digest") = document_snapshot_digest(source);
+    request.at("source_authoring_digest") = document_authoring_source_digest_v2(source);
+    request.at("source_entities_digest") = entity_map_digest(source.entities());
+    return replay_qualified_embedded_assembly_copy_preparation(source, request);
+}
 QualifiedEmbeddedAssemblyCopyPreparation replay_qualified_embedded_assembly_copy_preparation(
     const DocumentSnapshot& source, const Json& request) {
     admit_request(request); admit_retained_assembly_authoring_source(source); authenticate(source, request);
@@ -276,8 +354,11 @@ QualifiedEmbeddedAssemblyCopyPreparation replay_qualified_embedded_assembly_copy
     const auto dimensions = decode_dimensions(request);
     // Every target has its actual operator. The unused fallback supplies no
     // allocator, candidate-map, Document fork or partial publication authority.
-    auto entities = prepare_qualified_embedded_assembly_copy_entities(source, targets,
-        ArchitecturalGroupTransform{}, revision(request.at("expected_revision")), dimensions);
+    auto entities = request.at("version") == 1 ?
+        prepare_qualified_embedded_assembly_copy_entities(source, targets,
+            ArchitecturalGroupTransform{}, revision(request.at("expected_revision")), dimensions) :
+        prepare_qualified_embedded_assembly_copy_entities(source, targets,
+            ArchitecturalGroupTransform{}, revision(request.at("expected_revision")), dimensions, decode_memberships(request));
     return {request, std::move(entities)};
 }
 void require_qualified_embedded_assembly_copy_source_current(const DocumentSnapshot& source,

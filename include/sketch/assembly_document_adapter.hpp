@@ -4,6 +4,7 @@
 #include "sketch/document.hpp"
 #include <cstdint>
 #include <span>
+#include <set>
 #include <string_view>
 #include <utility>
 
@@ -263,6 +264,23 @@ struct EmbeddedAssemblyGroupTarget {
     const DocumentSnapshot& source, std::span<const EmbeddedAssemblyGroupTarget> targets,
     const ArchitecturalGroupTransform& transform, Revision expected_revision,
     const std::map<std::string, std::string, std::less<>>& copied_dimension_ids = {});
+// Source-only allocation plan for actual unlisted source cohorts. Retained-source
+// admission requires the existing editing authority; no Document/preview is
+// created. Declared roots reuse their exact companion; phase-free roots require
+// no allocation. Carrier
+// and complete opening/corner ancestry must be active and agree on one registry.
+[[nodiscard]] std::set<std::string, std::less<>> required_qualified_embedded_copy_membership_registries(
+    const DocumentSnapshot& source, std::span<const EmbeddedAssemblyGroupTarget> targets);
+// Explicit enrollment for unlisted phase-owned sources. The allocation map must
+// name exactly the planned registries and fresh required companion entity IDs.
+// Only destinations are enrolled in the actual saved baseline/proposed choice;
+// originals remain unchanged. Declared copies extend their actual companion;
+// unlisted copies use fresh companions. No identities are allocated.
+[[nodiscard]] AssemblyDocumentEntities prepare_qualified_embedded_assembly_copy_entities(
+    const DocumentSnapshot& source, std::span<const EmbeddedAssemblyGroupTarget> targets,
+    const ArchitecturalGroupTransform& transform, Revision expected_revision,
+    const std::map<std::string, std::string, std::less<>>& copied_dimension_ids,
+    const std::map<std::string, std::string, std::less<>>& membership_entity_ids);
 // Materialize each selected embedded root as a fresh independently editable
 // document instance sharing its immutable source catalog. Here copy_instance_id
 // is required and names a fresh document entity, not an appended catalog row.
