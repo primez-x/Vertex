@@ -1,8 +1,12 @@
 #include "sketch/phase_wall_replacement.hpp"
 
 #include "sketch/annotation_entity_codec.hpp"
+#include "sketch/architecture.hpp"
+#include "sketch/assembly_document_adapter.hpp"
+#include "sketch/assembly_geometry.hpp"
 #include "sketch/assembly_model.hpp"
 #include "sketch/assembly_phase_membership.hpp"
+#include "sketch/assembly_phase_membership_transport.hpp"
 #include "sketch/boundary_dimension.hpp"
 #include "sketch/boundary_integrity.hpp"
 #include "sketch/boundary_receipt.hpp"
@@ -14,11 +18,13 @@
 #include "sketch/model_phases.hpp"
 #include "sketch/measurement_linework.hpp"
 #include "sketch/measurement_linework_source.hpp"
+#include "sketch/opening_host_geometry.hpp"
 #include "sketch/physical_wall_room_data.hpp"
 #include "sketch/project_organization.hpp"
 #include "sketch/sheet_view_entity_codec.hpp"
-#include "sketch/wall_measurement.hpp"
+#include "sketch/site_frame.hpp"
 #include "sketch/wall_layer_stack_edit.hpp"
+#include "sketch/wall_measurement.hpp"
 
 #include <algorithm>
 #include <cctype>
@@ -27,6 +33,8 @@
 #include <stdexcept>
 #include <string_view>
 #include <utility>
+
+#include <Standard_Failure.hxx>
 
 namespace sketch {
 namespace {
@@ -80,6 +88,172 @@ void diagnostic(PhaseWallReplacementPlan& plan, const std::string& id, const std
     const PhaseWallReplacementDiagnostic item{id, reason, true};
     if (std::find(plan.diagnostics.begin(), plan.diagnostics.end(), item) == plan.diagnostics.end())
         plan.diagnostics.push_back(item);
+}
+const Json* field(const Json& value, const char* key) {
+    if (!value.is_object()) return nullptr;
+    const auto found = value.find(key);
+    return found == value.end() ? nullptr : &*found;
+}
+bool hosted_root_active(const PhaseWallReplacementEntities& source, const ConstraintPhaseScope& scope,
+    const PhaseWallReplacementHostedInstanceKey& root, const std::string& host) {
+    return !scope.assembly_memberships.owners.contains(root) ||
+        (!scope.assembly_memberships.inactive_roots.contains(root) &&
+            !assembly_host_inactive_in_phase(source, scope.inactive_owner_ids, host));
+}
+// Native admission follows the actual profile/legacy host-copy split. Cache
+// each real wall/ opening body and charge layered-cut work before fabrication.
+struct HostedGeometryAdmission {
+    AssemblyExpansionBudget expansion;
+    std::size_t native_work{};
+    std::map<std::string, TopoDS_Shape, std::less<>> hosts;
+    TopoDS_Shape wall_shape(const PhaseWallReplacementEntities& source, const ConstraintPhaseScope& scope,
+        const std::string& id) {
+        if (const auto found = hosts.find(id); found != hosts.end()) return found->second;
+        std::vector<const Entity*> cuts;
+        for (const auto& [cut_id, entity] : source)
+            if (entity.type == "opening" && !scope.inactive_owner_ids.contains(cut_id) &&
+                entity.properties.value("wall_id", std::string{}) == id) {
+                if (cuts.size() >= 128) reject("hosted wall cut budget exceeded");
+                cuts.push_back(&entity);
+            }
+        Wall wall; std::string error;
+        if (!read_document_wall(resolve_vertical_placement(source, source.at(id)), cuts, wall, error)) reject(error);
+        validate_wall_semantics(wall);
+        const auto layers = std::max<std::size_t>(1, wall.layers.size());
+        if (layers > 32) reject("hosted wall layer budget exceeded");
+        const auto work = layers * (wall.openings.size() + 1);
+        if (work > 262144 - native_work) reject("hosted native geometry budget exceeded");
+        native_work += work;
+        const auto shape = make_wall(wall);
+        hosts.emplace(id, shape); return shape;
+    }
+    void admit(const PhaseWallReplacementEntities& source, const ConstraintPhaseScope& scope,
+        const AssemblyModel& model, const AssemblyInstance& instance) try {
+        if (!instance.placement) reject("hosted component requires an actual placement");
+        const auto& placement = *instance.placement;
+        const auto host = source.find(placement.host_entity_id);
+        if (host == source.end() || (host->second.type != "wall" && host->second.type != "opening") ||
+            assembly_host_inactive_in_phase(source, scope.inactive_owner_ids, host->first))
+            reject("hosted component requires its actual active wall/opening host");
+        // Context is owned by the actual catalog and host, never a synthetic row.
+        (void)resolve_site_presentation(source, host->first);
+        const auto expanded = model.expand(instance, expansion);
+        if (!expanded.profiles.empty()) {
+            if (host->second.type == "wall") (void)wall_shape(source, scope, host->first);
+            else {
+                std::string wall_id, error;
+                if (!read_document_wall_id(host->second, wall_id, error) || !source.contains(wall_id) ||
+                    source.at(wall_id).type != "wall") reject("hosted opening has no actual wall");
+                (void)wall_shape(source, scope, wall_id);
+            }
+            if (make_assembly_geometry(expanded).shape.IsNull()) reject("hosted profiles have no native body");
+            return;
+        }
+        auto found = hosts.find(host->first);
+        if (found == hosts.end()) {
+            const auto shape = host->second.type == "wall" ? wall_shape(source, scope, host->first)
+                : make_document_opening_host_shape(source, host->first, &native_work);
+            found = hosts.emplace(host->first, shape).first;
+        }
+        (void)transform_assembly_shape(found->second,
+            {{placement.translation_m.x, placement.translation_m.y, placement.translation_z_m},
+                placement.rotation_radians, placement.scale, placement.mirrored_y, placement.vertical_scale});
+    } catch (const Standard_Failure& error) {
+        reject(std::string("hosted native admission failed: ") + error.what());
+    }
+};
+// Local definition/material namespaces remain exact. Only admitted qualified
+// row declarations and host bindings are released from the opaque scan.
+Entity catalog_remainder(Entity scratch, const Ids& released_rows) {
+    auto& model = scratch.properties.at("model");
+    for (auto& material : model.at("materials")) material.erase("id");
+    const auto clear_overrides = [](Json& row) { row.erase("material_overrides"); };
+    for (auto& type : model.at("types")) {
+        type.erase("id"); type.erase("materials");
+        if (type.contains("profiles")) for (auto& profile : type.at("profiles")) {
+            profile.erase("id"); profile.erase("material_slot");
+        }
+        if (type.contains("parts")) for (auto& part : type.at("parts")) {
+            part.erase("id"); part.erase("type_id"); clear_overrides(part);
+        }
+    }
+    for (auto& row : model.at("instances")) {
+        if (released_rows.contains(row.at("id").get<std::string>())) {
+            row.erase("id");
+            if (row.contains("placement")) row.at("placement").erase("host_entity_id");
+        }
+        row.erase("type_id"); clear_overrides(row);
+        if (row.contains("nested_overrides")) for (auto& change : row.at("nested_overrides")) {
+            change.erase("part_path"); clear_overrides(change);
+        }
+    }
+    return scratch;
+}
+Ids discover_hosted_instances(PhaseWallReplacementPlan& plan, const PhaseWallReplacementEntities& source,
+    const Ids& owners, const ConstraintPhaseScope& scope, const ProjectOrganization& organization,
+    const std::map<std::string, std::string, std::less<>>& memberships, const Ids& baseline) {
+    Ids catalogs;
+    HostedGeometryAdmission geometry;
+    for (const auto& [id, entity] : source) {
+        if (entity.type != "assembly_model") continue;
+        const auto raw_model = field(entity.properties, "model");
+        const auto rows = raw_model ? field(*raw_model, "instances") : nullptr;
+        if (!rows || !rows->is_array()) continue;
+        bool affected = false;
+        for (const auto& row : *rows) {
+            const auto placement = field(row, "placement");
+            const auto host = placement ? field(*placement, "host_entity_id") : nullptr;
+            const auto local = field(row, "id");
+            if (host && host->is_string() && owners.contains(host->get_ref<const std::string&>()) &&
+                (!local || !local->is_string() || hosted_root_active(source, scope,
+                    {id, local->get<std::string>()}, host->get_ref<const std::string&>()))) affected = true;
+        }
+        if (!affected) continue;
+        try {
+            const auto member = memberships.find(id);
+            if (member != memberships.end() && (member->second != plan.registry_id || !baseline.contains(id)))
+                reject("hosted catalog support is outside the actual target baseline registry");
+            for (const auto& [key, type] : std::vector<std::pair<const char*, const char*>>{
+                {"property_id", "property"}, {"building_id", "building"}, {"floor_id", "floor"}, {"layer_id", "layer"}}) {
+                if (!entity.properties.contains(key)) continue;
+                const auto target = entity.properties.at(key).get<std::string>();
+                if (!source.contains(target) || source.at(target).type != type) reject("hosted catalog context is unresolved");
+            }
+            const auto node = organization.nodes.find(id);
+            if (node != organization.nodes.end() && !node->second.issues.empty()) reject("hosted catalog drawing context is contradictory");
+            (void)organization.drawing_context(id);
+            (void)resolve_vertical_placement(source, entity);
+            (void)resolve_site_presentation(source, id);
+            const auto model = AssemblyModel::from_json(*raw_model);
+            Ids released, selected;
+            for (const auto& instance : model.instances()) {
+                if (!instance.placement || !owners.contains(instance.placement->host_entity_id)) continue;
+                const PhaseWallReplacementHostedInstanceKey key{id, instance.id};
+                if (!hosted_root_active(source, scope, key, instance.placement->host_entity_id)) {
+                    released.insert(instance.id); continue;
+                }
+                const auto row_owner = scope.assembly_memberships.owners.find(key);
+                if (row_owner != scope.assembly_memberships.owners.end() && row_owner->second.registry_id != plan.registry_id)
+                    reject("hosted row and replacement host belong to different actual registries");
+                if (row_owner == scope.assembly_memberships.owners.end() && scope.inactive_owner_ids.contains(id))
+                    reject("unlisted hosted row retains inactive legacy catalog support");
+                geometry.admit(source, scope, model, instance);
+                plan.required_hosted_instance_ids.push_back(key);
+                selected.insert(instance.id); released.insert(instance.id);
+            }
+            auto remainder = catalog_remainder(entity, released);
+            Ids opaque_ids = owners; opaque_ids.insert(id); opaque_ids.insert(selected.begin(), selected.end());
+            if (touches(remainder.properties, opaque_ids) || touches(remainder.extensions, opaque_ids))
+                reject("hosted catalog contains an affected opaque reference without a qualified copy codec");
+            catalogs.insert(id);
+            if (owners.size() + catalogs.size() + plan.required_hosted_instance_ids.size() > maximum_replacements)
+                reject("hosted replacement identity budget exceeded");
+        } catch (const std::exception& error) {
+            diagnostic(plan, id, "affected hosted catalog requires supported typed source admission: " + std::string(error.what()));
+        }
+    }
+    std::sort(plan.required_hosted_instance_ids.begin(), plan.required_hosted_instance_ids.end());
+    return catalogs;
 }
 Wall decoded_wall(const PhaseWallReplacementEntities& source, const std::string& id) {
     Wall wall; std::string error;
@@ -413,7 +587,7 @@ bool PhaseWallReplacementPlan::ready() const noexcept {
 PhaseWallReplacementPlan inspect_phase_wall_replacement_plan(
     const PhaseWallReplacementEntities& source, const std::vector<std::string>& seed_wall_ids,
     const std::string& registry_id, const std::string& alternative_id, bool complete_presentations,
-    bool complete_corner_windows) {
+    bool complete_corner_windows, bool complete_hosted_instances) {
     try {
         identity(registry_id); identity(alternative_id);
         if (source.size() > maximum_entities) reject("source entity budget exceeded");
@@ -422,6 +596,15 @@ PhaseWallReplacementPlan inspect_phase_wall_replacement_plan(
             if (id.empty() || entity.id != id || !entity.properties.is_object() || !entity.extensions.is_object())
                 reject("source must contain actual identified entity envelopes");
             occupied.values.insert(id); occupied.read(entity.properties); occupied.read(entity.extensions);
+        }
+        AssemblyCatalogTransferBudget catalog_work;
+        if (complete_hosted_instances) {
+            // Complete-map phase and alias resolvers decode catalog rows too.
+            // Admit their raw graph work before the first semantic decoder.
+            for (const auto& [id, entity] : source) {
+                (void)id;
+                if (entity.type == "assembly_model") admit_existing_assembly_catalog_work(entity, catalog_work);
+            }
         }
         if (!source.contains(registry_id) || source.at(registry_id).type != "model_phases") reject("registry is not an actual model_phases entity");
         const auto model = ModelPhases::from_json(source.at(registry_id).properties.at("model"));
@@ -440,6 +623,7 @@ PhaseWallReplacementPlan inspect_phase_wall_replacement_plan(
         plan.registry_id = registry_id; plan.alternative_id = alternative_id; plan.seed_wall_ids = seed_wall_ids;
         plan.complete_presentations = complete_presentations;
         plan.complete_corner_windows = complete_corner_windows;
+        plan.complete_hosted_instances = complete_hosted_instances;
         if (seed_wall_ids.empty() || seed_wall_ids.size() > maximum_replacements) reject("requires a bounded nonempty explicit wall seed");
         std::sort(plan.seed_wall_ids.begin(), plan.seed_wall_ids.end());
         if (std::adjacent_find(plan.seed_wall_ids.begin(), plan.seed_wall_ids.end()) != plan.seed_wall_ids.end()) reject("wall seeds must be unique");
@@ -768,6 +952,13 @@ PhaseWallReplacementPlan inspect_phase_wall_replacement_plan(
             child = children.erase(child);
         }
         if (owners.size() + children.size() > maximum_replacements) reject("replacement entity/child budget exceeded");
+        const auto catalogs = complete_hosted_instances ? discover_hosted_instances(plan, source, owners,
+            scope, organization, memberships, baseline) : Ids{};
+        Ids presentation_owners = owners;
+        if (complete_hosted_instances) {
+            const auto aliases = embedded_assembly_presentation_ids(source);
+            for (const auto& key : plan.required_hosted_instance_ids) presentation_owners.insert(aliases.at(key));
+        }
         // Distinct source owners cannot silently share a remapped child ID.
         // Inspect typed owned identities globally, including inactive designs.
         enum class ChildOwnerKind { physical_entity, sheet_view };
@@ -811,8 +1002,8 @@ PhaseWallReplacementPlan inspect_phase_wall_replacement_plan(
                 try {
                     const auto views = decode_sheet_view_entity(entity);
                     for (const auto& view : views.views()) for (const auto& overlay : view.overlays) {
-                        if (owners.contains(overlay.object_id) ||
-                            (overlay.dimension_binding && owners.contains(overlay.dimension_binding->object_id)))
+                        if (presentation_owners.contains(overlay.object_id) ||
+                            (overlay.dimension_binding && presentation_owners.contains(overlay.dimension_binding->object_id)))
                             children.insert(overlay.id);
                         // Scan the complete roster even when an unrelated
                         // retained overlay already aliases an entity. A later
@@ -823,7 +1014,7 @@ PhaseWallReplacementPlan inspect_phase_wall_replacement_plan(
                             ambiguous_children.insert(overlay.id);
                     }
                 } catch (const std::exception& error) {
-                    if (touches(entity.properties, owners) || touches(entity.extensions, owners))
+                    if (touches(entity.properties, presentation_owners) || touches(entity.extensions, presentation_owners))
                         diagnostic(plan, id, "affected sheet/view record is unsupported: " + std::string(error.what()));
                 }
             }
@@ -833,7 +1024,9 @@ PhaseWallReplacementPlan inspect_phase_wall_replacement_plan(
                 diagnostic(plan, child, "replacement child identity is owned by multiple actual source owners");
             if (owners.size() + children.size() > maximum_replacements) reject("replacement entity/child budget exceeded");
         }
-        Ids affected = owners; affected.insert(children.begin(), children.end());
+        if (owners.size() + catalogs.size() + children.size() + plan.required_hosted_instance_ids.size() > maximum_replacements)
+            reject("replacement entity/child/hosted budget exceeded");
+        Ids affected = presentation_owners; affected.insert(children.begin(), children.end());
         for (const auto& id : owners) {
             if (children.contains(id)) reject("entity and owned-child identities overlap: " + id);
             const auto member = memberships.find(id);
@@ -881,6 +1074,11 @@ PhaseWallReplacementPlan inspect_phase_wall_replacement_plan(
                             inactive_rows.insert(instance.id);
                             continue;
                         }
+                        if (complete_hosted_instances && std::binary_search(plan.required_hosted_instance_ids.begin(),
+                            plan.required_hosted_instance_ids.end(), root)) {
+                            inactive_rows.insert(instance.id);
+                            continue;
+                        }
                         // This historical plan has no catalog-qualified row
                         // allocation or materialization authority. Retaining
                         // the refusal prevents silently activating a host copy.
@@ -892,6 +1090,7 @@ PhaseWallReplacementPlan inspect_phase_wall_replacement_plan(
                     for (auto& row : remainder.properties.at("model").at("instances"))
                         if (inactive_rows.contains(row.at("id").get<std::string>()))
                             row.at("placement").erase("host_entity_id");
+                    if (complete_hosted_instances) remainder = catalog_remainder(entity, inactive_rows);
                     if (touches(remainder.properties, affected) || touches(remainder.extensions, affected))
                         diagnostic(plan, id, "affected dependent has no safe typed replacement codec; original remains preserved");
                 } catch (const std::exception& error) {
@@ -922,6 +1121,8 @@ PhaseWallReplacementPlan inspect_phase_wall_replacement_plan(
                 diagnostic(plan, id, "affected dependent has no safe typed replacement codec; original remains preserved");
         }
         plan.required_entity_ids.assign(owners.begin(), owners.end());
+        plan.required_entity_ids.insert(plan.required_entity_ids.end(), catalogs.begin(), catalogs.end());
+        std::sort(plan.required_entity_ids.begin(), plan.required_entity_ids.end());
         plan.required_child_ids.assign(children.begin(), children.end());
         plan.affected_original_room_ids.assign(rooms.begin(), rooms.end());
         std::sort(plan.diagnostics.begin(), plan.diagnostics.end(), [](const auto& a, const auto& b) {
@@ -933,10 +1134,11 @@ PhaseWallReplacementPlan inspect_phase_wall_replacement_plan(
 
 PhaseWallReplacementResult replay_phase_wall_replacement(
     const PhaseWallReplacementEntities& source, const PhaseWallReplacementPlan& plan,
-    const PhaseWallReplacementIdentityMap& identities) {
+    const PhaseWallReplacementIdentityMap& identities,
+    const PhaseWallReplacementHostedInstanceIdentityMap& hosted_instance_identities) {
     try {
         const auto derived = inspect_phase_wall_replacement_plan(source, plan.seed_wall_ids, plan.registry_id,
-            plan.alternative_id, plan.complete_presentations, plan.complete_corner_windows);
+            plan.alternative_id, plan.complete_presentations, plan.complete_corner_windows, plan.complete_hosted_instances);
         if (derived != plan) reject("supplied plan differs from actual source discovery");
         if (!derived.ready()) reject("replacement has unresolved affected dependencies");
         Ids expected(derived.required_entity_ids.begin(), derived.required_entity_ids.end());
@@ -944,21 +1146,29 @@ PhaseWallReplacementResult replay_phase_wall_replacement(
         if (identities.size() != expected.size()) reject("requires the complete exact entity/child mapping");
         Strings occupied;
         for (const auto& [id, entity] : source) { occupied.values.insert(id); occupied.read(entity.properties); occupied.read(entity.extensions); }
+        EmbeddedAssemblyPresentationIds original_aliases;
+        Ids presentation_owners;
+        for (const auto& id : derived.required_entity_ids)
+            if (source.at(id).type != "assembly_model") presentation_owners.insert(id);
+        if (derived.complete_hosted_instances) {
+            original_aliases = embedded_assembly_presentation_ids(source);
+            for (const auto& [key, alias] : original_aliases) { (void)key; occupied.values.insert(alias); }
+            for (const auto& key : derived.required_hosted_instance_ids) presentation_owners.insert(original_aliases.at(key));
+        }
         Ids presentation_source_ids;
-        if (derived.complete_presentations) {
+        if (derived.complete_presentations || derived.complete_hosted_instances) {
             for (const auto* key : {"id", "type", "properties", "required", "extensions"}) occupied.values.insert(key);
             for (const auto& [id, entity] : source) { (void)id; occupied.values.insert(entity.type); }
-            const Ids owners(derived.required_entity_ids.begin(), derived.required_entity_ids.end());
             // Extend only names of actual affected overlays admitted by the
             // source plan. Physical children and all destinations stay strict.
             for (const auto& [id, entity] : source) {
                 (void)id;
                 if (entity.type != kSheetViewEntityType ||
-                    (!touches(entity.properties, owners) && !touches(entity.extensions, owners))) continue;
+                    (!touches(entity.properties, presentation_owners) && !touches(entity.extensions, presentation_owners))) continue;
                 const auto views = decode_sheet_view_entity(entity);
                 for (const auto& view : views.views()) for (const auto& overlay : view.overlays)
-                    if (owners.contains(overlay.object_id) ||
-                        (overlay.dimension_binding && owners.contains(overlay.dimension_binding->object_id)))
+                    if (presentation_owners.contains(overlay.object_id) ||
+                        (overlay.dimension_binding && presentation_owners.contains(overlay.dimension_binding->object_id)))
                         presentation_source_ids.insert(overlay.id);
             }
         }
@@ -970,8 +1180,36 @@ PhaseWallReplacementResult replay_phase_wall_replacement(
             identity(new_id);
             if (occupied.values.contains(new_id) || !fresh.insert(new_id).second) reject("fresh identity collision: " + new_id);
         }
+        const std::set<PhaseWallReplacementHostedInstanceKey> expected_instances(
+            derived.required_hosted_instance_ids.begin(), derived.required_hosted_instance_ids.end());
+        if (hosted_instance_identities.size() != expected_instances.size()) reject("requires exact qualified hosted instance mapping");
+        for (const auto& [key, new_id] : hosted_instance_identities) {
+            if (!expected_instances.contains(key)) reject("unrequested qualified hosted instance mapping");
+            identity(new_id);
+            if (occupied.values.contains(new_id) || !fresh.insert(new_id).second) reject("fresh hosted identity collision: " + new_id);
+        }
+        if (derived.complete_hosted_instances && fresh.size() > maximum_replacements) reject("replacement fresh identity budget exceeded");
+        if (derived.complete_hosted_instances && derived.required_entity_ids.size() > maximum_entities - source.size())
+            reject("final entity budget exceeded");
+        if (derived.complete_hosted_instances) {
+            // Each private replica initially copies its complete source
+            // envelope before narrowing rows. Bound the retained catalogs plus
+            // every full replica before the first whole-map/catalog copy.
+            AssemblyCatalogTransferBudget destination_work;
+            for (const auto& [id, entity] : source) {
+                (void)id;
+                if (entity.type == "assembly_model") admit_existing_assembly_catalog_work(entity, destination_work);
+            }
+            for (const auto& id : derived.required_entity_ids)
+                if (source.at(id).type == "assembly_model")
+                    admit_existing_assembly_catalog_work(source.at(id), destination_work);
+        }
         PhaseWallReplacementResult result{source, identities, {}, derived.affected_original_room_ids,
-            derived.room_constraint_ids_requiring_review, {}};
+            derived.room_constraint_ids_requiring_review, {}, {}};
+        AssemblyPhaseCopiedRoots declared_copied_roots;
+        AssemblyPhaseCopiedHosts declared_copied_hosts;
+        AssemblyCatalogTransferBudget copied_catalog_work;
+        const auto source_scope = derived.complete_hosted_instances ? constraint_phase_scope(source) : ConstraintPhaseScope{};
         const auto model = ModelPhases::from_json(source.at(plan.registry_id).properties.at("model"));
         auto model_ids = model.entity_ids(); auto alternatives = model.alternatives();
         const auto target = std::find_if(alternatives.begin(), alternatives.end(), [&](const auto& a) { return a.id == plan.alternative_id; });
@@ -1017,6 +1255,30 @@ PhaseWallReplacementResult replay_phase_wall_replacement(
                 }
                 (void)decode_identified_boundary_entity(copy);
                 if (const auto unsupported = validate_boundary_integrity({{copy.id, copy}})) reject(*unsupported);
+            } else if (copy.type == "assembly_model" && derived.complete_hosted_instances) {
+                const auto retained = p.at("model").at("instances");
+                auto& rows = p.at("model").at("instances");
+                rows = Json::array();
+                for (auto row : retained) {
+                    const PhaseWallReplacementHostedInstanceKey key{old_id, row.at("id").get<std::string>()};
+                    if (!expected_instances.contains(key)) continue;
+                    const auto host = row.at("placement").at("host_entity_id").get<std::string>();
+                    if (!identities.contains(host) || (source.at(host).type != "wall" && source.at(host).type != "opening"))
+                        reject("proposed hosted row lost its actual copied wall/opening host");
+                    const PhaseWallReplacementHostedInstanceKey destination{copy.id, hosted_instance_identities.at(key)};
+                    row.at("id") = destination.second;
+                    row.at("placement").at("host_entity_id") = identities.at(host);
+                    rows.push_back(std::move(row));
+                    if (!result.hosted_instance_original_to_proposed.emplace(key, destination).second)
+                        reject("duplicate qualified hosted copy");
+                    if (source_scope.assembly_memberships.owners.contains(key)) {
+                        declared_copied_roots.emplace(key, destination);
+                        declared_copied_hosts.emplace(host, identities.at(host));
+                    }
+                }
+                if (rows.empty()) reject("copied catalog requires its exact nonempty qualified roster");
+                admit_existing_assembly_catalog_work(copy, copied_catalog_work);
+                (void)AssemblyModel::from_json(p.at("model"));
             } else if (copy.type == "constraint") {
                 for (auto& binding : p.at("bindings")) for (const auto* key : {"owner_id", "segment_id", "vertex_id"}) remap_field(binding, key, identities);
                 for (const auto* key : {"wall_ids", "entity_ids"}) if (p.contains(key)) {
@@ -1041,7 +1303,7 @@ PhaseWallReplacementResult replay_phase_wall_replacement(
             else if (!result.entities.emplace(copy.id, copy).second) reject("copy insertion collides");
             if (is_model_phase_entity_type(copy.type)) {
                 model_ids.push_back(copy.id); target->proposed_ids.push_back(copy.id);
-                if (baseline.contains(old_id)) target->demolished_ids.push_back(old_id);
+                if (copy.type != "assembly_model" && baseline.contains(old_id)) target->demolished_ids.push_back(old_id);
             }
         }
         // Preserve the raw order of all original registry lists and every other
@@ -1052,18 +1314,59 @@ PhaseWallReplacementResult replay_phase_wall_replacement(
         for (auto& alternative : raw.at("alternatives")) if (alternative.at("id") == plan.alternative_id) {
             for (const auto& id : derived.required_entity_ids) if (is_model_phase_entity_type(source.at(id).type)) {
                 alternative.at("proposed_ids").push_back(identities.at(id));
-                if (baseline.contains(id)) alternative.at("demolished_ids").push_back(id);
+                if (source.at(id).type != "assembly_model" && baseline.contains(id)) alternative.at("demolished_ids").push_back(id);
             }
         }
         if (ModelPhases::from_json(raw).to_json() != final_model.to_json()) reject("registry reconstruction differs from canonical update");
         result.entities.at(plan.registry_id).properties["model"] = std::move(raw);
+        if (!declared_copied_roots.empty())
+            result.entities = transport_assembly_phase_memberships_for_host_copies(source, result.entities,
+                declared_copied_roots, declared_copied_hosts, plan.registry_id, plan.alternative_id);
+        auto presentation_identities = identities;
+        if (derived.complete_hosted_instances) {
+            if (result.hosted_instance_original_to_proposed.size() != expected_instances.size())
+                reject("copied hosted roster differs from actual qualified source discovery");
+            const auto final_aliases = embedded_assembly_presentation_ids(result.entities);
+            for (const auto& [key, alias] : original_aliases)
+                if (final_aliases.at(key) != alias) reject("replacement changed an original hosted presentation alias");
+            for (const auto& [key, destination] : result.hosted_instance_original_to_proposed) {
+                const auto& alias = final_aliases.at(destination);
+                if (occupied.values.contains(alias) || (fresh.contains(alias) && alias != destination.second))
+                    reject("proposed hosted presentation alias collision");
+                if (!presentation_identities.emplace(original_aliases.at(key), alias).second)
+                    reject("hosted presentation alias overlaps mapped owner identity");
+            }
+        }
         if (derived.complete_corner_windows && std::any_of(derived.required_entity_ids.begin(),
             derived.required_entity_ids.end(), [&](const auto& id) { return source.at(id).type == "corner_window"; }))
             validate_corner_window_state(result.entities);
         if (derived.complete_presentations)
-            complete_presentation(result.entities, source,
-                Ids(derived.required_entity_ids.begin(), derived.required_entity_ids.end()), identities);
+            complete_presentation(result.entities, source, presentation_owners, presentation_identities);
         const auto result_scope = constraint_phase_scope(result.entities);
+        if (derived.complete_hosted_instances) {
+            HostedGeometryAdmission geometry;
+            std::set<PhaseWallReplacementHostedInstanceKey> destinations;
+            for (const auto& [key, destination] : result.hosted_instance_original_to_proposed) {
+                (void)key; destinations.insert(destination);
+            }
+            for (const auto& id : derived.required_entity_ids) {
+                const auto& original = source.at(id);
+                const auto& retained = result.entities.at(id);
+                if (original != retained || original.properties.dump() != retained.properties.dump() ||
+                    original.extensions.dump() != retained.extensions.dump()) reject("replacement changed an original copy source");
+                if (original.type != "assembly_model") continue;
+                const auto& catalog = result.entities.at(identities.at(id));
+                const auto decoded = AssemblyModel::from_json(catalog.properties.at("model"));
+                for (const auto& instance : decoded.instances()) {
+                    const PhaseWallReplacementHostedInstanceKey key{catalog.id, instance.id};
+                    if (!destinations.contains(key) || !instance.placement)
+                        reject("proposed catalog contains an unrequested hosted row");
+                    if (!hosted_root_active(result.entities, result_scope, key, instance.placement->host_entity_id))
+                        reject("copied hosted row is inactive in the proposed design");
+                    geometry.admit(result.entities, result_scope, decoded, instance);
+                }
+            }
+        }
         Ids result_visible;
         for (const auto& [id, entity] : result.entities) if (!result_scope.inactive_owner_ids.contains(id)) result_visible.insert(id);
         const auto copied_measured_checks = measurement_linework_source_checks(result.entities, &result_visible);

@@ -2,6 +2,7 @@
 
 #include "sketch/document_digest.hpp"
 #include "sketch/project_store.hpp"
+#include "sketch/retained_authoring_identities.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -228,6 +229,8 @@ PhaseAssemblyInstancePropertyEditPreparation replay_phase_assembly_instance_prop
         validate_phase_assembly_instance_property_edit_fresh_identities(record.entities, result.fresh_identity_ids);
         for (const auto& id : result.fresh_identity_ids) if (record.assets.contains(id)) reject("fresh identity reuses retained asset identity");
     }
+    const std::set<std::string, std::less<>> fresh(result.fresh_identity_ids.begin(), result.fresh_identity_ids.end());
+    validate_retained_authoring_fresh_identities(source.history(), source.history().size(), fresh);
     // No raw ApplyEntityChanges preview: the enclosing typed composer must
     // complete dependencies and final Document admission before publication.
     return {request, std::move(result)};

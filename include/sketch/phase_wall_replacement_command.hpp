@@ -67,6 +67,10 @@ struct PhaseWallReplacementAuthoring {
     // to the complete scalar cohort. Requires at least one elevation intent;
     // historical leaves never acquire vertical edit authority implicitly.
     bool complete_vertical_profiles{false};
+    // Leaf eleven wraps the exact historical edit body and explicitly opts
+    // into catalog-qualified hosted row copying and changed-host carry.
+    bool complete_hosted_instances{false};
+    PhaseWallReplacementHostedInstanceIdentityMap hosted_instance_identities;
 };
 struct PhaseWallReplacementAuthoringPreview {
     PhaseWallReplacementResult replacement;

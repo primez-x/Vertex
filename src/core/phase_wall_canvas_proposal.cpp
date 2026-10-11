@@ -11,12 +11,31 @@
 #include <utility>
 
 namespace sketch {
+namespace {
+
+void allocate_hosted_instance_identities(
+    PhaseWallReplacementAuthoring& replacement,
+    const PhaseWallReplacementPlan& plan,
+    const std::function<std::string(std::string_view)>& allocate_fresh_identity) {
+    if (!replacement.complete_hosted_instances) return;
+    for (const auto& key : plan.required_hosted_instance_ids) {
+        // JSON preserves the exact qualified source even when either component
+        // contains delimiters. This is only an allocator tag; authority stays
+        // in the catalog/local-row pair used by strict replacement replay.
+        if (!replacement.hosted_instance_identities.contains(key)) {
+            const auto tag = nlohmann::json::array({key.first, key.second}).dump();
+            replacement.hosted_instance_identities.emplace(key, allocate_fresh_identity(tag));
+        }
+    }
+}
+
+} // namespace
 
 std::optional<PhaseWallCanvasProposal> prepare_phase_wall_canvas_proposal(
     const DocumentSnapshot& source,
     const ConstraintAuthoringIntent& semantic,
     const std::function<std::string(std::string_view original_id)>& allocate_fresh_identity,
-    bool complete_presentations, bool complete_corner_windows) {
+    bool complete_presentations, bool complete_corner_windows, bool complete_hosted_instances) {
     const auto requests = phase_wall_replacement_requests(source.entities(), semantic);
     if (requests.empty()) return std::nullopt;
     if (requests.size() != 1)
@@ -25,7 +44,8 @@ std::optional<PhaseWallCanvasProposal> prepare_phase_wall_canvas_proposal(
 
     const auto& request = requests.front();
     const auto plan = inspect_phase_wall_replacement_plan(source.entities(), request.seed_wall_ids,
-        request.registry_id, request.alternative_id, complete_presentations, complete_corner_windows);
+        request.registry_id, request.alternative_id, complete_presentations, complete_corner_windows,
+        complete_hosted_instances);
     if (!plan.ready()) {
         std::string reason = "The proposed wall replacement has unsupported dependencies.";
         for (const auto& diagnostic : plan.diagnostics) {
@@ -45,6 +65,7 @@ std::optional<PhaseWallCanvasProposal> prepare_phase_wall_canvas_proposal(
     PhaseWallReplacementAuthoring replacement;
     replacement.complete_presentations = complete_presentations;
     replacement.complete_corner_windows = complete_corner_windows;
+    replacement.complete_hosted_instances = complete_hosted_instances;
     replacement.registry_id = request.registry_id;
     replacement.alternative_id = request.alternative_id;
     replacement.seed_wall_ids = request.seed_wall_ids;
@@ -56,6 +77,7 @@ std::optional<PhaseWallCanvasProposal> prepare_phase_wall_canvas_proposal(
     };
     for (const auto& id : plan.required_entity_ids) allocate(id);
     for (const auto& id : plan.required_child_ids) allocate(id);
+    allocate_hosted_instance_identities(replacement, plan, allocate_fresh_identity);
     intent.wall_replacement = encode_phase_wall_replacement_authoring(replacement);
     // The outer encoder delegates to the strict replacement decoder and applies
     // the canonical semantic/source envelope and resource admission checks.
@@ -74,7 +96,7 @@ std::optional<PhaseWallCanvasProposal> prepare_phase_hosted_opening_canvas_propo
     const DocumentSnapshot& source,
     const std::vector<HostedOpeningProfileEditIntent>& profiles,
     const std::function<std::string(std::string_view original_id)>& allocate_fresh_identity,
-    bool complete_presentations, bool complete_corner_windows) {
+    bool complete_presentations, bool complete_corner_windows, bool complete_hosted_instances) {
     if (profiles.empty()) return std::nullopt;
     if (profiles.size() > 2048)
         throw std::invalid_argument("The proposed opening edit exceeds its target budget.");
@@ -92,6 +114,7 @@ std::optional<PhaseWallCanvasProposal> prepare_phase_hosted_opening_canvas_propo
     PhaseWallReplacementAuthoring replacement;
     replacement.complete_presentations = complete_presentations;
     replacement.complete_corner_windows = complete_corner_windows;
+    replacement.complete_hosted_instances = complete_hosted_instances;
     std::set<std::string, std::less<>> openings, hosts;
     bool nonshared = false;
     for (const auto& profile : profiles) {
@@ -130,7 +153,8 @@ std::optional<PhaseWallCanvasProposal> prepare_phase_hosted_opening_canvas_propo
         throw std::invalid_argument("Edit shared-baseline and other openings in separate operations.");
     replacement.seed_wall_ids.assign(hosts.begin(), hosts.end());
     const auto plan = inspect_phase_wall_replacement_plan(entities, replacement.seed_wall_ids,
-        replacement.registry_id, replacement.alternative_id, complete_presentations, complete_corner_windows);
+        replacement.registry_id, replacement.alternative_id, complete_presentations, complete_corner_windows,
+        complete_hosted_instances);
     if (!plan.ready()) {
         std::string reason = "The proposed opening replacement has unsupported dependencies.";
         for (const auto& diagnostic : plan.diagnostics) {
@@ -153,6 +177,7 @@ std::optional<PhaseWallCanvasProposal> prepare_phase_hosted_opening_canvas_propo
     };
     for (const auto& id : plan.required_entity_ids) allocate(id);
     for (const auto& id : plan.required_child_ids) allocate(id);
+    allocate_hosted_instance_identities(replacement, plan, allocate_fresh_identity);
     replacement.opening_profiles = profiles;
     intent.wall_replacement = encode_phase_wall_replacement_authoring(replacement);
     (void)encode_phase_constraint_authoring_intent(intent);
@@ -172,11 +197,12 @@ std::optional<PhaseWallCanvasProposal> prepare_phase_hosted_opening_rehost_propo
     const DocumentSnapshot& source,
     const std::vector<HostedOpeningRehostIntent>& rehosts,
     const std::function<std::string(std::string_view original_id)>& allocate_fresh_identity,
-    bool complete_presentations, bool complete_corner_windows) {
+    bool complete_presentations, bool complete_corner_windows, bool complete_hosted_instances) {
     const auto request=phase_hosted_opening_rehost_replacement_request(source.entities(),rehosts);
     if (!request) return std::nullopt;
     const auto plan=inspect_phase_wall_replacement_plan(source.entities(),request->seed_wall_ids,
-        request->registry_id,request->alternative_id,complete_presentations,complete_corner_windows);
+        request->registry_id,request->alternative_id,complete_presentations,complete_corner_windows,
+        complete_hosted_instances);
     if (!plan.ready()) {
         std::string reason="The proposed opening rehost has unsupported replacement dependencies.";
         for (const auto& diagnostic:plan.diagnostics) {
@@ -193,6 +219,7 @@ std::optional<PhaseWallCanvasProposal> prepare_phase_hosted_opening_rehost_propo
     PhaseWallReplacementAuthoring replacement;
     replacement.complete_presentations = complete_presentations;
     replacement.complete_corner_windows = complete_corner_windows;
+    replacement.complete_hosted_instances = complete_hosted_instances;
     replacement.registry_id=request->registry_id;
     replacement.alternative_id=request->alternative_id;
     replacement.seed_wall_ids=request->seed_wall_ids;
@@ -203,6 +230,7 @@ std::optional<PhaseWallCanvasProposal> prepare_phase_hosted_opening_rehost_propo
     };
     for (const auto& id:plan.required_entity_ids) allocate(id);
     for (const auto& id:plan.required_child_ids) allocate(id);
+    allocate_hosted_instance_identities(replacement, plan, allocate_fresh_identity);
     intent.wall_replacement=encode_phase_wall_replacement_authoring(replacement);
     (void)encode_phase_constraint_authoring_intent(intent);
     auto physical=inspect_phase_wall_replacement_authoring(source,intent);
@@ -213,11 +241,12 @@ std::optional<PhaseWallCanvasProposal> prepare_phase_hosted_opening_family_propo
     const DocumentSnapshot& source,
     const std::vector<HostedOpeningFamilyEditIntent>& families,
     const std::function<std::string(std::string_view original_id)>& allocate_fresh_identity,
-    bool complete_presentations, bool complete_corner_windows) {
+    bool complete_presentations, bool complete_corner_windows, bool complete_hosted_instances) {
     const auto request = phase_hosted_opening_family_replacement_request(source.entities(), families);
     if (!request) return std::nullopt;
     const auto plan = inspect_phase_wall_replacement_plan(source.entities(), request->seed_wall_ids,
-        request->registry_id, request->alternative_id, complete_presentations, complete_corner_windows);
+        request->registry_id, request->alternative_id, complete_presentations, complete_corner_windows,
+        complete_hosted_instances);
     if (!plan.ready()) {
         std::string reason = "The proposed opening family conversion has unsupported replacement dependencies.";
         for (const auto& diagnostic : plan.diagnostics) {
@@ -234,6 +263,7 @@ std::optional<PhaseWallCanvasProposal> prepare_phase_hosted_opening_family_propo
     PhaseWallReplacementAuthoring replacement;
     replacement.complete_presentations = complete_presentations;
     replacement.complete_corner_windows = complete_corner_windows;
+    replacement.complete_hosted_instances = complete_hosted_instances;
     replacement.registry_id = request->registry_id;
     replacement.alternative_id = request->alternative_id;
     replacement.seed_wall_ids = request->seed_wall_ids;
@@ -244,6 +274,7 @@ std::optional<PhaseWallCanvasProposal> prepare_phase_hosted_opening_family_propo
     };
     for (const auto& id : plan.required_entity_ids) allocate(id);
     for (const auto& id : plan.required_child_ids) allocate(id);
+    allocate_hosted_instance_identities(replacement, plan, allocate_fresh_identity);
     intent.wall_replacement = encode_phase_wall_replacement_authoring(replacement);
     (void)encode_phase_constraint_authoring_intent(intent);
     auto physical = inspect_phase_wall_replacement_authoring(source, intent);

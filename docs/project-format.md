@@ -1,4 +1,12 @@
-# Vertex project formats v1 through v203
+# Vertex project formats v1 through v204
+
+Reader204 retains explicit qualified wall/opening component-copy authority in
+phase outer28. `wall_edit_version` preserves the exact historical edit lane
+(2, 19, 23 or 26); wall leaf11 wraps the corresponding historical leaf1..10
+and carries sorted catalog/instance allocations. Earlier outer and leaf records
+retain their original meaning. Native extraction emits202 for this authority.
+Source integration does not establish compilation, interaction or round-trip
+qualification; component mutation consumers and publication remain unfinished.
 
 Reader203 preserves required `assembly_phase_membership` entities in every
 retained revision. Native extraction emits201. The closed `properties.model`

@@ -4059,6 +4059,10 @@
     },
     {
       "category": "source",
+      "path": "include/sketch/retained_authoring_identities.hpp"
+    },
+    {
+      "category": "source",
       "path": "include/sketch/roof_clone.hpp"
     },
     {

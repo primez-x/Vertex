@@ -293,7 +293,9 @@ public:
     // v202 retains coordinated slab elevation/hosted carry, phase outer27 and
     // mixed Properties thirteen without changing historical profile meanings.
     // v203 requires qualified component phase membership in retained history.
-    static constexpr std::uint32_t format_version = 203;
+    // v204 retains explicit qualified wall/opening component copies in phase
+    // outer28, with the historical edit lane preserved by wall_edit_version.
+    static constexpr std::uint32_t format_version = 204;
     static constexpr std::uint32_t recovery_format_version = 4;
     [[nodiscard]] static std::uint32_t required_format_version(const DocumentSnapshot& snapshot);
     static constexpr std::uint64_t maximum_file_bytes = 4ULL * 1024ULL * 1024ULL * 1024ULL;

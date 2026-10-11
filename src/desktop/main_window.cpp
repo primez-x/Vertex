@@ -25395,7 +25395,7 @@ public:
                 auto proposed = new_id("proposed");
                 while (!occupied.insert(proposed).second) proposed = new_id("proposed");
                 return proposed;
-            }, true, true);
+            }, true, true, true);
         if (!proposal) return std::nullopt;
         // An incomplete room stage is retained only as typed semantic intent.
         // Canvas projection and release handle it without preparing history.
@@ -30549,7 +30549,7 @@ public:
                     auto proposed = new_id("proposed");
                     while (!occupied.insert(proposed).second) proposed = new_id("proposed");
                     return proposed;
-                }, true, true);
+                }, true, true, true);
             if (proposal) {
                 proposal->intent.intent.message = move_offset ? "Move proposed hosted opening" : "Resize proposed hosted opening";
                 return Command{phase_wall_replacement_authoring_command(proposal->intent)};
@@ -51545,7 +51545,7 @@ private:
                 auto proposed = new_id("proposed");
                 while (!occupied.insert(proposed).second) proposed = new_id("proposed");
                 return proposed;
-            }, true, true);
+            }, true, true, true);
         if (!proposal) throw std::invalid_argument("The shared opening lost its captured design alternative.");
         proposal->intent.intent.message = raw->message;
         PhaseWallReplacementIdentityMap proposed_ids;
@@ -51629,7 +51629,7 @@ private:
                 auto proposed = new_id("proposed");
                 while (!occupied.insert(proposed).second) proposed = new_id("proposed");
                 return proposed;
-            }, true, true);
+            }, true, true, true);
         if (proposal) {
             proposal->intent.intent.message = raw->message;
             PhaseWallReplacementIdentityMap proposed_ids;
@@ -51733,7 +51733,7 @@ private:
                 auto proposed = new_id("proposed");
                 while (!occupied.insert(proposed).second) proposed = new_id("proposed");
                 return proposed;
-            }, true, true);
+            }, true, true, true);
         if (proposal) {
             proposal->intent.intent.message = raw->message;
             PhaseWallReplacementIdentityMap proposed_ids;

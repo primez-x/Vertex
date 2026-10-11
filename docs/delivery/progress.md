@@ -14,6 +14,62 @@ changed source does not acquire runtime acceptance without later qualification.
 
 ## Current delivery state
 
+### October 11 qualified wall copies and retained receipt reservations
+
+The preceding batch is committed and pushed as ac586175. Current source closes
+the pure wall/opening hosted-copy kernel gap: explicit opt-in discovery returns
+actual catalog/local-row allocations, copies private catalogs with raw definitions,
+materials and selected row order retained, preserves original catalogs/rows and
+aliases, stages actual proposed support, and transports declared membership only
+after registry staging. Native host/profile admission and cumulative catalog
+preflight bound source and destination work before whole-map/private copies.
+
+Wall leaf11 wraps its exact historical leaf1..10 and admits sorted qualified
+allocations. Phase outer28 carries the same captured-source fields plus explicit
+wall_edit_version (2/19/23/26), retaining the actual geometry/scalar/vertical/group
+edit lane. Earlier records acquire no additional authority. Actual copied hosts
+and final independently edited hosts derive the carried placement, including
+proved rigid/similarity operators, effective elevations and opening station/sill
+frames. Type-owned world profiles use the actual Site frame. Final native/alias
+and original-baseline checks remain mandatory. Arbitrary wall deformation of
+type-owned world profiles and cross-Site world-profile rehosts still require
+additional source-bound behavior; refusing them does not close those workflows.
+
+All four canvas proposal APIs can allocate the exact qualified roster. Five
+standalone desktop paths explicitly opt in (wall geometry, opening canvas edits,
+opening Properties, rehost and family conversion). Historical coordinated wall
+children remain at old authority: their mixed wall/roof/slab/structural/stair
+workflow requires a new closed coordinated dialect. Scalar Properties allocation,
+manual wall stack/corner/group producers and complete qualified selection
+restoration still need integration. Reader204/extraction202 preserve new28 through
+direct/wrapped/undone history; the scanner ceiling now includes that reader floor.
+Detached mixed Properties14 remains unpublished and needs its next distinct
+reader/extraction floor when actually admitted.
+
+The shared retained-authoring identity helper consumes actual typed command
+receipts only. It reserves deliberately elided copies, qualified child IDs,
+stack/split/room allocations and captured roof-clone names; actual Properties11..13
+receipts are included. Component preparation inspects the entire retained history,
+including undone records; Document replay uses its authentic preceding prefix.
+This is identity reservation, never geometry/phase/source replay authority.
+Existing entity/asset/alias reservation rules remain. Its public header is included
+in the source-kit allowlist without generating a package.
+
+Continue same-host component/physical co-edit carry and duplicate-row elision,
+annotations/references, clipboard/removal/shared-type consequences, actual
+Document mutation/history/publication and selected-path restoration. Companion
+projects remain read-only until those consumers are complete; no new component
+UI producer creates a companion yet. All ten production gates remain open.
+Source inspection and diff whitespace checks are the available evidence. No
+builds, tests, scripts, probes, native jobs, launches, packages or installations
+ran; compilation, interaction, Undo/save/reopen and acceptance remain unverified.
+The installed candidate is unchanged. Independent integrated source review
+approved this bounded batch after correcting late/incomplete catalog-copy
+budgeting; no remaining confirmed P1/P2 finding was reported in its reviewed
+scope. Root also inspected command interfaces, history guards, reader-floor
+scanning, existing target dependencies and the five standalone caller changes.
+That review does not certify runtime behavior or any complete production gate.
+
 ### October 11 detached component Properties and host membership transport
 
 The preceding component replacement/filtering batch is committed and pushed as

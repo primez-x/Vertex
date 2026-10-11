@@ -2,15 +2,23 @@
 #include "sketch/phase_constraint_authoring.hpp"
 #include "sketch/phase_wall_replacement_authoring.hpp"
 #include "sketch/annotation_entity_codec.hpp"
+#include "sketch/architecture.hpp"
+#include "sketch/assembly_document_adapter.hpp"
+#include "sketch/assembly_geometry.hpp"
+#include "sketch/assembly_model.hpp"
 #include "sketch/boundary_integrity.hpp"
 #include "sketch/constraint_integrity.hpp"
 #include "sketch/constraint_phase_scope.hpp"
 #include "sketch/corner_window.hpp"
 #include "sketch/corner_window_edit.hpp"
 #include "sketch/document_digest.hpp"
+#include "sketch/document_wall.hpp"
 #include "sketch/model_phases.hpp"
+#include "sketch/opening_host_geometry.hpp"
 #include "sketch/physical_wall_room.hpp"
+#include "sketch/project_organization.hpp"
 #include "sketch/sheet_view_entity_codec.hpp"
+#include "sketch/site_frame.hpp"
 #include "sketch/wall_measurement.hpp"
 
 #include <algorithm>
@@ -18,6 +26,7 @@
 #include <cmath>
 #include <set>
 #include <stdexcept>
+#include <Standard_Failure.hxx>
 
 namespace sketch {
 namespace {
@@ -43,6 +52,16 @@ std::string presentation_source_identity(const std::string& value) {
         return std::isspace(c);
     })) invalid("presentation source identity must be nonblank and at most 128 bytes");
     return value;
+}
+std::string hosted_source_identity(const Json& value) {
+    if (!value.is_string()) invalid("qualified hosted source identity must be a string");
+    const auto result=value.get<std::string>();
+    // AssemblyModel accepts nonblank local names, not document-ID grammar.
+    // The enclosing one-MiB authoring budget bounds their retained bytes.
+    if (result.empty() || result.size()>1024*1024 || std::all_of(result.begin(),result.end(),[](unsigned char c) {
+        return std::isspace(c);
+    })) invalid("qualified hosted source identity must be bounded and nonblank");
+    return result;
 }
 PhaseWallReplacementAuthoring decode_flat_phase_wall_replacement_authoring(
     const Json& value, bool allow_presentation_source_ids);
@@ -84,6 +103,225 @@ struct Stage {
     std::set<std::string,std::less<>> deferred;
     std::set<std::string,std::less<>> deferred_removals;
 };
+// The complete copied source supplies active cuts, floor placement and native
+// bodies. Neither a render alias nor a sliced synthetic snapshot is a host.
+struct HostedWallAdmission {
+    const Entities& entities;
+    ConstraintPhaseScope scope;
+    AssemblyExpansionBudget expansion;
+    std::size_t native_work{};
+    std::map<std::string,Wall,std::less<>> walls;
+    std::map<std::string,TopoDS_Shape,std::less<>> bodies;
+    explicit HostedWallAdmission(const Entities& actual):entities(actual),scope(constraint_phase_scope(actual)) {}
+    const Wall& wall(const std::string& id) {
+        if (const auto found=walls.find(id);found!=walls.end()) return found->second;
+        const auto found=entities.find(id);
+        if (found==entities.end() || found->second.type!="wall" || scope.inactive_owner_ids.contains(id))
+            invalid("hosted row requires an actual active wall");
+        std::vector<const Entity*> cuts;
+        for (const auto& [cut_id,entity]:entities)
+            if (entity.type=="opening" && !scope.inactive_owner_ids.contains(cut_id) &&
+                entity.properties.value("wall_id",std::string{})==id) {
+                if (cuts.size()>=128) invalid("hosted wall cut budget exceeded");
+                cuts.push_back(&entity);
+            }
+        Wall decoded;std::string error;
+        if (!read_document_wall(resolve_vertical_placement(entities,found->second),cuts,decoded,error)) invalid(error);
+        validate_wall_semantics(decoded);
+        return walls.emplace(id,std::move(decoded)).first->second;
+    }
+    const TopoDS_Shape& body(const std::string& id) {
+        if (const auto found=bodies.find(id);found!=bodies.end()) return found->second;
+        TopoDS_Shape result;
+        if (entities.at(id).type=="opening") result=make_document_opening_host_shape(entities,id,&native_work);
+        else {
+            const auto& decoded=wall(id);
+            const auto layers=std::max<std::size_t>(1,decoded.layers.size());
+            const auto work=layers*(decoded.openings.size()+1);
+            if (layers>32 || work>262144-native_work) invalid("hosted native geometry budget exceeded");
+            native_work+=work;result=make_wall(decoded);
+        }
+        if (result.IsNull()) invalid("hosted source has no native body");
+        return bodies.emplace(id,std::move(result)).first->second;
+    }
+    void admit(const std::string& catalog_id,const AssemblyModel& model,const AssemblyInstance& instance) try {
+        if (!instance.placement) invalid("copied hosted row lost its actual placement");
+        const auto& p=*instance.placement;
+        const auto host=entities.find(p.host_entity_id);
+        if (host==entities.end() || (host->second.type!="wall" && host->second.type!="opening") ||
+            assembly_host_inactive_in_phase(entities,scope.inactive_owner_ids,host->first) ||
+            scope.assembly_memberships.inactive_roots.contains({catalog_id,instance.id}))
+            invalid("copied hosted row is inactive or has an unsupported host");
+        (void)resolve_site_presentation(entities,host->first);
+        const auto expanded=model.expand(instance,expansion);
+        if (!expanded.profiles.empty()) {
+            // Type-owned geometry still requires its independently admitted host.
+            const auto wall_id=host->second.type=="wall" ? host->first : host->second.properties.at("wall_id").get<std::string>();
+            (void)body(wall_id);
+            if (make_assembly_geometry(expanded).shape.IsNull()) invalid("copied hosted profiles have no native body");
+        } else (void)transform_assembly_shape(body(host->first),
+            {{p.translation_m.x,p.translation_m.y,p.translation_z_m},p.rotation_radians,p.scale,p.mirrored_y,p.vertical_scale});
+    } catch (const Standard_Failure& error) { invalid(std::string("copied hosted native admission failed: ")+error.what()); }
+};
+AssemblyTransform hosted_planar_transform(const PlanarTransform& t) {
+    // Determine the actual orthogonal basis using the geometry producer's
+    // rotation-then-reflection ordering, including exact half turns.
+    auto basis=t;basis.pivot={};basis.offset={};
+    const auto x=transform_point({1,0},basis);
+    AssemblyTransform result;
+    result.rotation_radians=std::atan2(x.y,x.x);
+    result.mirrored_y=t.flip_horizontal!=t.flip_vertical;
+    const auto translated=transform_point({},t);
+    result.translation_m={translated.x,translated.y,0};
+    return result;
+}
+AssemblyTransform hosted_pose_delta(AssemblyPoint3 before,double old_yaw,
+    AssemblyPoint3 after,double new_yaw) {
+    AssemblyTransform result;
+    result.rotation_radians=std::remainder(new_yaw-old_yaw,2*std::acos(-1.0));
+    const auto moved=transform_assembly_point(before,result);
+    result.translation_m={after.x-moved.x,after.y-moved.y,after.z-before.z};
+    return result;
+}
+AssemblyPoint3 hosted_station_point(const Wall& wall,double station,double sill,double& yaw) {
+    const auto& line=wall.baseline;
+    const auto dx=line.end.x-line.start.x,dy=line.end.y-line.start.y;
+    const auto chord=std::hypot(dx,dy),length=segment_length(line);
+    if (!(chord>0) || !(length>0) || !std::isfinite(station) || station<0 || station>length)
+        invalid("hosted opening has no actual wall station frame");
+    const auto ux=dx/chord,uy=dy/chord;
+    double along=station,across=0;
+    yaw=std::atan2(dy,dx);
+    if (line.sweep_radians!=0) {
+        const auto angle=line.sweep_radians*(station/length);
+        const auto center_along=chord/2,center_across=chord/(2*std::tan(line.sweep_radians/2));
+        const auto half=std::sin(angle/2),one_minus_cosine=2*half*half;
+        along=center_along*one_minus_cosine+center_across*std::sin(angle);
+        across=center_across*one_minus_cosine-center_along*std::sin(angle);
+        yaw+=angle-line.sweep_radians/2;
+    }
+    AssemblyPoint3 point{line.start.x+ux*along-uy*across,line.start.y+uy*along+ux*across,wall.elevation+sill};
+    if (!std::isfinite(point.x) || !std::isfinite(point.y) || !std::isfinite(point.z) || !std::isfinite(yaw))
+        invalid("hosted station carry exceeds supported numeric range");
+    return point;
+}
+void complete_hosted_wall_carry(Stage& stage,const ConstraintAuthoringIntent& mapped) {
+    if (!stage.plan.complete_hosted_instances) return;
+    HostedWallAdmission before(stage.replacement.entities),after(stage.entities);
+    AssemblyExpansionBudget source_expansion;
+    std::map<std::string,AssemblyModel,std::less<>> source_models;
+    std::optional<JointTranslationOffsets> joint;
+    if (mapped.joint_translation) joint=resolve_joint_translation_offsets(before.entities,*mapped.joint_translation);
+    std::map<std::string,std::map<std::string,AssemblyTransform,std::less<>>,std::less<>> operations;
+    // Every operation is derived from the copied actual host and the final
+    // independently replayed intent; the qualified key supplies only identity.
+    for (const auto& [original,destination]:stage.replacement.hosted_instance_original_to_proposed) {
+        const auto& catalog=stage.replacement.entities.at(destination.first);
+        auto decoded=source_models.find(destination.first);
+        if (decoded==source_models.end()) decoded=source_models.emplace(destination.first,
+            AssemblyModel::from_json(catalog.properties.at("model"))).first;
+        const auto& model=decoded->second;
+        const auto row=std::find_if(model.instances().begin(),model.instances().end(),[&](const auto& instance) {
+            return instance.id==destination.second;
+        });
+        if (row==model.instances().end() || !row->placement) invalid("qualified copied hosted row disappeared");
+        const auto& host=row->placement->host_entity_id;
+        const auto& old_host=before.entities.at(host);
+        const auto& new_host=after.entities.at(host);
+        const auto host_wall=[](const Entity& entity) {
+            return entity.type=="wall" ? entity.id : entity.properties.at("wall_id").get<std::string>();
+        };
+        const auto old_wall_id=host_wall(old_host),new_wall_id=host_wall(new_host);
+        const auto& old_wall=before.wall(old_wall_id);const auto& new_wall=after.wall(new_wall_id);
+        AssemblyTransform operation;
+        bool explicit_operation=false;
+        if (mapped.wall_group_scale && std::binary_search(mapped.wall_group_scale->wall_ids.begin(),
+            mapped.wall_group_scale->wall_ids.end(),old_wall_id)) {
+            const auto& t=*mapped.wall_group_scale;
+            operation.translation_m={(1-t.scale)*t.pivot.x,(1-t.scale)*t.pivot.y,(1-t.scale)*t.pivot.z};
+            operation.scale=t.scale;explicit_operation=true;
+        } else if (mapped.wall_geometry_move) {
+            for (const auto& target:mapped.wall_geometry_move->targets)
+                if (target.wall_id==old_wall_id && target.rigid_transform) {
+                    operation=hosted_planar_transform(*target.rigid_transform);explicit_operation=true;break;
+                }
+        }
+        if (!explicit_operation && joint) {
+            if (const auto found=joint->owner_similarities.find(old_wall_id);found!=joint->owner_similarities.end()) {
+                const auto& similarity=found->second;
+                AssemblyTransform scale;
+                scale.scale=similarity.scale;
+                scale.translation_m={(1-scale.scale)*similarity.transform.pivot.x,
+                    (1-scale.scale)*similarity.transform.pivot.y,(1-scale.scale)*old_wall.elevation};
+                // The physical producer uses the captured effective base plane
+                // as the Z pivot while scaling height and hosted sections.
+                operation=compose_assembly_transform(hosted_planar_transform(similarity.transform),scale);
+                explicit_operation=true;
+            } else if (const auto found=joint->owner_transforms.find(old_wall_id);found!=joint->owner_transforms.end()) {
+                operation=hosted_planar_transform(found->second);explicit_operation=true;
+            } else if (const auto found=joint->owner_offsets.find(old_wall_id);found!=joint->owner_offsets.end()) {
+                operation.translation_m={found->second.x,found->second.y,0};explicit_operation=true;
+            }
+        }
+        const auto expansion=model.expand(*row,source_expansion);
+        if (!explicit_operation) {
+            const auto& a=old_wall.baseline;const auto& b=new_wall.baseline;
+            const bool same_baseline=a.start.x==b.start.x && a.start.y==b.start.y &&
+                a.end.x==b.end.x && a.end.y==b.end.y && a.sweep_radians==b.sweep_radians;
+            if (old_host.type=="opening") {
+                const auto old_cut=std::find_if(old_wall.openings.begin(),old_wall.openings.end(),[&](const auto& cut){return cut.id==host;});
+                const auto new_cut=std::find_if(new_wall.openings.begin(),new_wall.openings.end(),[&](const auto& cut){return cut.id==host;});
+                if (old_cut==old_wall.openings.end() || new_cut==new_wall.openings.end()) invalid("copied opening lost its actual host cut");
+                double old_yaw{},new_yaw{};
+                const auto old_point=hosted_station_point(old_wall,old_cut->offset+old_cut->width/2,old_cut->sill,old_yaw);
+                const auto new_point=hosted_station_point(new_wall,new_cut->offset+new_cut->width/2,new_cut->sill,new_yaw);
+                operation=hosted_pose_delta(old_point,old_yaw,new_point,new_yaw);
+            } else if (same_baseline) operation.translation_m.z=new_wall.elevation-old_wall.elevation;
+            else {
+                // Arbitrary host deformation changes native host-derived bodies
+                // directly. A world profile has no source-owned station/warp
+                // contract, so only a proved directed rigid baseline may carry it.
+                const auto old_length=segment_length(a),new_length=segment_length(b);
+                const bool rigid=a.sweep_radians==b.sweep_radians &&
+                    std::abs(old_length-new_length)<=default_geometry_tolerance_metres;
+                if (!rigid) {
+                    if (!expansion.profiles.empty()) invalid("deformed wall has no source-bound carry authority for type-owned hosted profiles");
+                    continue;
+                }
+                operation=hosted_pose_delta({a.start.x,a.start.y,old_wall.elevation},std::atan2(a.end.y-a.start.y,a.end.x-a.start.x),
+                    {b.start.x,b.start.y,new_wall.elevation},std::atan2(b.end.y-b.start.y,b.end.x-b.start.x));
+            }
+        }
+        if (!expansion.profiles.empty()) {
+            const auto& frame=resolve_site_presentation(before.entities,host).forward;
+            const auto& final_frame=resolve_site_presentation(after.entities,host).forward;
+            if (frame.translation_m.x!=final_frame.translation_m.x || frame.translation_m.y!=final_frame.translation_m.y ||
+                frame.translation_m.z!=final_frame.translation_m.z || frame.rotation_radians!=final_frame.rotation_radians)
+                invalid("hosted carry between different Site frames requires explicit world-frame authority");
+            operation=conjugate_assembly_transform_through_rigid_frame(operation,
+                {{frame.translation_m.x,frame.translation_m.y,frame.translation_m.z},frame.rotation_radians,1,false});
+        }
+        if (operation!=AssemblyTransform{}) operations[destination.first].emplace(destination.second,operation);
+    }
+    for (const auto& [catalog,rows]:operations)
+        stage.entities.at(catalog).properties.at("model")=transform_hosted_assembly_model(
+            stage.replacement.entities.at(catalog).properties.at("model"),rows,true);
+    // Re-admit the exact whole candidate after changed-host carry. Original
+    // catalogs and rows are protected separately by preserve_baseline.
+    std::map<std::string,AssemblyModel,std::less<>> final_models;
+    for (const auto& [original,destination]:stage.replacement.hosted_instance_original_to_proposed) {
+        auto decoded=final_models.find(destination.first);
+        if (decoded==final_models.end()) decoded=final_models.emplace(destination.first,
+            AssemblyModel::from_json(stage.entities.at(destination.first).properties.at("model"))).first;
+        const auto& model=decoded->second;
+        const auto row=std::find_if(model.instances().begin(),model.instances().end(),[&](const auto& instance){return instance.id==destination.second;});
+        if (row==model.instances().end()) invalid("carried hosted row disappeared");
+        after.admit(destination.first,model,*row);
+    }
+    const auto original_aliases=embedded_assembly_presentation_ids(stage.replacement.entities);
+    const auto final_aliases=embedded_assembly_presentation_ids(stage.entities);
+    if (original_aliases!=final_aliases) invalid("hosted carry changed qualified presentation identities");
+}
 bool has_geometry_or_relation_intent(const ConstraintAuthoringIntent& intent) {
     return intent.wall_resize || intent.wall_geometry_move || intent.wall_group_scale || intent.wall_curve_construction ||
         intent.boundary_resize || intent.boundary_vertex_move || intent.exterior_corner_move ||
@@ -95,7 +333,7 @@ Stage physical_stage(const Entities& source,const PhaseConstraintAuthoringIntent
     const PhaseWallReplacementAuthoring& edit) {
     if (intent.source_entities_digest!=entity_map_digest(source) ||
         intent.phase_selections!=phase_constraint_authoring_selections(source)) invalid("actual source or saved choice changed");
-    if (edit.complete_vertical_profiles) {
+    if (edit.complete_vertical_profiles || edit.complete_hosted_instances) {
         // Detached inspection shares the enclosing dialect guard with retained
         // publication. Historical outer records cannot borrow leaf-ten authority.
         (void)encode_phase_constraint_authoring_intent(intent);
@@ -175,8 +413,8 @@ Stage physical_stage(const Entities& source,const PhaseConstraintAuthoringIntent
     }
     Stage stage;
     stage.plan=inspect_phase_wall_replacement_plan(source,edit.seed_wall_ids,edit.registry_id,
-        edit.alternative_id,edit.complete_presentations,edit.complete_corner_windows);
-    stage.replacement=replay_phase_wall_replacement(source,stage.plan,edit.identities);
+        edit.alternative_id,edit.complete_presentations,edit.complete_corner_windows,edit.complete_hosted_instances);
+    stage.replacement=replay_phase_wall_replacement(source,stage.plan,edit.identities,edit.hosted_instance_identities);
     auto mapped=remap_phase_wall_replacement_authoring_intent(intent.intent,stage.replacement.original_to_proposed);
     std::erase_if(mapped.relation_mutations,[&](const auto& mutation) {
         const auto found=stage.replacement.deferred_room_constraints.find(mutation.constraint_id);
@@ -400,6 +638,7 @@ Stage physical_stage(const Entities& source,const PhaseConstraintAuthoringIntent
         complete_corner_window_geometry(stage.replacement.entities,stage.entities);
         validate_corner_window_state(stage.entities);
     }
+    complete_hosted_wall_carry(stage,mapped);
     preserve_baseline(source,stage.entities,stage.plan);
     // Incoming room evidence sees every independently reconstructed new
     // relationship. These copies were withheld from the physical solve; only
@@ -651,6 +890,31 @@ std::optional<PhaseWallReplacementRequest> phase_wall_scalar_profile_replacement
 }
 
 Json encode_phase_wall_replacement_authoring(const PhaseWallReplacementAuthoring& value) {
+    if (!value.complete_hosted_instances && !value.hosted_instance_identities.empty())
+        invalid("qualified hosted identities require explicit leaf-eleven authority");
+    if (value.complete_hosted_instances) {
+        if (value.identities.size()>4096 || value.hosted_instance_identities.size()>4096-value.identities.size())
+            invalid("replacement entity/child/hosted identity budget exceeded");
+        auto historical=value;
+        historical.complete_hosted_instances=false;
+        historical.hosted_instance_identities.clear();
+        Json result{{"version",11},{"complete_hosted_instances",true},
+            {"authoring",encode_phase_wall_replacement_authoring(historical)},
+            {"hosted_instance_identities",Json::array()}};
+        std::set<std::string,std::less<>> destinations;
+        for (const auto& [old_id,new_id]:value.identities) {
+            destinations.insert(old_id);destinations.insert(new_id);
+        }
+        for (const auto& [key,new_id]:value.hosted_instance_identities) {
+            (void)identity(Json(key.first));(void)hosted_source_identity(Json(key.second));(void)identity(Json(new_id));
+            if (new_id==key.second || !destinations.insert(new_id).second)
+                invalid("qualified hosted destinations must be fresh, injective and disjoint from flat identities");
+            result.at("hosted_instance_identities").push_back(
+                {{"catalog_id",key.first},{"instance_id",key.second},{"proposed_id",new_id}});
+        }
+        if (result.dump().size()>1024*1024) invalid("replacement decisions exceed one MiB");
+        return result;
+    }
     const bool elevation=std::any_of(value.wall_profiles.begin(),value.wall_profiles.end(),[](const auto& profile) {
         return profile.elevation.has_value();
     });
@@ -765,6 +1029,30 @@ Json encode_phase_wall_replacement_authoring(const PhaseWallReplacementAuthoring
 }
 PhaseWallReplacementAuthoring decode_phase_wall_replacement_authoring(const Json& value) {
     if (value.dump().size()>1024*1024) invalid("replacement decisions exceed one MiB");
+    if (value.is_object() && value.contains("version") && value.at("version").is_number_integer() &&
+        value.at("version")==11) {
+        keys(value,{"version","complete_hosted_instances","authoring","hosted_instance_identities"});
+        if (!value.at("complete_hosted_instances").is_boolean() || value.at("complete_hosted_instances")!=true)
+            invalid("hosted completion requires explicit true authority");
+        const auto& body=value.at("authoring");
+        if (!body.is_object() || !body.contains("version") || !body.at("version").is_number_integer() ||
+            body.at("version")<1 || body.at("version")>10)
+            invalid("hosted completion requires one canonical historical authoring body");
+        auto result=decode_phase_wall_replacement_authoring(body);
+        const auto& rows=value.at("hosted_instance_identities");
+        if (!rows.is_array() || rows.size()>4096-result.identities.size())
+            invalid("replacement entity/child/hosted identity budget exceeded");
+        result.complete_hosted_instances=true;
+        for (const auto& row:rows) {
+            keys(row,{"catalog_id","instance_id","proposed_id"});
+            PhaseWallReplacementHostedInstanceKey key{identity(row.at("catalog_id")),hosted_source_identity(row.at("instance_id"))};
+            if (!result.hosted_instance_identities.emplace(std::move(key),identity(row.at("proposed_id"))).second)
+                invalid("duplicate qualified hosted source identity");
+        }
+        if (encode_phase_wall_replacement_authoring(result).dump()!=value.dump())
+            invalid("hosted completion wrapper is not canonical");
+        return result;
+    }
     if (value.is_object() && value.contains("version") && value.at("version").is_number_integer() &&
         (value.at("version")==9 || value.at("version")==10)) {
         keys(value,{"version","complete_presentations","authoring","wall_profiles","opening_profiles"});
@@ -1007,7 +1295,7 @@ void validate_phase_wall_replacement_originals(const Entities& source,const Enti
     const PhaseConstraintAuthoringIntent& intent) {
     const auto edit=decode_phase_wall_replacement_authoring(intent.wall_replacement);
     const auto plan=inspect_phase_wall_replacement_plan(source,edit.seed_wall_ids,edit.registry_id,
-        edit.alternative_id,edit.complete_presentations,edit.complete_corner_windows);
+        edit.alternative_id,edit.complete_presentations,edit.complete_corner_windows,edit.complete_hosted_instances);
     preserve_baseline(source,candidate,plan);
 }
 namespace {

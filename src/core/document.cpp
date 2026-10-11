@@ -1,4 +1,5 @@
 #include "sketch/document.hpp"
+#include "sketch/retained_authoring_identities.hpp"
 #include "sketch/sha256_stream.hpp"
 #include "sketch/dxf_source_receipt.hpp"
 #include "sketch/physical_wall_room_data.hpp"
@@ -3720,6 +3721,9 @@ static std::set<std::string,std::less<>> phase_demolition_ordinary_roof_destinat
 struct PhaseConstraintLifetimeProofs {
     std::vector<nlohmann::json> phase_proofs;
     std::vector<nlohmann::json> phase_room_proofs;
+    std::vector<nlohmann::json> room_proofs;
+    std::vector<nlohmann::json> mixed_properties_proofs;
+    std::vector<WallSplitIntent> wall_split_proofs;
     std::set<std::string,std::less<>> ordinary_roof_destinations;
 };
 static PhaseConstraintLifetimeProofs phase_constraint_lifetime_proofs(const ApplyBoundaryConstraintChanges& command) {
@@ -3732,8 +3736,15 @@ static PhaseConstraintLifetimeProofs phase_constraint_lifetime_proofs(const Appl
         if (depth>2) throw std::invalid_argument("Retained identity proof wrapper depth is invalid");
         if (proof.at("kind")!="apply_boundary_constraint_changes") return;
         const auto version=proof.at("version").get<int>();
+        if (proof.contains("room_review_intent") && !proof.at("room_review_intent").is_null())
+            result.room_proofs.push_back(proof.at("room_review_intent"));
+        if (proof.contains("room_review_additional_intents"))
+            for (const auto& room:proof.at("room_review_additional_intents")) result.room_proofs.push_back(room);
+        if (proof.contains("wall_split")) result.wall_split_proofs.push_back(decode_wall_split(proof.at("wall_split")));
         if (version==52) {
             const auto& mixed=proof.at("mixed_selection_edit_intent");
+            if (mixed.at("version")==11 || mixed.at("version")==12 || mixed.at("version")==13)
+                result.mixed_properties_proofs.push_back(validate_mixed_selection_edit_intent(mixed));
             if (mixed.at("version")!=5 && mixed.at("version")!=6 && mixed.at("version")!=7 && mixed.at("version")!=8 && mixed.at("version")!=9 && mixed.at("version")!=10 && mixed.at("version")!=11 && mixed.at("version")!=12 && mixed.at("version")!=13) {
                 const auto& roof=mixed.at("roof_authoring");
                 if (!roof.is_null()) result.phase_proofs.push_back(roof);
@@ -3825,6 +3836,232 @@ static PhaseConstraintLifetimeProofs phase_constraint_lifetime_proofs(const Appl
     };
     visit(visit,encoded,0);
     return result;
+}
+
+#ifdef VERTEX_HAS_PHYSICAL_ROOM_REVIEW
+static std::set<std::string,std::less<>> phase_room_review_destinations(const nlohmann::json& encoded) {
+    const auto intent=decode_physical_wall_phase_room_review_intent(encoded);
+    std::set<std::string,std::less<>> ids;
+    if (!intent.source_registry_entity_digest) ids.insert(intent.registry_id);
+    for (const auto& plane:intent.planes) {
+        for (const auto& decision:plane.fresh) {
+            if (decision.disposition!=PhysicalWallRoomPhaseFreshDisposition::create_proposed &&
+                decision.disposition!=PhysicalWallRoomPhaseFreshDisposition::redefine_proposed) continue;
+            if (decision.disposition==PhysicalWallRoomPhaseFreshDisposition::create_proposed) ids.insert(decision.room_id);
+            ids.insert(decision.fresh_ids.segment_ids.begin(),decision.fresh_ids.segment_ids.end());
+            ids.insert(decision.fresh_ids.vertex_ids.begin(),decision.fresh_ids.vertex_ids.end());
+        }
+        for (const auto& decision:plane.source_rooms)
+            ids.insert(decision.replacement_dimension_ids.begin(),decision.replacement_dimension_ids.end());
+    }
+    return ids;
+}
+static std::set<std::string,std::less<>> ordinary_room_review_destinations(const nlohmann::json& encoded) {
+    const auto intent=decode_physical_wall_room_review_intent(encoded);
+    std::set<std::string,std::less<>> ids;
+    for (const auto& decision:intent.fresh) {
+        if (decision.disposition==PhysicalWallRoomFreshDisposition::unclassified) continue;
+        if (decision.disposition==PhysicalWallRoomFreshDisposition::create) ids.insert(decision.room_id);
+        ids.insert(decision.fresh_ids.segment_ids.begin(),decision.fresh_ids.segment_ids.end());
+        ids.insert(decision.fresh_ids.vertex_ids.begin(),decision.fresh_ids.vertex_ids.end());
+    }
+    for (const auto& decision:intent.retained)
+        ids.insert(decision.replacement_dimension_ids.begin(),decision.replacement_dimension_ids.end());
+    return ids;
+}
+#endif
+
+static void reserve_phase_clone_sources(const PhaseConstraintAuthoringIntent& root,
+    const std::set<std::string,std::less<>>& fresh) {
+    std::vector<RoofOpeningEditIntent> openings;
+    const auto append=[&](const nlohmann::json& rows) {
+        if (rows.is_null()) return;
+        for (const auto& row:rows) {
+            const auto edit=decode_roof_edit_intent(row);
+            if (edit.openings) openings.push_back(*edit.openings);
+        }
+    };
+    append(root.ordinary_roof_edits);
+    if (!root.coordinated_replacements.is_null()) append(root.coordinated_replacements.at("ordinary_roof_edits"));
+    for (const auto& leaf:phase_constraint_replacement_components(root)) if (!leaf.roof_replacement.is_null()) {
+        const auto replacement=decode_phase_roof_replacement_authoring(leaf.roof_replacement);
+        openings.insert(openings.end(),replacement.roof_opening_edits.begin(),replacement.roof_opening_edits.end());
+        for (const auto* rows:{&replacement.roof_edits,&replacement.ordinary_roof_edits})
+            for (const auto& edit:*rows) if (edit.openings) openings.push_back(*edit.openings);
+    }
+    std::size_t nodes=0,bytes=0;
+    const auto scan=[&](const auto& self,const nlohmann::json& value,unsigned depth)->void {
+        if (depth>64 || ++nodes>4*1024*1024)
+            throw std::invalid_argument("Retained roof clone source exceeds the identity JSON budget");
+        const auto text=[&](const std::string& name) {
+            if (name.size()>64*1024*1024-bytes)
+                throw std::invalid_argument("Retained roof clone source exceeds the identity string budget");
+            bytes+=name.size();
+            if (fresh.contains(name))
+                throw std::invalid_argument("A fresh identity aliases a captured roof clone source: "+name);
+        };
+        if (value.is_string()) text(value.template get_ref<const std::string&>());
+        else if (value.is_array()) for (const auto& child:value) self(self,child,depth+1);
+        else if (value.is_object()) for (const auto& [name,child]:value.items()) {text(name);self(self,child,depth+1);}
+    };
+    for (const auto& edit:openings) for (const auto& upsert:edit.upserts) if (upsert.clone_source) {
+        const auto& roof=upsert.clone_source->roof;
+        scan(scan,nlohmann::json{{"id",roof.id},{"type",roof.type},{"properties",roof.properties},
+            {"required",roof.required},{"extensions",roof.extensions}},0);
+    }
+}
+
+static void validate_retained_authoring_receipt_identities(
+    const std::vector<RevisionRecord>& history,std::size_t preceding_records,
+    const std::set<std::string,std::less<>>& fresh) {
+    const auto require_unused_id=[&](const std::string& id) {
+        if (fresh.contains(id))
+            throw std::invalid_argument("Fresh identity was already reserved by retained authoring receipt: "+id);
+    };
+    for (std::size_t index=0;index<preceding_records;++index) {
+        const auto& record=history.at(index);
+        // A deliberately omitted fresh relationship copy is still a declared
+        // identity in the recorded semantic operation. Undo cannot release it.
+        const auto historical_proofs=record.boundary_constraint_changes
+            ? phase_constraint_lifetime_proofs(*record.boundary_constraint_changes) : PhaseConstraintLifetimeProofs{};
+#ifdef VERTEX_HAS_PHYSICAL_ROOM_REVIEW
+        for (const auto& encoded:historical_proofs.phase_room_proofs)
+            for (const auto& id:phase_room_review_destinations(encoded))
+                if (fresh.contains(id))
+                    throw std::invalid_argument("Fresh identity was already reserved by retained phase room review: "+id);
+#endif
+        for (const auto& id:historical_proofs.ordinary_roof_destinations)
+            if (fresh.contains(id))
+                throw std::invalid_argument("Proposed identity was already reserved by retained mixed removal roof split intent: "+id);
+        if (record.boundary_constraint_changes) {
+            if (has_complete_wall_join_deletion_proof(*record.boundary_constraint_changes))
+                for (const auto& [original,ids]:complete_wall_join_deletion_destinations(*record.boundary_constraint_changes)) {
+                    (void)original;
+                    for (const auto& id:ids) {
+                        if (fresh.contains(id))
+                            throw std::invalid_argument("Fresh identity was already reserved by retained wall-join split intent: "+id);
+                    }
+                }
+            for (const auto& encoded:historical_proofs.phase_proofs) {
+                const auto root=decode_phase_constraint_authoring_intent(encoded);
+                reserve_phase_clone_sources(root,fresh);
+                const auto reserve_openings=[&](const nlohmann::json& rows) {
+                    if (rows.is_null()) return;
+                    for (const auto& row:rows) {
+                        const auto edit=decode_roof_edit_intent(row);
+                        if (edit.openings) for (const auto& upsert:edit.openings->upserts)
+                            if (fresh.contains(upsert.opening_id))
+                                throw std::invalid_argument("Roof opening identity was already reserved by retained typed intent: "+upsert.opening_id);
+                    }
+                };
+                reserve_openings(root.ordinary_roof_edits);
+                if (!root.coordinated_replacements.is_null())
+                    reserve_openings(root.coordinated_replacements.at("ordinary_roof_edits"));
+                for (const auto& id:phase_demolition_ordinary_roof_destinations(root))
+                    if (fresh.contains(id))
+                        throw std::invalid_argument("Proposed identity was already reserved by retained ordinary roof split intent: "+id);
+                if (!root.wall_demolition.is_null()) {
+                    const auto demolition=decode_phase_wall_demolition_authoring(root.wall_demolition);
+#ifdef VERTEX_HAS_PHYSICAL_ROOM_REVIEW
+                    if (!demolition.room_review_intent.is_null())
+                        for (const auto& id:phase_room_review_destinations(demolition.room_review_intent)) require_unused_id(id);
+#endif
+                    for (const auto& [original,ids]:demolition.wall_additional_identities) {
+                        (void)original;
+                        for (const auto& id:ids) if (fresh.contains(id))
+                            throw std::invalid_argument("Fresh identity was already reserved by retained ordinary wall split intent: "+id);
+                    }
+                }
+            }
+        }
+        for (const auto& encoded:historical_proofs.phase_proofs)
+            for (const auto& intent : phase_constraint_replacement_components(decode_phase_constraint_authoring_intent(encoded))) {
+                const auto require_unused=[&](const auto& identities) {
+                    for (const auto& [original,id]:identities) {
+                        (void)original;
+                        if (fresh.contains(id)) throw std::invalid_argument("Proposed identity was already reserved by retained replacement intent: "+id);
+                    }
+                };
+                if (!intent.wall_replacement.is_null()) {
+                    const auto wall=decode_phase_wall_replacement_authoring(intent.wall_replacement);
+                    require_unused(wall.identities);
+                    require_unused(wall.hosted_instance_identities);
+#ifdef VERTEX_HAS_PHYSICAL_ROOM_REVIEW
+                    if (!wall.room_review_intent.is_null())
+                        for (const auto& id:phase_room_review_destinations(wall.room_review_intent)) require_unused_id(id);
+#endif
+                    for (const auto& stack:wall.wall_stacks)
+                        for (const auto& row:stack.layers) if (fresh.contains(row.layer_id))
+                            throw std::invalid_argument("Wall layer identity was already reserved by retained intent: "+row.layer_id);
+                }
+                if (!intent.slab_replacement.is_null()) {
+                    const auto slab = decode_phase_slab_replacement_authoring(intent.slab_replacement);
+                    require_unused(slab.identities);
+                    require_unused(slab.hosted_instance_identities);
+                    for (const auto& stack : slab.slab_stacks)
+                        for (const auto& row : stack.layers) if (fresh.contains(row.layer_id))
+                            throw std::invalid_argument("Slab layer identity was already reserved by retained intent: " + row.layer_id);
+                }
+                if (!intent.roof_replacement.is_null()) {
+                    const auto roof=decode_phase_roof_replacement_authoring(intent.roof_replacement);
+                    require_unused(roof.identities);
+                    require_unused(roof.hosted_instance_identities);
+                    for (const auto& [original, ids] : roof.demolition_additional_identities) {
+                        (void)original;
+                        for (const auto& id : ids) if (fresh.contains(id))
+                            throw std::invalid_argument("Proposed identity was already reserved by retained roof split intent: " + id);
+                    }
+                    auto roof_edits=roof.roof_edits;
+                    roof_edits.insert(roof_edits.end(),roof.ordinary_roof_edits.begin(),roof.ordinary_roof_edits.end());
+                    const auto opening_edits=roof_edits.empty() ? roof.roof_opening_edits : roof_edit_opening_intents(roof_edits);
+                    for (const auto& edit:opening_edits)
+                        for (const auto& upsert:edit.upserts)
+                            if (fresh.contains(upsert.opening_id))
+                                throw std::invalid_argument("Roof opening identity was already reserved by retained intent: "+upsert.opening_id);
+                }
+                if (!intent.structural_replacement.is_null()) {
+                    const auto structural=decode_phase_structural_replacement_authoring(intent.structural_replacement);
+                    require_unused(structural.identities);
+                    require_unused(structural.hosted_instance_identities);
+                }
+                if (!intent.stair_replacement.is_null()) {
+                    const auto stair=decode_phase_stair_replacement_authoring(intent.stair_replacement);
+                    require_unused(stair.identities);
+                    require_unused(stair.child_identities);
+                    require_unused(stair.hosted_instance_identities);
+                    require_unused(stair.overlay_identities);
+                }
+            }
+        for (const auto& mixed:historical_proofs.mixed_properties_proofs) {
+            const auto phase=validate_phase_selection_property_edit_request(mixed.at("phase_request"));
+            for (const auto& allocation:phase.at("allocations"))
+                for (const auto* field:{"identities","child_identities","hosted_instance_identities","overlay_identities"})
+                    for (const auto& row:allocation.at(field)) require_unused_id(row.at("proposed_id").get<std::string>());
+#ifdef VERTEX_HAS_PHYSICAL_ROOM_REVIEW
+            for (const auto& wire:mixed_selection_edit_phase_room_reviews(mixed))
+                for (const auto& id:phase_room_review_destinations(wire)) require_unused_id(id);
+            for (const auto& wire:mixed_selection_edit_room_reviews(mixed))
+                for (const auto& id:ordinary_room_review_destinations(wire)) require_unused_id(id);
+#endif
+        }
+        for (const auto& split:historical_proofs.wall_split_proofs) {
+            require_unused_id(split.second_wall_id);
+            require_unused_id(split.seam_constraint_id);
+            for (const auto& owner:split.measured_owners) {
+                require_unused_id(owner.vertex_id);
+                require_unused_id(owner.segment_id);
+                require_unused_id(owner.automatic_dimension_id);
+            }
+            for (const auto& owner:split.physical_room_owners) {
+                for (const auto& id:owner.new_segment_ids) require_unused_id(id);
+                for (const auto& id:owner.new_vertex_ids) require_unused_id(id);
+            }
+        }
+#ifdef VERTEX_HAS_PHYSICAL_ROOM_REVIEW
+        for (const auto& wire:historical_proofs.room_proofs)
+            for (const auto& id:ordinary_room_review_destinations(wire)) require_unused_id(id);
+#endif
+    }
 }
 
 static void validate_phase_constraint_fresh_lifetime(const std::map<std::string,Entity,std::less<>>& source,
@@ -4108,6 +4345,11 @@ static void validate_phase_constraint_fresh_lifetime(const std::map<std::string,
             complete_envelope_reservation=true;
             wall_presentation_asset_reservation=true;
         }
+        if (replacement.complete_hosted_instances) {
+            complete_envelope_reservation=true;
+            hosted_slab_asset_reservation=true;
+            structural_hosted_alias_reservation=true;
+        }
         if (!replacement.wall_stacks.empty()) {
             complete_envelope_reservation=true;
             wall_stack_asset_reservation=true;
@@ -4115,6 +4357,12 @@ static void validate_phase_constraint_fresh_lifetime(const std::map<std::string,
         for (const auto& [original,id]:replacement.identities) {
             (void)original;fresh.insert(id);
             if (complete_envelope_reservation) nested_fresh.insert(id);
+        }
+        for (const auto& [original,id]:replacement.hosted_instance_identities) {
+            if (!fresh.insert(id).second)
+                throw std::invalid_argument("A proposed wall-hosted component overlaps another fresh identity: "+id);
+            nested_fresh.insert(id);
+            proposed_hosted_instances.emplace(replacement.identities.at(original.first),id);
         }
         for (const auto& stack : replacement.wall_stacks) {
             const auto& original=source.at(stack.wall_id);
@@ -4174,26 +4422,9 @@ static void validate_phase_constraint_fresh_lifetime(const std::map<std::string,
         }
     }
 #ifdef VERTEX_HAS_PHYSICAL_ROOM_REVIEW
-    const auto room_destinations=[](const nlohmann::json& encoded) {
-        const auto intent=decode_physical_wall_phase_room_review_intent(encoded);
-        std::set<std::string,std::less<>> ids;
-        if (!intent.source_registry_entity_digest) ids.insert(intent.registry_id);
-        for (const auto& plane:intent.planes) {
-            for (const auto& decision:plane.fresh) {
-                if (decision.disposition!=PhysicalWallRoomPhaseFreshDisposition::create_proposed &&
-                    decision.disposition!=PhysicalWallRoomPhaseFreshDisposition::redefine_proposed) continue;
-                if (decision.disposition==PhysicalWallRoomPhaseFreshDisposition::create_proposed) ids.insert(decision.room_id);
-                ids.insert(decision.fresh_ids.segment_ids.begin(),decision.fresh_ids.segment_ids.end());
-                ids.insert(decision.fresh_ids.vertex_ids.begin(),decision.fresh_ids.vertex_ids.end());
-            }
-            for (const auto& decision:plane.source_rooms)
-                ids.insert(decision.replacement_dimension_ids.begin(),decision.replacement_dimension_ids.end());
-        }
-        return ids;
-    };
     for (const auto& encoded:lifetime_proofs.phase_room_proofs) {
         validate_phase_room_review_lifetime(encoded,history,preceding_records);
-        const auto ids=room_destinations(encoded);
+        const auto ids=phase_room_review_destinations(encoded);
         fresh.insert(ids.begin(),ids.end());
         for (const auto& id:ids)
             if (!nested_fresh.insert(id).second)
@@ -4250,46 +4481,9 @@ static void validate_phase_constraint_fresh_lifetime(const std::map<std::string,
                 throw std::invalid_argument("A fresh phase destination borrows a completed removal proof field: "+std::string(token));
     if (fresh.empty()) return;
     if (fresh.size()>4096) throw std::invalid_argument("Active design fresh identity budget exceeded");
-    const auto reserve_clone_sources=[&](const PhaseConstraintAuthoringIntent& root) {
-        std::vector<RoofOpeningEditIntent> openings;
-        const auto append=[&](const nlohmann::json& rows) {
-            if (rows.is_null()) return;
-            for (const auto& row:rows) {
-                const auto edit=decode_roof_edit_intent(row);
-                if (edit.openings) openings.push_back(*edit.openings);
-            }
-        };
-        append(root.ordinary_roof_edits);
-        if (!root.coordinated_replacements.is_null()) append(root.coordinated_replacements.at("ordinary_roof_edits"));
-        for (const auto& leaf:phase_constraint_replacement_components(root)) if (!leaf.roof_replacement.is_null()) {
-            const auto replacement=decode_phase_roof_replacement_authoring(leaf.roof_replacement);
-            openings.insert(openings.end(),replacement.roof_opening_edits.begin(),replacement.roof_opening_edits.end());
-            for (const auto* rows:{&replacement.roof_edits,&replacement.ordinary_roof_edits})
-                for (const auto& edit:*rows) if (edit.openings) openings.push_back(*edit.openings);
-        }
-        std::size_t nodes=0,bytes=0;
-        const auto scan=[&](const auto& self,const nlohmann::json& value,unsigned depth)->void {
-            if (depth>64 || ++nodes>4*1024*1024)
-                throw std::invalid_argument("Retained roof clone source exceeds the identity JSON budget");
-            const auto text=[&](const std::string& name) {
-                if (name.size()>64*1024*1024-bytes)
-                    throw std::invalid_argument("Retained roof clone source exceeds the identity string budget");
-                bytes+=name.size();
-                if (fresh.contains(name))
-                    throw std::invalid_argument("A fresh identity aliases a captured roof clone source: "+name);
-            };
-            if (value.is_string()) text(value.template get_ref<const std::string&>());
-            else if (value.is_array()) for (const auto& child:value) self(self,child,depth+1);
-            else if (value.is_object()) for (const auto& [name,child]:value.items()) {text(name);self(self,child,depth+1);}
-        };
-        for (const auto& edit:openings) for (const auto& upsert:edit.upserts) if (upsert.clone_source) {
-            const auto& roof=upsert.clone_source->roof;
-            scan(scan,nlohmann::json{{"id",roof.id},{"type",roof.type},{"properties",roof.properties},
-                {"required",roof.required},{"extensions",roof.extensions}},0);
-        }
-    };
+    validate_retained_authoring_fresh_identities(history,preceding_records,fresh);
     for (const auto& encoded:current_phase_proofs)
-        reserve_clone_sources(decode_phase_constraint_authoring_intent(encoded));
+        reserve_phase_clone_sources(decode_phase_constraint_authoring_intent(encoded),fresh);
     if (complete_envelope_reservation)
         for (const auto* key:{"id","type","properties","required","extensions"})
             if (nested_fresh.contains(key))
@@ -4302,109 +4496,6 @@ static void validate_phase_constraint_fresh_lifetime(const std::map<std::string,
                 (void)asset;
                 if (fresh.contains(id))
                     throw std::invalid_argument("Proposed identity collides with a retained asset: "+id);
-            }
-        // A deliberately omitted fresh relationship copy is still a declared
-        // identity in the recorded semantic operation. Undo cannot release it.
-        const auto historical_proofs=record.boundary_constraint_changes
-            ? phase_constraint_lifetime_proofs(*record.boundary_constraint_changes) : PhaseConstraintLifetimeProofs{};
-#ifdef VERTEX_HAS_PHYSICAL_ROOM_REVIEW
-        for (const auto& encoded:historical_proofs.phase_room_proofs)
-            for (const auto& id:room_destinations(encoded))
-                if (fresh.contains(id))
-                    throw std::invalid_argument("Fresh identity was already reserved by retained phase room review: "+id);
-#endif
-        for (const auto& id:historical_proofs.ordinary_roof_destinations)
-            if (fresh.contains(id))
-                throw std::invalid_argument("Proposed identity was already reserved by retained mixed removal roof split intent: "+id);
-        if (record.boundary_constraint_changes) {
-            if (has_complete_wall_join_deletion_proof(*record.boundary_constraint_changes))
-                for (const auto& [original,ids]:complete_wall_join_deletion_destinations(*record.boundary_constraint_changes)) {
-                    (void)original;
-                    for (const auto& id:ids) {
-                        if (fresh.contains(id))
-                            throw std::invalid_argument("Fresh identity was already reserved by retained wall-join split intent: "+id);
-                    }
-                }
-            for (const auto& encoded:historical_proofs.phase_proofs) {
-                const auto root=decode_phase_constraint_authoring_intent(encoded);
-                reserve_clone_sources(root);
-                const auto reserve_openings=[&](const nlohmann::json& rows) {
-                    if (rows.is_null()) return;
-                    for (const auto& row:rows) {
-                        const auto edit=decode_roof_edit_intent(row);
-                        if (edit.openings) for (const auto& upsert:edit.openings->upserts)
-                            if (fresh.contains(upsert.opening_id))
-                                throw std::invalid_argument("Roof opening identity was already reserved by retained typed intent: "+upsert.opening_id);
-                    }
-                };
-                reserve_openings(root.ordinary_roof_edits);
-                if (!root.coordinated_replacements.is_null())
-                    reserve_openings(root.coordinated_replacements.at("ordinary_roof_edits"));
-                for (const auto& id:phase_demolition_ordinary_roof_destinations(root))
-                    if (fresh.contains(id))
-                        throw std::invalid_argument("Proposed identity was already reserved by retained ordinary roof split intent: "+id);
-                if (!root.wall_demolition.is_null()) {
-                    const auto demolition=decode_phase_wall_demolition_authoring(root.wall_demolition);
-                    for (const auto& [original,ids]:demolition.wall_additional_identities) {
-                        (void)original;
-                        for (const auto& id:ids) if (fresh.contains(id))
-                            throw std::invalid_argument("Fresh identity was already reserved by retained ordinary wall split intent: "+id);
-                    }
-                }
-            }
-        }
-        for (const auto& encoded:historical_proofs.phase_proofs)
-            for (const auto& intent : phase_constraint_replacement_components(decode_phase_constraint_authoring_intent(encoded))) {
-                const auto require_unused=[&](const auto& identities) {
-                    for (const auto& [original,id]:identities) {
-                        (void)original;
-                        if (fresh.contains(id)) throw std::invalid_argument("Proposed identity was already reserved by retained replacement intent: "+id);
-                    }
-                };
-                if (!intent.wall_replacement.is_null()) {
-                    const auto wall=decode_phase_wall_replacement_authoring(intent.wall_replacement);
-                    require_unused(wall.identities);
-                    for (const auto& stack:wall.wall_stacks)
-                        for (const auto& row:stack.layers) if (fresh.contains(row.layer_id))
-                            throw std::invalid_argument("Wall layer identity was already reserved by retained intent: "+row.layer_id);
-                }
-                if (!intent.slab_replacement.is_null()) {
-                    const auto slab = decode_phase_slab_replacement_authoring(intent.slab_replacement);
-                    require_unused(slab.identities);
-                    require_unused(slab.hosted_instance_identities);
-                    for (const auto& stack : slab.slab_stacks)
-                        for (const auto& row : stack.layers) if (fresh.contains(row.layer_id))
-                            throw std::invalid_argument("Slab layer identity was already reserved by retained intent: " + row.layer_id);
-                }
-                if (!intent.roof_replacement.is_null()) {
-                    const auto roof=decode_phase_roof_replacement_authoring(intent.roof_replacement);
-                    require_unused(roof.identities);
-                    require_unused(roof.hosted_instance_identities);
-                    for (const auto& [original, ids] : roof.demolition_additional_identities) {
-                        (void)original;
-                        for (const auto& id : ids) if (fresh.contains(id))
-                            throw std::invalid_argument("Proposed identity was already reserved by retained roof split intent: " + id);
-                    }
-                    auto roof_edits=roof.roof_edits;
-                    roof_edits.insert(roof_edits.end(),roof.ordinary_roof_edits.begin(),roof.ordinary_roof_edits.end());
-                    const auto opening_edits=roof_edits.empty() ? roof.roof_opening_edits : roof_edit_opening_intents(roof_edits);
-                    for (const auto& edit:opening_edits)
-                        for (const auto& upsert:edit.upserts)
-                            if (fresh.contains(upsert.opening_id))
-                                throw std::invalid_argument("Roof opening identity was already reserved by retained intent: "+upsert.opening_id);
-                }
-                if (!intent.structural_replacement.is_null()) {
-                    const auto structural=decode_phase_structural_replacement_authoring(intent.structural_replacement);
-                    require_unused(structural.identities);
-                    require_unused(structural.hosted_instance_identities);
-                }
-                if (!intent.stair_replacement.is_null()) {
-                    const auto stair=decode_phase_stair_replacement_authoring(intent.stair_replacement);
-                    require_unused(stair.identities);
-                    require_unused(stair.child_identities);
-                    require_unused(stair.hosted_instance_identities);
-                    require_unused(stair.overlay_identities);
-                }
             }
         if (structural_hosted_alias_reservation)
             for (const auto& [qualified,alias]:embedded_assembly_presentation_ids(record.entities)) {
@@ -4473,6 +4564,21 @@ static void validate_phase_constraint_fresh_lifetime(const std::map<std::string,
     }
 }
 #endif
+
+void validate_retained_authoring_fresh_identities(
+    const std::vector<RevisionRecord>& history,std::size_t preceding_records,
+    const std::set<std::string,std::less<>>& fresh) {
+    if (preceding_records>history.size())
+        throw std::invalid_argument("Retained authoring identity history prefix is invalid");
+    if (fresh.empty()) return;
+#ifdef VERTEX_HAS_CONSTRAINT_AUTHORING
+    validate_retained_authoring_receipt_identities(history,preceding_records,fresh);
+#else
+    for (std::size_t index=0;index<preceding_records;++index)
+        if (history.at(index).boundary_constraint_changes)
+            throw std::invalid_argument("Retained authoring receipt reservations require the production authoring engine");
+#endif
+}
 
 // Current authoring cannot silently rewrite a baseline architectural object while an
 // alternative is active. Historical ordinary records retain their original
@@ -5469,6 +5575,7 @@ static void validate_mixed_properties_replacement_lifetime(const nlohmann::json&
         (void)entity;
         if (!source.contains(id)) fresh.insert(id);
     }
+    validate_retained_authoring_fresh_identities(history,preceding_records,fresh);
     for (std::size_t index=0;index<preceding_records;++index)
         validate_selection_edit_fresh_identity_tokens(history.at(index).entities,fresh);
 }

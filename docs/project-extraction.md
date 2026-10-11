@@ -1,5 +1,11 @@
 # Portable project extraction
 
+Exchange version202 requires native reader204 for retained phase outer28 wall
+and opening component copies. The explicit historical wall edit version,
+qualified catalog/instance allocations and original-source fences remain in
+the command receipt, including undone records. This is source-format support;
+runtime and migration qualification remain open.
+
 Exchange version201 requires native reader203 when any retained revision carries
 required qualified component phase membership. Structured catalog/instance keys,
 the referenced registry, raw surviving membership order and required status
