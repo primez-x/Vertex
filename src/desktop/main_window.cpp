@@ -111,6 +111,7 @@
 #include "sketch/desktop/building_object_dialog.hpp"
 #include "sketch/desktop/assembly_authoring_dialog.hpp"
 #include "sketch/assembly_document_adapter.hpp"
+#include "sketch/qualified_embedded_assembly_copy.hpp"
 #include "sketch/assembly_catalog_phase_edit.hpp"
 #include "sketch/phase_assembly_catalog_edit_preparation.hpp"
 #include "sketch/assembly_component_clipboard.hpp"
@@ -8328,6 +8329,151 @@ public:
         return transform;
     }
 
+    struct CatalogLocalAssemblyCopy {
+        QualifiedEmbeddedAssemblyCopyPreparation preparation;
+        std::map<std::string,std::pair<std::string,std::string>,std::less<>> destinations;
+        std::map<std::string,std::string,std::less<>> dimension_ids;
+    };
+
+    static CatalogLocalAssemblyCopy prepareCatalogLocalAssemblyCopy(const DocumentSnapshot& source,
+        std::vector<EmbeddedAssemblyGroupTarget> targets, const ArchitecturalGroupTransform& transform,
+        const std::string& message) {
+        if (targets.empty() || targets.size()>maximum_architectural_group_targets)
+            throw std::invalid_argument("Component Copy requires between one and 1000 actual source roots.");
+        auto occupied=retainedSlabIdentityNames(source,true);
+        const auto source_aliases=embedded_assembly_presentation_ids(source.entities());
+        for (const auto& [id,entity]:source.entities()) {
+            occupied.insert(id);
+            if (entity.type=="assembly_model") for (const auto& row:entity.properties.at("model").at("instances"))
+                occupied.insert(row.at("id").get<std::string>());
+        }
+        for (const auto& [root,alias]:source_aliases) { (void)root; occupied.insert(alias); }
+        std::set<std::string,std::less<>> allocations;
+        const auto fresh=[&](const char* kind) {
+            for (std::size_t attempt=0;attempt<64;++attempt) {
+                auto id=new_id(kind);
+                if (!occupied.insert(id).second) continue;
+                allocations.insert(id);
+                return id;
+            }
+            throw std::invalid_argument("Could not reserve a fresh component copy identity.");
+        };
+        std::vector<std::pair<std::string,std::string>> roots;
+        std::map<std::string,std::pair<std::string,std::string>,std::less<>> destinations;
+        for (auto& target:targets) {
+            if (target.copy_instance_id)
+                throw std::invalid_argument("Component Copy must allocate its own fresh catalog-local rows.");
+            const auto root=std::pair{target.catalog_id,target.instance_id};
+            roots.push_back(root);
+            bool reserved{};
+            for (std::size_t attempt=0;attempt<64;++attempt) {
+                auto id=new_id("component-instance");
+                const auto alias=target.catalog_id+":instance:"+id;
+                if (occupied.contains(id) || occupied.contains(alias)) continue;
+                occupied.insert(id); occupied.insert(alias);
+                allocations.insert(id); allocations.insert(alias);
+                target.copy_instance_id=id;
+                if (!destinations.emplace(source_aliases.at(root),std::pair{target.catalog_id,std::move(id)}).second)
+                    throw std::invalid_argument("Component Copy contains a repeated source root.");
+                reserved=true; break;
+            }
+            if (!reserved) throw std::invalid_argument("Could not reserve a fresh catalog-local component identity.");
+        }
+        std::map<std::string,std::string,std::less<>> dimensions;
+        for (const auto& [id,target]:inspect_embedded_assembly_dimension_clone_roster(source.entities(),roots)) {
+            (void)target; dimensions.emplace(id,fresh("component-dimension"));
+        }
+        std::map<std::string,std::string,std::less<>> memberships;
+        for (const auto& registry:required_qualified_embedded_copy_membership_registries(source,targets))
+            memberships.emplace(registry,fresh("requiredcompanion"));
+        validate_retained_authoring_fresh_identities(source.history(),source.history().size(),allocations);
+        auto prepared=prepare_qualified_embedded_assembly_copy(source,targets,transform,dimensions,memberships,message);
+        // The generated presentation roster, rather than the raw local IDs,
+        // controls preview and selection. Preparation independently reserves it.
+        const auto aliases=embedded_assembly_presentation_ids(prepared.preview_entities());
+        for (const auto& [original,destination]:destinations) {
+            (void)original; allocations.insert(aliases.at(destination));
+        }
+        validate_retained_authoring_fresh_identities(source.history(),source.history().size(),allocations);
+        return {std::move(prepared),std::move(destinations),std::move(dimensions)};
+    }
+
+    static std::map<std::string,std::string,std::less<>> catalogLocalAssemblyCopyRedirects(
+        const CatalogLocalAssemblyCopy& copy, const AssemblyDocumentEntities& entities) {
+        const auto aliases=embedded_assembly_presentation_ids(entities);
+        auto redirects=copy.dimension_ids;
+        for (const auto& [original,destination]:copy.destinations)
+            if (!redirects.emplace(original,aliases.at(destination)).second)
+                throw std::invalid_argument("A component copy has ambiguous presentation identities.");
+        return redirects;
+    }
+
+    static std::pair<std::vector<CanvasEntity>,std::vector<CanvasLabel>> catalogLocalAssemblyCopyPreview(
+        const DocumentSnapshot& source, const CatalogLocalAssemblyCopy& copy, bool metric) {
+        require_qualified_embedded_assembly_copy_source_current(source,copy.preparation);
+        std::vector<CanvasEntity> geometry;
+        std::vector<CanvasLabel> labels;
+        AssemblyExpansionBudget budget;
+        const auto add=[&](const AssemblyDocumentEntities& entities,bool selected) {
+            const auto aliases=embedded_assembly_presentation_ids(entities);
+            std::map<std::string,AssemblyModel,std::less<>> catalogs;
+            for (const auto& [original,destination]:copy.destinations) {
+                auto root=destination;
+                if (!selected) {
+                    const auto found=std::find_if(aliases.begin(),aliases.end(),[&](const auto& entry) {
+                        return entry.second==original;
+                    });
+                    if (found==aliases.end()) throw std::invalid_argument("A component copy lost its captured source alias.");
+                    root=found->first;
+                }
+                if (!catalogs.contains(root.first))
+                    catalogs.emplace(root.first,AssemblyModel::from_json(entities.at(root.first).properties.at("model")));
+                const auto& model=catalogs.at(root.first);
+                const auto instance=std::find_if(model.instances().begin(),model.instances().end(),[&](const auto& row) {
+                    return row.id==root.second;
+                });
+                if (instance==model.instances().end()) throw std::invalid_argument("A component copy lost its catalog-local row.");
+                const auto expansion=model.expand(*instance,budget);
+                if (expansion.profiles.empty()) throw std::invalid_argument("A component copy has no geometric preview.");
+                for (const auto& profile:expansion.profiles) {
+                    auto item=assemblyPlanProfile(id_from(aliases.at(root)),QString::fromStdString(
+                        assembly_profile_presentation_key(root.first,*instance,profile).dump()),profile,model,selected);
+                    if (!selected) { item.type=QStringLiteral("source"); item.stroke_color=QColor(140,148,158); }
+                    geometry.push_back(std::move(item));
+                }
+            }
+            std::vector<BoundaryDimension> dimensions;
+            dimensions.reserve(copy.dimension_ids.size());
+            for (const auto& [original,destination]:copy.dimension_ids) {
+                const auto& entity=entities.at(selected ? destination : original);
+                const auto decoded=decode_boundary_dimension_entity(entity);
+                if (!decoded.supported()) throw std::invalid_argument(decoded.unsupported_reason);
+                dimensions.push_back(*decoded.dimension);
+            }
+            const auto measurements=dimensions.empty() ? std::vector<BoundaryDimensionResolution>{} :
+                resolve_current_assembly_boundary_dimensions(dimensions,entities);
+            for (std::size_t index=0;index<dimensions.size();++index) {
+                const auto& dimension=dimensions[index];
+                auto projected=project_boundary_dimension_resolution(dimension,entities.at(dimension.boundary_id),
+                    measurements.at(index),metric,selected);
+                projected.label.color=selected ? QColor(35,115,190) : QColor(140,148,158);
+                if (projected.line) {
+                    if (!selected) projected.line->type=QStringLiteral("source");
+                    geometry.push_back(std::move(*projected.line));
+                }
+                labels.push_back(std::move(projected.label));
+            }
+        };
+        try {
+            add(source.entities(),false);
+            add(copy.preparation.preview_entities(),true);
+        } catch (const Standard_Failure& error) {
+            const auto* message=error.GetMessageString();
+            throw std::invalid_argument(message && *message ? message : "The component copy geometry could not be projected.");
+        }
+        return {std::move(geometry),std::move(labels)};
+    }
+
     static std::pair<Command, std::string> embeddedAssemblyTransformCommand(const DocumentSnapshot& source,
         const std::string& child_id, const ArchitecturalTransform& gesture, bool clone,
         bool flip_horizontal = false, bool flip_vertical = false) {
@@ -13363,6 +13509,18 @@ public:
         auto* clone = new QCheckBox(QStringLiteral("Create a transformed copy"), &dialog);
         clone->setObjectName(QStringLiteral("architecturalTransformClone"));
         layout->addWidget(clone);
+        PlanCanvas* catalog_copy_preview=nullptr;
+        if (embedded && !siteCanvas(m_workspace==Workspace::measurement ? m_measurementCanvas : m_architecturalCanvas)) {
+            catalog_copy_preview=new PlanCanvas(&dialog);
+            catalog_copy_preview->setObjectName(QStringLiteral("architecturalComponentCopyPreview"));
+            catalog_copy_preview->setAccessibleName(QStringLiteral("Component copy preview"));
+            catalog_copy_preview->setMetricUnits(context.metric_units);
+            catalog_copy_preview->setSelectionControlsVisible(false);
+            catalog_copy_preview->setMinimumHeight(200);
+            catalog_copy_preview->setOverviewMapEnabled(false);
+            catalog_copy_preview->hide();
+            layout->addWidget(catalog_copy_preview);
+        }
         auto* status = new QLabel(&dialog);
         status->setObjectName(QStringLiteral("architecturalTransformStatus"));
         status->setWordWrap(true);
@@ -13375,6 +13533,7 @@ public:
 
         std::optional<std::pair<Command, std::string>> candidate_command;
         std::optional<DocumentSnapshot> candidate_snapshot;
+        std::optional<CatalogLocalAssemblyCopy> candidate_catalog_copy;
         std::uint64_t input_generation{};
         bool room_review_active{};
         const auto input_values = [&] {
@@ -13384,16 +13543,35 @@ public:
             ++input_generation;
             candidate_command.reset();
             candidate_snapshot.reset();
+            candidate_catalog_copy.reset();
+            if (catalog_copy_preview) {
+                catalog_copy_preview->setEntities({}); catalog_copy_preview->setLabels({});
+                catalog_copy_preview->setVisible(clone->isChecked());
+            }
             try {
                 if (!m_document->is_editable())
                     throw std::invalid_argument("This document is read-only.");
                 if (!modalContextUnchanged(context) || !sourceEditAuthorityCurrent(authority))
                     throw std::invalid_argument("The project or selection changed. Reopen the transform editor.");
                 if (embedded) {
-                    candidate_command = embeddedAssemblyTransformCommand(source, context.selected_id.toStdString(),
-                        parseArchitecturalTransform(rotation->text(), offset_x->text(), offset_y->text(), offset_z->text(), scale->text()),
-                        clone->isChecked(),flip_horizontal->isChecked(),flip_vertical->isChecked());
-                    candidate_snapshot = Document::preview_command(source, candidate_command->first);
+                    const auto gesture=parseArchitecturalTransform(rotation->text(),offset_x->text(),offset_y->text(),offset_z->text(),scale->text());
+                    if (clone->isChecked() && catalog_copy_preview) {
+                        const ArchitecturalGroupTransform operation{{},{gesture.x,gesture.y,gesture.z},
+                            gesture.rotation_z_radians,gesture.scale,flip_horizontal->isChecked(),flip_vertical->isChecked()};
+                        auto copied=prepareCatalogLocalAssemblyCopy(source,
+                            {{embedded->assembly_catalog_id,embedded->instance.id,std::nullopt}},operation,"Copy transformed component");
+                        auto [geometry,labels]=catalogLocalAssemblyCopyPreview(source,copied,context.metric_units);
+                        const auto redirects=catalogLocalAssemblyCopyRedirects(copied,copied.preparation.preview_entities());
+                        candidate_command=std::pair{Command{qualified_embedded_assembly_copy_command(copied.preparation)},
+                            redirects.at(context.selected_id.toStdString())};
+                        catalog_copy_preview->setEntities(std::move(geometry));
+                        catalog_copy_preview->setLabels(std::move(labels)); catalog_copy_preview->fitView();
+                        candidate_catalog_copy=std::move(copied);
+                    } else {
+                        candidate_command = embeddedAssemblyTransformCommand(source, context.selected_id.toStdString(),
+                            gesture,clone->isChecked(),flip_horizontal->isChecked(),flip_vertical->isChecked());
+                        candidate_snapshot = Document::preview_command(source, candidate_command->first);
+                    }
                 } else {
                     auto [command, root] = [&]() -> std::pair<Command,std::string> {
                         if (flip_horizontal->isChecked() || flip_vertical->isChecked() ||
@@ -13421,6 +13599,8 @@ public:
             } catch (const std::exception& error) {
                 candidate_command.reset();
                 candidate_snapshot.reset();
+                candidate_catalog_copy.reset();
+                if (catalog_copy_preview) { catalog_copy_preview->setEntities({}); catalog_copy_preview->setLabels({}); }
                 status->setText(QStringLiteral("Preview: %1").arg(QString::fromUtf8(error.what())));
                 apply->setEnabled(false);
             }
@@ -13440,8 +13620,18 @@ public:
                 update_preview();
                 return;
             }
-            if (!candidate_command || !candidate_snapshot) return;
+            if (!candidate_command || (!candidate_snapshot && !candidate_catalog_copy)) return;
             try {
+                if (candidate_catalog_copy) {
+                    require_qualified_embedded_assembly_copy_source_current(authoringSnapshot(),candidate_catalog_copy->preparation);
+                    const Command command{qualified_embedded_assembly_copy_command(candidate_catalog_copy->preparation)};
+                    if (!clone->isChecked() || command_to_json(command).dump()!=command_to_json(candidate_command->first).dump())
+                        throw std::invalid_argument("The component Copy differs from its source-bound preview.");
+                    if (!applyAuthoredCommand(command)) return;
+                    const auto redirects=catalogLocalAssemblyCopyRedirects(*candidate_catalog_copy,authoringSnapshot().entities());
+                    m_selected_id=id_from(redirects.at(context.selected_id.toStdString())); m_selected_ids={m_selected_id};
+                    clearError(); refresh(); dialog.accept(); return;
+                }
                 if (!embedded && original->type == "wall" && authority.selection.size() == 1 &&
                     !clone->isChecked() && !flip_horizontal->isChecked() && !flip_vertical->isChecked() &&
                     parseArchitecturalTransform(rotation->text(), offset_x->text(), offset_y->text(), offset_z->text(), scale->text()).scale == 1.0 &&
@@ -13481,6 +13671,7 @@ public:
             } catch (const std::exception& error) {
                 room_review_active = false;
                 candidate_command.reset(); candidate_snapshot.reset(); apply->setEnabled(false);
+                candidate_catalog_copy.reset();
                 status->setText(QString::fromUtf8(error.what()));
             }
         });
@@ -13491,6 +13682,8 @@ public:
         QObject::connect(&source_guard, &QTimer::timeout, &dialog, [&] {
             if (candidate_command && (!modalContextUnchanged(context) || !sourceEditAuthorityCurrent(authority))) {
                 candidate_command.reset(); candidate_snapshot.reset();
+                candidate_catalog_copy.reset();
+                if (catalog_copy_preview) { catalog_copy_preview->setEntities({}); catalog_copy_preview->setLabels({}); }
                 apply->setEnabled(false);
                 status->setText(QStringLiteral("The project or selection changed. Reopen the transform editor."));
             }
@@ -13906,6 +14099,7 @@ public:
         std::optional<std::pair<Command, std::string>> candidate_command;
         std::map<std::string,std::string,std::less<>> candidate_copy_ids;
         std::map<std::pair<std::string,std::string>,std::string> candidate_copy_children;
+        std::optional<CatalogLocalAssemblyCopy> candidate_catalog_copy;
         std::optional<DocumentSnapshot> candidate_snapshot;
         std::optional<PhaseWallCanvasProposal> candidate_wall_proposal;
         std::vector<PhysicalWallRoomDimensionPlacement> candidate_room_placements;
@@ -13994,6 +14188,7 @@ public:
             candidate_room_placements.clear();
             candidate_copy_ids.clear();
             candidate_copy_children.clear();
+            candidate_catalog_copy.reset();
             freedom->clear();
             try {
                 if (!m_document->is_editable()) throw std::invalid_argument("This document is read-only.");
@@ -14080,6 +14275,24 @@ public:
                                 operation.flip_horizontal,operation.flip_vertical};
                         }
                         embedded_targets.push_back(std::move(target));
+                    }
+                    if (clone->isChecked() && !site_group && !embedded_targets.empty() &&
+                        geometry_selection.isEmpty() && architectural_selection.empty() &&
+                        annotation_targets.empty() && reference_targets.empty() && !independent_room_callout_selection) {
+                        auto copied=prepareCatalogLocalAssemblyCopy(source,std::move(embedded_targets),
+                            physical_transform,"Copy transformed components");
+                        candidate_copy_ids=catalogLocalAssemblyCopyRedirects(copied,copied.preparation.preview_entities());
+                        // Explicit associated dimensions may accompany their
+                        // selected roots. No other presentation is composed into
+                        // the exclusive request-only command.
+                        for (const auto& id:selection)
+                            if (!candidate_copy_ids.contains(id.toStdString()))
+                                throw std::invalid_argument("The component Copy cannot retain the complete selected cohort.");
+                        const auto primary=candidate_copy_ids.at(primary_render_id.toStdString());
+                        const Command command{qualified_embedded_assembly_copy_command(copied.preparation)};
+                        candidate_catalog_copy=std::move(copied);
+                        shared_callout_transform.reset();
+                        return {command,primary};
                     }
                     ApplyEntityChanges presentation{source.revision(),{}, {},"Transform presentation group"};
                     if (!annotation_targets.empty() || !reference_targets.empty()) {
@@ -14495,6 +14708,14 @@ public:
                     }
                     return {std::move(command),primary_render_id.toStdString()};
                 }();
+                if (candidate_catalog_copy) {
+                    auto [geometry,labels]=catalogLocalAssemblyCopyPreview(source,*candidate_catalog_copy,context.metric_units);
+                    preview->setEntities(std::move(geometry)); preview->setLabels(std::move(labels));
+                    preview->setReferences({}); preview->fitView();
+                    candidate_command=std::move(candidate);
+                    status->clear(); buttons->button(QDialogButtonBox::Apply)->setEnabled(true);
+                    return;
+                }
                 if (shared_callout_transform) {
                     if (group && clone->isChecked() && roof_copy_capture.intent &&
                         command_to_json(candidate.first).dump()!=command_to_json(Command{*roof_copy_capture.intent}).dump())
@@ -15032,6 +15253,7 @@ public:
                 candidate_command.reset();
                 candidate_snapshot.reset();
                 candidate_wall_proposal.reset();
+                candidate_catalog_copy.reset();
                 preview->setEntities({});
                 preview->setLabels({});
                 preview->setReferences({});
@@ -15042,6 +15264,7 @@ public:
             } catch (const std::exception& error) {
                 candidate_command.reset(); candidate_snapshot.reset();
                 candidate_wall_proposal.reset();
+                candidate_catalog_copy.reset();
                 preview->setEntities({});
                 preview->setLabels({});
                 preview->setReferences({});
@@ -15063,6 +15286,7 @@ public:
             ++input_generation;
             candidate_copy_ids.clear();
             candidate_copy_children.clear();
+            candidate_catalog_copy.reset();
             freedom->clear();
             status->clear();
             buttons->button(QDialogButtonBox::Apply)->setEnabled(false);
@@ -15088,6 +15312,7 @@ public:
                     candidate_command.reset();
                     candidate_snapshot.reset();
                     candidate_wall_proposal.reset();
+                    candidate_catalog_copy.reset();
                     freedom->clear();
                     preview->setEntities({});
                     preview->setLabels({});
@@ -15097,8 +15322,24 @@ public:
                 return;
             }
             if (supported_selection) {
-                if (!candidate_command || (!candidate_snapshot && !candidate_wall_proposal)) return;
+                if (!candidate_command || (!candidate_snapshot && !candidate_wall_proposal && !candidate_catalog_copy)) return;
                 try {
+                    if (candidate_catalog_copy) {
+                        require_qualified_embedded_assembly_copy_source_current(authoringSnapshot(),candidate_catalog_copy->preparation);
+                        const Command command{qualified_embedded_assembly_copy_command(candidate_catalog_copy->preparation)};
+                        if (!clone->isChecked() || preview_debounce.isActive() ||
+                            command_to_json(command).dump()!=command_to_json(candidate_command->first).dump() ||
+                            candidate_copy_ids.at(primary_render_id.toStdString())!=candidate_command->second)
+                            throw std::invalid_argument("The component Copy differs from its complete source-bound preview.");
+                        if (!applyAuthoredCommand(command)) return;
+                        const auto redirects=catalogLocalAssemblyCopyRedirects(*candidate_catalog_copy,authoringSnapshot().entities());
+                        QStringList copied_selection;
+                        for (const auto& id:selection) copied_selection.push_back(id_from(redirects.at(id.toStdString())));
+                        m_selected_id=id_from(redirects.at(primary_render_id.toStdString()));
+                        copied_selection.removeAll(m_selected_id); copied_selection.push_back(m_selected_id);
+                        m_selected_ids=std::move(copied_selection);
+                        clearError(); refresh(); dialog.accept(); return;
+                    }
                     if (candidate_wall_proposal) {
                         const auto retained = *candidate_command;
                         const auto proposal = *candidate_wall_proposal;
@@ -15249,6 +15490,7 @@ public:
                     room_review_active = false;
                     candidate_command.reset(); candidate_snapshot.reset();
                     candidate_wall_proposal.reset();
+                    candidate_catalog_copy.reset();
                     buttons->button(QDialogButtonBox::Apply)->setEnabled(false);
                     status->setText(QString::fromUtf8(error.what()));
                 }
@@ -15268,6 +15510,7 @@ public:
                 candidate_command.reset();
                 candidate_snapshot.reset();
                 candidate_wall_proposal.reset();
+                candidate_catalog_copy.reset();
                 freedom->clear();
                 preview->setEntities({});
                 preview->setLabels({});

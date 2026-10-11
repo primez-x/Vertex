@@ -14,6 +14,50 @@ changed source does not acquire runtime acceptance without later qualification.
 
 ## Current delivery state
 
+### October 11 catalog-local numeric Copy controller continuation
+
+The closed retirement batch is committed and pushed as 5a9f566f; its exact
+remote branch matches that checkpoint. The subsequent narrow lifetime trace
+confirms standalone wall split declarations are admitted by full retained raw
+receipt scanning and every declared split materializes. Original pure room
+review admits room/topology/dimension declarations before composition; Undo
+retains their preceding history. No correction was required by that source trace.
+
+This continuation connects explicit singleton component Copy and pure embedded
+component cohorts to sealed same-catalog preparation and exclusive command67.
+Mixed selections and Site retain their independent-copy paths. Fresh catalog
+rows, associated v6 dimensions and exact required companions reserve current
+and undone raw/typed names. Preview uses the actual source and sealed candidate
+profiles plus batched dimension resolution, with no synthetic Document or raw
+candidate admission. Current embedded poses are world-authored; preview uses
+the same expansion as canonical component projection and copy replay.
+
+Publication checks the complete captured source/selection and exact retained
+command, bypasses generic appearance/callout/registration augmentation, and
+restores actual published presentation aliases and explicitly selected copied
+dimensions. Typing, source changes, failed preview and cancellation invalidate
+the preparation. Existing singleton editing and mixed-group behavior remain.
+Independent integrated source review approved this continuation with no proved
+introduced P1/P2 finding. It traced retained identity allocation, world-authored
+projection, exact publication and alias restoration, and candidate invalidation.
+Root inspected interfaces, operator math, preview projection and invalidation;
+scoped diff checks pass. This is source evidence, not runtime qualification.
+
+Required gaps remain: Site catalog-local Copy, generic ancillary cleanup with
+qualified component retirement, complete Properties metadata/dimension carry,
+and profile-edge dimensions. The companion read-only latch and current67/
+catalog/Properties publication refusals remain; this branch does not unlock
+phase-owned Copy. Profile-topology discovery identified reusable identified
+segment validation and winding/edit correspondence in boundary_entity and
+boundary_geometry_edit. Profile identities need local profile/ring scope;
+document BoundaryIdentityHistory cannot supply their ownership. Outer/hole
+identities and codecs must integrate both type profiles and own overrides.
+
+Source-only steering remains binding. No builds, tests, scripts, probes, native
+jobs, launches, packages or installations ran. Compilation, rendered UI,
+runtime, Undo/reopen and user acceptance remain unverified. The installed
+application is unchanged and all ten production gates remain open.
+
 ### October 11 closed component retirement and controller continuation
 
 The prior status turn made no source changes. This continuation adds five
