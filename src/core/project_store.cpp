@@ -23,6 +23,7 @@
 #include "sketch/mixed_clipboard_command.hpp"
 #include "sketch/qualified_embedded_assembly_copy.hpp"
 #include "sketch/architectural_drawing_removal.hpp"
+#include "sketch/phase_assembly_catalog_edit.hpp"
 
 #include <sqlite3.h>
 
@@ -404,6 +405,16 @@ std::uint32_t required_format_version_internal(const DocumentSnapshot& snapshot,
                     const auto request=validate_qualified_embedded_assembly_copy_request(command->qualified_embedded_assembly_copy_intent);
                     return request.at("version")==2 ? 242U : 241U;
                 }
+                if (version==59 && command->assembly_catalog_edit_completion &&
+                    !command->assembly_catalog_edit_intent.is_null()) {
+                    const auto request=validate_assembly_catalog_phase_edit_request(command->assembly_catalog_edit_intent);
+                    if (request.at("version")==2) return 246U;
+                }
+                if (version==60 && command->phase_assembly_catalog_edit_completion &&
+                    !command->phase_assembly_catalog_edit_intent.is_null()) {
+                    const auto request=validate_phase_assembly_catalog_edit_request(command->phase_assembly_catalog_edit_intent);
+                    if (request.at("authoring").at("catalog_request").at("version")==2) return 246U;
+                }
                 if (version==52 && command->mixed_selection_edit_completion &&
                     !command->mixed_selection_edit_intent.is_null()) {
                     const auto intent=validate_mixed_selection_property_edit_intent(command->mixed_selection_edit_intent);
@@ -462,6 +473,14 @@ std::uint32_t required_format_version_internal(const DocumentSnapshot& snapshot,
             const auto literal_true=[](const nlohmann::json& child,const char* field) {
                 return child.contains(field) && child.at(field).is_boolean() && child.at(field)==true;
             };
+            if (floor<246 && typed_shape(value,2,{"version","source_entities_digest","edits"})) {
+                try {
+                    (void)validate_assembly_catalog_phase_edit_request(value);
+                    floor=246U;
+                } catch (const std::invalid_argument&) {
+                } catch (const nlohmann::json::exception&) {
+                }
+            }
             if (floor<245 && typed_shape(value,6,{"version","architectural","drawing",
                     "allow_manufactured_opening_hosts","complete_component_phase_memberships",
                     "complete_roof_component_phase_memberships","complete_component_dimensions",
@@ -1555,11 +1574,11 @@ std::uint32_t required_format_version_internal(const DocumentSnapshot& snapshot,
     };
     for (const auto& revision : snapshot.history()) {
         if (revision.phase_entity_import) required=std::max(required,160U);
-        if (required<245 && revision.boundary_constraint_changes)
+        if (required<246 && revision.boundary_constraint_changes)
             required=std::max(required,retained_component_reader_floor(command_to_json(Command{*revision.boundary_constraint_changes})));
-        if (required<245 && revision.boundary_geometry_edit)
+        if (required<246 && revision.boundary_geometry_edit)
             required=std::max(required,typed_edit_reader_floor(encode_boundary_geometry_edit(*revision.boundary_geometry_edit)));
-        if (required<245 && revision.boundary_constraint_changes)
+        if (required<246 && revision.boundary_constraint_changes)
             required=std::max(required,typed_edit_reader_floor(command_to_json(Command{*revision.boundary_constraint_changes})));
         if (required<122 && revision.boundary_geometry_edit)
             required=std::max(required,quantity_reader_floor(encode_boundary_geometry_edit(*revision.boundary_geometry_edit)));
@@ -4103,6 +4122,7 @@ bool verify_sqlite_schema(sqlite3* database, bool allow_recovery = false) {
          sqlite3_column_int(user_version.get(), 0) != 243 &&
          sqlite3_column_int(user_version.get(), 0) != 244 &&
          sqlite3_column_int(user_version.get(), 0) != 245 &&
+         sqlite3_column_int(user_version.get(), 0) != 246 &&
          sqlite3_column_int(user_version.get(), 0) != 242 &&
          sqlite3_column_int(user_version.get(), 0) != 207 &&
          sqlite3_column_int(user_version.get(), 0) != 202 &&
@@ -4829,6 +4849,8 @@ DocumentSnapshot read_snapshot(sqlite3* database, RecoveryLedger* recovery = nul
     // here and authenticate the manifest with its stored version below.
     const auto required_format = required_format_version_internal(snapshot, format_number < 28);
     if (required_format > format_number) {
+        if (required_format>=246)
+            storage_error(StorageErrorCode::unsupported_format,"This project requires reader 246 for catalog material edits with architectural consumers");
         if (required_format>=245)
             storage_error(StorageErrorCode::unsupported_format,"This project requires reader 245 for attached physical-owner dimension membership retirement");
         if (required_format>=244)

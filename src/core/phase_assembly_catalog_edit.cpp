@@ -288,6 +288,9 @@ void account_definition_effects(const Entities& source, const Json& request, Pha
             for (const auto& key : impact.after_material_ids) ++private_consumers[{impact.root.catalog_id, DefinitionKind::material, key}];
         }
     }
+    for (const auto& consumer : plan.source.material_consumers)
+        if (consumer.cohort != AssemblyCatalogPhaseEditCohort::active_ordinary)
+            protected_definitions.insert({consumer.catalog_id, DefinitionKind::material, consumer.material_id});
     std::set<DefinitionKey> global_candidates;
     Json residual_edits = Json::array();
     for (const auto& edit : request.at("edits")) {
@@ -362,7 +365,7 @@ void account_definition_effects(const Entities& source, const Json& request, Pha
             else ++key;
         }
         if (!accepted.empty()) {
-            Json residual{{"version", 1}, {"source_entities_digest", request.at("source_entities_digest")}, {"edits", std::move(accepted)}};
+            Json residual{{"version", request.at("version")}, {"source_entities_digest", request.at("source_entities_digest")}, {"edits", std::move(accepted)}};
             try {
                 const auto admitted = inspect_assembly_catalog_phase_edit(source, residual);
                 require(admitted.ordinary_replay_safe, "whole residual changes protected or inactive consumers");
@@ -759,6 +762,22 @@ PhaseAssemblyCatalogEditResult replay_phase_assembly_catalog_edit_entities(const
                     "actual global definition effect differs from the full requested typed replacement");
             } else require(effect.disposition == Disposition::private_only && effect.active_private_consumer_count != 0,
                 "changed definition lacks a complete actual effect");
+        }
+        // Physical layers keep their actual source catalog references. Private
+        // component copies cannot supply definition authority for those layers;
+        // only the independently admitted global remainder may change them.
+        std::set<std::pair<std::string, std::string>> physical_materials;
+        std::set<std::pair<std::string, std::string>> protected_materials;
+        for (const auto& consumer : plan.source.material_consumers) {
+            if (physical_materials.emplace(consumer.catalog_id, consumer.material_id).second)
+                require(exact(raw_row(result.entities.at(consumer.catalog_id).properties.at("model"), "materials", consumer.material_id),
+                    raw_row(global_authority->at(consumer.catalog_id).properties.at("model"), "materials", consumer.material_id)),
+                    "actual physical material differs from admitted global definition authority");
+            if (consumer.cohort != AssemblyCatalogPhaseEditCohort::active_ordinary &&
+                protected_materials.emplace(consumer.catalog_id, consumer.material_id).second)
+                require(exact(raw_row(result.entities.at(consumer.catalog_id).properties.at("model"), "materials", consumer.material_id),
+                    raw_row(source.at(consumer.catalog_id).properties.at("model"), "materials", consumer.material_id)),
+                    "protected/inactive physical material definition changed during private component replacement");
         }
         // Existing envelopes are byte-form equivalent except the explicitly
         // derived roster/catalog references and actual registry/companion edits.

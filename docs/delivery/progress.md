@@ -14,6 +14,66 @@ changed source does not acquire runtime acceptance without later qualification.
 
 ## Current delivery state
 
+### October 11 component alternative editing integration
+
+The previous status turn verified and pushed 21f85c8a; the exact remote branch
+matches that component Properties/deletion checkpoint. This continuation adds
+source behavior for editing components inside alternatives rather than keeping
+qualified projects read-only.
+
+The live Document guard now protects inactive qualified components' exact
+associated dimension envelopes, stable presentation aliases, annotation framing
+and ordered inactive override subsequences. Classification uses the original
+saved membership and actual host activity, even when the submitted command also
+switches alternatives. Active overrides can be deleted without falsely treating
+their shifted inactive neighbors as edits. Newly added inactive overrides refuse.
+The shared root inactivity helper retains existing typed replay semantics.
+
+Foundation catalog request2 inventories actual architectural material consumers.
+Protected/inactive physical consumers exclude their materials from global edits;
+active components use existing actual private-catalog isolation. Safe global
+remainders retain request2 and undergo complete inspection again. Current raw/v1
+catalog writers also preserve protected physical raw material rows and carrier
+bindings. Historical request1 replay remains root-only. Reader246/extraction244
+covers the direct/nested new request through retained and undone history.
+
+Current Copy/catalog publication refusals, the global companion latch and the
+embedded baseline Properties refusal are removed with these safeguards. Full
+history admission on restore re-evaluates only the exact obsolete computed latch
+diagnostic; unrelated restrictions remain. Root owns Document/controller/store
+integration and docs; the bounded worker owned catalog material impact and
+residual replay. Narrow discovery found the presentation-alias collision and the
+universal guard now preserves inactive source bindings against it. Independent
+integrated source review proved omitted top-level material assignments. The
+correction uses the existing architectural reference collector for all twelve
+supported roles and wall/slab layers, with actual opening/corner/stair host
+activity and explicit roof-join scope. Proposed owners retain their permission on
+baseline hosts while host inactivity remains decisive. Independent amended
+source review approved the bounded correction with no remaining proved P1/P2
+finding. Root inspected API signatures, inherited scope, historical request1
+behavior, current publication, source alias/framing protection and format floors.
+Manual source review and diff checks are
+available evidence; no builds, tests, scripts, native jobs, app launches, packages
+or installations ran. The installed candidate is unchanged.
+
+Next required source work includes Site catalog-local Copy, stable profile-edge
+dimension identity/lifecycle, and mixed skylight deletion with ordinary owner
+dimension retirement. Remaining broad implementation and external prerequisites
+stay in the complete delivery plan. Runtime editing, Undo/reopen, production
+qualification and user acceptance are unverified; all ten gates remain open.
+
+Site Copy discovery is complete: the numeric singleton and pure embedded group
+branches can reuse sealed command67 with world-authored embedded coordinates;
+Site footprint admission needs exact request roots and associated source
+dimensions. Canonical Site embedded body/dimension frames are identity even
+inside rotated buildings. Source and destination drawing contexts must both
+belong to the active property because nonidentity copying removes placement and
+can change context from host to catalog. Existing source/selection/publication
+generation fences and actual published alias redirects must be retained. The
+sealed normal Copy lane also lacks annotation/presentation override carry that
+the raw singleton fallback supplies; finish that lifecycle before enabling Site,
+without appending raw supplements to the exclusive command. No Site edits made.
+
 ### October 11 component Properties and source-preserving deletion continuation
 
 The preceding status turn made no source changes. This continuation committed

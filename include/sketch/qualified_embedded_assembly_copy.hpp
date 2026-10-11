@@ -5,7 +5,7 @@
 namespace sketch {
 
 // Detached source-derived preview only. This seal grants no publication or
-// companion-edit authority and does not remove companion quarantine.
+// companion-edit authority; the exclusive command replays actual source.
 class QualifiedEmbeddedAssemblyCopyPreparation final {
 public:
     [[nodiscard]] const nlohmann::json& request() const noexcept { return request_; }

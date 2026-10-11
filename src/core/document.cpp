@@ -3574,11 +3574,8 @@ static void validate_phase_constraint_composed_originals(const std::map<std::str
 #endif
 }
 
-static void validate_active_design_preserved_dependents(const std::map<std::string,Entity,std::less<>>& source,
-    const std::map<std::string,Entity,std::less<>>& candidate,bool freeze_registries=true,
-    bool retires_proposals=false) {
-    const auto scope=constraint_phase_scope(source);
-    std::set<std::string,std::less<>> inactive_targets=scope.inactive_owner_ids;
+static std::set<AssemblyPhaseRoot> inactive_qualified_component_roots(
+    const std::map<std::string,Entity,std::less<>>& source,const ConstraintPhaseScope& scope) {
     auto inactive_component_roots=scope.assembly_memberships.inactive_roots;
     if (!scope.assembly_memberships.owners.empty()) {
         // Row membership does not release actual host activity. Inspect each
@@ -3592,6 +3589,17 @@ static void validate_active_design_preserved_dependents(const std::map<std::stri
                         row.at("placement").at("host_entity_id").get<std::string>()))
                     inactive_component_roots.insert(root);
             }
+    }
+    return inactive_component_roots;
+}
+
+static void validate_active_design_preserved_dependents(const std::map<std::string,Entity,std::less<>>& source,
+    const std::map<std::string,Entity,std::less<>>& candidate,bool freeze_registries=true,
+    bool retires_proposals=false) {
+    const auto scope=constraint_phase_scope(source);
+    std::set<std::string,std::less<>> inactive_targets=scope.inactive_owner_ids;
+    const auto inactive_component_roots=inactive_qualified_component_roots(source,scope);
+    if (!scope.assembly_memberships.owners.empty()) {
         const auto component_aliases=embedded_assembly_presentation_ids(source);
         for (const auto& root:inactive_component_roots) {
             const auto alias=component_aliases.find(root);
@@ -4965,6 +4973,18 @@ static bool has_component_membership(const ComponentMembershipEntities& entities
         return row.second.type==assembly_phase_membership_entity_type;
     });
 }
+// Older serialized snapshots may retain the retired computed companion latch.
+// Recognize only its exact actual-head diagnostic after history admission;
+// arbitrary session restrictions and unknown required entities remain binding.
+static bool is_retired_component_read_only_reason(const ComponentMembershipEntities& entities,
+    const std::string& reason) {
+    for (const auto& [id,entity]:entities) {
+        if (entity.type==assembly_phase_membership_entity_type)
+            return reason=="Qualified component alternatives require component replacement and dependency integration ("+id+")";
+        if (entity.required && !is_known_entity_type(entity.type)) return false;
+    }
+    return false;
+}
 // Private provenance channel: call only after an exclusive actual-source typed
 // producer or exact source-derived deletion validator. Never capture generic
 // boundary results, submitted entity changes, or wrapper suffix payloads.
@@ -4984,6 +5004,83 @@ static void validate_current_component_membership_transition(
     if (!has_component_membership(source) && !has_component_membership(candidate) &&
         (!admission || !has_component_membership(*admission))) return;
     try { validate_assembly_phase_membership_transition(source,candidate,admission ? *admission : source); }
+    catch (const std::exception& error) { document_error(DocumentErrorCode::invalid_entity,error.what()); }
+}
+
+// Companion admission protects row ownership, not the dependent entities. Every
+// live writer must also preserve the original inactive component's dimensions
+// and annotation placements. Classify from source even when this same command
+// switches the saved design. Historical replay retains its original semantics.
+static void validate_current_component_dependent_preservation(
+    const ComponentMembershipEntities& source,const ComponentMembershipEntities& candidate) {
+    if (!has_component_membership(source)) return;
+    try {
+        const auto scope=constraint_phase_scope(source);
+        const auto inactive_roots=inactive_qualified_component_roots(source,scope);
+        if (inactive_roots.empty()) return;
+        std::set<std::string,std::less<>> inactive_targets;
+        const auto original_aliases=embedded_assembly_presentation_ids(source);
+        const auto candidate_aliases=embedded_assembly_presentation_ids(candidate);
+        for (const auto& root:inactive_roots) {
+            const auto original=original_aliases.find(root), after=candidate_aliases.find(root);
+            if (original==original_aliases.end() || after==candidate_aliases.end() || original->second!=after->second)
+                throw std::invalid_argument("Current editing changed an inactive component presentation binding: "+root.first);
+            inactive_targets.insert(original->second);
+        }
+        for (const auto& [id,original]:source) {
+            if (!can_recognize_boundary_dimension_entity_type(original.type)) continue;
+            const auto decoded=decode_boundary_dimension_entity(original);
+            if (!decoded.supported() || !decoded.dimension->assembly_target) continue;
+            const auto& component=decoded.dimension->assembly_target->component;
+            if (component.document_entity_id ||
+                !inactive_roots.contains({component.catalog_id,component.instance_id})) continue;
+            const auto after=candidate.find(id);
+            if (after==candidate.end() || !exact_entity_payload(original,after->second))
+                throw std::invalid_argument("Current editing changed an inactive component dimension: "+id);
+            // An annotation may address either the rendered component or its
+            // dimension. Both retain their original exact placement rows.
+            inactive_targets.insert(id);
+        }
+        const auto protected_rows=[&](const nlohmann::json& rows) {
+            auto result=nlohmann::json::array();
+            for (const auto& row:rows)
+                if (inactive_targets.contains(row.at("target_id").get<std::string>())) result.push_back(row);
+            return result.dump();
+        };
+        for (const auto& [id,original]:source) {
+            if (original.type!=kAnnotationEntityType) continue;
+            validate_annotation_entity(original);
+            const auto before=protected_rows(original.properties.at("state").at("overrides"));
+            const auto after=candidate.find(id);
+            if (after==candidate.end() || after->second.type!=original.type) {
+                if (before!="[]")
+                    throw std::invalid_argument("Current editing removed inactive component annotations: "+id);
+                continue;
+            }
+            validate_annotation_entity(after->second);
+            if (before!="[]") {
+                auto original_envelope=original.properties;
+                auto candidate_envelope=after->second.properties;
+                original_envelope.erase("state"); candidate_envelope.erase("state");
+                if (original.required!=after->second.required ||
+                    original_envelope.dump()!=candidate_envelope.dump() ||
+                    original.extensions.dump()!=after->second.extensions.dump())
+                    throw std::invalid_argument("Current editing changed an inactive component annotation frame: "+id);
+            }
+            // Active rows may be edited or removed. Their removal must not
+            // shift an otherwise unchanged inactive row into a false failure.
+            if (before!=protected_rows(after->second.properties.at("state").at("overrides")))
+                throw std::invalid_argument("Current editing changed an inactive component annotation placement: "+id);
+        }
+        for (const auto& [id,added]:candidate) {
+            if (added.type!=kAnnotationEntityType) continue;
+            const auto original=source.find(id);
+            if (original!=source.end() && original->second.type==kAnnotationEntityType) continue;
+            validate_annotation_entity(added);
+            if (protected_rows(added.properties.at("state").at("overrides"))!="[]")
+                throw std::invalid_argument("Current editing added an inactive component annotation placement: "+id);
+        }
+    } catch (const DocumentError&) { throw; }
     catch (const std::exception& error) { document_error(DocumentErrorCode::invalid_entity,error.what()); }
 }
 
@@ -11417,13 +11514,6 @@ Revision Document::apply_impl(const Command& command,
                             snapshot(),typed_command.qualified_embedded_assembly_copy_intent);
                         next.entities=prepared.preview_entities();
                         retain_current_component_membership_admission(current.entities,next.entities,&membership_admission);
-                        // Pure retained replay understands companion enrollment,
-                        // but current publication must not create a read-only
-                        // head that strands Undo while other writers are gated.
-                        if (std::any_of(next.entities.begin(),next.entities.end(),[](const auto& row) {
-                                return row.second.type==assembly_phase_membership_entity_type;
-                            }))
-                            throw std::invalid_argument("This component copy requires qualified alternatives that are not yet editable; the project was not changed");
                     } catch (const DocumentError&) { throw; }
                     catch (const std::exception& error) { document_error(DocumentErrorCode::invalid_entity,error.what()); }
 #else
@@ -11436,15 +11526,6 @@ Revision Document::apply_impl(const Command& command,
                             snapshot(),typed_command.phase_assembly_catalog_edit_intent);
                         next.entities=prepared.preview_entities();
                         retain_current_component_membership_admission(current.entities,next.entities,&membership_admission);
-                        // Until every component writer carries the required
-                        // companion authority, a newly qualified result would
-                        // make the project read-only and even strand Undo.
-                        // Refuse before publishing; retained/pure replay keeps
-                        // its exact semantics for migration and integration.
-                        if (std::any_of(next.entities.begin(),next.entities.end(),[](const auto& row) {
-                                return row.second.type==assembly_phase_membership_entity_type;
-                            }))
-                            throw std::invalid_argument("This component edit requires qualified alternatives that are not yet editable; the project was not changed");
                     } catch (const DocumentError&) { throw; }
                     catch (const std::exception& error) { document_error(DocumentErrorCode::invalid_entity,error.what()); }
 #else
@@ -11584,6 +11665,7 @@ Revision Document::apply_impl(const Command& command,
             }
 
             validate_current_component_membership_transition(current.entities,next.entities,membership_admission);
+            validate_current_component_dependent_preservation(current.entities,next.entities);
             validate_current_baseline_physical_preservation(current.entities,next.entities);
             // Source-bound rooms cannot borrow an ordinary metadata edit to
             // detach their holes or their physical-wall evidence. Deletion is
@@ -11720,15 +11802,6 @@ void Document::update_editability() {
         return;
     }
     for (const auto& [id, entity] : head_record().entities) {
-        // Row filtering is understood, but existing host-copy/remap/removal and
-        // shared-type writers do not yet carry this required authority. Keep
-        // such documents viewable without letting legacy writers revive rows.
-        // Enable editing together with the closed component replacement lane.
-        if (entity.type == assembly_phase_membership_entity_type) {
-            editable_ = false;
-            read_only_reason_ = "Qualified component alternatives require component replacement and dependency integration (" + id + ")";
-            return;
-        }
         if (entity.required && !is_known_entity_type(entity.type)) {
             editable_ = false;
             read_only_reason_ = "required entity type is unsupported: " + entity.type + " (" + id + ")";
@@ -12288,7 +12361,8 @@ Document Document::restore(DocumentSnapshot snapshot) {
     document.snapshot_history_cache_ = std::move(snapshot.history_);
     document.named_revisions_ = std::move(snapshot.named_revisions_);
     document.unsupported_constraint_history_reason_ = std::move(unsupported_constraint_history);
-    if (!snapshot.editable_ && !snapshot.read_only_reason_.empty()) {
+    if (!snapshot.editable_ && !snapshot.read_only_reason_.empty() &&
+        !is_retired_component_read_only_reason(document.head_record().entities,snapshot.read_only_reason_)) {
         document.session_read_only_reason_ = snapshot.read_only_reason_;
     }
     document.boundary_identity_history_ = std::move(identity_history);

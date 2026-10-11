@@ -71446,14 +71446,6 @@ public:
                 const bool has_noncomponent=ordinary_request || presentation_request || roof_properties || stair_review;
                 if (!assembly_intents.empty()) {
                     const auto component_plan=inspect_phase_assembly_instance_property_edit_plan(source->entities(),assembly_intents);
-                    // Do not create a project that becomes read-only on the
-                    // next edit/reopen while the remaining companion mutation
-                    // consumers are unfinished. Embedded protected edits keep
-                    // their established refusal rather than losing a baseline.
-                    if (std::any_of(component_plan.replacement_roots.begin(),component_plan.replacement_roots.end(),[](const auto& replacement) {
-                        return !replacement.root.document_entity_id;
-                    }))
-                        throw std::invalid_argument("This component's alternative edit cannot be completed yet. No changes were applied.");
                     const bool edit_profile_geometry=std::any_of(assembly_intents.begin(),assembly_intents.end(),[](const auto& intent) {
                         return intent.profile_geometry.operation!=AssemblyInstancePropertyPatchOperation::unchanged;
                     });

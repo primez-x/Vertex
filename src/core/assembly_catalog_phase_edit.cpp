@@ -2,6 +2,8 @@
 
 #include "sketch/corner_window.hpp"
 #include "sketch/document_digest.hpp"
+#include "sketch/roof_join_semantics.hpp"
+#include "sketch/stair_semantics.hpp"
 
 #include <algorithm>
 #include <cctype>
@@ -9,6 +11,7 @@
 #include <set>
 #include <stdexcept>
 #include <string_view>
+#include <utility>
 
 namespace sketch {
 namespace {
@@ -341,7 +344,7 @@ struct PhaseInventory {
             std::nullopt};
     }
 };
-std::vector<std::string> host_closure(const Entities& actual, const AssemblyInstance& instance) {
+std::vector<std::string> physical_host_closure(const Entities& actual, const std::string& host_id) {
     std::set<std::string, std::less<>> result;
     const auto reach = [&](const auto& self, const std::string& id) -> void {
         if (result.contains(id)) return;
@@ -379,8 +382,11 @@ std::vector<std::string> host_closure(const Entities& actual, const AssemblyInst
             }
         }
     };
-    if (instance.placement) reach(reach, instance.placement->host_entity_id);
+    reach(reach, host_id);
     return {result.begin(), result.end()};
+}
+std::vector<std::string> host_closure(const Entities& actual, const AssemblyInstance& instance) {
+    return instance.placement ? physical_host_closure(actual, instance.placement->host_entity_id) : std::vector<std::string>{};
 }
 bool equal_expansion(const AssemblyExpansion& a, const AssemblyExpansion& b) {
     if (!(a.source_instance == b.source_instance) || a.nodes.size() != b.nodes.size() || a.profiles.size() != b.profiles.size() ||
@@ -458,6 +464,80 @@ void classify(const PhaseInventory& phases, AssemblyCatalogPhaseEditRootImpact& 
         AssemblyCatalogPhaseEditCohort::baseline_protected : AssemblyCatalogPhaseEditCohort::active_ordinary;
 }
 
+std::vector<AssemblyCatalogPhaseEditMaterialConsumerImpact> material_consumers(
+    const Entities& actual, const PhaseInventory& phases, const Models& before, const Models* after = nullptr) {
+    std::vector<AssemblyCatalogPhaseEditMaterialConsumerImpact> result;
+    // The shared collector validates every supported root assignment and wall/
+    // slab layer stack, bounding parser reserves and deduplicating each owner's
+    // actual catalog/material pairs. Complete raw-map admission precedes it.
+    std::map<std::pair<std::string, std::string>, bool> definitions;
+    for (const auto& [id, entity] : actual) {
+        // Unknown entity envelopes remain opaque. The collector owns the
+        // supported architectural assignment roles within the model inventory.
+        if (!is_model_phase_entity_type(entity.type)) continue;
+        const auto references = architectural_material_source_refs(entity);
+        if (references.empty()) continue;
+        std::vector<AssemblyCatalogPhaseEditBinding> bindings;
+        bool inactive = false, protected_baseline = false;
+        const auto owner = phases.binding(id);
+        const bool proposed = owner && !owner->baseline && owner->state == ModelPhase::proposed;
+        const auto add = [&](const std::string& host, bool baseline_decides) {
+            if (auto binding = phases.binding(host)) {
+                inactive = inactive || !binding->state || binding->state == ModelPhase::demolished;
+                protected_baseline = protected_baseline || (baseline_decides && binding->baseline && binding->active_alternative.has_value());
+                bindings.push_back(std::move(*binding));
+            }
+        };
+        add(id, true);
+        if (entity.type == "opening" || entity.type == "corner_window") {
+            // Reuse the actual finite two-cut/two-wall closure. Backlinks and
+            // child roles must be exact; opaque host-like metadata is ignored.
+            for (const auto& host : physical_host_closure(actual, id))
+                if (host != id) add(host, !proposed);
+        } else if (entity.type == "railing") {
+            const auto& p = entity.properties;
+            const auto version = p.find("version"), form = p.find("form");
+            const bool hosted = version != p.end() && version->is_number_integer() && form != p.end() &&
+                ((*version == 2 && *form == "stair_flight_railing") || (*version == 3 && *form == "stair_landing_railing"));
+            if (hosted) {
+                const auto railing = decode_railing_properties(id, p);
+                const auto& host = railing.host ? railing.host->stair_id : railing.landing_host->stair_id;
+                require(actual.contains(host) && actual.at(host).type == "stair", "catalog edit railing has no actual stair host");
+                add(host, !proposed);
+            }
+        } else if (entity.type == "roof_join") {
+            // Join baseline protection belongs to the actual join owner.
+            // Its members decide inactivity, not baseline protection: active
+            // qualified proposals may intentionally use shared baseline roofs.
+            const auto join = parse_roof_join(entity.properties, id);
+            for (const auto& roof : join.roof_ids) {
+                require(actual.contains(roof) && actual.at(roof).type == "roof", "catalog edit material scope has no actual roof member");
+                add(roof, false);
+            }
+        }
+        // Rooms and roof bodies use their own actual registry. Descriptor wall
+        // references and inactive joins sharing a roof do not confer ownership.
+        const auto cohort = inactive ? AssemblyCatalogPhaseEditCohort::inactive_retained : protected_baseline ?
+            AssemblyCatalogPhaseEditCohort::baseline_protected : AssemblyCatalogPhaseEditCohort::active_ordinary;
+        for (const auto& assignment : references) {
+            const auto key = std::pair{assignment.catalog_id, assignment.material_id};
+            auto found = definitions.find(key);
+            if (found == definitions.end()) {
+                require(before.contains(assignment.catalog_id), "catalog edit physical material catalog is missing");
+                const auto& original = typed_row(before.at(assignment.catalog_id).materials(), assignment.material_id);
+                bool changed = false;
+                if (after) {
+                    require(after->contains(assignment.catalog_id), "catalog edit physical material catalog disappeared");
+                    changed = !(original == typed_row(after->at(assignment.catalog_id).materials(), assignment.material_id));
+                }
+                found = definitions.emplace(key, changed).first;
+            }
+            result.push_back({id, assignment.catalog_id, assignment.material_id, cohort, found->second, bindings});
+        }
+    }
+    return result;
+}
+
 struct Inspection { Entities candidate; AssemblyCatalogPhaseEditPlan plan; };
 Inspection inspect(const Entities& actual, const Json& request,
     AssemblyCatalogTransferBudget* source_admitted = nullptr) {
@@ -526,6 +606,12 @@ Inspection inspect(const Entities& actual, const Json& request,
         }
         plan.roots.push_back(std::move(impact));
     }
+    if (request.at("version") == 2) {
+        plan.material_consumers = material_consumers(actual, phases, before, &after);
+        for (const auto& consumer : plan.material_consumers)
+            if (consumer.definitions_changed && consumer.cohort != AssemblyCatalogPhaseEditCohort::active_ordinary)
+                plan.ordinary_replay_safe = false;
+    }
     return {std::move(candidate), std::move(plan)};
 }
 
@@ -537,7 +623,7 @@ Json validate_assembly_catalog_phase_edit_request(const Json& request) {
         require(budget.bytes <= assembly_catalog_transport_byte_limit && budget.nodes <= 262144,
             "catalog edit request exceeds transport bound");
         fields(request, {"version", "source_entities_digest", "edits"});
-        require(request.at("version").is_number_integer() && request.at("version") == 1,
+        require(request.at("version").is_number_integer() && (request.at("version") == 1 || request.at("version") == 2),
             "catalog edit request version is unsupported");
         digest(request.at("source_entities_digest"));
         const auto& edits = request.at("edits");
@@ -619,7 +705,7 @@ Json prepare_assembly_catalog_phase_edit_request(const Entities& actual,
             edits.push_back({{"catalog_id", intent.catalog_id}, {"source_catalog_digest", catalog_digest(found->second)},
                 {"types", std::move(types)}, {"materials", std::move(materials)}});
         }
-        Json request{{"version", 1}, {"source_entities_digest", entity_map_digest(actual)}, {"edits", std::move(edits)}};
+        Json request{{"version", 2}, {"source_entities_digest", entity_map_digest(actual)}, {"edits", std::move(edits)}};
         (void)inspect(actual, request, &catalog_work);
         return request;
     } catch (const Json::exception& error) {
@@ -637,7 +723,7 @@ Entities replay_assembly_catalog_phase_edit_entities(const Entities& actual, con
     try {
         auto result = inspect(actual, request);
         require(result.plan.ordinary_replay_safe,
-            "catalog edit requires explicit phase-isolated private catalog and proposed root replacement; inspect the complete impact plan");
+            "catalog edit affects protected/inactive consumers; inspect the complete impact plan for phase-isolated private replacements");
         return std::move(result.candidate);
     } catch (const Json::exception& error) {
         throw std::invalid_argument(std::string("invalid catalog edit actual replay: ") + error.what());
@@ -717,6 +803,26 @@ void validate_current_assembly_catalog_phase_preservation(const Entities& source
         for (const auto& id : impact.before_material_ids)
             require(exact(row(raw_model(original_catalog),"materials",id), row(raw_model(candidate_catalog),"materials",id)),
                 "current catalog editing changed a protected/inactive raw material definition");
+    }
+    // This live safeguard always uses actual physical consumers, even for raw
+    // writers or a submitted historical v1 request. Historical replay calls the
+    // source-bound request codec separately and retains its original meaning.
+    std::set<std::pair<std::string, std::string>> retained_materials;
+    for (const auto& consumer : material_consumers(source, phases, before)) {
+        if (consumer.cohort == AssemblyCatalogPhaseEditCohort::active_ordinary ||
+            !retained_materials.emplace(consumer.catalog_id, consumer.material_id).second) continue;
+        require(candidate.contains(consumer.catalog_id) && after.contains(consumer.catalog_id),
+            "current catalog editing removed a protected/inactive physical material catalog");
+        const auto& original = source.at(consumer.catalog_id);
+        const auto& proposed = candidate.at(consumer.catalog_id);
+        auto original_envelope = original.properties, proposed_envelope = proposed.properties;
+        original_envelope.erase("model"); proposed_envelope.erase("model");
+        require(original.type == proposed.type && original.required == proposed.required &&
+            exact(original_envelope, proposed_envelope) && exact(original.extensions, proposed.extensions),
+            "current catalog editing changed a protected/inactive physical material carrier binding");
+        require(exact(row(raw_model(original), "materials", consumer.material_id),
+            row(raw_model(proposed), "materials", consumer.material_id)),
+            "current catalog editing changed a protected/inactive physical material definition; isolate active component consumers");
     }
 }
 

@@ -348,7 +348,8 @@ public:
     // v243 retains source-bound standalone component retirement under outer45.
     // v244 retains explicit component Properties dimension carry under outer52.
     // v245 retains attached physical-owner dimension membership retirement.
-    static constexpr std::uint32_t format_version = 245;
+    // v246 retains catalog material impact on architectural assignments/layers.
+    static constexpr std::uint32_t format_version = 246;
     static constexpr std::uint32_t recovery_format_version = 4;
     [[nodiscard]] static std::uint32_t required_format_version(const DocumentSnapshot& snapshot);
     static constexpr std::uint64_t maximum_file_bytes = 4ULL * 1024ULL * 1024ULL * 1024ULL;

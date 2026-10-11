@@ -1,4 +1,42 @@
-# Vertex project formats v1 through v245
+# Vertex project formats v1 through v246
+
+Reader246 adds foundation catalog request2. Its closed fields remain `version`,
+`source_entities_digest`, and `edits`; the original catalog and definition
+bindings still determine every replacement. Request2 additionally inventories
+actual architectural material consumers under their physical owners' saved
+phase choices and actual supported host activity. Protected or inactive physical
+consumers prevent a global material
+rewrite. All twelve supported top-level assignment roles and wall/slab layers
+participate. Actual proposed owners keep their permission on baseline hosts;
+opening/corner and typed railing hosts still decide inactivity. Roof joins use
+their own baseline role and actual member inactivity; root roofs and rooms keep
+their own registry scope. Active
+components can use the existing private-catalog replacement
+lane while the original physical material stays exact. Physical consumers grant
+no physical-object replacement or allocation authority. Residual global edits retain
+the foundation request version and receive complete impact admission again.
+Request1 retains its historical root-only replay meaning.
+
+The floor applies to ordinary command59, nested phase command60 authoring,
+recognized closed nested requests and retained/undone history. The phase
+authoring and preparation request keep their existing version1 envelopes;
+only `authoring.catalog_request` becomes version2. Native extraction244 follows
+reader246 without changing SQLite tables.
+
+Current component alternative editing is enabled with universal live admission.
+The original source membership and actual host activity protect inactive
+component presentation bindings, supported associated dimension envelopes,
+annotation framing and exact ordered inactive override subsequences. Active
+override removal may shift indices without changing that protected subsequence.
+Raw writers cannot add inactive placements or rewrite inactive dependents while
+switching the saved alternative. Every current catalog writer also preserves
+protected physical material definitions, including submitted historical requests.
+These live safeguards do not reinterpret retained commands or historical Undo
+targets. A fully admitted snapshot's exact obsolete computed companion read-only
+diagnostic is re-evaluated on restore; unrelated session restrictions and unknown
+required entities retain their behavior. Existing exact typed source replay,
+membership admission, retained identity reservations and snapshot fences remain.
+Compilation, runtime and release qualification of these paths remain open.
 
 Reader245 adds architectural/drawing selection6 for standalone retirement17.
 Its exact fields are `version`, `architectural`, `drawing`,
@@ -34,8 +72,9 @@ history and recognized nested receipts without changing SQLite tables.
 
 Current controllers publish the exact prepared Properties command and use pure
 source-derived deletion cleanup instead of generic saved-view normalization.
-The component membership quarantine remains. These format contracts establish
-source behavior only; compilation, runtime and release qualification remain open.
+Reader246 completes current component membership integration. These format
+contracts establish source behavior only; compilation, runtime and release
+qualification remain open.
 
 Reader243 adds standalone retirement dialect17 under the existing exclusive
 command45. Its eleven fields are `version`, `ordinary`, `ordinary_command`,
