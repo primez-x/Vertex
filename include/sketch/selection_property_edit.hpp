@@ -81,7 +81,10 @@ private:
 // V3 adds stair_profiles and stair/railing families, requires a nonempty stair
 // lane, and always includes structural_profiles (which may be empty). It is
 // emitted only for a nonempty stair lane. Each lane exactly covers its owners.
-// Nested codecs retain their existing versions. Strict canonical round trips,
+// V4 explicitly admits wall elevation receipt v4 and requires at least one such
+// wall. It includes both structural_profiles and stair_profiles, either empty.
+// V1..V3 reject elevation leaves. Other nested codecs retain their versions.
+// Strict canonical round trips,
 // 1..1000 complete targets, 4 MiB wire, 100000 values, depth 64. Structural and
 // stair all-null intents explicitly retain their declared members. Historical typed
 // lanes retain their own empty-intent rules. Duplicate/unsorted/missing targets

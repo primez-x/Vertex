@@ -14,8 +14,8 @@ struct WallProfileLayerThickness {
     bool retain_source_thickness{false};
 };
 
-// Scalar dimensions and signed start-to-end top rise are editable here.
-// Context, baseline, elevation, layer identity/order and materials are retained.
+// Scalar dimensions, signed raw elevation and start-to-end top rise are editable.
+// Context, baseline, layer identity/order and materials are retained.
 struct WallProfileEditIntent {
     std::string wall_id;
     std::optional<Quantity> thickness;
@@ -28,6 +28,10 @@ struct WallProfileEditIntent {
     // height. Zero clears a retained slope plane; equal effective rise retains
     // the exact source. This signed quantity has no positive-dimension policy.
     std::optional<Quantity> top_rise;
+    // Stored raw elevation_m, before actual floor level/placement resolution.
+    // Signed finite values, including zero, retain floor/placement bindings and
+    // the full existing top gradient. Exact numerical no-ops retain source bytes.
+    std::optional<Quantity> elevation;
 };
 
 // Strict, bounded version-1 codec with exactly version, wall_id, thickness,
@@ -36,6 +40,9 @@ struct WallProfileEditIntent {
 // retains source thickness: it has the same six keys as version 2, nullable
 // top_rise and a nonnull complete layer inventory; null row thickness retains
 // actual source authority. Versions 1/2 never admit null row thickness.
+// Version 4 has exactly those six keys plus nonnull elevation; top_rise is
+// nullable and null layer thickness retains source. Elevation never enters an
+// earlier dialect implicitly; enclosing commands must opt into new authority.
 // Optional dimensions are explicit nulls; authored quantities use exact
 // receipts. Empty intents, including retention-only inventories, are rejected.
 [[nodiscard]] nlohmann::json encode_wall_profile_edit_intent(const WallProfileEditIntent& intent);
@@ -60,7 +67,10 @@ void validate_active_wall_physical_dependencies(
     // Recorded earlier dialects retain their original admission. Current
     // authoring and new dialects opt into complete profile/receipt admission
     // for targets and every affected join member.
-    bool strict_profiles = false);
+    bool strict_profiles = false,
+    // New elevation dialects admit raw elevation aliases/receipts throughout
+    // the complete affected physical cohort; historical admission is retained.
+    bool strict_elevations = false);
 
 // Requires the actual complete copied source, after qualified phase identity
 // mapping. Resolves saved-active scope; rejects inactive/duplicate targets.

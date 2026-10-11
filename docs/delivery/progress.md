@@ -14,6 +14,49 @@ changed source does not acquire runtime acceptance without later qualification.
 
 ## Current delivery state
 
+### October 10 wall elevation and native wall-cohort Z integration
+
+Shared profile editing and supported non-wall Z cohorts are committed and pushed
+as 3c3fa7bc, with exact local and remote branch references matched. The current
+source adds explicit signed raw wall elevation through profile leaf4, selected
+Properties request4, phase selection request3, wall replacement leaf10/outer26
+and mixed Properties12. Historical enclosing dialects refuse the new authority.
+Stored floor-relative elevation and its level binding, wall baseline, top
+gradient, aliases and opaque quantity receipt siblings remain preserved.
+Complete source and final wall/opening/join/corner physical admission use actual
+resolved hosts. Old and destination effective planes require explicit room
+decisions, including planes with no retained room inventory.
+
+Wall profile and group Properties dialogs expose signed stored elevation and
+explain floor-relative storage. Inspector elevation and single-wall native Z
+movement use the same sealed Properties publication. Native wall groups admit
+only actual walls, their explicitly selected hosted openings and corners with
+both selected hosts. Pure vertical preview derives actual phase copy slots;
+bounded selected-owner correspondence supplies transient candidate geometry,
+while original source/selection authority remains captured. Release completes
+phase and ordinary room review, Document admission and full selected-member
+restoration in one publication. Mixed wall/non-wall vertical gestures remain a
+required separate integration gap.
+
+Reader201 and extraction199 retain the explicit dialects through direct,
+wrapped, retained and undone history. Source review identified historical
+profile capture accidentally admitting elevation receipts, unchanged direct
+elevation creating a new Undo record and click-order-sensitive native scalar
+rosters. Root restored historical capture, returns exact prepared no-ops before
+publication and canonicalizes typed request copies while retaining selection
+order. Independent source review approved the corrected integration with no
+remaining confirmed P1/P2 in the reviewed paths. Single-wall Z additionally uses
+direct displacement-frame conversion to avoid cancellation at translated Site
+origins. Scoped whitespace checking passed. No builds, tests, probes, native jobs, launches, packages or
+installations run; compilation, UI/native interaction, history and round trips
+remain unverified. The installed app is unchanged; all ten production gates
+remain open.
+
+Protected-baseline component replacement, directional mixed resizing, general
+embedded host carry for XY/rotation/scale, complete profile creation and the
+remaining architecture, compatibility, assistance, output and qualification
+packages remain required. This batch is source progress, not production exit.
+
 ### October 10 shared profile authoring and vertical 3D cohorts
 
 Alternative Properties integration is committed and pushed as 564e1bab, with

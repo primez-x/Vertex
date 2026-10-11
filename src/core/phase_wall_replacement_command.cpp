@@ -50,7 +50,7 @@ bool exact(const Entity& a,const Entity& b) {
     return a==b && a.properties.dump()==b.properties.dump() && a.extensions.dump()==b.extensions.dump();
 }
 bool strict_profile_admission(const WallProfileEditIntent& profile) {
-    return profile.top_rise.has_value() || (profile.layer_thicknesses &&
+    return profile.elevation.has_value() || profile.top_rise.has_value() || (profile.layer_thicknesses &&
         std::any_of(profile.layer_thicknesses->begin(), profile.layer_thicknesses->end(),
             [](const auto& row) { return row.retain_source_thickness; }));
 }
@@ -95,12 +95,17 @@ Stage physical_stage(const Entities& source,const PhaseConstraintAuthoringIntent
     const PhaseWallReplacementAuthoring& edit) {
     if (intent.source_entities_digest!=entity_map_digest(source) ||
         intent.phase_selections!=phase_constraint_authoring_selections(source)) invalid("actual source or saved choice changed");
+    if (edit.complete_vertical_profiles) {
+        // Detached inspection shares the enclosing dialect guard with retained
+        // publication. Historical outer records cannot borrow leaf-ten authority.
+        (void)encode_phase_constraint_authoring_intent(intent);
+    }
     if (edit.complete_scalar_profiles) {
         if (!edit.complete_presentations || !edit.complete_corner_windows ||
             !edit.opening_rehosts.empty() || !edit.opening_families.empty() ||
             !edit.wall_stacks.empty() || !edit.corner_profiles.empty() ||
             has_geometry_or_relation_intent(intent.intent))
-            invalid("scalar cohort requires complete leaf-nine authority without sibling edit operations");
+            invalid("scalar cohort requires complete scalar authority without sibling edit operations");
         const auto request=phase_wall_scalar_profile_replacement_request(source,edit.wall_profiles,edit.opening_profiles);
         if (!request || request->registry_id!=edit.registry_id || request->alternative_id!=edit.alternative_id ||
             request->seed_wall_ids!=edit.seed_wall_ids)
@@ -255,7 +260,7 @@ Stage physical_stage(const Entities& source,const PhaseConstraintAuthoringIntent
         }
         for (const auto& profile:edit.wall_profiles) original_walls.insert(profile.wall_id);
         for (const auto& profile:edit.opening_profiles) original_walls.insert(profile.wall_id);
-        validate_active_wall_physical_dependencies(source,original_walls,true);
+        validate_active_wall_physical_dependencies(source,original_walls,true,edit.complete_vertical_profiles);
         // Each intent is admitted against its actual original owner first.
         // The copied envelope comes solely from the reconstructed replacement;
         // remapping typed owned IDs is the only change to its scalar authority.
@@ -276,7 +281,7 @@ Stage physical_stage(const Entities& source,const PhaseConstraintAuthoringIntent
                 stage.replacement.entities.at(profile.opening_id),profile);
             final_walls.insert(profile.wall_id);
         }
-        validate_active_wall_physical_dependencies(stage.entities,final_walls,true);
+        validate_active_wall_physical_dependencies(stage.entities,final_walls,true,edit.complete_vertical_profiles);
         const auto measurements=exterior_wall_measurement_source_updates_active_phase(
             stage.replacement.entities,stage.entities,false);
         stage.entities=edited_boundary_entities_batch(stage.entities,measurements);
@@ -646,6 +651,11 @@ std::optional<PhaseWallReplacementRequest> phase_wall_scalar_profile_replacement
 }
 
 Json encode_phase_wall_replacement_authoring(const PhaseWallReplacementAuthoring& value) {
+    const bool elevation=std::any_of(value.wall_profiles.begin(),value.wall_profiles.end(),[](const auto& profile) {
+        return profile.elevation.has_value();
+    });
+    if (value.complete_vertical_profiles!=elevation || (elevation && !value.complete_scalar_profiles))
+        invalid("elevation edits require explicit complete leaf-ten scalar authority");
     if (value.complete_scalar_profiles) {
         if (!value.complete_presentations || !value.complete_corner_windows ||
             (value.wall_profiles.empty() && value.opening_profiles.empty()) ||
@@ -654,11 +664,13 @@ Json encode_phase_wall_replacement_authoring(const PhaseWallReplacementAuthoring
             !value.wall_stacks.empty() || !value.corner_profiles.empty())
             invalid("scalar cohort requires bounded wall/opening authority and complete presentation/corner admission");
         auto base=value;
-        base.complete_scalar_profiles=false;base.complete_presentations=false;base.complete_corner_windows=false;
+        base.complete_vertical_profiles=false;base.complete_scalar_profiles=false;
+        base.complete_presentations=false;base.complete_corner_windows=false;
         base.wall_profiles.clear();base.opening_profiles.clear();
         // The old flat record's envelope/room decisions are reused verbatim;
-        // version nine alone admits both independently typed scalar arrays.
-        Json result{{"version",9},{"complete_presentations",true},
+        // Version nine admits historical scalar arrays; ten explicitly adds
+        // elevation. Both retain the same closed identity/room envelope.
+        Json result{{"version",value.complete_vertical_profiles ? 10 : 9},{"complete_presentations",true},
             {"authoring",encode_phase_wall_replacement_authoring(base)},
             {"wall_profiles",Json::array()},{"opening_profiles",Json::array()}};
         std::set<std::string,std::less<>> targets;
@@ -754,7 +766,7 @@ Json encode_phase_wall_replacement_authoring(const PhaseWallReplacementAuthoring
 PhaseWallReplacementAuthoring decode_phase_wall_replacement_authoring(const Json& value) {
     if (value.dump().size()>1024*1024) invalid("replacement decisions exceed one MiB");
     if (value.is_object() && value.contains("version") && value.at("version").is_number_integer() &&
-        value.at("version")==9) {
+        (value.at("version")==9 || value.at("version")==10)) {
         keys(value,{"version","complete_presentations","authoring","wall_profiles","opening_profiles"});
         if (!value.at("complete_presentations").is_boolean() || value.at("complete_presentations")!=true)
             invalid("scalar cohort requires complete presentations");
@@ -763,6 +775,7 @@ PhaseWallReplacementAuthoring decode_phase_wall_replacement_authoring(const Json
             invalid("scalar cohort requires one flat identity/room envelope");
         auto result=decode_flat_phase_wall_replacement_authoring(base,true);
         result.complete_presentations=true;result.complete_corner_windows=true;result.complete_scalar_profiles=true;
+        result.complete_vertical_profiles=value.at("version")==10;
         const auto& walls=value.at("wall_profiles");const auto& openings=value.at("opening_profiles");
         if (!walls.is_array() || !openings.is_array() || walls.size()>2048 || openings.size()>2048-walls.size())
             invalid("scalar cohort target budget exceeded");
@@ -840,6 +853,7 @@ PhaseWallReplacementAuthoring decode_flat_phase_wall_replacement_authoring(
         std::set<std::string,std::less<>> targets;
         for (const auto& edit:edits) {
             auto profile=decode_wall_profile_edit_intent(edit);
+            if (profile.elevation) invalid("historical wall profile leaf cannot admit elevation authority");
             if (!targets.insert(profile.wall_id).second ||
                 !std::binary_search(result.seed_wall_ids.begin(),result.seed_wall_ids.end(),profile.wall_id))
                 invalid("profile target must be a unique original wall seed");
@@ -983,7 +997,7 @@ Entities replay_phase_wall_replacement_authoring(const Entities& source,const Ph
                     original!=source.end() && entity!=original->second) copied_walls.insert(id);
             }
         }
-        validate_active_wall_physical_dependencies(stage.entities,copied_walls,true);
+        validate_active_wall_physical_dependencies(stage.entities,copied_walls,true,edit.complete_vertical_profiles);
     }
     preserve_baseline(source,stage.entities,stage.plan);
     if (const auto error=validate_active_phase_constraint_integrity(stage.entities)) invalid(*error);

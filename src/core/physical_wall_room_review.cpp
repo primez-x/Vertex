@@ -2958,7 +2958,7 @@ void validate_physical_wall_room_profile_review_source(const Entities& source,co
         (old_receipts!=previous->second.properties.end() && new_receipts!=proposed.properties.end() &&
             old_receipts->dump()!=new_receipts->dump());
     if (receipt_delta) {
-        const auto captured=capture_wall_profile_edit(previous->second,proposed);
+        const auto captured=capture_wall_profile_edit(previous->second,proposed,std::nullopt,false);
         if (!captured || !exact_entity(proposed,replay_wall_profile_entity(previous->second,*captured)))
             invalid("profile quantity changes must equal independent typed replay with retained opaque receipts");
     }

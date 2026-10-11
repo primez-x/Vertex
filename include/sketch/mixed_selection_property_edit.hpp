@@ -31,6 +31,11 @@ namespace sketch {
 // Dialect eleven adds sealed source-derived active-baseline replacements and
 // explicit final-stage phase room completion. Its phase request also owns the
 // complete scalar/skylight composite, including ordinary/proposed members.
+// Dialect twelve retains eleven's exact fields and requires phase request three
+// with scalar request four. Nullable presentation/assembly/skylight lanes remain
+// explicit. Zero allocation cohorts permit ordinary elevation edits with the
+// same source-bound replay and mandatory source/destination room-plane review.
+// Historical dialects five through eleven reject the elevation authority.
 // Each lane reads the same
 // complete immutable original snapshot. No supplied entity map, transform,
 // or caller-derived selected-object identity map is accepted. Historical

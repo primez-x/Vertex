@@ -170,8 +170,9 @@ void authenticate_source(const DocumentSnapshot& source, const Json& value) {
 SelectionPropertyEditRequest decode_request(const Json& value) {
     Budget{}.visit(value);
     if (!value.is_object() || !value.contains("version") || !value.at("version").is_number_integer() ||
-        (value.at("version") != 1 && value.at("version") != 2 && value.at("version") != 3)) reject("unsupported request version");
-    const bool stairs = value.at("version") == 3;
+        (value.at("version") != 1 && value.at("version") != 2 && value.at("version") != 3 && value.at("version") != 4)) reject("unsupported request version");
+    const bool vertical = value.at("version") == 4;
+    const bool stairs = value.at("version") == 3 || vertical;
     const bool structural = value.at("version") != 1;
     if (stairs)
         fields(value, {"version", "expected_revision", "source_snapshot_digest", "source_authoring_digest",
@@ -222,6 +223,8 @@ SelectionPropertyEditRequest decode_request(const Json& value) {
         }
     };
     lane("walls", "wall_id", SelectionPropertyFamily::wall, decode_wall_profile_edit_intent, encode_wall_profile_edit_intent, result.walls);
+    const bool elevation = std::any_of(result.walls.begin(), result.walls.end(), [](const auto& wall) { return wall.elevation.has_value(); });
+    if (vertical != elevation) reject("wall elevation requires the explicit request dialect four");
     lane("slabs", "slab_id", SelectionPropertyFamily::slab, decode_slab_profile_edit_intent, encode_slab_profile_edit_intent, result.slabs);
     lane("hosted_openings", "opening_id", SelectionPropertyFamily::hosted_opening,
         decode_hosted_opening_profile_edit_intent, encode_hosted_opening_profile_edit_intent, result.hosted_openings);
@@ -247,7 +250,7 @@ SelectionPropertyEditRequest decode_request(const Json& value) {
     }
     if (stairs) {
         const auto& rows = value.at("stair_profiles");
-        if (!rows.is_array() || rows.empty() || rows.size() > target_limit) reject("invalid stair lane budget");
+        if (!rows.is_array() || (!vertical && rows.empty()) || rows.size() > target_limit) reject("invalid stair lane budget");
         std::string prior;
         for (const auto& row : rows) {
             auto intent = decode_stair_profile_edit_intent(row);
@@ -296,7 +299,8 @@ Json encode_request(const DocumentSnapshot& source, const SelectionPropertyEditR
     lane(request.roofs, encode_roof_profile_edit_intent, roofs);
     lane(request.structural_profiles, encode_structural_profile_edit_intent, structural);
     lane(request.stair_profiles, encode_stair_profile_edit_intent, stairs);
-    Json result = {{"version", !request.stair_profiles.empty() ? 3 : request.structural_profiles.empty() ? 1 : 2}, {"expected_revision", source.revision()},
+    const bool vertical = std::any_of(request.walls.begin(), request.walls.end(), [](const auto& wall) { return wall.elevation.has_value(); });
+    Json result = {{"version", vertical ? 4 : !request.stair_profiles.empty() ? 3 : request.structural_profiles.empty() ? 1 : 2}, {"expected_revision", source.revision()},
         {"source_snapshot_digest", document_snapshot_digest(source)},
         {"source_authoring_digest", document_authoring_source_digest_v2(source)},
         {"source_entities_digest", entity_map_digest(source.entities())},
@@ -304,8 +308,8 @@ Json encode_request(const DocumentSnapshot& source, const SelectionPropertyEditR
         {"selected", std::move(selected)}, {"walls", std::move(walls)}, {"slabs", std::move(slabs)},
         {"hosted_openings", std::move(openings)}, {"roofs", std::move(roofs)},
         {"unchanged_policy", request.unchanged_policy == SelectionPropertyUnchangedPolicy::retain ? "retain" : "reject"}};
-    if (!request.structural_profiles.empty() || !request.stair_profiles.empty()) result["structural_profiles"] = std::move(structural);
-    if (!request.stair_profiles.empty()) result["stair_profiles"] = std::move(stairs);
+    if (vertical || !request.structural_profiles.empty() || !request.stair_profiles.empty()) result["structural_profiles"] = std::move(structural);
+    if (vertical || !request.stair_profiles.empty()) result["stair_profiles"] = std::move(stairs);
     (void)decode_request(result);
     return result;
 }
@@ -361,7 +365,8 @@ SelectionPropertyEditPreparation replay_selection_property_edit_preparation(cons
             reject("default-door materialization requires a straight actual original wall");
         affected_walls.insert(intent.wall_id);
     }
-    validate_active_wall_physical_dependencies(original, affected_walls, true);
+    const bool vertical = value.at("version") == 4;
+    validate_active_wall_physical_dependencies(original, affected_walls, true, vertical);
     std::vector<Entities> leaves;
     std::set<std::string, std::less<>> invariant_targets;
     const auto add = [&](Entities candidate, const auto& intents, auto target_id) {
@@ -420,7 +425,7 @@ SelectionPropertyEditPreparation replay_selection_property_edit_preparation(cons
     // Admit the complete shared-host state, never an intermediate wall-only or
     // opening-only state. Original-source admission above cannot be repaired
     // by this fit check, and no fit result supplies authored scalar authority.
-    validate_active_wall_physical_dependencies(candidate, affected_walls, true);
+    validate_active_wall_physical_dependencies(candidate, affected_walls, true, vertical);
     if (depth_changed) {
         const auto edits = exterior_wall_measurement_source_updates_active_phase(original, candidate, false);
         auto completed = edited_boundary_entities_batch(candidate, edits);
@@ -443,7 +448,7 @@ SelectionPropertyEditPreparation replay_selection_property_edit_preparation(cons
     // without claiming that the final map is another implicit-door source.
     auto final_opening_checks = request.hosted_openings;
     for (auto& intent : final_opening_checks) intent.materialize_default_door_assembly = false;
-    validate_active_wall_physical_dependencies(candidate, affected_walls, true);
+    validate_active_wall_physical_dependencies(candidate, affected_walls, true, vertical);
     if (!exact(candidate, replay_wall_profile_entities(candidate, request.walls, false, true)) ||
         !exact(candidate, replay_slab_profile_entities(candidate, request.slabs)) ||
         !exact(candidate, replay_hosted_opening_profile_entities(candidate, final_opening_checks, false)) ||

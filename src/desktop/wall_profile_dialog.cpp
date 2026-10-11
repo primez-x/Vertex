@@ -200,9 +200,11 @@ public:
     Wall wall;
     Input thickness;
     Input height;
+    Input elevation;
     Input rise;
     std::vector<Input> layers;
     QLabel* sum{};
+    QLabel* effective_base{};
     QLabel* error{};
     QPushButton* save{};
     QString source_error;
@@ -265,21 +267,30 @@ public:
                 rise.field->setReadOnly(true);
                 rise.field->setToolTip("This top plane has retained measurement bindings. Its rise cannot be changed here.");
             }
-            // Elevation is retained by the typed profile intent. Display the
-            // actual resolved base, including a captured level placement.
+            elevation = input(owner, "wallProfileElevation", wall.elevation, original,
+                              {"/elevation_m", "/elevation"}, unit);
+            const auto placement = original.properties.find("vertical_placement");
+            const bool level_bound = placement != original.properties.end() &&
+                placement->is_object() && placement->value("mode", std::string{}) == "level";
+            elevation.field->setAccessibleName(level_bound ? "Stored wall base offset from floor level" : "Wall base elevation");
+            elevation.field->setToolTip(elevation.field->toolTip() +
+                " Signed stored base elevation. For a level-bound wall, this is added to the floor level and placement offset; the level binding is retained.");
             Wall resolved;
             if (!read_document_wall(resolve_vertical_placement(source, original), {}, resolved, diagnostic))
                 throw std::invalid_argument(diagnostic);
-            auto* elevation = new QLineEdit(native_text(resolved.elevation), owner);
-            elevation->setObjectName("wallProfileElevation");
-            elevation->setAccessibleName("Resolved wall base elevation, read only");
-            elevation->setReadOnly(true);
-            elevation->setToolTip("Base elevation is retained by this profile edit, including level placement.");
+            auto* elevation_row = new QHBoxLayout;
+            elevation_row->addWidget(elevation.field, 1);
+            if (level_bound) {
+                effective_base = new QLabel("Effective base: " + native_text(resolved.elevation), owner);
+                effective_base->setObjectName("wallProfileEffectiveBase");
+                effective_base->setAccessibleName("Effective wall base elevation");
+                elevation_row->addWidget(effective_base);
+            }
             total_row->addWidget(thickness.field, 1);
             total_row->addWidget(sum);
             form->addRow("Total thickness", total_row);
             form->addRow("Height at start", height.field);
-            form->addRow("Base elevation", elevation);
+            form->addRow(level_bound ? "Base offset from floor" : "Base elevation", elevation_row);
             form->addRow("Top rise", rise.field);
             table->setRowCount(static_cast<int>(wall.layers.size()));
             layers.reserve(wall.layers.size());
@@ -329,6 +340,7 @@ public:
         };
         watch(thickness.field);
         watch(height.field);
+        watch(elevation.field);
         watch(rise.field);
         for (const auto& field : layers) watch(field.field);
         auto* timer = new QTimer(owner);
@@ -378,6 +390,7 @@ public:
             intent.wall_id = wall_id;
             if (edited(thickness)) intent.thickness = read(thickness, unit);
             if (edited(height)) intent.height = read(height, unit);
+            if (edited(elevation)) intent.elevation = read(elevation, unit);
             if (edited(rise)) {
                 require(!rise.field->isReadOnly(), "This retained top plane cannot be changed here");
                 intent.top_rise = read(rise, unit);
@@ -413,7 +426,7 @@ public:
             }
             admit_context_materials(source.entities(), wall_id);
             Entity candidate = original;
-            const bool has_input = intent.thickness || intent.height || intent.top_rise || intent.layer_thicknesses;
+            const bool has_input = intent.thickness || intent.height || intent.elevation || intent.top_rise || intent.layer_thicknesses;
             if (has_input) {
                 candidate = replay_wall_profile_entity(original, intent);
                 // Final room/relationship consequences belong to the
@@ -434,6 +447,13 @@ public:
                 validate_active_wall_physical_dependencies(source.entities(), {wall_id}, true);
                 if (const auto diagnostic = validate_active_phase_constraint_integrity(source.entities()))
                     throw std::invalid_argument(*diagnostic);
+            }
+            if (effective_base) {
+                Wall resolved;
+                std::string diagnostic;
+                if (!read_document_wall(resolve_vertical_placement(source.entities(), candidate), {}, resolved, diagnostic))
+                    throw std::invalid_argument(diagnostic);
+                effective_base->setText("Effective base: " + native_text(resolved.elevation));
             }
             auto captured = has_input ? capture_wall_profile_edit(original, candidate, intent) : std::nullopt;
             fence();

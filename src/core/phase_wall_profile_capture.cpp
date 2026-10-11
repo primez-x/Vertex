@@ -40,10 +40,12 @@ struct Dimension {
     const char* canonical;
     const char* alias;
     std::optional<Quantity> WallProfileEditIntent::* intent;
+    bool signed_value{false};
 };
 constexpr std::array dimensions{
     Dimension{"thickness_m", "thickness", &WallProfileEditIntent::thickness},
-    Dimension{"height_m", "height", &WallProfileEditIntent::height}};
+    Dimension{"height_m", "height", &WallProfileEditIntent::height},
+    Dimension{"elevation_m", "elevation", &WallProfileEditIntent::elevation, true}};
 
 double scalar(const Entity& entity, const Dimension& dimension) {
     const auto canonical = field(entity.properties, dimension.canonical);
@@ -51,7 +53,7 @@ double scalar(const Entity& entity, const Dimension& dimension) {
     const auto selected = canonical ? canonical : alias;
     if (!selected || !selected->is_number()) invalid("Wall capture dimension is missing or invalid");
     const auto value = selected->get<double>();
-    if (!std::isfinite(value) || value <= default_geometry_tolerance_metres)
+    if (!std::isfinite(value) || (!dimension.signed_value && value <= default_geometry_tolerance_metres))
         invalid("Wall capture dimension is outside its admitted range");
     if (alias && (!alias->is_number() || alias->get<double>() != value))
         invalid("Wall capture scalar aliases disagree");
@@ -221,11 +223,12 @@ Entity normalize_equivalent_source(const Entity& original, const Entity& candida
 }
 } // namespace
 
-void validate_wall_profile_source_entity(const Entity& source) {
+void validate_wall_profile_source_entity(const Entity& source, bool strict_elevation) {
     if (source.type != "wall" || !source.properties.is_object())
         invalid("Wall profile source admission requires an existing wall");
     const auto admitted = wall(source);
-    for (const auto& dimension : dimensions) (void)scalar(source, dimension);
+    for (const auto& dimension : dimensions)
+        if (!dimension.signed_value || strict_elevation) (void)scalar(source, dimension);
     const auto values = entries(source);
     if (!values) return;
     const auto bound_receipt = [&](const std::string& pointer, const Json& value) {
@@ -236,7 +239,8 @@ void validate_wall_profile_source_entity(const Entity& source) {
         }
     };
     for (const auto* name : {"height_m", "height", "thickness_m", "thickness",
-                            "slope_rise_m", "slope_rise"}) {
+                            "slope_rise_m", "slope_rise", "elevation_m", "elevation"}) {
+        if (!strict_elevation && (std::string_view(name)=="elevation_m" || std::string_view(name)=="elevation")) continue;
         const auto pointer = "/" + std::string(name);
         if (!receipt(values, pointer)) continue;
         const auto value = field(source.properties, name);
@@ -265,8 +269,10 @@ void validate_wall_profile_source_entity(const Entity& source) {
 
 std::optional<WallProfileEditIntent> capture_wall_profile_edit(
     const Entity& original, const Entity& candidate,
-    const std::optional<WallProfileEditIntent>& authored) {
-    validate_wall_profile_source_entity(original);
+    const std::optional<WallProfileEditIntent>& authored, bool strict_elevation) {
+    if (!strict_elevation && authored && authored->elevation)
+        invalid("Historical wall profile capture has no elevation authority");
+    validate_wall_profile_source_entity(original, strict_elevation);
     if (exact(original, candidate)) return std::nullopt;
     if (original.type != "wall" || candidate.type != "wall" ||
         !original.properties.is_object() || !candidate.properties.is_object())
@@ -280,6 +286,7 @@ std::optional<WallProfileEditIntent> capture_wall_profile_edit(
     WallProfileEditIntent captured;
     captured.wall_id = original.id;
     for (const auto& dimension : dimensions) {
+        if (dimension.signed_value && !strict_elevation) continue;
         const auto old_value = scalar(original, dimension), value = scalar(candidate, dimension);
         if (old_value == value) continue;
         const std::vector<std::string> names{"/" + std::string(dimension.canonical), "/" + std::string(dimension.alias)};
@@ -319,7 +326,7 @@ std::optional<WallProfileEditIntent> capture_wall_profile_edit(
             {"/slope_rise_m", "/slope_rise"}, before.slope_rise.value_or(0.0), after.slope_rise.value_or(0.0));
     }
     if (authored && authored->wall_id != original.id) invalid("Wall capture authored hint targets another wall");
-    const bool captured_edit = captured.thickness || captured.height || captured.layer_thicknesses || captured.top_rise;
+    const bool captured_edit = captured.thickness || captured.height || captured.layer_thicknesses || captured.top_rise || captured.elevation;
     const auto& intent = authored ? *authored : captured;
     // Pure admission already establishes an unchanged source's semantics and
     // receipt bindings. A representation-only candidate needs no invented

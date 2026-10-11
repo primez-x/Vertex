@@ -204,7 +204,8 @@ Json scalar_wire(const DocumentSnapshot& source, const SelectionPropertyEditRequ
     if (request.selected.empty() || request.selected.size() > 1000 || request.walls.size() > 1000 ||
         request.slabs.size() > 1000 || request.hosted_openings.size() > 1000 || request.roofs.size() > 1000 ||
         request.structural_profiles.size() > 1000 || request.stair_profiles.size() > 1000) invalid("typed scalar target budget exceeded");
-    Json result{{"version", !request.stair_profiles.empty() ? 3 : !request.structural_profiles.empty() ? 2 : 1},
+    const bool vertical = std::any_of(request.walls.begin(), request.walls.end(), [](const auto& wall) { return wall.elevation.has_value(); });
+    Json result{{"version", vertical ? 4 : !request.stair_profiles.empty() ? 3 : !request.structural_profiles.empty() ? 2 : 1},
         {"expected_revision", source.revision()}, {"source_snapshot_digest", document_snapshot_digest(source)},
         {"source_authoring_digest", document_authoring_source_digest_v2(source)},
         {"source_entities_digest", entity_map_digest(source.entities())},
@@ -220,10 +221,10 @@ Json scalar_wire(const DocumentSnapshot& source, const SelectionPropertyEditRequ
     append(request.slabs, "slabs", encode_slab_profile_edit_intent);
     append(request.hosted_openings, "hosted_openings", encode_hosted_opening_profile_edit_intent);
     append(request.roofs, "roofs", encode_roof_profile_edit_intent);
-    if (!request.structural_profiles.empty() || !request.stair_profiles.empty()) {
+    if (vertical || !request.structural_profiles.empty() || !request.stair_profiles.empty()) {
         result["structural_profiles"] = Json::array(); append(request.structural_profiles, "structural_profiles", encode_structural_profile_edit_intent);
     }
-    if (!request.stair_profiles.empty()) {
+    if (vertical || !request.stair_profiles.empty()) {
         result["stair_profiles"] = Json::array(); append(request.stair_profiles, "stair_profiles", encode_stair_profile_edit_intent);
     }
     return validate_selection_property_edit_request(result);
@@ -336,7 +337,8 @@ std::vector<PhaseStairReplacementDependencyDisposition> decisions(const Json& ro
 PhaseSelectionPropertyEditRequest decode(const Json& wire) {
     bounds(wire);
     if (!wire.is_object() || !wire.contains("version") || !wire.at("version").is_number_integer()) invalid("unsupported request version");
-    const bool composite = wire.at("version") == 2;
+    const bool vertical = wire.at("version") == 3;
+    const bool composite = wire.at("version") == 2 || vertical;
     if (composite) fields(wire, {"version", "expected_revision", "source_snapshot_digest", "source_authoring_digest", "source_entities_digest",
         "source_saved_revision", "scalar_request", "allocations", "stair_dependency_dispositions", "message", "skylight_properties", "roof_opening_members"});
     else {
@@ -346,6 +348,9 @@ PhaseSelectionPropertyEditRequest decode(const Json& wire) {
     PhaseSelectionPropertyEditRequest result;
     if (!wire.at("scalar_request").is_null()) result.properties = scalar_request(wire.at("scalar_request"));
     else if (!composite) invalid("historical request requires scalar authority");
+    if (vertical ? (wire.at("scalar_request").is_null() || wire.at("scalar_request").at("version") != 4) :
+        (!wire.at("scalar_request").is_null() && wire.at("scalar_request").at("version") == 4))
+        invalid("wall elevation requires explicit phase request three and scalar request four");
     if (composite) {
         const auto revision = [&](const Json& value) {
             if (!value.is_number_integer() || (value.is_number_unsigned() ? false : value.get<std::int64_t>() < 0)) invalid("invalid source revision");
@@ -358,8 +363,11 @@ PhaseSelectionPropertyEditRequest decode(const Json& wire) {
         }
         if (!wire.at("scalar_request").is_null()) for (const auto* fence : source_fences)
             if (wire.at(fence).dump() != wire.at("scalar_request").at(fence).dump()) invalid("scalar and composite source fences differ");
-        result.roof_opening_properties = skylight_request(wire);
-        if (result.properties.selected.size() + result.roof_opening_properties->members.size() > 1000) invalid("combined physical selection budget exceeded");
+        if (vertical && wire.at("skylight_properties").is_null()) {
+            if (!wire.at("roof_opening_members").is_array() || !wire.at("roof_opening_members").empty())
+                invalid("absent skylight contribution requires an exact empty child roster");
+        } else result.roof_opening_properties = skylight_request(wire);
+        if (result.properties.selected.size() + (result.roof_opening_properties ? result.roof_opening_properties->members.size() : 0) > 1000) invalid("combined physical selection budget exceeded");
     }
     if (!wire.at("allocations").is_array() || wire.at("allocations").size() > 1000) invalid("allocation cohort budget exceeded");
     std::optional<Key> previous;
@@ -602,12 +610,13 @@ Json encode_phase_selection_property_edit_request(const DocumentSnapshot& source
     if (request.allocations.size() > 1000) invalid("allocation cohort budget exceeded");
     if (request.properties.selected.empty() && (!request.roof_opening_properties || !request.properties.walls.empty() || !request.properties.slabs.empty() ||
         !request.properties.hosted_openings.empty() || !request.properties.roofs.empty() || !request.properties.structural_profiles.empty() || !request.properties.stair_profiles.empty())) invalid("empty physical roster requires child-only authority");
-    Json wire{{"version", request.roof_opening_properties ? 2 : 1}, {"scalar_request", request.properties.selected.empty() ? Json(nullptr) : scalar_wire(source, request.properties)}, {"allocations", Json::array()},
+    const bool vertical = std::any_of(request.properties.walls.begin(), request.properties.walls.end(), [](const auto& wall) { return wall.elevation.has_value(); });
+    Json wire{{"version", vertical ? 3 : request.roof_opening_properties ? 2 : 1}, {"scalar_request", request.properties.selected.empty() ? Json(nullptr) : scalar_wire(source, request.properties)}, {"allocations", Json::array()},
         {"stair_dependency_dispositions", decisions_wire(request.stair_dependency_dispositions)}, {"message", request.message}};
-    if (request.roof_opening_properties) {
+    if (vertical || request.roof_opening_properties) {
         const auto captured = source_fields(source); for (const auto* fence : source_fences) wire[fence] = captured.at(fence);
-        wire["skylight_properties"] = skylight_wire(*request.roof_opening_properties); wire["roof_opening_members"] = Json::array();
-        for (const auto& member : request.roof_opening_properties->members) wire["roof_opening_members"].push_back({{"roof_id", member.roof_id}, {"opening_id", member.opening_id}});
+        wire["skylight_properties"] = request.roof_opening_properties ? skylight_wire(*request.roof_opening_properties) : Json(nullptr); wire["roof_opening_members"] = Json::array();
+        if (request.roof_opening_properties) for (const auto& member : request.roof_opening_properties->members) wire["roof_opening_members"].push_back({{"roof_id", member.roof_id}, {"opening_id", member.opening_id}});
     }
     for (const auto& item : request.allocations) wire["allocations"].push_back(allocation_wire(item));
     (void)decode(wire); return wire;
@@ -682,6 +691,7 @@ PhaseSelectionPropertyEditPreparation replay_phase_selection_property_edit_prepa
             // The current combined scalar leaf is root-owned. Its closed codec
             // must admit both lists as one original-source/room-review stage.
             leaf.complete_scalar_profiles = true;
+            leaf.complete_vertical_profiles = std::any_of(leaf.wall_profiles.begin(), leaf.wall_profiles.end(), [](const auto& wall) { return wall.elevation.has_value(); });
             intent.wall_replacement = encode_phase_wall_replacement_authoring(leaf);
             auto preview = inspect_phase_wall_replacement_authoring(source, intent);
             merge_mapping(mapping, preview.replacement.original_to_proposed, actual);

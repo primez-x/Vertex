@@ -141,6 +141,11 @@ private:
 // roof_opening_members. scalar_request is null only for an empty physical roster;
 // when present its five fences exactly match. Children retain separate selection
 // authority and are admitted together with original-source roof profiles.
+// V3 has V2's exact fields and explicitly requires scalar_request V4. Its
+// skylight_properties may be null only with an empty roof_opening_members
+// roster. Empty allocation inventories remain ordinary/proposed scalar edits;
+// wall replacement cohorts with elevation use complete vertical leaf authority.
+// Historical V1/V2 reject scalar V4 and cannot acquire elevation authority.
 [[nodiscard]] nlohmann::json encode_phase_selection_property_edit_request(
     const DocumentSnapshot&, const PhaseSelectionPropertyEditRequest&);
 [[nodiscard]] nlohmann::json validate_phase_selection_property_edit_request(const nlohmann::json&);

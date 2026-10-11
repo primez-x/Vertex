@@ -1,5 +1,11 @@
 # Portable project extraction
 
+Exchange version199 requires native reader201 for explicit wall elevation
+profiles and reviewed mixed Properties dialect12. Source-bound phase copies,
+selected-owner correspondence and old/new effective room-plane decisions remain
+in retained history. Previous record shapes keep their original meaning. Source
+implementation does not establish runtime or round-trip qualification.
+
 Exchange version198 requires native reader200 for mixed alternative Properties
 dialect eleven and phase request two. Roof scalar and selected skylight edits
 share one original-source composite. The complete selection carries qualified

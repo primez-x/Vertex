@@ -63,6 +63,10 @@ struct PhaseWallReplacementAuthoring {
     // identities. Both scalar families stage before final physical admission.
     // Complete presentations/corners are mandatory; other edit lanes refuse.
     bool complete_scalar_profiles{false};
+    // Leaf ten / phase outer twenty-six: explicitly adds signed raw elevation
+    // to the complete scalar cohort. Requires at least one elevation intent;
+    // historical leaves never acquire vertical edit authority implicitly.
+    bool complete_vertical_profiles{false};
 };
 struct PhaseWallReplacementAuthoringPreview {
     PhaseWallReplacementResult replacement;

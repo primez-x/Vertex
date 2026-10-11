@@ -459,6 +459,9 @@ public:
                 if (target.family == SelectionPropertyFamily::wall) {
                     f.thickness = dimension(form, "Total thickness", "selectionWallThickness");
                     f.height = dimension(form, "Height", "selectionWallHeight");
+                    f.elevation = dimension(form, "Base elevation / floor offset", "selectionWallElevation");
+                    f.elevation->setToolTip(f.elevation->toolTip() +
+                        " Signed stored base elevation. For level-bound walls, this is added to the floor level and placement offset; each wall's level binding is retained.");
                     f.rise = dimension(form, "Top rise / fall", "selectionWallTopRise");
                     f.rise->setToolTip("Signed change in top height from wall start to end. Zero clears the slope; leave blank to retain the current top profile.");
                 } else if (target.family == SelectionPropertyFamily::slab) {
@@ -502,6 +505,7 @@ public:
                 layer_fields(value, wall.layers, profile_forms.at(target.family), original);
                 current_length(profiles.at(target.family).thickness, wall.thickness);
                 current_length(profiles.at(target.family).height, wall.height);
+                current_length(profiles.at(target.family).elevation, wall.elevation);
                 current_length(profiles.at(target.family).rise, wall.slope_rise.value_or(0.0));
                 title_singular = "Wall";
             } else if (target.family == SelectionPropertyFamily::slab) {
@@ -843,6 +847,7 @@ public:
                 intent.wall_id = target.entity_id;
                 intent.thickness = length(f.thickness, unit);
                 intent.height = length(f.height, unit);
+                intent.elevation = length(f.elevation, unit, false, true);
                 intent.top_rise = length(f.rise, unit, false, true);
                 if (std::any_of(value.layers.begin(), value.layers.end(), [](const auto& layer) { return text(layer.field).has_value(); })) {
                     intent.layer_thicknesses.emplace();
@@ -851,7 +856,7 @@ public:
                         intent.layer_thicknesses->push_back({layer.id, entered.value_or(Quantity{}), !entered.has_value()});
                     }
                 }
-                if (!intent.thickness && !intent.height && !intent.layer_thicknesses && !intent.top_rise)
+                if (!intent.thickness && !intent.height && !intent.elevation && !intent.layer_thicknesses && !intent.top_rise)
                     intent.height = invariant_quantity(original, scalar(original, "height_m", "height"), {"/height_m", "/height"});
                 (void)encode_wall_profile_edit_intent(intent);
                 // Detached scalar/layer admission is safe. Hosted cuts, joined

@@ -301,6 +301,7 @@ public:
     std::shared_ptr<const DocumentSnapshot> roof_candidate;
     std::optional<NativeModelView::VisibleEntityIds> roof_candidate_visible_ids;
     std::vector<NativeRoofOpeningTarget> roof_candidate_targets;
+    QStringList roof_candidate_selection;
     std::vector<occ::handle<AIS_Shape>> roof_preview_presentations;
     std::vector<std::pair<occ::handle<AIS_Shape>,bool>> roof_original_visibility;
     bool roof_release_pending{};
@@ -966,9 +967,39 @@ public:
     // Elevation authority comes from every actual captured owner, never the
     // proxy, primary member, compatibility host IDs or a cached eligibility bit.
     // Typed children travel vertically only through an explicitly selected roof.
+    // A wall cohort has its own scalar elevation publication path and admits
+    // only actual walls and their explicitly selected hosted dependents.
     bool supports_coordinated_vertical_translation(const DocumentSnapshot& source,
         const QStringList& ordinary, const std::vector<NativeRoofOpeningTarget>& children) const {
         if (!source.is_editable() || ordinary.isEmpty()) return false;
+        const bool wall_cohort=std::any_of(ordinary.begin(),ordinary.end(),[&source](const QString& selected) {
+            const auto found=source.entities().find(selected.toStdString());
+            return found!=source.entities().end() && found->second.type=="wall";
+        });
+        if (wall_cohort) {
+            if (!children.empty()) return false;
+            const auto selected_wall=[this,&source,&ordinary](const std::string& wall_id) {
+                const auto wall=source.entities().find(wall_id);
+                return ordinary.contains(QString::fromStdString(wall_id)) && wall!=source.entities().end() &&
+                    wall->second.type=="wall" && supports_coordinated_plan_member(wall_id,source,ordinary);
+            };
+            for (const auto& selected : ordinary) {
+                const auto id=selected.toStdString();
+                const auto found=source.entities().find(id);
+                if (found==source.entities().end() || !supports_coordinated_plan_member(id,source,ordinary)) return false;
+                if (found->second.type=="wall") continue;
+                if (found->second.type=="opening") {
+                    std::string wall_id,error;
+                    if (!read_document_wall_id(found->second,wall_id,error) || !selected_wall(wall_id)) return false;
+                } else if (found->second.type=="corner_window") {
+                    try {
+                        const auto corner=parse_corner_window(found->second);
+                        if (!selected_wall(corner.wall_ids[0]) || !selected_wall(corner.wall_ids[1])) return false;
+                    } catch (...) { return false; }
+                } else return false;
+            }
+            return true;
+        }
         for (const auto& selected : ordinary) {
             const auto id=selected.toStdString();
             const auto found=source.entities().find(id);
@@ -1490,6 +1521,7 @@ public:
         roof_candidate.reset();
         roof_candidate_visible_ids.reset();
         roof_candidate_targets.clear();
+        roof_candidate_selection.clear();
         roof_preview_timer->stop();
         roof_transform_feedback.clear();
         (void)restore_roof_preview();
@@ -1593,6 +1625,7 @@ public:
         roof_candidate.reset();
         roof_candidate_visible_ids.reset();
         roof_candidate_targets.clear();
+        roof_candidate_selection.clear();
         // Never retain an older admitted presentation under a newer proposal.
         if (!restore_roof_preview()) { owner->cancelInteraction(); return; }
         const double display_factor = roof_transform_metric_units ? 1.0 : 1.0/0.0254;
@@ -1680,7 +1713,7 @@ public:
                 const auto presentation=prepared_presentation(solid);
                 next.emplace_back(presentation,solid.visible);
                 const auto ordinary_id=QString::fromStdString(id);
-                if (roof_transform_capture->selection.contains(ordinary_id)) {
+                if (roof_candidate_selection.contains(ordinary_id)) {
                     if (!solid.visible || presentation->Shape().IsNull())
                         throw std::invalid_argument("candidate ordinary cohort lacks visible native geometry");
                     found_ordinary.push_back(ordinary_id);
@@ -1703,7 +1736,7 @@ public:
             for (const auto& target : roof_candidate_targets)
                 if (std::find(found_targets.begin(),found_targets.end(),target) == found_targets.end())
                     throw std::invalid_argument("candidate skylight cohort lacks visible native provenance");
-            for (const auto& id : roof_transform_capture->selection)
+            for (const auto& id : roof_candidate_selection)
                 if (!found_ordinary.contains(id))
                     throw std::invalid_argument("candidate ordinary cohort is incomplete");
             if (!restore_roof_preview()) { owner->cancelInteraction(); return; }
@@ -2297,7 +2330,8 @@ bool NativeModelView::roofOpeningTransformPreviewCurrent(std::uint64_t serial) c
 bool NativeModelView::completeRoofOpeningTransformPreview(
     std::uint64_t serial, const DocumentSnapshot& candidate,
     std::vector<NativeRoofOpeningTarget> remapped_targets,
-    VisibleEntityIds candidate_visible_ids) {
+    VisibleEntityIds candidate_visible_ids,
+    const std::map<std::string, std::string, std::less<>>& ordinary_correspondence) {
     if (QThread::currentThread() != thread() || !roofOpeningTransformPreviewCurrent(serial)) return false;
     const bool coordinated=!m_impl->roof_transform_capture->selection.isEmpty();
     if ((!coordinated && !candidate.is_editable()) ||
@@ -2335,14 +2369,43 @@ bool NativeModelView::completeRoofOpeningTransformPreview(
             return false;
         }
     }
-    // Coordinated ordinary IDs/embedded aliases remain exact. Active-baseline
-    // replacement has no native admission here; a complete candidate must
-    // retain every captured ordinary member and its supported semantics. The
-    // shell's sealed read-only drawing proposal can manufacture geometry
-    // here without acquiring the original source's authoring authority.
-    for (const auto& id : m_impl->roof_transform_capture->selection) {
+    auto candidate_selection=m_impl->roof_transform_capture->selection;
+    if (!ordinary_correspondence.empty()) {
+        const auto& original=*m_impl->roof_transform_capture->source;
+        const auto& proposal=*m_impl->roof_transform_proposal;
+        if (!coordinated || !proposal.targets.empty() || proposal.translation_world_m[0]!=0.0 ||
+            proposal.translation_world_m[1]!=0.0 || proposal.rotation_radians!=0.0 || proposal.uniform_scale!=1.0 ||
+            proposal.axis_scale!=std::array<double,2>{1.0,1.0} ||
+            ordinary_correspondence.size()>static_cast<std::size_t>(candidate_selection.size())) return false;
+        bool has_wall=false;
+        for (const auto& id:candidate_selection) {
+            const auto owner=original.entities().find(id.toStdString());
+            if (owner==original.entities().end() || (owner->second.type!="wall" && owner->second.type!="opening" &&
+                owner->second.type!="corner_window")) return false;
+            has_wall=has_wall || owner->second.type=="wall";
+        }
+        if (!has_wall) return false;
+        std::set<std::string,std::less<>> destinations;
+        for (const auto& [source_id,destination_id]:ordinary_correspondence) {
+            const auto id=QString::fromStdString(source_id);
+            const auto before=original.entities().find(source_id),after=candidate.entities().find(destination_id);
+            const auto retained=candidate.entities().find(source_id);
+            if (!candidate_selection.contains(id) || before==original.entities().end() ||
+                (before->second.type!="wall" && before->second.type!="opening" && before->second.type!="corner_window") ||
+                after==candidate.entities().end() || before->second.type!=after->second.type ||
+                source_id==destination_id || original.entities().contains(destination_id) ||
+                !destinations.insert(destination_id).second || retained==candidate.entities().end() ||
+                retained->second!=before->second || retained->second.properties.dump()!=before->second.properties.dump() ||
+                retained->second.extensions.dump()!=before->second.extensions.dump()) return false;
+            candidate_selection.replace(candidate_selection.indexOf(id),QString::fromStdString(destination_id));
+        }
+    }
+    // All ordinary aliases stay exact unless the sealed wall Z preparation
+    // supplied the bounded correspondence above. This is geometry manufacture,
+    // never replacement admission or mutation of captured gesture selection.
+    for (const auto& id : candidate_selection) {
         if (!candidate_visible_ids.contains(id.toStdString()) ||
-            !m_impl->supports_coordinated_plan_member(id.toStdString(),candidate,m_impl->roof_transform_capture->selection,false)) {
+            !m_impl->supports_coordinated_plan_member(id.toStdString(),candidate,candidate_selection,false)) {
             (void)rejectRoofOpeningTransformPreview(serial,QStringLiteral("The selection candidate lacks a visible ordinary member or its supported transform geometry."));
             return false;
         }
@@ -2355,6 +2418,7 @@ bool NativeModelView::completeRoofOpeningTransformPreview(
         m_impl->roof_candidate = std::move(source);
         m_impl->roof_candidate_visible_ids = std::move(candidate_visible_ids);
         m_impl->roof_candidate_targets = std::move(remapped_targets);
+        m_impl->roof_candidate_selection = std::move(candidate_selection);
         m_impl->roof_candidate_serial = serial;
         m_impl->roof_transform_feedback.replace(QStringLiteral(" — checking"),QStringLiteral(" — preparing"));
         m_impl->refresh_status_label();
@@ -2377,6 +2441,7 @@ bool NativeModelView::rejectRoofOpeningTransformPreview(std::uint64_t serial, QS
     m_impl->roof_candidate.reset();
     m_impl->roof_candidate_visible_ids.reset();
     m_impl->roof_candidate_targets.clear();
+    m_impl->roof_candidate_selection.clear();
     if (!m_impl->restore_roof_preview()) {
         cancelInteraction();
         return true;

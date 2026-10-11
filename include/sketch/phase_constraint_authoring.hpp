@@ -32,7 +32,9 @@ struct PhaseConstraintAuthoringIntent {
     ConstraintAuthoringIntent intent;
     // Dialect two: a typed wall identity replacement and reviewed room
     // completion, independently replayed before publication. Null keeps the
-    // version-one semantics and exact wire keys.
+    // version-one semantics and exact wire keys. Dialect twenty-six admits
+    // only complete wall leaf ten, with explicit signed raw elevation authority;
+    // dialect twenty-three remains paired exclusively with scalar leaf nine.
     nlohmann::json wall_replacement=nullptr;
     // Dialect three only: registry-only opening demolition. It cannot borrow
     // wall replacements, geometry edits, relationships or arbitrary payloads.

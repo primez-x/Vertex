@@ -1,4 +1,12 @@
-# Vertex project formats v1 through v200
+# Vertex project formats v1 through v201
+
+Reader201 retains signed wall elevation in profile leaf4, selected Properties
+request4, phase selection request3, wall replacement leaf10/phase outer26 and
+mixed Properties dialect12. Elevation edits preserve raw floor-relative storage,
+level bindings, wall top gradients and hosted openings. Complete source and
+destination room planes require explicit review before atomic publication.
+Older dialects retain their original authority. Native extraction emits199;
+compilation, interaction, migration and round-trip qualification remain open.
 
 Reader200 retains mixed Properties dialect eleven in command envelope52. The
 closed intent carries the original five source fences, phase_request,

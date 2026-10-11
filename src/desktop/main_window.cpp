@@ -6174,6 +6174,7 @@ class MainWindow::Impl {
         std::vector<visualization::NativeRoofOpeningTarget> targets;
         visualization::NativeModelView::VisibleEntityIds visible_ids;
         std::shared_ptr<const MixedSelectionEditPreparation> mixed_preparation;
+        std::shared_ptr<const MixedSelectionPropertyEditPreparation> wall_vertical_preparation;
         bool no_op{};
     };
     struct PendingNativeRoofOpeningPreview {
@@ -47795,6 +47796,17 @@ private:
                 const auto source = authoringSnapshot();
                 const auto authority = captureSourceEditAuthority(source);
                 if (entity->type == "wall") {
+                    if (authored_wall_profile && authored_wall_profile->elevation) {
+                        const auto candidate=replay_wall_profile_entity(source.entities().at(entity->id),*authored_wall_profile);
+                        if (candidate.properties.dump()!=properties.dump())
+                            throw std::invalid_argument("The wall elevation differs from its captured typed profile.");
+                        SelectionPropertyEditRequest request;
+                        request.unchanged_policy=SelectionPropertyUnchangedPolicy::retain;
+                        request.selected.push_back({entity->id,SelectionPropertyFamily::wall});
+                        request.walls.push_back(*authored_wall_profile);
+                        const auto prepared=prepareWallElevationProperties(source,request,message);
+                        return publishWallElevationProperties(source,prepared,authority,{});
+                    }
                     auto proposed = *entity;
                     proposed.properties = properties;
                     const Command raw{ApplyEntityChanges{
@@ -48269,10 +48281,11 @@ private:
             std::optional<WallProfileEditIntent> authored_wall_profile;
             std::optional<HostedOpeningProfileEditIntent> authored_opening_profile;
             std::optional<SlabProfileEditIntent> authored_slab_profile;
-            if (entity->type == "wall" && (key_is_height || key_is_thickness)) {
+            if (entity->type == "wall" && (key_is_height || key_is_thickness || key_is_elevation)) {
                 authored_wall_profile.emplace();
                 authored_wall_profile->wall_id = entity->id;
                 if (key_is_height) authored_wall_profile->height = quantity;
+                else if (key_is_elevation) authored_wall_profile->elevation = quantity;
                 else authored_wall_profile->thickness = quantity;
                 // Typed replay keeps the entered expression in every ordinary
                 // or proposed edit and preserves exact same-dimension no-ops.
@@ -49686,7 +49699,7 @@ private:
                     validate_mixed_clipboard_placement_intent(encoded.at("clipboard_placement_intent")) :
                     validate_mixed_selection_edit_intent(encoded.at("mixed_selection_edit_intent"));
                 const auto dialect=intent.at("version").get<int>();
-                if (version==52 && dialect>=5 && dialect<=11) {
+                if (version==52 && dialect>=5 && dialect<=12) {
                     // Properties dialects have no transform roof_authoring.
                     // Active-baseline redirects require independently replayed
                     // source authority rather than extracting supplied maps.
@@ -58602,11 +58615,12 @@ private:
                 if (value.mixed_selection_edit_completion || !value.mixed_selection_edit_intent.is_null()) {
                     mixed_edit=true;
                     const auto intent=validate_mixed_selection_edit_intent(value.mixed_selection_edit_intent);
-                    if (intent.at("version")==5 || intent.at("version")==6 || intent.at("version")==7 || intent.at("version")==8 || intent.at("version")==9 || intent.at("version")==10) {
+                    if (intent.at("version")==5 || intent.at("version")==6 || intent.at("version")==7 || intent.at("version")==8 || intent.at("version")==9 || intent.at("version")==10 || intent.at("version")==11 || intent.at("version")==12) {
                         // Properties has its own typed lanes, including a null
                         // physical lane for annotation-only edits. Gesture
                         // ordinary_request codecs cannot decode this roster.
-                        const auto& physical=intent.at("ordinary_request");
+                        const bool phased=intent.at("version")==11 || intent.at("version")==12;
+                        const auto& physical=phased ? intent.at("phase_request").at("scalar_request") : intent.at("ordinary_request");
                         if (!physical.is_null()) for (const auto& target:physical.at("selected"))
                             targets.insert(target.at("entity_id").template get<std::string>());
                         if ((intent.at("version")==9 || intent.at("version")==10) && !intent.at("stair_review_request").is_null()) {
@@ -58614,7 +58628,7 @@ private:
                             for (const auto& profile:review.profiles) targets.insert(profile.object_id);
                             for (const auto& choice:review.dependency_dispositions) targets.insert(choice.rail_id);
                         }
-                        if (intent.at("version")==10) {
+                        if (intent.at("version")==10 || (phased && !intent.at("assembly_request").is_null())) {
                             const auto aliases=embedded_assembly_presentation_ids(source.entities());
                             for (const auto& row:intent.at("assembly_request").at("intents")) {
                                 const auto target=decode_assembly_instance_property_edit_intent(row).target;
@@ -68211,6 +68225,63 @@ private:
                         children.push_back({target.roof_id,target.opening_id,capture.source->revision()});
                     const PlanarTransform world{{gesture.pivot_world_m[0],gesture.pivot_world_m[1]},
                         gesture.rotation_radians,false,false,{gesture.translation_world_m[0],gesture.translation_world_m[1]}};
+                    const bool walls=std::any_of(capture.ordinary.begin(),capture.ordinary.end(),[&](const auto& id) {
+                        const auto found=capture.source->entities().find(id.toStdString());
+                        return found!=capture.source->entities().end() && found->second.type=="wall";
+                    });
+                    if (walls && gesture.translation_world_m[0]==0.0 && gesture.translation_world_m[1]==0.0 &&
+                        gesture.rotation_radians==0.0 && gesture.uniform_scale==1.0) {
+                        if (!children.empty()) throw std::invalid_argument("Move walls and their hosted openings vertically together.");
+                        SelectionPropertyEditRequest properties;
+                        properties.unchanged_policy=SelectionPropertyUnchangedPolicy::retain;
+                        const auto quantity=[](double metres) {
+                            if (!std::isfinite(metres)) throw std::invalid_argument("The wall elevation is not finite.");
+                            const auto result=parse_quantity(json(metres).dump()+" m",Unit::metre);
+                            if (result.metres!=metres) throw std::invalid_argument("The wall elevation exceeds exact quantity precision.");
+                            return result;
+                        };
+                        for (const auto& id:capture.ordinary) {
+                            const auto& entity=capture.source->entities().at(id.toStdString());
+                            if (entity.type=="wall") {
+                                Wall wall;std::string diagnostic;
+                                if (!read_document_wall(entity,{},wall,diagnostic)) throw std::invalid_argument(diagnostic);
+                                const auto placement=capture.ordinary_frames.find(id);
+                                if (placement==capture.ordinary_frames.end())
+                                    throw std::invalid_argument("The wall lost its captured source frame.");
+                                const auto delta=site_transform_delta({0.0,0.0,gesture.translation_world_m[2]},placement->second.inverse);
+                                if (delta.x!=0.0 || delta.y!=0.0)
+                                    throw std::invalid_argument("The wall frame does not support pure vertical movement.");
+                                WallProfileEditIntent intent;intent.wall_id=entity.id;
+                                intent.elevation=quantity(wall.elevation+delta.z);
+                                properties.selected.push_back({entity.id,SelectionPropertyFamily::wall});
+                                properties.walls.push_back(std::move(intent));
+                            } else if (entity.type=="opening") {
+                                std::string host,diagnostic;
+                                if (!read_document_wall_id(entity,host,diagnostic) || !capture.ordinary.contains(id_from(host)))
+                                    throw std::invalid_argument("Select an opening's actual wall to move it vertically.");
+                                HostedOpeningProfileEditIntent intent;intent.opening_id=entity.id;intent.wall_id=host;
+                                intent.height=quantity(entity.properties.at(entity.properties.contains("height_m")?"height_m":"height").get<double>());
+                                properties.selected.push_back({entity.id,SelectionPropertyFamily::hosted_opening});
+                                properties.hosted_openings.push_back(std::move(intent));
+                            } else if (entity.type=="corner_window") {
+                                const auto corner=parse_corner_window(entity);
+                                if (!capture.ordinary.contains(id_from(corner.wall_ids[0])) || !capture.ordinary.contains(id_from(corner.wall_ids[1])))
+                                    throw std::invalid_argument("Select both corner-window walls to move the assembly vertically.");
+                            } else throw std::invalid_argument("Move the wall cohort separately from unrelated 3D objects.");
+                        }
+                        auto prepared=prepareWallElevationProperties(*capture.source,properties,"Move walls vertically in 3D");
+                        if (cancellation.is_cancelled()) return RegenerationReceipt{capture.source->revision(),{}};
+                        request.result->wall_vertical_preparation=std::make_shared<MixedSelectionPropertyEditPreparation>(std::move(prepared));
+                        request.result->candidate=std::make_shared<DocumentSnapshot>(request.result->wall_vertical_preparation->preview_snapshot());
+                        request.result->targets=capture.targets;
+                        request.result->visible_ids.clear();
+                        for (const auto& id:capture.visible_ids) {
+                            const auto mapped=request.result->wall_vertical_preparation->original_to_proposed().find(id);
+                            request.result->visible_ids.insert(mapped==request.result->wall_vertical_preparation->original_to_proposed().end()?id:mapped->second);
+                        }
+                        request.result->no_op=entity_map_digest(request.result->candidate->entities())==entity_map_digest(capture.source->entities());
+                        return RegenerationReceipt{capture.source->revision(),{}};
+                    }
                     auto mixed=prepareMixedSelectionTransform(capture.source,capture.ordinary,children,world,true,
                         std::nullopt,capture.ordinary_frames,SiteCanvasPresentationFrames{}, {},
                         "Transform complete selection in 3D",gesture.uniform_scale,gesture.translation_world_m[2]);
@@ -68274,12 +68345,19 @@ private:
             auto request=std::move(*m_running_native_roof_opening_preview); m_running_native_roof_opening_preview.reset();
             if (!nativeRoofOpeningRequestCurrent(request)) continue;
             if (completion.succeeded() && completion.receipt->source_revision==request.capture->source->revision() &&
-                request.result->candidate && (request.result->no_op || request.result->prepared || request.result->mixed_preparation)) {
+                request.result->candidate && (request.result->no_op || request.result->prepared || request.result->mixed_preparation || request.result->wall_vertical_preparation)) {
                 // Store command authority before native completion, which may
                 // finish a release waiting for this exact manufactured result.
                 m_ready_native_roof_opening_preview=request;
+                std::map<std::string,std::string,std::less<>> wall_correspondence;
+                if (request.result->wall_vertical_preparation)
+                    for (const auto& id:request.capture->ordinary) {
+                        const auto& mapping=request.result->wall_vertical_preparation->original_to_proposed();
+                        if (const auto found=mapping.find(id.toStdString());found!=mapping.end())
+                            wall_correspondence.emplace(found->first,found->second);
+                    }
                 if (!request.capture->view->completeRoofOpeningTransformPreview(request.serial,
-                    *request.result->candidate,request.result->targets,request.result->visible_ids)) m_ready_native_roof_opening_preview.reset();
+                    *request.result->candidate,request.result->targets,request.result->visible_ids,wall_correspondence)) m_ready_native_roof_opening_preview.reset();
             } else {
                 QString message=request.capture->ordinary.isEmpty() ?
                     QStringLiteral("The skylights do not fit this 3D proposal.") :
@@ -68306,6 +68384,21 @@ private:
             if (!ready || !nativeRoofOpeningRequestCurrent(*ready) || ready->serial!=serial ||
                 ready->gesture!=gesture || !source || fullSnapshotDigest(*source)!=fullSnapshotDigest(*ready->capture->source))
                 throw std::invalid_argument("The exact 3D selection preview is no longer current. Begin the gesture again.");
+            if (ready->result->wall_vertical_preparation) {
+                const auto capture=ready->capture;
+                const auto preparation=ready->result->wall_vertical_preparation;
+                cancelNativeRoofOpeningPreview();
+                const auto fence=[&] {
+                    const auto displayed=capture->view?capture->view->publishedSnapshot():nullptr;
+                    if (!capture->view || capture->view!=m_nativeModelView || !capture->view->isVisible() ||
+                        !displayed || fullSnapshotDigest(*displayed)!=fullSnapshotDigest(*capture->source) ||
+                        ordinarySelectionIDs()!=capture->ordinary || m_native_visible_ids!=capture->visible_ids)
+                        throw std::invalid_argument("The wall cohort or 3D view changed during room review.");
+                };
+                fence();
+                if (ready->result->no_op) { clearError();synchronizeNativeSelection();return true; }
+                return publishWallElevationProperties(*capture->source,*preparation,*capture->authority,fence,capture->edit_source);
+            }
             if (ready->result->mixed_preparation) {
                 const auto capture=ready->capture;
                 const auto preparation=ready->result->mixed_preparation;
@@ -68390,6 +68483,25 @@ private:
             // Embedded catalog profiles have explicit world roots; the typed
             // embedded adapter owns child lookup and atomic catalog completion.
             const auto local = conjugate_site_edit(world, frame);
+            const auto owner=gesture_source->entities().find(id.toStdString());
+            if (owner!=gesture_source->entities().end() && owner->second.type=="wall" &&
+                world.translation_m.x==0.0 && world.translation_m.y==0.0 && world.rotation_radians==0.0 && world.scale==1.0) {
+                Wall wall;std::string diagnostic;
+                if (!read_document_wall(owner->second,{},wall,diagnostic)) throw std::invalid_argument(diagnostic);
+                // Transform the requested displacement directly. Adding then
+                // subtracting a translated Site origin loses small Z deltas.
+                const auto delta=site_transform_delta(world.translation_m,inverse_site_transform(frame));
+                const auto elevation=wall.elevation+delta.z;
+                if (!std::isfinite(elevation)) throw std::invalid_argument("The wall elevation is not finite.");
+                WallProfileEditIntent intent;intent.wall_id=owner->first;
+                intent.elevation=parse_quantity(json(elevation).dump()+" m",Unit::metre);
+                if (intent.elevation->metres!=elevation)
+                    throw std::invalid_argument("The wall elevation exceeds exact quantity precision.");
+                SelectionPropertyEditRequest request;request.unchanged_policy=SelectionPropertyUnchangedPolicy::retain;
+                request.selected.push_back({owner->first,SelectionPropertyFamily::wall});request.walls.push_back(std::move(intent));
+                const auto prepared=prepareWallElevationProperties(*gesture_source,request,"Move wall vertically in 3D");
+                return publishWallElevationProperties(*gesture_source,prepared,*authority,{});
+            }
             const ArchitecturalTransform transform{local.translation_m.x, local.translation_m.y,
                 local.translation_m.z, local.rotation_radians, local.scale};
             const auto metres = [](double value) { return QString::number(value, 'g', 17) + QStringLiteral(" m"); };
@@ -69328,6 +69440,106 @@ public:
         if (reviews.size()!=prepared.required_phase_room_reviews().size())
             throw std::invalid_argument("The alternative room review inventory changed.");
         fence();return reviews;
+    }
+
+    static MixedSelectionPropertyEditPreparation prepareWallElevationProperties(
+        const DocumentSnapshot& source,const SelectionPropertyEditRequest& input,const std::string& message) {
+        auto request=input;
+        // Scalar wire order is canonical identity order. The captured click/
+        // primary order stays in SourceEditAuthority for selection restoration.
+        std::sort(request.selected.begin(),request.selected.end(),[](const auto& a,const auto& b) { return a.entity_id<b.entity_id; });
+        std::sort(request.walls.begin(),request.walls.end(),[](const auto& a,const auto& b) { return a.wall_id<b.wall_id; });
+        std::sort(request.hosted_openings.begin(),request.hosted_openings.end(),[](const auto& a,const auto& b) { return a.opening_id<b.opening_id; });
+        if (request.walls.empty() || std::none_of(request.walls.begin(),request.walls.end(),[](const auto& wall) {
+                return wall.elevation.has_value();
+            })) throw std::invalid_argument("Wall vertical movement requires its explicit elevation profiles.");
+        if (std::any_of(request.selected.begin(),request.selected.end(),[](const auto& member) {
+                return member.family!=SelectionPropertyFamily::wall && member.family!=SelectionPropertyFamily::hosted_opening;
+            })) throw std::invalid_argument("This elevation workflow requires walls and their hosted openings.");
+        const auto inventory=inspect_phase_selection_property_edit(source,request,{});
+        auto occupied=retainedSlabIdentityNames(source,true);
+        std::vector<PhaseSelectionPropertyIdentityAllocation> allocations;
+        for (const auto& cohort:inventory.replacements()) {
+            if (cohort.lane!=PhaseSelectionPropertyLane::walls)
+                throw std::invalid_argument("The wall elevation proposal has an unrelated replacement family.");
+            const auto& plan=std::get<PhaseWallReplacementPlan>(cohort.plan);
+            if (!plan.ready()) {
+                std::string reasons;
+                for (const auto& diagnostic:plan.diagnostics) if (diagnostic.blocking) {
+                    if (!reasons.empty()) reasons+='\n';reasons+=diagnostic.reason;
+                }
+                throw std::invalid_argument(reasons.empty()?"The wall replacement inventory is incomplete.":reasons);
+            }
+            PhaseSelectionPropertyIdentityAllocation allocation;
+            allocation.lane=cohort.lane;allocation.registry_id=cohort.registry_id;allocation.alternative_id=cohort.alternative_id;
+            for (const auto* roster:{&plan.required_entity_ids,&plan.required_child_ids})
+                for (const auto& id:*roster) if (!allocation.identities.contains(id)) {
+                    auto fresh=new_id("proposed");while (!occupied.insert(fresh).second) fresh=new_id("proposed");
+                    allocation.identities.emplace(id,std::move(fresh));
+                }
+            allocations.push_back(std::move(allocation));
+        }
+        return prepare_mixed_selection_property_edit(source,std::optional<SelectionPropertyEditRequest>{request},
+            std::nullopt,std::nullopt,message,std::span<const AssemblyInstancePropertyEditIntent>{},allocations,{});
+    }
+
+    bool publishWallElevationProperties(const DocumentSnapshot& source,
+        const MixedSelectionPropertyEditPreparation& prepared,const SourceEditAuthority& authority,
+        const std::function<void()>& additional_fence,
+        const std::shared_ptr<const CanvasEditSourceCapture>& edit_source={}) {
+        const auto fence=[&] {
+            if (prepared.source_snapshot_digest()!=authority.source_digest ||
+                !sourceEditAuthorityUnchanged(authority) || fullSnapshotDigest(source)!=authority.source_digest ||
+                fullSnapshotDigest(authoringSnapshot())!=authority.source_digest || hasPendingPlacementEdit() ||
+                m_text_placement_context || m_plan_label_context || m_armed_area_class ||
+                !authority.roof_opening_cohort.empty())
+                throw std::invalid_argument("The wall selection, project or workspace changed. Begin the edit again.");
+            if (additional_fence) additional_fence();
+        };
+        fence();
+        // Strict preparation has already admitted the source, quantities and
+        // complete physical cohort. Equivalent input must preserve history,
+        // saved state and Redo rather than publish an empty Properties command.
+        if (entity_map_digest(prepared.preview_snapshot().entities())==entity_map_digest(source.entities())) {
+            clearError();return true;
+        }
+        const auto phase_reviews=reviewSelectionPropertyPhaseRoomIntents(source,prepared,authority,owner,fence);
+        if (!phase_reviews) { refresh();return false; }
+        const auto room_reviews=reviewSelectionPropertyRoomIntents(source,prepared,authority,owner,fence,*phase_reviews);
+        if (!room_reviews) { refresh();return false; }
+        ApplyBoundaryConstraintChanges change;
+        change.expected_revision=source.revision();change.message=prepared.intent().at("message").get<std::string>();
+        change.mixed_selection_edit_completion=true;
+        change.mixed_selection_edit_intent=complete_mixed_selection_property_edit(source,prepared,*room_reviews,*phase_reviews);
+        const Command command{change};
+        const auto candidate=Document::preview_command(source,command);
+        auto selection=authority.ordinary_selection;
+        auto order=authority.semantic_selection_order;
+        const auto remap=[&](const QString& selected) {
+            const auto original=selected.toStdString();
+            const auto mapped=prepared.original_to_proposed().find(original);
+            const auto destination=mapped==prepared.original_to_proposed().end()?original:mapped->second;
+            const auto before=source.entities().find(original),after=candidate.entities().find(destination);
+            if (before==source.entities().end() || after==candidate.entities().end() || before->second.type!=after->second.type)
+                throw std::invalid_argument("The wall elevation edit lost a selected physical member.");
+            return QString::fromStdString(destination);
+        };
+        for (auto& id:selection) id=remap(id);
+        for (auto& member:order) {
+            if (member.child) throw std::invalid_argument("Wall elevation cannot carry roof-child selection authority.");
+            member.ordinary_id=remap(member.ordinary_id);
+        }
+        fence();
+        const bool native=m_workspace==Workspace::architectural && m_nativeModelView && m_nativeModelView->isVisible();
+        if (edit_source) {
+            auto published_edit=std::make_shared<PreparedCanvasEdit>();
+            (void)prepareCanvasEdit(source,command,edit_source,*published_edit);
+            fence();publishPreparedCapturedEdit(published_edit,edit_source);
+        } else if (!applyAuthoredCommand(command)) return false;
+        refresh();
+        const auto published=std::make_shared<DocumentSnapshot>(authoringSnapshot());
+        (void)adoptSemanticSelection(published,std::move(selection),{},native,std::nullopt,false,std::move(order),native);
+        clearError();return true;
     }
 
     void showSelectionPropertiesEditor() {
