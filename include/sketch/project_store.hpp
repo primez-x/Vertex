@@ -328,7 +328,8 @@ public:
     // v222 retains mixed transform19/ordinary6 actual host-derived dimension carry.
     // v223 retains phase31/inner6 coordinated ordinary host dimension carry.
     // v224 retains phase32, mixed20 and command61/placement3 roof component dimensions.
-    static constexpr std::uint32_t format_version = 224;
+    // v225 retains physical-host component dimension retirement under removal5/mixed15.
+    static constexpr std::uint32_t format_version = 225;
     static constexpr std::uint32_t recovery_format_version = 4;
     [[nodiscard]] static std::uint32_t required_format_version(const DocumentSnapshot& snapshot);
     static constexpr std::uint64_t maximum_file_bytes = 4ULL * 1024ULL * 1024ULL * 1024ULL;

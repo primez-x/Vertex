@@ -1,4 +1,28 @@
-# Vertex project formats v1 through v224
+# Vertex project formats v1 through v225
+
+Reader225 retains architectural/drawing removal5. Its seven exact fields are
+`version`, `architectural`, `drawing`, `allow_manufactured_opening_hosts`,
+`complete_component_phase_memberships`, `complete_roof_component_phase_memberships`
+and literal `complete_hosted_component_dimensions:true`. It requires nonempty
+actual object roots and admitted component hosts. Component-only dimension
+authority is exclusive and retains removal4. Membership flags remain explicit
+independent permissions; dimension completion cannot supply phase demolition.
+
+Actual source-derived physical retirement determines the embedded row roster.
+Supported v6 extent targets resolve together against the complete source before
+their dimensions retire under ordinary active/baseline/required/opaque-reference
+protections. Independent document owners sharing a catalog/local tuple remain
+exact. Roof selection derives rows only from physically removed roofs; retained
+alternative geometry keeps its rows and dimensions. No dimension cloning or
+replacement authority is granted. Historical roof API calls default to their
+original dimension consequences.
+
+Mixed removal15 under command45 pairs exclusively with ordinary removal5 and
+retains the source/stage, full ordinary command, child dominance, identity and
+alias proofs. Historical mixed1/9/10/14 retain ordinary1/2/3/4 respectively.
+Current, nested and undone authority requires reader225/extraction223. Wall and
+opening producers, phase demolition and linked views require their own completion.
+Compilation, runtime/history, migration and extraction remain unverified.
 
 Reader224 retains standalone ordinary roof phase authoring32. Its exact ten keys
 extend historical ordinary roof authoring with literal

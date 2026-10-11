@@ -12,6 +12,8 @@ namespace sketch {
 // complete proofs; this intent supplies the ordinary architectural/drawing lane.
 // Closed v4 records complete_component_dimensions with explicit membership flags
 // for a component-only architectural lane; older versions retain their meaning.
+// Closed v5 instead records complete_hosted_component_dimensions with explicit
+// membership flags for actual selected architectural owners and their hosts.
 struct ArchitecturalDrawingRemovalIntent {
     ArchitecturalSelectionRemovalIntent architectural;
     DrawingSelectionRemovalIntent drawing;

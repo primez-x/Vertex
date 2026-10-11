@@ -846,8 +846,10 @@ DrawingSelectionRemovalEntities replay_drawing_selection_removal_with_architectu
         // No caller-supplied candidate can grant this narrower composition path.
         (void)replay(actual, actual, drawing, active_phase_constraints);
         const auto stage = replay_architectural_selection_removal(
-            actual, architectural, allow_manufactured_opening_hosts, complete_roof_component_phase_memberships,
-            complete_component_phase_memberships, complete_component_phase_memberships, false,
+            actual, architectural, allow_manufactured_opening_hosts,
+            complete_roof_component_phase_memberships || architectural.complete_hosted_component_dimensions,
+            complete_component_phase_memberships || architectural.complete_hosted_component_dimensions,
+            complete_component_phase_memberships || architectural.complete_hosted_component_dimensions, false,
             complete_component_phase_memberships, complete_roof_component_phase_memberships);
         return replay(actual, stage, drawing, active_phase_constraints, &stage);
     } catch (const Json::exception& error) {

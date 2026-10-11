@@ -74,12 +74,16 @@ struct RoofRemovalResult {
 // declared and no additional baseline demolition authority is supplied.
 // An optional required choice needs membership completion and authenticates all
 // actual retired hosted rows before either the object leaf or roof native work.
+// Separate component-dimension completion requires hosted retirement and admits
+// only qualified v6 extents of actual removed embedded rows. Retained roofs and
+// independent component owners keep their dimensions under the ordinary policy.
 [[nodiscard]] RoofRemovalPlan inspect_roof_removal_plan(
     const RoofRemovalEntities& source, const std::vector<std::string>& selected_roof_ids,
     bool preserve_phase_references = false, bool preserve_singleton_material = false,
     bool retire_hosted_components = false, bool complete_hosted_catalog_consequences = false,
     bool complete_component_phase_memberships = false,
-    const std::optional<std::pair<std::string, std::string>>& required_component_phase_choice = std::nullopt);
+    const std::optional<std::pair<std::string, std::string>>& required_component_phase_choice = std::nullopt,
+    bool complete_component_dimensions = false);
 
 // Rederives the entire operation from source and explicit selection. Supplied
 // identities must exactly fill actual additional join/overlay slots and must
@@ -90,6 +94,7 @@ struct RoofRemovalResult {
     bool preserve_phase_references = false, bool preserve_singleton_material = false,
     bool retire_hosted_components = false, bool complete_hosted_catalog_consequences = false,
     bool complete_component_phase_memberships = false,
-    const std::optional<std::pair<std::string, std::string>>& required_component_phase_choice = std::nullopt);
+    const std::optional<std::pair<std::string, std::string>>& required_component_phase_choice = std::nullopt,
+    bool complete_component_dimensions = false);
 
 } // namespace sketch

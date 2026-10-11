@@ -220,6 +220,29 @@ bool unqualified_instance_reference(const Json& value, const Ids& locals, const 
     return false;
 }
 
+// Used only after the architectural leaf has analytically admitted the complete
+// actual-source dimension batch. Mask its closed qualified target, preserving
+// every opaque sibling and extension in the historical local-reference scan.
+std::optional<Entity> component_dimension_reference_remainder(const Entity& entity,
+    const std::set<std::pair<std::string, std::string>>& retired_keys) {
+    if (!can_recognize_boundary_dimension_entity_type(entity.type)) return std::nullopt;
+    const auto target = entity.properties.find("target");
+    if (target == entity.properties.end() || !target->is_object()) return std::nullopt;
+    const auto assembly = target->find("assembly");
+    if (assembly == target->end() || !assembly->is_object()) return std::nullopt;
+    const auto catalog = assembly->find("catalog_id"), instance = assembly->find("instance_id");
+    if (catalog == assembly->end() || !catalog->is_string() ||
+        instance == assembly->end() || !instance->is_string() ||
+        !retired_keys.contains({catalog->get<std::string>(), instance->get<std::string>()})) return std::nullopt;
+    const auto decoded = decode_boundary_dimension_entity(entity);
+    if (!decoded.supported() || decoded.version != 6 ||
+        decoded.dimension->kind != BoundaryDimensionKind::assembly_extent || !decoded.dimension->assembly_target)
+        reject("affected component dimension requires a supported extent target: " + entity.id);
+    auto scratch = entity;
+    scratch.properties.erase("target");
+    return scratch;
+}
+
 // Remove only codec-qualified reference fields for dependency inspection.
 // Unknown affected data refuses instead of acquiring deletion/remapping authority.
 Entity opaque_remainder(Entity entity, const Ids& retained_roofs) {
@@ -375,13 +398,16 @@ void validate_retained_catalog_rows(const RoofRemovalEntities& source,
 Derivation derive(const RoofRemovalEntities& source, const std::vector<std::string>& selected,
     bool preserve_phase_references, bool preserve_singleton_material, bool retire_hosted_components,
     bool complete_hosted_catalog_consequences, bool complete_component_phase_memberships = false,
-    const std::optional<std::pair<std::string, std::string>>& required_component_phase_choice = std::nullopt) {
+    const std::optional<std::pair<std::string, std::string>>& required_component_phase_choice = std::nullopt,
+    bool complete_component_dimensions = false) {
     Derivation result;
     auto& plan = result.plan;
     plan.selected_roof_ids = selected;
     try {
         if (required_component_phase_choice && !complete_component_phase_memberships)
             reject("required component phase choice needs complete component memberships");
+        if (complete_component_dimensions && !retire_hosted_components)
+            reject("complete component dimensions require hosted component retirement");
         (void)occupied_strings(source);
         if (complete_component_phase_memberships) {
             if (!retire_hosted_components || !complete_hosted_catalog_consequences)
@@ -581,10 +607,24 @@ Derivation derive(const RoofRemovalEntities& source, const std::vector<std::stri
                     locals.insert(key.second);
                     plan.retired_hosted_component_alias_ids.push_back(aliases.at(key));
                 }
-                for (const auto& [id, entity] : source)
-                    if (unqualified_instance_reference(entity.properties, locals, source) ||
-                        unqualified_instance_reference(entity.extensions, locals, source))
+                const std::set<std::pair<std::string, std::string>> retired_keys(
+                    plan.retired_hosted_component_keys.begin(), plan.retired_hosted_component_keys.end());
+                if (complete_component_dimensions) {
+                    // Admit all actual affected targets and ordinary dimension
+                    // protections before typed masking or either native producer.
+                    // The host lane supplies no membership or phase authority.
+                    preflight_architectural_object_removal(source, {}, plan.retired_hosted_component_keys,
+                        0, complete_hosted_catalog_consequences, false, false, false,
+                        complete_component_phase_memberships, required_component_phase_choice, true);
+                }
+                for (const auto& [id, entity] : source) {
+                    const auto scratch = complete_component_dimensions ?
+                        component_dimension_reference_remainder(entity, retired_keys) : std::nullopt;
+                    const auto& reference = scratch ? *scratch : entity;
+                    if (unqualified_instance_reference(reference.properties, locals, source) ||
+                        unqualified_instance_reference(reference.extensions, locals, source))
                         reject("affected unqualified component reference has no retirement codec: " + id);
+                }
                 // This producer receives the complete actual source and no physical
                 // selection. It cannot acquire roof or join deletion authority.
                 if (complete_component_phase_memberships) {
@@ -594,7 +634,11 @@ Derivation derive(const RoofRemovalEntities& source, const std::vector<std::stri
                     // would violate the helper's exact input-carrier contract.
                     result.hosted_candidate = replay_architectural_object_removal(source, {},
                         plan.retired_hosted_component_keys, true, 0, true, false, false, false, true,
-                        required_component_phase_choice);
+                        required_component_phase_choice, complete_component_dimensions);
+                } else if (complete_component_dimensions) {
+                    result.hosted_candidate = replay_architectural_object_removal(source, {},
+                        plan.retired_hosted_component_keys, true, 0, complete_hosted_catalog_consequences,
+                        false, false, false, false, required_component_phase_choice, true);
                 } else result.hosted_candidate = replay_architectural_object_removal(source, {}, plan.retired_hosted_component_keys);
                 validate_retained_catalog_rows(source, *result.hosted_candidate, result);
             }
@@ -934,21 +978,23 @@ bool RoofRemovalPlan::ready() const noexcept {
 RoofRemovalPlan inspect_roof_removal_plan(const RoofRemovalEntities& source,
     const std::vector<std::string>& selected_roof_ids, bool preserve_phase_references, bool preserve_singleton_material,
     bool retire_hosted_components, bool complete_hosted_catalog_consequences, bool complete_component_phase_memberships,
-    const std::optional<std::pair<std::string, std::string>>& required_component_phase_choice) {
+    const std::optional<std::pair<std::string, std::string>>& required_component_phase_choice,
+    bool complete_component_dimensions) {
     return derive(source, selected_roof_ids, preserve_phase_references, preserve_singleton_material,
         retire_hosted_components, complete_hosted_catalog_consequences, complete_component_phase_memberships,
-        required_component_phase_choice).plan;
+        required_component_phase_choice, complete_component_dimensions).plan;
 }
 
 RoofRemovalResult replay_roof_removal(const RoofRemovalEntities& source,
     const std::vector<std::string>& selected_roof_ids, const RoofRemovalAdditionalIdentities& additional_identities,
     bool preserve_phase_references, bool preserve_singleton_material, bool retire_hosted_components,
     bool complete_hosted_catalog_consequences, bool complete_component_phase_memberships,
-    const std::optional<std::pair<std::string, std::string>>& required_component_phase_choice) {
+    const std::optional<std::pair<std::string, std::string>>& required_component_phase_choice,
+    bool complete_component_dimensions) {
     try {
         const auto derived = derive(source, selected_roof_ids, preserve_phase_references, preserve_singleton_material,
             retire_hosted_components, complete_hosted_catalog_consequences, complete_component_phase_memberships,
-            required_component_phase_choice);
+            required_component_phase_choice, complete_component_dimensions);
         if (!derived.plan.ready()) {
             for (const auto& item : derived.plan.diagnostics) if (item.blocking) reject(item.entity_id + ": " + item.reason);
         }

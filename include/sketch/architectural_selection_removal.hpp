@@ -14,6 +14,9 @@ struct ArchitecturalSelectionRemovalIntent {
     // Separate saved authority for exact qualified embedded extent dimensions.
     // Historical/default intents retain their original deletion consequences.
     bool complete_component_dimensions = false;
+    // Separate physical-owner authority for dimensions on actual retired hosted
+    // rows. Requires admitted hosts and is exclusive with component-only intent.
+    bool complete_hosted_component_dimensions = false;
 };
 
 // Closed actual-selection producer. Roof and primitive/component lanes each
@@ -36,6 +39,8 @@ struct ArchitecturalSelectionRemovalIntent {
 // coordinated membership replay; historical complete producers stay strict.
 // A required component choice needs membership completion and is forwarded to
 // every leaf against this same complete actual source before native admission.
+// Hosted dimension completion requires actual selected owners and admitted
+// component hosts; it supplies no additional family or phase-demolition authority.
 [[nodiscard]] RoofRemovalEntities replay_architectural_selection_removal(
     const RoofRemovalEntities& actual, const ArchitecturalSelectionRemovalIntent& intent,
     bool allow_manufactured_opening_hosts = false,

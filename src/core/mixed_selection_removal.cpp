@@ -363,17 +363,20 @@ Json validate_mixed_selection_removal_intent(const Json& value) {
         if (value.dump().size()>1024*1024) reject("intent exceeds one MiB");
         fields(value,{"version","ordinary","ordinary_command","members","child_command","source_snapshot_digest",
             "source_authoring_digest","source_entities_digest","source_saved_revision","stage_snapshot_digest","stage_authoring_digest"});
-        if (!value.at("version").is_number_integer() || (value.at("version")!=1 && value.at("version")!=2 && value.at("version")!=3 && value.at("version")!=4 && value.at("version")!=5 && value.at("version")!=6 && value.at("version")!=7 && value.at("version")!=8 && value.at("version")!=9 && value.at("version")!=10 && value.at("version")!=11 && value.at("version")!=12 && value.at("version")!=13 && value.at("version")!=14))
+        if (!value.at("version").is_number_integer() || (value.at("version")!=1 && value.at("version")!=2 && value.at("version")!=3 && value.at("version")!=4 && value.at("version")!=5 && value.at("version")!=6 && value.at("version")!=7 && value.at("version")!=8 && value.at("version")!=9 && value.at("version")!=10 && value.at("version")!=11 && value.at("version")!=12 && value.at("version")!=13 && value.at("version")!=14 && value.at("version")!=15))
             reject("unsupported intent version");
         const auto members=decode_members(value.at("members"));
         std::size_t count=0;
-        if (value.at("version")==1 || value.at("version")==9 || value.at("version")==10 || value.at("version")==14) {
+        if (value.at("version")==1 || value.at("version")==9 || value.at("version")==10 ||
+            value.at("version")==14 || value.at("version")==15) {
             const auto ordinary=decode_architectural_drawing_removal_intent(value.at("ordinary"));
             // Membership retirement has distinct retained authority. Historical
             // mixed-one must never acquire the new ordinary codec's meaning.
-            if (ordinary.architectural.complete_component_dimensions != (value.at("version")==14))
-                reject("component dimension authority differs from its mixed history dialect");
-            if (value.at("version")!=14 && (ordinary.complete_component_phase_memberships !=
+            const auto ordinary_version = value.at("version")==15 ? 5 : value.at("version")==14 ? 4 :
+                value.at("version")==10 ? 3 : value.at("version")==9 ? 2 : 1;
+            if (value.at("ordinary").at("version") != ordinary_version)
+                reject("architectural/drawing authority differs from its mixed history dialect");
+            if (value.at("version")!=14 && value.at("version")!=15 && (ordinary.complete_component_phase_memberships !=
                     (value.at("version")==9 || value.at("version")==10) ||
                 ordinary.complete_roof_component_phase_memberships != (value.at("version")==10)))
                 reject("component membership authority differs from its mixed history dialect");
@@ -430,7 +433,8 @@ Json validate_mixed_selection_removal_intent(const Json& value) {
 bool mixed_selection_removal_active_phase_policy(const Json& value) {
     (void)validate_mixed_selection_removal_intent(value);
     return value.at("version")==2 || value.at("version")==4 || value.at("version")==5 || value.at("version")==6 || value.at("version")==7 || value.at("version")==8 || value.at("version")==9 || value.at("version")==10 || value.at("version")==11 || value.at("version")==12 || value.at("version")==13 ||
-        (value.at("version")==14 && value.at("ordinary").at("complete_component_phase_memberships")==true) ||
+        ((value.at("version")==14 || value.at("version")==15) &&
+            value.at("ordinary").at("complete_component_phase_memberships")==true) ||
         (!value.at("child_command").is_null() && value.at("child_command").at("version")==34);
 }
 std::optional<Revision> mixed_selection_removal_source_saved_revision(const Json& value) {
@@ -575,7 +579,8 @@ Entities replay_mixed_selection_removal(const DocumentSnapshot& source,const Jso
 Json make_mixed_selection_removal_intent(const DocumentSnapshot& source,const ArchitecturalDrawingRemovalIntent& ordinary,
     const Command& ordinary_command,const std::vector<RoofOpeningGroupMember>& members,const std::optional<Command>& child_command) {
     const auto stage=prepare_mixed_selection_removal_stage(source,ordinary,ordinary_command);
-    Json value={{"version",ordinary.architectural.complete_component_dimensions ? 14 :
+    Json value={{"version",ordinary.architectural.complete_hosted_component_dimensions ? 15 :
+        ordinary.architectural.complete_component_dimensions ? 14 :
         ordinary.complete_roof_component_phase_memberships ? 10 :
         ordinary.complete_component_phase_memberships ? 9 : 1},
         {"ordinary",encode_architectural_drawing_removal_intent(ordinary)},

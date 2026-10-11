@@ -1,5 +1,14 @@
 # Portable project extraction
 
+Exchange version223 requires native reader225 for architectural/drawing removal5
+and mixed removal15 under command45. The explicit hosted-dimension flag derives
+retirement from actual physically removed hosts and their qualified embedded rows,
+while preserving independent owners and phase-retained roofs. Component-only
+removal4/mixed14 retain their distinct authority. Source/stage composition,
+explicit membership flags, current/nested/undone history and opaque-reference
+protections retain the reader requirement. Other physical/phase producers require
+separate completion. No extraction or migration execution is claimed.
+
 Exchange version222 requires native reader224 for standalone roof phase32 and
 mixed transform20 under command52, plus command61/clipboard placement3. Phase32
 retains explicit ordinary typed roof authority plus existing hosted component

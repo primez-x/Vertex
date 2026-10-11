@@ -14,6 +14,37 @@ changed source does not acquire runtime acceptance without later qualification.
 
 ## Current delivery state
 
+### October 11 physical-host component dimension retirement
+
+The retained roof edit/mixed Paste batch is committed and pushed as 5975edda;
+the exact remote branch ref matches local HEAD. Current source work adds explicit
+host-derived retirement to the existing architectural selection producer. Actual
+physically removed roof, stair/rail, slab and structural roots derive their hosted
+component rows; the existing qualified v6 extent resolver and ordinary dimension
+policy retire associated dimensions with those rows. Selected roofs retained for
+an alternative keep their rows and dimensions. Component-only retirement retains
+its separate authority, and independent component owners remain protected.
+
+Architectural/drawing removal5 records the new literal hosted-dimension flag and
+explicit membership flags. Mixed removal15 pairs exclusively with that leaf;
+historical component-only removal4/mixed14 preserve their authority. Current
+general and roof-specific Delete/Cut preparation opts in, including mixed
+skylight composition and the drawing/architectural wrapper. Reader225/extraction223
+retain current, nested and undone proofs. No new physical-family, baseline
+demolition, dimension copying or replacement authority is supplied.
+
+Independent integrated source review approved the frozen batch with no proved
+P1/P2 finding; root source inspection and scoped whitespace review pass. Git
+records its source backup identity. A separate opening scan confirmed its old
+dimension closure matches carrier IDs rather than exact qualified embedded
+targets; it does not establish v6 component retirement. Wall and opening
+removal, coordinated phase demolition, protected replacement dimension
+copies, unresolved component profile/path edits and linked-view dimensions remain
+required implementation work. The complete production plan remains active. No
+builds/tests/jobs, launches, packages or installations ran; runtime/history/storage
+behavior is unverified, the installed candidate is unchanged, and all ten
+production gates remain open.
+
 ### October 11 retained ordinary roof dimensions
 
 The ordinary compound stair follow-up is committed and pushed as 468dd011, with

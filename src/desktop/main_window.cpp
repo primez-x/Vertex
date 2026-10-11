@@ -31864,17 +31864,20 @@ public:
         std::vector<std::pair<std::string,std::string>> components={},
         bool complete_roof_hosted_catalog_consequences=false,
         bool complete_component_phase_memberships=false,
-        const std::optional<std::pair<std::string,std::string>>& required_component_phase_choice=std::nullopt) {
+        const std::optional<std::pair<std::string,std::string>>& required_component_phase_choice=std::nullopt,
+        bool complete_hosted_component_dimensions=false) {
         std::sort(object_ids.begin(),object_ids.end());
         std::sort(components.begin(),components.end());
         ArchitecturalSelectionRemovalIntent intent{std::move(object_ids),std::move(components),{}};
+        intent.complete_hosted_component_dimensions=complete_hosted_component_dimensions;
         std::vector<std::string> roofs;
         for (const auto& id:intent.object_ids)
             if (source.entities().at(id).type=="roof") roofs.push_back(id);
         if (!roofs.empty()) intent.roof_additional_identities=captureRoofRemovalIdentities(source,
             inspect_roof_removal_plan(source.entities(),roofs,true,true,true,
                 complete_roof_hosted_catalog_consequences || complete_component_phase_memberships,
-                complete_component_phase_memberships,required_component_phase_choice));
+                complete_component_phase_memberships,required_component_phase_choice,
+                complete_hosted_component_dimensions));
         return intent;
     }
 
@@ -31959,7 +31962,8 @@ public:
             intent.complete_component_phase_memberships=componentMembershipRemovalMode(source,intent.architectural);
             intent.complete_roof_component_phase_memberships=componentMembershipRoofRemovalMode(source,intent.architectural);
             intent.allow_manufactured_opening_hosts=architectural &&
-                (allow_manufactured_opening_hosts || intent.complete_component_phase_memberships);
+                (allow_manufactured_opening_hosts || intent.complete_component_phase_memberships ||
+                    intent.architectural.complete_hosted_component_dimensions);
             if (hasIndependentDrawingRemoval(intent.drawing)) canonicalIndependentDrawingRemoval(intent.drawing);
             const auto expected=replay_architectural_drawing_removal(source,intent);
             if (expected.size()!=candidate.entities().size()) return;
@@ -31994,17 +31998,22 @@ public:
         const std::set<std::string,std::less<>> typed_roots(physical_roots.begin(),physical_roots.end());
         auto candidate=[&] {
             if (physical_roots.empty() && components.empty()) return snapshot.entities();
+            const bool complete_hosted_dimensions=!physical_roots.empty();
             auto intent=captureArchitecturalSelectionRemoval(snapshot,std::move(physical_roots),components,
-                false,hasComponentPhaseMemberships(snapshot));
+                complete_hosted_dimensions,hasComponentPhaseMemberships(snapshot),std::nullopt,
+                complete_hosted_dimensions);
             intent.complete_component_dimensions = intent.object_ids.empty() && !intent.components.empty();
             if (prepared_intent) *prepared_intent=intent;
             const bool complete_memberships=componentMembershipRemovalMode(snapshot,intent);
             const bool complete_roof_memberships=componentMembershipRoofRemovalMode(snapshot,intent);
-            const bool admit_hosts=allow_manufactured_opening_hosts || complete_memberships;
+            const bool admit_hosts=allow_manufactured_opening_hosts || complete_memberships ||
+                intent.complete_hosted_component_dimensions;
             if (admit_hosts)
                 validate_physical_wall_join_removal_identity_lifetime(snapshot,intent.roof_additional_identities);
             return replay_architectural_selection_removal(snapshot.entities(),intent,admit_hosts,
-                complete_roof_memberships,complete_memberships,complete_memberships,false,
+                complete_roof_memberships || intent.complete_hosted_component_dimensions,
+                complete_memberships || intent.complete_hosted_component_dimensions,
+                complete_memberships || intent.complete_hosted_component_dimensions,false,
                 complete_memberships,complete_roof_memberships);
         }();
         for (const auto& entity : graph) {
@@ -49656,11 +49665,11 @@ private:
         }
         if (!has_roof) return std::nullopt;
         const auto intent=captureArchitecturalSelectionRemoval(source,std::move(roots),std::move(components),
-            false,hasComponentPhaseMemberships(source));
+            true,hasComponentPhaseMemberships(source),std::nullopt,true);
         if (prepared_intent) *prepared_intent=intent;
         const bool complete_memberships=componentMembershipRemovalMode(source,intent);
-        const auto candidate=replay_architectural_selection_removal(source.entities(),intent,complete_memberships,
-            complete_memberships,complete_memberships,complete_memberships,false,complete_memberships,
+        const auto candidate=replay_architectural_selection_removal(source.entities(),intent,true,
+            true,true,true,false,complete_memberships,
             complete_memberships);
         ApplyEntityChanges command{source.revision(),{},{},message};
         for (const auto& [id,entity]:source.entities()) {
@@ -49687,7 +49696,7 @@ private:
             })) return alternativeRoofDemolitionCommand(source, selected_ids, message);
         const bool complete_memberships=hasComponentPhaseMemberships(source);
         const auto plan = inspect_roof_removal_plan(source.entities(), selected_ids, true, true, true,
-            complete_memberships,complete_memberships);
+            true,complete_memberships,std::nullopt,true);
         // Retained members must enter the phase-preserving removal producer
         // before the older complete-baseline demolition path sees them.
         if (!plan.phase_retention_required)
@@ -49697,9 +49706,10 @@ private:
             auto canonical_ids=selected_ids;
             std::sort(canonical_ids.begin(),canonical_ids.end());
             *prepared_intent=ArchitecturalSelectionRemovalIntent{std::move(canonical_ids),{},additional};
+            (*prepared_intent)->complete_hosted_component_dimensions=true;
         }
         const auto replay = replay_roof_removal(source.entities(), selected_ids, additional, true, true, true,
-            complete_memberships,complete_memberships);
+            true,complete_memberships,std::nullopt,true);
         ApplyEntityChanges command{source.revision(), {}, {}, message};
         for (const auto& [id, entity] : source.entities()) {
             const auto after = replay.entities.find(id);
