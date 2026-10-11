@@ -1,4 +1,29 @@
-# Vertex project formats v1 through v239
+# Vertex project formats v1 through v240
+
+Reader240 retains individual component geometry in catalog `sketch.assemblies.v8`
+and independent `sketch.assembly-instance.v3`. Both retain prior row framing and
+add optional `profile_overrides` to the root and stable nested-path rows. Absence
+inherits the selected node's shared type profiles; an explicit array replaces
+only that node's own profiles. Descendants retain their separate geometry.
+Profiles retain the existing analytic outer/hole boundaries, local elevations,
+extrusion heights, IDs and declared material slots. No shared definition is
+rewritten. Existing raw rows and unchanged numeric representations are retained.
+
+Instance intent2/request2 introduce `profile_geometry` with unchanged/set/clear
+semantics. Geometry phase authoring3/request3 adds mandatory literal presentation
+carry and a source-derived `dimension_identities` object, including when empty.
+Mixed Properties32 retains the complete source fences and sealed component
+request3, identity reservations, literal presentation carry and
+`complete_instance_profile_geometry:true`. Its optional noncomponent base retains
+its original family permissions; no historical wrapper acquires new geometry
+authority. Current, nested and undone proofs require reader240/extraction238;
+extraction derives from the native reader floor.
+
+This source batch integrates final dimension composition and consumer retention.
+Dimension carry uses actual changed roots and required physical-base coedits;
+untouched profile rows and fields preserve their original numeric representation.
+Compilation, runtime interaction and save/reopen qualification remain unverified
+under the source-only instruction.
 
 Reader239 retains mixed transform30 through composite command52. Transform30
 has transform20's exact fields and requires ordinary request6 plus nonnull

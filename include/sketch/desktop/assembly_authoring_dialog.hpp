@@ -9,6 +9,11 @@
 
 namespace sketch::desktop {
 
+// Detached outline/cutout draft using the same analytical profile editor as
+// type authoring. Retains the supplied identity, material and extrusion fields.
+[[nodiscard]] std::optional<AssemblyProfile> edit_assembly_profile_geometry(
+    QWidget* parent, const AssemblyProfile& retained, bool metric_units);
+
 // Captured source is retained for the controller's full-snapshot guard. These
 // dialogs produce detached drafts only; they never own or mutate a Document.
 struct AssemblyTypeDraft {

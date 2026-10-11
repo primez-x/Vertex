@@ -50,13 +50,18 @@ struct AssemblyInstancePropertyEditIntent {
     std::map<std::string, AssemblyInstancePropertyPatch<std::string>> materials;
     std::map<std::string, AssemblyInstancePropertyPatch<AssemblyQuantityProperty>> quantities;
     AssemblyInstancePosePropertyPatch pose;
+    // Only the selected node's own solid profiles. Set may be empty to suppress
+    // them while other node profiles retain an actual solid; clear returns to
+    // the shared type without changing its definition.
+    AssemblyInstancePropertyPatch<std::vector<AssemblyProfile>> profile_geometry;
 };
 
-// Closed canonical v1 codec. All patch operations are explicit; set carries a
-// value and unchanged/clear carry null. Pose component fields are always present
+// Closed canonical v1/v2 codec. V2 adds profile_geometry and is emitted only
+// for a non-unchanged profile operation. V1 rejects that field. All operations
+// are explicit; set carries a value and unchanged/clear carry null. Pose fields are always present
 // (unsupplied components are null). Values are finite, scales positive, counts
 // integral/nonnegative; property strings <=4096 bytes and local keys <=1024.
-// No type/profile/host/context/identity/child creation or deletion authority.
+// No shared type/host/context/identity/child creation or deletion authority.
 [[nodiscard]] nlohmann::json encode_assembly_instance_property_edit_intent(
     const AssemblyInstancePropertyEditIntent&);
 [[nodiscard]] AssemblyInstancePropertyEditIntent decode_assembly_instance_property_edit_intent(
@@ -90,8 +95,9 @@ struct AssemblyInstancePropertyEditImpact {
 // root are composed against that root's original expansion. All catalog rows,
 // definitions, metadata, assets and unrelated owners remain in place. Equal
 // sets and absent clears retain raw fields, quantities and authored row order.
-// Only affected rows gain new pose envelopes; an embedded dialect needing new
-// fields uses v7 without rewriting other rows. Existing override rows survive
+// Only affected rows gain new envelopes; geometry requires embedded v8 or
+// independent v3 without rewriting other rows or downconverting. Existing
+// override rows survive
 // even when emptied. Actual declared slots, material identities and quantity
 // dimensions are checked. Source/final expansion, saved-active constraints,
 // frame/host dependencies and native profile or genuine host-copy geometry are

@@ -11,6 +11,8 @@ namespace sketch::detail {
 // replacement permission, a Document preparation or publication authority.
 // Every original selected target occurs once, including identical destinations;
 // destinations retain its exact part path and root kind. Roots are injective.
+// Carried roots/path rows must retain original geometry overrides exactly,
+// including raw numeric representations, before original intents are applied.
 [[nodiscard]] AssemblyDocumentEntities calculate_carried_assembly_instance_property_entities(
     const AssemblyDocumentEntities& original,
     std::span<const AssemblyInstancePropertyEditIntent> original_intents,

@@ -54,8 +54,17 @@ struct PhaseAssemblyInstancePropertyEditResult {
 [[nodiscard]] PhaseAssemblyInstancePropertyEditPlan inspect_phase_assembly_instance_property_edit_plan(
     const AssemblyDocumentEntities&, std::span<const AssemblyInstancePropertyEditIntent>);
 // Actual replacement roots only: independent owners or their exact embedded
-// presentation aliases. Ordinary and unchanged targets never allocate overlays.
+// presentation aliases, plus actual dimension copies in geometry v3. Ordinary
+// and unchanged targets never allocate overlays.
 [[nodiscard]] std::vector<std::string> inspect_phase_assembly_instance_property_presentation_overlay_ids(
+    const AssemblyDocumentEntities&, std::span<const AssemblyInstancePropertyEditIntent>);
+// Geometry v3 allocation inventory. Actual replacement roots only; ordinary
+// roots share its 1000-association admission but allocate no dimension copies.
+// Values retain the complete supported v6 nested component target. Malformed,
+// unsupported or nonmeasurable affected associations refuse. Inactive copies
+// and dimensions registered outside the root's active baseline cohort refuse.
+[[nodiscard]] std::map<std::string, AssemblyInstancePropertyEditTarget, std::less<>>
+inspect_phase_assembly_instance_property_dimension_clone_roster(
     const AssemblyDocumentEntities&, std::span<const AssemblyInstancePropertyEditIntent>);
 [[nodiscard]] PhaseAssemblyInstancePropertyEditResult replay_phase_assembly_instance_property_edits(
     const AssemblyDocumentEntities&, std::span<const AssemblyInstancePropertyEditIntent>,
@@ -70,9 +79,14 @@ struct PhaseAssemblyInstancePropertyEditAuthoring {
     bool carry_presentation_references{false};
     // Actual original overlay ID -> fresh copy ID; exact sorted affected roster.
     std::map<std::string, std::string, std::less<>> presentation_overlay_identities;
+    // Geometry v3 only: exact actual source dimension -> fresh copy identity.
+    // Required wire object even when empty; ordinary dimensions stay in place.
+    std::map<std::string, std::string, std::less<>> dimension_identities;
 };
 // Historical closed v1 is unchanged. Opt-in v2 adds exact presentation carry
-// allocation; neither dialect accepts a caller-authored target/candidate map.
+// allocation. V3 adds dimension_identities, literal carry, and at least one
+// geometry intent; older authoring dialects reject geometry. No dialect accepts a
+// caller-authored target/candidate map or geometry-anchor correspondence.
 [[nodiscard]] nlohmann::json encode_phase_assembly_instance_property_edit_authoring(
     const PhaseAssemblyInstancePropertyEditAuthoring&);
 [[nodiscard]] PhaseAssemblyInstancePropertyEditAuthoring decode_phase_assembly_instance_property_edit_authoring(

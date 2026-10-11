@@ -319,7 +319,7 @@ void demolish_corners(Entities& result, const Phases& phase, const CornerRemoval
 }
 bool supported_catalog(const Json& model) {
     const auto schema = field(model, "schema"); if (!schema || !schema->is_string()) return false;
-    for (int v = 1; v <= 7; ++v) if (*schema == "sketch.assemblies.v" + std::to_string(v)) return true;
+    for (int v = 1; v <= 8; ++v) if (*schema == "sketch.assemblies.v" + std::to_string(v)) return true;
     return false;
 }
 bool sole_active_proposal(const ModelPhases& model, const std::string& id) {

@@ -3,6 +3,7 @@
 #include "sketch/geometry.hpp"
 
 #include <nlohmann/json.hpp>
+#include <cstddef>
 #include <functional>
 #include <map>
 #include <optional>
@@ -60,6 +61,14 @@ struct AssemblyProfile {
     std::optional<std::string> material_slot;
     bool operator==(const AssemblyProfile& other) const;
 };
+// Canonical profile arrays use unique IDs sorted lexically. Preflight checks
+// raw shapes and segment budgets before materializing boundaries; admission
+// also checks analytical rings/cutouts and finite positive extrusion volumes.
+// Material slots are checked against the selected node's type on expansion.
+[[nodiscard]] std::size_t preflight_assembly_profiles(const nlohmann::json& value);
+[[nodiscard]] std::size_t validate_assembly_profiles(const std::vector<AssemblyProfile>& profiles);
+[[nodiscard]] nlohmann::json encode_assembly_profiles(const std::vector<AssemblyProfile>& profiles);
+[[nodiscard]] std::vector<AssemblyProfile> decode_assembly_profiles(const nlohmann::json& value);
 struct AssemblyPart {
     std::string id;
     std::string type_id;
@@ -77,6 +86,9 @@ struct AssemblyPathOverride {
     std::map<std::string, std::string> property_overrides;
     std::map<std::string, std::string> material_overrides;
     std::map<std::string, AssemblyQuantityProperty> quantity_overrides;
+    // Replaces only this node's own profiles; empty suppresses them, nullopt
+    // follows the shared type. Parts and declarations remain type-owned.
+    std::optional<std::vector<AssemblyProfile>> profile_overrides;
     bool operator==(const AssemblyPathOverride&) const = default;
 };
 struct AssemblyType {
@@ -119,7 +131,8 @@ struct AssemblyPlacement {
     const AssemblyTransform& world_transform, bool host_geometry_transformed);
 // Patch actual hosted catalog instances without reconstructing saved definitions,
 // overrides or unchanged numeric representations. Unknown/unhosted IDs fail.
-// Preserve untouched rows through a row-local v7 upgrade when requested.
+// Preserve untouched rows through a row-local v7 upgrade when requested;
+// existing v8 catalogs retain their geometry dialect.
 [[nodiscard]] nlohmann::json transform_hosted_assembly_model(const nlohmann::json& actual_model,
     const std::map<std::string, AssemblyTransform, std::less<>>& instance_transforms,
     bool preserve_untouched_rows = false);
@@ -131,8 +144,9 @@ struct AssemblyPlacement {
     const nlohmann::json& actual_model, const nlohmann::json& accumulated_model,
     const nlohmann::json& incoming_model);
 // Retain an existing XYZ/vertical placement dialect after canonical edits or
-// catalog closure, supplying only its required envelope fields. Saved v7 keeps
-// row-local optional envelopes and unchanged raw rows without adding defaults.
+// catalog closure, supplying only its required envelope fields. Saved v7/v8
+// keep row-local envelopes and unchanged raw data without adding defaults;
+// geometry edits retain or promote v8 and never downconvert it.
 [[nodiscard]] nlohmann::json retain_assembly_catalog_dialect(
     const nlohmann::json& actual_model, nlohmann::json generated_model);
 struct AssemblyInstance {
@@ -145,10 +159,13 @@ struct AssemblyInstance {
     // Independent world placement; mutually exclusive with legacy host placement.
     std::optional<AssemblyTransform> root_transform;
     std::vector<AssemblyPathOverride> nested_overrides;
+    // Appended for aggregate compatibility. Applies only to the root node.
+    std::optional<std::vector<AssemblyProfile>> profile_overrides;
     bool operator==(const AssemblyInstance&) const = default;
 };
-// Strict independent-instance codec (v1 uniform, v2 vertical scaling). Legacy
-// embedded catalog instances use the separate V1-V7 catalog representation.
+// Strict independent-instance codec (v1 uniform, v2 vertical scaling, v3
+// optional node geometry). Embedded catalog instances use V1-V8; V8 retains
+// V7 row-local envelopes and adds optional node geometry.
 [[nodiscard]] nlohmann::json encode_assembly_instance(const AssemblyInstance& instance);
 [[nodiscard]] AssemblyInstance decode_assembly_instance(const nlohmann::json& value);
 [[nodiscard]] nlohmann::json encode_assembly_transform(const AssemblyTransform& transform);

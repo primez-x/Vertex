@@ -304,7 +304,7 @@ void retire_phases(Entities& candidate, const Entities& source, const Phases& ph
 bool supported_catalog(const Json& model) {
     const auto schema = field(model, "schema");
     if (!schema || !schema->is_string()) return false;
-    for (int v = 1; v <= 7; ++v) if (*schema == "sketch.assemblies.v" + std::to_string(v)) return true;
+    for (int v = 1; v <= 8; ++v) if (*schema == "sketch.assemblies.v" + std::to_string(v)) return true;
     return false;
 }
 // A complete typed operation may retire an actual row on its selected proposed

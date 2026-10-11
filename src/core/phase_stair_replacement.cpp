@@ -314,7 +314,7 @@ std::optional<PhaseStairReplacementRequest> classify(const Entities& actual, con
 bool supported_catalog(const Json& raw) {
     const auto schema = field(raw, "schema");
     if (!schema || !schema->is_string()) return false;
-    for (int version = 1; version <= 7; ++version)
+    for (int version = 1; version <= 8; ++version)
         if (*schema == "sketch.assemblies.v" + std::to_string(version)) return true;
     return false;
 }
@@ -1045,12 +1045,14 @@ bool stage_retained_topology(const Entities& actual, const std::vector<Intent>& 
             const auto& typed = staged.at(clone.identities.at(key.first)).properties.at("model");
             const auto row = std::find_if(typed.at("instances").begin(), typed.at("instances").end(), [&](const auto& item) { return item.at("id") == temporary; });
             if (row == typed.at("instances").end()) reject("typed staged hosted row disappeared");
-            auto replacement = *row; replacement.at("id") = key.second;
-            remap_field(replacement.at("placement"), "host_entity_id", inverse);
+            auto placement = row->at("placement");
+            remap_field(placement, "host_entity_id", inverse);
             auto& rows = raw.at("instances");
             const auto target = std::find_if(rows.begin(), rows.end(), [&](const auto& item) { return item.at("id") == key.second; });
             if (target == rows.end()) reject("actual qualified hosted row disappeared");
-            *target = std::move(replacement); raw.at("schema") = typed.at("schema");
+            // Host replay changes placement only. Keep the raw row's profile
+            // overrides and all other row-local framing byte-for-byte.
+            target->at("placement") = std::move(placement); raw.at("schema") = typed.at("schema");
         }
         validate_stair_identity_transition(actual, descriptors, std::span<const RevisionRecord>{});
         return descriptors;
@@ -1179,7 +1181,7 @@ Derivation derive(const Entities& actual, const std::vector<Intent>& edits,
             if (entity.type != "assembly_model" ||
                 (!touches(entity.properties, result.copied_owners) && !touches(entity.extensions, result.copied_owners))) continue;
             const auto& raw = entity.properties.at("model");
-            if (!supported_catalog(raw)) reject("affected catalog has no supported schema 1..7: " + id);
+            if (!supported_catalog(raw)) reject("affected catalog has no supported schema 1..8: " + id);
             catalog_bounds(raw, inventory);
             const auto catalog = AssemblyModel::from_json(raw);
             bool included = false;
@@ -2316,7 +2318,9 @@ Entities replay_phase_stair_replacement_authoring(const Entities& actual, const 
                     const auto& typed_rows = derived.physical.at(id).properties.at("model").at("instances");
                     const auto typed = std::find_if(typed_rows.begin(), typed_rows.end(), [&](const auto& item) { return item.at("id") == key.second; });
                     if (typed == typed_rows.end()) reject("selected actual typed transformed hosted row disappeared");
-                    row = *typed;
+                    // The host transform changes placement only. Preserve the
+                    // source row's profile overrides and other raw fields.
+                    row.at("placement") = typed->at("placement");
                 }
                 row.at("id") = authoring.hosted_instance_identities.at(key);
                 remap_field(row.at("placement"), "host_entity_id", authoring.identities);

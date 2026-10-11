@@ -520,7 +520,10 @@ void append_assembly_rows(const DocumentSnapshot& document,
                 // Host-only visibility remains valid for legacy host copies.
                 // Genuine profiles also require the catalog's presentation
                 // layer unless their exact alias was explicitly admitted.
-                return requested_visibility->contains(catalog_id) || model.expand(instance, visibility_budget).profiles.empty();
+                const bool overridden=instance.profile_overrides || std::any_of(instance.nested_overrides.begin(),
+                    instance.nested_overrides.end(),[](const auto& node) { return node.profile_overrides.has_value(); });
+                return requested_visibility->contains(catalog_id) ||
+                    (!overridden && model.expand(instance, visibility_budget).profiles.empty());
             }
             return instance.placement ? visible(instance.placement->host_entity_id) : visible(catalog_id);
         };
@@ -702,7 +705,9 @@ void append_assembly_rows(const DocumentSnapshot& document,
             }
             // Preserve historical declaration-only material slots as readable
             // rows without certifying declarations as measured material volume.
-            if (expansion.profiles.empty()) {
+            if (expansion.profiles.empty() && !instance.profile_overrides &&
+                std::none_of(instance.nested_overrides.begin(),instance.nested_overrides.end(),
+                    [](const auto& node) { return node.profile_overrides.has_value(); })) {
                 for (const auto& node : expansion.nodes) for (const auto& [slot,material_id] : node.materials) {
                     const auto material = std::find_if(model.materials().begin(),model.materials().end(),
                         [&](const auto& value) { return value.id == material_id; });

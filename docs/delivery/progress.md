@@ -14,6 +14,40 @@ changed source does not acquire runtime acceptance without later qualification.
 
 ## Current delivery state
 
+### October 11 individual component geometry source integration
+
+Previous committed/pushed source is f87914c2. This source batch
+adds root and stable nested-part profile overrides, preserving shared component
+definitions and other copies. Model, edit, Properties and transport workers have
+returned source changes: physical width/depth/height, analytic outline/cutout
+editing, extrusion controls, clear-to-type geometry, local material slots and
+raw representation preservation. Physical dimension fields account for pending
+root, ancestor and own scales. Catalog8 and independent3 carry these overrides;
+reader240/extraction238 integration is present in source. Existing type editing shares
+the same actual outline editor. Empty overridden geometry cannot be substituted
+with a legacy host body.
+
+Geometry Properties32 now joins the actual sealed base, controller, saved/undone
+history and consumer retention in source. Geometry3 derives dimension allocation
+and copy registration from actual replacement roots. The final composed graph
+carries dimensions once from source, preserving originals and the full originally
+allocated identity lifetime, including allocations elided during composition.
+Independent review identified two preservation defects: editing one profile
+rewrote untouched numeric representations, and unchanged selected roots consumed
+dimension capacity. Root corrections preserve profiles and fields by stable ID
+and limit final move carry to changed roots and required physical-base coedits.
+Independent correction review found no remaining proved introduced P1/P2 in
+the examined changes. Root source review and scoped diff checks are complete.
+Profile collection add/remove controls,
+segment-anchor correspondence and embedded protected-replacement companion
+mutation consumers remain further editing gaps; curved profiles do not permit
+unequal planar scaling that would require unsupported elliptical arcs.
+
+Source-only steering remains binding. No builds, tests, scripts, probes, jobs,
+launches, packages or installations ran; the installed candidate is unchanged.
+No compilation, runtime or user-observed resolution is claimed. All ten production
+gates remain open, and no defensible completion percentage or ETA is established.
+
 ### October 11 clipboard and mixed-transform dimension continuation
 
 The coordinated/Properties family batch is committed and pushed as d6d069f2;

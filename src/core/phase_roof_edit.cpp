@@ -209,7 +209,7 @@ bool host_binding(const Json& value, const Ids& hosts) {
 bool supported_catalog(const Json& raw) {
     const auto schema = field(raw, "schema");
     if (!schema || !schema->is_string()) return false;
-    for (int version = 1; version <= 7; ++version)
+    for (int version = 1; version <= 8; ++version)
         if (*schema == "sketch.assemblies.v" + std::to_string(version)) return true;
     return false;
 }

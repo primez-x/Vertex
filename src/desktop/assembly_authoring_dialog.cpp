@@ -701,6 +701,11 @@ std::optional<AssemblyProfile> edit_profile_geometry(QWidget* parent,const Assem
 }
 }
 
+std::optional<AssemblyProfile> edit_assembly_profile_geometry(
+    QWidget* parent,const AssemblyProfile& retained,bool metric_units) {
+    return edit_profile_geometry(parent,retained,std::nullopt,metric_units,{},{},{});
+}
+
 class AssemblyTypeDialog::Impl final {
 public:
     AssemblyTypeDialog* owner;
@@ -1043,10 +1048,11 @@ public:
     }
     void store_nested() {
         if(selected_path<0)return;AssemblyPathOverride current;current.part_path=paths.at(selected_path);
+        auto found=std::find_if(instance.nested_overrides.begin(),instance.nested_overrides.end(),[&](const auto& entry){return entry.part_path==current.part_path;});
+        if(found!=instance.nested_overrides.end())current.profile_overrides=found->profile_overrides;
         if(nested_transform_enabled->isChecked())current.transform=nested_transform.read(metric);
         current.property_overrides=nested_values->read_properties();current.material_overrides=nested_values->read_materials();current.quantity_overrides=nested_values->read_quantities();
-        auto found=std::find_if(instance.nested_overrides.begin(),instance.nested_overrides.end(),[&](const auto& entry){return entry.part_path==current.part_path;});
-        const auto nonempty=current.transform || !current.property_overrides.empty() || !current.material_overrides.empty() || !current.quantity_overrides.empty();
+        const auto nonempty=current.transform || current.profile_overrides || !current.property_overrides.empty() || !current.material_overrides.empty() || !current.quantity_overrides.empty();
         if(found!=instance.nested_overrides.end())*found=std::move(current);else if(nonempty)instance.nested_overrides.push_back(std::move(current));
     }
     AssemblyInstanceDraft read() {

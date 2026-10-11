@@ -165,7 +165,8 @@ void admit_supported_dependencies(const Entities& source, const Ids& targets) {
         if (!schema || !schema->is_string() ||
             (*schema != "sketch.assemblies.v1" && *schema != "sketch.assemblies.v2" &&
              *schema != "sketch.assemblies.v3" && *schema != "sketch.assemblies.v4" &&
-             *schema != "sketch.assemblies.v5") ||
+             *schema != "sketch.assemblies.v5" && *schema != "sketch.assemblies.v6" &&
+             *schema != "sketch.assemblies.v7" && *schema != "sketch.assemblies.v8") ||
             !instances || !instances->is_array()) continue;
         const bool affected = std::any_of(instances->begin(), instances->end(), [&](const Json& instance) {
             const auto placement = field(instance, "placement");

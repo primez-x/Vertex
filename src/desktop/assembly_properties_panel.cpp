@@ -1,21 +1,26 @@
 #include "sketch/desktop/assembly_properties_panel.hpp"
+#include "sketch/desktop/assembly_authoring_dialog.hpp"
 
 #include "sketch/quantity.hpp"
 
 #include <QComboBox>
 #include <QFormLayout>
+#include <QHeaderView>
 #include <QHBoxLayout>
 #include <QLabel>
 #include <QLineEdit>
+#include <QPushButton>
 #include <QScrollArea>
 #include <QStackedWidget>
 #include <QStringList>
 #include <QTabWidget>
+#include <QTableWidget>
 #include <QVBoxLayout>
 
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <limits>
 #include <map>
 #include <numbers>
 #include <set>
@@ -68,7 +73,7 @@ bool changed(const Intent& intent) {
         });
     };
     return any(intent.properties) || any(intent.materials) || any(intent.quantities) ||
-        intent.pose.operation != Operation::unchanged;
+        intent.pose.operation != Operation::unchanged || intent.profile_geometry.operation != Operation::unchanged;
 }
 double scalar(QLineEdit* field, bool positive = false) {
     bool ok = false;
@@ -85,6 +90,7 @@ struct Source {
     const AssemblyExpandedNode* node{};
     const AssemblyType* type{};
     AssemblyTransform pose;
+    const std::vector<AssemblyProfile>* profiles{};
 };
 struct ValueRow {
     std::string key;
@@ -93,13 +99,108 @@ struct ValueRow {
     QComboBox* material{};
     AssemblyQuantityUnit unit{AssemblyQuantityUnit::count};
 };
+struct ProfileRow {
+    AssemblyProfile draft;
+    QLineEdit *elevation{}, *height{};
+    QLabel* summary{};
+    QPushButton* edit{};
+};
 struct Page {
     std::vector<Source> sources;
     QWidget* widget{};
     std::vector<ValueRow> properties, materials, quantities;
     QComboBox *pose_operation{}, *mirrored{};
     std::array<QLineEdit*, 6> pose{};
+    QComboBox* geometry_operation{};
+    std::array<QLineEdit*, 3> dimensions{};
+    std::vector<ProfileRow> profiles;
+    QTableWidget* profile_table{};
 };
+
+struct ProfileBounds {
+    Vec2 minimum, maximum;
+    double bottom{}, top{};
+};
+ProfileBounds profile_bounds(const std::vector<AssemblyProfile>& profiles) {
+    require(!profiles.empty(), "This node has no own profiles to measure or resize. Choose a part with geometry.");
+    ProfileBounds result;
+    bool first = true;
+    for (const auto& profile : profiles) {
+        const auto bounds = boundary_bounds(profile.outer);
+        const auto top = profile.elevation_m + profile.height_m;
+        require(std::isfinite(top), "Profile extrusion endpoints must be representable.");
+        if (first) {
+            result = {bounds.minimum, bounds.maximum, profile.elevation_m, top};
+            first = false;
+        } else {
+            result.minimum.x = std::min(result.minimum.x, bounds.minimum.x);
+            result.minimum.y = std::min(result.minimum.y, bounds.minimum.y);
+            result.maximum.x = std::max(result.maximum.x, bounds.maximum.x);
+            result.maximum.y = std::max(result.maximum.y, bounds.maximum.y);
+            result.bottom = std::min(result.bottom, profile.elevation_m);
+            result.top = std::max(result.top, top);
+        }
+    }
+    return result;
+}
+std::array<double, 3> profile_spans(const std::vector<AssemblyProfile>& profiles, const AssemblyTransform& frame) {
+    const auto bounds = profile_bounds(profiles);
+    const auto z_scale = frame.scale * frame.vertical_scale;
+    require(std::isfinite(frame.scale) && frame.scale > 0 && std::isfinite(z_scale) && z_scale > 0,
+        "The geometry pose scales must be finite, positive and representable.");
+    std::array<double, 3> result{(bounds.maximum.x - bounds.minimum.x) * frame.scale,
+        (bounds.maximum.y - bounds.minimum.y) * frame.scale,
+        (bounds.top - bounds.bottom) * z_scale};
+    for (const auto span : result)
+        require(std::isfinite(span) && span > 0, "The own-profile dimensions must be finite, positive and representable.");
+    return result;
+}
+bool curved(const std::vector<AssemblyProfile>& profiles) {
+    const auto has_arc = [](const Boundary& boundary) {
+        return std::any_of(boundary.begin(), boundary.end(), [](const auto& edge) { return edge.sweep_radians != 0; });
+    };
+    return std::any_of(profiles.begin(), profiles.end(), [&](const auto& profile) {
+        return has_arc(profile.outer) || std::any_of(profile.holes.begin(), profile.holes.end(), has_arc);
+    });
+}
+void resize_profiles(std::vector<AssemblyProfile>& profiles, const AssemblyTransform& frame,
+                     const std::array<std::optional<double>, 3>& dimensions) {
+    if (std::none_of(dimensions.begin(), dimensions.end(), [](const auto& value) { return value.has_value(); })) return;
+    const auto bounds = profile_bounds(profiles);
+    const auto spans = profile_spans(profiles, frame);
+    std::array<double, 3> factors{1, 1, 1};
+    for (std::size_t i = 0; i < factors.size(); ++i) {
+        if (dimensions[i]) factors[i] = *dimensions[i] / spans[i];
+        require(std::isfinite(factors[i]) && factors[i] > 0, "Geometry resize factors must be finite and positive.");
+    }
+    if (curved(profiles) && factors[0] != factors[1]) {
+        // Circular arcs can only undergo a planar similarity. Allow arithmetic
+        // rounding in an otherwise uniform request, then use ONE exact factor.
+        const auto rounding = 32 * std::numeric_limits<double>::epsilon() * std::max(factors[0], factors[1]);
+        require(std::abs(factors[0] - factors[1]) <= rounding,
+            "Circular arcs require equal width and depth scale factors. Enter both dimensions in their current ratio, "
+            "or edit the outline/cutouts explicitly. Unequal planar scaling would require unsupported elliptical arcs.");
+        factors[1] = factors[0];
+    }
+    const auto scale_boundary = [&](Boundary& boundary) {
+        if (factors[0] == 1 && factors[1] == 1) return;
+        const auto point = [&](Vec2 value) {
+            value = {bounds.minimum.x + (value.x - bounds.minimum.x) * factors[0],
+                     bounds.minimum.y + (value.y - bounds.minimum.y) * factors[1]};
+            require(std::isfinite(value.x) && std::isfinite(value.y), "Resized profile coordinates overflow.");
+            return value;
+        };
+        for (auto& edge : boundary) { edge.start = point(edge.start); edge.end = point(edge.end); }
+    };
+    for (auto& profile : profiles) {
+        scale_boundary(profile.outer);
+        for (auto& hole : profile.holes) scale_boundary(hole);
+        if (factors[2] != 1) {
+            profile.elevation_m = bounds.bottom + (profile.elevation_m - bounds.bottom) * factors[2];
+            profile.height_m *= factors[2];
+        }
+    }
+}
 template<class T, class Map>
 QString common_hint(const std::vector<Source>& sources, Map values, const std::string& key,
                     const auto& display) {
@@ -239,12 +340,16 @@ public:
             [&](const auto& row) { return row.id == node->type_id; });
         require(type != model.types().end(), "A selected expanded type is missing.");
         auto pose = root_pose(expanded.source_instance);
+        const auto* profiles = expanded.source_instance.profile_overrides ?
+            &*expanded.source_instance.profile_overrides : &type->profiles;
         if (!target.part_path.empty()) {
             require(node->source_part.has_value(), "A nested target has no source part pose.");
             pose = node->path_override && node->path_override->transform ?
                 *node->path_override->transform : node->source_part->transform;
+            profiles = node->path_override && node->path_override->profile_overrides ?
+                &*node->path_override->profile_overrides : &type->profiles;
         }
-        return {target, &model, &*node, &*type, pose};
+        return {target, &model, &*node, &*type, pose, profiles};
     }
     QString part_name(const Path& relative) const {
         QString first;
@@ -323,8 +428,146 @@ public:
         form->addRow(label, holder);
         return result;
     }
+    QString length(double metres) const {
+        return exact(length_unit == Unit::metre ? metres : metres / 0.3048) +
+            (length_unit == Unit::metre ? " m" : " ft");
+    }
+    QString profile_summary(const AssemblyProfile& profile) const {
+        return QString("%1 outline edges; %2 cutouts").arg(static_cast<qulonglong>(profile.outer.size()))
+            .arg(static_cast<qulonglong>(profile.holes.size()));
+    }
+    std::vector<AssemblyProfile> profile_draft(const Page& page) const {
+        require(page.sources.size() == 1, "Detailed profile edits require one selected node.");
+        std::vector<AssemblyProfile> result;
+        result.reserve(page.profiles.size());
+        for (const auto& row : page.profiles) {
+            auto profile = row.draft;
+            try {
+                if (supplied(row.elevation)) profile.elevation_m = parse_quantity(row.elevation->text().toStdString(), length_unit).metres;
+                if (supplied(row.height)) profile.height_m = parse_quantity(row.height->text().toStdString(), length_unit).metres;
+                require(std::isfinite(profile.elevation_m) && std::isfinite(profile.height_m) && profile.height_m > 0,
+                    "Elevation must be finite and extrusion height must be finite and positive.");
+            } catch (const std::exception& failure) {
+                throw std::invalid_argument("Profile " + profile.id + ": " + failure.what());
+            }
+            result.push_back(std::move(profile));
+        }
+        return result;
+    }
+    void build_geometry(Page& page, QTabWidget* tabs) {
+        auto* form = tab(tabs, "Geometry");
+        page.geometry_operation = operations(tabs, "assemblyGeometry");
+        page.geometry_operation->setItemText(2, "Use type geometry");
+        page.geometry_operation->setToolTip("Keep retains each node's own geometry. Set stores a local profile override, "
+            "including when all dimension fields are blank. Use type geometry removes only this node's profile override.");
+        form->addRow("Geometry operation", page.geometry_operation);
+        auto* note = new QLabel("Dimensions measure this node's own outlines and extrusion, along its local axes, "
+            "with root and part pose scales included. Entered dimensions also account for pose changes on other part pages. "
+            "Child parts have their own Geometry pages. "
+            "Blank dimensions retain each source; resizing anchors the local minimum X, Y and elevation. "
+            "Current values describe the captured geometry and pose.", tabs);
+        note->setWordWrap(true); form->addRow(note);
+        const std::array<QString, 3> labels{"Width", "Depth", "Height"};
+        for (std::size_t i = 0; i < page.dimensions.size(); ++i) {
+            QString hint;
+            std::optional<double> first;
+            bool mixed = false, missing = false;
+            for (const auto& selected : page.sources) {
+                if (selected.profiles->empty()) { missing = true; continue; }
+                const auto span = profile_spans(*selected.profiles, selected.node->transform)[i];
+                if (!first) first = span;
+                else if (*first != span) mixed = true;
+            }
+            hint = !first ? "No own profiles" : missing ? "Some nodes have no own profiles" :
+                mixed ? "Multiple values" : length(*first);
+            auto* input = field(tabs, "assemblyGeometry" + labels[i], hint);
+            input->setAccessibleName("Geometry " + labels[i]);
+            input->setEnabled(false);
+            input->setToolTip("Current: " + hint + "\nEnter a positive physical length; blank retains each node's size. "
+                "Each selected node is resized from its own profiles; outlines and cutouts retain their identity. " +
+                (length_unit == Unit::metre ? QString("Bare numbers use metres.") : QString("Bare numbers use feet.")) +
+                "\nCircular arcs require width and depth to scale equally. Height includes elevation gaps between profiles. "
+                "Dimensions resize the complete profile draft after any detailed edits.");
+            page.dimensions[i] = input;
+            form->addRow(labels[i], input);
+        }
+        if (page.sources.size() == 1) {
+            auto* local_note = new QLabel("Individual profile elevations and extrusion heights use local coordinates, "
+                "before pose scaling. Edit outline and cutouts opens the vertex and circular-arc editor. "
+                "Profile IDs and material slots are retained.", tabs);
+            local_note->setWordWrap(true); form->addRow(local_note);
+            page.profile_table = new QTableWidget(tabs);
+            auto* table = page.profile_table;
+            table->setObjectName("assemblyGeometryProfiles");
+            table->setAccessibleName("This node's own geometry profiles");
+            table->setColumnCount(5);
+            table->setHorizontalHeaderLabels({"Profile", "Outline / cutouts", "Local elevation", "Local height", "Geometry"});
+            table->setSelectionBehavior(QAbstractItemView::SelectRows);
+            table->setEditTriggers(QAbstractItemView::NoEditTriggers);
+            table->horizontalHeader()->setSectionResizeMode(QHeaderView::ResizeToContents);
+            table->horizontalHeader()->setSectionResizeMode(1, QHeaderView::Stretch);
+            table->verticalHeader()->hide();
+            const auto& profiles = *page.sources.front().profiles;
+            table->setRowCount(static_cast<int>(profiles.size()));
+            page.profiles.reserve(profiles.size());
+            for (std::size_t index = 0; index < profiles.size(); ++index) {
+                const auto& profile = profiles[index];
+                const auto row_index = static_cast<int>(index);
+                ProfileRow row;
+                row.draft = profile;
+                auto* id = new QTableWidgetItem(q(profile.id));
+                id->setToolTip(profile.material_slot ? "Material slot: " + q(*profile.material_slot) : "No material slot");
+                table->setItem(row_index, 0, id);
+                row.summary = new QLabel(profile_summary(profile), table);
+                table->setCellWidget(row_index, 1, row.summary);
+                row.elevation = field(table, "assemblyProfileElevation" + q(profile.id), length(profile.elevation_m));
+                row.height = field(table, "assemblyProfileHeight" + q(profile.id), length(profile.height_m));
+                row.elevation->setAccessibleName("Profile " + q(profile.id) + " local elevation");
+                row.height->setAccessibleName("Profile " + q(profile.id) + " local extrusion height");
+                const auto units = length_unit == Unit::metre ? QString("Bare numbers use metres.") : QString("Bare numbers use feet.");
+                row.elevation->setToolTip("Current local elevation: " + length(profile.elevation_m) + "\nBlank retains it. " + units);
+                row.height->setToolTip("Current local height: " + length(profile.height_m) + "\nEnter a positive length; blank retains it. " + units);
+                table->setCellWidget(row_index, 2, row.elevation);
+                table->setCellWidget(row_index, 3, row.height);
+                row.edit = new QPushButton("Edit outline and cutouts…", table);
+                row.edit->setObjectName("assemblyProfileEdit" + q(profile.id));
+                row.edit->setAccessibleName("Edit profile " + q(profile.id) + " outline and cutouts");
+                table->setCellWidget(row_index, 4, row.edit);
+                page.profiles.push_back(std::move(row));
+                QObject::connect(page.profiles.back().edit, &QPushButton::clicked, owner, [this, page_ptr = &page, index] {
+                    try {
+                        auto& row = page_ptr->profiles.at(index);
+                        // The reusable editor owns only boundary changes. Extrusion
+                        // text remains independent so incomplete input is retained.
+                        if (auto accepted = edit_assembly_profile_geometry(owner, row.draft, length_unit == Unit::metre)) {
+                            require(accepted->id == row.draft.id && accepted->material_slot == row.draft.material_slot,
+                                "The outline editor changed a retained profile identity or material slot.");
+                            row.draft.outer = std::move(accepted->outer);
+                            row.draft.holes = std::move(accepted->holes);
+                            row.summary->setText(profile_summary(row.draft));
+                            error->clear(); error->hide();
+                        }
+                    } catch (const std::exception& failure) { error->setText(q(failure.what())); error->show(); }
+                });
+            }
+            table->resizeRowsToContents();
+            table->setEnabled(false);
+            form->addRow(table);
+            if (profiles.empty()) form->addRow(new QLabel("This node has no own profiles. Choose a part with geometry.", tabs));
+        } else {
+            auto* bulk = new QLabel("Common dimensions apply separately to each selected node's actual geometry. "
+                "To edit individual outlines, cutouts or extrusion elevations, select one node.", tabs);
+            bulk->setWordWrap(true); form->addRow(bulk);
+        }
+        QObject::connect(page.geometry_operation, &QComboBox::currentIndexChanged, owner, [page_ptr = &page](int) {
+            const bool enabled = operation(page_ptr->geometry_operation) == Operation::set;
+            for (auto* input : page_ptr->dimensions) input->setEnabled(enabled);
+            if (page_ptr->profile_table) page_ptr->profile_table->setEnabled(enabled);
+        });
+    }
     void build(Page& page) {
         auto* tabs = new QTabWidget(stack);
+        build_geometry(page, tabs);
         const auto properties = common_slots(page.sources, [](const auto& type) -> const auto& { return type.properties; },
             [](const auto&, const auto&) { return true; });
         auto* form = tab(tabs, "Properties");
@@ -451,6 +694,44 @@ public:
         stack->addWidget(tabs);
     }
 
+    std::array<std::optional<double>, 3> read_dimensions(const Page& page) const {
+        std::array<std::optional<double>, 3> dimensions;
+        if (operation(page.geometry_operation) != Operation::set) return dimensions;
+        for (std::size_t i = 0; i < dimensions.size(); ++i) if (supplied(page.dimensions[i])) {
+            const auto value = parse_quantity(page.dimensions[i]->text().toStdString(), length_unit).metres;
+            require(std::isfinite(value) && value > 0,
+                page.dimensions[i]->accessibleName().toStdString() + " must be finite and positive.");
+            dimensions[i] = value;
+        }
+        return dimensions;
+    }
+    AssemblyTransform final_geometry_frame(const Target& target, const std::map<Target, Intent>& intents) const {
+        auto path = target;
+        path.part_path.clear();
+        AssemblyTransform frame;
+        // Only root and exact stable-path ancestors of this node contribute.
+        // This detached scale calculation supplies no candidate/document authority.
+        for (std::size_t depth = 0; depth <= target.part_path.size(); ++depth) {
+            const auto selected = resolve(path);
+            auto local = selected.pose;
+            if (const auto found = intents.find(path); found != intents.end()) {
+                const auto& patch = found->second.pose;
+                if (patch.operation == Operation::clear) {
+                    require(!path.part_path.empty() && selected.node->source_part.has_value(),
+                        "Only a nested part pose can be cleared.");
+                    local = selected.node->source_part->transform;
+                } else if (patch.operation == Operation::set) {
+                    local.scale = patch.scale.value_or(local.scale);
+                    local.vertical_scale = patch.vertical_scale.value_or(local.vertical_scale);
+                }
+            }
+            // Yaw, reflection and translation do not change spans along the
+            // selected local axes. Reuse the model's checked scale composition.
+            frame = compose_assembly_transform(frame, AssemblyTransform{{}, 0, local.scale, false, local.vertical_scale});
+            if (depth < target.part_path.size()) path.part_path.push_back(target.part_path[depth]);
+        }
+        return frame;
+    }
     std::vector<Intent> read(const Page& page) const {
         Intent shared;
         for (const auto& row : page.properties) {
@@ -487,6 +768,11 @@ public:
                 require(std::isfinite(*values[i]), "Pose components must be finite.");
             }
         }
+        const auto geometry_operation = operation(page.geometry_operation);
+        std::optional<std::vector<AssemblyProfile>> detailed_profiles;
+        if (geometry_operation == Operation::set) {
+            if (page.sources.size() == 1) detailed_profiles = profile_draft(page);
+        }
         std::vector<Intent> result;
         for (const auto& selected : page.sources) {
             auto intent = shared;
@@ -510,16 +796,24 @@ public:
                 const auto vertical = pose.vertical_scale.value_or(selected.pose.vertical_scale);
                 require(std::isfinite(xy * vertical) && xy * vertical > 0, "The resulting Z scale overflows or underflows.");
             }
+            intent.profile_geometry.operation = geometry_operation;
+            if (geometry_operation == Operation::set) {
+                // Dimensions are applied only after all pages' pose patches have
+                // been collected. Each cohort member keeps its actual profiles.
+                intent.profile_geometry.value = detailed_profiles ? *detailed_profiles : *selected.profiles;
+            }
             result.push_back(std::move(intent));
         }
         return result;
     }
     std::vector<Intent> intents() const {
         std::map<Target, Intent> result;
+        std::map<Target, std::array<std::optional<double>, 3>> dimensions;
         for (const auto& target : original) { Intent retained; retained.target = target; result.emplace(target, std::move(retained)); }
         for (std::size_t index = 0; index < pages.size(); ++index) {
             if (!pages[index]->widget) continue;
             auto values = read(*pages[index]);
+            const auto requested_dimensions = read_dimensions(*pages[index]);
             if (index != 0 && std::none_of(values.begin(), values.end(), changed)) continue;
             for (auto& intent : values) {
                 const auto found = result.find(intent.target);
@@ -529,13 +823,27 @@ public:
                 }
                 const auto target = intent.target;
                 result.insert_or_assign(target, std::move(intent));
+                dimensions.insert_or_assign(target, requested_dimensions);
                 require(result.size() <= maximum_targets, "The combined selection and edited parts exceed 1000 targets.");
             }
         }
         std::vector<Intent> output;
         output.reserve(result.size());
-        for (const auto& [target, intent] : result) {
-            (void)target;
+        for (auto& [target, intent] : result) {
+            if (intent.profile_geometry.operation == Operation::set) {
+                require(intent.profile_geometry.value.has_value(), "Set geometry requires actual profile data.");
+                auto& profiles = *intent.profile_geometry.value;
+                try {
+                    const auto& requested = dimensions.at(target);
+                    if (std::any_of(requested.begin(), requested.end(), [](const auto& value) { return value.has_value(); }))
+                        resize_profiles(profiles, final_geometry_frame(target, result), requested);
+                    (void)validate_assembly_profiles(profiles);
+                } catch (const std::exception& failure) {
+                    throw std::invalid_argument("Geometry for " + target.instance_id +
+                        (target.part_path.empty() ? std::string(" (root)") : " / " + path_label(target.part_path).toStdString()) +
+                        ": " + failure.what());
+                }
+            }
             // The producer codec validates the complete typed envelope without
             // invoking preparation, native admission or changing the document.
             output.push_back(decode_assembly_instance_property_edit_intent(

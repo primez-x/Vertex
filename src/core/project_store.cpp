@@ -119,7 +119,8 @@ bool has_architectural_appraisal_v57_semantics(const Entity& entity) {
             (model->value("schema", nlohmann::json()) == "sketch.assemblies.v4" ||
              model->value("schema", nlohmann::json()) == "sketch.assemblies.v5" ||
              model->value("schema", nlohmann::json()) == "sketch.assemblies.v6" ||
-             model->value("schema", nlohmann::json()) == "sketch.assemblies.v7")) return true;
+             model->value("schema", nlohmann::json()) == "sketch.assemblies.v7" ||
+             model->value("schema", nlohmann::json()) == "sketch.assemblies.v8")) return true;
     }
     if (entity.type == "roof_join" &&
         (entity.properties.value("version", nlohmann::json()) == 2 ||
@@ -401,6 +402,32 @@ std::uint32_t required_format_version_internal(const DocumentSnapshot& snapshot,
             const auto literal_true=[](const nlohmann::json& child,const char* field) {
                 return child.contains(field) && child.at(field).is_boolean() && child.at(field)==true;
             };
+            if (floor<240) {
+                const bool geometry_intent=typed_shape(value,2,{"version","target","properties","materials",
+                    "quantities","pose","profile_geometry"});
+                const bool geometry_request=typed_shape(value,2,{"version","expected_revision","source_snapshot_digest",
+                    "source_authoring_digest","source_entities_digest","source_saved_revision","intents"});
+                const bool geometry_authoring=typed_shape(value,3,{"version","intents","allocation",
+                    "carry_presentation_references","presentation_overlay_identities","dimension_identities"});
+                const bool geometry_phase_request=typed_shape(value,3,{"version","expected_revision",
+                    "source_snapshot_digest","source_authoring_digest","source_entities_digest","source_saved_revision","authoring"});
+                const bool geometry_properties=typed_shape(value,32,{"version","expected_revision","source_snapshot_digest",
+                    "source_authoring_digest","source_entities_digest","source_saved_revision","component_request",
+                    "base_intent","room_reviews","phase_room_reviews","message","coordinate_component_hosts",
+                    "component_identity_reservations","carry_component_presentation","complete_instance_profile_geometry"});
+                if (geometry_intent || geometry_request || geometry_authoring || geometry_phase_request || geometry_properties) {
+                    try {
+                        if (geometry_intent) (void)decode_assembly_instance_property_edit_intent(value);
+                        else if (geometry_request) (void)validate_assembly_instance_property_edit_request(value);
+                        else if (geometry_authoring) (void)decode_phase_assembly_instance_property_edit_authoring(value);
+                        else if (geometry_phase_request) (void)validate_phase_assembly_instance_property_edit_request(value);
+                        else (void)validate_mixed_selection_property_edit_intent(value);
+                        floor=240U;
+                    } catch (const std::invalid_argument&) {
+                    } catch (const nlohmann::json::exception&) {
+                    }
+                }
+            }
             if (floor<236 && value.is_object() && value.contains("version") &&
                 value.at("version").is_number_integer() && value.at("version")==9 &&
                 value.contains("authoring") && value.contains("complete_hosted_component_dimensions") &&
@@ -1209,6 +1236,8 @@ std::uint32_t required_format_version_internal(const DocumentSnapshot& snapshot,
                 value.contains("mixed_selection_edit_completion") && value.contains("mixed_selection_edit_intent")) {
                 floor=std::max(floor,187U);
                 const auto& intent=value.at("mixed_selection_edit_intent");
+                if (intent.is_object() && intent.value("version",nlohmann::json())==32)
+                    floor=std::max(floor,240U);
                 if (intent.is_object() && intent.value("version",nlohmann::json())==30)
                     floor=std::max(floor,239U);
                 if (intent.is_object() && intent.value("version",nlohmann::json())==20)
@@ -1432,9 +1461,9 @@ std::uint32_t required_format_version_internal(const DocumentSnapshot& snapshot,
     };
     for (const auto& revision : snapshot.history()) {
         if (revision.phase_entity_import) required=std::max(required,160U);
-        if (required<239 && revision.boundary_geometry_edit)
+        if (required<240 && revision.boundary_geometry_edit)
             required=std::max(required,typed_edit_reader_floor(encode_boundary_geometry_edit(*revision.boundary_geometry_edit)));
-        if (required<239 && revision.boundary_constraint_changes)
+        if (required<240 && revision.boundary_constraint_changes)
             required=std::max(required,typed_edit_reader_floor(command_to_json(Command{*revision.boundary_constraint_changes})));
         if (required<122 && revision.boundary_geometry_edit)
             required=std::max(required,quantity_reader_floor(encode_boundary_geometry_edit(*revision.boundary_geometry_edit)));
@@ -1447,6 +1476,9 @@ std::uint32_t required_format_version_internal(const DocumentSnapshot& snapshot,
             const auto& edits=*revision.boundary_constraint_changes;
             if (edits.mixed_selection_edit_completion || !edits.mixed_selection_edit_intent.is_null()) {
                 required=std::max(required,187U);
+                if (edits.mixed_selection_edit_intent.is_object() &&
+                    edits.mixed_selection_edit_intent.value("version",nlohmann::json())==32)
+                    required=std::max(required,240U);
                 if (edits.mixed_selection_edit_intent.is_object() &&
                     edits.mixed_selection_edit_intent.value("version",nlohmann::json())==30)
                     required=std::max(required,239U);
@@ -2021,6 +2053,9 @@ std::uint32_t required_format_version_internal(const DocumentSnapshot& snapshot,
             if (entity.type == "assembly_model" && entity.properties.is_object()) {
                 const auto model = entity.properties.find("model");
                 if (model != entity.properties.end() && model->is_object() &&
+                    model->value("schema", nlohmann::json()) == "sketch.assemblies.v8")
+                    required = std::max(required, 240U);
+                if (model != entity.properties.end() && model->is_object() &&
                     model->value("schema", nlohmann::json()) == "sketch.assemblies.v7")
                     required = std::max(required, 124U);
                 if (model != entity.properties.end() && model->is_object() &&
@@ -2032,6 +2067,9 @@ std::uint32_t required_format_version_internal(const DocumentSnapshot& snapshot,
             }
             if (entity.type == "assembly_instance" && entity.properties.is_object()) {
                 const auto instance = entity.properties.find("instance");
+                if (instance != entity.properties.end() && instance->is_object() &&
+                    instance->value("schema", nlohmann::json()) == "sketch.assembly-instance.v3")
+                    required = std::max(required, 240U);
                 if (instance != entity.properties.end() && instance->is_object() &&
                     instance->value("schema", nlohmann::json()) == "sketch.assembly-instance.v2")
                     required = std::max(required, 115U);
@@ -3964,6 +4002,7 @@ bool verify_sqlite_schema(sqlite3* database, bool allow_recovery = false) {
          sqlite3_column_int(user_version.get(), 0) != 237 &&
          sqlite3_column_int(user_version.get(), 0) != 238 &&
          sqlite3_column_int(user_version.get(), 0) != 239 &&
+         sqlite3_column_int(user_version.get(), 0) != 240 &&
          sqlite3_column_int(user_version.get(), 0) != 207 &&
          sqlite3_column_int(user_version.get(), 0) != 202 &&
          sqlite3_column_int(user_version.get(), 0) != 200 &&
@@ -4689,6 +4728,8 @@ DocumentSnapshot read_snapshot(sqlite3* database, RecoveryLedger* recovery = nul
     // here and authenticate the manifest with its stored version below.
     const auto required_format = required_format_version_internal(snapshot, format_number < 28);
     if (required_format > format_number) {
+        if (required_format>=240)
+            storage_error(StorageErrorCode::unsupported_format,"This project requires reader 240 for individual component profile geometry and Properties edits");
         if (required_format>=239)
             storage_error(StorageErrorCode::unsupported_format,"This project requires reader 239 for complete proposed roof component dimensions in mixed transforms");
         if (required_format>=238)

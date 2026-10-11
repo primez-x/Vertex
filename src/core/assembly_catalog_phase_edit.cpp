@@ -275,14 +275,14 @@ Entities derive_raw(const Entities& actual, const Json& request) {
                 if (!old_nested && !row(original, collection, key).contains("profiles") &&
                     replacement.at("profiles").empty() && replacement.at("parts").empty()) {
                     replacement.erase("profiles"); replacement.erase("parts");
-                } else if (!old_nested && schema != "sketch.assemblies.v7") promote = true;
-                if (schema != "sketch.assemblies.v6" && schema != "sketch.assemblies.v7" && replacement.contains("parts"))
+                } else if (!old_nested && schema != "sketch.assemblies.v7" && schema != "sketch.assemblies.v8") promote = true;
+                if (schema != "sketch.assemblies.v6" && schema != "sketch.assemblies.v7" && schema != "sketch.assemblies.v8" && replacement.contains("parts"))
                     for (const auto& part : replacement.at("parts"))
                         if (part.at("transform").contains("vertical_scale")) promote = true;
             } else if (schema == "sketch.assemblies.v1" && replacement.contains("color_srgb")) promote = true;
             for (auto& saved : candidate.at(collection)) if (saved.at("id") == key) { saved = std::move(replacement); break; }
         }
-        if (promote) candidate.at("schema") = "sketch.assemblies.v7";
+        if (promote) candidate.at("schema") = schema == "sketch.assemblies.v8" ? "sketch.assemblies.v8" : "sketch.assemblies.v7";
     }
     return result;
 }

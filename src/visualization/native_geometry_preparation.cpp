@@ -1094,6 +1094,9 @@ std::optional<PreparedNativeGeometry> prepare_native_geometry(
                     continue;
                 }
                 // Genuine V1-V3 declarations retain their host-copy behavior.
+                if (instance.profile_overrides || std::any_of(instance.nested_overrides.begin(),instance.nested_overrides.end(),[](const auto& node) {
+                    return node.profile_overrides.has_value();
+                })) continue;
                 if (!instance.placement) continue;
                 if (inactive_owner_ids.contains(instance.placement->host_entity_id)) continue;
                 const auto host = entities.find(instance.placement->host_entity_id);

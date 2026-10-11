@@ -5,6 +5,7 @@
 #include "assembly_instance_property_carry.hpp"
 
 #include "sketch/assembly_geometry.hpp"
+#include "sketch/assembly_dimension_transform.hpp"
 #include "sketch/building_entity.hpp"
 #include "sketch/constraint_integrity.hpp"
 #include "sketch/constraint_phase_scope.hpp"
@@ -203,6 +204,35 @@ void preflight_intent(const Intent& intent, Budget& budget) {
     patches(intent.properties, [&](const std::string& value) { bounded(value, 4096, false); });
     patches(intent.materials, [&](const std::string& value) { bounded(value, 1024, true); });
     patches(intent.quantities, [&](const AssemblyQuantityProperty& value) { (void)encode_quantity(value); });
+    const auto& geometry = intent.profile_geometry;
+    (void)operation_name(geometry.operation);
+    if ((geometry.operation == Operation::set) != geometry.value.has_value()) reject("only profile set may carry a value");
+    if (geometry.value) {
+        // Charge borrowed strings and segments before helper validation or any
+        // profile JSON/string copy. Retain the source profile ID grammar; the
+        // wire budget and UTF-8 admission bound these local identifiers.
+        const auto boundary = [&](const Boundary& ring) {
+            budget.add(2 + (ring.empty() ? 0 : ring.size() - 1));
+            for (const auto& edge : ring) {
+                (void)edge;
+                budget.add(208); // Closed segment fields and five numbers.
+                if (8 > 100000 - budget.nodes) reject("typed profile complexity budget exceeded");
+                budget.nodes += 8;
+            }
+        };
+        for (const auto& profile : *geometry.value) {
+            budget.add(256); budget.quoted(profile.id);
+            if (profile.material_slot) budget.quoted(*profile.material_slot);
+            if (8 > 100000 - budget.nodes) reject("typed profile complexity budget exceeded");
+            budget.nodes += 8;
+            boundary(profile.outer);
+            for (const auto& hole : profile.holes) {
+                if (++budget.nodes > 100000) reject("typed profile complexity budget exceeded");
+                boundary(hole);
+            }
+        }
+        (void)validate_assembly_profiles(*geometry.value);
+    }
     (void)operation_name(intent.pose.operation);
     for (const auto value : {intent.pose.x_metres, intent.pose.y_metres, intent.pose.z_metres, intent.pose.rotation_radians})
         if (value && !std::isfinite(*value)) reject("pose components must be finite");
@@ -214,7 +244,7 @@ Json encode_intent(const Intent& intent) {
     const auto& p = intent.pose;
     const auto string_value = [](const std::string& value) { return Json(text(Json(value), 4096, false)); };
     const auto material = [](const std::string& value) { return Json(text(Json(value), 1024, true)); };
-    return {{"version", 1},
+    Json result{{"version", intent.profile_geometry.operation == Operation::unchanged ? 1 : 2},
         {"target", {{"catalog_id", t.catalog_id}, {"instance_id", t.instance_id},
             {"document_entity_id", optional(t.document_entity_id)}, {"part_path", t.part_path}}},
         {"properties", encode_patches(intent.properties, string_value)},
@@ -224,10 +254,17 @@ Json encode_intent(const Intent& intent) {
             {"y_metres", optional(p.y_metres)}, {"z_metres", optional(p.z_metres)},
             {"rotation_radians", optional(p.rotation_radians)}, {"scale", optional(p.scale)},
             {"vertical_scale", optional(p.vertical_scale)}, {"mirrored_y", optional(p.mirrored_y)}}}};
+    if (intent.profile_geometry.operation != Operation::unchanged)
+        result["profile_geometry"] = {{"operation", operation_name(intent.profile_geometry.operation)},
+            {"value", intent.profile_geometry.value ? encode_assembly_profiles(*intent.profile_geometry.value) : Json(nullptr)}};
+    return result;
 }
 Intent decode_intent(const Json& value) {
-    fields(value, {"version", "target", "properties", "materials", "quantities", "pose"});
-    if (!value.at("version").is_number_integer() || value.at("version") != 1) reject("unsupported intent version");
+    if (!value.is_object() || !value.contains("version") || !value.at("version").is_number_integer() ||
+        (value.at("version") != 1 && value.at("version") != 2)) reject("unsupported intent version");
+    const bool geometry = value.at("version") == 2;
+    if (geometry) fields(value, {"version", "target", "properties", "materials", "quantities", "pose", "profile_geometry"});
+    else fields(value, {"version", "target", "properties", "materials", "quantities", "pose"});
     Intent result;
     const auto& t = value.at("target");
     fields(t, {"catalog_id", "instance_id", "document_entity_id", "part_path"});
@@ -242,6 +279,15 @@ Intent decode_intent(const Json& value) {
     result.materials = decode_patches<std::string>(value.at("materials"),
         [](const Json& v) { return text(v, 1024, true); });
     result.quantities = decode_patches<AssemblyQuantityProperty>(value.at("quantities"), decode_quantity);
+    if (geometry) {
+        const auto& patch = value.at("profile_geometry");
+        fields(patch, {"operation", "value"});
+        result.profile_geometry.operation = operation(patch.at("operation"));
+        if (result.profile_geometry.operation == Operation::unchanged) reject("v2 requires a profile geometry operation");
+        if (result.profile_geometry.operation == Operation::set)
+            result.profile_geometry.value = decode_assembly_profiles(patch.at("value"));
+        else if (!patch.at("value").is_null()) reject("profile clear must carry null");
+    }
     const auto& p = value.at("pose");
     fields(p, {"operation", "x_metres", "y_metres", "z_metres", "rotation_radians", "scale", "vertical_scale", "mirrored_y"});
     result.pose.operation = operation(p.at("operation"));
@@ -338,6 +384,17 @@ void change_maps(auto& source, const AssemblyExpandedNode& node, const AssemblyT
         [&](const std::string& key, const AssemblyQuantityProperty& q) {
             if (q.unit != type.quantities.at(key).unit) reject("quantity override changes its declared dimension");
         });
+    const auto& geometry = intent.profile_geometry;
+    if (geometry.operation == Operation::clear) source.profile_overrides.reset();
+    else if (geometry.operation == Operation::set) {
+        const auto& resolved = source.profile_overrides ? *source.profile_overrides : type.profiles;
+        auto changed = *geometry.value;
+        std::sort(changed.begin(), changed.end(), [](const auto& a, const auto& b) { return a.id < b.id; });
+        // Compare canonical values to preserve even equal explicit provenance,
+        // while retaining the original raw row and its numeric representations.
+        if (encode_assembly_profiles(resolved) != encode_assembly_profiles(changed))
+            source.profile_overrides = std::move(changed);
+    }
 }
 AssemblyInstance change_instance(const AssemblyInstance& source, const AssemblyExpansion& expansion,
     const AssemblyModel& model, const std::vector<const Intent*>& intents) {
@@ -415,13 +472,52 @@ void patch_maps(Json& raw, const auto& before, const auto& after) {
     patch_map(raw.at("material_overrides"), before.material_overrides, after.material_overrides,
         [](const std::string& value) { return Json(value); });
     patch_map(raw.at("quantity_overrides"), before.quantity_overrides, after.quantity_overrides, encode_quantity);
+    if (before.profile_overrides != after.profile_overrides) {
+        if (!after.profile_overrides) { raw.erase("profile_overrides"); return; }
+        auto encoded = encode_assembly_profiles(*after.profile_overrides);
+        if (before.profile_overrides) {
+            std::map<std::string, const AssemblyProfile*, std::less<>> previous;
+            std::map<std::string, const AssemblyProfile*, std::less<>> updated;
+            std::map<std::string, const Json*, std::less<>> original;
+            for (const auto& profile : *before.profile_overrides) previous.emplace(profile.id, &profile);
+            for (const auto& profile : *after.profile_overrides) updated.emplace(profile.id, &profile);
+            for (const auto& profile : raw.at("profile_overrides"))
+                original.emplace(profile.at("id").template get<std::string>(), &profile);
+            const auto boundary_equal = [](const Boundary& first, const Boundary& second) {
+                return first.size() == second.size() && std::equal(first.begin(), first.end(), second.begin(),
+                    [](const auto& a, const auto& b) {
+                        return a.start.x == b.start.x && a.start.y == b.start.y &&
+                            a.end.x == b.end.x && a.end.y == b.end.y && a.sweep_radians == b.sweep_radians;
+                    });
+            };
+            for (auto& profile : encoded) {
+                const auto& next = *updated.at(profile.at("id").template get<std::string>());
+                const auto old = previous.find(next.id);
+                if (old == previous.end()) continue;
+                const auto source = original.find(next.id);
+                if (source == original.end()) reject("saved profile override is missing");
+                const auto& retained = *source->second;
+                if (*old->second == next) { profile = retained; continue; }
+                if (boundary_equal(old->second->outer, next.outer)) profile["outer"] = retained.at("outer");
+                if (old->second->holes.size() == next.holes.size() &&
+                    std::equal(old->second->holes.begin(), old->second->holes.end(), next.holes.begin(), boundary_equal))
+                    profile["holes"] = retained.at("holes");
+                if (old->second->elevation_m == next.elevation_m) profile["elevation_m"] = retained.at("elevation_m");
+                if (old->second->height_m == next.height_m) profile["height_m"] = retained.at("height_m");
+                if (old->second->material_slot == next.material_slot) profile["material_slot"] = retained.at("material_slot");
+            }
+        }
+        raw["profile_overrides"] = std::move(encoded);
+    }
 }
 Json encode_path(const AssemblyPathOverride& path) {
     auto properties = Json(path.property_overrides), materials = Json(path.material_overrides), quantities = Json::object();
     for (const auto& [key, value] : path.quantity_overrides) quantities[key] = encode_quantity(value);
-    return {{"part_path", path.part_path}, {"transform", path.transform ? encode_assembly_transform(*path.transform) : Json(nullptr)},
+    Json result{{"part_path", path.part_path}, {"transform", path.transform ? encode_assembly_transform(*path.transform) : Json(nullptr)},
         {"property_overrides", std::move(properties)}, {"material_overrides", std::move(materials)},
         {"quantity_overrides", std::move(quantities)}};
+    if (path.profile_overrides) result["profile_overrides"] = encode_assembly_profiles(*path.profile_overrides);
+    return result;
 }
 const Json& source_part_pose(const Json& catalog, const std::string& root_type, const Path& path) {
     std::string type_id = root_type;
@@ -482,7 +578,7 @@ void patch_instance(Json& raw, const AssemblyInstance& before, const AssemblyIns
 }
 bool needs_embedded_promotion(const Json& model, const Json& row) {
     const auto schema = model.at("schema").get<std::string>();
-    if (schema == "sketch.assemblies.v7") return false;
+    if (schema == "sketch.assemblies.v7" || schema == "sketch.assemblies.v8") return false;
     const bool nested = schema == "sketch.assemblies.v4" || schema == "sketch.assemblies.v5" || schema == "sketch.assemblies.v6";
     if (!nested && (row.contains("root_transform") || row.contains("nested_overrides"))) return true;
     const auto vertical = [](const Json& pose) { return pose.is_object() && pose.contains("vertical_scale"); };
@@ -497,6 +593,24 @@ bool needs_embedded_promotion(const Json& model, const Json& row) {
             if (vertical(path.at("transform"))) return true;
     }
     return false;
+}
+bool has_profile_overrides(const Json& row) {
+    return row.contains("profile_overrides") || (row.contains("nested_overrides") &&
+        std::any_of(row.at("nested_overrides").begin(), row.at("nested_overrides").end(),
+            [](const Json& path) { return path.contains("profile_overrides"); }));
+}
+void promote_embedded(Json& model, const Json& row) {
+    if (has_profile_overrides(row)) model["schema"] = "sketch.assemblies.v8";
+    else if (needs_embedded_promotion(model, row)) model["schema"] = "sketch.assemblies.v7";
+}
+void promote_independent(Json& raw) {
+    if (has_profile_overrides(raw)) raw["schema"] = "sketch.assembly-instance.v3";
+    else if (raw.at("schema") != "sketch.assembly-instance.v3") {
+        const auto vertical = [](const Json& pose) { return pose.is_object() && pose.contains("vertical_scale"); };
+        if (vertical(raw.at("root_transform")) || std::any_of(raw.at("nested_overrides").begin(),
+            raw.at("nested_overrides").end(), [&](const Json& row) { return vertical(row.at("transform")); }))
+            raw["schema"] = "sketch.assembly-instance.v2";
+    }
 }
 void complete_row_envelope(Json& row) {
     if (row.contains("root_transform") != row.contains("nested_overrides")) {
@@ -554,6 +668,9 @@ void admit_geometry(const AssemblyDocumentEntities& actual, const Target& target
         if (make_assembly_geometry(expansion).shape.IsNull()) reject("embedded assembly has no native source profiles");
         return;
     }
+    if (expansion.source_instance.profile_overrides || std::any_of(expansion.source_instance.nested_overrides.begin(),
+            expansion.source_instance.nested_overrides.end(),[](const auto& node) { return node.profile_overrides.has_value(); }))
+        reject("explicit component geometry has no native source profiles");
     if (!expansion.source_instance.placement) reject("metadata-only embedded assembly has no editable geometric presentation");
     const auto& host_id = expansion.source_instance.placement->host_entity_id;
     (void)resolve_site_presentation(actual, host_id); // Validate actual host/context dependencies.
@@ -674,6 +791,13 @@ struct PropertyEditSourceInspection {
         admit_geometry(original, target, before, opening_work, host_cache);
         auto changed = change_instance(instance, before, model, rows);
         auto after = model.expand(changed, after_budget);
+        if (after.profiles.empty() && std::any_of(rows.begin(), rows.end(), [&](const Intent* intent) {
+            return intent->profile_geometry.operation == Operation::set &&
+                std::any_of(before.profiles.begin(), before.profiles.end(), [&](const auto& profile) {
+                    return profile.part_path == intent->target.part_path;
+                });
+        }))
+            reject("profile Set suppresses the last actual solid; legacy host-copy is not replacement geometry");
         return {std::move(target), std::move(instance), std::move(changed), std::move(after)};
     }
 
@@ -697,11 +821,17 @@ std::vector<Intent> decode_request(const Json& request) {
     Budget{}.visit(request);
     fields(request, {"version", "expected_revision", "source_snapshot_digest", "source_authoring_digest",
         "source_entities_digest", "source_saved_revision", "intents"});
-    if (!request.at("version").is_number_integer() || request.at("version") != 1) reject("unsupported request version");
+    if (!request.at("version").is_number_integer() || (request.at("version") != 1 && request.at("version") != 2))
+        reject("unsupported request version");
     (void)revision(request.at("expected_revision"));
     for (const auto* name : {"source_snapshot_digest", "source_authoring_digest", "source_entities_digest"}) digest(request.at(name));
     if (!request.at("source_saved_revision").is_null()) (void)revision(request.at("source_saved_revision"));
-    return decode_intents(request.at("intents"));
+    auto intents = decode_intents(request.at("intents"));
+    const bool geometry = std::any_of(intents.begin(), intents.end(), [](const Intent& intent) {
+        return intent.profile_geometry.operation != Operation::unchanged;
+    });
+    if (request.at("version") == 1 && geometry) reject("v1 request cannot carry profile geometry authority");
+    return intents;
 }
 void authenticate(const DocumentSnapshot& source, const Json& request) {
     if (!source.is_editable()) reject("captured source is read-only");
@@ -841,10 +971,7 @@ void patch_root(AssemblyDocumentEntities& result, const AssemblyDocumentEntities
     if (destination.document_entity_id) {
         auto& raw = result.at(*destination.document_entity_id).properties.at("instance");
         patch_instance(raw, root.original, root.changed, source_catalog);
-        const auto vertical = [](const Json& pose) { return pose.is_object() && pose.contains("vertical_scale"); };
-        if (vertical(raw.at("root_transform")) || std::any_of(raw.at("nested_overrides").begin(),
-            raw.at("nested_overrides").end(), [&](const Json& row) { return vertical(row.at("transform")); }))
-            raw["schema"] = "sketch.assembly-instance.v2";
+        promote_independent(raw);
     } else {
         auto& model = result.at(destination.catalog_id).properties.at("model");
         auto& rows = model.at("instances");
@@ -852,7 +979,7 @@ void patch_root(AssemblyDocumentEntities& result, const AssemblyDocumentEntities
         if (row == rows.end()) reject("replayed actual destination row is missing");
         patch_instance(*row, root.original, root.changed, source_catalog);
         complete_row_envelope(*row);
-        if (needs_embedded_promotion(model, *row)) model["schema"] = "sketch.assemblies.v7";
+        promote_embedded(model, *row);
     }
 }
 } // namespace
@@ -903,7 +1030,7 @@ void require_carry_catalog(const Entity& before, const Entity& carried) {
     // Decoding separately admits each actual supported dialect. A carry may
     // retain its dialect or promote it; it may never silently downgrade it.
     const auto schema_rank = [](const Json& schema) {
-        for (int version = 1; version <= 7; ++version)
+        for (int version = 1; version <= 8; ++version)
             if (schema == "sketch.assemblies.v" + std::to_string(version)) return version;
         reject("unsupported carried catalog dialect");
     };
@@ -943,10 +1070,13 @@ void require_carry_instance(const AssemblyDocumentEntities& original, const Targ
     auto raw_after = actual_instance_row(carried, destination);
     raw_after["id"] = raw_before.at("id");
     if (raw_before.contains("schema")) {
-        if (raw_after.at("schema") != raw_before.at("schema") &&
-            !(raw_before.at("schema") == "sketch.assembly-instance.v1" &&
-                raw_after.at("schema") == "sketch.assembly-instance.v2"))
-            reject("carry changed independent instance dialect");
+        const auto rank = [](const Json& schema) {
+            for (int version = 1; version <= 3; ++version)
+                if (schema == "sketch.assembly-instance.v" + std::to_string(version)) return version;
+            reject("unsupported carried independent dialect");
+        };
+        if (rank(raw_after.at("schema")) < rank(raw_before.at("schema")))
+            reject("carry downgraded independent instance dialect");
         raw_after["schema"] = raw_before.at("schema");
     }
     if (raw_before.contains("root_transform")) raw_after["root_transform"] = raw_before.at("root_transform");
@@ -1106,7 +1236,13 @@ PhaseAssemblyInstancePropertyEditResult replay_phase_assembly_instance_property_
     if (intents.empty() || intents.size() > target_limit || allocation.roots.size() > target_limit ||
         allocation.membership_entity_ids.size() > target_limit) reject("typed replacement count exceeds bound");
     (void)encode_intents(intents); // Aggregate typed preflight precedes any intent copy.
-    (void)encode_phase_assembly_instance_property_edit_authoring({std::vector<Intent>(intents.begin(), intents.end()), allocation});
+    const bool geometry = std::any_of(intents.begin(), intents.end(), [](const Intent& intent) {
+        return intent.profile_geometry.operation != Operation::unchanged;
+    });
+    // This is allocation admission only. Presentation correspondence is owned
+    // by the enclosing sealed authoring request, never this mathematical replay.
+    (void)encode_phase_assembly_instance_property_edit_authoring(
+        {std::vector<Intent>(intents.begin(), intents.end()), allocation, geometry});
     PropertyEditSourceInspection inspection(original, intents, true);
     const auto plan = phase_plan(inspection);
     if (allocation.roots.size() != plan.replacement_roots.size() ||
@@ -1303,6 +1439,7 @@ AssemblyDocumentEntities replay_assembly_instance_property_entities(const Assemb
     const auto& grouped = source.grouped;
     auto result = original;
     std::map<RootKey, AssemblyInstance> expected;
+    std::set<RootKey> changed_roots;
     for (const auto& [key, rows] : grouped) {
         const auto root = source.inspect(rows);
         const auto& target = root.target;
@@ -1311,6 +1448,7 @@ AssemblyDocumentEntities replay_assembly_instance_property_entities(const Assemb
         const auto& catalog = original.at(target.catalog_id);
         expected.emplace(key, changed);
         if (changed == instance) continue;
+        changed_roots.insert(key);
         const auto& owner_id = target.document_entity_id ? *target.document_entity_id : target.catalog_id;
         if (baselines.contains(owner_id) || (instance.placement && baselines.contains(instance.placement->host_entity_id)))
             reject("changed instance belongs to a protected active-alternative baseline; use full replacement");
@@ -1319,11 +1457,7 @@ AssemblyDocumentEntities replay_assembly_instance_property_entities(const Assemb
             auto& owner = result.at(owner_id);
             auto& raw = owner.properties.at("instance");
             patch_instance(raw, instance, changed, catalog.properties.at("model"));
-            const bool vertical = raw.at("root_transform").contains("vertical_scale") ||
-                std::any_of(raw.at("nested_overrides").begin(), raw.at("nested_overrides").end(),
-                    [](const Json& row) { return row.at("transform").is_object() && row.at("transform").contains("vertical_scale"); });
-            // Existing v2 stays v2, even when its optional scale becomes default.
-            if (vertical) raw["schema"] = "sketch.assembly-instance.v2";
+            promote_independent(raw);
         } else {
             auto& raw_model = result.at(owner_id).properties.at("model");
             auto& raw_rows = raw_model.at("instances");
@@ -1332,7 +1466,7 @@ AssemblyDocumentEntities replay_assembly_instance_property_entities(const Assemb
             if (row == raw_rows.end()) reject("actual embedded raw row is missing");
             patch_instance(*row, instance, changed, catalog.properties.at("model"));
             complete_row_envelope(*row);
-            if (needs_embedded_promotion(raw_model, *row)) raw_model["schema"] = "sketch.assemblies.v7";
+            promote_embedded(raw_model, *row);
         }
     }
     // Actual final source admission is separate from typed temporary expansion.
@@ -1370,6 +1504,22 @@ AssemblyDocumentEntities replay_assembly_instance_property_entities(const Assemb
     for (const auto& [id, entity] : original)
         if ((scope.inactive_owner_ids.contains(id) || baselines.contains(id)) && !exact(entity, result.at(id)))
             reject("replay changed an inactive or protected source owner");
+    if (std::any_of(intents.begin(),intents.end(),[](const Intent& intent) {
+            return intent.profile_geometry.operation!=Operation::unchanged;
+        })) {
+        std::vector<AssemblyDimensionTransformRequest> requests;
+        for (const auto& [key,rows]:grouped) {
+            if (!changed_roots.contains(key)) continue;
+            auto root=rows.front()->target;root.part_path.clear();
+            requests.push_back({root,root,AssemblyDimensionTransformMode::move,{}});
+        }
+        const auto dimensions=requests.empty() ? std::vector<Entity>{} :
+            carry_assembly_dimension_transform_entities(original,result,requests);
+        std::vector<std::string> changed;
+        for (const auto& dimension:dimensions) changed.push_back(dimension.id);
+        validate_ordinary_assembly_dimension_changes(original,changed);
+        for (const auto& dimension:dimensions) result.at(dimension.id)=dimension;
+    }
     return result;
 }
 
@@ -1381,11 +1531,13 @@ Json validate_assembly_instance_property_edit_request(const Json& request) {
 }
 AssemblyInstancePropertyEditPreparation prepare_assembly_instance_property_edit(const DocumentSnapshot& source,
     std::span<const Intent> intents) {
-    Json request{{"version", 1}, {"expected_revision", source.revision()},
+    auto wire = encode_intents(intents);
+    const bool geometry = std::any_of(wire.begin(), wire.end(), [](const Json& intent) { return intent.at("version") == 2; });
+    Json request{{"version", geometry ? 2 : 1}, {"expected_revision", source.revision()},
         {"source_snapshot_digest", document_snapshot_digest(source)},
         {"source_authoring_digest", document_authoring_source_digest_v2(source)},
         {"source_entities_digest", entity_map_digest(source.entities())},
-        {"source_saved_revision", optional(source.saved_revision_optional())}, {"intents", encode_intents(intents)}};
+        {"source_saved_revision", optional(source.saved_revision_optional())}, {"intents", std::move(wire)}};
     return replay_assembly_instance_property_edit_preparation(source, request);
 }
 AssemblyInstancePropertyEditPreparation replay_assembly_instance_property_edit_preparation(const DocumentSnapshot& source,

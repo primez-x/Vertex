@@ -234,13 +234,13 @@ Entity edited_catalog(const Entity& original, const Json* edit) {
             if (!nested && !raw_row(saved, collection, key).contains("profiles") &&
                 replacement.at("profiles").empty() && replacement.at("parts").empty()) {
                 replacement.erase("profiles"); replacement.erase("parts");
-            } else if (!nested && schema != "sketch.assemblies.v7") promote = true;
-            if (schema != "sketch.assemblies.v6" && schema != "sketch.assemblies.v7" && replacement.contains("parts"))
+            } else if (!nested && schema != "sketch.assemblies.v7" && schema != "sketch.assemblies.v8") promote = true;
+            if (schema != "sketch.assemblies.v6" && schema != "sketch.assemblies.v7" && schema != "sketch.assemblies.v8" && replacement.contains("parts"))
                 for (const auto& part : replacement.at("parts")) if (part.at("transform").contains("vertical_scale")) promote = true;
         } else if (schema == "sketch.assemblies.v1" && replacement.contains("color_srgb")) promote = true;
         for (auto& row : model.at(collection)) if (row.at("id") == key) { row = std::move(replacement); break; }
     }
-    if (promote) model.at("schema") = "sketch.assemblies.v7";
+    if (promote) model.at("schema") = schema == "sketch.assemblies.v8" ? "sketch.assemblies.v8" : "sketch.assemblies.v7";
     return result;
 }
 void retain_equal_definitions(const Entity& original, Entity& edited, const AssemblyModel& before, const AssemblyModel& after) {

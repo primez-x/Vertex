@@ -243,6 +243,13 @@ private:
     const DocumentSnapshot&, const PhaseAssemblyInstancePropertyEditAuthoring&,
     const MixedSelectionPropertyEditPreparation& base, std::string_view message);
 
+// Dialect thirty-two adds complete_instance_profile_geometry:true to those
+// source/reservation/presentation fields and requires component request three.
+// Its base is null or an unreviewed noncomponent five-through-thirteen, fifteen,
+// twenty-one, twenty-four or twenty-seven. Family dimension permissions come
+// only from that sealed base; the wrapper does not invent or repeat them.
+// Historical component requests and wrappers retain their original authority.
+//
 // Closed dialect seventeen retains Properties16's source/reservation fields plus
 // carry_component_presentation:true. It requires component request two, whose
 // exact source-derived overlay allocations copy typed presentation references.

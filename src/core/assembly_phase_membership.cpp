@@ -174,17 +174,11 @@ void admit_catalog_work(const nlohmann::json& model, ResolveBudget& budget) {
         GraphSize size;
     };
     std::map<std::string, RawType, std::less<>> raw_types;
-    for (const auto& row : types) {
-        require(row.is_object() && row.at("id").is_string(), "invalid assembly phase catalog type");
-        const auto [entry, inserted] = raw_types.emplace(row.at("id").get<std::string>(), RawType{&row});
-        require(inserted, "duplicate assembly phase catalog type");
-        if (row.contains("parts"))
-            require(row.at("parts").is_array() && row.at("parts").size() <= 4096,
-                "invalid assembly phase catalog parts");
-        if (!row.contains("profiles")) continue;
-        require(row.at("profiles").is_array() && row.at("profiles").size() <= 4096,
+    const auto admit_profiles = [&](const nlohmann::json& profiles, std::size_t topology_passes = 1) {
+        require(profiles.is_array() && profiles.size() <= 4096,
             "invalid assembly phase catalog profiles");
-        for (const auto& profile : row.at("profiles")) {
+        std::size_t total{};
+        for (const auto& profile : profiles) {
             require(profile.is_object() && profile.at("outer").is_array() && profile.at("outer").size() <= 1024 &&
                 profile.at("holes").is_array() && profile.at("holes").size() <= 1024,
                 "invalid assembly phase catalog profile boundaries");
@@ -205,12 +199,22 @@ void admit_catalog_work(const nlohmann::json& model, ResolveBudget& budget) {
             count_arcs(profile.at("outer"));
             for (const auto& hole : profile.at("holes")) count_arcs(hole);
             const auto topology = segments + profile.at("holes").size() + 1;
-            budget.product(topology, 8 * topology);
-            budget.product(arcs, 300000 * segments);
-            require(segments <= 262144 - entry->second.own_segments,
+            budget.product(topology, 8 * topology * topology_passes);
+            budget.product(arcs, 300000 * segments * topology_passes);
+            require(segments <= 262144 - total,
                 "assembly phase catalog type segment budget exceeded");
-            entry->second.own_segments += segments;
+            total += segments;
         }
+        return total;
+    };
+    for (const auto& row : types) {
+        require(row.is_object() && row.at("id").is_string(), "invalid assembly phase catalog type");
+        const auto [entry, inserted] = raw_types.emplace(row.at("id").get<std::string>(), RawType{&row});
+        require(inserted, "duplicate assembly phase catalog type");
+        if (row.contains("parts"))
+            require(row.at("parts").is_array() && row.at("parts").size() <= 4096,
+                "invalid assembly phase catalog parts");
+        if (row.contains("profiles")) entry->second.own_segments = admit_profiles(row.at("profiles"));
     }
     const auto visit = [&](const auto& self, RawType& type, std::size_t depth) -> GraphSize {
         budget.product(1, 1);
@@ -240,15 +244,72 @@ void admit_catalog_work(const nlohmann::json& model, ResolveBudget& budget) {
             "assembly phase catalog aggregate validation budget exceeded");
         validation_nodes += size.nodes; validation_segments += size.segments;
     }
-    std::size_t instance_nodes{}, instance_segments{};
+    std::size_t instance_nodes{}, instance_segments{}, override_segments{};
     for (const auto& instance : instances) {
         require(instance.is_object() && instance.at("type_id").is_string(), "invalid assembly phase catalog instance");
         const auto type = raw_types.find(instance.at("type_id").get_ref<const std::string&>());
         require(type != raw_types.end(), "assembly phase catalog instance type is missing");
+        auto effective_segments = type->second.size.segments;
+        std::size_t replacements{};
+        const auto replace_profiles = [&](const nlohmann::json& row, const RawType& selected) {
+            if (!row.contains("profile_overrides")) return;
+            require(model.at("schema") == "sketch.assemblies.v8",
+                "assembly profile overrides require catalog schema v8");
+            // Decode, create() validation and real expansion each validate
+            // override topology; shared definitions retain their single charge.
+            const auto count = admit_profiles(row.at("profile_overrides"), 3);
+            require(count == preflight_assembly_profiles(row.at("profile_overrides")),
+                "assembly phase catalog override segment accounting mismatch");
+            require(count <= 262144 - override_segments && count <= 262144 - replacements,
+                "assembly phase catalog override segment budget exceeded");
+            override_segments += count; replacements += count;
+            require(selected.own_segments <= effective_segments,
+                "assembly phase catalog override geometry accounting mismatch");
+            // A profile override changes only its qualified node, including an
+            // explicit empty array. Descendant contributions remain intact.
+            effective_segments -= selected.own_segments;
+        };
+        replace_profiles(instance, type->second);
+        if (instance.contains("nested_overrides")) {
+            const auto& overrides = instance.at("nested_overrides");
+            require(overrides.is_array() && overrides.size() <= 4096,
+                "invalid assembly phase catalog nested overrides");
+            std::set<std::vector<std::string>> paths;
+            for (const auto& change : overrides) {
+                require(change.is_object() && change.at("part_path").is_array() &&
+                    !change.at("part_path").empty() && change.at("part_path").size() < 32,
+                    "invalid assembly phase catalog nested override path");
+                std::size_t path_work = change.at("part_path").size() + 1;
+                for (const auto& part : change.at("part_path")) {
+                    require(part.is_string(), "assembly phase catalog override path part must be a string");
+                    path_work += part.get_ref<const std::string&>().size();
+                }
+                budget.product(paths.size() + 1, path_work);
+                const auto path = change.at("part_path").get<std::vector<std::string>>();
+                require(paths.insert(path).second, "duplicate assembly phase catalog nested override path");
+                const auto* selected = &type->second;
+                for (const auto& part_id : path) {
+                    require(!part_id.empty() && !std::all_of(part_id.begin(), part_id.end(),
+                        [](unsigned char c) { return std::isspace(c); }),
+                        "assembly phase catalog override path part must not be blank");
+                    require(selected->row->contains("parts"), "assembly phase catalog override path is missing");
+                    const auto& parts = selected->row->at("parts");
+                    budget.product(parts.size() + 1, part_id.size() + 1);
+                    const auto part = std::find_if(parts.begin(), parts.end(),
+                        [&](const auto& row) { return row.at("id") == part_id; });
+                    require(part != parts.end(), "assembly phase catalog override path is missing");
+                    selected = &raw_types.at(part->at("type_id").get_ref<const std::string&>());
+                }
+                replace_profiles(change, *selected);
+            }
+        }
+        require(replacements <= 262144 - effective_segments,
+            "assembly phase catalog effective instance segment budget exceeded");
+        effective_segments += replacements;
         require(type->second.size.nodes <= 4096 - instance_nodes &&
-            type->second.size.segments <= 262144 - instance_segments,
+            effective_segments <= 262144 - instance_segments,
             "assembly phase catalog aggregate instance budget exceeded");
-        instance_nodes += type->second.size.nodes; instance_segments += type->second.size.segments;
+        instance_nodes += type->second.size.nodes; instance_segments += effective_segments;
     }
     JsonBudget source;
     admit_json(model, source);

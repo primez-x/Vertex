@@ -2287,6 +2287,7 @@ Entity merge_mixed_edit_instance_rows(const Entity& source,const std::vector<con
     for (const auto& row:retained) retained_ids.insert(row.at("id").get<std::string>());
     Json suffix=Json::array();
     bool promoted=false;
+    bool profile_dialect=false;
     for (const auto* candidate:candidates) {
         const auto& model=candidate->properties.at("model");
         (void)AssemblyModel::from_json(model);
@@ -2300,10 +2301,14 @@ Entity merge_mixed_edit_instance_rows(const Entity& source,const std::vector<con
                     (after=="sketch.assemblies.v5" || after=="sketch.assemblies.v6" || after=="sketch.assemblies.v7")) &&
                 !(before=="sketch.assemblies.v5" && (after=="sketch.assemblies.v6" || after=="sketch.assemblies.v7")) &&
                 !(before=="sketch.assemblies.v6" && after=="sketch.assemblies.v7") &&
+                !((before=="sketch.assemblies.v3" || before=="sketch.assemblies.v4" ||
+                    before=="sketch.assemblies.v5" || before=="sketch.assemblies.v6" ||
+                    before=="sketch.assemblies.v7") && after=="sketch.assemblies.v8") &&
                 !(allow_legacy_assembly_promotion && (before=="sketch.assemblies.v1" || before=="sketch.assemblies.v2") &&
-                    after=="sketch.assemblies.v7"))
+                    (after=="sketch.assemblies.v7" || after=="sketch.assemblies.v8")))
                 invalid("Mixed edit catalog has an unsupported dialect change");
             promoted=true;
+            profile_dialect=profile_dialect || after=="sketch.assemblies.v8";
             normalized.at("schema")=original.at("schema");
             auto& types=normalized.at("types");
             const auto& source_types=original.at("types");
@@ -2353,7 +2358,8 @@ Entity merge_mixed_edit_instance_rows(const Entity& source,const std::vector<con
     for (const auto& row:suffix) rows.push_back(row);
     auto result=source;
     result.properties.at("model").at("instances")=std::move(rows);
-    if (promoted && (!changed.empty() || !suffix.empty())) result.properties.at("model").at("schema")="sketch.assemblies.v7";
+    if (promoted && (!changed.empty() || !suffix.empty())) result.properties.at("model").at("schema")=
+        profile_dialect ? "sketch.assemblies.v8" : "sketch.assemblies.v7";
     (void)AssemblyModel::from_json(result.properties.at("model"));
     return result;
 }
@@ -3091,7 +3097,8 @@ Entities compose_assembly_property_selection_edit_candidates(const DocumentSnaps
     for (const auto& [id,entity]:source.entities()) if (entity.type=="assembly_model") {
         const auto& before=entity.properties.at("model").at("schema");
         const auto& after=replayed.preview_entities().at(id).properties.at("model").at("schema");
-        if ((before=="sketch.assemblies.v1" || before=="sketch.assemblies.v2") && after=="sketch.assemblies.v7")
+        if ((before=="sketch.assemblies.v1" || before=="sketch.assemblies.v2") &&
+            (after=="sketch.assemblies.v7" || after=="sketch.assemblies.v8"))
             promoted.insert(id);
     }
     auto leaves=ordinary;
@@ -3114,7 +3121,7 @@ Entities compose_phase_assembly_property_selection_edit_candidates(const Documen
         const auto& before=entity.properties.at("model");
         const auto& after=admitted.at(id).properties.at("model");
         if ((before.at("schema")=="sketch.assemblies.v1" || before.at("schema")=="sketch.assemblies.v2") &&
-            after.at("schema")=="sketch.assemblies.v7") promoted.insert(id);
+            (after.at("schema")=="sketch.assemblies.v7" || after.at("schema")=="sketch.assemblies.v8")) promoted.insert(id);
         std::map<std::string,const Json*,std::less<>> final_rows;
         for (const auto& row:after.at("instances"))
             if (!final_rows.emplace(row.at("id").get<std::string>(),&row).second)
@@ -3156,7 +3163,7 @@ std::optional<MixedSelectionPropertyEditPreparation> reconstruct_component_prope
     if (!base) return std::nullopt;
     const auto& wire=base->intent();
     const auto version=wire.at("version").get<int>();
-    if (!((version>=5 && version<=13) || version==21 || version==24 || version==27) || !wire.at("room_reviews").empty() ||
+    if (!((version>=5 && version<=13) || version==15 || version==21 || version==24 || version==27) || !wire.at("room_reviews").empty() ||
         (wire.contains("phase_room_reviews") && !wire.at("phase_room_reviews").empty()) ||
         (wire.contains("assembly_request") && !wire.at("assembly_request").is_null()))
         invalid("Component Properties base must be an unreviewed admitted noncomponent contribution");
@@ -3208,7 +3215,7 @@ AssemblyPropertyRowAdmission component_property_row_admission(const Entities& or
         const auto& before=entity.properties.at("model");
         const auto& after=admitted.at(id).properties.at("model");
         if ((before.at("schema")=="sketch.assemblies.v1" || before.at("schema")=="sketch.assemblies.v2") &&
-            after.at("schema")=="sketch.assemblies.v7") promoted.insert(id);
+            (after.at("schema")=="sketch.assemblies.v7" || after.at("schema")=="sketch.assemblies.v8")) promoted.insert(id);
         std::map<std::string,const Json*,std::less<>> rows;
         for (const auto& row:after.at("instances"))
             if (!rows.emplace(row.at("id").get<std::string>(),&row).second)
@@ -3427,6 +3434,13 @@ CoordinatedComponentPropertyComposition compose_coordinated_component_property_d
     auto normalized=replayed.preview_entities();
     const auto allocated_aliases=embedded_assembly_presentation_ids(normalized);
     const auto authoring=decode_phase_assembly_instance_property_edit_authoring(replayed.request().at("authoring"));
+    const bool geometry_completion=replayed.request().at("version")==3;
+    std::map<std::string,std::string,std::less<>> base_dimension_ids;
+    if (geometry_completion && (version==21 || version==24 || version==27))
+        for (const auto& allocation:wire.at("phase_request").at("allocations"))
+            for (const auto& [original,proposed]:allocation.at("dimension_identities").items())
+                if (!base_dimension_ids.emplace(original,proposed.get<std::string>()).second)
+                    invalid("Coordinated component Properties repeats a base dimension allocation");
     CoordinatedComponentPropertyComposition result;
     result.original_to_proposed=replayed.result().original_to_proposed;
     result.reserved_component_identity_ids=replayed.result().fresh_identity_ids;
@@ -3494,6 +3508,14 @@ CoordinatedComponentPropertyComposition compose_coordinated_component_property_d
             }
         }
     }
+    if (geometry_completion) for (const auto& [original,proposed]:authoring.dimension_identities) {
+        const auto base_dimension=base_dimension_ids.find(original);
+        if (base_dimension==base_dimension_ids.end()) continue;
+        if (!normalized.erase(proposed) || !carried.contains(base_dimension->second))
+            invalid("Coordinated component dimension elision lost its exact allocated carriers");
+        if (!independent_substitutions.emplace(proposed,base_dimension->second).second)
+            invalid("Coordinated component dimension substitution overlaps another allocation");
+    }
     substitute_component_memberships(normalized,embedded_substitutions,independent_substitutions);
     if (authoring.carry_presentation_references) {
         std::map<std::string,std::string,std::less<>> presentation_substitutions;
@@ -3513,6 +3535,27 @@ CoordinatedComponentPropertyComposition compose_coordinated_component_property_d
         result.original_to_proposed.at(intent.target)=destination;
         selected_carried.emplace(intent.target,destination);
         carried_intents.push_back(intent);
+    }
+    std::set<ComponentTarget> geometry_move_roots;
+    if (geometry_completion) {
+        const auto plan=inspect_phase_assembly_instance_property_edit_plan(actual,authoring.intents);
+        for (const auto& original:plan.ordinary_roots) {
+            const auto destination=carried_roots.find(original);
+            if (destination==carried_roots.end() || destination->second==original)
+                geometry_move_roots.insert(original);
+        }
+        for (const auto& [original,destination]:selected_carried)
+            if (component_root(original)==component_root(destination)) geometry_move_roots.insert(component_root(original));
+        // Both contributions were independently sealed against the original.
+        // Keep the physical base carrier until the one final-frame calculation.
+        for (const auto& [id,entity]:actual) {
+            if (!can_recognize_boundary_dimension_entity_type(entity.type) ||
+                inspect_boundary_dimension_version(entity).format!=BoundaryDimensionFormat::supported_v6) continue;
+            const auto decoded=decode_boundary_dimension_entity(entity);
+            if (decoded.dimension && decoded.dimension->assembly_target &&
+                geometry_move_roots.contains(component_root(decoded.dimension->assembly_target->component)))
+                normalized.at(id)=entity;
+        }
     }
     PhasePropertyCompositionRetirements retirements;
     for (const auto& [id,entity]:actual) { (void)entity; if (!carried.contains(id)) retirements.erased.insert(id); }
@@ -3534,25 +3577,27 @@ CoordinatedComponentPropertyComposition compose_coordinated_component_property_d
         nullptr,nullptr,nullptr,&promoted,&retirements,&rows);
     if (!carried_intents.empty()) result.entities=detail::calculate_carried_assembly_instance_property_entities(
         actual,carried_intents,result.entities,selected_carried);
-    if (version==27) {
+    if (version==27 || geometry_completion) {
         // A component SET can change the frame after the physical base copied
         // dimensions. Reconstruct the actual base inventory and carry from the
         // original source to the complete final component graph only once.
-        const auto phase=replay_phase_selection_property_edit_preparation(source,wire.at("phase_request"));
+        std::optional<PhaseSelectionPropertyEditPreparation> phase;
+        if (version==21 || version==24 || version==27)
+            phase=replay_phase_selection_property_edit_preparation(source,wire.at("phase_request"));
         std::vector<std::pair<std::string,std::string>> roots;
         std::map<ComponentTarget,ComponentTarget> clone_destinations;
         std::map<ComponentTarget,std::size_t> requests_by_root;
         std::vector<AssemblyDimensionTransformRequest> requests;
         std::map<std::string,std::string,std::less<>> dimension_ids;
-        for (std::size_t index=0;index<phase.inspection().replacements().size();++index) {
-            const auto& inventory=phase.inspection().replacements().at(index);
-            const auto& allocation=phase.validated_identity_allocations().at(index);
+        for (std::size_t index=0;phase && index<phase->inspection().replacements().size();++index) {
+            const auto& inventory=phase->inspection().replacements().at(index);
+            const auto& allocation=phase->validated_identity_allocations().at(index);
             const char* permission=inventory.lane==PhaseSelectionPropertyLane::walls ? "complete_wall_component_dimensions" :
                 inventory.lane==PhaseSelectionPropertyLane::stairs ? "complete_stair_component_dimensions" :
                 inventory.lane==PhaseSelectionPropertyLane::roofs ? "complete_roof_component_dimensions" :
                 inventory.lane==PhaseSelectionPropertyLane::slabs ? "complete_slab_component_dimensions" :
                 "complete_structural_component_dimensions";
-            if (!phase.request().at(permission).get<bool>()) continue;
+            if (!phase->request().contains(permission) || !phase->request().at(permission).get<bool>()) continue;
             std::visit([&](const auto& plan) {
                 for (const auto& root:plan.required_hosted_instance_ids) {
                     const ComponentTarget original{root.first,root.second,std::nullopt,{}};
@@ -3570,9 +3615,33 @@ CoordinatedComponentPropertyComposition compose_coordinated_component_property_d
                 if (!dimension_ids.emplace(original,proposed).second)
                     invalid("Coordinated component Properties repeats a copied source dimension");
         }
-        const auto roster=inspect_embedded_assembly_dimension_clone_roster(actual,roots);
+        auto roster=inspect_embedded_assembly_dimension_clone_roster(actual,roots);
         if (roster.size()!=dimension_ids.size())
             invalid("Coordinated component Properties dimension map differs from its actual source roster");
+        if (geometry_completion) {
+            const auto component_roster=inspect_phase_assembly_instance_property_dimension_clone_roster(actual,authoring.intents);
+            if (component_roster.size()!=authoring.dimension_identities.size())
+                invalid("Coordinated geometry dimension allocations differ from their actual source roster");
+            for (const auto& [original,target]:component_roster) {
+                const auto root=component_root(target);
+                const auto selected=std::find_if(result.original_to_proposed.begin(),result.original_to_proposed.end(),
+                    [&](const auto& pair) { return component_root(pair.first)==root; });
+                if (selected==result.original_to_proposed.end())
+                    invalid("Coordinated geometry dimension has no actual selected source root");
+                const auto destination=component_root(selected->second);
+                const auto [existing,inserted]=clone_destinations.emplace(root,destination);
+                if (!inserted && existing->second!=destination)
+                    invalid("Coordinated geometry dimension copies have different final survivors");
+                if (roster.contains(original)) {
+                    if (component_root(roster.at(original))!=root)
+                        invalid("Coordinated geometry dimension copies disagree about their source root");
+                    continue;
+                }
+                roster.emplace(original,target);
+                if (!dimension_ids.emplace(original,authoring.dimension_identities.at(original)).second)
+                    invalid("Coordinated geometry dimension allocation overlaps another source");
+            }
+        }
         auto framed=result.entities;
         for (const auto& [original,target]:roster) {
             if (!dimension_ids.contains(original) || !exact(actual.at(original),result.entities.at(original)))
@@ -3585,11 +3654,14 @@ CoordinatedComponentPropertyComposition compose_coordinated_component_property_d
             requests.at(request->second).fresh_dimension_ids.emplace(original,proposed);
         }
         std::set<ComponentTarget> move_roots;
-        for (const auto& [original,destination]:selected_carried) {
-            const auto root=component_root(original);
-            if (root!=component_root(destination) || requests_by_root.contains(root)) continue;
-            move_roots.insert(root);
-        }
+        if (geometry_completion) {
+            for (const auto& root:geometry_move_roots)
+                if (!requests_by_root.contains(root)) move_roots.insert(root);
+        } else for (const auto& [original,destination]:selected_carried) {
+                const auto root=component_root(original);
+                if (root!=component_root(destination) || requests_by_root.contains(root)) continue;
+                move_roots.insert(root);
+            }
         // Existing ordinary dimensions may already have followed the physical
         // base. Release only carriers on the actual selected move roots, retaining
         // their independent base proof, for one source-to-final frame calculation.
@@ -3665,7 +3737,8 @@ Entities compose_phase_property_selection_edit_candidates(const DocumentSnapshot
         for (const auto& [id,entity]:actual) if (entity.type=="assembly_model") {
             const auto& before=entity.properties.at("model").at("schema");
             const auto& after=assembly_replay->preview_entities().at(id).properties.at("model").at("schema");
-            if ((before=="sketch.assemblies.v1" || before=="sketch.assemblies.v2") && after=="sketch.assemblies.v7")
+            if ((before=="sketch.assemblies.v1" || before=="sketch.assemblies.v2") &&
+                (after=="sketch.assemblies.v7" || after=="sketch.assemblies.v8"))
                 promoted.insert(id);
         }
     }

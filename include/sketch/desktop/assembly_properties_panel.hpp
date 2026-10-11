@@ -22,6 +22,10 @@ public:
     AssemblyPropertiesPanel& operator=(const AssemblyPropertiesPanel&) = delete;
 
     // Throws on invalid input. Always retains every originally selected target.
+    // Geometry edits replace only a node's own effective source profiles. Bulk
+    // dimensions resize each source separately using pending ancestor pose
+    // scales. Detailed outline/cutout and local extrusion edits require one
+    // node. Untouched geometry stays Keep.
     [[nodiscard]] std::vector<AssemblyInstancePropertyEditIntent> intents() const;
     [[nodiscard]] QString lastError() const;
 

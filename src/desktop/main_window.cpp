@@ -8375,11 +8375,12 @@ public:
         auto catalog = original;
         // A selected row edit must preserve the raw definitions and every
         // unrelated/original row, including authored numeric representations.
-        // V7 permits the new root envelope locally without canonicalizing all
+        // Row-local framing permits the new root envelope without canonicalizing all
         // legacy rows merely to transform or clone one component.
         auto& raw_model=catalog.properties.at("model");
-        raw_model["schema"]="sketch.assemblies.v7";
         const auto generated=AssemblyModel::create(model.materials(),model.types(),{instance}).to_json();
+        raw_model["schema"]=(raw_model.at("schema")=="sketch.assemblies.v8" ||
+            generated.at("schema")=="sketch.assemblies.v8") ? "sketch.assemblies.v8" : "sketch.assemblies.v7";
         const auto& changed_row=generated.at("instances").front();
         if (clone) raw_model.at("instances").push_back(changed_row);
         else for (auto& row:raw_model.at("instances")) if (row.at("id")==instance.id) row=changed_row;
@@ -50837,7 +50838,7 @@ private:
                     validate_mixed_clipboard_placement_intent(encoded.at("clipboard_placement_intent")) :
                     validate_mixed_selection_edit_intent(encoded.at("mixed_selection_edit_intent"));
                 const auto dialect=intent.at("version").get<int>();
-                if (version==52 && ((dialect>=5 && dialect<=13) || (dialect>=15 && dialect<=17) || (dialect>=21 && dialect<=29))) {
+                if (version==52 && ((dialect>=5 && dialect<=13) || (dialect>=15 && dialect<=17) || (dialect>=21 && dialect<=29) || dialect==32)) {
                     // Properties dialects have no transform roof_authoring.
                     // Active-baseline redirects require independently replayed
                     // source authority rather than extracting supplied maps.
@@ -59874,11 +59875,11 @@ private:
                     mixed_edit=true;
                     const auto intent=validate_mixed_selection_edit_intent(value.mixed_selection_edit_intent);
                     const auto properties_dialect=intent.at("version").get<int>();
-                    if ((properties_dialect>=5 && properties_dialect<=13) || (properties_dialect>=15 && properties_dialect<=17) || (properties_dialect>=21 && properties_dialect<=29)) {
+                    if ((properties_dialect>=5 && properties_dialect<=13) || (properties_dialect>=15 && properties_dialect<=17) || (properties_dialect>=21 && properties_dialect<=29) || properties_dialect==32) {
                         // Properties has its own typed lanes, including a null
                         // physical lane for annotation-only edits. Gesture
                         // ordinary_request codecs cannot decode this roster.
-                        const bool component_properties=properties_dialect==16 || properties_dialect==17 || properties_dialect==22 || properties_dialect==23 || properties_dialect==25 || properties_dialect==26 || properties_dialect==28 || properties_dialect==29;
+                        const bool component_properties=properties_dialect==16 || properties_dialect==17 || properties_dialect==22 || properties_dialect==23 || properties_dialect==25 || properties_dialect==26 || properties_dialect==28 || properties_dialect==29 || properties_dialect==32;
                         const auto& selection_properties=component_properties ? intent.at("base_intent") : intent;
                         const bool phased=!selection_properties.is_null() &&
                             (selection_properties.at("version")==11 || selection_properties.at("version")==12 || selection_properties.at("version")==13 || selection_properties.at("version")==15 || selection_properties.at("version")==21 || selection_properties.at("version")==24 || selection_properties.at("version")==27);
@@ -59929,7 +59930,7 @@ private:
                     }
                     // Qualified children never promote their compatibility host
                     // IDs into ordinary presented-object selection authority.
-                    const auto& roof_selection=(intent.at("version")==16 || intent.at("version")==17 || intent.at("version")==22 || intent.at("version")==23 || intent.at("version")==25 || intent.at("version")==26 || intent.at("version")==28 || intent.at("version")==29)
+                    const auto& roof_selection=(intent.at("version")==16 || intent.at("version")==17 || intent.at("version")==22 || intent.at("version")==23 || intent.at("version")==25 || intent.at("version")==26 || intent.at("version")==28 || intent.at("version")==29 || intent.at("version")==32)
                         ? intent.at("base_intent") : intent;
                     if (!roof_selection.is_null()) for (const auto& child:roof_selection.at("roof_opening_members"))
                         targets.insert(child.at("opening_id").template get<std::string>());
@@ -71145,7 +71146,10 @@ public:
                     }))
                         throw std::invalid_argument("This component's alternative edit cannot be completed yet. No changes were applied.");
                     const bool carry_presentation=!component_plan.replacement_roots.empty();
-                    if (carry_presentation || has_noncomponent) {
+                    const bool edit_profile_geometry=std::any_of(assembly_intents.begin(),assembly_intents.end(),[](const auto& intent) {
+                        return intent.profile_geometry.operation!=AssemblyInstancePropertyPatchOperation::unchanged;
+                    });
+                    if (carry_presentation || has_noncomponent || edit_profile_geometry) {
                         std::optional<MixedSelectionPropertyEditPreparation> base;
                         if (has_noncomponent) base=replacing
                             ? prepare_mixed_selection_property_edit(*source,ordinary_request,presentation_request,
@@ -71158,7 +71162,7 @@ public:
                                 roof_properties,message);
                         PhaseAssemblyInstancePropertyEditAuthoring authoring;
                         authoring.intents=assembly_intents;
-                        if (carry_presentation) {
+                        if (carry_presentation || edit_profile_geometry) {
                             auto occupied=retainedSlabIdentityNames(*source,true);
                             if (base) {
                                 for (const auto& [id,entity]:base->preview_snapshot().entities()) {
@@ -71182,6 +71186,11 @@ public:
                             authoring.carry_presentation_references=true;
                             for (const auto& id:inspect_phase_assembly_instance_property_presentation_overlay_ids(source->entities(),assembly_intents))
                                 authoring.presentation_overlay_identities.emplace(id,fresh("proposed-component-dimension"));
+                            if (edit_profile_geometry)
+                                for (const auto& [id,target]:inspect_phase_assembly_instance_property_dimension_clone_roster(source->entities(),assembly_intents)) {
+                                    (void)target;
+                                    authoring.dimension_identities.emplace(id,fresh("proposed-component-dimension"));
+                                }
                             return prepare_component_presentation_property_edit(*source,authoring,base ? &*base : nullptr,message);
                         }
                         return prepare_coordinated_component_property_edit(*source,authoring,*base,message);

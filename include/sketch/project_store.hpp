@@ -343,7 +343,8 @@ public:
     // v237 retains family dimension Properties request8 and sealed mixed receipts27/28/29.
     // v238 retains complete proposed roof component dimensions in mixed clipboard placement4.
     // v239 retains mixed transform30 with ordinary6 and proposed roof component dimensions.
-    static constexpr std::uint32_t format_version = 239;
+    // v240 retains individual root/path profile geometry and its atomic Properties edits.
+    static constexpr std::uint32_t format_version = 240;
     static constexpr std::uint32_t recovery_format_version = 4;
     [[nodiscard]] static std::uint32_t required_format_version(const DocumentSnapshot& snapshot);
     static constexpr std::uint64_t maximum_file_bytes = 4ULL * 1024ULL * 1024ULL * 1024ULL;

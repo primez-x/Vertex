@@ -396,8 +396,8 @@ Derivation derive(const Entities& actual, const std::vector<StairTransformIntent
             if (entity.type != "assembly_model" || (!touches(entity.properties, result.owners) && !touches(entity.extensions, result.owners))) continue;
             const auto& raw = entity.properties.at("model");
             const auto schema = field(raw, "schema"); bool supported = false;
-            for (int version = 1; version <= 7; ++version) if (schema && *schema == "sketch.assemblies.v" + std::to_string(version)) supported = true;
-            if (!supported) reject("affected catalog has no supported schema 1..7: " + id);
+            for (int version = 1; version <= 8; ++version) if (schema && *schema == "sketch.assemblies.v" + std::to_string(version)) supported = true;
+            if (!supported) reject("affected catalog has no supported schema 1..8: " + id);
             for (const auto* name : {"materials", "types", "instances"}) {
                 const auto rows = field(raw, name);
                 if (!rows || !rows->is_array() || rows->size() > entity_limit - inventory) reject("affected catalog inventory is not bounded");

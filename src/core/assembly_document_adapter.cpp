@@ -58,6 +58,37 @@ void retain_assembly_transform_source(nlohmann::json& encoded, const nlohmann::j
 }
 template<class T> void retain_assembly_override_source(nlohmann::json& encoded,
     const nlohmann::json& raw, const T& before, const T& after) {
+    if (before.profile_overrides == after.profile_overrides) {
+        if (raw.contains("profile_overrides")) encoded["profile_overrides"] = raw.at("profile_overrides");
+        else encoded.erase("profile_overrides");
+    } else if (before.profile_overrides && after.profile_overrides) {
+        const auto boundary_equal = [](const Boundary& first, const Boundary& second) {
+            return first.size() == second.size() && std::equal(first.begin(), first.end(), second.begin(),
+                [](const auto& a, const auto& b) {
+                    return a.start.x == b.start.x && a.start.y == b.start.y &&
+                        a.end.x == b.end.x && a.end.y == b.end.y && a.sweep_radians == b.sweep_radians;
+                });
+        };
+        for (auto& profile : encoded.at("profile_overrides")) {
+            const auto id = profile.at("id").template get<std::string>();
+            const auto old = std::find_if(before.profile_overrides->begin(), before.profile_overrides->end(),
+                [&](const auto& row) { return row.id == id; });
+            const auto next = std::find_if(after.profile_overrides->begin(), after.profile_overrides->end(),
+                [&](const auto& row) { return row.id == id; });
+            if (old == before.profile_overrides->end() || next == after.profile_overrides->end()) continue;
+            const auto original = std::find_if(raw.at("profile_overrides").begin(), raw.at("profile_overrides").end(),
+                [&](const auto& row) { return row.at("id") == id; });
+            require(original != raw.at("profile_overrides").end(), "assembly profile override lost its raw source");
+            if (*old == *next) { profile = *original; continue; }
+            if (boundary_equal(old->outer, next->outer)) profile["outer"] = original->at("outer");
+            if (old->holes.size() == next->holes.size() &&
+                std::equal(old->holes.begin(), old->holes.end(), next->holes.begin(), boundary_equal))
+                profile["holes"] = original->at("holes");
+            if (old->elevation_m == next->elevation_m) profile["elevation_m"] = original->at("elevation_m");
+            if (old->height_m == next->height_m) profile["height_m"] = original->at("height_m");
+            if (old->material_slot == next->material_slot) profile["material_slot"] = original->at("material_slot");
+        }
+    }
     if (before.property_overrides == after.property_overrides)
         encoded["property_overrides"] = raw.at("property_overrides");
     if (before.material_overrides == after.material_overrides)
@@ -78,7 +109,9 @@ nlohmann::json retain_independent_assembly_instance_source(const nlohmann::json&
     const auto after = decode_assembly_instance(encoded);
     if (before.id == after.id) encoded["id"] = raw.at("id");
     if (before.type_id == after.type_id) encoded["type_id"] = raw.at("type_id");
-    if (raw.at("schema") == "sketch.assembly-instance.v2") encoded["schema"] = raw.at("schema");
+    if (raw.at("schema") == "sketch.assembly-instance.v3" ||
+        (raw.at("schema") == "sketch.assembly-instance.v2" && encoded.at("schema") != "sketch.assembly-instance.v3"))
+        encoded["schema"] = raw.at("schema");
     retain_assembly_transform_source(encoded.at("root_transform"), raw.at("root_transform"),
         *before.root_transform, *after.root_transform);
     retain_assembly_override_source(encoded, raw, before, after);
@@ -455,7 +488,8 @@ AssemblyCatalogSourceReferences preflight_complete_catalog(const Entity& source,
     const auto& schema = model.at("schema");
     require(schema.is_string() && (schema == "sketch.assemblies.v1" || schema == "sketch.assemblies.v2" ||
         schema == "sketch.assemblies.v3" || schema == "sketch.assemblies.v4" ||
-        schema == "sketch.assemblies.v5" || schema == "sketch.assemblies.v6" || schema == "sketch.assemblies.v7"),
+        schema == "sketch.assemblies.v5" || schema == "sketch.assemblies.v6" || schema == "sketch.assemblies.v7" ||
+        schema == "sketch.assemblies.v8"),
         "unsupported complete assembly catalog schema");
     for (const auto* key : {"materials", "types", "instances"}) {
         require(model.at(key).is_array() && model.at(key).size() <= 4096,
@@ -469,24 +503,11 @@ AssemblyCatalogSourceReferences preflight_complete_catalog(const Entity& source,
         GraphSize size;
     };
     std::map<std::string, RawType, std::less<>> types;
-    for (const auto& row : model.at("types")) {
-        require(row.is_object() && row.at("id").is_string(), "invalid complete assembly catalog type");
-        const auto& id = row.at("id").get_ref<const std::string&>();
-        if (policy == AssemblyCatalogSourceReferencePolicy::document_authoring) {
-            charge_catalog_string(budget, id);
-            charge_catalog_product(budget, types.size() + 1, 1);
-        }
-        local_identifier(id);
-        auto [entry, inserted] = types.emplace(id, RawType{&row, 0, 0, {}});
-        require(inserted, "duplicate complete assembly catalog type identity");
-        if (row.contains("parts")) {
-            require(row.at("parts").is_array() && row.at("parts").size() <= 4096,
-                "complete assembly catalog part budget exceeded");
-        }
-        if (!row.contains("profiles")) continue;
-        require(row.at("profiles").is_array() && row.at("profiles").size() <= 4096,
+    const auto admit_profiles = [&](const nlohmann::json& profiles, std::size_t topology_passes = 1) {
+        require(profiles.is_array() && profiles.size() <= 4096,
             "complete assembly catalog profile budget exceeded");
-        for (const auto& profile : row.at("profiles")) {
+        std::size_t total{};
+        for (const auto& profile : profiles) {
             require(profile.is_object() && profile.at("outer").is_array() &&
                 profile.at("outer").size() <= 1024 && profile.at("holes").is_array() &&
                 profile.at("holes").size() <= 1024, "invalid complete assembly catalog profile collections");
@@ -506,21 +527,32 @@ AssemblyCatalogSourceReferences preflight_complete_catalog(const Entity& source,
             };
             count_arcs(profile.at("outer"));
             for (const auto& hole : profile.at("holes")) count_arcs(hole);
-            // Admission precedes create()'s topology pass. Squared total edges
-            // covers outer/hole self checks, mutual contacts and containment;
-            // the factor also reserves repeated analytical clearance work.
-            charge_catalog_product(budget, segments + profile.at("holes").size() + 1,
-                8 * (segments + profile.at("holes").size() + 1));
-            // Contact allows three fresh 20,000-operation contexts. Clearance
-            // allows three outer contexts plus three nested contact contexts;
-            // cross-boundary validation can run clearance a second time. The
-            // resulting 300,000-operation bound is charged for every possible
-            // arc/edge pair before topology invokes certified arithmetic.
-            charge_catalog_product(budget, arcs, 300000 * segments);
-            require(segments <= 262144 - entry->second.own_segments,
-                "complete assembly catalog type profile segment budget exceeded");
-            entry->second.own_segments += segments;
+            // Reserve self/contact/containment checks and certified arc work
+            // for each actual authored profile, before the topology decoder.
+            const auto topology = segments + profile.at("holes").size() + 1;
+            charge_catalog_product(budget, topology, 8 * topology * topology_passes);
+            charge_catalog_product(budget, arcs, 300000 * segments * topology_passes);
+            require(segments <= 262144 - total,
+                "complete assembly catalog profile segment budget exceeded");
+            total += segments;
         }
+        return total;
+    };
+    for (const auto& row : model.at("types")) {
+        require(row.is_object() && row.at("id").is_string(), "invalid complete assembly catalog type");
+        const auto& id = row.at("id").get_ref<const std::string&>();
+        if (policy == AssemblyCatalogSourceReferencePolicy::document_authoring) {
+            charge_catalog_string(budget, id);
+            charge_catalog_product(budget, types.size() + 1, 1);
+        }
+        local_identifier(id);
+        auto [entry, inserted] = types.emplace(id, RawType{&row, 0, 0, {}});
+        require(inserted, "duplicate complete assembly catalog type identity");
+        if (row.contains("parts")) {
+            require(row.at("parts").is_array() && row.at("parts").size() <= 4096,
+                "complete assembly catalog part budget exceeded");
+        }
+        if (row.contains("profiles")) entry->second.own_segments = admit_profiles(row.at("profiles"));
     }
     std::function<GraphSize(RawType&, std::size_t)> visit;
     visit = [&](RawType& type, std::size_t depth) -> GraphSize {
@@ -556,26 +588,72 @@ AssemblyCatalogSourceReferences preflight_complete_catalog(const Entity& source,
         validation_nodes += size.nodes;
         validation_segments += size.segments;
     }
-    std::size_t instance_nodes{}, instance_segments{};
+    std::size_t instance_nodes{}, instance_segments{}, override_segments{};
     for (const auto& instance : model.at("instances")) {
         require(instance.is_object() && instance.at("type_id").is_string(), "invalid complete assembly catalog instance");
+        const auto type = types.find(instance.at("type_id").get_ref<const std::string&>());
+        require(type != types.end(), "complete assembly catalog instance type is missing");
+        auto effective_segments = type->second.size.segments;
+        std::size_t replacements{};
+        const auto replace_profiles = [&](const nlohmann::json& row, const RawType& selected) {
+            if (!row.contains("profile_overrides")) return;
+            require(schema == "sketch.assemblies.v8", "assembly profile overrides require catalog schema v8");
+            // Override topology is checked by profile decode, instance
+            // validation in create(), and its subsequent real expansion.
+            const auto count = admit_profiles(row.at("profile_overrides"), 3);
+            require(count == preflight_assembly_profiles(row.at("profile_overrides")),
+                "complete assembly catalog override segment accounting mismatch");
+            require(count <= 262144 - override_segments && count <= 262144 - replacements,
+                "complete assembly catalog override segment budget exceeded");
+            override_segments += count;
+            replacements += count;
+            require(selected.own_segments <= effective_segments,
+                "complete assembly catalog override geometry accounting mismatch");
+            // Each unique path replaces this node only, retaining descendants.
+            // Remove all old contributions before adding the authored totals so
+            // source ordering cannot cause a transient false budget refusal.
+            effective_segments -= selected.own_segments;
+        };
+        replace_profiles(instance, type->second);
         if (instance.contains("nested_overrides")) {
             const auto& overrides = instance.at("nested_overrides");
             require(overrides.is_array() && overrides.size() <= 4096,
                 "complete assembly catalog nested override budget exceeded");
+            std::set<std::vector<std::string>> paths;
             for (const auto& change : overrides) {
                 require(change.is_object() && change.at("part_path").is_array() &&
                     !change.at("part_path").empty() && change.at("part_path").size() < 32,
                     "invalid complete assembly catalog nested override path");
+                std::size_t path_work = change.at("part_path").size() + 1;
+                for (const auto& part : change.at("part_path")) {
+                    require(part.is_string(), "complete assembly catalog override path part must be a string");
+                    path_work += part.get_ref<const std::string&>().size();
+                }
+                charge_catalog_product(budget, paths.size() + 1, path_work);
+                const auto path = change.at("part_path").get<std::vector<std::string>>();
+                require(paths.insert(path).second, "duplicate complete assembly catalog nested override path");
+                const auto* selected = &type->second;
+                for (const auto& part_id : path) {
+                    local_identifier(part_id);
+                    require(selected->row->contains("parts"), "complete assembly catalog override path is missing");
+                    const auto& parts = selected->row->at("parts");
+                    charge_catalog_product(budget, parts.size() + 1, part_id.size() + 1);
+                    const auto part = std::find_if(parts.begin(), parts.end(),
+                        [&](const auto& row) { return row.at("id") == part_id; });
+                    require(part != parts.end(), "complete assembly catalog override path is missing");
+                    selected = &types.at(part->at("type_id").get_ref<const std::string&>());
+                }
+                replace_profiles(change, *selected);
             }
         }
-        const auto type = types.find(instance.at("type_id").get_ref<const std::string&>());
-        require(type != types.end(), "complete assembly catalog instance type is missing");
+        require(replacements <= 262144 - effective_segments,
+            "complete assembly catalog effective instance segment budget exceeded");
+        effective_segments += replacements;
         require(type->second.size.nodes <= 4096 - instance_nodes &&
-            type->second.size.segments <= 262144 - instance_segments,
+            effective_segments <= 262144 - instance_segments,
             "complete assembly catalog aggregate instance budget exceeded");
         instance_nodes += type->second.size.nodes;
-        instance_segments += type->second.size.segments;
+        instance_segments += effective_segments;
     }
     // Conservatively reserve repeated linear lookups, overrides, maps and raw
     // profile copying for all unused-type probes and all embedded instances.
@@ -1676,8 +1754,13 @@ ApplyEntityChanges embedded_assembly_group_copy_command(const DocumentSnapshot& 
         require(row != rows.end(), "embedded assembly copy lost its raw source record");
         auto raw = *row;
         const auto catalog_schema = proposed.properties.at("model").value("schema", nlohmann::json{});
-        raw["schema"] = catalog_schema == "sketch.assemblies.v6" || catalog_schema == "sketch.assemblies.v7"
-            ? "sketch.assembly-instance.v2" : "sketch.assembly-instance.v1";
+        const bool profile_overrides = raw.contains("profile_overrides") ||
+            (raw.contains("nested_overrides") && std::any_of(raw.at("nested_overrides").begin(),
+                raw.at("nested_overrides").end(), [](const auto& path) { return path.contains("profile_overrides"); }));
+        raw["schema"] = catalog_schema == "sketch.assemblies.v8" || profile_overrides
+            ? "sketch.assembly-instance.v3"
+            : catalog_schema == "sketch.assemblies.v6" || catalog_schema == "sketch.assemblies.v7"
+                ? "sketch.assembly-instance.v2" : "sketch.assembly-instance.v1";
         raw["id"] = *target.copy_instance_id;
         if (raw.contains("placement") || !raw.contains("root_transform") || !raw.at("root_transform").is_object())
             raw["root_transform"] = encode_assembly_transform(expansion.nodes.front().transform);

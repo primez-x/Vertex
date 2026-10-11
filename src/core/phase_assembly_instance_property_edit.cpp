@@ -2,6 +2,9 @@
 
 #include "sketch/annotation_entity_codec.hpp"
 #include "sketch/assembly_phase_membership.hpp"
+#include "sketch/assembly_dimension_transform.hpp"
+#include "sketch/boundary_dimension.hpp"
+#include "sketch/constraint_phase_scope.hpp"
 #include "sketch/document_digest.hpp"
 #include "sketch/model_phases.hpp"
 #include "sketch/project_store.hpp"
@@ -78,6 +81,11 @@ std::string original_overlay_identity(const Json& value) {
     return text;
 }
 Json optional(const auto& value) { return value ? Json(*value) : Json(nullptr); }
+bool has_geometry_intent(const PhaseAssemblyInstancePropertyEditAuthoring& authoring) {
+    return std::any_of(authoring.intents.begin(), authoring.intents.end(), [](const auto& intent) {
+        return intent.profile_geometry.operation != AssemblyInstancePropertyPatchOperation::unchanged;
+    });
+}
 Target root_target(const Json& value) {
     // Reuse the existing qualified target codec through an unchanged intent;
     // neither identity parsing nor historical property intent authority forks.
@@ -100,12 +108,15 @@ PhaseAssemblyInstancePropertyEditAuthoring decode_authoring(const Json& value) {
     // cannot force an unbounded dump or reach source model decoding.
     (void)value.dump();
     if (!value.is_object() || !value.contains("version") || !value.at("version").is_number_integer() ||
-        (value.at("version") != 1 && value.at("version") != 2)) reject("unsupported authoring version");
-    const bool carry = value.at("version") == 2;
+        (value.at("version") != 1 && value.at("version") != 2 && value.at("version") != 3)) reject("unsupported authoring version");
+    const bool geometry = value.at("version") == 3;
+    const bool carry = value.at("version") != 1;
     if (carry) {
-        fields(value, {"version", "intents", "allocation", "carry_presentation_references", "presentation_overlay_identities"});
+        if (geometry) fields(value, {"version", "intents", "allocation", "carry_presentation_references",
+            "presentation_overlay_identities", "dimension_identities"});
+        else fields(value, {"version", "intents", "allocation", "carry_presentation_references", "presentation_overlay_identities"});
         if (!value.at("carry_presentation_references").is_boolean() || value.at("carry_presentation_references") != true)
-            reject("v2 requires literal presentation carry");
+            reject("v2/v3 require literal presentation carry");
     } else fields(value, {"version", "intents", "allocation"});
     const auto& intents = value.at("intents");
     if (!intents.is_array() || intents.empty() || intents.size() > count_limit) reject("invalid intent count");
@@ -118,6 +129,11 @@ PhaseAssemblyInstancePropertyEditAuthoring decode_authoring(const Json& value) {
         if (!roots.is_array() || roots.size() > count_limit || !memberships.is_array() || memberships.size() > count_limit ||
             !overlays.is_array() || overlays.size() > presentation_identity_limit) reject("typed presentation request count exceeds bound");
         std::size_t fresh_count = memberships.size() + overlays.size();
+        if (geometry) {
+            const auto& dimensions = value.at("dimension_identities");
+            if (!dimensions.is_object() || dimensions.size() > count_limit) reject("invalid dimension allocation count");
+            fresh_count += dimensions.size();
+        }
         for (const auto& row : roots) {
             fields(row, {"root", "proposed_entity_id", "proposed_catalog_id", "proposed_instance_id"});
             fresh_count += row.at("proposed_entity_id").is_null() ? 3 : 1;
@@ -128,9 +144,12 @@ PhaseAssemblyInstancePropertyEditAuthoring decode_authoring(const Json& value) {
     result.carry_presentation_references = carry;
     for (const auto& row : intents) {
         auto intent = decode_assembly_instance_property_edit_intent(row);
+        if (!geometry && intent.profile_geometry.operation != AssemblyInstancePropertyPatchOperation::unchanged)
+            reject("historical authoring cannot carry profile geometry authority");
         if (!result.intents.empty() && !(result.intents.back().target < intent.target)) reject("intent targets must be sorted unique");
         result.intents.push_back(std::move(intent));
     }
+    if (geometry && !has_geometry_intent(result)) reject("v3 requires a geometry intent");
     const auto& allocation = value.at("allocation");
     fields(allocation, {"roots", "membership_entity_ids"});
     const auto& roots = allocation.at("roots");
@@ -180,6 +199,10 @@ PhaseAssemblyInstancePropertyEditAuthoring decode_authoring(const Json& value) {
             previous_overlay = original;
             result.presentation_overlay_identities.emplace(std::move(original), reserve(row.at("proposed_overlay_id")));
         }
+        if (geometry) for (const auto& [source, destination] : value.at("dimension_identities").items()) {
+            admit_identity(source);
+            result.dimension_identities.emplace(source, reserve(destination));
+        }
         const auto aliases = std::count_if(result.allocation.roots.begin(), result.allocation.roots.end(),
             [](const auto& row) { return !row.first.document_entity_id; });
         if (fresh.size() + static_cast<std::size_t>(aliases) > presentation_identity_limit)
@@ -203,13 +226,13 @@ PhaseAssemblyInstancePropertyEditAuthoring decode_request(const Json& value) {
     WireBudget{}.visit(value);
     fields(value, {"version", "expected_revision", "source_snapshot_digest", "source_authoring_digest",
         "source_entities_digest", "source_saved_revision", "authoring"});
-    if (!value.at("version").is_number_integer() || (value.at("version") != 1 && value.at("version") != 2))
+    if (!value.at("version").is_number_integer() || (value.at("version") != 1 && value.at("version") != 2 && value.at("version") != 3))
         reject("unsupported request version");
     (void)revision(value.at("expected_revision"));
     for (const auto* name : {"source_snapshot_digest", "source_authoring_digest", "source_entities_digest"}) digest(value.at(name));
     if (!value.at("source_saved_revision").is_null()) (void)revision(value.at("source_saved_revision"));
     auto authoring = decode_authoring(value.at("authoring"));
-    if (value.at("version") != (authoring.carry_presentation_references ? 2 : 1))
+    if (value.at("version") != (has_geometry_intent(authoring) ? 3 : authoring.carry_presentation_references ? 2 : 1))
         reject("request and authoring versions differ");
     return authoring;
 }
@@ -259,6 +282,92 @@ void admit_presentation_source(const AssemblyDocumentEntities& source) {
         budget.read(entity.properties); budget.read(entity.extensions);
     }
 }
+Target component_root(Target target) { target.part_path.clear(); return target; }
+struct DimensionRoster {
+    std::map<std::string, Target, std::less<>> components;
+    std::set<std::string, std::less<>> copies;
+};
+DimensionRoster inspect_dimension_roster(const AssemblyDocumentEntities& source,
+    const PhaseAssemblyInstancePropertyEditPlan& plan, bool measure) {
+    // Whole raw admission precedes even a malformed/future target scan. The
+    // enclosing plan has separately admitted every actual source catalog.
+    admit_presentation_source(source);
+    std::set<Target> roots, replacements;
+    std::map<Target, const PhaseAssemblyInstanceReplacementRoot*> cohorts;
+    std::set<std::string, std::less<>> catalogs, carriers, independent_carriers;
+    const auto add = [&](const Target& root) {
+        roots.insert(root); catalogs.insert(root.catalog_id);
+        carriers.insert(root.document_entity_id.value_or(root.catalog_id));
+        if (root.document_entity_id) independent_carriers.insert(*root.document_entity_id);
+    };
+    for (const auto& root : plan.ordinary_roots) add(root);
+    for (const auto& row : plan.replacement_roots) {
+        add(row.root); replacements.insert(row.root); cohorts.emplace(row.root, &row);
+    }
+    const auto field = [](const Json& value, const char* key) -> const Json* {
+        if (!value.is_object()) return nullptr;
+        const auto found = value.find(key); return found == value.end() ? nullptr : &*found;
+    };
+    DimensionRoster result;
+    std::vector<AssemblyDimensionTarget> targets;
+    for (const auto& [id, entity] : source) {
+        if (!can_recognize_boundary_dimension_entity_type(entity.type)) continue;
+        const auto* target = field(entity.properties, "target");
+        const auto* carrier = target ? field(*target, "entity_id") : nullptr;
+        const bool selected_carrier = carrier && carrier->is_string() &&
+            carriers.contains(carrier->get_ref<const std::string&>());
+        const auto* assembly = target ? field(*target, "assembly") : nullptr;
+        const auto* catalog = assembly ? field(*assembly, "catalog_id") : nullptr;
+        const bool selected_catalog = catalog && catalog->is_string() &&
+            catalogs.contains(catalog->get_ref<const std::string&>());
+        if (!selected_catalog) {
+            if (selected_carrier) reject("affected dimension has no actual qualified catalog target");
+            continue;
+        }
+        const auto* instance = field(*assembly, "instance_id");
+        const auto* owner = field(*assembly, "document_entity_id");
+        if (!instance || !instance->is_string() || !owner || (!owner->is_null() && !owner->is_string()))
+            reject("affected dimension has malformed qualified root fields");
+        Target root{catalog->get_ref<const std::string&>(), instance->get_ref<const std::string&>(),
+            owner->is_null() ? std::nullopt : std::optional<std::string>{owner->get_ref<const std::string&>()}, {}};
+        if (!roots.contains(root)) {
+            if (selected_carrier && independent_carriers.contains(carrier->get_ref<const std::string&>()))
+                reject("affected independent dimension carrier and target disagree");
+            continue;
+        }
+        const auto decoded = decode_boundary_dimension_entity(entity);
+        if (!decoded.supported() || decoded.version != 6 || !decoded.dimension ||
+            decoded.dimension->kind != BoundaryDimensionKind::assembly_extent || !decoded.dimension->assembly_target)
+            reject("affected geometry dimension requires a supported v6 assembly extent");
+        const auto& dimension = *decoded.dimension;
+        if (component_root(dimension.assembly_target->component) != root ||
+            dimension.boundary_id != root.document_entity_id.value_or(root.catalog_id))
+            reject("affected dimension carrier differs from its actual qualified target");
+        if (result.components.size() >= count_limit) reject("complete dimension association count exceeds bound");
+        targets.push_back(*dimension.assembly_target);
+        result.components.emplace(id, dimension.assembly_target->component);
+        if (replacements.contains(root)) result.copies.insert(id);
+    }
+    if (!result.copies.empty()) {
+        const auto scope = constraint_phase_scope(source);
+        for (const auto& id : result.copies) if (scope.inactive_owner_ids.contains(id))
+            reject("cannot copy an inactive source assembly dimension");
+        // Decode each registry once, rather than once per association. Copy
+        // authority follows the root's actual cohort and never demolishes or
+        // speculatively enrolls an existing dimension from another choice.
+        for (const auto& [registry_id, entity] : source) if (entity.type == "model_phases") {
+            const auto phases = ModelPhases::from_json(entity.properties.at("model"));
+            for (const auto& id : phases.entity_ids()) if (result.copies.contains(id)) {
+                const auto& cohort = *cohorts.at(component_root(result.components.at(id)));
+                if (registry_id != cohort.registry_id || phases.active_alternative() != std::optional<std::string>{cohort.alternative_id} ||
+                    std::find(phases.baseline_ids().begin(), phases.baseline_ids().end(), id) == phases.baseline_ids().end())
+                    reject("source assembly dimension belongs to an incompatible registered baseline cohort");
+            }
+        }
+    }
+    if (measure && !targets.empty()) (void)resolve_assembly_dimensions(source, targets);
+    return result;
+}
 PresentationIds replacement_presentation_owners(const AssemblyDocumentEntities& source,
     const PhaseAssemblyInstancePropertyEditPlan& plan) {
     const auto aliases = embedded_assembly_presentation_ids(source);
@@ -306,7 +415,7 @@ bool touches_presentation_ids(const Json& value, const PresentationIds& ids) {
 // This scratch remainder never becomes output. Closed local component values
 // (including arbitrary property strings) are not document reference authority.
 // Only admitted typed fields are removed; envelope/extension siblings remain.
-Entity opaque_presentation_remainder(Entity entity) {
+Entity opaque_presentation_remainder(Entity entity, const DimensionRoster* dimensions = nullptr) {
     auto& p = entity.properties;
     if (entity.type == "assembly_model") {
         (void)AssemblyModel::from_json(p.at("model")); p.erase("model");
@@ -333,13 +442,120 @@ Entity opaque_presentation_remainder(Entity entity) {
     } else if (entity.type == kAnnotationEntityType) {
         validate_annotation_entity(entity);
         for (auto& row : p.at("state").at("overrides")) row.erase("target_id");
+    } else if (dimensions && dimensions->components.contains(entity.id)) {
+        // Only the inventoried supported v6 target is understood. Profile,
+        // segment or future anchor semantics never gain remapping authority;
+        // opaque envelope/target/extension siblings remain fenced below.
+        const auto decoded = decode_boundary_dimension_entity(entity);
+        if (!decoded.supported() || decoded.version != 6 || !decoded.dimension->assembly_target)
+            reject("dimension dependency remainder differs from actual supported roster");
+        auto& target = p.at("target"); target.erase("entity_id");
+        auto& assembly = target.at("assembly");
+        for (const auto* name : {"version", "form", "catalog_id", "instance_id", "document_entity_id", "part_path", "axis"})
+            assembly.erase(name);
     }
     return entity;
+}
+Target actual_dimension_destination(const PhaseAssemblyInstancePropertyEditResult& result, const Target& root) {
+    std::optional<Target> destination;
+    for (const auto& [source, proposed] : result.original_to_proposed) {
+        if (component_root(source) != root) continue;
+        if (source.part_path != proposed.part_path) reject("dimension destination changed an actual selected path");
+        const auto proposed_root = component_root(proposed);
+        if (destination && *destination != proposed_root) reject("dimension root has conflicting actual destinations");
+        destination = proposed_root;
+    }
+    if (!destination) reject("dimension root has no actual replay destination");
+    return *destination;
+}
+void complete_dimension_carry(const AssemblyDocumentEntities& source,
+    const PhaseAssemblyInstancePropertyEditAuthoring& authoring, PhaseAssemblyInstancePropertyEditResult& result) {
+    const auto plan = inspect_phase_assembly_instance_property_edit_plan(source, authoring.intents);
+    const auto dimensions = inspect_dimension_roster(source, plan, false);
+    if (dimensions.copies.size() != authoring.dimension_identities.size())
+        reject("dimension allocation differs from the actual replacement roster");
+    for (const auto& id : dimensions.copies) if (!authoring.dimension_identities.contains(id))
+        reject("missing actual replacement dimension allocation");
+    if (result.fresh_identity_ids.size() > presentation_identity_limit ||
+        authoring.dimension_identities.size() > presentation_identity_limit - result.fresh_identity_ids.size() ||
+        authoring.presentation_overlay_identities.size() > presentation_identity_limit -
+            result.fresh_identity_ids.size() - authoring.dimension_identities.size())
+        reject("complete fresh geometry inventory exceeds bound");
+    PresentationIds fresh(result.fresh_identity_ids.begin(), result.fresh_identity_ids.end());
+    for (const auto& [original, proposed] : authoring.dimension_identities) {
+        (void)original;
+        if (!fresh.insert(proposed).second) reject("fresh dimension collides with another replacement identity");
+        result.fresh_identity_ids.push_back(proposed);
+    }
+    validate_phase_assembly_instance_property_edit_fresh_identities(source, result.fresh_identity_ids);
+    std::map<Target, const PhaseAssemblyInstanceReplacementRoot*> replacements;
+    for (const auto& row : plan.replacement_roots) replacements.emplace(row.root, &row);
+    std::map<Target, std::size_t> request_roots;
+    std::vector<AssemblyDimensionTransformRequest> requests;
+    std::map<std::string, const PhaseAssemblyInstanceReplacementRoot*, std::less<>> copy_cohorts;
+    for (const auto& [id, component] : dimensions.components) {
+        const auto root = component_root(component);
+        const auto replacement = replacements.find(root);
+        const bool clone = replacement != replacements.end();
+        if (clone) {
+            const auto& cohort = *replacement->second;
+            copy_cohorts.emplace(authoring.dimension_identities.at(id), &cohort);
+        }
+        const auto [request, inserted] = request_roots.emplace(root, requests.size());
+        if (inserted) requests.push_back({root, actual_dimension_destination(result, root),
+            clone ? AssemblyDimensionTransformMode::clone : AssemblyDimensionTransformMode::move, {}});
+        if (clone) requests.at(request->second).fresh_dimension_ids.emplace(id, authoring.dimension_identities.at(id));
+    }
+    // One shared source/final measurement batch. This admits complete qualified
+    // targets and actual final extents, retaining nested paths and axes exactly.
+    const auto contribution = requests.empty() ? std::vector<Entity>{} :
+        carry_assembly_dimension_transform_entities(source, result.entities, requests);
+    std::vector<std::string> moved;
+    PresentationIds copied;
+    for (const auto& entity : contribution) {
+        if (copy_cohorts.contains(entity.id)) copied.insert(entity.id);
+        else moved.push_back(entity.id);
+    }
+    validate_ordinary_assembly_dimension_changes(source, moved);
+    if (copied.size() != dimensions.copies.size()) reject("dimension contribution differs from actual copy roster");
+    for (const auto& entity : contribution) {
+        if (copy_cohorts.contains(entity.id)) {
+            if (!result.entities.emplace(entity.id, entity).second) reject("dimension clone collides with a final owner");
+        } else result.entities.at(entity.id) = entity;
+    }
+    std::map<std::string, PresentationIds, std::less<>> registry_copies;
+    for (const auto& [id, cohort] : copy_cohorts) registry_copies[cohort->registry_id].insert(id);
+    for (const auto& [registry_id, ids] : registry_copies) {
+        auto& entity = result.entities.at(registry_id);
+        const auto phases = ModelPhases::from_json(entity.properties.at("model"));
+        const auto& alternative_id = copy_cohorts.at(*ids.begin())->alternative_id;
+        if (phases.active_alternative() != std::optional<std::string>{alternative_id})
+            reject("dimension copies lost the actual saved registry alternative");
+        auto owners = phases.entity_ids(); auto alternatives = phases.alternatives();
+        const auto active = std::find_if(alternatives.begin(), alternatives.end(),
+            [&](const auto& row) { return row.id == alternative_id; });
+        if (active == alternatives.end()) reject("dimension copies have no actual registry alternative");
+        auto raw = entity.properties.at("model");
+        for (const auto& id : ids) { owners.push_back(id); active->proposed_ids.push_back(id); raw.at("entity_ids").push_back(id); }
+        for (auto& row : raw.at("alternatives")) if (row.at("id") == alternative_id)
+            for (const auto& id : ids) row.at("proposed_ids").push_back(id);
+        const auto expected = ModelPhases::create(owners, phases.baseline_ids(), alternatives, phases.active_alternative());
+        if (ModelPhases::from_json(raw).to_json() != expected.to_json()) reject("dimension registry append differs from typed admission");
+        entity.properties.at("model") = std::move(raw);
+    }
+    for (const auto& id : dimensions.copies) {
+        const auto& before = source.at(id); const auto& after = result.entities.at(id);
+        if (before != after || before.properties.dump() != after.properties.dump() || before.extensions.dump() != after.extensions.dump())
+            reject("dimension copy changed its exact original source envelope");
+    }
 }
 void complete_presentation_carry(const AssemblyDocumentEntities& source,
     const PhaseAssemblyInstancePropertyEditAuthoring& authoring, PhaseAssemblyInstancePropertyEditResult& result) {
     const auto plan = inspect_phase_assembly_instance_property_edit_plan(source, authoring.intents);
-    const auto owners = replacement_presentation_owners(source, plan);
+    auto owners = replacement_presentation_owners(source, plan);
+    const bool geometry = has_geometry_intent(authoring);
+    const auto dimensions = geometry ? inspect_dimension_roster(source, plan, false) : DimensionRoster{};
+    owners.insert(dimensions.copies.begin(), dimensions.copies.end());
     const auto overlays = presentation_overlay_ids(source, owners);
     if (overlays.size() != authoring.presentation_overlay_identities.size()) reject("overlay allocation differs from actual affected roster");
     for (const auto& id : overlays) if (!authoring.presentation_overlay_identities.contains(id))
@@ -368,11 +584,16 @@ void complete_presentation_carry(const AssemblyDocumentEntities& source,
             proposed_aliases.at({destination->catalog_id, destination->instance_id});
         if (!mappings.emplace(old_id, new_id).second) reject("duplicate actual presentation owner mapping");
     }
+    if (geometry) for (const auto& id : dimensions.copies) {
+        const auto found = authoring.dimension_identities.find(id);
+        if (found == authoring.dimension_identities.end() || !result.entities.contains(found->second) ||
+            !mappings.emplace(id, found->second).second) reject("missing actual dimension presentation destination");
+    }
     PresentationIds affected = owners;
     affected.insert(overlays.begin(), overlays.end());
     for (const auto& [id, entity] : source) {
         (void)id;
-        auto remainder = opaque_presentation_remainder(entity);
+        auto remainder = opaque_presentation_remainder(entity, geometry ? &dimensions : nullptr);
         if (touches_presentation_ids(remainder.properties, affected) || touches_presentation_ids(remainder.extensions, affected))
             reject("opaque source presentation reference cannot be carried safely");
     }
@@ -438,18 +659,39 @@ std::vector<std::string> inspect_phase_assembly_instance_property_presentation_o
     const AssemblyDocumentEntities& source, std::span<const AssemblyInstancePropertyEditIntent> intents) {
     admit_presentation_source(source);
     const auto plan = inspect_phase_assembly_instance_property_edit_plan(source, intents);
-    const auto ids = presentation_overlay_ids(source, replacement_presentation_owners(source, plan));
+    auto owners = replacement_presentation_owners(source, plan);
+    if (std::any_of(intents.begin(), intents.end(), [](const auto& intent) {
+        return intent.profile_geometry.operation != AssemblyInstancePropertyPatchOperation::unchanged;
+    })) {
+        const auto dimensions = inspect_dimension_roster(source, plan, true);
+        owners.insert(dimensions.copies.begin(), dimensions.copies.end());
+    }
+    const auto ids = presentation_overlay_ids(source, owners);
     return {ids.begin(), ids.end()};
+}
+std::map<std::string, Target, std::less<>> inspect_phase_assembly_instance_property_dimension_clone_roster(
+    const AssemblyDocumentEntities& source, std::span<const AssemblyInstancePropertyEditIntent> intents) {
+    admit_presentation_source(source);
+    const auto plan = inspect_phase_assembly_instance_property_edit_plan(source, intents);
+    const auto dimensions = inspect_dimension_roster(source, plan, true);
+    std::map<std::string, Target, std::less<>> result;
+    for (const auto& id : dimensions.copies) result.emplace(id, dimensions.components.at(id));
+    return result;
 }
 
 Json encode_phase_assembly_instance_property_edit_authoring(const PhaseAssemblyInstancePropertyEditAuthoring& authoring) {
     if (authoring.intents.empty() || authoring.intents.size() > count_limit || authoring.allocation.roots.size() > count_limit ||
         authoring.allocation.membership_entity_ids.size() > count_limit) reject("typed request count exceeds bound");
+    const bool geometry = has_geometry_intent(authoring);
+    if (geometry && !authoring.carry_presentation_references) reject("geometry authoring requires literal presentation carry");
+    if ((!geometry && !authoring.dimension_identities.empty()) || authoring.dimension_identities.size() > count_limit)
+        reject("dimension identities require geometry v3 and at most 1000 copies");
     if (!authoring.carry_presentation_references && !authoring.presentation_overlay_identities.empty())
         reject("historical v1 cannot allocate presentation overlays");
     if (authoring.carry_presentation_references) {
         if (authoring.presentation_overlay_identities.size() > presentation_identity_limit) reject("invalid overlay allocation count");
-        std::size_t fresh_count = authoring.allocation.membership_entity_ids.size() + authoring.presentation_overlay_identities.size();
+        std::size_t fresh_count = authoring.allocation.membership_entity_ids.size() + authoring.presentation_overlay_identities.size() +
+            authoring.dimension_identities.size();
         for (const auto& [root, ids] : authoring.allocation.roots) {
             (void)ids; fresh_count += root.document_entity_id ? 1 : 3;
         }
@@ -480,11 +722,20 @@ Json encode_phase_assembly_instance_property_edit_authoring(const PhaseAssemblyI
         Json wire{{"original_overlay_id", original}, {"proposed_overlay_id", proposed}};
         budget.visit(wire); overlays.push_back(std::move(wire));
     }
-    Json result{{"version", authoring.carry_presentation_references ? 2 : 1}, {"intents", std::move(intents)},
+    Json result{{"version", geometry ? 3 : authoring.carry_presentation_references ? 2 : 1}, {"intents", std::move(intents)},
         {"allocation", {{"roots", std::move(roots)}, {"membership_entity_ids", std::move(memberships)}}}};
     if (authoring.carry_presentation_references) {
         result["carry_presentation_references"] = true;
         result["presentation_overlay_identities"] = std::move(overlays);
+    }
+    if (geometry) {
+        auto dimensions = Json::object();
+        for (const auto& [source, destination] : authoring.dimension_identities) {
+            admit_identity(source); admit_identity(destination);
+            budget.string(source); budget.string(destination);
+            dimensions[source] = destination;
+        }
+        result["dimension_identities"] = std::move(dimensions);
     }
     (void)decode_authoring(result);
     return result;
@@ -503,7 +754,8 @@ PhaseAssemblyInstancePropertyEditPreparation prepare_phase_assembly_instance_pro
     const PhaseAssemblyInstancePropertyEditAuthoring& authoring) {
     auto wire = encode_phase_assembly_instance_property_edit_authoring(authoring);
     if (authoring.carry_presentation_references) admit_presentation_source(source.entities());
-    Json request{{"version", authoring.carry_presentation_references ? 2 : 1}, {"expected_revision", source.revision()},
+    const auto version = wire.at("version");
+    Json request{{"version", version}, {"expected_revision", source.revision()},
         {"source_snapshot_digest", document_snapshot_digest(source)},
         {"source_authoring_digest", document_authoring_source_digest_v2(source)},
         {"source_entities_digest", entity_map_digest(source.entities())},
@@ -518,6 +770,7 @@ PhaseAssemblyInstancePropertyEditPreparation replay_phase_assembly_instance_prop
     authenticate(source, request);
     (void)Document::fork(source); // Actual complete history/assets/read-only admission.
     auto result = replay_phase_assembly_instance_property_edits(source.entities(), authoring.intents, authoring.allocation);
+    if (has_geometry_intent(authoring)) complete_dimension_carry(source.entities(), authoring, result);
     if (authoring.carry_presentation_references) complete_presentation_carry(source.entities(), authoring, result);
     // Includes undone states. Every allocated ID becomes live in this dialect;
     // exact no-ops cannot carry speculative/unpublished allocations.

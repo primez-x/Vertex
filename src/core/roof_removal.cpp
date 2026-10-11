@@ -145,7 +145,7 @@ void admit_assignment(const RoofRemovalEntities& source, const Json& assignment)
 
 bool supported_catalog(const Json& model) {
     if (!model.is_object() || !model.contains("schema") || !model.at("schema").is_string()) return false;
-    for (int version = 1; version <= 7; ++version)
+    for (int version = 1; version <= 8; ++version)
         if (model.at("schema") == "sketch.assemblies.v" + std::to_string(version)) return true;
     return false;
 }
