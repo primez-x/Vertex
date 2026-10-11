@@ -494,16 +494,15 @@ public:
             if (pose_operation == Operation::clear) intent.pose.operation = Operation::clear;
             else if (pose_operation == Operation::set) {
                 auto& pose = intent.pose;
-                const auto component = [](std::optional<double> value, double current) {
-                    return value && *value != current ? value : std::nullopt;
-                };
-                pose.x_metres = component(values[0], selected.pose.translation_m.x);
-                pose.y_metres = component(values[1], selected.pose.translation_m.y);
-                pose.z_metres = component(values[2], selected.pose.translation_m.z);
-                pose.rotation_radians = component(values[3], selected.pose.rotation_radians);
-                pose.scale = component(values[4], selected.pose.scale);
-                pose.vertical_scale = component(values[5], selected.pose.vertical_scale);
-                if (page.mirrored->currentIndex() > 0 && page.mirrored->currentData().toBool() != selected.pose.mirrored_y)
+                // Explicit values must also replace a pose carried by another edit,
+                // even when they match the captured source pose.
+                pose.x_metres = values[0];
+                pose.y_metres = values[1];
+                pose.z_metres = values[2];
+                pose.rotation_radians = values[3];
+                pose.scale = values[4];
+                pose.vertical_scale = values[5];
+                if (page.mirrored->currentIndex() > 0)
                     pose.mirrored_y = page.mirrored->currentData().toBool();
                 if (pose.x_metres || pose.y_metres || pose.z_metres || pose.rotation_radians || pose.scale || pose.vertical_scale || pose.mirrored_y)
                     pose.operation = Operation::set;

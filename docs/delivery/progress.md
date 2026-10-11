@@ -14,6 +14,56 @@ changed source does not acquire runtime acceptance without later qualification.
 
 ## Current delivery state
 
+### October 11 component presentation reference transport
+
+The preceding retained joint Properties batch is committed and pushed as
+433126b3. Current source adds opt-in component request/authoring2 and distinct
+Properties17 for additive typed presentation carry. Source inspection determines
+replacement independent owners or qualified embedded aliases, bound view overlay
+IDs, object restrictions, appearance rows and annotation override targets. The
+closed authoring carries exact fresh overlay allocations, not a caller-authored
+reference map. Historical component authoring/request1 and Properties14/16 keep
+their original meaning. Unknown reference-bearing siblings remain explicit
+refusals rather than being rewritten as guessed JSON links.
+
+Copies retain actual original raw view/annotation records. Joint composition
+retargets only fresh component proposals to the independently reconstructed base
+survivor; equivalent base-owned bound overlays survive once. Losing overlay IDs
+remain reserved together with elided component IDs. Properties17 compares the
+full fresh inventory to actual component replay before Document publication;
+current, retained and undone history reserve the same names. Reader208 and
+extraction206 retain this authority through nested/wrapped commands.
+
+Desktop general Properties allocates and publishes independent baseline
+component replacements, alone or with a noncomponent base, restores actual
+selected owners, and admits nullable component-only rosters in Site commands.
+Default 2D/3D component edit requests and Properties now reach that same typed
+editor rather than bypassing it through the historical assembly construction
+dialog. Explicit advanced construction commands remain available separately.
+Embedded baseline replacements still refuse while companion mutation consumers
+remain unfinished; the read-only quarantine is unchanged. The properties panel
+now retains explicitly supplied source-equal pose SETs and mirrored Yes/No;
+blank fields still retain their carried values.
+
+This does not complete nested profile/path selection restoration, clipboard/
+removal/shared-type companion consumers, joint-only patch admission, arbitrary
+deformed/cross-Site world-profile carry or all alternative lifecycle behavior.
+All ten production gates remain open. Installed candidate unchanged; no builds,
+tests, scripts, probes, launches, packages or installations ran. Independent
+integrated source review found and resolved the single-component default editor
+entrypoint bypass, then approved this bounded delivery with no confirmed P1/P2
+remaining. Root reviewed the interfaces, retained raw records, actual proposal
+maps, Document/history lifetime and format routing; named whitespace checks pass.
+Compilation and runtime remain unverified.
+
+The next companion lifecycle inventory is source-backed: actual host replacement
+transport is called by wall/roof/slab/structural/stair replacements, while pruning
+is currently called only by stair demolition retirement. Clone/copy, mixed
+clipboard transfer/placement, broader typed deletions and shared catalog/type
+writers still need specific row/registry/alternative policy. Replacement transport
+requires actual demolition/proposal roles; ordinary clones must not borrow that
+authority. Inspect and implement those consumer paths before lifting quarantine.
+
 ### October 11 retained coordinated component Properties
 
 The preceding detached component/host composer is committed and pushed as

@@ -275,10 +275,10 @@ bool phase_selection_dialect(const Json& value) {
         value.at("version") == 13 || value.at("version") == 15;
 }
 bool phase_room_dialect(const Json& value) {
-    return phase_selection_dialect(value) || value.at("version") == 14 || value.at("version") == 16;
+    return phase_selection_dialect(value) || value.at("version") == 14 || value.at("version") == 16 || value.at("version") == 17;
 }
 bool component_dialect(const Json& value) {
-    return value.at("version") == 14 || value.at("version") == 16;
+    return value.at("version") == 14 || value.at("version") == 16 || value.at("version") == 17;
 }
 bool vertical_scalar(const Json& scalar) {
     return !scalar.is_null() && (scalar.at("version") == 4 || scalar.at("version") == 5);
@@ -312,9 +312,17 @@ void historical_selected_members(const Json& value, std::set<MemberKey>& selecte
 void validate(const Json& value) {
     Budget budget; budget.visit(value);
     if (value.is_object() && value.contains("version") && component_dialect(value)) {
-        const bool coordinated = value.at("version") == 16;
+        const bool presentation_carry = value.at("version") == 17;
+        const bool coordinated = value.at("version") == 16 || presentation_carry;
         if (coordinated) {
-            fields(value, {"version", "expected_revision", "source_snapshot_digest", "source_authoring_digest",
+            if (presentation_carry) {
+                fields(value, {"version", "expected_revision", "source_snapshot_digest", "source_authoring_digest",
+                    "source_entities_digest", "source_saved_revision", "component_request", "base_intent",
+                    "room_reviews", "phase_room_reviews", "message", "coordinate_component_hosts", "component_identity_reservations",
+                    "carry_component_presentation"});
+                if (!value.at("carry_component_presentation").is_boolean() || value.at("carry_component_presentation") != true)
+                    reject("component presentation Properties requires literal carry_component_presentation:true");
+            } else fields(value, {"version", "expected_revision", "source_snapshot_digest", "source_authoring_digest",
                 "source_entities_digest", "source_saved_revision", "component_request", "base_intent",
                 "room_reviews", "phase_room_reviews", "message", "coordinate_component_hosts", "component_identity_reservations"});
             if (!value.at("coordinate_component_hosts").is_boolean() || value.at("coordinate_component_hosts") != true)
@@ -341,6 +349,8 @@ void validate(const Json& value) {
         }
         if (!value.at("version").is_number_integer()) reject("Properties dialect must be an integer");
         const auto component = validate_phase_assembly_instance_property_edit_request(value.at("component_request"));
+        if (component.at("version") != (presentation_carry ? 2 : 1))
+            reject("component request authority differs from its explicit Properties dialect");
         const auto fence = [&](const Json& lane) {
             for (const auto* key : {"expected_revision", "source_snapshot_digest", "source_authoring_digest", "source_entities_digest", "source_saved_revision"})
                 if (lane.at(key).dump() != value.at(key).dump()) reject("leaf source fences differ from complete original source");
@@ -349,7 +359,7 @@ void validate(const Json& value) {
         if (!value.at("message").is_string() || value.at("message").get_ref<const std::string&>().size() > 1024 ||
             value.at("message").get_ref<const std::string&>().find('\0') != std::string::npos) reject("invalid message");
         const auto& base = value.at("base_intent");
-        if (coordinated && base.is_null()) reject("coordinated component Properties requires a sealed base");
+        if (coordinated && !presentation_carry && base.is_null()) reject("coordinated component Properties requires a sealed base");
         std::set<MemberKey> selected;
         if (!base.is_null()) {
             if (!base.is_object() || !base.contains("version") || !base.at("version").is_number_integer() ||
@@ -913,7 +923,7 @@ Stage derive(const DocumentSnapshot& source, const Json& value) {
     if (const auto error = validate_active_phase_constraint_integrity(original)) throw std::invalid_argument(*error);
     if (component_dialect(value)) {
         auto component = replay_phase_assembly_instance_property_edit_preparation(source, value.at("component_request"));
-        if (value.at("version") == 16 &&
+        if ((value.at("version") == 16 || value.at("version") == 17) &&
             value.at("component_identity_reservations") != Json(component.result().fresh_identity_ids))
             reject("component reservation receipt differs from actual original-source replay");
         const auto& base = value.at("base_intent");
@@ -926,14 +936,18 @@ Stage derive(const DocumentSnapshot& source, const Json& value) {
             stage = derive(source, base);
             prepared_base = replay_mixed_selection_property_edit_preparation(source, base);
         }
-        if (value.at("version") == 16) {
-            // The closed codec requires a base. Entities, survivor correspondence
+        if ((value.at("version") == 16 || value.at("version") == 17) && prepared_base) {
+            // A nonnull sealed base supplies entities, survivor correspondence
             // and allocation elision come from one independently replayed result.
             auto coordinated = compose_coordinated_component_property_dependencies(source, component, *prepared_base);
             stage.entities = std::move(coordinated.entities);
             stage.component_mapping = std::move(coordinated.original_to_proposed);
             stage.reserved_component_identity_ids = std::move(coordinated.reserved_component_identity_ids);
             stage.elided_component_identity_ids = std::move(coordinated.elided_component_identity_ids);
+        } else if (value.at("version") == 17) {
+            stage.entities = component.preview_entities();
+            stage.component_mapping = component.result().original_to_proposed;
+            stage.reserved_component_identity_ids = component.result().fresh_identity_ids;
         } else {
             stage.entities = compose_phase_assembly_with_mixed_property_selection_edit_candidates(
                 source, component, prepared_base ? &*prepared_base : nullptr);
@@ -1328,6 +1342,25 @@ MixedSelectionPropertyEditPreparation prepare_coordinated_component_property_edi
     value["component_identity_reservations"] = component.result().fresh_identity_ids;
     value["component_request"] = component.request();
     value["base_intent"] = replayed_base.intent();
+    value["room_reviews"] = Json::array();
+    value["phase_room_reviews"] = Json::array();
+    value["message"] = std::string(message);
+    return replay_mixed_selection_property_edit_preparation(source, value);
+}
+MixedSelectionPropertyEditPreparation prepare_component_presentation_property_edit(const DocumentSnapshot& source,
+    const PhaseAssemblyInstancePropertyEditAuthoring& authoring,
+    const MixedSelectionPropertyEditPreparation* base, std::string_view message) {
+    if (message.size() > 1024 || message.find('\0') != std::string_view::npos) reject("invalid message");
+    const auto component = prepare_phase_assembly_instance_property_edit(source, authoring);
+    if (component.request().at("version") != 2) reject("component presentation Properties requires reference-carry authoring");
+    if (base) require_mixed_selection_property_edit_source_current(source, *base);
+    auto value = source_fields(source);
+    value["version"] = 17;
+    value["coordinate_component_hosts"] = true;
+    value["carry_component_presentation"] = true;
+    value["component_identity_reservations"] = component.result().fresh_identity_ids;
+    value["component_request"] = component.request();
+    value["base_intent"] = base ? base->intent() : Json(nullptr);
     value["room_reviews"] = Json::array();
     value["phase_room_reviews"] = Json::array();
     value["message"] = std::string(message);

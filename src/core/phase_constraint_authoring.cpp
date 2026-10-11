@@ -2840,6 +2840,81 @@ void substitute_component_memberships(Entities& components,
         }
     }
 }
+
+// Only fresh, independently replayed component proposals are substituted.
+// Source presentation records remain byte-for-byte retained; matching base
+// copies survive when both lanes carried the same bound callout.
+void substitute_component_presentation_proposals(Entities& components,const Entities& carried,
+    const std::map<std::string,std::string,std::less<>>& substitutions,
+    const std::map<std::string,std::string,std::less<>>& overlay_allocations) {
+    if (substitutions.empty()) return;
+    const auto remap=[&](Json& row,const char* field) {
+        if (!row.contains(field) || !row.at(field).is_string()) return;
+        if (const auto found=substitutions.find(row.at(field).get<std::string>());found!=substitutions.end())
+            row.at(field)=found->second;
+    };
+    const auto deduplicate=[&](Json& rows,const char* field,bool paired_kind=false) {
+        Json retained=Json::array();
+        std::map<std::pair<std::string,std::string>,std::size_t> destinations;
+        for (const auto& row:rows) {
+            const auto id=field ? row.at(field).get<std::string>() : row.get<std::string>();
+            const auto kind=paired_kind ? row.at("target_kind").get<std::string>() : std::string{};
+            const auto [found,inserted]=destinations.emplace(std::pair{id,kind},retained.size());
+            if (inserted) retained.push_back(row);
+            else if (!exact_json(retained.at(found->second),row))
+                invalid("Coordinated component presentation proposals conflict at their actual survivor");
+        }
+        rows=std::move(retained);
+    };
+    std::set<std::string,std::less<>> fresh_overlays;
+    for (const auto& [original,proposed]:overlay_allocations) { (void)original; fresh_overlays.insert(proposed); }
+    for (auto& [id,entity]:components) {
+        if (entity.type==kSheetViewEntityType) {
+            (void)decode_sheet_view_entity(entity);
+            const auto& base=carried.at(id);
+            (void)decode_sheet_view_entity(base);
+            for (auto& view:entity.properties.at("model").at("views")) {
+                if (view.contains("object_ids")) {
+                    for (auto& object:view.at("object_ids"))
+                        if (const auto found=substitutions.find(object.get<std::string>());found!=substitutions.end()) object=found->second;
+                    deduplicate(view.at("object_ids"),nullptr);
+                }
+                auto& presentation=view.at("presentation");
+                if (presentation.contains("appearance") && !presentation.at("appearance").is_null()) {
+                    auto& rows=presentation.at("appearance").at("objects");
+                    for (auto& row:rows) remap(row,"object_id");
+                    deduplicate(rows,"object_id");
+                }
+                if (!view.contains("overlays")) continue;
+                const auto& base_views=base.properties.at("model").at("views");
+                const auto base_view=std::find_if(base_views.begin(),base_views.end(),[&](const auto& row) {
+                    return row.at("id")==view.at("id");
+                });
+                if (base_view==base_views.end()) invalid("Coordinated component presentation lost its actual source view");
+                auto& rows=view.at("overlays");
+                for (auto& row:rows) {
+                    remap(row,"object_id");
+                    if (row.contains("dimension_binding") && !row.at("dimension_binding").is_null())
+                        remap(row.at("dimension_binding"),"object_id");
+                }
+                if (base_view->contains("overlays")) rows.erase(std::remove_if(rows.begin(),rows.end(),[&](const auto& row) {
+                    if (!fresh_overlays.contains(row.at("id").template get<std::string>())) return false;
+                    auto content=row; content.erase("id");
+                    return std::any_of(base_view->at("overlays").begin(),base_view->at("overlays").end(),[&](auto candidate) {
+                        candidate.erase("id"); return exact_json(content,candidate);
+                    });
+                }),rows.end());
+            }
+            validate_sheet_view_entity(entity);
+        } else if (entity.type==kAnnotationEntityType) {
+            validate_annotation_entity(entity);
+            auto& rows=entity.properties.at("state").at("overrides");
+            for (auto& row:rows) remap(row,"target_id");
+            deduplicate(rows,"target_id",true);
+            validate_annotation_entity(entity);
+        }
+    }
+}
 } // namespace
 
 CoordinatedComponentPropertyComposition compose_coordinated_component_property_dependencies(
@@ -2861,6 +2936,7 @@ CoordinatedComponentPropertyComposition compose_coordinated_component_property_d
     validate_phase_assembly_instance_property_edit_fresh_identities(carried,replayed.result().fresh_identity_ids);
     validate_mixed_edit_fresh_destinations(actual,{carried,replayed.preview_entities()});
     auto normalized=replayed.preview_entities();
+    const auto allocated_aliases=embedded_assembly_presentation_ids(normalized);
     const auto authoring=decode_phase_assembly_instance_property_edit_authoring(replayed.request().at("authoring"));
     CoordinatedComponentPropertyComposition result;
     result.original_to_proposed=replayed.result().original_to_proposed;
@@ -2930,6 +3006,15 @@ CoordinatedComponentPropertyComposition compose_coordinated_component_property_d
         }
     }
     substitute_component_memberships(normalized,embedded_substitutions,independent_substitutions);
+    if (authoring.carry_presentation_references) {
+        std::map<std::string,std::string,std::less<>> presentation_substitutions;
+        for (const auto& [from,to]:independent_substitutions) presentation_substitutions.emplace(from,to);
+        const auto aliases=embedded_assembly_presentation_ids(carried);
+        for (const auto& [from,to]:embedded_substitutions)
+            presentation_substitutions.emplace(allocated_aliases.at(from),aliases.at(to));
+        substitute_component_presentation_proposals(normalized,carried,presentation_substitutions,
+            authoring.presentation_overlay_identities);
+    }
     std::vector<AssemblyInstancePropertyEditIntent> carried_intents;
     std::map<ComponentTarget,ComponentTarget> selected_carried;
     for (const auto& intent:authoring.intents) {

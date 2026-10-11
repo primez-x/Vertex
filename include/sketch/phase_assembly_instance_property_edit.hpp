@@ -53,6 +53,10 @@ struct PhaseAssemblyInstancePropertyEditResult {
 // including active proposed dependencies that a new companion cannot encode.
 [[nodiscard]] PhaseAssemblyInstancePropertyEditPlan inspect_phase_assembly_instance_property_edit_plan(
     const AssemblyDocumentEntities&, std::span<const AssemblyInstancePropertyEditIntent>);
+// Actual replacement roots only: independent owners or their exact embedded
+// presentation aliases. Ordinary and unchanged targets never allocate overlays.
+[[nodiscard]] std::vector<std::string> inspect_phase_assembly_instance_property_presentation_overlay_ids(
+    const AssemblyDocumentEntities&, std::span<const AssemblyInstancePropertyEditIntent>);
 [[nodiscard]] PhaseAssemblyInstancePropertyEditResult replay_phase_assembly_instance_property_edits(
     const AssemblyDocumentEntities&, std::span<const AssemblyInstancePropertyEditIntent>,
     const PhaseAssemblyInstancePropertyEditAllocation&);
@@ -63,8 +67,12 @@ void validate_phase_assembly_instance_property_edit_fresh_identities(
 struct PhaseAssemblyInstancePropertyEditAuthoring {
     std::vector<AssemblyInstancePropertyEditIntent> intents;
     PhaseAssemblyInstancePropertyEditAllocation allocation;
+    bool carry_presentation_references{false};
+    // Actual original overlay ID -> fresh copy ID; exact sorted affected roster.
+    std::map<std::string, std::string, std::less<>> presentation_overlay_identities;
 };
-// Closed bounded v1 mathematical intents + exact allocation; no candidate map.
+// Historical closed v1 is unchanged. Opt-in v2 adds exact presentation carry
+// allocation; neither dialect accepts a caller-authored target/candidate map.
 [[nodiscard]] nlohmann::json encode_phase_assembly_instance_property_edit_authoring(
     const PhaseAssemblyInstancePropertyEditAuthoring&);
 [[nodiscard]] PhaseAssemblyInstancePropertyEditAuthoring decode_phase_assembly_instance_property_edit_authoring(

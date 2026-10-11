@@ -49748,7 +49748,7 @@ private:
                     validate_mixed_clipboard_placement_intent(encoded.at("clipboard_placement_intent")) :
                     validate_mixed_selection_edit_intent(encoded.at("mixed_selection_edit_intent"));
                 const auto dialect=intent.at("version").get<int>();
-                if (version==52 && ((dialect>=5 && dialect<=13) || dialect==15 || dialect==16)) {
+                if (version==52 && ((dialect>=5 && dialect<=13) || dialect==15 || dialect==16 || dialect==17)) {
                     // Properties dialects have no transform roof_authoring.
                     // Active-baseline redirects require independently replayed
                     // source authority rather than extracting supplied maps.
@@ -49759,6 +49759,13 @@ private:
                         const auto [found,inserted]=identities.emplace(original,proposed);
                         if (!inserted && found->second!=proposed)
                             throw std::invalid_argument("The Properties edit has conflicting proposed identities.");
+                    }
+                    for (const auto& [original,proposed]:prepared.component_original_to_proposed()) {
+                        if (!original.document_entity_id || !proposed.document_entity_id ||
+                            *original.document_entity_id==*proposed.document_entity_id) continue;
+                        const auto [found,inserted]=identities.emplace(*original.document_entity_id,*proposed.document_entity_id);
+                        if (!inserted && found->second!=*proposed.document_entity_id)
+                            throw std::invalid_argument("The component edit has conflicting proposed identities.");
                     }
                     for (const auto& encoded_leaf:prepared.phase_authorings()) {
                         const auto leaf=decode_phase_constraint_authoring_intent(encoded_leaf);
@@ -54033,10 +54040,13 @@ private:
                 if (!selectOrdinaryFromSource(source,id,false,true)) return;
                 if (mixedSemanticSelection()) { showSelectionPropertiesEditor(); return; }
                 if (m_selected_ids.size()==1) {
-                    if (editEmbeddedAssemblyFromDialog()) return;
                     const auto selected=selectedEntity();
+                    if ((selected && selected->type=="assembly_instance") ||
+                        (!m_selected_id.isEmpty() && embeddedAssemblyChild(authoringSnapshot(),m_selected_id.toStdString()))) {
+                        showSelectionPropertiesEditor(); return;
+                    }
+                    if (editEmbeddedAssemblyFromDialog()) return;
                     if (selected && selected->type=="room") { editRoomVolumeFromDialog(); return; }
-                    if (selected && selected->type=="assembly_instance") { editIndependentAssembly(selected->id); return; }
                     if (selected && selected->type=="roof_join") { showRoofJoinProperties(); return; }
                 }
                 positionContextEditor(true);
@@ -55566,12 +55576,13 @@ private:
                 if (!selectOrdinaryFromSource(source,id,false,false)) return;
                 if (mixedSemanticSelection()) { showSelectionPropertiesEditor(); return; }
                 if (m_selected_ids.size() == 1) {
-                    if (editEmbeddedAssemblyFromDialog()) return;
                     const auto selected = selectedEntity();
-                    if (selected && selected->type == "assembly_instance") {
-                        editIndependentAssembly(selected->id);
+                    if ((selected && selected->type == "assembly_instance") ||
+                        (!m_selected_id.isEmpty() && embeddedAssemblyChild(authoringSnapshot(),m_selected_id.toStdString()))) {
+                        showSelectionPropertiesEditor();
                         return;
                     }
+                    if (editEmbeddedAssemblyFromDialog()) return;
                     if (selected && selected->type == "roof_join") {
                         showRoofJoinProperties();
                         return;
@@ -58678,23 +58689,27 @@ private:
                 if (value.mixed_selection_edit_completion || !value.mixed_selection_edit_intent.is_null()) {
                     mixed_edit=true;
                     const auto intent=validate_mixed_selection_edit_intent(value.mixed_selection_edit_intent);
-                    if (intent.at("version")==5 || intent.at("version")==6 || intent.at("version")==7 || intent.at("version")==8 || intent.at("version")==9 || intent.at("version")==10 || intent.at("version")==11 || intent.at("version")==12 || intent.at("version")==13 || intent.at("version")==15 || intent.at("version")==16) {
+                    if (intent.at("version")==5 || intent.at("version")==6 || intent.at("version")==7 || intent.at("version")==8 || intent.at("version")==9 || intent.at("version")==10 || intent.at("version")==11 || intent.at("version")==12 || intent.at("version")==13 || intent.at("version")==15 || intent.at("version")==16 || intent.at("version")==17) {
                         // Properties has its own typed lanes, including a null
                         // physical lane for annotation-only edits. Gesture
                         // ordinary_request codecs cannot decode this roster.
-                        const auto& selection_properties=intent.at("version")==16 ? intent.at("base_intent") : intent;
-                        const bool phased=selection_properties.at("version")==11 || selection_properties.at("version")==12 || selection_properties.at("version")==13 || selection_properties.at("version")==15;
-                        const auto& physical=phased ? selection_properties.at("phase_request").at("scalar_request") : selection_properties.at("ordinary_request");
+                        const bool component_properties=intent.at("version")==16 || intent.at("version")==17;
+                        const auto& selection_properties=component_properties ? intent.at("base_intent") : intent;
+                        const bool phased=!selection_properties.is_null() &&
+                            (selection_properties.at("version")==11 || selection_properties.at("version")==12 || selection_properties.at("version")==13 || selection_properties.at("version")==15);
+                        const json no_physical=nullptr;
+                        const auto& physical=selection_properties.is_null() ? no_physical :
+                            phased ? selection_properties.at("phase_request").at("scalar_request") : selection_properties.at("ordinary_request");
                         if (!physical.is_null()) for (const auto& target:physical.at("selected"))
                             targets.insert(target.at("entity_id").template get<std::string>());
-                        if ((selection_properties.at("version")==9 || selection_properties.at("version")==10) && !selection_properties.at("stair_review_request").is_null()) {
+                        if (!selection_properties.is_null() && (selection_properties.at("version")==9 || selection_properties.at("version")==10) && !selection_properties.at("stair_review_request").is_null()) {
                             const auto review=decode_stair_property_review_request(selection_properties.at("stair_review_request"));
                             for (const auto& profile:review.profiles) targets.insert(profile.object_id);
                             for (const auto& choice:review.dependency_dispositions) targets.insert(choice.rail_id);
                         }
-                        if (intent.at("version")==16 || selection_properties.at("version")==10 || (phased && !selection_properties.at("assembly_request").is_null())) {
+                        if (component_properties || selection_properties.at("version")==10 || (phased && !selection_properties.at("assembly_request").is_null())) {
                             const auto aliases=embedded_assembly_presentation_ids(source.entities());
-                            const auto& component_intents=intent.at("version")==16
+                            const auto& component_intents=component_properties
                                 ? intent.at("component_request").at("authoring").at("intents")
                                 : selection_properties.at("assembly_request").at("intents");
                             for (const auto& row:component_intents) {
@@ -58703,7 +58718,7 @@ private:
                                 else targets.insert(aliases.at({target.catalog_id,target.instance_id}));
                             }
                         }
-                        const auto& presentation=selection_properties.at("presentation_request");
+                        const auto& presentation=selection_properties.is_null() ? no_physical : selection_properties.at("presentation_request");
                         if (!presentation.is_null()) for (const auto& target:presentation.at("selected")) {
                             if (target.at("family")=="reference")
                                 targets.insert(target.at("entity_id").template get<std::string>());
@@ -58729,10 +58744,9 @@ private:
                     }
                     // Qualified children never promote their compatibility host
                     // IDs into ordinary presented-object selection authority.
-                    const auto& selected_roof_members=intent.at("version")==16
-                        ? intent.at("base_intent").at("roof_opening_members")
-                        : intent.at("roof_opening_members");
-                    for (const auto& child:selected_roof_members)
+                    const auto& roof_selection=(intent.at("version")==16 || intent.at("version")==17)
+                        ? intent.at("base_intent") : intent;
+                    if (!roof_selection.is_null()) for (const auto& child:roof_selection.at("roof_opening_members"))
                         targets.insert(child.at("opening_id").template get<std::string>());
                 }
                 if (value.mixed_selection_removal_completion || !value.mixed_selection_removal_intent.is_null()) {
@@ -63572,6 +63586,13 @@ private:
             return;
         }
         if (!m_selected_roof_openings.empty()) { showRoofOpeningQuickProperties(); return; }
+        if (const auto selected=selectedEntity();
+            (selected && selected->type=="assembly_instance") ||
+            (!m_selected_id.isEmpty() && embeddedAssemblyChild(authoringSnapshot(),m_selected_id.toStdString()))) {
+            if (m_inspector) m_inspector->hide();
+            if (open_corner) showSelectionPropertiesEditor();
+            return;
+        }
         if (const auto selected = selectedEntity(); selected && selected->type == "corner_window") {
             if (m_inspector) m_inspector->hide();
             if (open_corner) showCornerWindowEditor();
@@ -69884,26 +69905,58 @@ public:
             const auto presentation_request=dialog.presentationRequest();
             const auto prepared=[&]() {
                 const bool has_noncomponent=ordinary_request || presentation_request || roof_properties || stair_review;
-                if (!assembly_intents.empty() && has_noncomponent) {
+                if (!assembly_intents.empty()) {
                     const auto component_plan=inspect_phase_assembly_instance_property_edit_plan(source->entities(),assembly_intents);
                     // Do not create a project that becomes read-only on the
                     // next edit/reopen while the remaining companion mutation
-                    // consumers are unfinished. Existing protected edits keep
+                    // consumers are unfinished. Embedded protected edits keep
                     // their established refusal rather than losing a baseline.
-                    if (!component_plan.replacement_roots.empty())
+                    if (std::any_of(component_plan.replacement_roots.begin(),component_plan.replacement_roots.end(),[](const auto& replacement) {
+                        return !replacement.root.document_entity_id;
+                    }))
                         throw std::invalid_argument("This component's alternative edit cannot be completed yet. No changes were applied.");
-                    const auto base=replacing
-                        ? prepare_mixed_selection_property_edit(*source,ordinary_request,presentation_request,
-                            roof_properties,message,std::span<const AssemblyInstancePropertyEditIntent>{},
-                            allocations,phase_dispositions,copy_wall_components)
-                        : stair_review
-                        ? prepare_mixed_selection_property_edit(*source,ordinary_request,presentation_request,
-                            roof_properties,message,*stair_review)
-                        : prepare_mixed_selection_property_edit(*source,ordinary_request,presentation_request,
-                            roof_properties,message);
-                    PhaseAssemblyInstancePropertyEditAuthoring authoring;
-                    authoring.intents=assembly_intents;
-                    return prepare_coordinated_component_property_edit(*source,authoring,base,message);
+                    const bool carry_presentation=!component_plan.replacement_roots.empty();
+                    if (carry_presentation || has_noncomponent) {
+                        std::optional<MixedSelectionPropertyEditPreparation> base;
+                        if (has_noncomponent) base=replacing
+                            ? prepare_mixed_selection_property_edit(*source,ordinary_request,presentation_request,
+                                roof_properties,message,std::span<const AssemblyInstancePropertyEditIntent>{},
+                                allocations,phase_dispositions,copy_wall_components)
+                            : stair_review
+                            ? prepare_mixed_selection_property_edit(*source,ordinary_request,presentation_request,
+                                roof_properties,message,*stair_review)
+                            : prepare_mixed_selection_property_edit(*source,ordinary_request,presentation_request,
+                                roof_properties,message);
+                        PhaseAssemblyInstancePropertyEditAuthoring authoring;
+                        authoring.intents=assembly_intents;
+                        if (carry_presentation) {
+                            auto occupied=retainedSlabIdentityNames(*source,true);
+                            if (base) {
+                                for (const auto& [id,entity]:base->preview_snapshot().entities()) {
+                                    occupied.insert(id);
+                                    if (entity.type=="assembly_model") for (const auto& row:entity.properties.at("model").at("instances"))
+                                        occupied.insert(row.at("id").template get<std::string>());
+                                }
+                                for (const auto& [binding,alias]:embedded_assembly_presentation_ids(base->preview_snapshot().entities())) {
+                                    (void)binding; occupied.insert(alias);
+                                }
+                            }
+                            const auto fresh=[&](const char* kind) {
+                                auto id=new_id(kind);while (!occupied.insert(id).second) id=new_id(kind);return id;
+                            };
+                            for (const auto& replacement:component_plan.replacement_roots) {
+                                PhaseAssemblyInstanceReplacementIdentity ids;
+                                ids.proposed_entity_id=fresh("proposed-component");
+                                ids.proposed_instance_id=*ids.proposed_entity_id;
+                                authoring.allocation.roots.emplace(replacement.root,std::move(ids));
+                            }
+                            authoring.carry_presentation_references=true;
+                            for (const auto& id:inspect_phase_assembly_instance_property_presentation_overlay_ids(source->entities(),assembly_intents))
+                                authoring.presentation_overlay_identities.emplace(id,fresh("proposed-component-dimension"));
+                            return prepare_component_presentation_property_edit(*source,authoring,base ? &*base : nullptr,message);
+                        }
+                        return prepare_coordinated_component_property_edit(*source,authoring,*base,message);
+                    }
                 }
                 return replacing
                     ? prepare_mixed_selection_property_edit(*source,ordinary_request,presentation_request,

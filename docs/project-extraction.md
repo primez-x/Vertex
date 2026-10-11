@@ -1,5 +1,13 @@
 # Portable project extraction
 
+Exchange version206 requires native reader208 for component presentation
+Properties17 and component request/authoring2. Original source fences, exact
+overlay allocations, component correspondence and complete lifetime reservations
+remain in current, wrapped and undone commands. Source-derived presentation
+copies retain originals; joint composition retains the actual surviving target.
+Historical14/16 keep component request1. This describes source-format support;
+embedded companion editing and runtime/round-trip qualification remain open.
+
 Exchange version205 requires native reader207 for coordinated component/host
 Properties16. It retains the original-source component and noncomponent base
 requests, explicit coordination and replay-verified identity reservation list.

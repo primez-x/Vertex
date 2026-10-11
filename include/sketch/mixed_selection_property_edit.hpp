@@ -211,6 +211,16 @@ private:
 [[nodiscard]] MixedSelectionPropertyEditPreparation prepare_coordinated_component_property_edit(
     const DocumentSnapshot&, const PhaseAssemblyInstancePropertyEditAuthoring&,
     const MixedSelectionPropertyEditPreparation& base, std::string_view message);
+
+// Closed dialect seventeen retains Properties16's source/reservation fields plus
+// carry_component_presentation:true. It requires component request two, whose
+// exact source-derived overlay allocations copy typed presentation references.
+// A null base is a component-only edit; otherwise the same sealed noncomponent
+// base5..13/15 is composed with host carry. Historical fourteen/sixteen retain
+// component request one and their original base contracts.
+[[nodiscard]] MixedSelectionPropertyEditPreparation prepare_component_presentation_property_edit(
+    const DocumentSnapshot&, const PhaseAssemblyInstancePropertyEditAuthoring&,
+    const MixedSelectionPropertyEditPreparation* base, std::string_view message);
 // Preparation accepts only empty room_reviews. A copied read-only snapshot
 // retains complete history/save/assets/opaque state and has no admission token.
 [[nodiscard]] MixedSelectionPropertyEditPreparation replay_mixed_selection_property_edit_preparation(

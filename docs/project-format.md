@@ -1,4 +1,18 @@
-# Vertex project formats v1 through v207
+# Vertex project formats v1 through v208
+
+Reader208 retains component presentation Properties17 in mixed envelope52.
+It adds literal `carry_component_presentation:true` to the Properties16 fields and
+requires component request/authoring2. That closed authoring adds literal
+`carry_presentation_references:true` and sorted `presentation_overlay_identities`
+rows, each exactly `{original_overlay_id, proposed_overlay_id}`. Actual source
+replacement roots determine the affected overlay roster and owner/alias targets;
+the request cannot supply a target map. A null noncomponent base allows standalone
+component editing; a nonnull unreviewed base5..13/15 composes host consequences.
+Original bound view records remain retained and additive copies follow the
+actual surviving proposal. Elided copy identities remain lifetime-reserved.
+Historical14/16 accept only component request1. Extraction emits206. Independent
+component Properties has a desktop producer; embedded companion editing and
+runtime/round-trip qualification remain open.
 
 Reader207 retains explicit coordinated component/host Properties16 within the
 existing mixed command envelope52. Both component and unreviewed noncomponent
