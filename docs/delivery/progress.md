@@ -14,6 +14,47 @@ changed source does not acquire runtime acceptance without later qualification.
 
 ## Current delivery state
 
+### October 11 coordinated and Properties family dimension integration
+
+The standalone roof/slab/structural dimension batch is committed and pushed as
+7030c046. Current source integrates those families into coordinated inner9/
+phase41 and phase Properties request8/mixed27/component28/29. Five delegates
+completed separate core, Properties, lifetime and reader changes; root integrated
+the canvas producers, allocation inventory, shared Properties composition and
+selection restoration. Reader236/237 retain the new contracts through nested
+and undone history; extraction234/235 derives from the native reader floor.
+
+Coordinated flags match actual complete children. At least two real family lanes
+and a new roof/slab/structural child are required. Original dimensions remain
+exact; fresh copied frames resolve against the final combined geometry, and
+ordinary dimensions carry once under the remaining shared association budget.
+Properties has separate explicit family permissions and exact source-derived
+dimension allocation maps. Historical commands retain their original authority.
+Root fixed shared composer rejection of new family receipts, component selection
+restoration and request8 proof-field identity reservations. Independent integrated
+source review found a P2: a component pose edit after its host replacement left
+copied dimension text in the preceding physical frame. Root added actual-source
+roster reconstruction and a single final clone/move carry after component edits,
+with exact original preservation and ordinary-dimension phase-policy checks.
+Follow-up review corrected dimensionless-root budget charging and the case where
+a final component frame returns to the original source frame: intermediate label
+movement must then be discarded even when the final carry emits no upsert.
+Independent review of the revised integrated source found no remaining proved
+introduced P1/P2 in the examined batch. Root source review confirms the closed
+contracts, exact original preservation, final-frame carry and reader-derived
+extraction. Scoped whitespace inspection passes; Git records the source backup.
+Compilation, canvas interaction, Undo/redo, save/reopen, extraction execution and
+performance remain unverified.
+
+Next source work includes remaining mixed selection/clipboard/removal enclosures,
+component root/part profile and path editing, nested and linked-view references,
+and complete architectural editing. Broader drawing, normative appraisal,
+compatibility/exchange, assistance, offline distribution and final qualification
+remain open. All ten production acceptance gates remain open; that does not
+mean their existing source implementation is absent. The installed candidate is
+unchanged. No builds, tests, scripts, probes, jobs, launches, packages or
+installations ran. No aggregate percentage or ETA is supported by this evidence.
+
 ### October 11 roof, slab and structural component dimension integration
 
 The Properties wall dimension batch is committed and pushed as 6c239f6e;

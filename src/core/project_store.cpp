@@ -15,6 +15,10 @@
 #include "sketch/phase_roof_replacement.hpp"
 #include "sketch/phase_slab_replacement.hpp"
 #include "sketch/phase_structural_replacement.hpp"
+#include "sketch/phase_stair_replacement.hpp"
+#include "sketch/phase_wall_replacement_command.hpp"
+#include "sketch/phase_selection_property_edit.hpp"
+#include "sketch/mixed_selection_property_edit.hpp"
 
 #include <sqlite3.h>
 
@@ -395,6 +399,176 @@ std::uint32_t required_format_version_internal(const DocumentSnapshot& snapshot,
             const auto literal_true=[](const nlohmann::json& child,const char* field) {
                 return child.contains(field) && child.at(field).is_boolean() && child.at(field)==true;
             };
+            if (floor<236 && value.is_object() && value.contains("version") &&
+                value.at("version").is_number_integer() && value.at("version")==9 &&
+                value.contains("authoring") && value.contains("complete_hosted_component_dimensions") &&
+                value.size()>=3 && value.size()<=8) {
+                try {
+                    // Direct retained inner receipts have no enclosing source
+                    // fences. Recognize the closed wrapper/body and actual
+                    // canonical children without manufacturing phase authority.
+                    const auto& body=phase_constraint_coordinated_authoring_body(value);
+                    bool canonical=typed_shape(body,4,{"version","wall_authoring","roof_replacement","slab_replacement",
+                            "structural_replacement","stair_replacement","ordinary_roof_edits","ordinary_slab_geometry",
+                            "ordinary_structural_edits","ordinary_stair_transforms"}) ||
+                        typed_shape(body,5,{"version","wall_authoring","roof_replacement","slab_replacement",
+                            "structural_replacement","stair_replacement","ordinary_roof_edits","ordinary_slab_geometry",
+                            "ordinary_structural_edits","ordinary_stair_transforms"});
+                    if (canonical) {
+                        for (const auto* field:{"ordinary_roof_edits","ordinary_slab_geometry",
+                                "ordinary_structural_edits","ordinary_stair_transforms"})
+                            canonical=canonical && body.at(field).is_array() && body.at(field).size()<=1000;
+                        const auto& roof=body.at("roof_replacement");
+                        const auto& slab=body.at("slab_replacement");
+                        const auto& structural=body.at("structural_replacement");
+                        const auto& stair=body.at("stair_replacement");
+                        std::optional<std::pair<std::string,std::string>> replacement_choice;
+                        const auto same_choice=[&](const auto& leaf) {
+                            const auto choice=std::pair{leaf.registry_id,leaf.alternative_id};
+                            if (!replacement_choice) replacement_choice=choice;
+                            return *replacement_choice==choice;
+                        };
+                        if (!roof.is_null()) {
+                            const auto leaf=decode_phase_roof_replacement_authoring(roof);
+                            canonical=canonical && roof.at("version")!=10 && !leaf.demolition && same_choice(leaf) &&
+                                leaf.complete_component_dimensions==value.contains("complete_roof_component_dimensions") &&
+                                encode_phase_roof_replacement_authoring(leaf).dump()==roof.dump();
+                        }
+                        if (!slab.is_null()) {
+                            const auto leaf=decode_phase_slab_replacement_authoring(slab);
+                            canonical=canonical && same_choice(leaf) && !leaf.coordinate_hosted_profiles && !leaf.slab_geometry.empty() &&
+                                leaf.slab_profiles.empty() && leaf.slab_stacks.empty() &&
+                                leaf.complete_component_dimensions==value.contains("complete_slab_component_dimensions") &&
+                                encode_phase_slab_replacement_authoring(leaf).dump()==slab.dump();
+                        }
+                        const auto transform_only=[](const StructuralObjectEditIntent& edit) {
+                            return edit.transform && edit.profile_fields.is_null() && edit.quantity_entries.is_null();
+                        };
+                        if (!structural.is_null()) {
+                            const auto leaf=decode_phase_structural_replacement_authoring(structural);
+                            canonical=canonical && same_choice(leaf) && !leaf.demolition && !leaf.edits.empty() &&
+                                std::all_of(leaf.edits.begin(),leaf.edits.end(),transform_only) &&
+                                leaf.complete_component_dimensions==value.contains("complete_structural_component_dimensions") &&
+                                encode_phase_structural_replacement_authoring(leaf).dump()==structural.dump();
+                        }
+                        if (!stair.is_null()) {
+                            const auto leaf=decode_phase_stair_replacement_authoring(stair);
+                            const bool dimensions=value.contains("complete_stair_component_dimensions");
+                            canonical=canonical && same_choice(leaf) && !leaf.complete_scalar_dependencies &&
+                                leaf.complete_component_dimensions==dimensions && leaf.complete_ordinary_component_dimensions==dimensions &&
+                                encode_phase_stair_replacement_authoring(leaf).dump()==stair.dump();
+                        }
+                        const auto& wall=body.at("wall_authoring");
+                        if (!wall.is_null()) {
+                            const bool qualified=body.at("version")==5;
+                            canonical=canonical && wall.is_object() && wall.contains("version") &&
+                                (qualified ? wall.at("version")==36 && wall.contains("wall_edit_version") &&
+                                    wall.at("wall_edit_version")==2 : wall.at("version")==1 || wall.at("version")==2);
+                            if (canonical) {
+                                const auto child=decode_phase_constraint_authoring_intent(wall);
+                                ConstraintAuthoringIntent only_move;
+                                only_move.message=child.intent.message;
+                                only_move.wall_geometry_move=child.intent.wall_geometry_move;
+                                canonical=child.intent.wall_geometry_move && !child.intent.wall_geometry_move->targets.empty() &&
+                                    encode_intent(only_move)==encode_intent(child.intent) &&
+                                    encode_phase_constraint_authoring_intent(child).dump()==wall.dump();
+                                if (!child.wall_replacement.is_null()) {
+                                    const auto leaf=decode_phase_wall_replacement_authoring(child.wall_replacement);
+                                    canonical=canonical && same_choice(leaf) && leaf.wall_profiles.empty() &&
+                                        leaf.opening_profiles.empty() && leaf.opening_rehosts.empty() && leaf.opening_families.empty() &&
+                                        leaf.wall_stacks.empty() && leaf.corner_profiles.empty();
+                                }
+                            }
+                        }
+                        if (canonical) {
+                            std::set<std::string,std::less<>> roof_targets,slab_targets,structural_targets,stair_targets;
+                            for (const auto& row:body.at("ordinary_roof_edits")) {
+                                const auto edit=decode_roof_edit_intent(row);
+                                canonical=canonical && row.at("version")!=9 && roof_targets.insert(edit.roof_id).second &&
+                                    encode_roof_edit_intent(edit).dump()==row.dump();
+                            }
+                            for (const auto& row:body.at("ordinary_slab_geometry")) {
+                                const auto edit=decode_slab_geometry_edit_intent(row);
+                                canonical=canonical && slab_targets.insert(edit.slab_id).second &&
+                                    encode_slab_geometry_edit_intent(edit).dump()==row.dump();
+                            }
+                            for (const auto& row:body.at("ordinary_structural_edits")) {
+                                const auto edit=decode_structural_object_edit_intent(row);
+                                canonical=canonical && transform_only(edit) && structural_targets.insert(edit.object_id).second &&
+                                    encode_structural_object_edit_intent(edit).dump()==row.dump();
+                            }
+                            for (const auto& row:body.at("ordinary_stair_transforms")) {
+                                const auto edit=decode_stair_transform_intent(row);
+                                canonical=canonical && stair_targets.insert(edit.object_id).second &&
+                                    encode_stair_transform_intent(edit).dump()==row.dump();
+                            }
+                            unsigned families=!wall.is_null() ? 1U : 0U;
+                            for (const auto& lane:{std::pair{&roof,&body.at("ordinary_roof_edits")},
+                                    std::pair{&slab,&body.at("ordinary_slab_geometry")},
+                                    std::pair{&structural,&body.at("ordinary_structural_edits")},
+                                    std::pair{&stair,&body.at("ordinary_stair_transforms")}}) {
+                                const auto count=static_cast<unsigned>(!lane.first->is_null())+
+                                    static_cast<unsigned>(!lane.second->empty());
+                                canonical=canonical && count<=1;
+                                families+=count;
+                            }
+                            if (canonical && families>=2) floor=236U;
+                        }
+                    }
+                } catch (const std::invalid_argument&) {
+                } catch (const nlohmann::json::exception&) {
+                }
+            }
+            if (floor<236 && typed_shape(value,41,{"version","expected_revision","source_snapshot_digest",
+                    "source_authoring_digest","source_entities_digest","source_saved_revision","phase_selections",
+                    "intent","coordinated_replacements"})) {
+                try {
+                    // The phase codec owns the nonnested inner-nine body and
+                    // the exact optional flags for its actual replacement leaves.
+                    (void)decode_phase_constraint_authoring_intent(value);
+                    floor=236U;
+                } catch (const std::invalid_argument&) {
+                } catch (const nlohmann::json::exception&) {
+                }
+            }
+            const bool family_dimension_properties_request=typed_shape(value,8,{"version","expected_revision",
+                "source_snapshot_digest","source_authoring_digest","source_entities_digest","source_saved_revision",
+                "scalar_request","allocations","stair_dependency_dispositions","message","skylight_properties",
+                "roof_opening_members","complete_wall_hosted_instances","complete_stair_component_dimensions",
+                "complete_wall_component_dimensions","complete_roof_component_dimensions",
+                "complete_slab_component_dimensions","complete_structural_component_dimensions"});
+            const bool family_dimension_properties_receipt=typed_shape(value,27,{"version","expected_revision",
+                "source_snapshot_digest","source_authoring_digest","source_entities_digest","source_saved_revision",
+                "phase_request","presentation_request","skylight_properties","roof_opening_members","room_reviews",
+                "phase_room_reviews","message","assembly_request"});
+            const bool family_dimension_component_receipt=
+                typed_shape(value,28,{"version","expected_revision","source_snapshot_digest","source_authoring_digest",
+                    "source_entities_digest","source_saved_revision","component_request","base_intent","room_reviews",
+                    "phase_room_reviews","message","coordinate_component_hosts","component_identity_reservations",
+                    "complete_stair_component_dimensions","complete_wall_component_dimensions",
+                    "complete_roof_component_dimensions","complete_slab_component_dimensions",
+                    "complete_structural_component_dimensions"}) ||
+                typed_shape(value,29,{"version","expected_revision","source_snapshot_digest","source_authoring_digest",
+                    "source_entities_digest","source_saved_revision","component_request","base_intent","room_reviews",
+                    "phase_room_reviews","message","coordinate_component_hosts","component_identity_reservations",
+                    "carry_component_presentation","complete_stair_component_dimensions","complete_wall_component_dimensions",
+                    "complete_roof_component_dimensions","complete_slab_component_dimensions",
+                    "complete_structural_component_dimensions"});
+            if (floor<237 && (family_dimension_properties_request || family_dimension_properties_receipt ||
+                    family_dimension_component_receipt)) {
+                try {
+                    // Empty dimension maps still declare the new authority.
+                    // Existing codecs own independent family permissions,
+                    // allocation budgets and sealed component/base matching.
+                    if (family_dimension_properties_request)
+                        (void)validate_phase_selection_property_edit_request(value);
+                    else
+                        (void)validate_mixed_selection_property_edit_intent(value);
+                    floor=237U;
+                } catch (const std::invalid_argument&) {
+                } catch (const nlohmann::json::exception&) {
+                }
+            }
             if (floor<235 && closed_shape({"version","authoring","complete_component_dimensions","dimension_identities"}) &&
                 value.at("version").is_number_integer() && literal_true(value,"complete_component_dimensions") &&
                 value.at("dimension_identities").is_object()) {
@@ -1215,9 +1389,9 @@ std::uint32_t required_format_version_internal(const DocumentSnapshot& snapshot,
     };
     for (const auto& revision : snapshot.history()) {
         if (revision.phase_entity_import) required=std::max(required,160U);
-        if (required<235 && revision.boundary_geometry_edit)
+        if (required<237 && revision.boundary_geometry_edit)
             required=std::max(required,typed_edit_reader_floor(encode_boundary_geometry_edit(*revision.boundary_geometry_edit)));
-        if (required<235 && revision.boundary_constraint_changes)
+        if (required<237 && revision.boundary_constraint_changes)
             required=std::max(required,typed_edit_reader_floor(command_to_json(Command{*revision.boundary_constraint_changes})));
         if (required<122 && revision.boundary_geometry_edit)
             required=std::max(required,quantity_reader_floor(encode_boundary_geometry_edit(*revision.boundary_geometry_edit)));
@@ -3740,6 +3914,8 @@ bool verify_sqlite_schema(sqlite3* database, bool allow_recovery = false) {
          sqlite3_column_int(user_version.get(), 0) != 233 &&
          sqlite3_column_int(user_version.get(), 0) != 234 &&
          sqlite3_column_int(user_version.get(), 0) != 235 &&
+         sqlite3_column_int(user_version.get(), 0) != 236 &&
+         sqlite3_column_int(user_version.get(), 0) != 237 &&
          sqlite3_column_int(user_version.get(), 0) != 207 &&
          sqlite3_column_int(user_version.get(), 0) != 202 &&
          sqlite3_column_int(user_version.get(), 0) != 200 &&
@@ -4465,6 +4641,10 @@ DocumentSnapshot read_snapshot(sqlite3* database, RecoveryLedger* recovery = nul
     // here and authenticate the manifest with its stored version below.
     const auto required_format = required_format_version_internal(snapshot, format_number < 28);
     if (required_format > format_number) {
+        if (required_format>=237)
+            storage_error(StorageErrorCode::unsupported_format,"This project requires reader 237 for roof, slab and structural component dimension Properties receipts");
+        if (required_format>=236)
+            storage_error(StorageErrorCode::unsupported_format,"This project requires reader 236 for coordinated roof, slab and structural component dimension copies");
         if (required_format>=235)
             storage_error(StorageErrorCode::unsupported_format,"This project requires reader 235 for roof, slab and structural component dimension copies");
         if (required_format>=234)

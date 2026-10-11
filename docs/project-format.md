@@ -1,4 +1,52 @@
-# Vertex project formats v1 through v235
+# Vertex project formats v1 through v237
+
+Reader237 retains component dimensions through phase Properties request8,
+mixed receipt27 and component receipts28/29. Request8 adds three explicit
+Boolean fields to request7: `complete_roof_component_dimensions`,
+`complete_slab_component_dimensions` and `complete_structural_component_dimensions`.
+At least one is true; wall dimension and hosted completion remain literal true,
+and stair permission remains independently Boolean. Each allocation retains its
+separate exact `dimension_identities` object; a nonempty map requires that
+actual family's permission. Source inventory after dependency decisions governs
+the maps, with 1000 dimension destinations per allocation and 4096 combined
+fresh destinations. Roof11/phase38, slab8/phase39 and structural5/phase40 retain
+their actual scalar or vertical authority. Shared composition normalizes
+historical and new dialects to one family when rejecting overlapping edits.
+
+Mixed27 has receipt24's closed fields and requires request8. Component28/29
+require a sealed base27, coordinated hosts and explicit family/stair Booleans
+matching that base's actual request8; wall completion remains literal true.
+Receipt29 additionally requires presentation carry. Component composition
+retains dimensions through co-edits by reconstructing the sealed base's
+actual source roster and carrying copied and ordinary selected-root dimensions
+against the final component graph in one bounded batch. Original copied
+dimensions remain exact; changed ordinary dimensions require their ordinary
+phase-policy admission. Current and undone history
+reserve separate dimension destinations and derived aliases. Request8 reserves
+its three actual new field names even when their values are false. Historical
+requests and receipts retain their original authority. Current, nested and
+undone new Properties proofs require reader237/extraction235 even with empty
+dimension maps.
+
+Reader236 retains coordinated inner9/phase41. The closed inner wrapper contains
+`version`, a nonnested canonical `authoring` body4 or body5, mandatory
+`complete_hosted_component_dimensions:true`, and optional literal-true
+`complete_{wall,stair,roof,slab,structural}_component_dimensions` flags. Each flag
+must match its actual complete child; at least one roof11, slab8 or structural5
+child is required. Body5 additionally requires wall phase36/edit2/leaf12.
+At least two actual family lanes are present. Slab and structural lanes remain
+transform-only; roof body10 rotation is admitted only through roof11, while
+ordinary roof row9 rotation remains outside this enclosure.
+
+Coordinated replay uses the complete original source for discovery, allocations
+and preserved dimension owners. Fresh copies must resolve against the final
+combined geometry. Proven ordinary dimension contributions from actual leaf
+producers are normalized before merging; one final ordinary carry uses the
+remaining shared 1000-association budget after copied associations. Combined
+fresh destinations remain bounded to4096. Current, nested and undone proofs
+require reader236/extraction234. Extraction continues to derive from the native
+reader floor. These source additions have not been compiled or exercised and
+do not establish production acceptance.
 
 Reader235 retains standalone roof, slab, and structural component dimension
 copies. Roof leaf11, slab leaf8, and structural leaf5 each have exactly four
@@ -28,9 +76,10 @@ dimensions on changed ordinary hosts carry under the remaining shared
 
 Current and undone history reserve dimension destinations and retained aliases.
 Current, nested, and undone new proofs require reader235/extraction233, with
-extraction derived from the reader floor. Mixed-family and Properties activation
-for these three new leaves requires separate explicit contracts and remains a
-follow-on; historical enclosures do not acquire it. These source additions have
+extraction derived from the reader floor. At reader235, mixed-family and
+Properties activation for these three new leaves remains outside its standalone
+contracts; reader236/237 add separate explicit enclosures without granting
+historical enclosures their authority. These source additions have
 not been compiled or exercised and do not establish production acceptance.
 
 Reader234 retains wall component dimensions in Properties edits. Phase Properties

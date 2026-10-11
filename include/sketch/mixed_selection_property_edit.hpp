@@ -182,6 +182,11 @@ private:
 // with literal complete_wall_component_dimensions:true and hosted completion.
 // Its stair dimension permission is an independent explicit Boolean. Wall room
 // completion uses canonical leaf twelve with hosted and dimension completion.
+// Twenty-seven retains twenty-four's exact fields and requires phase request
+// eight, with independent explicit roof/slab/structural dimension Booleans,
+// at least one enabled family, wall dimension and hosted completion true, and
+// an independent stair dimension Boolean. Each family retains its own sealed
+// allocation dimension-map authority; wall room completion remains leaf twelve.
 // ordinary overloads also emit thirteen for explicit hosted slab carry.
 // Assembly request is nullable; stair review stays solely inside phase_request.
 // phase_room_reviews contains ordered {phase_authoring_index,wall_replacement}
@@ -196,7 +201,10 @@ private:
     const std::vector<PhaseStairReplacementDependencyDisposition>&,
     bool complete_wall_hosted_instances = false,
     bool complete_stair_component_dimensions = false,
-    bool complete_wall_component_dimensions = false);
+    bool complete_wall_component_dimensions = false,
+    bool complete_roof_component_dimensions = false,
+    bool complete_slab_component_dimensions = false,
+    bool complete_structural_component_dimensions = false);
 // Closed dialect fourteen: version, the five complete source fences,
 // component_request (sealed v1), base_intent (null or historical five-through-
 // thirteen without a nonnull assembly_request), room_reviews,
@@ -225,6 +233,12 @@ private:
 // complete_wall_component_dimensions:true. Its mandatory base is twenty-four;
 // its explicit Boolean stair dimension permission must equal the base phase
 // request's permission. Component request one and host coordination are unchanged.
+// Dialect twenty-eight retains twenty-five's exact fields plus explicit Boolean
+// complete_roof_component_dimensions, complete_slab_component_dimensions and
+// complete_structural_component_dimensions. Its mandatory sealed base is
+// twenty-seven; all three family permissions and the stair permission exactly
+// match that base's phase request eight, and wall completion is literal true.
+// Historical component dialects cannot accept a base twenty-seven.
 [[nodiscard]] MixedSelectionPropertyEditPreparation prepare_coordinated_component_property_edit(
     const DocumentSnapshot&, const PhaseAssemblyInstancePropertyEditAuthoring&,
     const MixedSelectionPropertyEditPreparation& base, std::string_view message);
@@ -245,6 +259,12 @@ private:
 // It retains component request two and host/presentation coordination, with
 // explicit Boolean stair dimension permission matching the base phase request.
 // Producers choose twenty-five/twenty-six only for actual wall-authorized base twenty-four.
+// Dialect twenty-nine retains twenty-six's exact fields plus the three explicit
+// family dimension Booleans from twenty-eight. It requires an actual sealed
+// base twenty-seven, with those permissions and the independent stair permission
+// matching its phase request eight, and literal wall completion true. Component
+// request two and host/presentation coordination remain unchanged. Producers
+// choose twenty-eight/twenty-nine only for the actual request-eight base.
 [[nodiscard]] MixedSelectionPropertyEditPreparation prepare_component_presentation_property_edit(
     const DocumentSnapshot&, const PhaseAssemblyInstancePropertyEditAuthoring&,
     const MixedSelectionPropertyEditPreparation* base, std::string_view message);

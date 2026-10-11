@@ -3324,15 +3324,16 @@ static int room_review_geometry_dialect(const ApplyBoundaryConstraintChanges& co
 
 static bool mixed_properties_dialect(const nlohmann::json& intent) {
     const auto version=intent.at("version").get<int>();
-    return (version>=5 && version<=13) || (version>=15 && version<=17) || (version>=21 && version<=26);
+    return (version>=5 && version<=13) || (version>=15 && version<=17) || (version>=21 && version<=29);
 }
 static bool mixed_phase_properties_dialect(const nlohmann::json& intent) {
     const auto version=intent.at("version").get<int>();
-    return (version>=11 && version<=13) || (version>=15 && version<=17) || (version>=21 && version<=26);
+    return (version>=11 && version<=13) || (version>=15 && version<=17) || (version>=21 && version<=29);
 }
 static bool mixed_component_properties_dialect(const nlohmann::json& intent) {
     const auto version=intent.at("version").get<int>();
-    return version==16 || version==17 || version==22 || version==23 || version==25 || version==26;
+    return version==16 || version==17 || version==22 || version==23 || version==25 || version==26 ||
+        version==28 || version==29;
 }
 
 static std::vector<nlohmann::json> phase_constraint_authoring_proofs(const ApplyBoundaryConstraintChanges& command) {
@@ -4174,7 +4175,7 @@ static void validate_retained_authoring_receipt_identities(
                 for (const auto& allocation:phase.at("allocations")) {
                     for (const auto* field:{"identities","child_identities","hosted_instance_identities","overlay_identities"})
                         for (const auto& row:allocation.at(field)) require_unused_id(row.at("proposed_id").get<std::string>());
-                    if (phase.at("version")==6 || phase.at("version")==7)
+                    if (phase.at("version")==6 || phase.at("version")==7 || phase.at("version")==8)
                         for (const auto& [original,proposed]:allocation.at("dimension_identities").items()) {
                             (void)original;require_unused_id(proposed.get<std::string>());
                         }
@@ -4295,6 +4296,9 @@ static void validate_phase_constraint_fresh_lifetime(const std::map<std::string,
     bool complete_stair_ordinary_dimension_carry=false;
     bool complete_coordinated_stair_dimension_copies=false;
     bool complete_coordinated_wall_dimension_copies=false;
+    bool complete_coordinated_roof_dimension_copies=false;
+    bool complete_coordinated_slab_dimension_copies=false;
+    bool complete_coordinated_structural_dimension_copies=false;
     for (const auto& [id,entity] : candidate) {
         (void)entity;
         if (!source.contains(id)) fresh.insert(id);
@@ -4389,11 +4393,28 @@ static void validate_phase_constraint_fresh_lifetime(const std::map<std::string,
             roof_mixed_asset_reservation=true;
             complete_coordinated_stair_dimension_copies=complete_coordinated_stair_dimension_copies ||
                 root_intent.coordinated_replacements.at("version")==7 ||
-                (root_intent.coordinated_replacements.at("version")==8 &&
+                ((root_intent.coordinated_replacements.at("version")==8 ||
+                    root_intent.coordinated_replacements.at("version")==9) &&
                     root_intent.coordinated_replacements.contains("complete_stair_component_dimensions") &&
                     root_intent.coordinated_replacements.at("complete_stair_component_dimensions")==true);
             complete_coordinated_wall_dimension_copies=complete_coordinated_wall_dimension_copies ||
-                root_intent.coordinated_replacements.at("version")==8;
+                root_intent.coordinated_replacements.at("version")==8 ||
+                (root_intent.coordinated_replacements.at("version")==9 &&
+                    root_intent.coordinated_replacements.contains("complete_wall_component_dimensions") &&
+                    root_intent.coordinated_replacements.at("complete_wall_component_dimensions")==true);
+            // Inner nine introduces these fields only for the corresponding
+            // complete family child. Older coordinators retain their vocabulary.
+            if (root_intent.coordinated_replacements.at("version")==9) {
+                complete_coordinated_roof_dimension_copies=complete_coordinated_roof_dimension_copies ||
+                    (root_intent.coordinated_replacements.contains("complete_roof_component_dimensions") &&
+                        root_intent.coordinated_replacements.at("complete_roof_component_dimensions")==true);
+                complete_coordinated_slab_dimension_copies=complete_coordinated_slab_dimension_copies ||
+                    (root_intent.coordinated_replacements.contains("complete_slab_component_dimensions") &&
+                        root_intent.coordinated_replacements.at("complete_slab_component_dimensions")==true);
+                complete_coordinated_structural_dimension_copies=complete_coordinated_structural_dimension_copies ||
+                    (root_intent.coordinated_replacements.contains("complete_structural_component_dimensions") &&
+                        root_intent.coordinated_replacements.at("complete_structural_component_dimensions")==true);
+            }
             std::vector<RoofEditIntent> ordinary_roof_edits;
             for (const auto& row : phase_constraint_coordinated_authoring_body(root_intent.coordinated_replacements).at("ordinary_roof_edits"))
                 ordinary_roof_edits.push_back(decode_roof_edit_intent(row));
@@ -4718,6 +4739,12 @@ static void validate_phase_constraint_fresh_lifetime(const std::map<std::string,
         throw std::invalid_argument("A coordinated stair destination borrows its dimension copy proof field");
     if (complete_coordinated_wall_dimension_copies && fresh.contains("complete_wall_component_dimensions"))
         throw std::invalid_argument("A coordinated wall destination borrows its dimension copy proof field");
+    if (complete_coordinated_roof_dimension_copies && fresh.contains("complete_roof_component_dimensions"))
+        throw std::invalid_argument("A coordinated roof destination borrows its dimension copy proof field");
+    if (complete_coordinated_slab_dimension_copies && fresh.contains("complete_slab_component_dimensions"))
+        throw std::invalid_argument("A coordinated slab destination borrows its dimension copy proof field");
+    if (complete_coordinated_structural_dimension_copies && fresh.contains("complete_structural_component_dimensions"))
+        throw std::invalid_argument("A coordinated structural destination borrows its dimension copy proof field");
     if (complete_stair_ordinary_dimension_carry && fresh.contains("complete_ordinary_component_dimensions"))
         throw std::invalid_argument("A proposed stair destination borrows its ordinary dimension carry proof field");
     if (phase_drawing_enclosure) {
@@ -5805,6 +5832,7 @@ static void validate_mixed_properties_replacement_lifetime(const nlohmann::json&
     const auto mixed=validate_mixed_selection_edit_intent(encoded);
     if (!mixed_phase_properties_dialect(mixed)) return;
     if (preceding_records>history.size()) throw std::invalid_argument("Properties identity history prefix is invalid");
+    bool complete_family_dimension_request=false;
     std::set<std::string,std::less<>> fresh;
     const auto reserve=[&](const std::string& id) {
         if (!is_valid_identifier(id) || !fresh.insert(id).second)
@@ -5812,10 +5840,11 @@ static void validate_mixed_properties_replacement_lifetime(const nlohmann::json&
     };
     if (const auto* request=mixed_properties_phase_request(mixed)) {
         const auto phase=validate_phase_selection_property_edit_request(*request);
+        complete_family_dimension_request=phase.at("version")==8;
         for (const auto& allocation:phase.at("allocations")) {
             for (const auto* field:{"identities","child_identities","hosted_instance_identities","overlay_identities"})
                 for (const auto& row:allocation.at(field)) reserve(row.at("proposed_id").get<std::string>());
-            if (phase.at("version")==6 || phase.at("version")==7)
+            if (phase.at("version")==6 || phase.at("version")==7 || phase.at("version")==8)
                 for (const auto& [original,proposed]:allocation.at("dimension_identities").items()) {
                     (void)original;reserve(proposed.get<std::string>());
                 }
@@ -5867,6 +5896,13 @@ static void validate_mixed_properties_replacement_lifetime(const nlohmann::json&
         (void)entity;
         if (!source.contains(id)) fresh.insert(id);
     }
+    // Request eight includes all three Boolean fields, including false ones.
+    // Reserve that actual vocabulary without changing historical requests.
+    if (complete_family_dimension_request)
+        for (const auto* token:{"complete_roof_component_dimensions","complete_slab_component_dimensions",
+                "complete_structural_component_dimensions"})
+            if (fresh.contains(token))
+                throw std::invalid_argument("A Properties destination borrows its family dimension proof field: "+std::string(token));
     validate_retained_authoring_fresh_identities(history,preceding_records,fresh);
     for (std::size_t index=0;index<preceding_records;++index)
         validate_selection_edit_fresh_identity_tokens(history.at(index).entities,fresh);

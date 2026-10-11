@@ -98,6 +98,18 @@ struct PhaseConstraintAuthoringIntent {
     // present exactly when an actual canonical stair child8 supplies its complete
     // dimension authority. The other families keep inner five's semantics;
     // ordinary hosted carry still runs once after composition, excluding walls.
+    // Dialect forty-one alone pairs closed inner nine: version, authoring,
+    // complete_hosted_component_dimensions:true and optional literal-true
+    // complete_{wall,stair,roof,slab,structural}_component_dimensions keys.
+    // Each key matches an actual wall12/stair8/roof11/slab8/structural5 child;
+    // at least one of roof11/slab8/structural5 is required. The nonnested exact
+    // body is four, or five exactly when an actual qualified wall replacement
+    // supplies phase36/wall_edit_version two. Roof11 alone may enclose roof
+    // rotation body ten; historical wrappers retain their original admission.
+    // Real complete leaves preserve original dimensions and reserve fresh
+    // destinations together. The source-derived shared copied roster and one
+    // final ordinary hosted contribution share the 1000-association budget;
+    // final copied frames are independently verified against the original source.
     nlohmann::json coordinated_replacements=nullptr;
     // Dialect nine: source-derived column/beam edits in one saved alternative.
     // Shared baseline owners remain exact; explicit structural intent alone
@@ -181,7 +193,7 @@ struct PhaseConstraintAuthoringIntent {
 [[nodiscard]] nlohmann::json encode_phase_constraint_authoring_intent(
     const PhaseConstraintAuthoringIntent& intent);
 // Borrow the historical coordinated body from an already validated canonical
-// enclosing intent. Inner six/seven/eight's exact closed, literal-true, nonnested
+// enclosing intent. Inner six/seven/eight/nine's exact closed, literal-true, nonnested
 // wrapper is checked before unwrapping once; historical bodies return unchanged.
 // Mutation callers must re-encode the enclosing intent to validate completion.
 // This accessor grants no edit, replay, replacement or publication authority.
@@ -206,7 +218,7 @@ struct PhaseConstraintAuthoringIntent {
 [[nodiscard]] std::map<std::string,Entity,std::less<>> replay_phase_constraint_authoring(
     const std::map<std::string,Entity,std::less<>>& source, const nlohmann::json& proof);
 // Detached physical preview for coordinated authored inner v2/v3/v4/v5 wall
-// replacements, including the exclusive v6/v7/v8 dimension wrappers when present.
+// replacements, including the exclusive v6/v7/v8/v9 dimension wrappers when present.
 // Pending room decisions remain pending; this map is not publication authority.
 [[nodiscard]] PhaseWallReplacementAuthoringPreview inspect_phase_coordinated_authoring(
     const DocumentSnapshot& source,const PhaseConstraintAuthoringIntent& intent);

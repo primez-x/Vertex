@@ -273,22 +273,23 @@ void validate_vertical_members(const Json& value, const Json& scalar) {
 bool phase_selection_dialect(const Json& value) {
     return value.at("version") == 11 || value.at("version") == 12 ||
         value.at("version") == 13 || value.at("version") == 15 || value.at("version") == 21 ||
-        value.at("version") == 24;
+        value.at("version") == 24 || value.at("version") == 27;
 }
 bool phase_room_dialect(const Json& value) {
     return phase_selection_dialect(value) || value.at("version") == 14 || value.at("version") == 16 ||
         value.at("version") == 17 || value.at("version") == 22 || value.at("version") == 23 ||
-        value.at("version") == 25 || value.at("version") == 26;
+        value.at("version") == 25 || value.at("version") == 26 || value.at("version") == 28 ||
+        value.at("version") == 29;
 }
 bool component_dialect(const Json& value) {
     return value.at("version") == 14 || value.at("version") == 16 || value.at("version") == 17 ||
         value.at("version") == 22 || value.at("version") == 23 || value.at("version") == 25 ||
-        value.at("version") == 26;
+        value.at("version") == 26 || value.at("version") == 28 || value.at("version") == 29;
 }
 bool coordinated_component_dialect(const Json& value) {
     return value.at("version") == 16 || value.at("version") == 17 ||
         value.at("version") == 22 || value.at("version") == 23 || value.at("version") == 25 ||
-        value.at("version") == 26;
+        value.at("version") == 26 || value.at("version") == 28 || value.at("version") == 29;
 }
 bool vertical_scalar(const Json& scalar) {
     return !scalar.is_null() && (scalar.at("version") == 4 || scalar.at("version") == 5);
@@ -323,13 +324,19 @@ void validate(const Json& value) {
     Budget budget; budget.visit(value);
     if (value.is_object() && value.contains("version") && component_dialect(value)) {
         const bool stair_dimensions = value.at("version") == 22 || value.at("version") == 23;
-        const bool wall_dimensions = value.at("version") == 25 || value.at("version") == 26;
+        const bool family_dimensions = value.at("version") == 28 || value.at("version") == 29;
+        const bool wall_dimensions = value.at("version") == 25 || value.at("version") == 26 || family_dimensions;
         const bool presentation_carry = value.at("version") == 17 || value.at("version") == 23 ||
-            value.at("version") == 26;
+            value.at("version") == 26 || value.at("version") == 29;
         const bool coordinated = coordinated_component_dialect(value);
         if (coordinated) {
             if (presentation_carry) {
-                if (wall_dimensions) fields(value, {"version", "expected_revision", "source_snapshot_digest", "source_authoring_digest",
+                if (family_dimensions) fields(value, {"version", "expected_revision", "source_snapshot_digest", "source_authoring_digest",
+                    "source_entities_digest", "source_saved_revision", "component_request", "base_intent",
+                    "room_reviews", "phase_room_reviews", "message", "coordinate_component_hosts", "component_identity_reservations",
+                    "carry_component_presentation", "complete_stair_component_dimensions", "complete_wall_component_dimensions",
+                    "complete_roof_component_dimensions", "complete_slab_component_dimensions", "complete_structural_component_dimensions"});
+                else if (wall_dimensions) fields(value, {"version", "expected_revision", "source_snapshot_digest", "source_authoring_digest",
                     "source_entities_digest", "source_saved_revision", "component_request", "base_intent",
                     "room_reviews", "phase_room_reviews", "message", "coordinate_component_hosts", "component_identity_reservations",
                     "carry_component_presentation", "complete_stair_component_dimensions", "complete_wall_component_dimensions"});
@@ -343,7 +350,12 @@ void validate(const Json& value) {
                     "carry_component_presentation"});
                 if (!value.at("carry_component_presentation").is_boolean() || value.at("carry_component_presentation") != true)
                     reject("component presentation Properties requires literal carry_component_presentation:true");
-            } else if (wall_dimensions) fields(value, {"version", "expected_revision", "source_snapshot_digest", "source_authoring_digest",
+            } else if (family_dimensions) fields(value, {"version", "expected_revision", "source_snapshot_digest", "source_authoring_digest",
+                "source_entities_digest", "source_saved_revision", "component_request", "base_intent",
+                "room_reviews", "phase_room_reviews", "message", "coordinate_component_hosts", "component_identity_reservations",
+                "complete_stair_component_dimensions", "complete_wall_component_dimensions", "complete_roof_component_dimensions",
+                "complete_slab_component_dimensions", "complete_structural_component_dimensions"});
+            else if (wall_dimensions) fields(value, {"version", "expected_revision", "source_snapshot_digest", "source_authoring_digest",
                 "source_entities_digest", "source_saved_revision", "component_request", "base_intent",
                 "room_reviews", "phase_room_reviews", "message", "coordinate_component_hosts", "component_identity_reservations",
                 "complete_stair_component_dimensions", "complete_wall_component_dimensions"});
@@ -361,6 +373,15 @@ void validate(const Json& value) {
                     value.at("complete_wall_component_dimensions") != true ||
                     !value.at("complete_stair_component_dimensions").is_boolean()))
                 reject("wall dimension component Properties requires literal wall completion and explicit stair permission");
+            if (family_dimensions) {
+                bool enabled = false;
+                for (const auto* key : {"complete_roof_component_dimensions", "complete_slab_component_dimensions",
+                        "complete_structural_component_dimensions"}) {
+                    if (!value.at(key).is_boolean()) reject("component family dimension permissions must be explicit Booleans");
+                    enabled = enabled || value.at(key) == true;
+                }
+                if (!enabled) reject("component family dimension Properties requires an enabled family permission");
+            }
             if (!value.at("coordinate_component_hosts").is_boolean() || value.at("coordinate_component_hosts") != true)
                 reject("coordinated component Properties requires literal coordinate_component_hosts:true");
             const auto& reservations = value.at("component_identity_reservations");
@@ -400,7 +421,7 @@ void validate(const Json& value) {
         std::set<MemberKey> selected;
         if (!base.is_null()) {
             if (!base.is_object() || !base.contains("version") || !base.at("version").is_number_integer() ||
-                (wall_dimensions ? base.at("version") != 24 : stair_dimensions ? base.at("version") != 21 :
+                (family_dimensions ? base.at("version") != 27 : wall_dimensions ? base.at("version") != 24 : stair_dimensions ? base.at("version") != 21 :
                     !((base.at("version") >= 5 && base.at("version") <= 13) || (coordinated && base.at("version") == 15))))
                 reject("component base must retain its explicit noncomponent Properties dialect");
             if (base.contains("assembly_request") && !base.at("assembly_request").is_null())
@@ -410,6 +431,11 @@ void validate(const Json& value) {
             if (wall_dimensions && value.at("complete_stair_component_dimensions") !=
                     base.at("phase_request").at("complete_stair_component_dimensions"))
                 reject("component stair dimension permission differs from its sealed wall Properties base");
+            if (family_dimensions)
+                for (const auto* key : {"complete_roof_component_dimensions", "complete_slab_component_dimensions",
+                        "complete_structural_component_dimensions"})
+                    if (value.at(key) != base.at("phase_request").at(key))
+                        reject("component family dimension permission differs from its sealed Properties base");
             if (base.at("message").dump() != value.at("message").dump() || !base.at("room_reviews").empty() ||
                 (base.contains("phase_room_reviews") && !base.at("phase_room_reviews").empty()))
                 reject("component base must retain the same message and no completed room decisions");
@@ -448,7 +474,7 @@ void validate(const Json& value) {
             if (qualified_walls &&
                 (row.at("wall_replacement").at("version") != 11 || !leaf.complete_hosted_instances))
                 reject("qualified wall Properties requires explicit leaf eleven room completion");
-            if (coordinated && (base.at("version") == 15 || base.at("version") == 21 || base.at("version") == 24) &&
+            if (coordinated && (base.at("version") == 15 || base.at("version") == 21 || base.at("version") == 24 || base.at("version") == 27) &&
                 !vertical_scalar(base.at("phase_request").at("scalar_request")) && leaf.complete_vertical_profiles)
                 reject("historical Properties has no elevation room completion authority");
             if (base.at("version") == 11 && leaf.complete_vertical_profiles)
@@ -461,7 +487,8 @@ void validate(const Json& value) {
     }
     if (value.is_object() && value.contains("version") && phase_selection_dialect(value)) {
         const bool stair_dimensions = value.at("version") == 21;
-        const bool wall_dimensions = value.at("version") == 24;
+        const bool family_dimensions = value.at("version") == 27;
+        const bool wall_dimensions = value.at("version") == 24 || family_dimensions;
         const bool slab_carry = value.at("version") == 13;
         const bool historical_vertical = value.at("version") == 12 || slab_carry;
         if (!value.at("version").is_number_integer()) reject("Properties dialect must be an integer");
@@ -469,7 +496,7 @@ void validate(const Json& value) {
             "source_entities_digest", "source_saved_revision", "phase_request", "presentation_request",
             "skylight_properties", "roof_opening_members", "room_reviews", "phase_room_reviews", "message", "assembly_request"});
         const auto phase = validate_phase_selection_property_edit_request(value.at("phase_request"));
-        if (wall_dimensions ? phase.at("version") != 7 : stair_dimensions ? phase.at("version") != 6 :
+        if (family_dimensions ? phase.at("version") != 8 : wall_dimensions ? phase.at("version") != 7 : stair_dimensions ? phase.at("version") != 6 :
             value.at("version") == 15 ? phase.at("version") != 5 :
             historical_vertical ? phase.at("version") != (slab_carry ? 4 : 3) :
             (phase.at("version") != 1 && phase.at("version") != 2))
@@ -490,7 +517,7 @@ void validate(const Json& value) {
         if (vertical) validate_vertical_members(value, scalar);
         else {
             // Retain the exact ordinary roster authority for scalar one through
-            // three and child-only selection, including detached dialects fifteen/twenty-one/twenty-four.
+            // three and child-only selection, including detached dialects fifteen/twenty-one/twenty-four/twenty-seven.
             auto roster = value;
             roster.erase("phase_request"); roster.erase("phase_room_reviews");
             roster["ordinary_request"] = scalar;
@@ -1341,11 +1368,14 @@ MixedSelectionPropertyEditPreparation prepare_mixed_selection_property_edit(cons
     const std::vector<PhaseSelectionPropertyIdentityAllocation>& allocations,
     const std::vector<PhaseStairReplacementDependencyDisposition>& dispositions,
     bool complete_wall_hosted_instances, bool complete_stair_component_dimensions,
-    bool complete_wall_component_dimensions) {
+    bool complete_wall_component_dimensions, bool complete_roof_component_dimensions,
+    bool complete_slab_component_dimensions, bool complete_structural_component_dimensions) {
     if (!ordinary && !children) {
         if (complete_wall_hosted_instances) reject("qualified wall Properties requires an actual physical or skylight selection");
         if (complete_stair_component_dimensions) reject("stair dimension Properties requires an actual physical or skylight selection");
         if (complete_wall_component_dimensions) reject("wall dimension Properties requires an actual physical or skylight selection");
+        if (complete_roof_component_dimensions || complete_slab_component_dimensions || complete_structural_component_dimensions)
+            reject("family dimension Properties requires an actual physical or skylight selection");
         if (!allocations.empty() || !dispositions.empty()) reject("phase allocations require an actual physical or skylight selection");
         if (assemblies.empty()) return prepare_properties(source, ordinary, presentation, children, message, nullptr);
         const auto prepared = prepare_assembly_instance_property_edit(source, assemblies);
@@ -1360,9 +1390,12 @@ MixedSelectionPropertyEditPreparation prepare_mixed_selection_property_edit(cons
     request.complete_wall_hosted_instances = complete_wall_hosted_instances;
     request.complete_stair_component_dimensions = complete_stair_component_dimensions;
     request.complete_wall_component_dimensions = complete_wall_component_dimensions;
+    request.complete_roof_component_dimensions = complete_roof_component_dimensions;
+    request.complete_slab_component_dimensions = complete_slab_component_dimensions;
+    request.complete_structural_component_dimensions = complete_structural_component_dimensions;
     const auto phase = prepare_phase_selection_property_edit(source, request);
     auto value = source_fields(source);
-    value["version"] = phase.request().at("version") == 7 ? 24 :
+    value["version"] = phase.request().at("version") == 8 ? 27 : phase.request().at("version") == 7 ? 24 :
         phase.request().at("version") == 6 ? 21 : phase.request().at("version") == 5 ? 15 :
         phase.request().at("version") == 4 ? 13 : phase.request().at("version") == 3 ? 12 : 11;
     value["phase_request"] = phase.request();
@@ -1399,13 +1432,18 @@ MixedSelectionPropertyEditPreparation prepare_coordinated_component_property_edi
     const auto component = prepare_phase_assembly_instance_property_edit(source, authoring);
     auto value = source_fields(source);
     const bool stair_dimensions = replayed_base.intent().at("version") == 21;
-    const bool wall_dimensions = replayed_base.intent().at("version") == 24;
-    value["version"] = wall_dimensions ? 25 : stair_dimensions ? 22 : 16;
+    const bool family_dimensions = replayed_base.intent().at("version") == 27;
+    const bool wall_dimensions = replayed_base.intent().at("version") == 24 || family_dimensions;
+    value["version"] = family_dimensions ? 28 : wall_dimensions ? 25 : stair_dimensions ? 22 : 16;
     if (wall_dimensions) {
         value["complete_wall_component_dimensions"] = true;
         value["complete_stair_component_dimensions"] =
             replayed_base.intent().at("phase_request").at("complete_stair_component_dimensions");
     } else if (stair_dimensions) value["complete_stair_component_dimensions"] = true;
+    if (family_dimensions)
+        for (const auto* key : {"complete_roof_component_dimensions", "complete_slab_component_dimensions",
+                "complete_structural_component_dimensions"})
+            value[key] = replayed_base.intent().at("phase_request").at(key);
     value["coordinate_component_hosts"] = true;
     value["component_identity_reservations"] = component.result().fresh_identity_ids;
     value["component_request"] = component.request();
@@ -1424,13 +1462,18 @@ MixedSelectionPropertyEditPreparation prepare_component_presentation_property_ed
     if (base) require_mixed_selection_property_edit_source_current(source, *base);
     auto value = source_fields(source);
     const bool stair_dimensions = base && base->intent().at("version") == 21;
-    const bool wall_dimensions = base && base->intent().at("version") == 24;
-    value["version"] = wall_dimensions ? 26 : stair_dimensions ? 23 : 17;
+    const bool family_dimensions = base && base->intent().at("version") == 27;
+    const bool wall_dimensions = base && (base->intent().at("version") == 24 || family_dimensions);
+    value["version"] = family_dimensions ? 29 : wall_dimensions ? 26 : stair_dimensions ? 23 : 17;
     if (wall_dimensions) {
         value["complete_wall_component_dimensions"] = true;
         value["complete_stair_component_dimensions"] =
             base->intent().at("phase_request").at("complete_stair_component_dimensions");
     } else if (stair_dimensions) value["complete_stair_component_dimensions"] = true;
+    if (family_dimensions)
+        for (const auto* key : {"complete_roof_component_dimensions", "complete_slab_component_dimensions",
+                "complete_structural_component_dimensions"})
+            value[key] = base->intent().at("phase_request").at(key);
     value["coordinate_component_hosts"] = true;
     value["carry_component_presentation"] = true;
     value["component_identity_reservations"] = component.result().fresh_identity_ids;

@@ -50051,10 +50051,30 @@ private:
         const bool stair_dimensions=authoring.contains("stair_replacement") &&
             !authoring.at("stair_replacement").is_null() &&
             decode_phase_stair_replacement_authoring(authoring.at("stair_replacement")).complete_component_dimensions;
-        json result={{"version",wall_dimensions ? 8 : stair_dimensions ? 7 : 6},{"authoring",std::move(authoring)},
+        const bool roof_dimensions=authoring.contains("roof_replacement") && !authoring.at("roof_replacement").is_null() &&
+            decode_phase_roof_replacement_authoring(authoring.at("roof_replacement")).complete_component_dimensions;
+        const bool slab_dimensions=authoring.contains("slab_replacement") && !authoring.at("slab_replacement").is_null() &&
+            decode_phase_slab_replacement_authoring(authoring.at("slab_replacement")).complete_component_dimensions;
+        const bool structural_dimensions=authoring.contains("structural_replacement") && !authoring.at("structural_replacement").is_null() &&
+            decode_phase_structural_replacement_authoring(authoring.at("structural_replacement")).complete_component_dimensions;
+        const bool other_dimensions=roof_dimensions || slab_dimensions || structural_dimensions;
+        if (other_dimensions && authoring.at("version")<4) {
+            // The new enclosure carries a complete family shape, including
+            // explicit empty lanes, without inferring any additional edit.
+            authoring["version"]=4;
+            if (!authoring.contains("wall_authoring")) authoring["wall_authoring"]=nullptr;
+            if (!authoring.contains("structural_replacement")) authoring["structural_replacement"]=nullptr;
+            if (!authoring.contains("ordinary_structural_edits")) authoring["ordinary_structural_edits"]=json::array();
+            authoring["stair_replacement"]=nullptr;
+            authoring["ordinary_stair_transforms"]=json::array();
+        }
+        json result={{"version",other_dimensions ? 9 : wall_dimensions ? 8 : stair_dimensions ? 7 : 6},{"authoring",std::move(authoring)},
             {"complete_hosted_component_dimensions",true}};
         if (wall_dimensions) result["complete_wall_component_dimensions"]=true;
         if (stair_dimensions) result["complete_stair_component_dimensions"]=true;
+        if (roof_dimensions) result["complete_roof_component_dimensions"]=true;
+        if (slab_dimensions) result["complete_slab_component_dimensions"]=true;
+        if (structural_dimensions) result["complete_structural_component_dimensions"]=true;
         return result;
     }
 
@@ -50817,7 +50837,7 @@ private:
                     validate_mixed_clipboard_placement_intent(encoded.at("clipboard_placement_intent")) :
                     validate_mixed_selection_edit_intent(encoded.at("mixed_selection_edit_intent"));
                 const auto dialect=intent.at("version").get<int>();
-                if (version==52 && ((dialect>=5 && dialect<=13) || (dialect>=15 && dialect<=17) || (dialect>=21 && dialect<=26))) {
+                if (version==52 && ((dialect>=5 && dialect<=13) || (dialect>=15 && dialect<=17) || (dialect>=21 && dialect<=29))) {
                     // Properties dialects have no transform roof_authoring.
                     // Active-baseline redirects require independently replayed
                     // source authority rather than extracting supplied maps.
@@ -51528,7 +51548,7 @@ private:
         if (stairs.empty()) throw std::invalid_argument("The stair group requires an actual stair or railing.");
         const auto stair_command=sourceDerivedStairTransformCommand(source,stairs,message);
         if (other.empty()) return stair_command;
-        const auto other_command=sourceDerivedPhysicalGroupTransformCommand(source,other,message,false);
+        const auto other_command=sourceDerivedPhysicalGroupTransformCommand(source,other,message);
         const auto empty=[](const Command& command) {
             const auto ordinary=std::get_if<ApplyEntityChanges>(&command);
             return ordinary && ordinary->entity_changes.empty() && ordinary->asset_changes.empty();
@@ -51630,12 +51650,10 @@ private:
         });
         if (structural.empty()) return other.empty() ? Command{ApplyEntityChanges{source.revision(), {}, {}, message}} :
             sourceDerivedRoofSlabTransformCommand(source, other, message,complete_component_dimensions);
-        // Historical mixed-family records cannot grant the new standalone
-        // dimension-copy authority. Their dedicated enclosure is separate.
         const auto structural_command = sourceDerivedStructuralEditCommand(source, structural, message,
-            complete_component_dimensions && other.empty());
+            complete_component_dimensions);
         if (other.empty()) return structural_command;
-        const auto other_command = sourceDerivedRoofSlabTransformCommand(source, other, message,false);
+        const auto other_command = sourceDerivedRoofSlabTransformCommand(source, other, message,complete_component_dimensions);
         const auto* ordinary_structural = std::get_if<ApplyEntityChanges>(&structural_command);
         const auto* ordinary_other = std::get_if<ApplyEntityChanges>(&other_command);
         if (ordinary_other && ordinary_other->entity_changes.empty()) return structural_command;
@@ -51759,8 +51777,7 @@ private:
             const auto& type=source.entities().at(target.entity_id).type;
             return type=="stair" || type=="railing";
         });
-        const auto physical_command = sourceDerivedPhysicalGroupTransformCommand(source, physical_targets, message,
-            wall_move.targets.empty());
+        const auto physical_command = sourceDerivedPhysicalGroupTransformCommand(source, physical_targets, message);
         if (wall_move.targets.empty()) return physical_command;
         ConstraintAuthoringIntent wall_semantic;
         wall_semantic.wall_geometry_move = std::move(wall_move);
@@ -51930,8 +51947,9 @@ private:
         if (slabs.empty()) return sourceDerivedRoofMathEditCommand(source, roof_physical, std::move(roof_edits), message,
             nullptr,false,complete_component_dimensions);
 
-        const auto roof_command = sourceDerivedRoofMathEditCommand(source, roof_physical, roof_edits, message,nullptr,false,false);
-        const auto slab_command = sourceDerivedSlabGeometryEditCommand(source, slabs, message,false);
+        const auto roof_command = sourceDerivedRoofMathEditCommand(source, roof_physical, roof_edits, message,
+            nullptr,false,complete_component_dimensions);
+        const auto slab_command = sourceDerivedSlabGeometryEditCommand(source, slabs, message,complete_component_dimensions);
         const auto* ordinary_roofs = std::get_if<ApplyEntityChanges>(&roof_command);
         const auto* ordinary_slabs = std::get_if<ApplyEntityChanges>(&slab_command);
         if (ordinary_roofs && ordinary_slabs) {
@@ -59856,14 +59874,14 @@ private:
                     mixed_edit=true;
                     const auto intent=validate_mixed_selection_edit_intent(value.mixed_selection_edit_intent);
                     const auto properties_dialect=intent.at("version").get<int>();
-                    if ((properties_dialect>=5 && properties_dialect<=13) || (properties_dialect>=15 && properties_dialect<=17) || (properties_dialect>=21 && properties_dialect<=26)) {
+                    if ((properties_dialect>=5 && properties_dialect<=13) || (properties_dialect>=15 && properties_dialect<=17) || (properties_dialect>=21 && properties_dialect<=29)) {
                         // Properties has its own typed lanes, including a null
                         // physical lane for annotation-only edits. Gesture
                         // ordinary_request codecs cannot decode this roster.
-                        const bool component_properties=properties_dialect==16 || properties_dialect==17 || properties_dialect==22 || properties_dialect==23 || properties_dialect==25 || properties_dialect==26;
+                        const bool component_properties=properties_dialect==16 || properties_dialect==17 || properties_dialect==22 || properties_dialect==23 || properties_dialect==25 || properties_dialect==26 || properties_dialect==28 || properties_dialect==29;
                         const auto& selection_properties=component_properties ? intent.at("base_intent") : intent;
                         const bool phased=!selection_properties.is_null() &&
-                            (selection_properties.at("version")==11 || selection_properties.at("version")==12 || selection_properties.at("version")==13 || selection_properties.at("version")==15 || selection_properties.at("version")==21 || selection_properties.at("version")==24);
+                            (selection_properties.at("version")==11 || selection_properties.at("version")==12 || selection_properties.at("version")==13 || selection_properties.at("version")==15 || selection_properties.at("version")==21 || selection_properties.at("version")==24 || selection_properties.at("version")==27);
                         const json no_physical=nullptr;
                         const auto& physical=selection_properties.is_null() ? no_physical :
                             phased ? selection_properties.at("phase_request").at("scalar_request") : selection_properties.at("ordinary_request");
@@ -59911,7 +59929,7 @@ private:
                     }
                     // Qualified children never promote their compatibility host
                     // IDs into ordinary presented-object selection authority.
-                    const auto& roof_selection=(intent.at("version")==16 || intent.at("version")==17 || intent.at("version")==22 || intent.at("version")==23 || intent.at("version")==25 || intent.at("version")==26)
+                    const auto& roof_selection=(intent.at("version")==16 || intent.at("version")==17 || intent.at("version")==22 || intent.at("version")==23 || intent.at("version")==25 || intent.at("version")==26 || intent.at("version")==28 || intent.at("version")==29)
                         ? intent.at("base_intent") : intent;
                     if (!roof_selection.is_null()) for (const auto& child:roof_selection.at("roof_opening_members"))
                         targets.insert(child.at("opening_id").template get<std::string>());
@@ -70776,7 +70794,7 @@ public:
                 return member.family!=SelectionPropertyFamily::wall && member.family!=SelectionPropertyFamily::slab &&
                     member.family!=SelectionPropertyFamily::hosted_opening;
             })) throw std::invalid_argument("This elevation workflow requires walls, floor slabs and their hosted openings.");
-        const auto inventory=inspect_phase_selection_property_edit(source,request,{},std::nullopt,true,false,true);
+        const auto inventory=inspect_phase_selection_property_edit(source,request,{},std::nullopt,true,false,true,false,true,false);
         auto occupied=retainedSlabIdentityNames(source,true);
         std::vector<PhaseSelectionPropertyIdentityAllocation> allocations;
         for (const auto& cohort:inventory.replacements()) {
@@ -70812,12 +70830,17 @@ public:
                 allocate(plan);
                 for (const auto& id:plan.required_dimension_ids)
                     allocation.dimension_identities.emplace(id,fresh("proposed-wall-dimension"));
-            } else allocate(std::get<PhaseSlabReplacementPlan>(cohort.plan));
+            } else {
+                const auto& plan=std::get<PhaseSlabReplacementPlan>(cohort.plan);
+                allocate(plan);
+                for (const auto& id:plan.required_dimension_ids)
+                    allocation.dimension_identities.emplace(id,fresh("proposed-slab-dimension"));
+            }
             allocations.push_back(std::move(allocation));
         }
         return prepare_mixed_selection_property_edit(source,std::optional<SelectionPropertyEditRequest>{request},
             std::nullopt,std::nullopt,message,std::span<const AssemblyInstancePropertyEditIntent>{},allocations,{},
-            true,false,true);
+            true,false,true,false,true,false);
     }
 
     bool publishWallElevationProperties(const DocumentSnapshot& source,
@@ -70975,7 +70998,7 @@ public:
             if (ordinary_request || roof_properties) {
                 SelectionPropertyEditRequest empty;
                 empty.unchanged_policy=SelectionPropertyUnchangedPolicy::retain;
-                phase_inspection=inspect_phase_selection_property_edit(*source,ordinary_request.value_or(empty),{},roof_properties,true,true,true);
+                phase_inspection=inspect_phase_selection_property_edit(*source,ordinary_request.value_or(empty),{},roof_properties,true,true,true,true,true,true);
             }
             const bool replacing=phase_inspection && !phase_inspection->replacements().empty();
             std::vector<PhaseStairReplacementDependencyDisposition> phase_dispositions;
@@ -71027,7 +71050,7 @@ public:
                 SelectionPropertyEditRequest empty;empty.unchanged_policy=SelectionPropertyUnchangedPolicy::retain;
                 // Decisions may change the actual replacement closure. Discover
                 // that final inventory before assigning any fresh identity.
-                phase_inspection=inspect_phase_selection_property_edit(*source,ordinary_request.value_or(empty),phase_dispositions,roof_properties,true,true,true);
+                phase_inspection=inspect_phase_selection_property_edit(*source,ordinary_request.value_or(empty),phase_dispositions,roof_properties,true,true,true,true,true,true);
                 auto occupied=retainedSlabIdentityNames(*source,true);
                 for (const auto& id:ordinary) occupied.insert(id.toStdString());
                 for (const auto& child:children) { occupied.insert(child.roof_id.toStdString());occupied.insert(child.opening_id.toStdString()); }
@@ -71054,9 +71077,8 @@ public:
                         } else {
                             for (const auto& id:plan.required_child_ids)
                                 if (!allocation.identities.contains(id)) allocation.identities.emplace(id,fresh("proposed-child"));
-                            if constexpr (std::is_same_v<Plan,PhaseWallReplacementPlan>)
-                                for (const auto& id:plan.required_dimension_ids)
-                                    allocation.dimension_identities.emplace(id,fresh("proposed-wall-dimension"));
+                            for (const auto& id:plan.required_dimension_ids)
+                                allocation.dimension_identities.emplace(id,fresh("proposed-dimension"));
                         }
                         for (const auto& key:plan.required_hosted_instance_ids) {
                             auto id=fresh("proposed-component");
@@ -71105,10 +71127,6 @@ public:
                 }
             }
             const auto assembly_intents=dialog.assemblyIntents();
-            const bool copy_wall_components=phase_inspection &&
-                std::any_of(phase_inspection->replacements().begin(),phase_inspection->replacements().end(),[](const auto& cohort) {
-                    return cohort.lane==PhaseSelectionPropertyLane::walls;
-                });
             const bool copy_stair_dimensions=phase_inspection &&
                 std::any_of(phase_inspection->replacements().begin(),phase_inspection->replacements().end(),[](const auto& cohort) {
                     return cohort.lane==PhaseSelectionPropertyLane::stairs;
@@ -71132,7 +71150,7 @@ public:
                         if (has_noncomponent) base=replacing
                             ? prepare_mixed_selection_property_edit(*source,ordinary_request,presentation_request,
                                 roof_properties,message,std::span<const AssemblyInstancePropertyEditIntent>{},
-                                allocations,phase_dispositions,copy_wall_components,copy_stair_dimensions,copy_wall_components)
+                                allocations,phase_dispositions,true,copy_stair_dimensions,true,true,true,true)
                             : stair_review
                             ? prepare_mixed_selection_property_edit(*source,ordinary_request,presentation_request,
                                 roof_properties,message,*stair_review)
@@ -71171,7 +71189,7 @@ public:
                 }
                 return replacing
                     ? prepare_mixed_selection_property_edit(*source,ordinary_request,presentation_request,
-                        roof_properties,message,assembly_intents,allocations,phase_dispositions,copy_wall_components,copy_stair_dimensions,copy_wall_components)
+                        roof_properties,message,assembly_intents,allocations,phase_dispositions,true,copy_stair_dimensions,true,true,true,true)
                     : !assembly_intents.empty()
                     ? prepare_mixed_selection_property_edit(*source,ordinary_request,presentation_request,
                         roof_properties,message,assembly_intents,stair_review)
