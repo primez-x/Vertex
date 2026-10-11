@@ -83,6 +83,10 @@ private:
 // replay their own actual-source operator to an exactly unchanged full map,
 // and require their entire owner unchanged in the final composed result.
 // This conveys neither changed-child nor phase replacement authority.
+// Version five is the separate mixed scalar Properties dialect declared in
+// mixed_selection_property_edit.hpp. It rederives physical/presentation/child
+// edits together and requires every affected retained-room review. Historical
+// gesture requests keep their original versions and meanings.
 [[nodiscard]] nlohmann::json make_mixed_selection_edit_intent(
     const DocumentSnapshot& source, const nlohmann::json& ordinary_request,
     const nlohmann::json& roof_authoring, const nlohmann::json& roof_members,

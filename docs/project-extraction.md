@@ -1,5 +1,11 @@
 # Portable project extraction
 
+Exchange version191 requires native reader193 for mixed scalar Properties
+dialect five in command envelope52, including its complete typed selected
+rosters, original snapshot/save bindings and mandatory room decisions. The
+native reader-floor scan includes direct, nested, retained and undone history.
+Source integration does not certify interaction, recovery or exchange fidelity.
+
 Exchange version190 requires native reader192 for selected-geometry request two,
 joint similarity intent eleven, source-only command53, pure phase intent22 and
 measured schema/replay six. Exact owner coverage, positive finite scales,

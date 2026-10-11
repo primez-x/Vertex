@@ -413,6 +413,19 @@ std::vector<RoofEditIntent> prepare_roof_opening_group_transform(const Entities&
 std::vector<RoofEditIntent> prepare_roof_opening_group_properties(const Entities& actual,
     const RoofOpeningGroupProperties& request) {
     bounded_group(request.members.size());
+    return prepare_roof_opening_group_properties(actual, request, {});
+}
+
+std::vector<RoofEditIntent> prepare_roof_opening_group_properties(const Entities& actual,
+    const RoofOpeningGroupProperties& request, const std::vector<RoofProfileEditIntent>& profiles) {
+    return prepare_roof_opening_group_properties_composite(actual, request, profiles).intents;
+}
+
+PreparedRoofOpeningGroupProperties prepare_roof_opening_group_properties_composite(const Entities& actual,
+    const RoofOpeningGroupProperties& request, const std::vector<RoofProfileEditIntent>& profiles) {
+    if (request.members.empty() && profiles.empty()) invalid("Roof Properties requires actual selected members");
+    if (request.members.size() > group_limit || profiles.size() > group_limit)
+        invalid("Roof Properties cohort budget exceeded");
     const auto width = property_metres(request.width), depth = property_metres(request.depth);
     const auto frame_width = property_metres(request.frame_width);
     const auto curb_height = property_metres(request.curb_height, false);
@@ -421,6 +434,16 @@ std::vector<RoofEditIntent> prepare_roof_opening_group_properties(const Entities
         *request.rotation_radians < -std::numbers::pi || *request.rotation_radians > std::numbers::pi))
         invalid("Skylight property rotation must be finite and canonical in [-pi,pi]");
     Hosts hosts;
+    Entities staged_profiles;
+    Hosts final_hosts;
+    std::map<std::string, RoofProfileEditIntent, std::less<>> profile_inputs;
+    for (const auto& profile : profiles) {
+        (void)encode_roof_profile_edit_intent(profile);
+        if (!profile_inputs.emplace(profile.roof_id, profile).second)
+            invalid("Roof Properties has duplicate profile targets");
+        staged_profiles.emplace(profile.roof_id,
+            stage_roof_profile_entity(actual_roof(actual, profile.roof_id), profile));
+    }
     MemberIds ids;
     std::map<std::string, RoofOpeningEditIntent, std::less<>> grouped;
     for (const auto& member : request.members) {
@@ -428,7 +451,9 @@ std::vector<RoofEditIntent> prepare_roof_opening_group_properties(const Entities
         const auto& owner = actual_host(actual, hosts, member.roof_id);
         const auto source = skylight(owner, member.opening_id);
         const auto before = plan_frame(owner, source);
-        const auto final_scales = scales(owner, before.center);
+        const auto& final_owner = staged_profiles.contains(member.roof_id)
+            ? actual_host(staged_profiles, final_hosts, member.roof_id) : owner;
+        const auto final_scales = scales(final_owner, before.center);
         auto final = source;
         if (request.rotation_radians) final.rotation_radians = *request.rotation_radians;
         // Reference scales depend on the actual facet at the retained centre,
@@ -444,7 +469,7 @@ std::vector<RoofEditIntent> prepare_roof_opening_group_properties(const Entities
         // retains its exact coordinate and input receipt, without cancellation.
         if (final.width != source.width) final.x = source.x + (source.width - final.width) * .5;
         if (final.depth != source.depth) final.y = source.y + (source.depth - final.depth) * .5;
-        const auto after = plan_frame(owner, final);
+        const auto after = plan_frame(final_owner, final);
         if (after.width_surface_scale != final_scales.x || after.depth_surface_scale != final_scales.y)
             invalid("Skylight property edit cannot change its retained reference facet metric");
         auto [entry, inserted] = grouped.try_emplace(member.roof_id, opening_intent(owner));
@@ -487,13 +512,27 @@ std::vector<RoofEditIntent> prepare_roof_opening_group_properties(const Entities
     for (auto& [id, opening] : grouped) {
         (void)id;
         auto edit = composite(std::move(opening));
+        if (const auto profile = profile_inputs.find(edit.roof_id); profile != profile_inputs.end()) {
+            edit.profile = profile->second;
+            profile_inputs.erase(profile);
+        }
         edit.coordinate_world_hosted_geometry = true;
         result.push_back(std::move(edit));
     }
-    const auto admitted = replay_roof_edit_entities(actual, result);
+    for (const auto& [id, profile] : profile_inputs) {
+        RoofEditIntent edit;
+        edit.roof_id = id;
+        edit.profile = profile;
+        edit.coordinate_world_hosted_geometry = true;
+        result.push_back(std::move(edit));
+    }
+    std::sort(result.begin(), result.end(), [](const auto& left, const auto& right) {
+        return left.roof_id < right.roof_id;
+    });
+    auto admitted = replay_roof_edit_entities(actual, result);
     if (!request.retain_invariant_members)
         std::erase_if(result, [&](const auto& edit) { return admitted.at(edit.roof_id) == actual.at(edit.roof_id); });
-    return result;
+    return {std::move(result), std::move(admitted)};
 }
 
 std::vector<RoofEditIntent> prepare_roof_opening_group_removal(const Entities& actual,

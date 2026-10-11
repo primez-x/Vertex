@@ -3260,8 +3260,11 @@ static std::vector<nlohmann::json> phase_constraint_authoring_proofs(const Apply
         const auto version=proof.at("version").get<int>();
         if (version==34) result.push_back(proof.at("phase_constraint_authoring_intent"));
         else if (version==52) {
-            const auto& roof=proof.at("mixed_selection_edit_intent").at("roof_authoring");
-            if (!roof.is_null()) result.push_back(roof);
+            const auto& mixed=proof.at("mixed_selection_edit_intent");
+            if (mixed.at("version")!=5) {
+                const auto& roof=mixed.at("roof_authoring");
+                if (!roof.is_null()) result.push_back(roof);
+            }
         }
         else if (version==51) {
             const auto& roof=proof.at("clipboard_placement_intent").at("roof_authoring");
@@ -3706,8 +3709,11 @@ static PhaseConstraintLifetimeProofs phase_constraint_lifetime_proofs(const Appl
         if (proof.at("kind")!="apply_boundary_constraint_changes") return;
         const auto version=proof.at("version").get<int>();
         if (version==52) {
-            const auto& roof=proof.at("mixed_selection_edit_intent").at("roof_authoring");
-            if (!roof.is_null()) result.phase_proofs.push_back(roof);
+            const auto& mixed=proof.at("mixed_selection_edit_intent");
+            if (mixed.at("version")!=5) {
+                const auto& roof=mixed.at("roof_authoring");
+                if (!roof.is_null()) result.phase_proofs.push_back(roof);
+            }
         }
         else if (version==51) {
             const auto& roof=proof.at("clipboard_placement_intent").at("roof_authoring");

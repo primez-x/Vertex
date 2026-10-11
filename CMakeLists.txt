@@ -846,6 +846,7 @@ if(SKETCH_BUILD_ARCHITECTURE OR SKETCH_BUILD_DESKTOP)
     src/core/authored_phase_membership.cpp src/core/mixed_clipboard_command.cpp
     src/core/ordinary_selection_edit.cpp src/core/mixed_selection_edit.cpp
     src/core/selection_property_edit.cpp
+    src/core/selection_presentation_property_edit.cpp src/core/mixed_selection_property_edit.cpp
     src/core/selection_geometry_transform.cpp
     src/core/selection_geometry_review.cpp
     src/core/phase_coordinated_demolition.cpp
@@ -1141,6 +1142,7 @@ if(SKETCH_BUILD_DESKTOP)
     src/desktop/text_library_panel.cpp
     src/desktop/appraisal_report_dialog.cpp src/desktop/appraisal_details_panel.cpp
     src/desktop/assembly_authoring_dialog.cpp src/desktop/site_placement_dialog.cpp
+    src/desktop/selection_properties_dialog.cpp
     src/desktop/drawing_input_panel.cpp src/desktop/area_class_palette.cpp)
   target_link_libraries(sketch_desktop PUBLIC sketch_text_library)
   target_link_libraries(sketch_desktop PUBLIC sketch_floor_reference)

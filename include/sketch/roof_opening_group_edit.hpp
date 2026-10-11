@@ -101,6 +101,28 @@ struct RoofOpeningGroupClonePlacement {
     const std::map<std::string, Entity, std::less<>>& actual,
     const RoofOpeningGroupProperties& request);
 
+// Original-source composite Properties preparation. Scalar profiles stage
+// against their actual owners; child reference centres and physical sizes read
+// those original owners, then rebase to the complete final profile's facet.
+// Only the complete roof/profile/child cohort receives native admission. Empty
+// members permit profile-only preparation; no caller candidate is accepted.
+[[nodiscard]] std::vector<RoofEditIntent> prepare_roof_opening_group_properties(
+    const std::map<std::string, Entity, std::less<>>& actual,
+    const RoofOpeningGroupProperties& request,
+    const std::vector<RoofProfileEditIntent>& profiles);
+
+struct PreparedRoofOpeningGroupProperties {
+    std::vector<RoofEditIntent> intents;
+    std::map<std::string, Entity, std::less<>> candidate_entities;
+};
+// The same preparation with its complete independently replayed map, avoiding
+// a second full native admission just to retrieve the result. This return
+// value is original-source evidence only, never command/publication authority.
+[[nodiscard]] PreparedRoofOpeningGroupProperties prepare_roof_opening_group_properties_composite(
+    const std::map<std::string, Entity, std::less<>>& actual,
+    const RoofOpeningGroupProperties& request,
+    const std::vector<RoofProfileEditIntent>& profiles);
+
 // Removal-only actual-source authority. Every named member must be a real
 // profiled child of its named roof; containing roofs are never selected roots.
 // Complete replay admits the whole roster before returning any removal intent.

@@ -64,6 +64,14 @@ bool curve_proposal(const std::optional<Command>& predecessor) {
     const auto* command=predecessor?std::get_if<ApplyBoundaryConstraintChanges>(&*predecessor):nullptr;
     return command && command->curve_construction_completion;
 }
+DocumentSnapshot property_room_stage(const DocumentSnapshot& original,
+    const MixedSelectionPropertyEditPreparation& preparation,const std::vector<nlohmann::json>& prefix) {
+    if (prefix.size()>=preparation.required_room_reviews().size())
+        throw std::invalid_argument("There is no next required Properties room review.");
+    auto stage=preview_mixed_selection_property_room_stage(original,preparation,prefix);
+    if (stage.is_editable()) throw std::invalid_argument("The Properties room drawing stage must remain read-only.");
+    return stage;
+}
 } // namespace
 
 class PhysicalWallRoomReviewDialog::Impl {
@@ -84,6 +92,8 @@ public:
     };
     PhysicalWallRoomReviewDialog* dialog;
     DocumentSnapshot original_source;
+    std::optional<MixedSelectionPropertyEditPreparation> property_preparation;
+    std::vector<nlohmann::json> property_review_prefix;
     DocumentSnapshot source;
     std::optional<Command> predecessor;
     std::function<DocumentSnapshot()> current_source;
@@ -103,6 +113,7 @@ public:
     std::map<Child,QComboBox*> mappings;
     std::optional<std::size_t> active;
     std::optional<ApplyBoundaryConstraintChanges> candidate,accepted;
+    std::optional<nlohmann::json> candidate_room_intent,accepted_room_intent;
     std::optional<DocumentSnapshot> candidate_snapshot;
     std::optional<DocumentSnapshot> dimension_source;
     std::vector<PhysicalWallRoomDimensionPlacement> selected_dimension_placements;
@@ -113,10 +124,16 @@ public:
 
     Impl(PhysicalWallRoomReviewDialog* owner,DocumentSnapshot captured,std::string wall_id,bool metric_units,
         std::function<DocumentSnapshot()> current,std::optional<Command> geometry,
-        std::optional<DrawingContext> context=std::nullopt,std::optional<double> elevation=std::nullopt):dialog(owner),original_source(std::move(captured)),
-        source(geometry?preview_physical_wall_room_review_geometry(original_source,*geometry):original_source),predecessor(std::move(geometry)),
+        std::optional<DrawingContext> context=std::nullopt,std::optional<double> elevation=std::nullopt,
+        std::optional<MixedSelectionPropertyEditPreparation> properties=std::nullopt,
+        std::vector<nlohmann::json> prior_reviews={}):dialog(owner),original_source(std::move(captured)),
+        property_preparation(std::move(properties)),property_review_prefix(std::move(prior_reviews)),
+        source(property_preparation?property_room_stage(original_source,*property_preparation,property_review_prefix):
+            geometry?preview_physical_wall_room_review_geometry(original_source,*geometry):original_source),predecessor(std::move(geometry)),
         current_source(std::move(current)),original_digest(document_snapshot_digest(original_source)),
-        source_digest(document_snapshot_digest(source)),metric(metric_units),selected_context(std::move(context)),selected_elevation(elevation) {
+        source_digest(document_snapshot_digest(source)),metric(metric_units),
+        selected_context(property_preparation?std::optional<DrawingContext>{property_preparation->required_room_reviews().at(property_review_prefix.size()).context}:std::move(context)),
+        selected_elevation(property_preparation?std::optional<double>{property_preparation->required_room_reviews().at(property_review_prefix.size()).effective_elevation_m}:elevation) {
         dialog->setObjectName(QStringLiteral("physicalRoomReviewDialog"));dialog->setWindowTitle(QStringLiteral("Review rooms from walls"));dialog->resize(1100,900);
         auto* layout=new QVBoxLayout(dialog);
         auto help_text=QStringLiteral("Choose what happens to every previous room and current space. "
@@ -132,6 +149,7 @@ public:
             walls->setCurrentIndex(walls->findData(text(wall_id)));
         }
         layout->addWidget(walls);walls->setVisible(!selected_context.has_value());
+        if (property_preparation) walls->setEnabled(false);
         canvas=new PlanCanvas(dialog);canvas->setObjectName(QStringLiteral("physicalRoomReviewCanvas"));canvas->setMinimumHeight(270);
         canvas->setGridEnabled(false);canvas->setSnapEnabled(false);canvas->setOverviewMapEnabled(false);canvas->setSelectionTransformEnabled(false,false);layout->addWidget(canvas,1);
         tabs=new QTabWidget(dialog);tabs->setObjectName(QStringLiteral("physicalRoomReviewTabs"));
@@ -156,7 +174,7 @@ public:
         status=new QLabel(dialog);status->setObjectName(QStringLiteral("physicalRoomReviewStatus"));status->setWordWrap(true);status->setTextFormat(Qt::PlainText);layout->addWidget(status);
         auto* buttons=new QDialogButtonBox(QDialogButtonBox::Apply|QDialogButtonBox::Cancel,dialog);
         apply=buttons->button(QDialogButtonBox::Apply);apply->setObjectName(QStringLiteral("physicalRoomReviewApply"));
-        apply->setText(!predecessor?QStringLiteral("Apply reviewed rooms"):
+        apply->setText(property_preparation?QStringLiteral("Accept reviewed rooms"):!predecessor?QStringLiteral("Apply reviewed rooms"):
             selected_context?QStringLiteral("Apply wall deletion and reviewed rooms"):
             curve_proposal(predecessor)?QStringLiteral("Apply curve and reviewed rooms"):
             QStringLiteral("Apply wall edit and reviewed rooms"));layout->addWidget(buttons);
@@ -171,6 +189,7 @@ public:
         reset();
     }
     void set_deletion_consequences(const DocumentSnapshot& original,const ApplyEntityChanges& deletion) {
+        if (property_preparation) throw std::invalid_argument("Scalar Properties has no wall deletion authority.");
         if (deletion_acknowledgement) throw std::invalid_argument("Wall deletion consequences are already captured.");
         if (!is_physical_wall_room_deletion_review_command(Command{deletion}))
             throw std::invalid_argument("The wall deletion consequence list has no original removal command.");
@@ -237,6 +256,7 @@ public:
     }
     void set_selected_dimension_placements(const DocumentSnapshot& original,
         const std::vector<PhysicalWallRoomDimensionPlacement>& placements,bool allow_reviewed_removal) {
+        if (property_preparation) throw std::invalid_argument("Scalar Properties has no dimension placement authority.");
         require_current();
         if (dimension_source) throw std::invalid_argument("Selected dimension placements are already captured.");
         if (!report || original.document_id()!=original_source.document_id() || !original.is_editable())
@@ -280,6 +300,7 @@ public:
     }
     void fail(QString reason) {
         candidate.reset();candidate_snapshot.reset();accepted.reset();apply->setEnabled(false);error=std::move(reason);status->setText(error);
+        candidate_room_intent.reset();accepted_room_intent.reset();
         if (!invalidated && !is_current()) {
             invalidated=true;const auto previous_rebuilding=rebuilding;rebuilding=true;
             report.reset();retained.clear();fresh.clear();references.clear();graphs.clear();mappings.clear();active.reset();
@@ -294,6 +315,7 @@ public:
     void reset() {
         rebuilding=true;report.reset();retained.clear();fresh.clear();references.clear();graphs.clear();mappings.clear();active.reset();
         candidate.reset();candidate_snapshot.reset();accepted.reset();
+        candidate_room_intent.reset();accepted_room_intent.reset();
         for (auto* t:{retained_table,fresh_table,reference_table,mapping_table,graph_table}) t->setRowCount(0);
         try {
             require_current();
@@ -349,7 +371,9 @@ public:
         } catch (const std::exception& e) {rebuilding=false;fail(QString::fromUtf8(e.what()));scene();}
     }
     void inventory() {
-        const auto constraint_scope=source.uses_active_phase_constraints()
+        const bool saved_property_phases=property_preparation && std::any_of(source.entities().begin(),source.entities().end(),
+            [](const auto& entry){return entry.second.type=="model_phases";});
+        const auto constraint_scope=(source.uses_active_phase_constraints() || saved_property_phases)
             ? std::optional<ConstraintPhaseScope>{constraint_phase_scope(source.entities())} : std::nullopt;
         for (const auto& [id,e]:source.entities()) {
             Reference reference;reference.id=id;QString label;
@@ -550,6 +574,11 @@ public:
         result.active_phase_room_scope=report->active_phase_room_scope;
         result.source_entities_digest=entity_map_digest(source.entities());result.context=report->context;result.effective_elevation_m=report->effective_elevation_m;
         result.source_authoring_digest=document_authoring_source_digest_v2(source);result.source_saved_revision=source.saved_revision_optional();
+        if (property_preparation) {
+            result.source_snapshot_digest=original_digest;
+            result.source_authoring_digest=document_authoring_source_digest_v2(original_source);
+            result.source_saved_revision=original_source.saved_revision_optional();
+        }
         const auto assigned=assignments();std::set<std::string> retiring;
         for (std::size_t i=0;i<report->retained.size();++i) {
             const auto& old=report->retained[i];const auto action=value(retained.at(old.room.id));
@@ -632,6 +661,7 @@ public:
     }
     void update(bool room_assignments_changed=false) {
         candidate.reset();candidate_snapshot.reset();accepted.reset();apply->setEnabled(false);
+        candidate_room_intent.reset();accepted_room_intent.reset();
         for (int row=0;row<reference_table->rowCount();++row) reference_table->item(row,2)->setText({});
         std::set<std::string> retiring;for (const auto& [id,c]:retained) if (value(c)=="retire") retiring.insert(id);
         for (auto& f:fresh) {
@@ -644,7 +674,15 @@ public:
                 throw std::invalid_argument("Review the Wall deletion tab and confirm its listed removals.");
             const auto decisions=intent();
             ApplyBoundaryConstraintChanges command;
+            std::optional<nlohmann::json> room_intent;
             auto exact=[&]() {
+                if (property_preparation) {
+                    room_intent=encode_physical_wall_room_review_intent(decisions);
+                    auto prefix=property_review_prefix;prefix.push_back(*room_intent);
+                    auto reviewed=preview_mixed_selection_property_room_stage(original_source,*property_preparation,prefix);
+                    if (reviewed.is_editable()) throw std::invalid_argument("The Properties room candidate must remain read-only.");
+                    return reviewed;
+                }
                 if (predecessor) {
                     auto prepared=prepare_physical_wall_room_review_after_geometry(original_source,*predecessor,*report,decisions);
                     command=std::move(prepared.command);return std::move(prepared.snapshot);
@@ -678,7 +716,10 @@ public:
                 }
                 reference_table->item(static_cast<int>(i),2)->setText(description);
             }
-            require_current();candidate=std::move(command);candidate_snapshot=std::move(exact);error.clear();
+            require_current();
+            if (property_preparation) candidate_room_intent=std::move(room_intent);
+            else candidate=std::move(command);
+            candidate_snapshot=std::move(exact);error.clear();
             status->clear();apply->setEnabled(true);
         } catch (const std::exception& e) {fail(QString::fromUtf8(e.what()));}
         scene();
@@ -718,7 +759,18 @@ public:
         canvas->setEntities(std::move(entities));canvas->setLabels(std::move(labels));
     }
     bool submit() {
-        update();if (!candidate || !candidate_snapshot) return false;
+        update();
+        if (property_preparation) {
+            if (!candidate_room_intent || !candidate_snapshot) return false;
+            try {
+                require_current();auto prefix=property_review_prefix;prefix.push_back(*candidate_room_intent);
+                const auto exact=preview_mixed_selection_property_room_stage(original_source,*property_preparation,prefix);
+                if (exact.is_editable() || document_snapshot_digest(exact)!=document_snapshot_digest(*candidate_snapshot))
+                    throw std::invalid_argument("The accepted Properties room preview changed. Review it again.");
+                require_current();accepted_room_intent=candidate_room_intent;return true;
+            } catch (const std::exception& e) {fail(QString::fromUtf8(e.what()));return false;}
+        }
+        if (!candidate || !candidate_snapshot) return false;
         try {
             require_current();const auto exact=Document::preview_command(original_source,*candidate);
             if (exact.entities()!=candidate_snapshot->entities() || exact.assets()!=candidate_snapshot->assets()) throw std::invalid_argument("The accepted room preview changed. Review it again.");
@@ -734,8 +786,13 @@ PhysicalWallRoomReviewDialog::PhysicalWallRoomReviewDialog(DocumentSnapshot sour
     bool metric_units,std::function<DocumentSnapshot()> current_source,QWidget* parent,std::optional<Command> predecessor):QDialog(parent),
     m_impl(std::make_unique<Impl>(this,std::move(source),std::string{},metric_units,std::move(current_source),std::move(predecessor),
         std::move(context),effective_elevation_m)) {}
+PhysicalWallRoomReviewDialog::PhysicalWallRoomReviewDialog(DocumentSnapshot original_source,MixedSelectionPropertyEditPreparation preparation,
+    std::vector<nlohmann::json> prior_room_reviews,bool metric_units,std::function<DocumentSnapshot()> current_original_source,QWidget* parent):QDialog(parent),
+    m_impl(std::make_unique<Impl>(this,std::move(original_source),std::string{},metric_units,std::move(current_original_source),
+        std::nullopt,std::nullopt,std::nullopt,std::move(preparation),std::move(prior_room_reviews))) {}
 PhysicalWallRoomReviewDialog::~PhysicalWallRoomReviewDialog()=default;
 const std::optional<ApplyBoundaryConstraintChanges>& PhysicalWallRoomReviewDialog::acceptedCommand() const {return m_impl->accepted;}
+const std::optional<nlohmann::json>& PhysicalWallRoomReviewDialog::acceptedRoomIntent() const {return m_impl->accepted_room_intent;}
 QString PhysicalWallRoomReviewDialog::lastError() const {return m_impl->error;}
 void PhysicalWallRoomReviewDialog::setDeletionConsequences(const DocumentSnapshot& original,const ApplyEntityChanges& deletion) {
     m_impl->set_deletion_consequences(original,deletion);
@@ -745,5 +802,8 @@ void PhysicalWallRoomReviewDialog::setSelectedDimensionPlacements(const Document
     m_impl->set_selected_dimension_placements(original,placements,allow_reviewed_removal);
 }
 void PhysicalWallRoomReviewDialog::accept() {if (m_impl->submit()) QDialog::accept();}
-void PhysicalWallRoomReviewDialog::reject() {m_impl->accepted.reset();m_impl->candidate.reset();m_impl->candidate_snapshot.reset();QDialog::reject();}
+void PhysicalWallRoomReviewDialog::reject() {
+    m_impl->accepted.reset();m_impl->candidate.reset();m_impl->candidate_snapshot.reset();
+    m_impl->accepted_room_intent.reset();m_impl->candidate_room_intent.reset();QDialog::reject();
+}
 } // namespace sketch::desktop

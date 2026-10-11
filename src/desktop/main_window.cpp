@@ -84,6 +84,8 @@
 #include "sketch/mixed_selection_removal.hpp"
 #include "sketch/ordinary_selection_removal.hpp"
 #include "sketch/mixed_selection_edit.hpp"
+#include "sketch/mixed_selection_property_edit.hpp"
+#include "sketch/desktop/selection_properties_dialog.hpp"
 #include "sketch/ordinary_selection_edit.hpp"
 #include "sketch/phase_removal_selection.hpp"
 #include "sketch/phase_selection_removal.hpp"
@@ -53921,7 +53923,7 @@ private:
                 if (!admitNativeSceneInput(false)) return;
                 const auto source=m_nativeModelView->gestureSourceSnapshot();
                 if (!selectOrdinaryFromSource(source,id,false,true)) return;
-                if (rejectMixedSelectionCommand(QStringLiteral("Properties"))) return;
+                if (mixedSemanticSelection()) { showSelectionPropertiesEditor(); return; }
                 if (m_selected_ids.size()==1) {
                     if (editEmbeddedAssemblyFromDialog()) return;
                     const auto selected=selectedEntity();
@@ -55443,7 +55445,7 @@ private:
                 // selection before opening the same editor used by Properties.
                 const auto source=captureCanvasGeometrySource(canvas,std::nullopt,false);
                 if (!selectOrdinaryFromSource(source,id,false,false)) return;
-                if (rejectMixedSelectionCommand(QStringLiteral("Properties"))) return;
+                if (mixedSemanticSelection()) { showSelectionPropertiesEditor(); return; }
                 if (m_selected_ids.size() == 1) {
                     if (editEmbeddedAssemblyFromDialog()) return;
                     const auto selected = selectedEntity();
@@ -63380,7 +63382,11 @@ private:
     }
 
     void positionContextEditor(bool open_corner = false) {
-        if (rejectMixedSelectionCommand(QStringLiteral("Properties"))) return;
+        if (mixedSemanticSelection() || ordinarySelectionIDs().size()>1) {
+            if (m_inspector) m_inspector->hide();
+            if (open_corner) showSelectionPropertiesEditor();
+            return;
+        }
         if (!m_selected_roof_openings.empty()) { showRoofOpeningQuickProperties(); return; }
         if (const auto selected = selectedEntity(); selected && selected->type == "corner_window") {
             if (m_inspector) m_inspector->hide();
@@ -64569,7 +64575,7 @@ private:
     bool adoptSemanticSelection(const std::shared_ptr<const DocumentSnapshot>& source,
         QStringList ordinary,std::vector<CanvasRoofOpeningTarget> children,bool native,
         std::optional<CanvasRoofOpeningTarget> primary_child,bool adopt_layer=true,
-        std::vector<SemanticSelectionMember> order={}) {
+        std::vector<SemanticSelectionMember> order={},bool restore_pending_native_scene=false) {
         if (!source || fullSnapshotDigest(*source)!=fullSnapshotDigest(authoringSnapshot()))
             throw std::invalid_argument("The displayed source changed before skylight selection.");
         std::vector<CanvasRoofOpeningTarget> unique;
@@ -64632,7 +64638,16 @@ private:
                 refreshRoofOpeningControls(*source);
                 if (!refreshRetainedSelection(publication)) refresh();
             }
-            if (native) completeNativeSelectionAuthority(source);
+            if (native) {
+                if (restore_pending_native_scene) {
+                    // An authored command may have queued an asynchronous 3D
+                    // rebuild. Keep the logical roster against its new source;
+                    // old AIS geometry cannot acquire new input authority.
+                    // The next starting input renews it only after exact scene
+                    // publication through admitNativeSceneInput.
+                    m_native_input_authority.reset();
+                } else completeNativeSelectionAuthority(source);
+            }
             synchronizeNativeSelection();
             return true;
         } catch (...) {
@@ -65502,7 +65517,7 @@ private:
     }
 
     void showRoofOpeningGroupProperties() {
-        if (rejectMixedSelectionCommand(QStringLiteral("Properties"))) return;
+        if (mixedSemanticSelection()) { showSelectionPropertiesEditor(); return; }
         try {
             if (m_selected_roof_openings.size()<2) return;
             const auto targets=m_selected_roof_openings;
@@ -65565,14 +65580,16 @@ private:
                 const auto source=*selectedRoofOpeningCohortSource(false);
                 const auto authority=captureSourceEditAuthority(source);
                 QMenu menu(owner);
+                auto* properties=menu.addAction(QStringLiteral("Properties…"));
                 auto* copy=menu.addAction(QStringLiteral("Copy selected group"));
                 auto* cut=menu.addAction(QStringLiteral("Cut selected group"));
                 auto* duplicate=menu.addAction(QStringLiteral("Duplicate selected group…"));
                 auto* remove=menu.addAction(QStringLiteral("Delete selected group"));
-                for (auto* action:{cut,duplicate,remove}) action->setEnabled(source.is_editable());
+                for (auto* action:{properties,cut,duplicate,remove}) action->setEnabled(source.is_editable());
                 const auto action=menu.exec(global_position);
                 if (!sourceEditAuthorityCurrent(authority,false)) throw std::invalid_argument("The complete group changed. Reopen its menu.");
-                if (action==copy) (void)copyMixedClipboardSelection(false);
+                if (action==properties) showSelectionPropertiesEditor();
+                else if (action==copy) (void)copyMixedClipboardSelection(false);
                 else if (action==cut) (void)copyMixedClipboardSelection(true);
                 else if (action==duplicate) duplicateMixedClipboardSelection();
                 else if (action==remove) (void)deleteSelection();
@@ -65622,7 +65639,7 @@ private:
     }
 
     void showRoofOpeningQuickProperties() {
-        if (rejectMixedSelectionCommand(QStringLiteral("Properties"))) return;
+        if (mixedSemanticSelection()) { showSelectionPropertiesEditor(); return; }
         try {
             if (m_selected_roof_openings.size()>1) { showRoofOpeningGroupProperties(); return; }
             if (!m_selected_roof_opening) return;
@@ -69051,6 +69068,148 @@ public:
             throw std::invalid_argument("The atomic wall and room review differs from the complete staged decisions.");
         (void)current_source();
         return prepared.command;
+    }
+
+    std::optional<std::vector<json>> reviewSelectionPropertyRoomIntents(
+        const DocumentSnapshot& source,const MixedSelectionPropertyEditPreparation& prepared,
+        const SourceEditAuthority& authority,QWidget* parent,const std::function<void()>& fence) {
+        if (prepared.source_snapshot_digest()!=authority.source_digest ||
+            fullSnapshotDigest(source)!=authority.source_digest)
+            throw std::invalid_argument("The Properties proposal does not belong to the captured project.");
+        std::vector<json> reviews;
+        const auto current_source=[&] { fence();return source; };
+        for (const auto& requirement:prepared.required_room_reviews()) {
+            (void)requirement;
+            fence();
+            PhysicalWallRoomReviewDialog dialog(source,prepared,reviews,authority.context.metric_units,current_source,parent);
+            styleDialog(dialog);
+            dialog.setWindowTitle(QStringLiteral("Review rooms %1 of %2")
+                .arg(static_cast<qulonglong>(reviews.size()+1))
+                .arg(static_cast<qulonglong>(prepared.required_room_reviews().size())));
+            if (dialog.exec()!=QDialog::Accepted) return std::nullopt;
+            fence();
+            if (!dialog.acceptedRoomIntent())
+                throw std::invalid_argument("The room review has no accepted decisions.");
+            reviews.push_back(*dialog.acceptedRoomIntent());
+        }
+        // The readonly stage is only a presentation. Completion independently
+        // reconstructs all scalar edits and every required room decision.
+        (void)complete_mixed_selection_property_edit(source,prepared,reviews);
+        fence();
+        return reviews;
+    }
+
+    void showSelectionPropertiesEditor() {
+        try {
+            if (hasPendingPlacementEdit() || m_boundary_session || m_text_placement_context ||
+                m_plan_label_context || m_armed_area_class)
+                throw std::invalid_argument("Finish or cancel the active drawing or placement first.");
+            auto* canvas=m_workspace==Workspace::measurement ? m_measurementCanvas : m_architecturalCanvas;
+            const bool native=m_workspace==Workspace::architectural && m_nativeModelView && m_nativeModelView->isVisible();
+            std::shared_ptr<const DocumentSnapshot> source;
+            if (!m_selected_roof_openings.empty()) source=selectedRoofOpeningCohortSource(false);
+            else if (native) {
+                if (!admitNativeSceneInput(false)) throw std::invalid_argument("The displayed 3D source changed. Select the objects again.");
+                source=m_nativeModelView->publishedSnapshot();
+            } else source=captureCanvasGeometrySource(canvas,std::nullopt,false);
+            if (!source || !source->is_editable() || fullSnapshotDigest(*source)!=fullSnapshotDigest(authoringSnapshot()))
+                throw std::invalid_argument("The selected project is read-only or its displayed source changed.");
+            const auto authority=captureSourceEditAuthority(*source);
+            const auto ordinary=authority.ordinary_selection;
+            const auto children=authority.roof_opening_cohort;
+            if (ordinary.size()+children.size()==0 || ordinary.size()+children.size()>1000)
+                throw std::invalid_argument("Select between one and 1000 objects.");
+            const bool site=!native && siteCanvas(canvas);
+            const auto site_generation=m_site_publication_generation;
+            const auto annotation_targets=site ? m_site_annotation_targets : std::map<QString,SiteAnnotationTarget>{};
+            if (site) requireSitePublicationCurrent();
+            const auto owners=site ? std::map<std::string,std::string,std::less<>>{} : annotation_selection_owners(*source,ordinary);
+            std::vector<SelectionPropertyTarget> physical;
+            std::vector<SelectionPresentationPropertyTarget> presentation;
+            std::vector<RoofOpeningGroupMember> skylights;
+            for (const auto& id:ordinary) {
+                std::optional<SiteAnnotationTarget> annotation;
+                if (site) {
+                    if (const auto target=annotation_targets.find(id);target!=annotation_targets.end()) annotation=target->second;
+                } else if (const auto found=owners.find(id.toStdString());found!=owners.end())
+                    annotation=SiteAnnotationTarget{found->second,id.toStdString()};
+                if (annotation) {
+                    if (source->entities().contains(id.toStdString()))
+                        throw std::invalid_argument("A selected presentation has conflicting object and annotation identities.");
+                    const auto state=decode_annotation_entity(source->entities().at(annotation->owner_entity_id));
+                    const auto symbols=std::count_if(state.symbols.begin(),state.symbols.end(),[&](const auto& row){return row.id==annotation->child_id;});
+                    const auto labels=std::count_if(state.labels.begin(),state.labels.end(),[&](const auto& row){return row.id==annotation->child_id;});
+                    if (symbols+labels!=1) throw std::invalid_argument("A selected annotation has ambiguous source ownership.");
+                    presentation.push_back({symbols ? SelectionPresentationPropertyFamily::symbol : SelectionPresentationPropertyFamily::label,
+                        annotation->owner_entity_id,annotation->child_id});
+                    continue;
+                }
+                const auto found=source->entities().find(id.toStdString());
+                if (found==source->entities().end()) throw std::invalid_argument("A selected component lost its actual source.");
+                const auto& entity=found->second;
+                if (entity.type=="reference_asset") presentation.push_back({SelectionPresentationPropertyFamily::reference,entity.id,{}});
+                else if (entity.type=="wall") physical.push_back({entity.id,SelectionPropertyFamily::wall});
+                else if (entity.type=="slab") physical.push_back({entity.id,SelectionPropertyFamily::slab});
+                else if (entity.type=="opening") physical.push_back({entity.id,SelectionPropertyFamily::hosted_opening});
+                else if (entity.type=="roof") physical.push_back({entity.id,SelectionPropertyFamily::roof});
+                else throw std::invalid_argument("Group Properties for "+entity.type+" is not yet available. The complete selection has been retained.");
+            }
+            for (const auto& child:children) skylights.push_back({child.roof_id.toStdString(),child.opening_id.toStdString()});
+            const auto fence=[&] {
+                if (!sourceEditAuthorityUnchanged(authority) || hasPendingPlacementEdit() || m_boundary_session ||
+                    m_text_placement_context || m_plan_label_context || m_armed_area_class)
+                    throw std::invalid_argument("The project, selection or workspace changed. Reopen Properties.");
+                if (!children.empty() && fullSnapshotDigest(*selectedRoofOpeningCohortSource(false))!=authority.source_digest)
+                    throw std::invalid_argument("The displayed selected source changed. Reopen Properties.");
+                if (native && (!admitNativeSceneInput(false) || m_nativeModelView->publishedSnapshot()!=source))
+                    throw std::invalid_argument("The displayed 3D source changed. Reopen Properties.");
+                if (site) {
+                    requireSitePublicationCurrent();
+                    if (site_generation!=m_site_publication_generation || annotation_targets!=m_site_annotation_targets)
+                        throw std::invalid_argument("The selected Site presentations changed. Reopen Properties.");
+                }
+            };
+            fence();
+            SelectionPropertiesDialog dialog(*source,std::move(presentation),std::move(physical),std::move(skylights),
+                authority.context.metric_units,owner);
+            styleDialog(dialog);
+            if (dialog.exec()!=QDialog::Accepted) return;
+            fence();
+            const std::string message="Edit selection properties";
+            const auto prepared=prepare_mixed_selection_property_edit(*source,dialog.ordinaryRequest(),
+                dialog.presentationRequest(),dialog.roofOpeningProperties(),message);
+            const auto reviews=reviewSelectionPropertyRoomIntents(*source,prepared,authority,owner,fence);
+            if (!reviews) { owner->statusBar()->showMessage(QStringLiteral("Properties edit cancelled."),4000);return; }
+            fence();
+            ApplyBoundaryConstraintChanges command;
+            command.expected_revision=source->revision();command.message=message;
+            command.mixed_selection_edit_completion=true;
+            command.mixed_selection_edit_intent=complete_mixed_selection_property_edit(*source,prepared,*reviews);
+            // This first admitted preview is the complete atomic command,
+            // including room decisions. No speculative stage is published.
+            (void)Document::preview_command(*source,Command{command});
+            fence();
+            if (!applyAuthoredCommand(Command{command})) return;
+            refresh();
+            const auto published=std::make_shared<DocumentSnapshot>(authoringSnapshot());
+            auto restored=ordinary;
+            auto order=authority.semantic_selection_order;
+            if (site) {
+                restored=remapSiteAnnotationSelection(ordinary,annotation_targets,m_site_annotation_targets);
+                for (auto& member:order) if (!member.child) {
+                    const auto mapped=remapSiteAnnotationSelection({member.ordinary_id},annotation_targets,m_site_annotation_targets);
+                    if (mapped.size()!=1) throw std::invalid_argument("The edited selection lost its Site alias.");
+                    member.ordinary_id=mapped.front();
+                }
+            }
+            auto restored_children=children;
+            for (auto& child:restored_children) child.source_revision=published->revision();
+            for (auto& member:order) if (member.child) member.child->source_revision=published->revision();
+            auto primary=authority.primary_roof_opening;
+            if (primary) primary->source_revision=published->revision();
+            (void)adoptSemanticSelection(published,std::move(restored),std::move(restored_children),native,primary,false,std::move(order),native);
+            clearError();
+        } catch (const std::exception& error) { setError(QStringLiteral("Selection properties: %1").arg(QString::fromUtf8(error.what()))); }
     }
 
     std::optional<std::vector<json>> reviewSelectionGeometryRoomIntents(

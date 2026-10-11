@@ -1,4 +1,32 @@
-# Vertex project formats v1 through v192
+# Vertex project formats v1 through v193
+
+## Mixed scalar Properties (v193, source implementation)
+
+Command envelope52 retains a distinct mixed edit dialect five for coordinated
+wall, slab, hosted-opening, roof, symbol, label, reference and skylight
+Properties. Historical gesture dialects one through four keep their meanings.
+The closed intent binds the complete original snapshot, authoring-v2 digest,
+entity map, revision and saved revision. Every selected member appears in its
+typed lane, including explicitly retained unchanged members. Raw candidates,
+identity allocation, rehosting, deletion and active-baseline replacement are
+not Properties authority.
+
+Wall/opening fields compose before final host-fit admission. Roof scalar
+profiles and selected child fields derive together before final roof admission;
+unchanged parent body fields are distinct from selected child rows. Actual
+exterior measurement consequences derive from original and complete final
+geometry. Qualified annotation edits preserve raw sibling rows, saved artwork
+and unrelated fields. A layer change retains the selected child's actual
+property/building/floor/level, resolving its original child layer when its
+carrier has no declared owner context. References retain assets/calibration.
+
+Preparation and partial room-review stages are sealed read-only drawing copies
+with no admission token. Every affected active retained-room context/plane
+requires explicit canonical decisions bound to original snapshot/save metadata
+and the exact preceding derived entity map. Only the completed request enters
+the existing atomic Document command and retained-history replay. Native
+reader193/extraction191 apply to direct, nested, retained and undone proofs.
+Compilation, interaction and recovery qualification remain outstanding.
 
 ## Selected geometry similarity (v192, source implementation)
 

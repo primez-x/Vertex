@@ -14,6 +14,44 @@ changed source does not acquire runtime acceptance without later qualification.
 
 ## Current delivery state
 
+### October 10 mixed selection Properties - source integration
+
+The ordinary scalar-profile preparation is committed and pushed as f87c2e0f;
+its exact local and remote branch references matched. The current batch
+connects that preparation with qualified symbol/text/reference properties and
+selected skylight fields through one complete original-source command. Wall
+thickness, height and signed top rise, explicit wall/slab layers, opening
+dimensions/offset, roof profiles, annotation appearance and reference settings
+have selected-family controls. Blank fields retain every selected member.
+Coordinated wall/opening and roof/skylight changes admit the final combined
+geometry, rather than invalid intermediate hosts. Unchanged roof bodies remain
+distinct from selected child rows.
+
+Required room decisions use sealed read-only intermediate maps. They retain
+the original project/save authority and exact preceding entity digest; they do
+not enter Document admission until the complete edit is ready. Command
+envelope52 carries separate mixed Properties dialect five. Reader193 and
+extraction191 include direct, nested, retained and undone history. Historical
+gesture dialects retain their meanings. Site alias maps, visible scene sources,
+complete rosters, order and primary child selection are fenced throughout.
+
+Independent core source review found no required correction. Independent UI
+review found a post-commit 3D selection restoration error while asynchronous
+scene rebuilding was pending. The corrected route restores the logical roster
+against the new authoring source, retires old native input authority and only
+renews it after exact new scene publication on a starting interaction. The
+reviewer approved the correction. Root reviewed source interfaces, dispatch,
+reader floors and the integration. These are source reviews, not runtime proof.
+
+Complete Properties remains unfinished: annotation layer assignment controls,
+additional object families/fields, cross-context migration and active-baseline
+replacement are still required. Mixed-family clipboard, native mixed gesture
+transforms, directional resizing and broader reflections remain separate work.
+The installed app is unchanged. No builds, tests/new tests, probes, native jobs,
+launches, packages or installations have run; all ten production gates remain
+open. Compilation, rendering, save/reopen and interaction qualification remain
+outstanding.
+
 ### October 10 typed Properties preparation - source integration
 
 Mixed uniform resizing is committed and pushed as 860ff8a8; exact local and
