@@ -1,4 +1,25 @@
-# Vertex project formats v1 through v199
+# Vertex project formats v1 through v200
+
+Reader200 retains mixed Properties dialect eleven in command envelope52. The
+closed intent carries the original five source fences, phase_request,
+presentation_request, skylight_properties, roof_opening_members, nullable
+assembly_request, room_reviews, phase_room_reviews and message. Phase request
+two carries its own original fences, a nullable scalar_request, exact identity
+allocations, stair dependency choices and the qualified skylight patch/roster.
+Its outer child fields must match the contained sole child authority exactly.
+Roof scalars and skylight dimensions receive combined original-source admission,
+including child-only edits that independently require a baseline host copy.
+
+Phase room completion rows are ordered {phase_authoring_index,wall_replacement}.
+The completed leaf must retain every independently derived scalar and identity
+field; only canonical room and endpoint decisions may differ. Room evidence
+binds the complete composed stage and original captured snapshot. Each review
+prefix is rederived, and publication requires every mandatory phase and ordinary
+review plus final admission. Allocations, fresh room children/dimensions and
+computed qualified render aliases remain reserved across retained and undone
+history. Historical dialects5-10 and phase request one retain their meanings.
+Direct, wrapped and retained proofs require reader200; extraction emits198.
+Source integration does not establish runtime or migration acceptance.
 
 Reader199 adds original-source scalar replacement authority for remodeling
 alternatives. Phase outer23 carries wall leaf9, with one flat identity/room

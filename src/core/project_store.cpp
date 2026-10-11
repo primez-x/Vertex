@@ -380,6 +380,10 @@ std::uint32_t required_format_version_internal(const DocumentSnapshot& snapshot,
             if (value.is_object() && value.contains("phase_selections") && value.contains("source_snapshot_digest") &&
                 value.contains("intent") && (value.value("version",nlohmann::json())==23 || value.value("version",nlohmann::json())==24 || value.value("version",nlohmann::json())==25))
                 floor=std::max(floor,199U);
+            if (value.is_object() && value.value("version",nlohmann::json())==2 &&
+                value.contains("source_snapshot_digest") && value.contains("scalar_request") &&
+                value.contains("allocations") && value.contains("skylight_properties") && value.contains("roof_opening_members"))
+                floor=std::max(floor,200U);
             if (value.is_object() &&
                 ((value.value("kind",nlohmann::json())=="apply_boundary_constraint_changes" &&
                     value.value("version",nlohmann::json())==53) ||
@@ -414,6 +418,8 @@ std::uint32_t required_format_version_internal(const DocumentSnapshot& snapshot,
                     floor=std::max(floor,197U);
                 if (intent.is_object() && intent.value("version",nlohmann::json())==10)
                     floor=std::max(floor,198U);
+                if (intent.is_object() && intent.value("version",nlohmann::json())==11)
+                    floor=std::max(floor,200U);
             }
             if (value.is_object() && value.value("kind",nlohmann::json())=="corner_removal" &&
                 value.value("version",nlohmann::json())==4 && value.contains("selected_cut_ids"))
@@ -605,9 +611,9 @@ std::uint32_t required_format_version_internal(const DocumentSnapshot& snapshot,
     };
     for (const auto& revision : snapshot.history()) {
         if (revision.phase_entity_import) required=std::max(required,160U);
-        if (required<199 && revision.boundary_geometry_edit)
+        if (required<200 && revision.boundary_geometry_edit)
             required=std::max(required,typed_edit_reader_floor(encode_boundary_geometry_edit(*revision.boundary_geometry_edit)));
-        if (required<199 && revision.boundary_constraint_changes)
+        if (required<200 && revision.boundary_constraint_changes)
             required=std::max(required,typed_edit_reader_floor(command_to_json(Command{*revision.boundary_constraint_changes})));
         if (required<122 && revision.boundary_geometry_edit)
             required=std::max(required,quantity_reader_floor(encode_boundary_geometry_edit(*revision.boundary_geometry_edit)));
@@ -647,6 +653,9 @@ std::uint32_t required_format_version_internal(const DocumentSnapshot& snapshot,
                 if (edits.mixed_selection_edit_intent.is_object() &&
                     edits.mixed_selection_edit_intent.value("version",nlohmann::json())==10)
                     required=std::max(required,198U);
+                if (edits.mixed_selection_edit_intent.is_object() &&
+                    edits.mixed_selection_edit_intent.value("version",nlohmann::json())==11)
+                    required=std::max(required,200U);
             }
             if (edits.wall_group_scale_completion || edits.wall_group_scale)
                 required=std::max(required,173U);
@@ -3062,6 +3071,7 @@ bool verify_sqlite_schema(sqlite3* database, bool allow_recovery = false) {
          sqlite3_column_int(user_version.get(), 0) != 197 &&
          sqlite3_column_int(user_version.get(), 0) != 198 &&
          sqlite3_column_int(user_version.get(), 0) != 199 &&
+         sqlite3_column_int(user_version.get(), 0) != 200 &&
          sqlite3_column_int(user_version.get(), 0) != 174 &&
          sqlite3_column_int(user_version.get(), 0) != 169 &&
          sqlite3_column_int(user_version.get(), 0) != 163 &&
@@ -3784,6 +3794,8 @@ DocumentSnapshot read_snapshot(sqlite3* database, RecoveryLedger* recovery = nul
     // here and authenticate the manifest with its stored version below.
     const auto required_format = required_format_version_internal(snapshot, format_number < 28);
     if (required_format > format_number) {
+        if (required_format>=200)
+            storage_error(StorageErrorCode::unsupported_format,"This project requires reader 200 for source-bound alternative Properties and joint roof/skylight edits");
         if (required_format>=199)
             storage_error(StorageErrorCode::unsupported_format,"This project requires reader 199 for original-source compound wall/opening, structural and stair scalar replacements");
         if (required_format>=198)

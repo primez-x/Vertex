@@ -97,6 +97,8 @@ private:
 // their independently rederived retirement closure beside other Properties.
 // Version ten adds actual catalog-qualified assembly instance/path Properties,
 // optionally beside the same authenticated stair dependency review.
+// Version eleven adds independently inventoried baseline replacements and
+// explicit phase room/relationship completion beside the complete selection.
 [[nodiscard]] nlohmann::json make_mixed_selection_edit_intent(
     const DocumentSnapshot& source, const nlohmann::json& ordinary_request,
     const nlohmann::json& roof_authoring, const nlohmann::json& roof_members,
@@ -111,6 +113,8 @@ private:
 // inactive annotation rows by exact subsequence rather than old array index.
 // Historical gesture/Properties dialects never acquire this authority.
 [[nodiscard]] bool mixed_selection_edit_retires_dependencies(const nlohmann::json& value);
+[[nodiscard]] bool mixed_selection_edit_has_phase_replacements(const nlohmann::json& value);
+[[nodiscard]] std::vector<nlohmann::json> mixed_selection_edit_phase_room_reviews(const nlohmann::json& value);
 [[nodiscard]] std::vector<nlohmann::json> mixed_selection_edit_room_reviews(const nlohmann::json& value);
 [[nodiscard]] std::optional<Revision> mixed_selection_edit_source_saved_revision(const nlohmann::json& value);
 

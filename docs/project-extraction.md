@@ -1,5 +1,14 @@
 # Portable project extraction
 
+Exchange version198 requires native reader200 for mixed alternative Properties
+dialect eleven and phase request two. Roof scalar and selected skylight edits
+share one original-source composite. The complete selection carries qualified
+owner/child mappings and explicit final-stage phase room/relationship decisions.
+Declared copy slots, fresh room identities and computed render aliases retain
+their history reservations, including unused or undone destinations. Earlier
+request and command shapes retain their authority. Runtime, migration and
+round-trip qualification remain open.
+
 Exchange version197 requires native reader199 for phase outer23/24/25 scalar
 replacements. Wall leaf9 stages original-source wall and opening edits together;
 structural leaf4 preserves dormant dimensions and raw receipt metadata while

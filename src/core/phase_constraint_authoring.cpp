@@ -2465,15 +2465,27 @@ Entities compose_assembly_property_selection_edit_candidates(const DocumentSnaps
 
 Entities compose_phase_property_selection_edit_candidates(const DocumentSnapshot& source,
     const std::vector<Json>& authorings,const std::vector<Entities>& ordinary,
-    const StairPropertyReviewPreparation* ordinary_stair_review) {
+    const StairPropertyReviewPreparation* ordinary_stair_review,
+    const AssemblyInstancePropertyEditPreparation* assemblies) {
     if (!source.is_editable() || authorings.size()>1000 || ordinary.size()>4 ||
-        (authorings.empty() && ordinary.empty() && !ordinary_stair_review))
+        (authorings.empty() && ordinary.empty() && !ordinary_stair_review && !assemblies))
         invalid("Phase Properties composition requires bounded actual-source contributions");
     const auto& actual=source.entities();
     const auto snapshot_digest=document_snapshot_digest(source);
     const auto authoring_digest=document_authoring_source_digest_v2(source);
     const auto entities_digest=entity_map_digest(actual);
     const auto choices=phase_constraint_authoring_selections(actual);
+    std::optional<AssemblyInstancePropertyEditPreparation> assembly_replay;
+    std::set<std::string,std::less<>> promoted;
+    if (assemblies) {
+        assembly_replay=replay_assembly_instance_property_edit_preparation(source,assemblies->request());
+        for (const auto& [id,entity]:actual) if (entity.type=="assembly_model") {
+            const auto& before=entity.properties.at("model").at("schema");
+            const auto& after=assembly_replay->preview_entities().at(id).properties.at("model").at("schema");
+            if ((before=="sketch.assemblies.v1" || before=="sketch.assemblies.v2") && after=="sketch.assemblies.v7")
+                promoted.insert(id);
+        }
+    }
     Entities result=actual;
     PhasePropertyCompositionRetirements retirements;
     std::set<std::string,std::less<>> retired_rails;
@@ -2508,7 +2520,8 @@ Entities compose_phase_property_selection_edit_candidates(const DocumentSnapshot
     // never a projected snapshot. This retains the 1000-target request budget
     // without holding one whole-document candidate for every phase cohort.
     const auto merge=[&](const Entities& replay) {
-        result=compose_mixed_selection_edit_candidates_impl(actual,{result,replay},nullptr,nullptr,nullptr,nullptr,&retirements);
+        result=compose_mixed_selection_edit_candidates_impl(actual,{result,replay},nullptr,nullptr,nullptr,
+            assemblies ? &promoted : nullptr,&retirements);
     };
     for (const auto& wire:authorings) {
         const auto count=wire.dump().size();
@@ -2561,6 +2574,7 @@ Entities compose_phase_property_selection_edit_candidates(const DocumentSnapshot
         collect(reviewed.entities());merge(reviewed.entities());
     }
     for (const auto& replay:ordinary) merge(replay);
+    if (assembly_replay) merge(assembly_replay->preview_entities());
     for (const auto& id:retirements.erased) if (result.contains(id))
         invalid("Phase Properties restored a source-derived retired owner");
     return result;

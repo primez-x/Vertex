@@ -199,7 +199,8 @@ struct PhaseConstraintAuthoringIntent {
     const DocumentSnapshot& actual,
     const std::vector<nlohmann::json>& phase_authorings,
     const std::vector<std::map<std::string,Entity,std::less<>>>& independently_admitted_ordinary_candidates,
-    const StairPropertyReviewPreparation* ordinary_stair_review = nullptr);
+    const StairPropertyReviewPreparation* ordinary_stair_review = nullptr,
+    const AssemblyInstancePropertyEditPreparation* assemblies = nullptr);
 
 // Internal composition of independently admitted demolition leaves. Complete
 // typed leaf replay owns removals and fresh destinations; overlapping changes

@@ -14,6 +14,31 @@ changed source does not acquire runtime acceptance without later qualification.
 
 ## Current delivery state
 
+### October 10 alternative Properties - command and workspace integration
+
+The source foundation is committed and pushed as 810478ec, with exact local and
+remote branch references matched. The current batch connects it to a new closed
+mixed Properties dialect eleven, final composed room/relationship review,
+qualified selection restoration and the existing atomic command/history path.
+Phase request two additionally prepares roof scalar and selected skylight edits
+together from their original owners, including skylight-only baseline hosts.
+Reader200/extraction198 retain the new request and command authority.
+
+The writers returned their source changes and root integrated the Document,
+router, reader, composed-wall room helpers and workspace/dialog paths. Independent
+source review found one P2: coincident room planes were compared by exact
+elevation rather than the existing geometry tolerance, allowing duplicate phase
+and ordinary review requirements. Root corrected that classifier while retaining
+historical exact review bindings. No other confirmed P1/P2 finding was reported
+in the reviewed core/UI source; scoped whitespace checking passed.
+
+Changing a component instance hosted on a protected baseline remains a required
+gap, along with shared component definition/profile editing, directional mixed
+resizing and vertical 3D group movement. This batch does not claim those paths.
+No builds, tests, probes, launches, packages or installations run. Compilation,
+native interaction, Undo/Redo and save/reopen remain unverified. The installed
+app is unchanged; all ten production gates remain open.
+
 ### October 10 baseline group scalar Properties - source foundation
 
 Qualified component Properties are committed and pushed as 5ec6a601, with exact

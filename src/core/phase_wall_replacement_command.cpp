@@ -996,6 +996,67 @@ void validate_phase_wall_replacement_originals(const Entities& source,const Enti
         edit.alternative_id,edit.complete_presentations,edit.complete_corner_windows);
     preserve_baseline(source,candidate,plan);
 }
+namespace {
+Stage composed_room_stage(const DocumentSnapshot& source,const PhaseConstraintAuthoringIntent& intent,
+    const Entities& analytical_entities) {
+    if (!source.is_editable() || intent.expected_revision!=source.revision() ||
+        intent.source_snapshot_digest!=document_snapshot_digest(source) ||
+        intent.source_authoring_digest!=document_authoring_source_digest_v2(source) ||
+        intent.source_saved_revision!=source.saved_revision_optional()) invalid("original captured document changed");
+    const auto edit=decode_phase_wall_replacement_authoring(intent.wall_replacement);
+    if (!edit.complete_scalar_profiles) invalid("composed room completion requires explicit scalar wall authority");
+    auto stage=physical_stage(source.entities(),intent,edit);
+    // A complete enclosing producer may also update catalogs, presentation and
+    // foreign registries. It may not substitute different physical copies or
+    // relationship bodies for this leaf's independently derived closure.
+    for (const auto& [original,copy]:stage.replacement.original_to_proposed) {
+        const auto before=source.entities().find(original);
+        if (before==source.entities().end() || before->second.type=="assembly_model") continue;
+        const auto expected=stage.entities.find(copy);
+        if (expected==stage.entities.end()) continue; // Reserved owned-child slot.
+        const auto actual=analytical_entities.find(copy);
+        if (actual==analytical_entities.end() || !exact(expected->second,actual->second))
+            invalid("composed stage changed an independently derived wall closure: "+copy);
+    }
+    for (const auto& id:stage.deferred) {
+        const auto expected=stage.entities.find(id),actual=analytical_entities.find(id);
+        if (expected==stage.entities.end() || actual==analytical_entities.end() || !exact(expected->second,actual->second))
+            invalid("composed stage changed a deferred room relationship: "+id);
+    }
+    stage.entities=analytical_entities;
+    return stage;
+}
+}
+PhaseWallReplacementAuthoringPreview inspect_phase_wall_replacement_rooms_on_composed_stage(
+    const DocumentSnapshot& source,const PhaseConstraintAuthoringIntent& intent,const Entities& analytical_entities) {
+    const auto edit=decode_phase_wall_replacement_authoring(intent.wall_replacement);
+    auto stage=composed_room_stage(source,intent,analytical_entities);
+    auto inventory=inspect_physical_wall_phase_room_review_entities(stage.entities,room_binding(intent,edit,stage.entities));
+    const bool needed=requires_rooms(stage,inventory);
+    return {std::move(stage.replacement),std::move(stage.entities),std::move(inventory),needed};
+}
+Entities complete_phase_wall_replacement_rooms_on_composed_stage(
+    const DocumentSnapshot& source,const PhaseConstraintAuthoringIntent& intent,const Entities& analytical_entities,
+    const std::set<std::string,std::less<>>& deferred_constraint_ids) {
+    const auto edit=decode_phase_wall_replacement_authoring(intent.wall_replacement);
+    auto stage=composed_room_stage(source,intent,analytical_entities);
+    const auto inventory=inspect_physical_wall_phase_room_review_entities(stage.entities,room_binding(intent,edit,stage.entities));
+    if (edit.room_review_intent.is_null()) {
+        if (requires_rooms(stage,inventory)) invalid("complete every proposed room and relationship decision");
+    } else {
+        const auto room=decode_physical_wall_phase_room_review_intent(edit.room_review_intent);
+        validate_room_binding(intent,edit,stage.entities,room);
+        auto deferred=stage.deferred;
+        deferred.insert(deferred_constraint_ids.begin(),deferred_constraint_ids.end());
+        stage.entities=replay_physical_wall_phase_room_review_with_deferred_constraints(
+            stage.entities,edit.room_review_intent,deferred).entities;
+    }
+    complete_room_constraints(stage,edit);
+    complete_surviving_presentations(stage,source.entities(),edit);
+    // Other independently derived leaves can still await their review. Final
+    // composed physical/constraint admission belongs to the enclosing command.
+    return std::move(stage.entities);
+}
 ApplyBoundaryConstraintChanges phase_wall_replacement_authoring_command(const PhaseConstraintAuthoringIntent& intent) {
     if (intent.wall_replacement.is_null()) invalid("replacement command needs its typed identity decisions");
     ApplyBoundaryConstraintChanges command;command.expected_revision=intent.expected_revision;

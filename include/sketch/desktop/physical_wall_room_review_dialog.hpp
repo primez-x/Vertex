@@ -27,6 +27,9 @@ public:
     PhysicalWallRoomReviewDialog(DocumentSnapshot original_source,MixedSelectionPropertyEditPreparation preparation,
         std::vector<nlohmann::json> prior_room_reviews,bool metric_units,
         std::function<DocumentSnapshot()> current_original_source,QWidget* parent=nullptr);
+    PhysicalWallRoomReviewDialog(DocumentSnapshot original_source,MixedSelectionPropertyEditPreparation preparation,
+        std::vector<nlohmann::json> prior_room_reviews,std::vector<nlohmann::json> phase_room_reviews,
+        bool metric_units,std::function<DocumentSnapshot()> current_original_source,QWidget* parent=nullptr);
     ~PhysicalWallRoomReviewDialog() override;
     [[nodiscard]] const std::optional<ApplyBoundaryConstraintChanges>& acceptedCommand() const;
     [[nodiscard]] const std::optional<nlohmann::json>& acceptedRoomIntent() const;

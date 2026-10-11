@@ -56,6 +56,7 @@
 #include "sketch/mixed_clipboard_command.hpp"
 #include "sketch/mixed_selection_edit.hpp"
 #include "sketch/phase_constraint_authoring.hpp"
+#include "sketch/phase_selection_property_edit.hpp"
 #include "sketch/phase_coordinated_demolition.hpp"
 #include "sketch/phase_opening_demolition.hpp"
 #include "sketch/phase_roof_replacement.hpp"
@@ -3261,7 +3262,7 @@ static std::vector<nlohmann::json> phase_constraint_authoring_proofs(const Apply
         if (version==34) result.push_back(proof.at("phase_constraint_authoring_intent"));
         else if (version==52) {
             const auto& mixed=proof.at("mixed_selection_edit_intent");
-            if (mixed.at("version")!=5 && mixed.at("version")!=6 && mixed.at("version")!=7 && mixed.at("version")!=8 && mixed.at("version")!=9 && mixed.at("version")!=10) {
+            if (mixed.at("version")!=5 && mixed.at("version")!=6 && mixed.at("version")!=7 && mixed.at("version")!=8 && mixed.at("version")!=9 && mixed.at("version")!=10 && mixed.at("version")!=11) {
                 const auto& roof=mixed.at("roof_authoring");
                 if (!roof.is_null()) result.push_back(roof);
             }
@@ -3330,6 +3331,10 @@ static bool mixed_clipboard_placement_policy(const ApplyBoundaryConstraintChange
 }
 
 static bool phase_constraint_authoring_preserves_registries(const ApplyBoundaryConstraintChanges& command) {
+#ifdef VERTEX_HAS_CONSTRAINT_AUTHORING
+    if (has_mixed_selection_edit(command) && command.mixed_selection_edit_intent.at("version")==11)
+        return !mixed_selection_edit_has_phase_replacements(command.mixed_selection_edit_intent);
+#endif
     const auto proofs=phase_constraint_authoring_proofs(command);
     return std::none_of(proofs.begin(),proofs.end(),[](const auto& intent) {
         return (intent.contains("wall_replacement") && !intent.at("wall_replacement").is_null()) ||
@@ -3355,7 +3360,7 @@ static bool phase_constraint_authoring_retires_proposals(const ApplyBoundaryCons
         if (intent.contains("wall_demolition") && !intent.at("wall_demolition").is_null()) return true;
 #ifdef VERTEX_HAS_CONSTRAINT_AUTHORING
         const auto replacement_retires=[](const nlohmann::json& value) {
-            if (!value.is_object() || value.value("version",0)!=5) return false;
+            if (!value.is_object() || (value.value("version",0)!=5 && value.value("version",0)!=6)) return false;
             const auto replacement=decode_phase_stair_replacement_authoring(value);
             return std::any_of(replacement.dependency_dispositions.begin(),replacement.dependency_dispositions.end(),
                 [](const auto& decision) { return decision.action==PhaseStairReplacementDependencyAction::retire; });
@@ -3710,7 +3715,7 @@ static PhaseConstraintLifetimeProofs phase_constraint_lifetime_proofs(const Appl
         const auto version=proof.at("version").get<int>();
         if (version==52) {
             const auto& mixed=proof.at("mixed_selection_edit_intent");
-            if (mixed.at("version")!=5 && mixed.at("version")!=6 && mixed.at("version")!=7 && mixed.at("version")!=8 && mixed.at("version")!=9 && mixed.at("version")!=10) {
+            if (mixed.at("version")!=5 && mixed.at("version")!=6 && mixed.at("version")!=7 && mixed.at("version")!=8 && mixed.at("version")!=9 && mixed.at("version")!=10 && mixed.at("version")!=11) {
                 const auto& roof=mixed.at("roof_authoring");
                 if (!roof.is_null()) result.phase_proofs.push_back(roof);
             }
@@ -5388,6 +5393,65 @@ static void validate_phase_room_review_lifetime(const nlohmann::json& encoded,
                 if (fresh.contains(edge.segment_id) || fresh.contains(edge.start_vertex_id) || fresh.contains(edge.end_vertex_id))
                     throw std::invalid_argument("Phase room child identity was already used in retained history: "+id);
         }
+}
+#endif
+
+#ifdef VERTEX_HAS_CONSTRAINT_AUTHORING
+static void validate_mixed_properties_replacement_lifetime(const nlohmann::json& encoded,
+    const std::map<std::string,Entity,std::less<>>& source,
+    const std::map<std::string,Entity,std::less<>>& candidate,
+    const std::vector<RevisionRecord>& history,std::size_t preceding_records) {
+    const auto mixed=validate_mixed_selection_edit_intent(encoded);
+    if (mixed.at("version")!=11) return;
+    if (preceding_records>history.size()) throw std::invalid_argument("Properties identity history prefix is invalid");
+    const auto phase=validate_phase_selection_property_edit_request(mixed.at("phase_request"));
+    std::set<std::string,std::less<>> fresh;
+    const auto reserve=[&](const std::string& id) {
+        if (!is_valid_identifier(id) || !fresh.insert(id).second)
+            throw std::invalid_argument("Properties fresh identity declarations overlap: "+id);
+    };
+    for (const auto& allocation:phase.at("allocations"))
+        for (const auto* field:{"identities","child_identities","hosted_instance_identities","overlay_identities"})
+            for (const auto& row:allocation.at(field)) reserve(row.at("proposed_id").get<std::string>());
+#ifdef VERTEX_HAS_PHYSICAL_ROOM_REVIEW
+    for (const auto& wire:mixed_selection_edit_phase_room_reviews(mixed)) {
+        const auto review=decode_physical_wall_phase_room_review_intent(wire);
+        if (!review.source_registry_entity_digest) reserve(review.registry_id);
+        for (const auto& plane:review.planes) {
+            for (const auto& decision:plane.fresh) {
+                if (decision.disposition!=PhysicalWallRoomPhaseFreshDisposition::create_proposed &&
+                    decision.disposition!=PhysicalWallRoomPhaseFreshDisposition::redefine_proposed) continue;
+                if (decision.disposition==PhysicalWallRoomPhaseFreshDisposition::create_proposed) reserve(decision.room_id);
+                for (const auto& id:decision.fresh_ids.segment_ids) reserve(id);
+                for (const auto& id:decision.fresh_ids.vertex_ids) reserve(id);
+            }
+            for (const auto& decision:plane.source_rooms)
+                for (const auto& id:decision.replacement_dimension_ids) reserve(id);
+        }
+    }
+    for (const auto& wire:mixed_selection_edit_room_reviews(mixed)) {
+        const auto review=decode_physical_wall_room_review_intent(wire);
+        for (const auto& decision:review.fresh) {
+            if (decision.disposition==PhysicalWallRoomFreshDisposition::unclassified) continue;
+            if (decision.disposition==PhysicalWallRoomFreshDisposition::create) reserve(decision.room_id);
+            for (const auto& id:decision.fresh_ids.segment_ids) reserve(id);
+            for (const auto& id:decision.fresh_ids.vertex_ids) reserve(id);
+        }
+        for (const auto& decision:review.retained)
+            for (const auto& id:decision.replacement_dimension_ids) reserve(id);
+    }
+#endif
+    // Reserve derived render aliases as well as declared local IDs. A copied
+    // qualified catalog cannot reuse an alias retained by undone history.
+    const auto original_aliases=embedded_assembly_presentation_ids(source);
+    for (const auto& [binding,alias]:embedded_assembly_presentation_ids(candidate))
+        if (!original_aliases.contains(binding)) reserve(alias);
+    for (const auto& [id,entity]:candidate) {
+        (void)entity;
+        if (!source.contains(id)) fresh.insert(id);
+    }
+    for (std::size_t index=0;index<preceding_records;++index)
+        validate_selection_edit_fresh_identity_tokens(history.at(index).entities,fresh);
 }
 #endif
 
@@ -10512,15 +10576,20 @@ Revision Document::apply(const Command& command) {
 #ifdef VERTEX_HAS_CONSTRAINT_AUTHORING
                     try {
                         const auto reviews=mixed_selection_edit_room_reviews(typed_command.mixed_selection_edit_intent);
+                        const auto phase_reviews=mixed_selection_edit_phase_room_reviews(typed_command.mixed_selection_edit_intent);
 #ifdef VERTEX_HAS_PHYSICAL_ROOM_REVIEW
                         for (const auto& review:reviews)
                             validate_room_review_lifetime(review,history_,history_.size(),true);
+                        for (const auto& review:phase_reviews)
+                            validate_phase_room_review_lifetime(review,history_,history_.size());
 #endif
                         next.entities=replay_mixed_selection_edit(snapshot(),typed_command.mixed_selection_edit_intent);
+                        validate_mixed_properties_replacement_lifetime(typed_command.mixed_selection_edit_intent,
+                            current.entities,next.entities,history_,history_.size());
                         const bool retires_dependencies=mixed_selection_edit_retires_dependencies(typed_command.mixed_selection_edit_intent);
                         validate_active_design_preserved_dependents(current.entities,next.entities,
-                            phase_constraint_authoring_preserves_registries(typed_command) && reviews.empty() && !retires_dependencies,
-                            !reviews.empty() || retires_dependencies);
+                            phase_constraint_authoring_preserves_registries(typed_command) && reviews.empty() && phase_reviews.empty() && !retires_dependencies,
+                            !reviews.empty() || !phase_reviews.empty() || retires_dependencies);
                     } catch (const DocumentError&) { throw; }
                     catch (const std::exception& error) { document_error(DocumentErrorCode::invalid_entity,error.what()); }
 #else
@@ -11129,15 +11198,20 @@ Document Document::restore(DocumentSnapshot snapshot) {
                         seal_snapshot_admission(prefix,*prior_boundary_history,*prior_stair_history,
                             prior_unsupported_history);
                         const auto reviews=mixed_selection_edit_room_reviews(proof.mixed_selection_edit_intent);
+                        const auto phase_reviews=mixed_selection_edit_phase_room_reviews(proof.mixed_selection_edit_intent);
 #ifdef VERTEX_HAS_PHYSICAL_ROOM_REVIEW
                         for (const auto& review:reviews)
                             validate_room_review_lifetime(review,snapshot.history(),index,true);
+                        for (const auto& review:phase_reviews)
+                            validate_phase_room_review_lifetime(review,snapshot.history(),index);
 #endif
                         expected.entities=replay_mixed_selection_edit(prefix,proof.mixed_selection_edit_intent);
+                        validate_mixed_properties_replacement_lifetime(proof.mixed_selection_edit_intent,
+                            previous.entities,expected.entities,snapshot.history(),index);
                         const bool retires_dependencies=mixed_selection_edit_retires_dependencies(proof.mixed_selection_edit_intent);
                         validate_active_design_preserved_dependents(previous.entities,expected.entities,
-                            phase_constraint_authoring_preserves_registries(proof) && reviews.empty() && !retires_dependencies,
-                            !reviews.empty() || retires_dependencies);
+                            phase_constraint_authoring_preserves_registries(proof) && reviews.empty() && phase_reviews.empty() && !retires_dependencies,
+                            !reviews.empty() || !phase_reviews.empty() || retires_dependencies);
 #else
                         throw std::invalid_argument("Mixed selection edit requires the production authoring engine");
 #endif

@@ -6,9 +6,11 @@
 #include "sketch/model_phases.hpp"
 #include "sketch/phase_constraint_authoring.hpp"
 #include "sketch/stair_property_review.hpp"
+#include "sketch/constraint_entity.hpp"
 
 #include <algorithm>
 #include <cmath>
+#include <numbers>
 #include <stdexcept>
 #include <tuple>
 #include <type_traits>
@@ -19,6 +21,7 @@ using Json = nlohmann::json;
 using Entities = std::map<std::string, Entity, std::less<>>;
 using Ids = std::set<std::string, std::less<>>;
 using Key = std::tuple<PhaseSelectionPropertyLane, std::string, std::string>;
+constexpr const char* source_fences[] = {"expected_revision", "source_snapshot_digest", "source_authoring_digest", "source_entities_digest", "source_saved_revision"};
 [[noreturn]] void invalid(const std::string& message) {
     throw std::invalid_argument("Phase Selection Properties: " + message);
 }
@@ -102,6 +105,101 @@ PhaseSelectionPropertyLane family_lane(SelectionPropertyFamily family) {
     }
     invalid("unsupported selected family");
 }
+Json source_fields(const DocumentSnapshot& source) {
+    return {{"expected_revision", source.revision()}, {"source_snapshot_digest", document_snapshot_digest(source)},
+        {"source_authoring_digest", document_authoring_source_digest_v2(source)},
+        {"source_entities_digest", entity_map_digest(source.entities())},
+        {"source_saved_revision", source.saved_revision_optional() ? Json(*source.saved_revision_optional()) : Json(nullptr)}};
+}
+const char* unit_name(Unit value) {
+    switch (value) {
+    case Unit::metre: return "m"; case Unit::millimetre: return "mm"; case Unit::centimetre: return "cm";
+    case Unit::foot: return "ft"; case Unit::inch: return "in";
+    }
+    invalid("unsupported quantity unit");
+}
+Unit unit(const Json& value) {
+    for (auto candidate : {Unit::metre, Unit::millimetre, Unit::centimetre, Unit::foot, Unit::inch})
+        if (value == unit_name(candidate)) return candidate;
+    invalid("unsupported quantity unit");
+}
+Json quantity_wire(const RoofOpeningQuantityInput& input) {
+    const auto& q = input.quantity;
+    if (q.original_expression.size() > 4096) invalid("quantity expression budget exceeded");
+    const auto parsed = parse_quantity(q.original_expression, input.default_unit);
+    if (parsed.metres != q.metres || parsed.exact_metres != q.exact_metres || parsed.entered_unit != q.entered_unit)
+        invalid("quantity must reproduce its exact entered input");
+    return {{"quantity", {{"version", 1}, {"original_expression", q.original_expression}, {"entered_unit", unit_name(q.entered_unit)},
+        {"exact_metres", {{"numerator", q.exact_metres.numerator}, {"denominator", q.exact_metres.denominator}}}}},
+        {"default_unit", unit_name(input.default_unit)}};
+}
+std::optional<RoofOpeningQuantityInput> quantity_input(const Json& value, bool positive) {
+    if (value.is_null()) return {};
+    fields(value, {"quantity", "default_unit"});
+    const auto& raw = value.at("quantity");
+    fields(raw, {"version", "original_expression", "entered_unit", "exact_metres"});
+    fields(raw.at("exact_metres"), {"numerator", "denominator"});
+    if (!raw.at("original_expression").is_string() || raw.at("original_expression").get_ref<const std::string&>().size() > 4096)
+        invalid("invalid quantity expression");
+    RoofOpeningQuantityInput result{decode_constraint_quantity_receipt(raw), unit(value.at("default_unit"))};
+    if (!std::isfinite(result.quantity.metres) || (positive ? result.quantity.metres <= 0 : result.quantity.metres < 0) ||
+        quantity_wire(result).dump() != value.dump()) invalid("quantity requires canonical exact input and admitted sign");
+    return result;
+}
+Json skylight_wire(const RoofOpeningGroupProperties& request) {
+    const auto q = [](const auto& value) { return value ? quantity_wire(*value) : Json(nullptr); };
+    return {{"version", 1}, {"width", q(request.width)}, {"depth", q(request.depth)}, {"frame_width", q(request.frame_width)},
+        {"curb_height", q(request.curb_height)}, {"glazing_thickness", q(request.glazing_thickness)},
+        {"rotation_radians", request.rotation_radians ? Json(*request.rotation_radians) : Json(nullptr)},
+        {"retain_invariant_members", request.retain_invariant_members}};
+}
+RoofOpeningGroupProperties skylight_request(const Json& wire) {
+    const auto& patch = wire.at("skylight_properties");
+    fields(patch, {"version", "width", "depth", "frame_width", "curb_height", "glazing_thickness", "rotation_radians", "retain_invariant_members"});
+    if (!patch.at("version").is_number_integer() || patch.at("version") != 1 || !patch.at("retain_invariant_members").is_boolean())
+        invalid("unsupported skylight Properties codec");
+    RoofOpeningGroupProperties result;
+    result.width = quantity_input(patch.at("width"), true); result.depth = quantity_input(patch.at("depth"), true);
+    result.frame_width = quantity_input(patch.at("frame_width"), true); result.curb_height = quantity_input(patch.at("curb_height"), false);
+    result.glazing_thickness = quantity_input(patch.at("glazing_thickness"), true);
+    if (!patch.at("rotation_radians").is_null()) {
+        if (!patch.at("rotation_radians").is_number()) invalid("skylight angle must be numeric");
+        result.rotation_radians = patch.at("rotation_radians").get<double>();
+        if (!std::isfinite(*result.rotation_radians) || std::abs(*result.rotation_radians) > std::numbers::pi) invalid("skylight angle must be canonical in [-pi,pi]");
+    }
+    result.retain_invariant_members = patch.at("retain_invariant_members").get<bool>();
+    if (!result.width && !result.depth && !result.frame_width && !result.curb_height && !result.glazing_thickness &&
+        !result.rotation_radians && !result.retain_invariant_members) invalid("empty skylight patch requires invariant retention");
+    if (skylight_wire(result).dump() != patch.dump()) invalid("noncanonical skylight Properties");
+    const auto& rows = wire.at("roof_opening_members");
+    if (!rows.is_array() || rows.empty() || rows.size() > 1000) invalid("invalid child roster budget");
+    std::set<std::pair<std::string, std::string>> seen;
+    for (const auto& row : rows) {
+        fields(row, {"roof_id", "opening_id"});
+        RoofOpeningGroupMember member{text(row.at("roof_id")), text(row.at("opening_id"))};
+        if (!seen.emplace(member.roof_id, member.opening_id).second) invalid("duplicate qualified child selection");
+        result.members.push_back(std::move(member));
+    }
+    return result;
+}
+PreparedRoofOpeningGroupProperties composite_roof_properties(const Entities& actual,
+    const RoofOpeningGroupProperties& request, const std::vector<RoofProfileEditIntent>& profiles) {
+    auto complete = request;
+    // Preserve complete selected-child proof even for no-ops. The caller's
+    // invariant policy remains a separate independently checked row contract.
+    complete.retain_invariant_members = true;
+    auto prepared = prepare_roof_opening_group_properties_composite(actual, complete, profiles);
+    if (!request.retain_invariant_members) for (const auto& member : request.members) {
+        const auto row = [&](const Entities& entities) -> const Json& {
+            const auto& roster = entities.at(member.roof_id).properties.at("roof_openings");
+            const auto found = std::find_if(roster.begin(), roster.end(), [&](const auto& child) { return child.at("id") == member.opening_id; });
+            if (found == roster.end()) invalid("actual selected child row disappeared");
+            return *found;
+        };
+        if (row(actual).dump() == row(prepared.candidate_entities).dump()) invalid("unchanged selected skylight requires explicit retain policy");
+    }
+    return prepared;
+}
 Json scalar_wire(const DocumentSnapshot& source, const SelectionPropertyEditRequest& request) {
     if (request.selected.empty() || request.selected.size() > 1000 || request.walls.size() > 1000 ||
         request.slabs.size() > 1000 || request.hosted_openings.size() > 1000 || request.roofs.size() > 1000 ||
@@ -158,6 +256,15 @@ void authenticate(const DocumentSnapshot& source, const Json& scalar) {
         source.history().at(source.revision()).revision != source.revision() ||
         (source.saved_revision_optional() && *source.saved_revision_optional() >= source.history().size())) invalid("invalid captured source metadata");
     if (scalar_wire(source, scalar_request(scalar)).dump() != scalar.dump()) invalid("complete captured source changed");
+}
+void authenticate_request(const DocumentSnapshot& source, const Json& wire) {
+    if (wire.at("version") == 1) { authenticate(source, wire.at("scalar_request")); return; }
+    if (!source.is_editable() || source.history().empty() || source.revision() >= source.history().size() ||
+        source.history().at(source.revision()).revision != source.revision() ||
+        (source.saved_revision_optional() && *source.saved_revision_optional() >= source.history().size())) invalid("invalid captured source metadata");
+    const auto expected = source_fields(source);
+    for (const auto* fence : source_fences) if (wire.at(fence).dump() != expected.at(fence).dump()) invalid("complete captured source changed");
+    if (!wire.at("scalar_request").is_null()) authenticate(source, wire.at("scalar_request"));
 }
 Json allocation_wire(const PhaseSelectionPropertyIdentityAllocation& allocation) {
     Json result{{"lane", lane_name(allocation.lane)}, {"registry_id", allocation.registry_id}, {"alternative_id", allocation.alternative_id},
@@ -228,10 +335,32 @@ std::vector<PhaseStairReplacementDependencyDisposition> decisions(const Json& ro
 }
 PhaseSelectionPropertyEditRequest decode(const Json& wire) {
     bounds(wire);
-    fields(wire, {"version", "scalar_request", "allocations", "stair_dependency_dispositions", "message"});
-    if (!wire.at("version").is_number_integer() || wire.at("version") != 1) invalid("unsupported request version");
+    if (!wire.is_object() || !wire.contains("version") || !wire.at("version").is_number_integer()) invalid("unsupported request version");
+    const bool composite = wire.at("version") == 2;
+    if (composite) fields(wire, {"version", "expected_revision", "source_snapshot_digest", "source_authoring_digest", "source_entities_digest",
+        "source_saved_revision", "scalar_request", "allocations", "stair_dependency_dispositions", "message", "skylight_properties", "roof_opening_members"});
+    else {
+        fields(wire, {"version", "scalar_request", "allocations", "stair_dependency_dispositions", "message"});
+        if (wire.at("version") != 1) invalid("unsupported request version");
+    }
     PhaseSelectionPropertyEditRequest result;
-    result.properties = scalar_request(wire.at("scalar_request"));
+    if (!wire.at("scalar_request").is_null()) result.properties = scalar_request(wire.at("scalar_request"));
+    else if (!composite) invalid("historical request requires scalar authority");
+    if (composite) {
+        const auto revision = [&](const Json& value) {
+            if (!value.is_number_integer() || (value.is_number_unsigned() ? false : value.get<std::int64_t>() < 0)) invalid("invalid source revision");
+        };
+        revision(wire.at("expected_revision"));
+        if (!wire.at("source_saved_revision").is_null()) revision(wire.at("source_saved_revision"));
+        for (const auto* key : {"source_snapshot_digest", "source_authoring_digest", "source_entities_digest"}) {
+            const auto digest = text(wire.at(key));
+            if (digest.size() != 64 || !std::all_of(digest.begin(), digest.end(), [](unsigned char c) { return (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f'); })) invalid("invalid source digest");
+        }
+        if (!wire.at("scalar_request").is_null()) for (const auto* fence : source_fences)
+            if (wire.at(fence).dump() != wire.at("scalar_request").at(fence).dump()) invalid("scalar and composite source fences differ");
+        result.roof_opening_properties = skylight_request(wire);
+        if (result.properties.selected.size() + result.roof_opening_properties->members.size() > 1000) invalid("combined physical selection budget exceeded");
+    }
     if (!wire.at("allocations").is_array() || wire.at("allocations").size() > 1000) invalid("allocation cohort budget exceeded");
     std::optional<Key> previous;
     Ids fresh;
@@ -307,10 +436,29 @@ const std::vector<PhaseStairReplacementDependencyPlan>& PhaseSelectionPropertyEd
 const std::vector<std::string>& PhaseSelectionPropertyEditInspection::invariant_selected_ids() const noexcept { return invariant_; }
 
 PhaseSelectionPropertyEditInspection inspect_phase_selection_property_edit(const DocumentSnapshot& source, const SelectionPropertyEditRequest& request,
-    const std::vector<PhaseStairReplacementDependencyDisposition>& reviewed_stair_dispositions) {
+    const std::vector<PhaseStairReplacementDependencyDisposition>& reviewed_stair_dispositions,
+    const std::optional<RoofOpeningGroupProperties>& roof_opening_properties) {
     (void)decisions(decisions_wire(reviewed_stair_dispositions));
-    const auto wire = scalar_wire(source, request); authenticate(source, wire);
+    if (request.selected.empty() && (!roof_opening_properties || !request.walls.empty() || !request.slabs.empty() ||
+        !request.hosted_openings.empty() || !request.roofs.empty() || !request.structural_profiles.empty() || !request.stair_profiles.empty()))
+        invalid("empty physical roster requires child-only authority");
+    const Json wire = request.selected.empty() ? Json(nullptr) : scalar_wire(source, request);
+    if (!wire.is_null()) authenticate(source, wire);
+    else {
+        auto captured = source_fields(source); captured["version"] = 2; captured["scalar_request"] = nullptr;
+        authenticate_request(source, captured);
+    }
+    if (roof_opening_properties) {
+        Json children{{"skylight_properties", skylight_wire(*roof_opening_properties)}, {"roof_opening_members", Json::array()}};
+        for (const auto& member : roof_opening_properties->members) children["roof_opening_members"].push_back({{"roof_id", member.roof_id}, {"opening_id", member.opening_id}});
+        (void)skylight_request(children);
+        if (request.selected.size() + roof_opening_properties->members.size() > 1000) invalid("combined physical selection budget exceeded");
+    }
     const auto& actual = source.entities(); const auto scope = constraint_phase_scope(actual);
+    std::optional<PreparedRoofOpeningGroupProperties> composite_roofs;
+    if (roof_opening_properties) composite_roofs = composite_roof_properties(actual, *roof_opening_properties, request.roofs);
+    if (roof_opening_properties) for (const auto& member : roof_opening_properties->members)
+        if (scope.inactive_owner_ids.contains(member.roof_id) || scope.inactive_owner_ids.contains(member.opening_id)) invalid("selected child or host is inactive in the saved design");
     Entities edited;
     for (const auto& target : request.selected) {
         const auto found = actual.find(target.entity_id);
@@ -321,7 +469,12 @@ PhaseSelectionPropertyEditInspection inspect_phase_selection_property_edit(const
     for (const auto& profile : request.walls) edited.at(profile.wall_id) = replay_wall_profile_entity(actual.at(profile.wall_id), profile);
     for (const auto& profile : request.slabs) edited.at(profile.slab_id) = replay_slab_profile_entity(actual.at(profile.slab_id), profile);
     for (const auto& profile : request.hosted_openings) edited.at(profile.opening_id) = replay_hosted_opening_profile_entity(actual.at(profile.opening_id), profile);
-    for (const auto& profile : request.roofs) edited.at(profile.roof_id) = stage_roof_profile_entity(actual.at(profile.roof_id), profile);
+    Ids invariant_roof_bodies;
+    for (const auto& profile : request.roofs) {
+        const auto body = stage_roof_profile_entity(actual.at(profile.roof_id), profile);
+        if (exact(actual.at(profile.roof_id), body)) invariant_roof_bodies.insert(profile.roof_id);
+        edited.at(profile.roof_id) = composite_roofs ? composite_roofs->candidate_entities.at(profile.roof_id) : body;
+    }
     for (const auto& profile : request.structural_profiles) edited.at(profile.object_id) = prepare_structural_profile_edit_entity(actual.at(profile.object_id), profile);
     for (const auto& entity : prepare_stair_profile_edit_entities(actual, request.stair_profiles)) edited.at(entity.id) = entity;
     std::map<std::string, std::string, std::less<>> memberships;
@@ -341,11 +494,11 @@ PhaseSelectionPropertyEditInspection inspect_phase_selection_property_edit(const
         if (!model.active_alternative() || std::find(model.baseline_ids().begin(), model.baseline_ids().end(), id) == model.baseline_ids().end()) return {};
         return Key{kind, registry, *model.active_alternative()};
     };
-    struct Group { Ids selected, seeds; };
+    struct Group { Ids selected, seeds, roof_hosts; };
     std::map<Key, Group> groups;
     std::vector<std::string> invariant;
     for (const auto& target : request.selected) {
-        if (exact(actual.at(target.entity_id), edited.at(target.entity_id))) {
+        if (invariant_roof_bodies.contains(target.entity_id) || exact(actual.at(target.entity_id), edited.at(target.entity_id))) {
             if (request.unchanged_policy != SelectionPropertyUnchangedPolicy::retain) invalid("unchanged selected owner requires retain policy");
             invariant.push_back(target.entity_id); continue;
         }
@@ -363,12 +516,21 @@ PhaseSelectionPropertyEditInspection inspect_phase_selection_property_edit(const
         }
         if (key) { groups[*key].selected.insert(target.entity_id); groups[*key].seeds.insert(seed); }
     }
+    // Qualified child selections derive host phase authority from actual saved
+    // membership. Hosts remain internal producers, never physical selections.
+    if (composite_roofs) for (const auto& edit : composite_roofs->intents) {
+        if (scope.inactive_owner_ids.contains(edit.roof_id)) invalid("selected child host is inactive in the saved design");
+        if (exact(actual.at(edit.roof_id), composite_roofs->candidate_entities.at(edit.roof_id))) continue;
+        if (const auto key = baseline_key(edit.roof_id, PhaseSelectionPropertyLane::roofs)) {
+            groups[*key].seeds.insert(edit.roof_id); groups[*key].roof_hosts.insert(edit.roof_id);
+        }
+    }
     // Coordinate ordinary members with their selected replacement family when
     // its existing producer admits that role. This is essential for selected
     // rails/openings fitting a concurrently edited baseline host. Foreign
     // ordinary registries retain their separate original-source contribution.
     for (const auto& target : request.selected) {
-        if (exact(actual.at(target.entity_id), edited.at(target.entity_id))) continue;
+        if (invariant_roof_bodies.contains(target.entity_id) || exact(actual.at(target.entity_id), edited.at(target.entity_id))) continue;
         const auto kind = family_lane(target.family);
         if (kind == PhaseSelectionPropertyLane::slabs || std::any_of(groups.begin(), groups.end(),
             [&](const auto& item) { return item.second.selected.contains(target.entity_id); })) continue;
@@ -376,6 +538,15 @@ PhaseSelectionPropertyEditInspection inspect_phase_selection_property_edit(const
         for (auto& [key, group] : groups) if (std::get<0>(key) == kind &&
             (kind == PhaseSelectionPropertyLane::walls || membership == memberships.end() || membership->second == std::get<1>(key))) {
             group.selected.insert(target.entity_id); break;
+        }
+    }
+    if (composite_roofs) for (const auto& edit : composite_roofs->intents) {
+        if (exact(actual.at(edit.roof_id), composite_roofs->candidate_entities.at(edit.roof_id))) continue;
+        if (std::any_of(groups.begin(), groups.end(), [&](const auto& item) { return item.second.roof_hosts.contains(edit.roof_id); })) continue;
+        const auto membership = memberships.find(edit.roof_id);
+        for (auto& [key, group] : groups) if (std::get<0>(key) == PhaseSelectionPropertyLane::roofs &&
+            (membership == memberships.end() || membership->second == std::get<1>(key))) {
+            group.roof_hosts.insert(edit.roof_id); break;
         }
     }
     std::vector<PhaseSelectionPropertyReplacementInventory> replacements;
@@ -412,7 +583,14 @@ PhaseSelectionPropertyEditInspection inspect_phase_selection_property_edit(const
             phase_stairs.insert(group.selected.begin(), group.selected.end()); break;
         }
         }
-        replacements.push_back({kind, registry, alternative, {group.selected.begin(), group.selected.end()}, std::move(plan)});
+        std::vector<RoofEditIntent> roof_edits;
+        if (composite_roofs && kind == PhaseSelectionPropertyLane::roofs) {
+            const auto& roof_plan = std::get<PhaseRoofReplacementPlan>(plan);
+            const Ids closure(roof_plan.seed_roof_ids.begin(), roof_plan.seed_roof_ids.end());
+            for (const auto& edit : composite_roofs->intents) if ((group.roof_hosts.contains(edit.roof_id) || closure.contains(edit.roof_id)) &&
+                !exact(actual.at(edit.roof_id), composite_roofs->candidate_entities.at(edit.roof_id))) roof_edits.push_back(edit);
+        }
+        replacements.push_back({kind, registry, alternative, {group.selected.begin(), group.selected.end()}, std::move(plan), std::move(roof_edits)});
     }
     auto ordinary_stairs = changed_stairs(request, actual, edited);
     for (const auto& id : phase_stairs) ordinary_stairs.erase(id);
@@ -422,8 +600,15 @@ PhaseSelectionPropertyEditInspection inspect_phase_selection_property_edit(const
 
 Json encode_phase_selection_property_edit_request(const DocumentSnapshot& source, const PhaseSelectionPropertyEditRequest& request) {
     if (request.allocations.size() > 1000) invalid("allocation cohort budget exceeded");
-    Json wire{{"version", 1}, {"scalar_request", scalar_wire(source, request.properties)}, {"allocations", Json::array()},
+    if (request.properties.selected.empty() && (!request.roof_opening_properties || !request.properties.walls.empty() || !request.properties.slabs.empty() ||
+        !request.properties.hosted_openings.empty() || !request.properties.roofs.empty() || !request.properties.structural_profiles.empty() || !request.properties.stair_profiles.empty())) invalid("empty physical roster requires child-only authority");
+    Json wire{{"version", request.roof_opening_properties ? 2 : 1}, {"scalar_request", request.properties.selected.empty() ? Json(nullptr) : scalar_wire(source, request.properties)}, {"allocations", Json::array()},
         {"stair_dependency_dispositions", decisions_wire(request.stair_dependency_dispositions)}, {"message", request.message}};
+    if (request.roof_opening_properties) {
+        const auto captured = source_fields(source); for (const auto* fence : source_fences) wire[fence] = captured.at(fence);
+        wire["skylight_properties"] = skylight_wire(*request.roof_opening_properties); wire["roof_opening_members"] = Json::array();
+        for (const auto& member : request.roof_opening_properties->members) wire["roof_opening_members"].push_back({{"roof_id", member.roof_id}, {"opening_id", member.opening_id}});
+    }
     for (const auto& item : request.allocations) wire["allocations"].push_back(allocation_wire(item));
     (void)decode(wire); return wire;
 }
@@ -432,15 +617,19 @@ Json validate_phase_selection_property_edit_request(const Json& wire) { (void)de
 PhaseSelectionPropertyEditPreparation::PhaseSelectionPropertyEditPreparation(Json request, PhaseSelectionPropertyEditInspection inspection,
     Entities entities, std::vector<Json> authorings, Json ordinary, Json ordinary_stair,
     std::map<std::string, std::string, std::less<>> selected, std::map<std::string, std::string, std::less<>> mapping,
-    std::vector<std::string> retired_selected, PhaseStairReplacementChildIdentityMap children, std::vector<PhaseWallReplacementAuthoringPreview> wall_previews)
+    std::vector<std::string> retired_selected, PhaseStairReplacementChildIdentityMap children, std::vector<PhaseWallReplacementAuthoringPreview> wall_previews,
+    std::vector<RoofEditIntent> ordinary_roofs, std::map<std::pair<std::string, std::string>, RoofOpeningGroupMember> roof_opening_mapping)
     : request_(std::move(request)), inspection_(std::move(inspection)), entities_(std::move(entities)), authorings_(std::move(authorings)),
       ordinary_(std::move(ordinary)), ordinary_stair_(std::move(ordinary_stair)), selected_mapping_(std::move(selected)), mapping_(std::move(mapping)),
-      allocations_(decode(request_).allocations), retired_selected_(std::move(retired_selected)), children_(std::move(children)), wall_previews_(std::move(wall_previews)) {}
+      allocations_(decode(request_).allocations), retired_selected_(std::move(retired_selected)), children_(std::move(children)), wall_previews_(std::move(wall_previews)),
+      ordinary_roofs_(std::move(ordinary_roofs)), roof_opening_mapping_(std::move(roof_opening_mapping)) {}
 const Json& PhaseSelectionPropertyEditPreparation::request() const noexcept { return request_; }
 const Entities& PhaseSelectionPropertyEditPreparation::entities() const noexcept { return entities_; }
 const std::vector<Json>& PhaseSelectionPropertyEditPreparation::phase_authorings() const noexcept { return authorings_; }
 const Json& PhaseSelectionPropertyEditPreparation::ordinary_scalar_request() const noexcept { return ordinary_; }
 const Json& PhaseSelectionPropertyEditPreparation::ordinary_stair_review_request() const noexcept { return ordinary_stair_; }
+const std::vector<RoofEditIntent>& PhaseSelectionPropertyEditPreparation::ordinary_roof_edits() const noexcept { return ordinary_roofs_; }
+const std::map<std::pair<std::string, std::string>, RoofOpeningGroupMember>& PhaseSelectionPropertyEditPreparation::selected_roof_opening_original_to_proposed() const noexcept { return roof_opening_mapping_; }
 const std::map<std::string, std::string, std::less<>>& PhaseSelectionPropertyEditPreparation::selected_original_to_proposed() const noexcept { return selected_mapping_; }
 const std::vector<std::string>& PhaseSelectionPropertyEditPreparation::explicitly_retired_selected_ids() const noexcept { return retired_selected_; }
 const std::vector<PhaseSelectionPropertyIdentityAllocation>& PhaseSelectionPropertyEditPreparation::validated_identity_allocations() const noexcept { return allocations_; }
@@ -454,8 +643,8 @@ PhaseSelectionPropertyEditPreparation prepare_phase_selection_property_edit(cons
 }
 
 PhaseSelectionPropertyEditPreparation replay_phase_selection_property_edit_preparation(const DocumentSnapshot& source, const Json& wire) {
-    const auto request = decode(wire); authenticate(source, wire.at("scalar_request"));
-    auto inspection = inspect_phase_selection_property_edit(source, request.properties, request.stair_dependency_dispositions);
+    const auto request = decode(wire); authenticate_request(source, wire);
+    auto inspection = inspect_phase_selection_property_edit(source, request.properties, request.stair_dependency_dispositions, request.roof_opening_properties);
     const auto& actual = source.entities();
     if (request.allocations.size() != inspection.replacements().size()) invalid("allocation cohorts must exactly cover actual replacement inventory");
     for (std::size_t index = 0; index < request.allocations.size(); ++index) {
@@ -475,7 +664,7 @@ PhaseSelectionPropertyEditPreparation replay_phase_selection_property_edit_prepa
     std::vector<PhaseWallReplacementAuthoringPreview> wall_previews;
     std::map<std::string, std::string, std::less<>> mapping;
     PhaseStairReplacementChildIdentityMap children;
-    Ids phase_selected, consumed_decisions;
+    Ids phase_selected, consumed_decisions, phase_roof_hosts;
     for (std::size_t index = 0; index < inspection.replacements().size(); ++index) {
         const auto& inventory = inspection.replacements()[index]; const auto& ids = request.allocations[index];
         const Ids selected(inventory.changed_selected_ids.begin(), inventory.changed_selected_ids.end());
@@ -512,7 +701,12 @@ PhaseSelectionPropertyEditPreparation replay_phase_selection_property_edit_prepa
             leaf.seed_roof_ids = plan.seed_roof_ids; leaf.identities = ids.identities; leaf.hosted_instance_identities = ids.hosted_instance_identities;
             leaf.phase_qualified_joins = true; leaf.include_hosted_instances = true;
             const Ids seeds(plan.seed_roof_ids.begin(), plan.seed_roof_ids.end());
-            for (const auto& profile : selected_intents(request.properties.roofs, selected, [](const auto& p) { return p.roof_id; })) {
+            if (request.roof_opening_properties) {
+                for (const auto& edit : inventory.source_roof_edits) {
+                    if (!phase_roof_hosts.insert(edit.roof_id).second) invalid("combined roof producer authority overlaps phase cohorts");
+                    (seeds.contains(edit.roof_id) ? leaf.roof_edits : leaf.ordinary_roof_edits).push_back(edit);
+                }
+            } else for (const auto& profile : selected_intents(request.properties.roofs, selected, [](const auto& p) { return p.roof_id; })) {
                 RoofEditIntent edit; edit.roof_id = profile.roof_id; edit.profile = profile;
                 (seeds.contains(profile.roof_id) ? leaf.roof_edits : leaf.ordinary_roof_edits).push_back(std::move(edit));
             }
@@ -559,6 +753,14 @@ PhaseSelectionPropertyEditPreparation replay_phase_selection_property_edit_prepa
     std::erase_if(ordinary.roofs, [&](const auto& p) { return phase_selected.contains(p.roof_id); });
     std::erase_if(ordinary.structural_profiles, [&](const auto& p) { return phase_selected.contains(p.object_id); });
     std::erase_if(ordinary.stair_profiles, [&](const auto& p) { return phase_selected.contains(p.object_id); });
+    std::vector<RoofEditIntent> ordinary_roofs;
+    if (request.roof_opening_properties) {
+        const auto combined = composite_roof_properties(actual, *request.roof_opening_properties, request.properties.roofs);
+        for (const auto& edit : combined.intents) if (!phase_roof_hosts.contains(edit.roof_id)) ordinary_roofs.push_back(edit);
+        if (!ordinary_roofs.empty()) ordinary_candidates.push_back(replay_roof_edit_entities(actual, ordinary_roofs));
+        ordinary.roofs.clear();
+        std::erase_if(ordinary.selected, [](const auto& target) { return target.family == SelectionPropertyFamily::roof; });
+    }
     Json ordinary_wire = nullptr, ordinary_stair_wire = nullptr;
     std::optional<StairPropertyReviewPreparation> ordinary_stair_review;
     if (!ordinary.stair_profiles.empty()) {
@@ -606,6 +808,34 @@ PhaseSelectionPropertyEditPreparation replay_phase_selection_property_edit_prepa
         }
         selected_mapping.emplace(target.entity_id, final);
     }
+    std::map<std::pair<std::string, std::string>, RoofOpeningGroupMember> roof_opening_mapping;
+    if (request.roof_opening_properties) for (const auto& member : request.roof_opening_properties->members) {
+        const auto& source_host = actual.at(member.roof_id);
+        if (source_host.type != "roof" || source_host.id != member.roof_id) invalid("selected child has no actual qualified roof host");
+        RoofOpeningGroupMember destination = member;
+        bool inventoried = false;
+        for (std::size_t i = 0; i < inspection.replacements().size(); ++i) {
+            const auto& inventory = inspection.replacements()[i];
+            if (inventory.lane != PhaseSelectionPropertyLane::roofs) continue;
+            const auto& plan = std::get<PhaseRoofReplacementPlan>(inventory.plan);
+            const auto& ids = request.allocations[i].identities;
+            if (!ids.contains(member.roof_id)) continue;
+            if (inventoried || std::find(plan.required_entity_ids.begin(), plan.required_entity_ids.end(), member.roof_id) == plan.required_entity_ids.end() ||
+                std::find(plan.required_child_ids.begin(), plan.required_child_ids.end(), member.opening_id) == plan.required_child_ids.end() || !ids.contains(member.opening_id))
+                invalid("selected child replacement lacks one actual inventoried host/child pair");
+            inventoried = true; destination = {ids.at(member.roof_id), ids.at(member.opening_id)};
+        }
+        const auto final = candidate.find(destination.roof_id);
+        if (final == candidate.end() || final->second.id != destination.roof_id || final->second.type != "roof") invalid("selected child destination lost its actual qualified roof");
+        const auto& roster = final->second.properties.at("roof_openings");
+        if (std::count_if(roster.begin(), roster.end(), [&](const auto& row) { return row.at("id") == destination.opening_id && row.contains("skylight") && !row.at("skylight").is_null(); }) != 1)
+            invalid("complete preparation lost a selected qualified skylight");
+        // Query validates the actual qualified original child even when it was
+        // retained and cloned only through its host's replacement closure.
+        (void)roof_opening_group_member_center_world(actual, member);
+        (void)roof_opening_group_member_center_world(candidate, destination);
+        if (!roof_opening_mapping.emplace(std::pair{member.roof_id, member.opening_id}, std::move(destination)).second) invalid("duplicate selected child mapping");
+    }
     // Every original protected physical owner remains exact. Known additive
     // presentation completion is separately admitted by the family producers.
     const auto scope = constraint_phase_scope(actual);
@@ -617,9 +847,9 @@ PhaseSelectionPropertyEditPreparation replay_phase_selection_property_edit_prepa
     }
     for (const auto& id : scope.inactive_owner_ids) if (!candidate.contains(id) || !exact(actual.at(id), candidate.at(id))) invalid("preparation changed an inactive physical owner");
     return {wire, std::move(inspection), std::move(candidate), std::move(authorings), std::move(ordinary_wire), std::move(ordinary_stair_wire),
-        std::move(selected_mapping), std::move(mapping), std::move(retired_selected), std::move(children), std::move(wall_previews)};
+        std::move(selected_mapping), std::move(mapping), std::move(retired_selected), std::move(children), std::move(wall_previews), std::move(ordinary_roofs), std::move(roof_opening_mapping)};
 }
 void require_phase_selection_property_edit_source_current(const DocumentSnapshot& source, const PhaseSelectionPropertyEditPreparation& prepared) {
-    (void)decode(prepared.request()); authenticate(source, prepared.request().at("scalar_request"));
+    (void)decode(prepared.request()); authenticate_request(source, prepared.request());
 }
 } // namespace sketch

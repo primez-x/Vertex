@@ -10,6 +10,7 @@
 #include "sketch/phase_corner_window_edit.hpp"
 #include "sketch/constraint_entity.hpp"
 #include "sketch/physical_wall_phase_review.hpp"
+#include <set>
 
 namespace sketch {
 
@@ -87,6 +88,19 @@ struct PhaseWallReplacementAuthoringPreview {
     const DocumentSnapshot& source,const PhaseConstraintAuthoringIntent& intent);
 [[nodiscard]] PhaseWallReplacementEntities replay_phase_wall_replacement_authoring(
     const PhaseWallReplacementEntities& source,const PhaseConstraintAuthoringIntent& intent);
+// Analytical room evidence/completion for an independently composed scalar
+// Properties stage. The enclosing sealed command rederives that whole stage;
+// these helpers confer neither physical edit nor publication authority.
+// The source leaf is independently reconstructed, copied physical owners and
+// deferred relationship bodies remain exact, and only its reviewed room,
+// endpoint and surviving-presentation consequences may change the stage.
+[[nodiscard]] PhaseWallReplacementAuthoringPreview inspect_phase_wall_replacement_rooms_on_composed_stage(
+    const DocumentSnapshot& source,const PhaseConstraintAuthoringIntent& intent,
+    const PhaseWallReplacementEntities& analytical_entities);
+[[nodiscard]] PhaseWallReplacementEntities complete_phase_wall_replacement_rooms_on_composed_stage(
+    const DocumentSnapshot& source,const PhaseConstraintAuthoringIntent& intent,
+    const PhaseWallReplacementEntities& analytical_entities,
+    const std::set<std::string,std::less<>>& deferred_constraint_ids = {});
 void validate_phase_wall_replacement_originals(const PhaseWallReplacementEntities& source,
     const PhaseWallReplacementEntities& candidate,const PhaseConstraintAuthoringIntent& intent);
 // Caller supplies the source-bound original intent and complete independently

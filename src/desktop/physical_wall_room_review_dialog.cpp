@@ -65,10 +65,11 @@ bool curve_proposal(const std::optional<Command>& predecessor) {
     return command && command->curve_construction_completion;
 }
 DocumentSnapshot property_room_stage(const DocumentSnapshot& original,
-    const MixedSelectionPropertyEditPreparation& preparation,const std::vector<nlohmann::json>& prefix) {
+    const MixedSelectionPropertyEditPreparation& preparation,const std::vector<nlohmann::json>& prefix,
+    const std::vector<nlohmann::json>& phase_prefix) {
     if (prefix.size()>=preparation.required_room_reviews().size())
         throw std::invalid_argument("There is no next required Properties room review.");
-    auto stage=preview_mixed_selection_property_room_stage(original,preparation,prefix);
+    auto stage=preview_mixed_selection_property_room_stage(original,preparation,prefix,phase_prefix);
     if (stage.is_editable()) throw std::invalid_argument("The Properties room drawing stage must remain read-only.");
     return stage;
 }
@@ -94,6 +95,7 @@ public:
     DocumentSnapshot original_source;
     std::optional<MixedSelectionPropertyEditPreparation> property_preparation;
     std::vector<nlohmann::json> property_review_prefix;
+    std::vector<nlohmann::json> property_phase_reviews;
     DocumentSnapshot source;
     std::optional<Command> predecessor;
     std::function<DocumentSnapshot()> current_source;
@@ -126,9 +128,10 @@ public:
         std::function<DocumentSnapshot()> current,std::optional<Command> geometry,
         std::optional<DrawingContext> context=std::nullopt,std::optional<double> elevation=std::nullopt,
         std::optional<MixedSelectionPropertyEditPreparation> properties=std::nullopt,
-        std::vector<nlohmann::json> prior_reviews={}):dialog(owner),original_source(std::move(captured)),
+        std::vector<nlohmann::json> prior_reviews={},std::vector<nlohmann::json> phase_reviews={}):dialog(owner),original_source(std::move(captured)),
         property_preparation(std::move(properties)),property_review_prefix(std::move(prior_reviews)),
-        source(property_preparation?property_room_stage(original_source,*property_preparation,property_review_prefix):
+        property_phase_reviews(std::move(phase_reviews)),
+        source(property_preparation?property_room_stage(original_source,*property_preparation,property_review_prefix,property_phase_reviews):
             geometry?preview_physical_wall_room_review_geometry(original_source,*geometry):original_source),predecessor(std::move(geometry)),
         current_source(std::move(current)),original_digest(document_snapshot_digest(original_source)),
         source_digest(document_snapshot_digest(source)),metric(metric_units),
@@ -679,7 +682,7 @@ public:
                 if (property_preparation) {
                     room_intent=encode_physical_wall_room_review_intent(decisions);
                     auto prefix=property_review_prefix;prefix.push_back(*room_intent);
-                    auto reviewed=preview_mixed_selection_property_room_stage(original_source,*property_preparation,prefix);
+                    auto reviewed=preview_mixed_selection_property_room_stage(original_source,*property_preparation,prefix,property_phase_reviews);
                     if (reviewed.is_editable()) throw std::invalid_argument("The Properties room candidate must remain read-only.");
                     return reviewed;
                 }
@@ -764,7 +767,7 @@ public:
             if (!candidate_room_intent || !candidate_snapshot) return false;
             try {
                 require_current();auto prefix=property_review_prefix;prefix.push_back(*candidate_room_intent);
-                const auto exact=preview_mixed_selection_property_room_stage(original_source,*property_preparation,prefix);
+                const auto exact=preview_mixed_selection_property_room_stage(original_source,*property_preparation,prefix,property_phase_reviews);
                 if (exact.is_editable() || document_snapshot_digest(exact)!=document_snapshot_digest(*candidate_snapshot))
                     throw std::invalid_argument("The accepted Properties room preview changed. Review it again.");
                 require_current();accepted_room_intent=candidate_room_intent;return true;
@@ -790,6 +793,11 @@ PhysicalWallRoomReviewDialog::PhysicalWallRoomReviewDialog(DocumentSnapshot orig
     std::vector<nlohmann::json> prior_room_reviews,bool metric_units,std::function<DocumentSnapshot()> current_original_source,QWidget* parent):QDialog(parent),
     m_impl(std::make_unique<Impl>(this,std::move(original_source),std::string{},metric_units,std::move(current_original_source),
         std::nullopt,std::nullopt,std::nullopt,std::move(preparation),std::move(prior_room_reviews))) {}
+PhysicalWallRoomReviewDialog::PhysicalWallRoomReviewDialog(DocumentSnapshot original_source,MixedSelectionPropertyEditPreparation preparation,
+    std::vector<nlohmann::json> prior_room_reviews,std::vector<nlohmann::json> phase_room_reviews,
+    bool metric_units,std::function<DocumentSnapshot()> current_original_source,QWidget* parent):QDialog(parent),
+    m_impl(std::make_unique<Impl>(this,std::move(original_source),std::string{},metric_units,std::move(current_original_source),
+        std::nullopt,std::nullopt,std::nullopt,std::move(preparation),std::move(prior_room_reviews),std::move(phase_room_reviews))) {}
 PhysicalWallRoomReviewDialog::~PhysicalWallRoomReviewDialog()=default;
 const std::optional<ApplyBoundaryConstraintChanges>& PhysicalWallRoomReviewDialog::acceptedCommand() const {return m_impl->accepted;}
 const std::optional<nlohmann::json>& PhysicalWallRoomReviewDialog::acceptedRoomIntent() const {return m_impl->accepted_room_intent;}

@@ -6,6 +6,7 @@
 #include "sketch/selection_presentation_property_edit.hpp"
 #include "sketch/selection_property_edit.hpp"
 #include "sketch/stair_property_review.hpp"
+#include "sketch/phase_selection_property_edit.hpp"
 
 #include <optional>
 #include <span>
@@ -27,10 +28,13 @@ namespace sketch {
 // Dialect ten adds authenticated qualified assembly instance/path Properties.
 // Its stair review field is always present and may be null; a nonnull review
 // retains dialect nine's exact scalar/removal closure authority.
+// Dialect eleven adds sealed source-derived active-baseline replacements and
+// explicit final-stage phase room completion. Its phase request also owns the
+// complete scalar/skylight composite, including ordinary/proposed members.
 // Each lane reads the same
 // complete immutable original snapshot. No supplied entity map, transform,
-// selected-object identity generation or active-baseline replacement is
-// accepted. Historical dialects five through eight retain their no-deletion
+// or caller-derived selected-object identity map is accepted. Historical
+// dialects five through eight retain their no-deletion
 // authority. Historical dialect five only admits presentation
 // request one and never acquires the newer pose authority.
 // Room decisions retain their existing typed topology
@@ -41,17 +45,40 @@ public:
     [[nodiscard]] const DocumentSnapshot& preview_snapshot() const noexcept;
     [[nodiscard]] const std::string& source_snapshot_digest() const noexcept;
     [[nodiscard]] const std::vector<SelectionGeometryRoomReviewRequirement>& required_room_reviews() const noexcept;
+    [[nodiscard]] const std::map<std::string, std::string, std::less<>>& selected_original_to_proposed() const noexcept;
+    [[nodiscard]] const std::map<std::string, std::string, std::less<>>& original_to_proposed() const noexcept;
+    [[nodiscard]] const PhaseStairReplacementChildIdentityMap& stair_child_original_to_proposed() const noexcept;
+    using HostedBindingMap = std::map<std::pair<std::string, std::string>, std::pair<std::string, std::string>>;
+    [[nodiscard]] const HostedBindingMap& hosted_binding_original_to_proposed() const noexcept;
+    [[nodiscard]] const std::map<std::pair<std::string, std::string>, RoofOpeningGroupMember>& roof_child_original_to_proposed() const noexcept;
+    [[nodiscard]] const std::vector<PhysicalWallRoomPhaseReviewInventory>& required_phase_room_reviews() const noexcept;
+    [[nodiscard]] const std::vector<std::size_t>& required_phase_room_review_indices() const noexcept;
+    [[nodiscard]] const std::vector<PhaseWallReplacementAuthoringPreview>& phase_wall_previews() const noexcept;
+    [[nodiscard]] const std::vector<nlohmann::json>& phase_authorings() const noexcept;
 private:
     MixedSelectionPropertyEditPreparation(const DocumentSnapshot&, nlohmann::json,
         std::map<std::string, Entity, std::less<>>,
-        std::vector<SelectionGeometryRoomReviewRequirement>);
+        std::vector<SelectionGeometryRoomReviewRequirement>,
+        std::optional<PhaseSelectionPropertyEditPreparation> = std::nullopt,
+        std::vector<PhysicalWallRoomPhaseReviewInventory> = {});
     nlohmann::json intent_;
     DocumentSnapshot preview_;
     std::string source_digest_;
     std::vector<SelectionGeometryRoomReviewRequirement> room_reviews_;
+    std::optional<PhaseSelectionPropertyEditPreparation> phase_;
+    HostedBindingMap hosted_bindings_;
+    std::map<std::pair<std::string, std::string>, RoofOpeningGroupMember> roof_children_;
+    std::vector<PhysicalWallRoomPhaseReviewInventory> phase_room_reviews_;
+    std::vector<std::size_t> phase_room_review_indices_;
     friend MixedSelectionPropertyEditPreparation replay_mixed_selection_property_edit_preparation(
         const DocumentSnapshot&, const nlohmann::json&);
     friend DocumentSnapshot preview_mixed_selection_property_room_stage(
+        const DocumentSnapshot&, const MixedSelectionPropertyEditPreparation&,
+        const std::vector<nlohmann::json>&);
+    friend DocumentSnapshot preview_mixed_selection_property_room_stage(
+        const DocumentSnapshot&, const MixedSelectionPropertyEditPreparation&,
+        const std::vector<nlohmann::json>&, const std::vector<nlohmann::json>&);
+    friend DocumentSnapshot preview_mixed_selection_property_phase_room_stage(
         const DocumentSnapshot&, const MixedSelectionPropertyEditPreparation&,
         const std::vector<nlohmann::json>&);
 };
@@ -103,6 +130,18 @@ private:
     const std::optional<RoofOpeningGroupProperties>&, std::string_view message,
     std::span<const AssemblyInstancePropertyEditIntent>,
     const std::optional<StairPropertyReviewRequest>& reviewed = std::nullopt);
+// Dialect eleven replaces ordinary_request with mandatory phase_request v1/v2.
+// Assembly request is nullable; stair review stays solely inside phase_request.
+// phase_room_reviews contains ordered {phase_authoring_index,wall_replacement}
+// rows: the completed wall leaf must preserve all captured scalar/allocation
+// fields and carries only explicit final-stage room/relationship decisions.
+[[nodiscard]] MixedSelectionPropertyEditPreparation prepare_mixed_selection_property_edit(
+    const DocumentSnapshot&, const std::optional<SelectionPropertyEditRequest>&,
+    const std::optional<SelectionPresentationPropertyEditRequest>&,
+    const std::optional<RoofOpeningGroupProperties>&, std::string_view message,
+    std::span<const AssemblyInstancePropertyEditIntent>,
+    const std::vector<PhaseSelectionPropertyIdentityAllocation>&,
+    const std::vector<PhaseStairReplacementDependencyDisposition>&);
 // Preparation accepts only empty room_reviews. A copied read-only snapshot
 // retains complete history/save/assets/opaque state and has no admission token.
 [[nodiscard]] MixedSelectionPropertyEditPreparation replay_mixed_selection_property_edit_preparation(
@@ -116,11 +155,22 @@ void require_mixed_selection_property_edit_source_current(
 [[nodiscard]] DocumentSnapshot preview_mixed_selection_property_room_stage(
     const DocumentSnapshot&, const MixedSelectionPropertyEditPreparation&,
     const std::vector<nlohmann::json>& preceding_room_reviews);
+[[nodiscard]] DocumentSnapshot preview_mixed_selection_property_room_stage(
+    const DocumentSnapshot&, const MixedSelectionPropertyEditPreparation&,
+    const std::vector<nlohmann::json>& preceding_room_reviews,
+    const std::vector<nlohmann::json>& completed_phase_room_reviews);
 // Independently rederive all lanes and every mandatory review against the
 // captured source, returning canonical history intent without publication.
 [[nodiscard]] nlohmann::json complete_mixed_selection_property_edit(
     const DocumentSnapshot&, const MixedSelectionPropertyEditPreparation&,
     const std::vector<nlohmann::json>& room_reviews);
+[[nodiscard]] nlohmann::json complete_mixed_selection_property_edit(
+    const DocumentSnapshot&, const MixedSelectionPropertyEditPreparation&,
+    const std::vector<nlohmann::json>& room_reviews,
+    const std::vector<nlohmann::json>& phase_room_reviews);
+[[nodiscard]] DocumentSnapshot preview_mixed_selection_property_phase_room_stage(
+    const DocumentSnapshot&, const MixedSelectionPropertyEditPreparation&,
+    const std::vector<nlohmann::json>& preceding_phase_room_reviews);
 // Complete derived map and source-replayed typed room transitions. Full final
 // physical/constraint admission, room/fresh-ID policies and publication remain
 // owned by Document. Scalar Properties grant no dimension movement authority.
@@ -129,6 +179,9 @@ void require_mixed_selection_property_edit_source_current(
 [[nodiscard]] bool mixed_selection_property_edit_has_geometry(const nlohmann::json&);
 [[nodiscard]] bool mixed_selection_property_edit_active_phase_policy(const nlohmann::json&);
 [[nodiscard]] std::vector<nlohmann::json> mixed_selection_property_edit_room_reviews(const nlohmann::json&);
+[[nodiscard]] std::vector<nlohmann::json> mixed_selection_property_edit_phase_room_reviews(const nlohmann::json&);
+[[nodiscard]] bool mixed_selection_property_edit_retires_dependencies(const nlohmann::json&);
+[[nodiscard]] bool mixed_selection_property_edit_has_phase_replacements(const nlohmann::json&);
 [[nodiscard]] std::optional<Revision> mixed_selection_property_edit_source_saved_revision(const nlohmann::json&);
 
 } // namespace sketch

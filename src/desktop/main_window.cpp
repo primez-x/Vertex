@@ -49632,7 +49632,8 @@ private:
         std::vector<PhaseStructuralReplacementAuthoring>* structural_components=nullptr,
         std::vector<PhaseStairReplacementAuthoring>* stair_components=nullptr,
         std::vector<PhaseSlabReplacementAuthoring>* slab_components=nullptr,
-        std::vector<PhaseRoofReplacementAuthoring>* roof_components=nullptr) {
+        std::vector<PhaseRoofReplacementAuthoring>* roof_components=nullptr,
+        const DocumentSnapshot* source=nullptr) {
         PhaseWallReplacementIdentityMap identities;
         if (!std::holds_alternative<ApplyBoundaryConstraintChanges>(command)) return identities;
         // Room completion retains the complete geometry command in its closed
@@ -49671,6 +49672,32 @@ private:
                 const auto intent=version==51 ?
                     validate_mixed_clipboard_placement_intent(encoded.at("clipboard_placement_intent")) :
                     validate_mixed_selection_edit_intent(encoded.at("mixed_selection_edit_intent"));
+                const auto dialect=intent.at("version").get<int>();
+                if (version==52 && dialect>=5 && dialect<=11) {
+                    // Properties dialects have no transform roof_authoring.
+                    // Active-baseline redirects require independently replayed
+                    // source authority rather than extracting supplied maps.
+                    if (dialect<11 || !source) return;
+                    auto request=intent;request["room_reviews"]=json::array();request["phase_room_reviews"]=json::array();
+                    const auto prepared=replay_mixed_selection_property_edit_preparation(*source,request);
+                    for (const auto& [original,proposed]:prepared.original_to_proposed()) {
+                        const auto [found,inserted]=identities.emplace(original,proposed);
+                        if (!inserted && found->second!=proposed)
+                            throw std::invalid_argument("The Properties edit has conflicting proposed identities.");
+                    }
+                    for (const auto& encoded_leaf:prepared.phase_authorings()) {
+                        const auto leaf=decode_phase_constraint_authoring_intent(encoded_leaf);
+                        if (structural_components && !leaf.structural_replacement.is_null())
+                            structural_components->push_back(decode_phase_structural_replacement_authoring(leaf.structural_replacement));
+                        if (stair_components && !leaf.stair_replacement.is_null())
+                            stair_components->push_back(decode_phase_stair_replacement_authoring(leaf.stair_replacement));
+                        if (slab_components && !leaf.slab_replacement.is_null())
+                            slab_components->push_back(decode_phase_slab_replacement_authoring(leaf.slab_replacement));
+                        if (roof_components && !leaf.roof_replacement.is_null())
+                            roof_components->push_back(decode_phase_roof_replacement_authoring(leaf.roof_replacement));
+                    }
+                    return;
+                }
                 if (!intent.at("roof_authoring").is_null()) {
                     ApplyBoundaryConstraintChanges leaf;
                     leaf.expected_revision=encoded.at("expected_revision").get<Revision>();
@@ -49700,7 +49727,7 @@ private:
         std::vector<PhaseStairReplacementAuthoring> stair_components;
         std::vector<PhaseSlabReplacementAuthoring> slab_components;
         std::vector<PhaseRoofReplacementAuthoring> roof_components;
-        const auto identities = alternativeCommandReplacementIdentities(command,&structural_components,&stair_components,&slab_components,&roof_components);
+        const auto identities = alternativeCommandReplacementIdentities(command,&structural_components,&stair_components,&slab_components,&roof_components,&source);
         for (const auto& [original_id, proposed_id] : identities) {
             const auto original = source.entities().find(original_id);
             if (original == source.entities().end() ||
@@ -69207,7 +69234,8 @@ public:
 
     std::optional<std::vector<json>> reviewSelectionPropertyRoomIntents(
         const DocumentSnapshot& source,const MixedSelectionPropertyEditPreparation& prepared,
-        const SourceEditAuthority& authority,QWidget* parent,const std::function<void()>& fence) {
+        const SourceEditAuthority& authority,QWidget* parent,const std::function<void()>& fence,
+        const std::vector<json>& phase_reviews={}) {
         if (prepared.source_snapshot_digest()!=authority.source_digest ||
             fullSnapshotDigest(source)!=authority.source_digest)
             throw std::invalid_argument("The Properties proposal does not belong to the captured project.");
@@ -69216,7 +69244,7 @@ public:
         for (const auto& requirement:prepared.required_room_reviews()) {
             (void)requirement;
             fence();
-            PhysicalWallRoomReviewDialog dialog(source,prepared,reviews,authority.context.metric_units,current_source,parent);
+            PhysicalWallRoomReviewDialog dialog(source,prepared,reviews,phase_reviews,authority.context.metric_units,current_source,parent);
             styleDialog(dialog);
             dialog.setWindowTitle(QStringLiteral("Review rooms %1 of %2")
                 .arg(static_cast<qulonglong>(reviews.size()+1))
@@ -69229,9 +69257,46 @@ public:
         }
         // The readonly stage is only a presentation. Completion independently
         // reconstructs all scalar edits and every required room decision.
-        (void)complete_mixed_selection_property_edit(source,prepared,reviews);
+        (void)complete_mixed_selection_property_edit(source,prepared,reviews,phase_reviews);
         fence();
         return reviews;
+    }
+
+    std::optional<std::vector<json>> reviewSelectionPropertyPhaseRoomIntents(
+        const DocumentSnapshot& source,const MixedSelectionPropertyEditPreparation& prepared,
+        const SourceEditAuthority& authority,QWidget* parent,const std::function<void()>& fence) {
+        if (prepared.source_snapshot_digest()!=authority.source_digest || fullSnapshotDigest(source)!=authority.source_digest)
+            throw std::invalid_argument("The alternative Properties proposal lost its captured source.");
+        std::vector<json> reviews;
+        std::set<std::string,std::less<>> deferred;
+        for (const auto& preview:prepared.phase_wall_previews())
+            for (const auto& [id,entity]:preview.replacement.deferred_room_constraints) { (void)entity;deferred.insert(id); }
+        for (const auto index:prepared.required_phase_room_review_indices()) {
+            const auto intent=decode_phase_constraint_authoring_intent(prepared.phase_authorings().at(index));
+            if (intent.wall_replacement.is_null()) throw std::invalid_argument("The phase room review lost its wall replacement source.");
+            fence();
+            const auto stage=preview_mixed_selection_property_phase_room_stage(source,prepared,reviews);
+            const auto completion=[&](const json& leaf) {
+                fence();auto prefix=reviews;
+                prefix.push_back(json{{"phase_authoring_index",index},{"wall_replacement",leaf}});
+                auto exact=preview_mixed_selection_property_phase_room_stage(source,prepared,prefix);
+                fence();return exact.entities();
+            };
+            PhysicalWallPhaseRoomReviewDialog dialog(source,intent,stage.entities(),authority.context.metric_units,
+                [&] { fence();return source; },completion,parent,deferred);
+            styleDialog(dialog);
+            dialog.setWindowTitle(QStringLiteral("Review alternative rooms %1 of %2")
+                .arg(static_cast<qulonglong>(reviews.size()+1))
+                .arg(static_cast<qulonglong>(prepared.required_phase_room_reviews().size())));
+            if (dialog.exec()!=QDialog::Accepted) return std::nullopt;
+            fence();
+            if (!dialog.acceptedWallReplacement())
+                throw std::invalid_argument("The alternative room review has no accepted decisions.");
+            reviews.push_back(json{{"phase_authoring_index",index},{"wall_replacement",*dialog.acceptedWallReplacement()}});
+        }
+        if (reviews.size()!=prepared.required_phase_room_reviews().size())
+            throw std::invalid_argument("The alternative room review inventory changed.");
+        fence();return reviews;
     }
 
     void showSelectionPropertiesEditor() {
@@ -69325,9 +69390,103 @@ public:
             fence();
             const std::string message="Edit selection properties";
             const auto ordinary_request=dialog.ordinaryRequest();
+            const auto roof_properties=dialog.roofOpeningProperties();
+            std::optional<PhaseSelectionPropertyEditInspection> phase_inspection;
+            if (ordinary_request || roof_properties) {
+                SelectionPropertyEditRequest empty;
+                empty.unchanged_policy=SelectionPropertyUnchangedPolicy::retain;
+                phase_inspection=inspect_phase_selection_property_edit(*source,ordinary_request.value_or(empty),{},roof_properties);
+            }
+            const bool replacing=phase_inspection && !phase_inspection->replacements().empty();
+            std::vector<PhaseStairReplacementDependencyDisposition> phase_dispositions;
+            std::vector<PhaseSelectionPropertyIdentityAllocation> allocations;
             std::optional<StairPropertyReviewRequest> stair_review;
             std::vector<std::string> retired_stair_rails;
-            if (ordinary_request && !ordinary_request->stair_profiles.empty()) {
+            if (replacing) {
+                std::set<std::string,std::less<>> phase_stairs;
+                for (const auto& cohort:phase_inspection->replacements()) if (cohort.lane==PhaseSelectionPropertyLane::stairs)
+                    phase_stairs.insert(cohort.changed_selected_ids.begin(),cohort.changed_selected_ids.end());
+                for (const auto& plan:phase_inspection->stair_dependency_plans()) {
+                    if (!plan.ready()) {
+                        std::string reasons;
+                        for (const auto& diagnostic:plan.diagnostics) if (diagnostic.blocking) {
+                            if (!reasons.empty()) reasons+='\n';reasons+=diagnostic.reason;
+                        }
+                        throw std::invalid_argument(reasons.empty()?"The stair attachments could not be reviewed.":reasons);
+                    }
+                    if (plan.dependencies.empty()) continue;
+                    std::set<std::string,std::less<>> cohort_ids;
+                    const bool alternative=!plan.registry_id.empty();
+                    if (alternative) {
+                        for (const auto& cohort:phase_inspection->replacements())
+                            if (cohort.lane==PhaseSelectionPropertyLane::stairs && cohort.registry_id==plan.registry_id &&
+                                cohort.alternative_id==plan.alternative_id)
+                                cohort_ids.insert(cohort.changed_selected_ids.begin(),cohort.changed_selected_ids.end());
+                    }
+                    std::vector<Entity> edited;
+                    for (const auto& [id,entity]:phase_inspection->selected_editor_entities()) {
+                        if (entity.type!="stair" && entity.type!="railing") continue;
+                        if (alternative ? !cohort_ids.contains(id) : phase_stairs.contains(id)) continue;
+                        const auto& original=source->entities().at(id);
+                        if (entity==original && entity.properties.dump()==original.properties.dump() &&
+                            entity.extensions.dump()==original.extensions.dump()) continue;
+                        edited.push_back(entity);
+                    }
+                    fence();StairDependencyReviewDialog dependency_dialog(*source,plan,[&] { fence();return *source; },owner);
+                    dependency_dialog.setDispositionValidator([source,edited,alternative](const auto& choices) {
+                        if (alternative) validate_phase_stair_dependency_dispositions(source->entities(),edited,choices,true);
+                        else validate_ordinary_stair_dependency_dispositions(source->entities(),edited,choices);
+                    });
+                    styleDialog(dependency_dialog);
+                    if (dependency_dialog.exec()!=QDialog::Accepted || !dependency_dialog.acceptedDispositions()) return;
+                    fence();
+                    phase_dispositions.insert(phase_dispositions.end(),dependency_dialog.acceptedDispositions()->begin(),
+                        dependency_dialog.acceptedDispositions()->end());
+                }
+                std::sort(phase_dispositions.begin(),phase_dispositions.end(),[](const auto& a,const auto& b) { return a.rail_id<b.rail_id; });
+                SelectionPropertyEditRequest empty;empty.unchanged_policy=SelectionPropertyUnchangedPolicy::retain;
+                // Decisions may change the actual replacement closure. Discover
+                // that final inventory before assigning any fresh identity.
+                phase_inspection=inspect_phase_selection_property_edit(*source,ordinary_request.value_or(empty),phase_dispositions,roof_properties);
+                auto occupied=retainedSlabIdentityNames(*source,true);
+                for (const auto& id:ordinary) occupied.insert(id.toStdString());
+                for (const auto& child:children) { occupied.insert(child.roof_id.toStdString());occupied.insert(child.opening_id.toStdString()); }
+                const auto fresh=[&](const char* kind) {
+                    auto id=new_id(kind);while (!occupied.insert(id).second) id=new_id(kind);return id;
+                };
+                for (const auto& cohort:phase_inspection->replacements()) {
+                    PhaseSelectionPropertyIdentityAllocation allocation;
+                    allocation.lane=cohort.lane;allocation.registry_id=cohort.registry_id;allocation.alternative_id=cohort.alternative_id;
+                    std::visit([&](const auto& plan) {
+                        if (!plan.ready()) {
+                            std::string reasons;
+                            for (const auto& diagnostic:plan.diagnostics) if (diagnostic.blocking) {
+                                if (!reasons.empty()) reasons+='\n';reasons+=diagnostic.reason;
+                            }
+                            throw std::invalid_argument(reasons.empty()?"The alternative replacement inventory is incomplete.":reasons);
+                        }
+                        for (const auto& id:plan.required_entity_ids) allocation.identities.emplace(id,fresh("proposed"));
+                        using Plan=std::decay_t<decltype(plan)>;
+                        if constexpr (std::is_same_v<Plan,PhaseStairReplacementPlan>) {
+                            for (const auto& key:plan.required_child_ids) allocation.child_identities.emplace(key,fresh("proposed-stair-child"));
+                            for (const auto& key:plan.required_overlay_ids) allocation.overlay_identities.emplace(key,fresh("proposed-overlay"));
+                        } else for (const auto& id:plan.required_child_ids)
+                            if (!allocation.identities.contains(id)) allocation.identities.emplace(id,fresh("proposed-child"));
+                        if constexpr (!std::is_same_v<Plan,PhaseWallReplacementPlan>)
+                            for (const auto& key:plan.required_hosted_instance_ids) {
+                                auto id=fresh("proposed-component");
+                                auto alias=allocation.identities.at(key.first)+":instance:"+id;
+                                while (!occupied.insert(alias).second) {
+                                    id=fresh("proposed-component");alias=allocation.identities.at(key.first)+":instance:"+id;
+                                }
+                                allocation.hosted_instance_identities.emplace(key,std::move(id));
+                            }
+                    },cohort.plan);
+                    allocations.push_back(std::move(allocation));
+                }
+                for (const auto& choice:phase_dispositions) if (choice.action==PhaseStairReplacementDependencyAction::retire)
+                    retired_stair_rails.push_back(choice.rail_id);
+            } else if (ordinary_request && !ordinary_request->stair_profiles.empty()) {
                 const auto plan=inspect_stair_property_review_dependencies(*source,ordinary_request->stair_profiles);
                 if (!plan.ready()) {
                     std::string reasons;
@@ -69361,7 +69520,10 @@ public:
                 }
             }
             const auto assembly_intents=dialog.assemblyIntents();
-            const auto prepared=!assembly_intents.empty()
+            const auto prepared=replacing
+                ? prepare_mixed_selection_property_edit(*source,ordinary_request,dialog.presentationRequest(),
+                    roof_properties,message,assembly_intents,allocations,phase_dispositions)
+                : !assembly_intents.empty()
                 ? prepare_mixed_selection_property_edit(*source,ordinary_request,dialog.presentationRequest(),
                     dialog.roofOpeningProperties(),message,assembly_intents,stair_review)
                 : stair_review
@@ -69369,20 +69531,18 @@ public:
                     dialog.roofOpeningProperties(),message,*stair_review)
                 : prepare_mixed_selection_property_edit(*source,ordinary_request,dialog.presentationRequest(),
                     dialog.roofOpeningProperties(),message);
-            const auto reviews=reviewSelectionPropertyRoomIntents(*source,prepared,authority,owner,fence);
+            const auto phase_reviews=reviewSelectionPropertyPhaseRoomIntents(*source,prepared,authority,owner,fence);
+            if (!phase_reviews) { owner->statusBar()->showMessage(QStringLiteral("Properties edit cancelled."),4000);return; }
+            const auto reviews=reviewSelectionPropertyRoomIntents(*source,prepared,authority,owner,fence,*phase_reviews);
             if (!reviews) { owner->statusBar()->showMessage(QStringLiteral("Properties edit cancelled."),4000);return; }
             fence();
             ApplyBoundaryConstraintChanges command;
             command.expected_revision=source->revision();command.message=message;
             command.mixed_selection_edit_completion=true;
-            command.mixed_selection_edit_intent=complete_mixed_selection_property_edit(*source,prepared,*reviews);
+            command.mixed_selection_edit_intent=complete_mixed_selection_property_edit(*source,prepared,*reviews,*phase_reviews);
             // This first admitted preview is the complete atomic command,
             // including room decisions. No speculative stage is published.
-            (void)Document::preview_command(*source,Command{command});
-            fence();
-            if (!applyAuthoredCommand(Command{command})) return;
-            refresh();
-            const auto published=std::make_shared<DocumentSnapshot>(authoringSnapshot());
+            const auto publication_preview=Document::preview_command(*source,Command{command});
             auto restored=ordinary;
             auto order=authority.semantic_selection_order;
             for (const auto& id:retired_stair_rails) restored.remove(QString::fromStdString(id));
@@ -69390,18 +69550,63 @@ public:
                 return !member.child && std::binary_search(retired_stair_rails.begin(),retired_stair_rails.end(),
                     member.ordinary_id.toStdString());
             });
+            std::map<std::string,std::string,std::less<>> redirects=prepared.selected_original_to_proposed();
+            for (const auto& [original,proposed]:prepared.original_to_proposed()) {
+                const auto found=source->entities().find(original);
+                if (found!=source->entities().end() && found->second.type=="assembly_model") continue;
+                const auto [existing,inserted]=redirects.emplace(original,proposed);
+                if (!inserted && existing->second!=proposed)
+                    throw std::invalid_argument("A selected physical owner has ambiguous replacement destinations.");
+            }
+            for (const auto& [key,proposed]:prepared.stair_child_original_to_proposed()) {
+                const auto [existing,inserted]=redirects.emplace(key.second,proposed);
+                if (!inserted && existing->second!=proposed && ordinary.contains(QString::fromStdString(key.second)))
+                    throw std::invalid_argument("A selected stair child has ambiguous replacement destinations.");
+            }
+            const auto original_aliases=embedded_assembly_presentation_ids(source->entities());
+            const auto final_aliases=embedded_assembly_presentation_ids(publication_preview.entities());
+            for (const auto& [original,proposed]:prepared.hosted_binding_original_to_proposed())
+                redirects.insert_or_assign(original_aliases.at(original),final_aliases.at(proposed));
+            const auto redirect=[&](QString id) {
+                if (const auto mapped=redirects.find(id.toStdString());mapped!=redirects.end()) return QString::fromStdString(mapped->second);
+                return id;
+            };
+            for (auto& id:restored) id=redirect(id);
+            for (auto& member:order) if (!member.child) member.ordinary_id=redirect(member.ordinary_id);
             if (site) {
-                restored=remapSiteAnnotationSelection(restored,annotation_targets,m_site_annotation_targets);
+                auto previous_targets=annotation_targets;
+                for (auto& [alias,target]:previous_targets) {
+                    (void)alias;
+                    if (const auto mapped=redirects.find(target.owner_entity_id);mapped!=redirects.end()) target.owner_entity_id=mapped->second;
+                    if (const auto mapped=redirects.find(target.child_id);mapped!=redirects.end()) target.child_id=mapped->second;
+                }
+                const auto final_targets=preparedSiteAnnotationTargets(publication_preview);
+                restored=remapSiteAnnotationSelection(restored,previous_targets,final_targets);
                 for (auto& member:order) if (!member.child) {
-                    const auto mapped=remapSiteAnnotationSelection({member.ordinary_id},annotation_targets,m_site_annotation_targets);
+                    const auto mapped=remapSiteAnnotationSelection({member.ordinary_id},previous_targets,final_targets);
                     if (mapped.size()!=1) throw std::invalid_argument("The edited selection lost its Site alias.");
                     member.ordinary_id=mapped.front();
                 }
             }
             auto restored_children=children;
+            const auto restore_child=[&](CanvasRoofOpeningTarget& child) {
+                if (const auto mapped=prepared.roof_child_original_to_proposed().find({child.roof_id.toStdString(),child.opening_id.toStdString()});
+                    mapped!=prepared.roof_child_original_to_proposed().end()) {
+                    child.roof_id=QString::fromStdString(mapped->second.roof_id);
+                    child.opening_id=QString::fromStdString(mapped->second.opening_id);
+                }
+                child.source_revision=publication_preview.revision();
+            };
+            for (auto& child:restored_children) restore_child(child);
+            for (auto& member:order) if (member.child) restore_child(*member.child);
+            auto primary=authority.primary_roof_opening;
+            if (primary) restore_child(*primary);
+            fence();
+            if (!applyAuthoredCommand(Command{command})) return;
+            refresh();
+            const auto published=std::make_shared<DocumentSnapshot>(authoringSnapshot());
             for (auto& child:restored_children) child.source_revision=published->revision();
             for (auto& member:order) if (member.child) member.child->source_revision=published->revision();
-            auto primary=authority.primary_roof_opening;
             if (primary) primary->source_revision=published->revision();
             (void)adoptSemanticSelection(published,std::move(restored),std::move(restored_children),native,primary,false,std::move(order),native);
             clearError();
