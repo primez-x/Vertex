@@ -298,7 +298,9 @@ public:
     // v205 retains qualified wall copying in coordinated inner5 / phase
     // outer29 without extending historical coordinated authoring records.
     // v206 retains qualified wall-hosted scalar Properties15 / phase request5.
-    static constexpr std::uint32_t format_version = 206;
+    // v207 retains explicit component/host Properties16 and replay-verified
+    // lifetime reservations for deliberately elided component copies/aliases.
+    static constexpr std::uint32_t format_version = 207;
     static constexpr std::uint32_t recovery_format_version = 4;
     [[nodiscard]] static std::uint32_t required_format_version(const DocumentSnapshot& snapshot);
     static constexpr std::uint64_t maximum_file_bytes = 4ULL * 1024ULL * 1024ULL * 1024ULL;

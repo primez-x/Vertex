@@ -14,6 +14,53 @@ changed source does not acquire runtime acceptance without later qualification.
 
 ## Current delivery state
 
+### October 11 retained coordinated component Properties
+
+The preceding detached component/host composer is committed and pushed as
+af2ca211. Current source wires that composer through distinct closed mixed
+Properties16. Historical14 keeps its original exact fields, nullable historical
+base5..13 and composer. New16 requires literal coordination, a mandatory
+unreviewed noncomponent base5..13/15, identical original source/message fences
+and the sealed component request. Its mandatory sorted
+`component_identity_reservations` must exactly equal the independently replayed
+component preparation's fresh identity inventory, including computed escaped
+aliases and deliberately elided copies. The list grants lifetime reservation
+only. One derivation supplies entities, correspondence and reserved/elided
+inventories; final room review retains the base's genuine phase/removal metadata.
+
+Document's existing outer52 mixed envelope validates and replays16 through
+current and retained commands. Properties classifiers exclude it from unrelated
+roof-authoring codecs, retain its actual base phase/registry policy and reserve
+the component tokens plus base phase/room allocations. The retained/undone
+receipt scanner keeps elided names through the exact validated reservation list.
+Reader207 scans direct/nested/wrapped/undone16 receipts, includes the new SQLite
+version and raises an explicit old-reader diagnostic. Native extraction derives
+205 through its existing required-reader-minus-two rule.
+
+Desktop general Properties routes component-plus-noncomponent selections through
+the new joint command when component authoring requires no alternative component
+replacement. Original/proposed component correspondence supplies actual owner
+or qualified embedded render-alias restoration. Site selected-roster checks and
+alternative Properties extraction read16's genuine nested base rather than a
+gesture/roof codec. Component-only routing stays unchanged. Actual protected
+component replacement remains an explicit UI refusal until complete reference
+and companion mutation consumers are implemented: the UI does not create a
+project that becomes read-only on its next edit/reopen. This is required remaining
+implementation work, not completion of component alternatives.
+
+Complete component-only reference carry, protected replacement desktop allocation
+and publication, nested presentation/path restoration, clipboard/removal/shared-
+type consumers, joint-only patch admission and arbitrary deformed/cross-Site
+world-profile carry remain gaps. Companion-project quarantine is unchanged.
+No builds, tests, scripts, probes, launches, packages or installations ran. The
+installed candidate remains unchanged; compilation, Undo/redo, save/reopen and
+runtime interactions are unverified. All ten production gates remain open.
+Independent integrated source review found and resolved one Site admission
+roster read that used the historical outer fields instead of16's actual base.
+The reviewer approved the bounded source change with no confirmed P1/P2
+remaining. Root reviewed the interfaces, command/history reservations and reader
+routing; named whitespace checks pass. Compilation and runtime remain unverified.
+
 ### October 11 detached component-and-host dependency composition
 
 The preceding qualified wall preview/mixed Properties batch is committed and

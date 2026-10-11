@@ -52,6 +52,10 @@ namespace sketch {
 // authority; a null scalar retains child-only selection. Elevation and hosted
 // slab carry require the underlying scalar four/five codec. Qualified wall
 // room decisions use explicit leaf eleven on the final composed stage.
+// Dialect sixteen explicitly coordinates component operations with actual
+// base-carried hosts. It requires an unreviewed five-through-thirteen/fifteen
+// base and coordinate_component_hosts:true; entities and correspondence are
+// reconstructed together. Fourteen retains its historical composition meaning.
 // This preparation does not grant Document publication or a format floor.
 // Each lane reads the same
 // complete immutable original snapshot. No supplied entity map, transform,
@@ -71,6 +75,10 @@ public:
     [[nodiscard]] const std::map<std::string, std::string, std::less<>>& original_to_proposed() const noexcept;
     using ComponentIdentityMap = std::map<AssemblyInstancePropertyEditTarget, AssemblyInstancePropertyEditTarget>;
     [[nodiscard]] const ComponentIdentityMap& component_original_to_proposed() const noexcept;
+    // Dialect sixteen's independently reconstructed allocation inventory;
+    // historical dialects leave these detached coordination inventories empty.
+    [[nodiscard]] const std::vector<std::string>& reserved_component_identity_ids() const noexcept;
+    [[nodiscard]] const std::vector<std::string>& elided_component_identity_ids() const noexcept;
     [[nodiscard]] const PhaseStairReplacementChildIdentityMap& stair_child_original_to_proposed() const noexcept;
     using HostedBindingMap = std::map<std::pair<std::string, std::string>, std::pair<std::string, std::string>>;
     [[nodiscard]] const HostedBindingMap& hosted_binding_original_to_proposed() const noexcept;
@@ -86,7 +94,9 @@ private:
         std::optional<PhaseSelectionPropertyEditPreparation> = std::nullopt,
         std::vector<PhysicalWallRoomPhaseReviewInventory> = {},
         std::optional<PhaseAssemblyInstancePropertyEditPreparation> = std::nullopt,
-        ComponentIdentityMap = {});
+        ComponentIdentityMap = {},
+        std::vector<std::string> reserved_component_identity_ids = {},
+        std::vector<std::string> elided_component_identity_ids = {});
     nlohmann::json intent_;
     DocumentSnapshot preview_;
     std::string source_digest_;
@@ -94,6 +104,8 @@ private:
     std::optional<PhaseSelectionPropertyEditPreparation> phase_;
     std::optional<PhaseAssemblyInstancePropertyEditPreparation> component_;
     ComponentIdentityMap component_identity_map_;
+    std::vector<std::string> reserved_component_identity_ids_;
+    std::vector<std::string> elided_component_identity_ids_;
     std::map<std::string, std::string, std::less<>> selected_identity_map_;
     std::map<std::string, std::string, std::less<>> identity_map_;
     HostedBindingMap hosted_bindings_;
@@ -186,6 +198,19 @@ private:
 [[nodiscard]] MixedSelectionPropertyEditPreparation prepare_mixed_selection_property_edit(
     const DocumentSnapshot&, const PhaseAssemblyInstancePropertyEditAuthoring&,
     const MixedSelectionPropertyEditPreparation* base, std::string_view message);
+// Closed dialect sixteen has fourteen's fields plus mandatory literal
+// coordinate_component_hosts:true and component_identity_reservations, a sorted
+// unique array of at most 4096 portable UTF-8 strings, each at most 4096 bytes.
+// Source replay must reproduce the
+// complete reservation receipt, including original computed render aliases.
+// This receipt reserves identity lifetime only. Its mandatory base is unreviewed five-through-
+// thirteen or fifteen with no assembly lane, the same complete original source
+// fences/message and no nested component dialect. Combined qualified selection
+// and wire budgets remain identical to fourteen. The sealed detached result
+// retains all original component allocation reservations, including elided IDs.
+[[nodiscard]] MixedSelectionPropertyEditPreparation prepare_coordinated_component_property_edit(
+    const DocumentSnapshot&, const PhaseAssemblyInstancePropertyEditAuthoring&,
+    const MixedSelectionPropertyEditPreparation& base, std::string_view message);
 // Preparation accepts only empty room_reviews. A copied read-only snapshot
 // retains complete history/save/assets/opaque state and has no admission token.
 [[nodiscard]] MixedSelectionPropertyEditPreparation replay_mixed_selection_property_edit_preparation(

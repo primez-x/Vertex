@@ -3282,7 +3282,7 @@ static std::vector<nlohmann::json> phase_constraint_authoring_proofs(const Apply
         if (version==34) result.push_back(proof.at("phase_constraint_authoring_intent"));
         else if (version==52) {
             const auto& mixed=proof.at("mixed_selection_edit_intent");
-            if (mixed.at("version")!=5 && mixed.at("version")!=6 && mixed.at("version")!=7 && mixed.at("version")!=8 && mixed.at("version")!=9 && mixed.at("version")!=10 && mixed.at("version")!=11 && mixed.at("version")!=12 && mixed.at("version")!=13 && mixed.at("version")!=15) {
+            if (mixed.at("version")!=5 && mixed.at("version")!=6 && mixed.at("version")!=7 && mixed.at("version")!=8 && mixed.at("version")!=9 && mixed.at("version")!=10 && mixed.at("version")!=11 && mixed.at("version")!=12 && mixed.at("version")!=13 && mixed.at("version")!=15 && mixed.at("version")!=16) {
                 const auto& roof=mixed.at("roof_authoring");
                 if (!roof.is_null()) result.push_back(roof);
             }
@@ -3352,7 +3352,7 @@ static bool mixed_clipboard_placement_policy(const ApplyBoundaryConstraintChange
 
 static bool phase_constraint_authoring_preserves_registries(const ApplyBoundaryConstraintChanges& command) {
 #ifdef VERTEX_HAS_CONSTRAINT_AUTHORING
-    if (has_mixed_selection_edit(command) && (command.mixed_selection_edit_intent.at("version")==11 || command.mixed_selection_edit_intent.at("version")==12 || command.mixed_selection_edit_intent.at("version")==13 || command.mixed_selection_edit_intent.at("version")==15))
+    if (has_mixed_selection_edit(command) && (command.mixed_selection_edit_intent.at("version")==11 || command.mixed_selection_edit_intent.at("version")==12 || command.mixed_selection_edit_intent.at("version")==13 || command.mixed_selection_edit_intent.at("version")==15 || command.mixed_selection_edit_intent.at("version")==16))
         return !mixed_selection_edit_has_phase_replacements(command.mixed_selection_edit_intent);
 #endif
     const auto proofs=phase_constraint_authoring_proofs(command);
@@ -3726,6 +3726,15 @@ struct PhaseConstraintLifetimeProofs {
     std::vector<WallSplitIntent> wall_split_proofs;
     std::set<std::string,std::less<>> ordinary_roof_destinations;
 };
+static const nlohmann::json* mixed_properties_phase_request(const nlohmann::json& mixed) {
+    // Callers own closed intent validation. Sixteen's independently replayed
+    // noncomponent base retains its exact scalar/phase authority; ordinary
+    // bases have no phase request. Never borrow the component lane as a host.
+    const auto& lane=mixed.at("version")==16 ? mixed.at("base_intent") : mixed;
+    const auto found=lane.find("phase_request");
+    return found==lane.end() ? nullptr : &*found;
+}
+
 static PhaseConstraintLifetimeProofs phase_constraint_lifetime_proofs(const ApplyBoundaryConstraintChanges& command) {
     // Unlike original-source authority, retained identity ownership includes
     // strict removal selections and forty-five's child bound to its stage.
@@ -3743,9 +3752,9 @@ static PhaseConstraintLifetimeProofs phase_constraint_lifetime_proofs(const Appl
         if (proof.contains("wall_split")) result.wall_split_proofs.push_back(decode_wall_split(proof.at("wall_split")));
         if (version==52) {
             const auto& mixed=proof.at("mixed_selection_edit_intent");
-            if (mixed.at("version")==11 || mixed.at("version")==12 || mixed.at("version")==13 || mixed.at("version")==15)
+            if (mixed.at("version")==11 || mixed.at("version")==12 || mixed.at("version")==13 || mixed.at("version")==15 || mixed.at("version")==16)
                 result.mixed_properties_proofs.push_back(validate_mixed_selection_edit_intent(mixed));
-            if (mixed.at("version")!=5 && mixed.at("version")!=6 && mixed.at("version")!=7 && mixed.at("version")!=8 && mixed.at("version")!=9 && mixed.at("version")!=10 && mixed.at("version")!=11 && mixed.at("version")!=12 && mixed.at("version")!=13 && mixed.at("version")!=15) {
+            if (mixed.at("version")!=5 && mixed.at("version")!=6 && mixed.at("version")!=7 && mixed.at("version")!=8 && mixed.at("version")!=9 && mixed.at("version")!=10 && mixed.at("version")!=11 && mixed.at("version")!=12 && mixed.at("version")!=13 && mixed.at("version")!=15 && mixed.at("version")!=16) {
                 const auto& roof=mixed.at("roof_authoring");
                 if (!roof.is_null()) result.phase_proofs.push_back(roof);
             }
@@ -4033,10 +4042,17 @@ static void validate_retained_authoring_receipt_identities(
                 }
             }
         for (const auto& mixed:historical_proofs.mixed_properties_proofs) {
-            const auto phase=validate_phase_selection_property_edit_request(mixed.at("phase_request"));
-            for (const auto& allocation:phase.at("allocations"))
-                for (const auto* field:{"identities","child_identities","hosted_instance_identities","overlay_identities"})
-                    for (const auto& row:allocation.at(field)) require_unused_id(row.at("proposed_id").get<std::string>());
+            if (const auto* request=mixed_properties_phase_request(mixed)) {
+                const auto phase=validate_phase_selection_property_edit_request(*request);
+                for (const auto& allocation:phase.at("allocations"))
+                    for (const auto* field:{"identities","child_identities","hosted_instance_identities","overlay_identities"})
+                        for (const auto& row:allocation.at(field)) require_unused_id(row.at("proposed_id").get<std::string>());
+            }
+            // These exact source-replayed tokens also retain allocations and
+            // computed aliases deliberately elided by dependency composition.
+            // This lifetime walk grants no authoring or source proof authority.
+            if (mixed.at("version")==16) for (const auto& token:mixed.at("component_identity_reservations"))
+                require_unused_id(token.get<std::string>());
 #ifdef VERTEX_HAS_PHYSICAL_ROOM_REVIEW
             for (const auto& wire:mixed_selection_edit_phase_room_reviews(mixed))
                 for (const auto& id:phase_room_review_destinations(wire)) require_unused_id(id);
@@ -5527,17 +5543,28 @@ static void validate_mixed_properties_replacement_lifetime(const nlohmann::json&
     const std::map<std::string,Entity,std::less<>>& candidate,
     const std::vector<RevisionRecord>& history,std::size_t preceding_records) {
     const auto mixed=validate_mixed_selection_edit_intent(encoded);
-    if (mixed.at("version")!=11 && mixed.at("version")!=12 && mixed.at("version")!=13 && mixed.at("version")!=15) return;
+    if (mixed.at("version")!=11 && mixed.at("version")!=12 && mixed.at("version")!=13 && mixed.at("version")!=15 && mixed.at("version")!=16) return;
     if (preceding_records>history.size()) throw std::invalid_argument("Properties identity history prefix is invalid");
-    const auto phase=validate_phase_selection_property_edit_request(mixed.at("phase_request"));
     std::set<std::string,std::less<>> fresh;
     const auto reserve=[&](const std::string& id) {
         if (!is_valid_identifier(id) || !fresh.insert(id).second)
             throw std::invalid_argument("Properties fresh identity declarations overlap: "+id);
     };
-    for (const auto& allocation:phase.at("allocations"))
-        for (const auto* field:{"identities","child_identities","hosted_instance_identities","overlay_identities"})
-            for (const auto& row:allocation.at(field)) reserve(row.at("proposed_id").get<std::string>());
+    if (const auto* request=mixed_properties_phase_request(mixed)) {
+        const auto phase=validate_phase_selection_property_edit_request(*request);
+        for (const auto& allocation:phase.at("allocations"))
+            for (const auto* field:{"identities","child_identities","hosted_instance_identities","overlay_identities"})
+                for (const auto& row:allocation.at(field)) reserve(row.at("proposed_id").get<std::string>());
+    }
+    std::set<std::string,std::less<>> component_reservations;
+    if (mixed.at("version")==16) for (const auto& token:mixed.at("component_identity_reservations")) {
+        const auto id=token.get<std::string>();
+        // Computed escaped aliases are lifetime tokens, not global entity IDs.
+        // Closed16 replay already compared this complete list to the sealed
+        // original component preparation before candidate publication.
+        if (!component_reservations.insert(id).second || !fresh.insert(id).second)
+            throw std::invalid_argument("Properties component allocations overlap another declared destination: "+id);
+    }
 #ifdef VERTEX_HAS_PHYSICAL_ROOM_REVIEW
     for (const auto& wire:mixed_selection_edit_phase_room_reviews(mixed)) {
         const auto review=decode_physical_wall_phase_room_review_intent(wire);
@@ -5570,7 +5597,7 @@ static void validate_mixed_properties_replacement_lifetime(const nlohmann::json&
     // qualified catalog cannot reuse an alias retained by undone history.
     const auto original_aliases=embedded_assembly_presentation_ids(source);
     for (const auto& [binding,alias]:embedded_assembly_presentation_ids(candidate))
-        if (!original_aliases.contains(binding)) reserve(alias);
+        if (!original_aliases.contains(binding) && !component_reservations.contains(alias)) reserve(alias);
     for (const auto& [id,entity]:candidate) {
         (void)entity;
         if (!source.contains(id)) fresh.insert(id);

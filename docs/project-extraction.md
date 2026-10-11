@@ -1,5 +1,12 @@
 # Portable project extraction
 
+Exchange version205 requires native reader207 for coordinated component/host
+Properties16. It retains the original-source component and noncomponent base
+requests, explicit coordination and replay-verified identity reservation list.
+Elided private copies and their computed aliases remain reserved in retained
+and undone commands. Historical14 authority is unchanged. Native companion
+editing and runtime/round-trip qualification remain open.
+
 Exchange version204 requires native reader206 for retained scalar Properties15
 and phase request5. Explicit qualified wall allocations, source fences and
 actual room decisions remain in retained commands, including undone history.

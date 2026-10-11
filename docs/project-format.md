@@ -1,4 +1,16 @@
-# Vertex project formats v1 through v206
+# Vertex project formats v1 through v207
+
+Reader207 retains explicit coordinated component/host Properties16 within the
+existing mixed command envelope52. Both component and unreviewed noncomponent
+base5..13/15 replay against the complete original snapshot. Literal
+`coordinate_component_hosts:true` selects this authority; historical14 keeps
+its original field set and restrictions. `component_identity_reservations`
+must exactly match the independently replayed component's sorted fresh IDs,
+including computed aliases and copies elided by composition. It supplies
+lifetime reservation only, never entity-map or geometry authority. Current,
+wrapped and undone receipts retain those names. Extraction emits205 for this
+reader floor. Companion-bearing projects remain read-only until the remaining
+mutation consumers integrate. Runtime and round-trip qualification remain open.
 
 Reader206 retains mixed scalar Properties15 with phase request5. The request
 explicitly opts into exact qualified wall-hosted component copies; scalar
