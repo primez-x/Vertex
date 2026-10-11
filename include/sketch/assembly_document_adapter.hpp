@@ -162,6 +162,12 @@ inline constexpr std::size_t assembly_catalog_transport_node_limit = 1'000'000;
 // source first; catalogs contain no legacy instances or host references.
 [[nodiscard]] AssemblyDocumentEntities assembly_clipboard_dependencies(
     const DocumentSnapshot& source, const std::vector<std::string>& root_entity_ids);
+// Passive type/material closure for supplied independent roots against actual
+// catalog owners. Caller must first admit the complete immutable source map;
+// exact selected definition rows and the actual catalog dialect are retained.
+// This overload never creates, restores or previews a Document.
+[[nodiscard]] AssemblyDocumentEntities assembly_clipboard_dependencies(
+    const AssemblyDocumentEntities& source, const std::vector<Entity>& independent_roots);
 // Validates before/after patching only Entity.id, instance.id and the catalog
 // reference. Raw dialect, row order, numeric forms, local identities and opaque
 // properties/extensions are retained. Both mappings must be present.

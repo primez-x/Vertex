@@ -1,5 +1,6 @@
 #include "sketch/mixed_clipboard_transfer.hpp"
 
+#include "sketch/assembly_component_clipboard.hpp"
 #include "sketch/roof_entity_codec.hpp"
 
 #include <algorithm>
@@ -109,10 +110,12 @@ struct Budget {
 };
 
 void shape_counts(const MixedClipboardTransfer& value) {
+    if (!value.detached_components.is_array() || value.detached_components.size() > legacy_limit)
+        reject("detached component roster limit exceeded");
     if (value.corners.size() > 128 || value.catalogs.size() > legacy_limit || value.skylights.size() > member_limit)
         reject("family roster limit exceeded");
     if (value.corners.empty() && !value.catalogs.empty()) reject("corner material pool has no corner members");
-    std::size_t dimensions = 0, rows = value.catalogs.size() + value.skylights.size();
+    std::size_t dimensions = 0, rows = value.catalogs.size() + value.skylights.size() + value.detached_components.size();
     for (const auto& corner : value.corners) {
         if (corner.dimensions.size() > 2048 - dimensions) reject("corner dimension limit exceeded");
         dimensions += corner.dimensions.size(); rows += 5 + corner.dimensions.size();
@@ -124,7 +127,9 @@ void shape_counts(const MixedClipboardTransfer& value) {
 void preflight(const MixedClipboardTransfer& value) {
     shape_counts(value);
     Budget budget;
-    budget.object({"format", "version", "ordinary", "corners", "catalogs", "skylights"}, 0);
+    if (value.component_source_completion || !value.detached_components.empty())
+        budget.object({"format", "version", "ordinary", "corners", "catalogs", "skylights", "detached_components"}, 0);
+    else budget.object({"format", "version", "ordinary", "corners", "catalogs", "skylights"}, 0);
     budget.string(format, 1); budget.node(1); budget.add(32);
     if (value.ordinary) budget.json(*value.ordinary, 1);
     else { budget.node(1); budget.add(4); }
@@ -144,6 +149,7 @@ void preflight(const MixedClipboardTransfer& value) {
         budget.object({"roof", "opening_id"}, 2);
         budget.entity(source.roof, 3); budget.string(source.opening_id, 3);
     }
+    if (value.component_source_completion || !value.detached_components.empty()) budget.json(value.detached_components, 1);
 }
 
 struct Envelope {
@@ -336,16 +342,22 @@ Entity decode_entity(const Json& value) {
     return {std::string(row.id), std::string(row.type), row.properties, row.required, row.extensions};
 }
 void wire_shape(const Json& value) {
-    keys(value, {"format", "version", "ordinary", "corners", "catalogs", "skylights"});
+    if (!value.is_object() || !value.contains("version") || !value.at("version").is_number_integer() ||
+        (value.at("version") != 1 && value.at("version") != 2)) reject("unsupported version");
+    const bool components = value.at("version") == 2;
+    if (components) keys(value, {"format", "version", "ordinary", "corners", "catalogs", "skylights", "detached_components"});
+    else keys(value, {"format", "version", "ordinary", "corners", "catalogs", "skylights"});
     if (!value.at("format").is_string() || value.at("format") != format) reject("unsupported format");
-    version_one(value.at("version"));
+    if (components && (!value.at("detached_components").is_array() || value.at("detached_components").size() > legacy_limit))
+        reject("detached component roster limit exceeded");
     if ((!value.at("ordinary").is_null() && !value.at("ordinary").is_object()) ||
         !value.at("corners").is_array() || value.at("corners").size() > 128 ||
         !value.at("catalogs").is_array() || value.at("catalogs").size() > legacy_limit ||
         !value.at("skylights").is_array() || value.at("skylights").size() > member_limit)
         reject("invalid family roster shape");
     std::size_t dimensions = 0;
-    std::size_t rows = value.at("catalogs").size() + value.at("skylights").size();
+    std::size_t rows = value.at("catalogs").size() + value.at("skylights").size() +
+        (components ? value.at("detached_components").size() : 0);
     for (const auto& row : value.at("corners")) {
         keys(row, {"owner", "walls", "cuts", "dimensions"});
         if (!row.at("walls").is_array() || row.at("walls").size() != 2 ||
@@ -371,11 +383,32 @@ void validate_mixed_clipboard_transfer(const MixedClipboardTransfer& transfer) {
     preflight(transfer);
     const auto lanes = static_cast<unsigned>(transfer.ordinary.has_value()) +
         static_cast<unsigned>(!transfer.corners.empty()) + static_cast<unsigned>(!transfer.skylights.empty());
-    if (lanes < 2) reject("at least two represented family lanes are required");
+    if (lanes < 2 && !(lanes == 1 && transfer.ordinary && !transfer.detached_components.empty()))
+        reject("at least two represented family lanes or detached ordinary components are required");
     IdentityRoster identities;
     const auto ordinary_members = transfer.ordinary ? ordinary(*transfer.ordinary, identities) : 0;
     if (ordinary_members + transfer.corners.size() + transfer.skylights.size() > member_limit)
         reject("aggregate semantic member limit exceeded");
+    validate_assembly_component_clipboard_provenance(transfer.detached_components);
+    if (!transfer.detached_components.empty()) {
+        if (!transfer.ordinary || transfer.detached_components.size() > ordinary_members)
+            reject("detached components require selected ordinary roots");
+        const auto& packet = *transfer.ordinary;
+        std::set<std::string_view, std::less<>> roots;
+        if (packet.contains("root_ids")) for (const auto& root : packet.at("root_ids")) roots.insert(text(root));
+        else roots.insert(text(packet.at("root_id")));
+        for (const auto& record : transfer.detached_components) {
+            const auto& owner = text(record.at("wire_owner_id"));
+            const auto found = identities.rows.find(owner);
+            if (!roots.contains(owner) || found == identities.rows.end() || found->second.role != Role::ordinary ||
+                found->second.entity.type != "assembly_instance" || found->second.entity.required)
+                reject("detached component wire owner is not a selected independent ordinary root");
+        }
+        std::vector<Entity> wire_entities;
+        wire_entities.reserve(packet.at("entities").size());
+        for (const auto& row : packet.at("entities")) wire_entities.push_back(decode_entity(row));
+        validate_assembly_component_clipboard_source_rows(transfer.detached_components, wire_entities);
+    }
     for (const auto& corner : transfer.corners) {
         identities.add(envelope(corner.owner), Role::corner_owned);
         for (const auto& cut : corner.cuts) identities.add(envelope(cut), Role::corner_owned);
@@ -397,8 +430,10 @@ void validate_mixed_clipboard_transfer(const MixedClipboardTransfer& transfer) {
 
 nlohmann::json encode_mixed_clipboard_transfer(const MixedClipboardTransfer& transfer) {
     validate_mixed_clipboard_transfer(transfer);
-    Json result{{"format", format}, {"version", 1}, {"ordinary", transfer.ordinary ? *transfer.ordinary : Json()},
+    const bool components = transfer.component_source_completion || !transfer.detached_components.empty();
+    Json result{{"format", format}, {"version", components ? 2 : 1}, {"ordinary", transfer.ordinary ? *transfer.ordinary : Json()},
         {"corners", Json::array()}, {"catalogs", Json::array()}, {"skylights", Json::array()}};
+    if (components) result["detached_components"] = transfer.detached_components;
     for (const auto& corner : transfer.corners) {
         Json row{{"owner", encode_entity(corner.owner)}, {"walls", Json::array()},
             {"cuts", Json::array()}, {"dimensions", Json::array()}};
@@ -417,6 +452,10 @@ MixedClipboardTransfer decode_mixed_clipboard_transfer(const nlohmann::json& val
     Budget budget; budget.json(value, 0);
     wire_shape(value);
     MixedClipboardTransfer result;
+    if (value.at("version") == 2) {
+        result.component_source_completion = true;
+        result.detached_components = value.at("detached_components");
+    }
     if (!value.at("ordinary").is_null()) result.ordinary = value.at("ordinary");
     std::size_t dimensions = 0;
     for (const auto& row : value.at("corners")) {

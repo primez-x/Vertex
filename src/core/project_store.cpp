@@ -381,6 +381,15 @@ std::uint32_t required_format_version_internal(const DocumentSnapshot& snapshot,
                 if (!value.is_object() || value.size()!=fields.size()) return false;
                 return std::all_of(fields.begin(),fields.end(),[&](const char* field) { return value.contains(field); });
             };
+            if (closed_shape({"version","expected_revision","source_snapshot_digest","source_authoring_digest",
+                    "source_entities_digest","source_saved_revision","roof_authoring","additions",
+                    "selected_registry_id","message","detached_components"}) && value.at("version")==2 &&
+                value.at("detached_components").is_array() &&
+                std::all_of(value.at("detached_components").begin(),value.at("detached_components").end(),[](const auto& row) {
+                    return row.is_object() && row.size()==2 && row.contains("source") && row.contains("destination_owner_id") &&
+                        row.at("source").is_object() && row.at("destination_owner_id").is_string();
+                }))
+                floor=std::max(floor,216U);
             const bool ordinary_wall_membership_shape=
                 (closed_shape({"version","kind","expected_revision","message","wall_ids","proof",
                     "complete_hosted_removal","complete_join_removal","additional_join_identities",
@@ -768,9 +777,9 @@ std::uint32_t required_format_version_internal(const DocumentSnapshot& snapshot,
     };
     for (const auto& revision : snapshot.history()) {
         if (revision.phase_entity_import) required=std::max(required,160U);
-        if (required<215 && revision.boundary_geometry_edit)
+        if (required<216 && revision.boundary_geometry_edit)
             required=std::max(required,typed_edit_reader_floor(encode_boundary_geometry_edit(*revision.boundary_geometry_edit)));
-        if (required<215 && revision.boundary_constraint_changes)
+        if (required<216 && revision.boundary_constraint_changes)
             required=std::max(required,typed_edit_reader_floor(command_to_json(Command{*revision.boundary_constraint_changes})));
         if (required<122 && revision.boundary_geometry_edit)
             required=std::max(required,quantity_reader_floor(encode_boundary_geometry_edit(*revision.boundary_geometry_edit)));
@@ -1096,7 +1105,8 @@ std::uint32_t required_format_version_internal(const DocumentSnapshot& snapshot,
             };
             const auto profile_proof=[&](const auto& self,const nlohmann::json& proof,unsigned depth)->std::uint32_t {
                 if (depth>3 || !proof.is_object()) return 0;
-                if (typed_edit_reader_floor(proof)==215U) return 215U;
+                const auto clipboard_or_wall_floor=typed_edit_reader_floor(proof);
+                if (clipboard_or_wall_floor>=215U) return clipboard_or_wall_floor;
                 if (proof.value("kind",std::string{})=="apply_boundary_constraint_changes" &&
                     (proof.value("version",0)==43 || proof.value("version",0)==44)) return 173U;
                 if (proof.value("kind",std::string{})=="apply_boundary_constraint_changes" &&
@@ -3255,6 +3265,7 @@ bool verify_sqlite_schema(sqlite3* database, bool allow_recovery = false) {
          sqlite3_column_int(user_version.get(), 0) != 213 &&
          sqlite3_column_int(user_version.get(), 0) != 214 &&
          sqlite3_column_int(user_version.get(), 0) != 215 &&
+         sqlite3_column_int(user_version.get(), 0) != 216 &&
          sqlite3_column_int(user_version.get(), 0) != 207 &&
          sqlite3_column_int(user_version.get(), 0) != 202 &&
          sqlite3_column_int(user_version.get(), 0) != 200 &&
@@ -3980,6 +3991,8 @@ DocumentSnapshot read_snapshot(sqlite3* database, RecoveryLedger* recovery = nul
     // here and authenticate the manifest with its stored version below.
     const auto required_format = required_format_version_internal(snapshot, format_number < 28);
     if (required_format > format_number) {
+        if (required_format>=216)
+            storage_error(StorageErrorCode::unsupported_format,"This project requires reader 216 for component clipboard source provenance and destination identity mappings");
         if (required_format>=215)
             storage_error(StorageErrorCode::unsupported_format,"This project requires reader 215 for ordinary wall and component membership retirement with drawing and room review");
         if (required_format>=214)

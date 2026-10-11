@@ -1,4 +1,39 @@
-# Vertex project formats v1 through v215
+# Vertex project formats v1 through v216
+
+Reader216 retains component clipboard placement intent2 under command58.
+The intent has the historical ten fields plus `detached_components`. Each
+mapping has exactly `source` and `destination_owner_id`. The source record has
+seven fields: wire owner, qualified catalog/local instance IDs, complete source
+catalog digest, exact raw source row, sorted physical host closure, and nullable
+source phase evidence. Declared phase evidence carries the actual membership
+and registry IDs/digests, saved alternative and active existing/proposed state.
+These are passive foreign provenance, never destination phase authority.
+Fresh independent destination objects use the destination's actual selected
+registry. No required membership companion travels in the clipboard.
+
+Transfer2 adds this source roster to the historical six-field transfer.
+A single ordinary lane is permitted only with nonempty provenance linked to
+selected independent wire roots and their minimal catalogs. Empty version-two
+completion preserves the existing multi-lane rule. Capture does not delete
+embedded source rows or manufacture a temporary Document. Minimal catalogs
+retain their original schema and selected raw type/material definitions;
+normalized independent wire roots are checked before destination translation.
+Mapped destinations decode the raw source row through their actual catalog
+dialect and preserve its type, property/material/quantity/nested overrides,
+rotation, mirror, scales and elevation. Only root XY translation and identity
+remapping may differ. Prepared and actual-source replay check this before any
+roof producer, rejecting unrelated components mislabeled with copied provenance.
+Fresh organized catalogs in the new transfer path bind to the actual destination
+property/building/floor/layer. An existing level binding uses that context's
+level; foreign flat phase IDs are removed. All remaining raw catalog content is
+unchanged before material reconciliation. Global catalogs stay global, and
+version-one preparation preserves its historical carrier contract.
+Source evidence is reserved before allocating fresh destination identities.
+Command51 accepts only intent1; command58 accepts only intent2. Historical
+version-one contracts remain unchanged. Reader216 scans current, wrapped,
+nested, retained and undone history, including events following reader215.
+Portable extraction214 requires reader216. Compilation, runtime, save/reopen
+and extraction remain unverified under the current source-only instruction.
 
 Reader215 retains complete ordinary/proposed wall deletion with component
 membership retirement. The closed geometry proofs are physical wall54,

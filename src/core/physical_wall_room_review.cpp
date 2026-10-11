@@ -2387,9 +2387,9 @@ bool is_physical_wall_room_mixed_clipboard_review_command(const Command& command
         budget.text(geometry->message);budget.read(geometry->clipboard_placement_intent);
         const auto proof=command_to_json(command);
         keys(proof,{"version","kind","expected_revision","message","clipboard_placement_completion","clipboard_placement_intent"});
-        if (proof.at("version")!=51 || proof.at("kind")!="apply_boundary_constraint_changes" ||
+        if ((proof.at("version")!=51 && proof.at("version")!=58) || proof.at("kind")!="apply_boundary_constraint_changes" ||
             proof.dump().size()>ClipboardRoomProofBudget::limit) return false;
-        // v51 itself validates its closed fresh-only additions and optional
+        // v51/v58 validate their closed fresh-only additions and optional
         // roof leaf. No legacy active-design predicate is broadened here.
         return command_to_json(command_from_json(proof)).dump()==proof.dump();
     } catch (const std::exception&) { return false; }
@@ -2402,7 +2402,7 @@ void validate_physical_wall_room_mixed_clipboard_review_source(const Entities& s
     const auto& intent=std::get<ApplyBoundaryConstraintChanges>(command).clipboard_placement_intent;
     if (intent.at("source_entities_digest")!=entity_map_digest(source))
         invalid("clipboard room geometry differs from the actual original map");
-    // Admission of the entire v51 stage remains Document-owned. These checks
+    // Admission of the entire clipboard stage remains Document-owned. These checks
     // prevent room authority from changing old walls or erasing old lineage.
     for (const auto& [owner,entity]:source) {
         if (entity.type!="wall" && !is_physical_wall_room(entity)) continue;

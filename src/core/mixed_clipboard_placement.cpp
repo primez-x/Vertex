@@ -1,6 +1,7 @@
 #include "sketch/mixed_clipboard_placement.hpp"
 
 #include "sketch/assembly_document_adapter.hpp"
+#include "sketch/assembly_component_clipboard.hpp"
 #include "sketch/assembly_model.hpp"
 #include "sketch/architectural_document_adapter.hpp"
 #include "sketch/annotation_entity_codec.hpp"
@@ -9,6 +10,7 @@
 #include "sketch/boundary_integrity.hpp"
 #include "sketch/constraint_entity.hpp"
 #include "sketch/measurement_linework.hpp"
+#include "sketch/project_organization.hpp"
 #include "sketch/terrain_surface.hpp"
 
 #include <algorithm>
@@ -126,6 +128,7 @@ void reserve(const DocumentSnapshot& destination, const MixedClipboardTransfer& 
     Reservation scan{fresh};
     // The closed passive admission has already bounded this traversal.
     if (passive.ordinary) scan.read(*passive.ordinary);
+    scan.read(passive.detached_components);
     for (const auto& corner : passive.corners) {
         scan.entity(corner.owner);
         for (const auto& wall : corner.walls) scan.entity(wall);
@@ -235,6 +238,9 @@ MixedClipboardPlacement prepare_mixed_clipboard_placement(const DocumentSnapshot
     const MixedClipboardPlacementRequest& request, Revision expected_revision) {
     if (!destination.is_editable() || destination.revision() != expected_revision) reject("read-only or stale destination");
     validate_mixed_clipboard_transfer(request.transfer);
+    if (request.ordinary.entity_changes.size() + request.imported_material_catalogs.size() +
+        request.transfer.detached_components.size() > change_limit)
+        reject("aggregate prepared entity and component row budget exceeded");
     if (request.corners.size() != request.transfer.corners.size() || request.skylights.size() > 1000 ||
         request.imported_material_catalogs.size() > 128 || request.ordinary.entity_changes.size() > change_limit ||
         request.identity_mapping.size() > 100000 || request.material_catalog_mapping.size() > 256 ||
@@ -247,6 +253,15 @@ MixedClipboardPlacement prepare_mixed_clipboard_placement(const DocumentSnapshot
         !request.roof_opening_identity_mapping.empty())) reject("ordinary preparation has no transported graph");
 
     PreparedBudget input_budget;
+    // Charge the unchanged source evidence and prospective mapping wrapper
+    // before any prepared graph or source record is copied.
+    input_budget.read(request.transfer.detached_components, 2);
+    for (const auto& record : request.transfer.detached_components) {
+        (void)record;
+        input_budget.add(194); // Wrapper keys plus a bounded destination identity.
+        if (input_budget.nodes > 100000 - 2) reject("prepared component mapping complexity budget exceeded");
+        input_budget.nodes += 2;
+    }
     const auto mapping_budget = [&](const std::string& source, const std::string& target) {
         identity(source); identity(target);
         if (input_budget.nodes > 100000 - 2) reject("prepared mapping complexity budget exceeded");
@@ -280,6 +295,8 @@ MixedClipboardPlacement prepare_mixed_clipboard_placement(const DocumentSnapshot
     result.identity_mapping = request.identity_mapping;
     result.material_catalog_mapping = request.material_catalog_mapping;
     result.roof_opening_identity_mapping = request.roof_opening_identity_mapping;
+    result.component_source_completion = request.transfer.component_source_completion ||
+        !request.transfer.detached_components.empty();
     Ids fresh, ordinary_targets;
     const auto fresh_identity = [&](const std::string& id) {
         identity(id);
@@ -303,6 +320,22 @@ MixedClipboardPlacement prepare_mixed_clipboard_placement(const DocumentSnapshot
                 reject("ordinary mapped entity has no prepared addition");
         } else if (target->second.type != original.type || target->second.required != original.required)
             reject("ordinary mapped entity changed its envelope role");
+    }
+    Ids detached_targets;
+    for (const auto& record : request.transfer.detached_components) {
+        const auto& wire_id = record.at("wire_owner_id").get_ref<const std::string&>();
+        const auto mapped = request.identity_mapping.find(wire_id);
+        if (mapped == request.identity_mapping.end() || !detached_targets.insert(mapped->second).second)
+            reject("detached component destination mapping is missing or noninjective");
+        const auto target = additions.find(mapped->second);
+        if (target == additions.end() || target->second.type != "assembly_instance" || target->second.required)
+            reject("detached component destination must be a fresh independent assembly addition");
+        const auto independent = decode_document_assembly_instance(target->second);
+        if (independent.instance.id != target->second.id || independent.instance.placement)
+            reject("detached component destination cannot be a qualified or hosted instance");
+        // The ordinary producer owns translated geometry and remapped catalog
+        // dependencies. Passive source phase/host evidence is never replayed.
+        result.detached_components.push_back(Json{{"source", record}, {"destination_owner_id", mapped->second}});
     }
     Ids ordinary_owners;
     for (const auto& [id, original] : originals) { (void)original; ordinary_owners.insert(request.identity_mapping.at(id)); }
@@ -360,7 +393,34 @@ MixedClipboardPlacement prepare_mixed_clipboard_placement(const DocumentSnapshot
         if (prepared != additions.end() && prepared->second.type != "assembly_model") reject("mapped catalog has another role");
         if (prepared != additions.end() && originals.contains(id)) {
             auto retained = originals.at(id); retained.id = mapped->second;
-            if (!exact(retained, prepared->second)) reject("ordinary catalog must retain its raw source carrier before reconciliation");
+            auto actual_catalog=prepared->second;
+            if (result.component_source_completion) {
+                const bool organized=retained.properties.contains("property_id") || retained.properties.contains("building_id") ||
+                    retained.properties.contains("floor_id") || retained.properties.contains("layer_id") ||
+                    retained.properties.contains("level_id");
+                if (organized) {
+                    if (!actual_catalog.properties.contains("layer_id") || !actual_catalog.properties.at("layer_id").is_string())
+                        reject("organized component catalog requires a destination layer");
+                    const auto context=organize_project(destination).drawing_context(actual_catalog.properties.at("layer_id").get<std::string>());
+                    if (!context || actual_catalog.properties.value("property_id",Json())!=context->property_id ||
+                        actual_catalog.properties.value("building_id",Json())!=context->building_id ||
+                        actual_catalog.properties.value("floor_id",Json())!=context->floor_id ||
+                        actual_catalog.properties.at("layer_id")!=context->layer_id)
+                        reject("component catalog context differs from actual destination organization");
+                    if (retained.properties.contains("level_id") &&
+                        (context->level_id.empty() ? actual_catalog.properties.contains("level_id") :
+                            actual_catalog.properties.value("level_id",Json())!=context->level_id))
+                        reject("component catalog level differs from its actual destination context");
+                    if (!retained.properties.contains("level_id") && actual_catalog.properties.contains("level_id"))
+                        reject("component catalog cannot invent a level binding");
+                    for (const auto* key:{"property_id","building_id","floor_id","layer_id","level_id"}) {
+                        retained.properties.erase(key); actual_catalog.properties.erase(key);
+                    }
+                }
+                if (actual_catalog.properties.contains("phase_id")) reject("component catalog cannot import a foreign phase identity");
+                retained.properties.erase("phase_id");
+            }
+            if (!exact(retained, actual_catalog)) reject("ordinary catalog must retain its raw source carrier before reconciliation");
         }
     }
     for (const auto& id : imported_catalogs)
@@ -460,6 +520,7 @@ MixedClipboardPlacement prepare_mixed_clipboard_placement(const DocumentSnapshot
     }
     // All ordinary, nested, material, corner and skylight names enter the same
     // reservation before either family producer receives fresh identities.
+    validate_assembly_component_clipboard_destinations(result.detached_components,additions,destination.entities());
     reserve(destination, request.transfer, fresh);
     if (!corners.empty()) {
         auto cloned = corner_window_group_clone_command(destination, corners, expected_revision, {}, fresh_hosts);
@@ -495,8 +556,10 @@ MixedClipboardPlacement prepare_mixed_clipboard_placement(const DocumentSnapshot
         for (const auto& [id, entity] : replayed)
             if (!exact(entity, destination.entities().at(id))) result.roof_candidates.emplace(id, entity);
     }
-    if (additions.size() + result.roof_candidates.size() > change_limit) reject("combined change row budget exceeded");
+    if (additions.size() + result.roof_candidates.size() + result.detached_components.size() > change_limit)
+        reject("combined change and component row budget exceeded");
     PreparedBudget output_budget;
+    output_budget.read(result.detached_components, 1);
     for (auto& [id, entity] : additions) {
         (void)id;
         output_budget.entity(entity);

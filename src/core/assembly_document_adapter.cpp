@@ -1077,24 +1077,44 @@ void validate_document_assembly_instances(const AssemblyDocumentEntities& entiti
     AssemblyExpansionBudget budget;
     (void)expand_document_assembly_instances(entities, budget);
 }
+namespace {
+AssemblyDocumentEntities clipboard_dependencies(const AssemblyDocumentEntities& source,
+    const std::vector<Entity>& independent_roots, bool retain_raw_catalog);
+}
 AssemblyDocumentEntities assembly_clipboard_dependencies(const DocumentSnapshot& source,
     const std::vector<std::string>& root_entity_ids) {
     AssemblyExpansionBudget source_budget;
     (void)expand_document_assembly_instances(source.entities(), source_budget);
-    std::map<std::string, std::vector<AssemblyInstance>, std::less<>> roots;
+    std::vector<Entity> independent_roots;
     std::set<std::string> selected;
-    AssemblyDocumentEntities closure;
     for (const auto& id : root_entity_ids) {
         require(selected.insert(id).second, "duplicate assembly clipboard root");
         const auto found = source.entities().find(id);
         require(found != source.entities().end(), "assembly clipboard root is missing");
-        const auto value = decode_document_assembly_instance(found->second);
+        independent_roots.push_back(found->second);
+    }
+    return clipboard_dependencies(source.entities(), independent_roots, false);
+}
+AssemblyDocumentEntities assembly_clipboard_dependencies(const AssemblyDocumentEntities& source,
+    const std::vector<Entity>& independent_roots) {
+    return clipboard_dependencies(source, independent_roots, true);
+}
+namespace {
+AssemblyDocumentEntities clipboard_dependencies(const AssemblyDocumentEntities& source,
+    const std::vector<Entity>& independent_roots, bool retain_raw_catalog) {
+    std::map<std::string, std::vector<AssemblyInstance>, std::less<>> roots;
+    AssemblyDocumentEntities closure;
+    for (const auto& entity : independent_roots) {
+        require(closure.emplace(entity.id, entity).second, "duplicate assembly clipboard root");
+        const auto value = decode_document_assembly_instance(entity);
         roots[value.assembly_catalog_id].push_back(value.instance);
-        closure.emplace(id, found->second);
     }
     AssemblyDocumentEntities result;
     for (const auto& [catalog_id, instances] : roots) {
-        const auto& source_entity = source.entities().at(catalog_id);
+        const auto found_catalog = source.find(catalog_id);
+        require(found_catalog != source.end() && found_catalog->second.id == catalog_id,
+            "assembly clipboard catalog is missing or has inconsistent identity");
+        const auto& source_entity = found_catalog->second;
         const auto model = catalog(source_entity);
         std::set<std::string> type_ids, material_ids;
         std::vector<std::string> pending;
@@ -1118,21 +1138,40 @@ AssemblyDocumentEntities assembly_clipboard_dependencies(const DocumentSnapshot&
                 materials(part.material_overrides);
             }
         }
-        std::vector<AssemblyType> types;
-        std::vector<AssemblyMaterial> retained_materials;
-        for (const auto& type : model.types()) if (type_ids.contains(type.id)) types.push_back(type);
-        for (const auto& material : model.materials())
-            if (material_ids.contains(material.id)) retained_materials.push_back(material);
         Entity entity = source_entity;
-        entity.properties["model"] = retain_assembly_catalog_dialect(source_entity.properties.at("model"),
-            AssemblyModel::create(std::move(retained_materials), std::move(types), {}).to_json());
+        if (retain_raw_catalog) {
+            // A passive record carries its exact original embedded row. Retain
+            // the actual model dialect and selected definitions so that row
+            // still decodes through the minimal catalog on receipt, including
+            // old rows without root_transform/nested_overrides envelopes.
+            auto& raw = entity.properties.at("model");
+            auto& types = raw.at("types");
+            types.erase(std::remove_if(types.begin(), types.end(), [&](const auto& row) {
+                return !type_ids.contains(row.at("id").template get<std::string>());
+            }), types.end());
+            auto& materials = raw.at("materials");
+            materials.erase(std::remove_if(materials.begin(), materials.end(), [&](const auto& row) {
+                return !material_ids.contains(row.at("id").template get<std::string>());
+            }), materials.end());
+            raw.at("instances") = nlohmann::json::array();
+        } else {
+            std::vector<AssemblyType> types;
+            std::vector<AssemblyMaterial> retained_materials;
+            for (const auto& type : model.types()) if (type_ids.contains(type.id)) types.push_back(type);
+            for (const auto& material : model.materials())
+                if (material_ids.contains(material.id)) retained_materials.push_back(material);
+            entity.properties["model"] = retain_assembly_catalog_dialect(source_entity.properties.at("model"),
+                AssemblyModel::create(std::move(retained_materials), std::move(types), {}).to_json());
+        }
         result.emplace(catalog_id, entity);
-        closure.emplace(catalog_id, std::move(entity));
+        require(closure.emplace(catalog_id, std::move(entity)).second,
+            "assembly clipboard root collides with its catalog");
     }
     AssemblyExpansionBudget closure_budget;
     (void)expand_document_assembly_instances(closure, closure_budget);
     return result;
 }
+} // namespace
 Entity remap_independent_assembly_instance(const Entity& source,
     const std::map<std::string, std::string>& identity_mapping) {
     const auto value = decode_document_assembly_instance(source);

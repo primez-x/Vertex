@@ -10,10 +10,15 @@ namespace sketch {
 // no caller-supplied existing registry/view payload is admitted.
 // Bounds: 4096 fresh changes, 4 MiB compact-wire upper bound, 100000 JSON
 // values, depth 64. Preflight precedes copies/serialization/family replay.
+// Version 2 adds exactly detached_components: passive source evidence mapped to
+// fresh independent additions. Source phase provenance grants no destination
+// authority; enrollment is still derived from the actual destination registry.
 [[nodiscard]] nlohmann::json make_mixed_clipboard_placement_intent(
     const DocumentSnapshot& source, const nlohmann::json& roof_authoring,
     const ApplyEntityChanges& fresh_additions, std::string_view selected_registry_id,
-    std::string_view message);
+    std::string_view message,
+    const nlohmann::json& detached_components = nlohmann::json::array(),
+    bool component_source_completion = false);
 [[nodiscard]] nlohmann::json validate_mixed_clipboard_placement_intent(
     const nlohmann::json& value);
 // Exact editable snapshot/history binding and retained/undone fresh-name

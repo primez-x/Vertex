@@ -15,6 +15,8 @@ struct MixedClipboardTransfer {
     std::vector<CornerWindowTransfer> corners;
     std::vector<Entity> catalogs;
     std::vector<RoofOpeningCloneSource> skylights;
+    bool component_source_completion{false};
+    nlohmann::json detached_components = nlohmann::json::array();
 };
 
 // Closed vertex-mixed-clipboard version 1: exactly format, version, ordinary,
@@ -34,6 +36,10 @@ struct MixedClipboardTransfer {
 // before granting any clone authority. Shared material catalogs admit separate
 // referenced subsets with exact shared raw definitions and compatible model
 // dialect/opaque fields; source carrier context remains local to its lane.
+// Version 2 adds exactly detached_components, retaining bounded passive source
+// evidence for selected independent assembly roots. It also permits one ordinary
+// lane only when a nonempty, validated detached component roster is present.
+// An empty completion roster does not relax the historical two-lane rule.
 void validate_mixed_clipboard_transfer(const MixedClipboardTransfer& transfer);
 [[nodiscard]] nlohmann::json encode_mixed_clipboard_transfer(const MixedClipboardTransfer& transfer);
 [[nodiscard]] MixedClipboardTransfer decode_mixed_clipboard_transfer(const nlohmann::json& value);

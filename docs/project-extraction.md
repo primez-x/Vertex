@@ -1,5 +1,17 @@
 # Portable project extraction
 
+Exchange version214 requires native reader216 for component clipboard
+placement intent2 and command58. It retains exact passive source records and
+their fresh destination owner mappings. Capture preserves the actual source
+catalog and required companions; pasted independent objects use the actual
+destination phase. Original catalog dialect and selected raw type/material
+definitions keep historical embedded rows decodable before normalization.
+Foreign digests supply provenance, not live-source authentication or destination
+phase authority. Command51/intent1 retain their historical meanings. Current,
+nested, wrapped, retained and undone clipboard history raises the reader floor,
+including history after reader215. Compilation and extraction round trips
+remain unverified.
+
 Exchange version213 requires native reader215 for ordinary wall/component
 membership retirement. Geometry proof54 (walls), 55 (mixed walls) and 56
 (walls/openings) retain complete catalog/membership markers and an actual-source

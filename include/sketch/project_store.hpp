@@ -316,7 +316,9 @@ public:
     // retirement/demolition composed before the complete room review.
     // v215 retains ordinary wall proof54, mixed wall55 and wall/opening56
     // component membership retirement through drawing, room and mixed history.
-    static constexpr std::uint32_t format_version = 215;
+    // v216 retains clipboard placement intent2 under command58, carrying
+    // passive component origins and fresh destination identity mappings.
+    static constexpr std::uint32_t format_version = 216;
     static constexpr std::uint32_t recovery_format_version = 4;
     [[nodiscard]] static std::uint32_t required_format_version(const DocumentSnapshot& snapshot);
     static constexpr std::uint64_t maximum_file_bytes = 4ULL * 1024ULL * 1024ULL * 1024ULL;

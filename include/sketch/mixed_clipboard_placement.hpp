@@ -40,6 +40,9 @@ struct MixedClipboardPlacement {
     MixedClipboardIdentityMapping identity_mapping;
     MixedClipboardIdentityMapping material_catalog_mapping;
     MixedClipboardRoofOpeningMapping roof_opening_identity_mapping;
+    bool component_source_completion{false};
+    // Closed rows: unchanged passive source record and fresh destination owner.
+    nlohmann::json detached_components = nlohmann::json::array();
 };
 
 // Translate one complete prepared fresh graph on the captured actual source.

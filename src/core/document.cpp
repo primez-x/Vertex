@@ -3156,7 +3156,7 @@ static Command room_review_geometry_command(const ApplyBoundaryConstraintChanges
     const bool mixed_opening_deletion=proof.at("kind")=="mixed_wall_opening_deletion";
     if ((mixed_opening_deletion && version!=40 && version!=50 && version!=56) || (mixed_deletion && version!=37 && version!=39 && version!=49 && version!=55) ||
         (grouped_deletion && version!=31 && version!=35 && version!=36 && version!=38 && version!=48 && version!=54) || (!grouped_deletion && !mixed_deletion && !mixed_opening_deletion &&
-        version!=1 && version!=10 && version!=17 && version!=19 && version!=21 && version!=22 && version!=23 && version!=34 && version!=43 && version!=51 && version!=53 && !ordinary_room_wall_proof_version(version)))
+        version!=1 && version!=10 && version!=17 && version!=19 && version!=21 && version!=22 && version!=23 && version!=34 && version!=43 && version!=51 && version!=58 && version!=53 && !ordinary_room_wall_proof_version(version)))
         throw std::invalid_argument("Room review cannot wrap another geometry intent");
     const auto decoded=[&]()->Command {
 #ifdef VERTEX_HAS_PHYSICAL_ROOM_REVIEW
@@ -3287,7 +3287,7 @@ static std::vector<nlohmann::json> phase_constraint_authoring_proofs(const Apply
                 if (!roof.is_null()) result.push_back(roof);
             }
         }
-        else if (version==51) {
+        else if (version==51 || version==58) {
             const auto& roof=proof.at("clipboard_placement_intent").at("roof_authoring");
             if (!roof.is_null()) result.push_back(roof);
         }
@@ -3327,7 +3327,7 @@ static std::vector<nlohmann::json> mixed_clipboard_placement_proofs(const ApplyB
         if (depth>2) throw std::invalid_argument("Clipboard proof wrapper depth is invalid");
         if (proof.at("kind")!="apply_boundary_constraint_changes") return;
         const auto version=proof.at("version").get<int>();
-        if (version==51) result.push_back(proof.at("clipboard_placement_intent"));
+        if (version==51 || version==58) result.push_back(proof.at("clipboard_placement_intent"));
         else if (version==45 || version==46 || version==47 || version==57) return;
         else if (version==41 || version==42) self(self,proof.at("proof"),depth);
         else if (version==19 || version==22) self(self,proof.at("proof"),depth+1);
@@ -3783,7 +3783,7 @@ static PhaseConstraintLifetimeProofs phase_constraint_lifetime_proofs(const Appl
                 if (!roof.is_null()) result.phase_proofs.push_back(roof);
             }
         }
-        else if (version==51) {
+        else if (version==51 || version==58) {
             const auto& roof=proof.at("clipboard_placement_intent").at("roof_authoring");
             if (!roof.is_null()) result.phase_proofs.push_back(roof);
         }
@@ -8774,7 +8774,8 @@ nlohmann::json command_to_json(const Command& command) {
             if (has_mixed_clipboard_placement(typed)) {
                 try {
                     validate_mixed_clipboard_placement_mode(typed);
-                    return nlohmann::json{{"version",51},{"kind","apply_boundary_constraint_changes"},
+                    const auto version=typed.clipboard_placement_intent.at("version")==2 ? 58 : 51;
+                    return nlohmann::json{{"version",version},{"kind","apply_boundary_constraint_changes"},
                         {"expected_revision",typed.expected_revision},{"message",typed.message},
                         {"clipboard_placement_completion",true},
                         {"clipboard_placement_intent",typed.clipboard_placement_intent}};
@@ -9299,7 +9300,7 @@ Command command_from_json(const nlohmann::json& value,
     try {
         if (!value.is_object() || !value.contains("version") || !value.contains("kind") ||
             !value.at("version").is_number_integer() ||
-            (value.at("version")<1 || value.at("version")>57) ||
+            (value.at("version")<1 || value.at("version")>58) ||
             !value.at("kind").is_string()) {
             document_error(DocumentErrorCode::invalid_entity, "serialized command envelope is invalid");
         }
@@ -9439,7 +9440,7 @@ Command command_from_json(const nlohmann::json& value,
                 validate_mixed_selection_edit_mode(result);
                 return result;
             }
-            if (value.at("version")==51) {
+            if (value.at("version")==51 || value.at("version")==58) {
                 command_exact_fields(value,{"version","kind","expected_revision","message",
                     "clipboard_placement_completion","clipboard_placement_intent"},
                     DocumentErrorCode::invalid_entity,"serialized combined clipboard placement");
@@ -9451,6 +9452,8 @@ Command command_from_json(const nlohmann::json& value,
                 result.message=command_string(value.at("message"),"Clipboard placement message",1024);
 #ifdef VERTEX_HAS_CONSTRAINT_AUTHORING
                 result.clipboard_placement_intent=validate_mixed_clipboard_placement_intent(value.at("clipboard_placement_intent"));
+                if ((value.at("version")==58) != (result.clipboard_placement_intent.at("version")==2))
+                    throw std::invalid_argument("Clipboard placement command and intent versions disagree.");
 #else
                 throw std::invalid_argument("Combined clipboard placement requires the production authoring engine.");
 #endif

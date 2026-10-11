@@ -110,6 +110,7 @@
 #include "sketch/desktop/building_object_dialog.hpp"
 #include "sketch/desktop/assembly_authoring_dialog.hpp"
 #include "sketch/assembly_document_adapter.hpp"
+#include "sketch/assembly_component_clipboard.hpp"
 #include "sketch/assembly_geometry.hpp"
 #include "sketch/desktop/constraint_dialog.hpp"
 #include "sketch/desktop/constraint_preview_canvas.hpp"
@@ -31691,64 +31692,53 @@ public:
     }
 
     std::string clipboardSelectionPayload(const DocumentSnapshot& source_snapshot,
-        const QStringList* selection_override=nullptr) const {
-        auto snapshot = source_snapshot;
+        const QStringList* selection_override=nullptr, json* detached_sources=nullptr) const {
+        const auto& snapshot = source_snapshot;
         auto copied_ids = selection_override ? *selection_override : m_selected_ids;
         if (copied_ids.isEmpty() || copied_ids.size()>kMaximumClipboardEntities)
             throw std::invalid_argument("Choose a bounded selection for the ordinary clipboard graph.");
-        std::map<std::string, Entity, std::less<>> catalogs;
-        std::vector<EntityChange> detached_changes;
+        AssemblyCatalogTransferBudget catalog_budget;
+        for (const auto& [entity_id,entity]:snapshot.entities()) {
+            (void)entity_id;
+            if (entity.type=="assembly_model") admit_existing_assembly_catalog_work(entity,catalog_budget);
+        }
+        auto occupied=retainedSlabIdentityNames(snapshot,true);
+        QStringList ordinary_ids;
+        std::vector<AssemblyClipboardDetachRequest> requests;
         std::map<std::string, std::string, std::less<>> copied_children;
         for (auto& id : copied_ids) {
             const auto binding = geometric_assembly_for_child(source_snapshot, id.toStdString());
-            if (!binding) continue;
-            auto instance = binding->instance;
+            if (!binding) { ordinary_ids.push_back(id); continue; }
             const auto original_child = id.toStdString();
-            instance.root_transform = embedded_assembly_transform(instance); instance.placement.reset();
-            do { instance.id = new_id("assembly"); } while (source_snapshot.entities().contains(instance.id));
-            const auto& source_catalog = source_snapshot.entities().at(binding->assembly_catalog_id);
-            Entity external{instance.id, "assembly_instance", json::object()};
-            for (const auto* key : {"property_id", "building_id", "floor_id", "layer_id"})
-                if (source_catalog.properties.contains(key)) external.properties[key] = source_catalog.properties.at(key);
-            external = encode_document_assembly_instance(external, {binding->assembly_catalog_id, instance});
-            detached_changes.push_back(EntityChange::upsert(std::move(external)));
-            auto catalog = catalogs.contains(binding->assembly_catalog_id) ? catalogs.at(binding->assembly_catalog_id) : source_catalog;
-            auto& instances=catalog.properties.at("model").at("instances");
-            instances.erase(std::remove_if(instances.begin(),instances.end(),[&](const auto& row) {
-                return row.at("id").template get<std::string>()==binding->instance.id;
-            }),instances.end());
-            (void)AssemblyModel::from_json(catalog.properties.at("model"));
-            catalogs.insert_or_assign(catalog.id, std::move(catalog));
-            copied_children.emplace(original_child, instance.id); id = id_from(instance.id);
+            if (copied_children.contains(original_child)) { id=id_from(copied_children.at(original_child)); continue; }
+            auto fresh=new_id("assembly");
+            while (!occupied.insert(fresh).second) fresh=new_id("assembly");
+            requests.push_back({binding->assembly_catalog_id,binding->instance.id,fresh});
+            copied_children.emplace(original_child,fresh); id=id_from(fresh);
         }
-        for (auto& [id, catalog] : catalogs) { (void)id; detached_changes.push_back(EntityChange::upsert(std::move(catalog))); }
+        auto entities=ordinary_ids.isEmpty() ? std::vector<Entity>{} :
+            independentAreaCopyGraph(snapshot,clipboardSelectionGraph(snapshot,false,&ordinary_ids));
+        std::vector<Entity> independent_roots;
+        for (const auto& entity:entities) if (entity.type=="assembly_instance") independent_roots.push_back(entity);
+        auto detached=capture_assembly_component_clipboard(snapshot,requests,independent_roots);
+        std::set<std::string,std::less<>> detached_ids;
+        for (const auto& request:requests) detached_ids.insert(request.independent_id);
+        for (auto& root:detached.roots) {
+            if (detached_ids.contains(root.id)) entities.push_back(std::move(root));
+        }
+        const auto redirect=[&](json& reference) {
+            if (!reference.is_string()) return;
+            const auto found=copied_children.find(reference.get<std::string>());
+            if (found!=copied_children.end()) reference=found->second;
+        };
+        // Redirect only copied records. Copy never edits catalog rows, phase
+        // companions or views in a manufactured source Document.
+        for (auto& entity:entities) if (entity.type==kAnnotationEntityType) {
+            for (auto& row:entity.properties.at("state").at("overrides")) redirect(row.at("target_id"));
+            validate_annotation_entity(entity);
+        }
         if (!copied_children.empty()) for (const auto& [id, entity] : source_snapshot.entities()) {
             (void)id;
-            const auto redirect=[&](json& reference) {
-                if (!reference.is_string()) return;
-                const auto found=copied_children.find(reference.get<std::string>());
-                if (found!=copied_children.end()) reference=found->second;
-            };
-            if (entity.type==kSheetViewEntityType) {
-                auto saved=entity;
-                (void)decode_sheet_view_entity(saved);
-                for (auto& view:saved.properties.at("model").at("views")) {
-                    if (view.contains("object_ids")) for (auto& object:view.at("object_ids")) redirect(object);
-                    auto& presentation=view.at("presentation");
-                    if (presentation.contains("appearance") && !presentation.at("appearance").is_null())
-                        for (auto& row:presentation.at("appearance").at("objects")) redirect(row.at("object_id"));
-                    if (view.contains("overlays")) for (auto& row:view.at("overlays")) {
-                        if (row.contains("object_id")) redirect(row.at("object_id"));
-                        if (row.contains("dimension_binding") && !row.at("dimension_binding").is_null())
-                            redirect(row.at("dimension_binding").at("object_id"));
-                    }
-                }
-                if (saved!=entity || saved.properties.dump()!=entity.properties.dump()) {
-                    validate_sheet_view_entity(saved);
-                    detached_changes.push_back(EntityChange::upsert(std::move(saved)));
-                }
-                continue;
-            }
             if (can_recognize_boundary_dimension_entity_type(entity.type)) {
                 const auto target=entity.properties.find("target");
                 if (target!=entity.properties.end() && target->is_object() && target->contains("entity_id") &&
@@ -31758,50 +31748,58 @@ public:
                     auto dimension=entity;
                     redirect(dimension.properties.at("target").at("entity_id"));
                     (void)decode_boundary_dimension_entity(dimension);
-                    detached_changes.push_back(EntityChange::upsert(std::move(dimension)));
+                    const auto existing=std::find_if(entities.begin(),entities.end(),[&](const auto& row) { return row.id==dimension.id; });
+                    if (existing==entities.end()) entities.push_back(std::move(dimension));
+                    else *existing=std::move(dimension);
                 }
                 continue;
             }
             if (entity.type != kAnnotationEntityType) continue;
             auto annotation = entity;
-            for (auto& record : annotation.properties.at("state").at("overrides")) {
-                const auto found = copied_children.find(record.at("target_id").get<std::string>());
-                if (found != copied_children.end()) record["target_id"] = found->second;
-            }
-            if (annotation != entity) { validate_annotation_entity(annotation); detached_changes.push_back(EntityChange::upsert(std::move(annotation))); }
+            auto& state=annotation.properties.at("state");
+            state["labels"]=json::array(); state["symbols"]=json::array();
+            auto& overrides=state.at("overrides");
+            overrides.erase(std::remove_if(overrides.begin(),overrides.end(),[&](const auto& row) {
+                return !copied_children.contains(row.at("target_id").template get<std::string>());
+            }),overrides.end());
+            if (overrides.empty()) continue;
+            for (auto& row:overrides) redirect(row.at("target_id"));
+            annotation.required=false;
+            const auto existing=std::find_if(entities.begin(),entities.end(),[&](const auto& row) { return row.id==annotation.id; });
+            if (existing!=entities.end()) {
+                auto& retained=existing->properties.at("state").at("overrides");
+                for (const auto& row:overrides)
+                    if (std::none_of(retained.begin(),retained.end(),[&](const auto& value) {
+                        return value.at("target_id")==row.at("target_id");
+                    })) retained.push_back(row);
+                validate_annotation_entity(*existing);
+            } else { validate_annotation_entity(annotation); entities.push_back(std::move(annotation)); }
         }
-        if (!detached_changes.empty()) snapshot = Document::preview_command(source_snapshot,
-            ApplyEntityChanges{source_snapshot.revision(), std::move(detached_changes), {}, "Prepare detached embedded assembly clipboard"});
-        auto entities = independentAreaCopyGraph(snapshot,clipboardSelectionGraph(snapshot, false, &copied_ids));
         if (entities.empty()) {
             throw std::invalid_argument(
                 "Select supported geometry, an area, an architectural object, or annotations.");
         }
         std::map<std::string, std::set<std::string>> material_dependencies;
-        std::vector<std::string> independent_roots;
         for(const auto& entity : entities) {
-            if (entity.type == "assembly_instance") independent_roots.push_back(entity.id);
             for (const auto& material : architectural_material_source_refs(entity))
                 material_dependencies[material.catalog_id].insert(material.material_id);
         }
-        auto assembly_dependencies = assembly_clipboard_dependencies(snapshot, independent_roots);
+        auto assembly_dependencies = std::move(detached.catalogs);
         for(const auto& [catalog_id, material_ids] : material_dependencies) {
-            const auto catalog = AssemblyModel::from_json(snapshot.entities().at(catalog_id).properties.at("model"));
-            std::vector<AssemblyMaterial> used;
-            std::vector<AssemblyType> used_types;
-            if (const auto dependency = assembly_dependencies.find(catalog_id); dependency != assembly_dependencies.end()) {
-                const auto model = AssemblyModel::from_json(dependency->second.properties.at("model"));
-                used = model.materials();
-                used_types = model.types();
+            auto dependency=assembly_dependencies.find(catalog_id);
+            if (dependency==assembly_dependencies.end()) {
+                auto minimal=snapshot.entities().at(catalog_id);
+                auto& model=minimal.properties.at("model");
+                model["types"]=json::array(); model["materials"]=json::array(); model["instances"]=json::array();
+                minimal.required=false;
+                dependency=assembly_dependencies.emplace(catalog_id,std::move(minimal)).first;
             }
-            for(const auto& material : catalog.materials())
-                if(material_ids.contains(material.id) && std::none_of(used.begin(),used.end(),
-                    [&](const auto& value) { return value.id == material.id; })) used.push_back(material);
-            const auto retained_model = retain_assembly_catalog_dialect(
-                snapshot.entities().at(catalog_id).properties.at("model"),
-                AssemblyModel::create(std::move(used),std::move(used_types),{}).to_json());
-            assembly_dependencies.insert_or_assign(catalog_id, Entity{catalog_id,"assembly_model",{{"version",1},
-                {"model",retained_model}},false,json::object()});
+            auto& used=dependency->second.properties.at("model").at("materials");
+            for (const auto& material:snapshot.entities().at(catalog_id).properties.at("model").at("materials"))
+                if (material_ids.contains(material.at("id").get<std::string>()) &&
+                    std::none_of(used.begin(),used.end(),[&](const auto& value) { return value.at("id")==material.at("id"); }))
+                    used.push_back(material);
+            (void)AssemblyModel::from_json(dependency->second.properties.at("model"));
         }
         for (auto& [id,catalog] : assembly_dependencies) {
             (void)id;
@@ -31809,10 +31807,16 @@ public:
         }
         if(entities.size()>kMaximumClipboardEntities)
             throw std::invalid_argument("Clipboard material dependencies exceed the entity limit.");
+        validate_assembly_component_clipboard_source_rows(detached.provenance,entities);
+        if (detached_sources) *detached_sources=detached.provenance;
         json payload{{"format", std::string(kClipboardFormat)}, {"version", 1}, {"root_id",entities.front().id},
                      {"root_ids", json::array()}, {"entities", json::array()}};
         std::set<std::string> roots;
         for (const auto& id : copied_ids) {
+            if (detached_ids.contains(id.toStdString())) {
+                if (roots.insert(id.toStdString()).second) payload["root_ids"].push_back(id.toStdString());
+                continue;
+            }
             const auto target=annotationActionTarget(snapshot,id,false);
             if(target) {
                 if(roots.insert(target->owner_entity_id).second)payload["root_ids"].push_back(target->owner_entity_id);
@@ -34653,7 +34657,13 @@ public:
         std::vector<Entity> geometry;
         std::set<std::string,std::less<>> captured;
         const auto source=authoringSnapshot();
+        AssemblyCatalogTransferBudget catalog_budget;
+        for (const auto& [entity_id,entity]:source.entities()) {
+            (void)entity_id;
+            if (entity.type=="assembly_model") admit_existing_assembly_catalog_work(entity,catalog_budget);
+        }
         for (const auto& id:ordinarySelectionIDs()) {
+            if (geometric_assembly_for_child(source,id.toStdString())) return true;
             const auto found=source.entities().find(id.toStdString());
             if (cornerWindowClipboardOwner(source,id)) corner=true;
             else {
@@ -34688,7 +34698,8 @@ public:
             else ordinary.push_back(id);
         }
         if (!ordinary.isEmpty()) {
-            auto packet=json::parse(clipboardSelectionPayload(source,&ordinary));
+            auto packet=json::parse(clipboardSelectionPayload(source,&ordinary,&transfer.detached_components));
+            transfer.component_source_completion=!transfer.detached_components.empty();
             // A wall's dependency closure contains its managed corner cuts.
             // Transport their complete owner once in the coordinated lane.
             for (const auto& owner_id:mixedClipboardCornerDependencies(packet))
@@ -35064,7 +35075,8 @@ public:
             ApplyBoundaryConstraintChanges compound;
             compound.expected_revision=session->source->revision(); compound.message="Paste mixed selection";
             compound.clipboard_placement_completion=true;
-            compound.clipboard_placement_intent=make_mixed_clipboard_placement_intent(*session->source,roof_authoring,fresh,session->registry,compound.message);
+            compound.clipboard_placement_intent=make_mixed_clipboard_placement_intent(*session->source,roof_authoring,fresh,session->registry,compound.message,
+                session->admitted.detached_components,session->admitted.component_source_completion);
             session->command=Command{compound};
             }
             const auto candidate=prepareCanvasEdit(*session->source,*session->command,session->edit_source,*session->prepared);
@@ -35969,6 +35981,7 @@ public:
                 // Complete passive admission bounded this traversal already.
                 // Reserve every family before allocating any destination ID.
                 reserve_json(*mixed->ordinary);
+                reserve_json(mixed->detached_components);
                 for (const auto& corner:mixed->corners) {
                     reserve_entity(corner.owner);
                     for (const auto& host:corner.walls) reserve_entity(host);
@@ -36193,6 +36206,24 @@ public:
                 }
                 if (entity.type == "measurement_linework")
                     entity.extensions["measurement_linework_copy_scope"] = {{"version",1}};
+                if (entity.type=="assembly_model" && preparation &&
+                    (mixed->component_source_completion || !mixed->detached_components.empty())) {
+                    const bool organized=entity.properties.contains("property_id") || entity.properties.contains("building_id") ||
+                        entity.properties.contains("floor_id") || entity.properties.contains("layer_id") ||
+                        entity.properties.contains("level_id");
+                    if (organized) {
+                        if (!prepared_context) return false;
+                        entity.properties["property_id"]=prepared_context->property_id;
+                        entity.properties["building_id"]=prepared_context->building_id;
+                        entity.properties["floor_id"]=prepared_context->floor_id;
+                        entity.properties["layer_id"]=prepared_context->layer_id;
+                        if (entity.properties.contains("level_id")) {
+                            if (prepared_context->level_id.empty()) entity.properties.erase("level_id");
+                            else entity.properties["level_id"]=prepared_context->level_id;
+                        }
+                    }
+                    entity.properties.erase("phase_id");
+                }
                 if (entity.type == kAnnotationEntityType) {
                     const auto context = preparation ? prepared_context : requireDrawingContext();
                     if (!context) return false;
@@ -50128,8 +50159,8 @@ private:
                     if (!inserted && found->second != proposed)
                         throw std::invalid_argument("The reviewed alternative edit has conflicting proposed identities.");
                 }
-            } else if (version == 51 || version == 52) {
-                const auto intent=version==51 ?
+            } else if (version == 51 || version == 58 || version == 52) {
+                const auto intent=version!=52 ?
                     validate_mixed_clipboard_placement_intent(encoded.at("clipboard_placement_intent")) :
                     validate_mixed_selection_edit_intent(encoded.at("mixed_selection_edit_intent"));
                 const auto dialect=intent.at("version").get<int>();

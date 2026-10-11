@@ -14,6 +14,78 @@ changed source does not acquire runtime acceptance without later qualification.
 
 ## Current delivery state
 
+### October 11 component clipboard source capture
+
+The ordinary wall/component retirement batch is committed and pushed as
+e264a57a, with the exact remote branch ref verified. Current source work closes
+mixed component Copy/Paste/Duplicate lineage and phase handling. An individual
+embedded symbol remains an independent copied object; its destination uses
+ordinary fresh-object phase enrollment. Its qualified source row and actual
+source phase state remain passive provenance, not destination phase authority.
+Copy must never remove rows or change required companions in a synthetic
+Document merely to construct clipboard content.
+
+A bounded passive source helper owns immutable detachment and minimal
+type/material dependencies. Separate version-two transfer and placement intent
+retain source-to-wire-to-destination identity. Historical version-one meanings
+remain unchanged. Root owns capture/dispatch, Document/history, format floors
+and source-kit integration; pure helpers and codecs have exclusive writers.
+The controller now routes even a single embedded geometric symbol through the
+version-two transfer, redirects only copied appearance/dimensions, and reserves
+passive source names before destination allocation. Capture retains original
+catalog dialect and selected raw type/material rows. Command58 binds only
+clipboard intent2; command51 still binds only intent1. Room review, replacement
+identity walking and Document lifetime/policy traversal recognize both closed
+clipboard versions. Reader216/extraction214 scan retained and undone history,
+including events after reader215. The new pure source is linked in the base
+Document target, and both files are listed in the source-kit allowlist. Named
+whitespace checks pass. Integrated independent source review approved the batch;
+compilation and runtime are not implied by these checks.
+
+Review found a P2: prepared and retained placement could associate valid source
+provenance with a different independent destination symbol. The pure mapped-row
+validator now decodes the raw source through the actual destination catalog
+dialect and compares type, all overrides/nested poses, elevation, rotation,
+mirror and scales. Only root XY translation and identity remapping may differ.
+Preparation and actual-source replay check this before roof producers. The
+retained shape checks fresh catalogs directly and rejects incomplete raw rows;
+retained catalog references receive complete checking against the actual map.
+The earlier room-review consumer gap was corrected to accept canonical command58
+alongside51, with exact inner-version pairing retained by Document. Final source
+review rechecked both corrections and the catalog context correction below,
+with no confirmed P1/P2 findings remaining in the reviewed scope. Root reviewed
+the appended API defaults, complete raw-row/typed destination comparison,
+historical dialect/version behavior, early admission, actual organization,
+source-kit linkage and required reader floor. This is source approval only.
+
+Review also confirmed a pre-existing cross-document paste gap: organized source
+catalogs retained foreign property/building/floor/layer references. The new
+component path rebinds only catalog organization to the captured destination,
+uses its actual level only when the source had that binding, and removes foreign
+flat phase IDs. Pure preparation authenticates that actual organization and
+requires all other raw model/carrier metadata to remain exact. Global catalogs
+remain global; historical version-one preparation retains its prior contract.
+Broader non-component legacy catalog clipboard context remains outside this
+version-two correction and requires separate source work.
+
+A bounded follow-up discovery retracted its suggested numeric-copy companion
+mapping: those copies are independent document roots and already receive exact
+ordinary destination phase enrollment. The inspected caller also requires an
+actually visible qualified source profile. No confirmed numeric-copy/shared-type
+companion defect was established in that narrow scan; the broader editing
+quarantine and unqualified lifecycle/qualification work are still open.
+
+No builds, tests, scripts, probes, native jobs, launches, packages or installations
+ran; these remain excluded by current steering.
+The installed app is unchanged; compilation and runtime remain unverified.
+All ten production gates and component-companion editing quarantine remain open.
+The next source investigation checks actual writer gaps behind that quarantine,
+including synthetic numeric-copy/type/profile consumers. Do not repeat the
+retracted independent-root companion mapping or lift the quarantine based on
+this clipboard batch. Historical version-one catalog context, nested profiles,
+joint-only patches, deformed/cross-Site carry, full lifecycle qualification and
+external compatibility prerequisites remain required work.
+
 ### October 11 ordinary wall/component retirement integration
 
 The preceding wall/component demolition integration is committed and pushed as

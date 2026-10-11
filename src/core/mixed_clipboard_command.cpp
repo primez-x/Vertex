@@ -1,5 +1,6 @@
 #include "sketch/mixed_clipboard_command.hpp"
 
+#include "sketch/assembly_component_clipboard.hpp"
 #include "sketch/assembly_document_adapter.hpp"
 #include "sketch/authored_phase_membership.hpp"
 #include "sketch/boundary_entity.hpp"
@@ -181,13 +182,51 @@ void roof_shape(const Json& roof, const Json& enclosing) {
     if (encode_phase_constraint_authoring_intent(empty).dump() != roof.dump())
         reject("roof authority cannot borrow ordinary constraint authoring");
 }
+void detached_shape(const Json& records, const ApplyEntityChanges& additions) {
+    if (!records.is_array() || records.size() > 128 || records.size() + additions.entity_changes.size() > change_limit)
+        reject("detached component placement roster exceeds admission bounds");
+    Json sources = Json::array();
+    Ids destinations;
+    for (const auto& row : records) {
+        fields(row, {"source", "destination_owner_id"});
+        if (!row.at("destination_owner_id").is_string()) reject("component destination must be an identity");
+        const auto& id = row.at("destination_owner_id").get_ref<const std::string&>();
+        identity(id);
+        if (!destinations.insert(id).second) reject("component destination mapping must be injective");
+        const auto found = std::find_if(additions.entity_changes.begin(), additions.entity_changes.end(),
+            [&](const auto& change) { return change.entity.id == id; });
+        if (found == additions.entity_changes.end() || found->entity.type != "assembly_instance" || found->entity.required)
+            reject("component destination must name an independent fresh assembly addition");
+        const auto independent = decode_document_assembly_instance(found->entity);
+        if (independent.instance.id != id || independent.instance.placement)
+            reject("component destination cannot borrow qualified or host placement authority");
+        sources.push_back(row.at("source"));
+    }
+    validate_assembly_component_clipboard_provenance(sources);
+    for (const auto& source:sources) {
+        const auto& raw=source.at("source_row");
+        for (const auto* key:{"type_id","property_overrides","material_overrides","quantity_overrides"})
+            if (!raw.contains(key)) reject("component source row is missing semantic fields");
+    }
+    Entities candidates;
+    for (const auto& change:additions.entity_changes) candidates.emplace(change.entity.id,change.entity);
+    const bool complete=std::all_of(destinations.begin(),destinations.end(),[&](const auto& id) {
+        return candidates.contains(decode_document_assembly_instance(candidates.at(id)).assembly_catalog_id);
+    });
+    if (complete) validate_assembly_component_clipboard_destinations(records,candidates);
+}
 void validate(const Json& value) {
     Budget budget; budget.json(value, 0); // Before copies, dump or family codecs.
-    fields(value, {"version", "expected_revision", "source_snapshot_digest", "source_authoring_digest",
-        "source_entities_digest", "source_saved_revision", "roof_authoring", "additions",
-        "selected_registry_id", "message"});
-    if (!value.at("version").is_number_integer() || value.at("version") != 1)
+    if (!value.is_object() || !value.contains("version") || !value.at("version").is_number_integer() ||
+        (value.at("version") != 1 && value.at("version") != 2))
         reject("unsupported intent version");
+    if (value.at("version") == 2)
+        fields(value, {"version", "expected_revision", "source_snapshot_digest", "source_authoring_digest",
+            "source_entities_digest", "source_saved_revision", "roof_authoring", "additions",
+            "selected_registry_id", "message", "detached_components"});
+    else fields(value, {"version", "expected_revision", "source_snapshot_digest", "source_authoring_digest",
+            "source_entities_digest", "source_saved_revision", "roof_authoring", "additions",
+            "selected_registry_id", "message"});
     const auto expected = revision(value.at("expected_revision"));
     if (expected == std::numeric_limits<Revision>::max()) reject("source revision cannot advance");
     for (const auto* key : {"source_snapshot_digest", "source_authoring_digest", "source_entities_digest"})
@@ -201,7 +240,8 @@ void validate(const Json& value) {
     if (!value.at("message").is_string() || value.at("message").get_ref<const std::string&>().size() > 1024 ||
         value.at("message").get_ref<const std::string&>().find('\0') != std::string::npos)
         reject("invalid placement message");
-    (void)decode_additions(value.at("additions"), expected);
+    const auto additions = decode_additions(value.at("additions"), expected);
+    if (value.at("version") == 2) detached_shape(value.at("detached_components"), additions);
     roof_shape(value.at("roof_authoring"), value);
 }
 
@@ -337,6 +377,20 @@ struct ReservedNames {
         }
     }
 };
+void reserve_detached_sources(ReservedNames& occupied, const Json& value) {
+    if (value.at("version") != 2) return;
+    // The mapped destination is checked in the normal fresh lane, not treated
+    // as an already occupied name. Every string in origin evidence is passive.
+    for (const auto& row : value.at("detached_components")) occupied.json(row.at("source"));
+}
+void detached_fresh_names(const ReservedNames& origins, const ApplyEntityChanges& additions) {
+    if (origins.values.empty()) return;
+    for (const auto& change : additions.entity_changes) {
+        if (origins.values.contains(change.entity.id)) reject("fresh owner is reserved in detached source evidence");
+        for (const auto& child : owned_children(change.entity))
+            if (origins.values.contains(child)) reject("fresh child is reserved in detached source evidence");
+    }
+}
 Ids roof_new_names(const Entities& actual, const Entities& roof_stage) {
     Ids names;
     for (const auto& [id, entity] : roof_stage) {
@@ -406,9 +460,19 @@ std::optional<Revision> mixed_clipboard_placement_source_saved_revision(const Js
 }
 Entities replay_mixed_clipboard_placement(const Entities& actual, const Json& value) {
     validate(value);
-    const auto roof_stage = roof_replay(actual, value);
-    auto stage = roof_stage;
     auto additions = decode_additions(value.at("additions"), revision(value.at("expected_revision")));
+    if (value.at("version")==2) {
+        Entities candidates;
+        for (const auto& change:additions.entity_changes) candidates.emplace(change.entity.id,change.entity);
+        validate_assembly_component_clipboard_destinations(value.at("detached_components"),candidates,actual);
+    }
+    ReservedNames origins;
+    reserve_detached_sources(origins, value);
+    detached_fresh_names(origins, additions);
+    const auto roof_stage = roof_replay(actual, value);
+    if (!origins.values.empty()) for (const auto& name : roof_new_names(actual, roof_stage))
+        if (origins.values.contains(name)) reject("roof-stage identity is reserved in detached source evidence");
+    auto stage = roof_stage;
     append_fresh(stage, actual, additions);
     // Freshness is relative to the independently replayed roof-only map.
     // Its explicit replacement cohort keeps its already-authored memberships.
@@ -443,10 +507,22 @@ void validate_mixed_clipboard_placement_source(const DocumentSnapshot& source, c
     }
     for (const auto& [id, asset] : source.assets()) { occupied.text(id); occupied.json(asset.metadata); }
     if (!value.at("roof_authoring").is_null()) occupied.json(value.at("roof_authoring"));
+    ReservedNames origins;
+    reserve_detached_sources(origins, value);
+    reserve_detached_sources(occupied, value);
+    const auto additions = decode_additions(value.at("additions"), source.revision());
+    if (value.at("version")==2) {
+        Entities candidates;
+        for (const auto& change:additions.entity_changes) candidates.emplace(change.entity.id,change.entity);
+        validate_assembly_component_clipboard_destinations(value.at("detached_components"),candidates,source.entities());
+    }
+    detached_fresh_names(origins, additions);
     auto stage = roof_replay(source.entities(), value);
     const auto roof_names = roof_new_names(source.entities(), stage);
-    for (const auto& name : roof_names) occupied.text(name);
-    const auto additions = decode_additions(value.at("additions"), source.revision());
+    for (const auto& name : roof_names) {
+        if (origins.values.contains(name)) reject("roof-stage identity is reserved in detached source evidence");
+        occupied.text(name);
+    }
     for (const auto& change : additions.entity_changes) {
         if (!occupied.values.insert(change.entity.id).second)
             reject("fresh owner is reserved in source, history or roof stage");
@@ -507,13 +583,21 @@ void validate_mixed_clipboard_followup_identities(const Entities& actual,
         if (occupied.values.contains(name)) reject("room suffix identity is reserved by clipboard geometry or history");
 }
 Json make_mixed_clipboard_placement_intent(const DocumentSnapshot& source, const Json& roof,
-    const ApplyEntityChanges& additions, std::string_view selected_registry_id, std::string_view message) {
+    const ApplyEntityChanges& additions, std::string_view selected_registry_id, std::string_view message,
+    const Json& detached_components, bool component_source_completion) {
     additions_shape(additions);
     if (additions.expected_revision != source.revision()) reject("fresh additions bind a different source");
+    if (!detached_components.is_array() || detached_components.size() > 128 ||
+        detached_components.size() + additions.entity_changes.size() > change_limit)
+        reject("detached component placement roster exceeds admission bounds");
+    const bool components = component_source_completion || !detached_components.empty();
     // Budget the prospective wire layout before constructing any JSON copy,
     // wrapping a typed command or entering a roof codec.
     Budget budget;
-    budget.object({"version", "expected_revision", "source_snapshot_digest", "source_authoring_digest",
+    if (components) budget.object({"version", "expected_revision", "source_snapshot_digest", "source_authoring_digest",
+        "source_entities_digest", "source_saved_revision", "roof_authoring", "additions",
+        "selected_registry_id", "message", "detached_components"}, 0);
+    else budget.object({"version", "expected_revision", "source_snapshot_digest", "source_authoring_digest",
         "source_entities_digest", "source_saved_revision", "roof_authoring", "additions",
         "selected_registry_id", "message"}, 0);
     for (int i = 0; i < 3; ++i) { budget.node(1); budget.add(32); }
@@ -527,13 +611,16 @@ Json make_mixed_clipboard_placement_intent(const DocumentSnapshot& source, const
         budget.object({"kind", "entity"}, 3); budget.string("upsert", 4); budget.entity(change.entity, 4);
     }
     budget.array(0, 2);
-    Json value{{"version", 1}, {"expected_revision", source.revision()},
+    if (components) budget.json(detached_components, 1);
+    if (components) detached_shape(detached_components, additions);
+    Json value{{"version", components ? 2 : 1}, {"expected_revision", source.revision()},
         {"source_snapshot_digest", document_snapshot_digest(source)},
         {"source_authoring_digest", document_authoring_source_digest_v2(source)},
         {"source_entities_digest", entity_map_digest(source.entities())},
         {"source_saved_revision", source.saved_revision_optional() ? Json(*source.saved_revision_optional()) : Json(nullptr)},
         {"roof_authoring", roof}, {"additions", command_to_json(Command{additions})},
         {"selected_registry_id", std::string(selected_registry_id)}, {"message", std::string(message)}};
+    if (components) value["detached_components"] = detached_components;
     validate_mixed_clipboard_placement_source(source, value);
     return value;
 }
