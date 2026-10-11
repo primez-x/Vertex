@@ -1,5 +1,12 @@
 # Portable project extraction
 
+Exchange version188 requires native reader190 for mixed edit dialect three and
+its paired ordinary selected-geometry request with complete typed room review.
+Exact original-source replay, room identity lifetimes and acknowledged callout
+cleanup survive nested, retained and undone command history. Earlier dialects
+keep their original meanings. Desktop integration and runtime qualification
+remain required.
+
 Exchange version187 requires native reader189 for joint dialect nine/ten,
 retaining explicit two-host corner-window rigid callout completion. Direct,
 nested, retained and undone history keep that floor. Earlier joint dialects

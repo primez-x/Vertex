@@ -2174,6 +2174,17 @@ void validate_physical_room_source_transition(
     const ApplyBoundaryConstraintChanges* reviewed_batch=nullptr,
     bool active_phase_constraints=false,
     bool composed_selection=false) {
+    if (reviewed_batch && (reviewed_batch->mixed_selection_edit_completion ||
+        !reviewed_batch->mixed_selection_edit_intent.is_null())) {
+#ifdef VERTEX_HAS_CONSTRAINT_AUTHORING
+        // Only the exclusive full-snapshot replay can publish this geometry.
+        // It independently rederives every required room decision and compares
+        // final wall/room consequences with that exact typed geometry result.
+        // Entity-map validation here never supplies candidate authority.
+        (void)command_to_json(Command{*reviewed_batch});
+        if (mixed_selection_edit_has_geometry(reviewed_batch->mixed_selection_edit_intent)) return;
+#endif
+    }
     if (reviewed_batch && reviewed_batch->phase_constraint_authoring_completion &&
         !reviewed_batch->phase_constraint_authoring_intent.is_null()) {
 #ifdef VERTEX_HAS_CONSTRAINT_AUTHORING
@@ -2640,6 +2651,16 @@ static bool has_mixed_selection_removal(const ApplyBoundaryConstraintChanges& co
 static bool has_mixed_selection_edit(const ApplyBoundaryConstraintChanges& command) {
     return command.mixed_selection_edit_completion || !command.mixed_selection_edit_intent.is_null();
 }
+#ifdef VERTEX_HAS_CONSTRAINT_AUTHORING
+static bool mixed_selection_edit_source_phase_policy(const nlohmann::json& intent,
+    const std::map<std::string,Entity,std::less<>>& source) {
+    return mixed_selection_edit_active_phase_policy(intent) ||
+        (mixed_selection_edit_has_geometry(intent) &&
+            std::any_of(source.begin(),source.end(),[](const auto& entry) {
+                return entry.second.type=="model_phases";
+            }));
+}
+#endif
 static void validate_mixed_selection_edit_mode(const ApplyBoundaryConstraintChanges& command) {
     if (!command.mixed_selection_edit_completion || command.mixed_selection_edit_intent.is_null())
         throw std::invalid_argument("Mixed selection edit requires its retained source request");
@@ -3489,6 +3510,12 @@ static std::vector<bool> active_constraint_history_policies(const std::vector<Re
                         validate_mixed_selection_removal_mode(command);
 #ifdef VERTEX_HAS_CONSTRAINT_AUTHORING
                         result[index]=result[index] || mixed_selection_removal_active_phase_policy(command.mixed_selection_removal_intent);
+#endif
+                    } else if (has_mixed_selection_edit(command)) {
+                        validate_mixed_selection_edit_mode(command);
+#ifdef VERTEX_HAS_CONSTRAINT_AUTHORING
+                        result[index]=result[index] || mixed_selection_edit_source_phase_policy(
+                            command.mixed_selection_edit_intent,history[index-1].entities);
 #endif
                     } else result[index]=result[index] || mixed_clipboard_placement_policy(command) ||
                         !phase_constraint_authoring_proofs(command).empty();
@@ -5212,7 +5239,8 @@ static const std::map<std::string,Entity,std::less<>>* room_dimension_original_s
 }
 
 static void validate_room_review_lifetime(const nlohmann::json& encoded,
-    const std::vector<RevisionRecord>& history,std::size_t preceding_records) {
+    const std::vector<RevisionRecord>& history,std::size_t preceding_records,
+    bool complete_selection_owned_tokens=false) {
     const auto intent=decode_physical_wall_room_review_intent(encoded);
     std::set<std::string,std::less<>> fresh;
     const auto reserve=[&](const std::string& id) {
@@ -5227,6 +5255,18 @@ static void validate_room_review_lifetime(const nlohmann::json& encoded,
     }
     for (const auto& decision:intent.retained)
         for (const auto& id:decision.replacement_dimension_ids) reserve(id);
+#ifdef VERTEX_HAS_CONSTRAINT_AUTHORING
+    if (complete_selection_owned_tokens) {
+        const std::set<std::string,std::less<>> complete_fresh(fresh.begin(),fresh.end());
+        if (complete_fresh.empty()) return;
+        for (std::size_t index=0;index<preceding_records;++index)
+            validate_selection_edit_fresh_identity_tokens(history.at(index).entities,complete_fresh);
+        return;
+    }
+#else
+    if (complete_selection_owned_tokens)
+        throw std::invalid_argument("Complete selected-room identity lifetime requires the production authoring engine");
+#endif
     for (std::size_t index=0;index<preceding_records;++index) {
         for (const auto& [id,entity]:history[index].entities) {
             if (fresh.contains(id)) throw std::invalid_argument("Room review identity was already used in retained history: "+id);
@@ -10187,7 +10227,8 @@ Revision Document::apply(const Command& command) {
                 if (has_mixed_selection_edit(typed_command)) {
                     (void)command_to_json(Command{typed_command});
 #ifdef VERTEX_HAS_CONSTRAINT_AUTHORING
-                    next_active_policy=source_active_policy || mixed_selection_edit_active_phase_policy(typed_command.mixed_selection_edit_intent);
+                    next_active_policy=source_active_policy || mixed_selection_edit_source_phase_policy(
+                        typed_command.mixed_selection_edit_intent,current.entities);
 #else
                     document_error(DocumentErrorCode::invalid_entity,"Mixed selection edit requires the production authoring engine");
 #endif
@@ -10259,9 +10300,14 @@ Revision Document::apply(const Command& command) {
                 if (has_mixed_selection_edit(typed_command)) {
 #ifdef VERTEX_HAS_CONSTRAINT_AUTHORING
                     try {
+                        const auto reviews=mixed_selection_edit_room_reviews(typed_command.mixed_selection_edit_intent);
+#ifdef VERTEX_HAS_PHYSICAL_ROOM_REVIEW
+                        for (const auto& review:reviews)
+                            validate_room_review_lifetime(review,history_,history_.size(),true);
+#endif
                         next.entities=replay_mixed_selection_edit(snapshot(),typed_command.mixed_selection_edit_intent);
                         validate_active_design_preserved_dependents(current.entities,next.entities,
-                            phase_constraint_authoring_preserves_registries(typed_command),false);
+                            phase_constraint_authoring_preserves_registries(typed_command) && reviews.empty(),!reviews.empty());
                     } catch (const DocumentError&) { throw; }
                     catch (const std::exception& error) { document_error(DocumentErrorCode::invalid_entity,error.what()); }
 #else
@@ -10869,9 +10915,14 @@ Document Document::restore(DocumentSnapshot snapshot) {
                             throw std::invalid_argument("Mixed selection edit source policy differs from admitted ancestry");
                         seal_snapshot_admission(prefix,*prior_boundary_history,*prior_stair_history,
                             prior_unsupported_history);
+                        const auto reviews=mixed_selection_edit_room_reviews(proof.mixed_selection_edit_intent);
+#ifdef VERTEX_HAS_PHYSICAL_ROOM_REVIEW
+                        for (const auto& review:reviews)
+                            validate_room_review_lifetime(review,snapshot.history(),index,true);
+#endif
                         expected.entities=replay_mixed_selection_edit(prefix,proof.mixed_selection_edit_intent);
                         validate_active_design_preserved_dependents(previous.entities,expected.entities,
-                            phase_constraint_authoring_preserves_registries(proof),false);
+                            phase_constraint_authoring_preserves_registries(proof) && reviews.empty(),!reviews.empty());
 #else
                         throw std::invalid_argument("Mixed selection edit requires the production authoring engine");
 #endif

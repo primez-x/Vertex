@@ -1,4 +1,32 @@
-# Vertex project formats v1 through v189
+# Vertex project formats v1 through v190
+
+## Mixed reviewed geometry edits (v190, source integration)
+
+Envelope52 now accepts explicit mixed edit dialect three paired with ordinary
+request dialect three. Earlier dialects retain their exact fields and replay.
+The ordinary request adds `geometry`, either null or exactly
+`{request,room_reviews}`. `request` is the canonical selected-geometry dialect
+one with enclosing revision/message and explicit sorted roots. `room_reviews`
+contains at most thirty-two canonical typed physical-room review intents in
+sequential replay order. Explicit geometry roots count toward the aggregate
+one-thousand-member selection budget and cannot overlap another persisted-owner
+lane. Geometry operators are rigid XY; uniform/directional geometry scaling and
+ordinary design-phase replacement remain required extensions.
+
+Every leaf derives from the same complete original snapshot. Geometry replay
+authenticates all required room planes, explicit dispositions, surviving callout
+placements and acknowledged reference removals. The ordinary and roof leaves
+cannot change its wall/room/constraint consequences. Only independently replayed
+retired physical rooms gain erasure authority; shared annotation edits preserve
+source-relative field conflicts and reviewed cleanup. Raw entity candidates or
+extra command fields cannot supply geometry authority.
+
+The exclusive Document command reserves room identities against retained and
+undone history, admits the final complete state and publishes one history event.
+Saved-phase constraint policy follows the actual original source in live and
+chronological replay. Reader190/extraction188 are required for direct, nested,
+retained and undone dialect-three commands. Desktop routing and runtime
+qualification are still required; the candidate-map helper is not publication.
 
 ## Carried corner-window rigid callouts (v189, source integration)
 

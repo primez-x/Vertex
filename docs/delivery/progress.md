@@ -14,6 +14,38 @@ changed source does not acquire runtime acceptance without later qualification.
 
 ## Current delivery state
 
+### October 10 complete mixed geometry command - source integration
+
+Reviewed selected geometry and corner callouts are committed and pushed as
+e8b2da69, with exact local/remote ref verification. The next batch adds closed
+ordinary/mixed edit dialect three under exclusive envelope52 and reader190/
+extraction188. Actual geometry roots and every required typed room review share
+the complete original snapshot with independently admitted furniture, reference,
+architectural and roof-child edits. Pure candidate replay is separate from raw
+entity-change publication. The final command owns full state/identity admission,
+including fresh room identities against retained and undone history.
+
+The reviewed composer admits exact explicit physical-room retirement while
+protecting independently replayed wall/room/constraint consequences. Shared
+annotation changes must retain reviewed cleanup and field conflicts. Saved-phase
+constraint policy is derived from original entities consistently in live and
+chronological replay. Independent source review approves the core integration
+after correcting three gaps: an empty roof roster now admits standalone reviewed
+geometry, fresh room identities are checked against all explicitly owned tokens
+in retained and undone states, and room cleanup preserves baseline registry
+membership and an emptied saved view's restriction. Historical dialects retain
+their original behavior. Root reviewed the integrated source; runtime evidence
+is absent.
+
+The desktop room-dialog adapter is written but not yet connected to complete
+mixed transform publication. It collects every mandatory context/plane and
+permits explicit removal of selected dimensions only in the new opt-in route.
+That separate source batch is under bounded review; it is not installed.
+Complete mixed Properties, plan/native preview and release, ordinary phase
+replacement, geometry scaling and independent child reflection remain required.
+No builds, tests/new tests, probes, native jobs, launches, packages or
+installations run; the installed app is unchanged and all ten gates remain open.
+
 ### October 10 source-selected geometry and corner callouts - integration
 
 Mixed presentation scaling is committed and pushed as 524926a4, with exact

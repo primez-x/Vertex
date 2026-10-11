@@ -23,6 +23,7 @@
 #include "sketch/phase_structural_replacement.hpp"
 #include "sketch/phase_wall_replacement_command.hpp"
 #include "sketch/phase_wall_demolition_authoring.hpp"
+#include "sketch/physical_wall_room_review.hpp"
 #include "sketch/model_phases.hpp"
 #include "sketch/measurement_linework.hpp"
 #include "sketch/roof_join_phase_ownership.hpp"
@@ -849,9 +850,11 @@ Entity merge_demolition_catalog(const Entity& source,const std::vector<const Ent
 }
 
 Entity merge_demolition_row_container(const Entity& source,const std::vector<const Entity*>& candidates,
-    bool ordinary_removal_rosters=false,bool allow_shared_reference_retirement=false) {
+    bool ordinary_removal_rosters=false,bool allow_shared_reference_retirement=false,
+    bool coalesce_exact_consequences=false) {
     if (source.type!=kSheetViewEntityType)
-        return merge_source_row_container(source,candidates,ordinary_removal_rosters,allow_shared_reference_retirement);
+        return merge_source_row_container(source,candidates,ordinary_removal_rosters,allow_shared_reference_retirement,
+            coalesce_exact_consequences);
     std::vector<Entity> normalized;
     normalized.reserve(candidates.size());
     const auto& source_views=source.properties.at("model").at("views");
@@ -877,7 +880,7 @@ Entity merge_demolition_row_container(const Entity& source,const std::vector<con
     }
     std::vector<const Entity*> rows;
     for (const auto& candidate:normalized) rows.push_back(&candidate);
-    auto result=merge_source_row_container(source,rows,false,allow_shared_reference_retirement);
+    auto result=merge_source_row_container(source,rows,false,allow_shared_reference_retirement,coalesce_exact_consequences);
     auto& views=result.properties.at("model").at("views");
     for (std::size_t i=0;i<views.size();++i)
         if (source_views.at(i).contains("object_ids") && views.at(i).contains("object_ids") &&
@@ -1902,10 +1905,114 @@ MixedEditIdentityOwners mixed_edit_identity_owners(const Entities& entities) {
     }
     return owners;
 }
-} // namespace
 
-Entities compose_mixed_selection_edit_candidates(const Entities& actual,
-    const std::vector<Entities>& independently_admitted_candidates) {
+// Only the typed replay's actual removals qualify this normalization. Restore
+// no removed rows when joining selected annotation children with area callouts.
+Entity merge_reviewed_geometry_annotation_rows(const Entity& original,const Entity& geometry,
+    const std::vector<const Entity*>& ordinary,const std::set<std::string,std::less<>>& removed_targets) {
+    validate_annotation_entity(geometry);
+    using Target=std::pair<std::string,std::string>;
+    std::set<Target> surviving;
+    for (const auto& row:geometry.properties.at("state").at("overrides"))
+        surviving.emplace(row.at("target_id").get<std::string>(),row.at("target_kind").get<std::string>());
+    const auto clean=[&](Entity entity) {
+        validate_annotation_entity(entity);
+        auto& rows=entity.properties.at("state").at("overrides");
+        rows.erase(std::remove_if(rows.begin(),rows.end(),[&](const auto& row) {
+            const auto target=row.at("target_id").template get<std::string>();
+            return removed_targets.contains(target) &&
+                !surviving.contains({target,row.at("target_kind").template get<std::string>()});
+        }),rows.end());
+        return entity;
+    };
+    auto baseline=clean(original);
+    auto result=geometry;
+    bool promoted=geometry.properties.at("state").at("version").get<int>()>=3;
+    for (const auto* lane:ordinary)
+        promoted=promoted || lane->properties.at("state").at("version").get<int>()>=3;
+    if (promoted) {
+        baseline=promote_mixed_annotation_axes(std::move(baseline));
+        result=promote_mixed_annotation_axes(std::move(result));
+    }
+    const auto retain_envelope=[&](const Entity& lane) {
+        auto envelope=lane;
+        for (const auto* table:{"labels","symbols","overrides"})
+            envelope.properties.at("state").at(table)=baseline.properties.at("state").at(table);
+        envelope.properties.at("state").at("version")=baseline.properties.at("state").at("version");
+        if (!exact(baseline,envelope))
+            invalid("Reviewed geometry annotation changed fields outside its source row authority");
+    };
+    retain_envelope(result);
+    // Verify geometry's only added rows through the source-callout codec before
+    // any ordinary replacement suffix is considered. Its proof owns neither
+    // copied labels/symbols nor arbitrary added override targets.
+    result=merge_selection_annotation_entities(baseline,result,baseline,
+        AnnotationMergeMode::source_callout_geometry);
+    std::map<std::string,Json,std::less<>> suffixes;
+    for (const auto* lane:ordinary) {
+        auto normalized=clean(*lane);
+        if (promoted) normalized=promote_mixed_annotation_axes(std::move(normalized));
+        retain_envelope(normalized);
+        for (const auto* table:{"labels","symbols","overrides"}) {
+            const auto identity=[&](const Json& row) -> Target {
+                if (std::string_view(table)=="overrides")
+                    return {row.at("target_id").get<std::string>(),row.at("target_kind").get<std::string>()};
+                return {row.at("id").get<std::string>(),{}};
+            };
+            const auto& retained=baseline.properties.at("state").at(table);
+            std::map<Target,std::size_t> source_rows;
+            for (std::size_t index=0;index<retained.size();++index)
+                if (!source_rows.emplace(identity(retained[index]),index).second)
+                    invalid("Reviewed geometry annotation source row identity is ambiguous");
+            auto prefix=Json::array();
+            auto& suffix=suffixes.try_emplace(table,Json::array()).first->second;
+            bool appended=false;
+            std::size_t next{};
+            for (const auto& row:normalized.properties.at("state").at(table)) {
+                const auto found=source_rows.find(identity(row));
+                if (found==source_rows.end()) { appended=true; suffix.push_back(row); }
+                else {
+                    if (appended || found->second!=next++)
+                        invalid("Reviewed ordinary annotation changed source row identities or order");
+                    prefix.push_back(row);
+                }
+            }
+            if (next!=retained.size())
+                invalid("Reviewed ordinary annotation cannot remove a surviving source row");
+            normalized.properties.at("state").at(table)=std::move(prefix);
+        }
+        result=merge_selection_annotation_entities(baseline,result,normalized,
+            AnnotationMergeMode::source_callout_geometry);
+    }
+    // Complete ordinary leaf replay alone admits these exact copied rows.
+    // Coalesce identical references only; incompatible same-identity rows refuse.
+    // Fresh child ownership across lanes was already checked by the composer.
+    for (const auto& [table,suffix]:suffixes) {
+        auto& rows=result.properties.at("state").at(table);
+        const auto identity=[&](const Json& row) -> Target {
+            if (table=="overrides")
+                return {row.at("target_id").get<std::string>(),row.at("target_kind").get<std::string>()};
+            return {row.at("id").get<std::string>(),{}};
+        };
+        std::map<Target,std::size_t> destinations;
+        for (std::size_t index=0;index<rows.size();++index)
+            if (!destinations.emplace(identity(rows[index]),index).second)
+                invalid("Reviewed geometry annotation destination identity is ambiguous");
+        for (const auto& row:suffix) {
+            const auto [found,inserted]=destinations.emplace(identity(row),rows.size());
+            if (inserted) rows.push_back(row);
+            else if (!exact_json(rows[found->second],row))
+                invalid("Reviewed ordinary annotation suffix conflicts with an admitted destination");
+        }
+    }
+    validate_annotation_entity(result);
+    return result;
+}
+
+Entities compose_mixed_selection_edit_candidates_impl(const Entities& actual,
+    const std::vector<Entities>& independently_admitted_candidates,
+    const std::set<std::string,std::less<>>* retired_rooms=nullptr,
+    const std::set<std::string,std::less<>>* removed_annotation_targets=nullptr) {
     coordinated_map_budget(actual);
     if (independently_admitted_candidates.empty() || independently_admitted_candidates.size()>5)
         invalid("Mixed edit composition requires one to five independently admitted actual-source candidates");
@@ -1967,7 +2074,8 @@ Entities compose_mixed_selection_edit_candidates(const Entities& actual,
             const bool constraint=original.type=="constraint" && decode_constraint_entity(original).supported();
             const bool annotation=original.type==kAnnotationEntityType;
             if (annotation) validate_annotation_entity(original);
-            if (!dimension && !constraint && !annotation)
+            const bool reviewed_room=retired_rooms && retired_rooms->contains(key);
+            if (!dimension && !constraint && !annotation && !reviewed_room)
                 invalid("Mixed edit erasure lacks a supported reference-cleanup owner");
             result.erase(key);
             continue;
@@ -1977,10 +2085,21 @@ Entities compose_mixed_selection_edit_candidates(const Entities& actual,
             invalid("Mixed edit changed an actual retained baseline owner");
         if (original.type=="assembly_model")
             result.at(key)=merge_mixed_edit_instance_rows(original,changes);
-        else if (original.type==kAnnotationEntityType)
-            result.at(key)=merge_mixed_edit_annotation_rows(original,changes);
-        else if (original.type=="model_phases" || original.type==kSheetViewEntityType)
-            result.at(key)=merge_source_row_container(original,changes,false,false,true);
+        else if (original.type==kAnnotationEntityType) {
+            if (removed_annotation_targets) {
+                std::vector<const Entity*> ordinary;
+                for (std::size_t index=1;index<independently_admitted_candidates.size();++index)
+                    ordinary.push_back(&independently_admitted_candidates[index].at(key));
+                result.at(key)=merge_reviewed_geometry_annotation_rows(original,
+                    independently_admitted_candidates.front().at(key),ordinary,*removed_annotation_targets);
+            } else result.at(key)=merge_mixed_edit_annotation_rows(original,changes);
+        }
+        else if (original.type=="model_phases")
+            result.at(key)=merge_source_row_container(original,changes,removed_annotation_targets!=nullptr,false,true);
+        else if (original.type==kSheetViewEntityType)
+            result.at(key)=removed_annotation_targets
+                ? merge_demolition_row_container(original,changes,false,true,true)
+                : merge_source_row_container(original,changes,false,false,true);
         else if (changes.size()==1) result.at(key)=*changes.front();
         else invalid("Mixed edit leaves have conflicting consequences for one physical owner");
     }
@@ -2017,6 +2136,95 @@ Entities compose_mixed_selection_edit_candidates(const Entities& actual,
     }
     (void)constraint_phase_scope(result);
     validate_document_assembly_instances(result);
+    return result;
+}
+
+bool reviewed_geometry_owner(const Entity& entity,const Entities& actual,const Entities& geometry) {
+    if (entity.type=="wall" || is_physical_wall_room(entity) || entity.type=="constraint") return true;
+    if (!can_recognize_boundary_dimension_entity_type(entity.type)) return false;
+    const auto dimension=decode_boundary_dimension_entity(entity);
+    // Unknown dimensions stay opaque; composition cannot supply new authority.
+    if (!dimension.supported()) return true;
+    if (dimension.dimension->kind==BoundaryDimensionKind::wall_axis_length ||
+        dimension.dimension->kind==BoundaryDimensionKind::corner_window_leg_length) return true;
+    for (const auto* map:{&actual,&geometry}) {
+        const auto owner=map->find(dimension.dimension->boundary_id);
+        if (owner!=map->end() && (owner->second.type=="wall" || is_physical_wall_room(owner->second))) return true;
+    }
+    return false;
+}
+} // namespace
+
+Entities compose_mixed_selection_edit_candidates(const Entities& actual,
+    const std::vector<Entities>& independently_admitted_candidates) {
+    return compose_mixed_selection_edit_candidates_impl(actual,independently_admitted_candidates);
+}
+
+void validate_selection_edit_fresh_identity_tokens(const Entities& retained,
+    const std::set<std::string,std::less<>>& fresh) {
+    if (fresh.empty()) return;
+    coordinated_map_budget(retained);
+    const auto owned=mixed_edit_identity_owners(retained);
+    for (const auto& token:fresh) if (owned.contains(token))
+        invalid("Reviewed room identity was already owned in retained history: "+token);
+    for (const auto& [binding,alias]:embedded_assembly_presentation_ids(retained)) {
+        (void)binding;
+        if (fresh.contains(alias))
+            invalid("Reviewed room identity reuses a retained component render alias: "+alias);
+    }
+}
+
+Entities compose_reviewed_geometry_selection_edit_candidates(const Entities& actual,
+    const ReplayedPhysicalWallRoomReview& independently_replayed_geometry,
+    const std::vector<Entities>& independently_admitted_ordinary_candidates) {
+    coordinated_map_budget(actual);
+    const auto& geometry=independently_replayed_geometry.entities;
+    coordinated_map_budget(geometry);
+    if (independently_admitted_ordinary_candidates.size()>4 || independently_replayed_geometry.retired_room_ids.size()>4096)
+        invalid("Reviewed geometry composition exceeds its actual-source lane or retirement budget");
+    std::set<std::string,std::less<>> retired,removed_targets;
+    for (const auto& room_id:independently_replayed_geometry.retired_room_ids) {
+        const auto room=actual.find(room_id);
+        if (!retired.insert(room_id).second || room==actual.end() || room->second.id!=room_id ||
+            !is_physical_wall_room(room->second) || geometry.contains(room_id) ||
+            validate_physical_wall_room_descriptor(room->second))
+            invalid("Reviewed geometry retirement requires a unique actual supported physical room absent from replay");
+        (void)decode_identified_boundary_entity(room->second);
+        removed_targets.insert(room_id);
+    }
+    for (const auto& [key,entity]:actual) if (!geometry.contains(key) &&
+        ((entity.type=="constraint" && decode_constraint_entity(entity).supported()) ||
+         (can_recognize_boundary_dimension_entity_type(entity.type) && decode_boundary_dimension_entity(entity).supported())))
+        removed_targets.insert(key);
+    for (const auto& lane:independently_admitted_ordinary_candidates) {
+        coordinated_map_budget(lane);
+        for (const auto& [key,entity]:actual) {
+            const auto next=lane.find(key);
+            if ((reviewed_geometry_owner(entity,actual,geometry) ||
+                (next!=lane.end() && reviewed_geometry_owner(next->second,actual,geometry))) &&
+                (next==lane.end() || !exact(entity,next->second)))
+                invalid("Ordinary reviewed-selection lane changed a protected geometry owner");
+        }
+        for (const auto& [key,entity]:lane) if (!actual.contains(key) && reviewed_geometry_owner(entity,actual,geometry))
+            invalid("Ordinary reviewed-selection lane introduced a protected geometry owner");
+    }
+    std::vector<Entities> lanes;
+    lanes.reserve(1+independently_admitted_ordinary_candidates.size());
+    lanes.push_back(geometry);
+    lanes.insert(lanes.end(),independently_admitted_ordinary_candidates.begin(),independently_admitted_ordinary_candidates.end());
+    auto result=compose_mixed_selection_edit_candidates_impl(actual,lanes,&retired,&removed_targets);
+    const auto retain_geometry=[&](const Entities& owners) {
+        for (const auto& [key,entity]:owners) if (reviewed_geometry_owner(entity,actual,geometry)) {
+            const auto expected=geometry.find(key);
+            const auto final=result.find(key);
+            if ((expected==geometry.end())!=(final==result.end()) ||
+                (expected!=geometry.end() && !exact(expected->second,final->second)))
+                invalid("Reviewed selection composition changed an exact typed geometry consequence");
+        }
+    };
+    retain_geometry(actual);
+    retain_geometry(geometry);
+    retain_geometry(result);
     return result;
 }
 

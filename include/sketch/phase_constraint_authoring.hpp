@@ -3,10 +3,20 @@
 #include "sketch/constraint_authoring.hpp"
 
 #include <vector>
+#include <set>
 
 namespace sketch {
 
 struct PhaseWallReplacementAuthoringPreview;
+struct ReplayedPhysicalWallRoomReview;
+
+// Collision fence for newly declared global identities against one retained
+// state, including known owned topology/children and render aliases. References
+// and qualified catalog-local instance IDs are not global ownership authority.
+// This validates lifetime only; it cannot admit an edit or create identities.
+void validate_selection_edit_fresh_identity_tokens(
+    const std::map<std::string,Entity,std::less<>>& retained,
+    const std::set<std::string,std::less<>>& fresh);
 
 // Versioned semantic authority. Geometry payloads are outputs of replay;
 // every source binding and saved phase choice describes the actual source.
@@ -140,6 +150,19 @@ struct PhaseConstraintAuthoringIntent {
 [[nodiscard]] std::map<std::string,Entity,std::less<>> compose_mixed_selection_edit_candidates(
     const std::map<std::string,Entity,std::less<>>& actual,
     const std::vector<std::map<std::string,Entity,std::less<>>>& independently_admitted_candidates);
+
+// The complete typed geometry/review replay is the first composition lane;
+// ordinary lanes must be independently admitted against this same actual
+// source. Only its explicitly retired supported physical rooms gain owner
+// erasure authority. Walls, physical rooms, constraints and wall/room callouts
+// retain the exact geometry result. Reviewed reference/room override cleanup
+// composes with independent annotation children without restoring removed rows.
+// This grants neither replay admission nor captured-source/publication authority;
+// the caller must independently rederive the complete typed geometry result.
+[[nodiscard]] std::map<std::string,Entity,std::less<>> compose_reviewed_geometry_selection_edit_candidates(
+    const std::map<std::string,Entity,std::less<>>& actual,
+    const ReplayedPhysicalWallRoomReview& independently_replayed_geometry,
+    const std::vector<std::map<std::string,Entity,std::less<>>>& independently_admitted_ordinary_candidates);
 
 // Internal composition of independently admitted demolition leaves. Complete
 // typed leaf replay owns removals and fresh destinations; overlapping changes

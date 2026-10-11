@@ -384,6 +384,8 @@ std::uint32_t required_format_version_internal(const DocumentSnapshot& snapshot,
                 const auto& intent=value.at("mixed_selection_edit_intent");
                 if (intent.is_object() && intent.value("version",nlohmann::json())==2)
                     floor=std::max(floor,188U);
+                if (intent.is_object() && intent.value("version",nlohmann::json())==3)
+                    floor=std::max(floor,190U);
             }
             if (value.is_object() && value.value("kind",nlohmann::json())=="corner_removal" &&
                 value.value("version",nlohmann::json())==4 && value.contains("selected_cut_ids"))
@@ -575,9 +577,9 @@ std::uint32_t required_format_version_internal(const DocumentSnapshot& snapshot,
     };
     for (const auto& revision : snapshot.history()) {
         if (revision.phase_entity_import) required=std::max(required,160U);
-        if (required<189 && revision.boundary_geometry_edit)
+        if (required<190 && revision.boundary_geometry_edit)
             required=std::max(required,typed_edit_reader_floor(encode_boundary_geometry_edit(*revision.boundary_geometry_edit)));
-        if (required<189 && revision.boundary_constraint_changes)
+        if (required<190 && revision.boundary_constraint_changes)
             required=std::max(required,typed_edit_reader_floor(command_to_json(Command{*revision.boundary_constraint_changes})));
         if (required<122 && revision.boundary_geometry_edit)
             required=std::max(required,quantity_reader_floor(encode_boundary_geometry_edit(*revision.boundary_geometry_edit)));
@@ -593,6 +595,9 @@ std::uint32_t required_format_version_internal(const DocumentSnapshot& snapshot,
                 if (edits.mixed_selection_edit_intent.is_object() &&
                     edits.mixed_selection_edit_intent.value("version",nlohmann::json())==2)
                     required=std::max(required,188U);
+                if (edits.mixed_selection_edit_intent.is_object() &&
+                    edits.mixed_selection_edit_intent.value("version",nlohmann::json())==3)
+                    required=std::max(required,190U);
             }
             if (edits.wall_group_scale_completion || edits.wall_group_scale)
                 required=std::max(required,173U);
@@ -2990,6 +2995,7 @@ bool verify_sqlite_schema(sqlite3* database, bool allow_recovery = false) {
          sqlite3_column_int(user_version.get(), 0) != 187 &&
          sqlite3_column_int(user_version.get(), 0) != 188 &&
          sqlite3_column_int(user_version.get(), 0) != 189 &&
+         sqlite3_column_int(user_version.get(), 0) != 190 &&
          sqlite3_column_int(user_version.get(), 0) != 174 &&
          sqlite3_column_int(user_version.get(), 0) != 169 &&
          sqlite3_column_int(user_version.get(), 0) != 163 &&
@@ -3712,6 +3718,8 @@ DocumentSnapshot read_snapshot(sqlite3* database, RecoveryLedger* recovery = nul
     // here and authenticate the manifest with its stored version below.
     const auto required_format = required_format_version_internal(snapshot, format_number < 28);
     if (required_format > format_number) {
+        if (required_format>=190)
+            storage_error(StorageErrorCode::unsupported_format,"This project requires reader 190 for mixed reviewed geometry edits and retained history");
         if (required_format>=189)
             storage_error(StorageErrorCode::unsupported_format,"This project requires reader 189 for rigid corner-window callout completion and retained history");
         if (required_format>=188)

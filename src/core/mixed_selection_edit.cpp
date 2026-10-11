@@ -8,6 +8,7 @@
 #include "sketch/physical_wall_room_data.hpp"
 #include "sketch/project_store.hpp"
 #include "sketch/roof_opening_group_edit.hpp"
+#include "sketch/selection_geometry_review.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -107,8 +108,9 @@ struct Member {
     MemberKey key;
     bool carried{};
 };
-std::vector<Member> members(const Json& value) {
-    if (!value.is_array() || value.empty() || value.size() > 1000) reject("requires one to 1000 roof children");
+std::vector<Member> members(const Json& value,bool allow_empty=false) {
+    if (!value.is_array() || (!allow_empty && value.empty()) || value.size() > 1000)
+        reject("requires a supported bounded roof-child roster");
     std::vector<Member> result;
     std::optional<MemberKey> previous;
     for (const auto& row : value) {
@@ -160,7 +162,7 @@ void validate(const Json& value) {
     fields(value, {"version", "expected_revision", "source_snapshot_digest", "source_authoring_digest",
         "source_entities_digest", "source_saved_revision", "ordinary_request", "roof_authoring", "roof_opening_members", "message"});
     if (!value.at("version").is_number_integer() ||
-        (value.at("version") != 1 && value.at("version") != 2)) reject("unsupported intent version");
+        (value.at("version") != 1 && value.at("version") != 2 && value.at("version") != 3)) reject("unsupported intent version");
     const auto expected = revision(value.at("expected_revision"));
     if (expected == std::numeric_limits<Revision>::max()) reject("source revision cannot advance");
     for (const auto* key : {"source_snapshot_digest", "source_authoring_digest", "source_entities_digest"}) digest(value.at(key));
@@ -171,9 +173,11 @@ void validate(const Json& value) {
     if (ordinary.at("version") != value.at("version")) reject("ordinary request requires its matching mixed intent dialect");
     if (ordinary.dump() != value.at("ordinary_request").dump() || revision(ordinary.at("expected_revision")) != expected)
         reject("ordinary request is not canonical or binds another revision");
-    const auto selected = members(value.at("roof_opening_members"));
+    const auto selected = members(value.at("roof_opening_members"),value.at("version") == 3);
     std::size_t count = selected.size();
     for (const auto* lane : {"architectural", "embedded", "annotations", "references"}) count += ordinary.at(lane).size();
+    if (ordinary.at("version") == 3 && !ordinary.at("geometry").is_null())
+        count += ordinary.at("geometry").at("request").at("roots").size();
     if (count > 1000) reject("aggregate selection exceeds 1000 members");
     const auto parents = explicit_parents(ordinary);
     std::set<MemberKey> independent;
@@ -299,6 +303,14 @@ Json validate_mixed_selection_edit_intent(const Json& value) {
 bool mixed_selection_edit_active_phase_policy(const Json& value) {
     validate(value); return !value.at("roof_authoring").is_null();
 }
+bool mixed_selection_edit_has_geometry(const Json& value) {
+    validate(value);
+    return value.at("version") == 3 && !value.at("ordinary_request").at("geometry").is_null();
+}
+std::vector<Json> mixed_selection_edit_room_reviews(const Json& value) {
+    validate(value);
+    return ordinary_selection_edit_room_reviews(value.at("ordinary_request"));
+}
 std::optional<Revision> mixed_selection_edit_source_saved_revision(const Json& value) {
     validate(value);
     return value.at("source_saved_revision").is_null() ? std::nullopt :
@@ -321,14 +333,26 @@ Entities replay_mixed_selection_edit(const DocumentSnapshot& source, const Json&
     const auto key = std::pair{source_digest, value.dump()};
     if (const auto found = replay_memo->results.find(key); found != replay_memo->results.end()) return found->second;
     Replaying replaying(key);
-    const auto selected = members(value.at("roof_opening_members"));
+    const auto selected = members(value.at("roof_opening_members"),value.at("version") == 3);
     for (const auto& member : selected) (void)child_row(source.entities(), member.key);
 
     // Complete closed producers and previews use ORIGINAL source. Neither
     // detached result is ever supplied as authority to the other leaf.
-    const auto ordinary = replay_ordinary_selection_edit(source, value.at("ordinary_request"));
-    if (ordinary.expected_revision != source.revision() || !ordinary.asset_changes.empty()) reject("ordinary leaf changed revision or assets");
-    const auto ordinary_stage = Document::preview_command(source, Command{ordinary});
+    auto ordinary_request = value.at("ordinary_request");
+    const bool reviewed_geometry = ordinary_request.at("version") == 3 && !ordinary_request.at("geometry").is_null();
+    if (ordinary_request.at("version") == 3) {
+        ordinary_request.erase("geometry");
+        ordinary_request["version"] = 2;
+    }
+    const bool ordinary_empty = ordinary_request.at("architectural").empty() &&
+        ordinary_request.at("embedded").empty() && ordinary_request.at("annotations").empty() &&
+        ordinary_request.at("references").empty();
+    auto ordinary_stage = source;
+    if (!ordinary_empty) {
+        const auto ordinary = replay_ordinary_selection_edit(source, ordinary_request);
+        if (ordinary.expected_revision != source.revision() || !ordinary.asset_changes.empty()) reject("ordinary leaf changed revision or assets");
+        ordinary_stage = Document::preview_command(source, Command{ordinary});
+    }
     metadata(source, ordinary_stage);
     // The closed architectural producer above owns rigid reflection and uniform
     // scaling of the parent's complete child roster. These may legitimately
@@ -350,8 +374,17 @@ Entities replay_mixed_selection_edit(const DocumentSnapshot& source, const Json&
         leaves.push_back(roof_stage.entities());
     }
     for (const auto& leaf : leaves) preserve_wall_lane(source.entities(), leaf);
-    auto result = compose_mixed_selection_edit_candidates(source.entities(), leaves);
-    preserve_wall_lane(source.entities(), result);
+    Entities result;
+    if (reviewed_geometry) {
+        const auto& geometry = value.at("ordinary_request").at("geometry");
+        const auto reviewed = replay_selection_geometry_review(source,
+            decode_selection_geometry_transform_request(geometry.at("request")),
+            ordinary_selection_edit_room_reviews(value.at("ordinary_request")));
+        result = compose_reviewed_geometry_selection_edit_candidates(source.entities(), reviewed, leaves);
+    } else {
+        result = compose_mixed_selection_edit_candidates(source.entities(), leaves);
+        preserve_wall_lane(source.entities(), result);
+    }
     // Document owns complete final geometry, phase policy and retained-history
     // identity validation, followed by the only live publication.
     remember(key, result);

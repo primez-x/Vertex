@@ -4,6 +4,7 @@
 #include "sketch/assembly_document_adapter.hpp"
 #include "sketch/phase_constraint_authoring.hpp"
 #include "sketch/presentation_transform.hpp"
+#include "sketch/selection_geometry_review.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -204,12 +205,17 @@ PlanarTransform planar_transform(const Json& value, bool similarity = false) {
 void shape(const Json& request) {
     Budget budget;
     budget.json(request, 0);
-    fields(request, {"version", "expected_revision", "transaction_id", "architectural", "embedded",
+    const bool geometry_dialect = request.is_object() && request.contains("version") &&
+        request.at("version").is_number_integer() && request.at("version") == 3;
+    if (geometry_dialect)
+        fields(request, {"version", "expected_revision", "transaction_id", "architectural", "embedded",
+            "annotations", "references", "message", "geometry"});
+    else fields(request, {"version", "expected_revision", "transaction_id", "architectural", "embedded",
         "annotations", "references", "message"});
     if (!request.at("version").is_number_integer() ||
-        (request.at("version") != 1 && request.at("version") != 2))
+        (request.at("version") != 1 && request.at("version") != 2 && request.at("version") != 3))
         reject("unsupported request version");
-    const bool similarity = request.at("version") == 2;
+    const bool similarity = request.at("version") != 1;
     if (revision(request.at("expected_revision")) == std::numeric_limits<Revision>::max())
         reject("source revision cannot advance");
     (void)identity(request.at("transaction_id"));
@@ -225,6 +231,29 @@ void shape(const Json& request) {
         if (!rows.is_array() || rows.size() > target_limit - count)
             reject("selection exceeds 1000 targets or has an invalid array");
         count += rows.size();
+    }
+
+    Ids geometry_roots;
+    if (geometry_dialect && !request.at("geometry").is_null()) {
+        const auto& geometry = request.at("geometry");
+        fields(geometry, {"request", "room_reviews"});
+        const auto& reviews = geometry.at("room_reviews");
+        if (!reviews.is_array() || reviews.size() > 32)
+            reject("geometry room reviews must be an array of at most thirty-two intents");
+        const auto decoded = decode_selection_geometry_transform_request(geometry.at("request"));
+        if (encode_selection_geometry_transform_request(decoded).dump() != geometry.at("request").dump())
+            reject("geometry request must use its canonical typed encoding");
+        if (decoded.expected_revision != revision(request.at("expected_revision")) || decoded.message != message)
+            reject("geometry request revision and message must match the enclosing request");
+        if (decoded.roots.size() > target_limit - count)
+            reject("selection exceeds 1000 targets");
+        count += decoded.roots.size();
+        for (const auto& root : geometry.at("request").at("roots"))
+            if (!geometry_roots.insert(identity(root.at("root_id"))).second)
+                reject("repeated geometry root");
+        for (const auto& review : reviews)
+            if (encode_physical_wall_room_review_intent(decode_physical_wall_room_review_intent(review)).dump() !=
+                review.dump()) reject("room review must use its canonical typed encoding");
     }
     if (count == 0) reject("selection must contain at least one target");
 
@@ -260,6 +289,9 @@ void shape(const Json& request) {
             !references.insert(id).second) reject("overlapping or repeated reference owner");
         (void)planar_transform(row.at("transform"), similarity);
     }
+    for (const auto& root : geometry_roots)
+        if (objects.contains(root) || catalogs.contains(root) || annotation_owners.contains(root) ||
+            references.contains(root)) reject("geometry root overlaps another persisted owner lane");
 }
 
 const std::string& text(const Json& value, const char* key) {
@@ -316,6 +348,9 @@ Json ordinary_selection_edit_semantic_targets(const Json& request) {
         roster.push_back({{"kind", "annotation"}, {"owner_id", row.at("owner_id")}, {"child_id", row.at("child_id")}});
     for (const auto& row : canonical.at("embedded"))
         roster.push_back({{"kind", "embedded"}, {"catalog_id", row.at("catalog_id")}, {"instance_id", row.at("instance_id")}});
+    if (canonical.at("version") == 3 && !canonical.at("geometry").is_null())
+        for (const auto& root : canonical.at("geometry").at("request").at("roots"))
+            roster.push_back({{"kind", "geometry"}, {"entity_id", root.at("root_id")}});
     for (const auto& row : canonical.at("architectural"))
         roster.push_back({{"kind", "object"}, {"entity_id", row.at("entity_id")}});
     for (const auto& row : canonical.at("references"))
@@ -325,6 +360,8 @@ Json ordinary_selection_edit_semantic_targets(const Json& request) {
 
 ApplyEntityChanges replay_ordinary_selection_edit(const DocumentSnapshot& source, const Json& request) {
     const auto canonical = validate_ordinary_selection_edit_request(request);
+    if (canonical.at("version") == 3)
+        reject("version three requires typed candidate replay, not raw entity-change authority");
     const auto expected = revision(canonical.at("expected_revision"));
     if (source.revision() != expected)
         throw DocumentError(DocumentErrorCode::stale_revision, "The ordinary selection edit source changed.");
@@ -407,6 +444,51 @@ ApplyEntityChanges replay_ordinary_selection_edit(const DocumentSnapshot& source
             reject("final admission changed the composed raw result");
     }
     return result;
+}
+
+std::vector<Json> ordinary_selection_edit_room_reviews(const Json& request) {
+    const auto canonical = validate_ordinary_selection_edit_request(request);
+    if (canonical.at("version") != 3 || canonical.at("geometry").is_null()) return {};
+    return canonical.at("geometry").at("room_reviews").get<std::vector<Json>>();
+}
+
+Entities replay_ordinary_selection_edit_candidate(const DocumentSnapshot& source, const Json& request) {
+    const auto canonical = validate_ordinary_selection_edit_request(request);
+    const auto expected = revision(canonical.at("expected_revision"));
+    if (source.revision() != expected)
+        throw DocumentError(DocumentErrorCode::stale_revision, "The ordinary selection edit source changed.");
+    if (!source.is_editable())
+        throw DocumentError(DocumentErrorCode::read_only, "The ordinary selection edit source is read-only.");
+    const auto admit_ordinary = [&](const Json& ordinary) {
+        const auto command = replay_ordinary_selection_edit(source, ordinary);
+        const auto admitted = Document::preview_command(source, command);
+        unchanged_assets(source, admitted);
+        return Entities(admitted.entities());
+    };
+    if (canonical.at("version") != 3) return admit_ordinary(canonical);
+
+    std::vector<Entities> candidates;
+    const bool has_ordinary_targets = !canonical.at("architectural").empty() ||
+        !canonical.at("embedded").empty() || !canonical.at("annotations").empty() ||
+        !canonical.at("references").empty();
+    if (has_ordinary_targets) {
+        auto ordinary = canonical;
+        ordinary.erase("geometry");
+        ordinary["version"] = 2;
+        // All producer leaves remain independently admitted against this same
+        // original, never the geometry stage or a preceding leaf's candidate.
+        candidates.push_back(admit_ordinary(ordinary));
+    }
+    if (canonical.at("geometry").is_null()) return candidates.front();
+
+    const auto& geometry = canonical.at("geometry");
+    const auto reviewed = replay_selection_geometry_review(source,
+        decode_selection_geometry_transform_request(geometry.at("request")),
+        geometry.at("room_reviews").get<std::vector<Json>>());
+    // The typed replay owns geometry, topology and required room decisions.
+    // This returns only a complete map; enclosing Document admission retains
+    // identity-lifetime/history authority and final live-head publication.
+    return compose_reviewed_geometry_selection_edit_candidates(source.entities(), reviewed, candidates);
 }
 
 } // namespace sketch
