@@ -9,6 +9,7 @@
 #include "sketch/corner_window.hpp"
 #include "sketch/stair_semantics.hpp"
 #include "sketch/assembly_document_adapter.hpp"
+#include "sketch/roof_entity_codec.hpp"
 
 #include <AIS_InteractiveContext.hxx>
 #include <AIS_InteractiveObject.hxx>
@@ -962,6 +963,47 @@ public:
             owner->onRoofOpeningTransformRequested;
     }
 
+    // Elevation authority comes from every actual captured owner, never the
+    // proxy, primary member, compatibility host IDs or a cached eligibility bit.
+    // Typed children travel vertically only through an explicitly selected roof.
+    bool supports_coordinated_vertical_translation(const DocumentSnapshot& source,
+        const QStringList& ordinary, const std::vector<NativeRoofOpeningTarget>& children) const {
+        if (!source.is_editable() || ordinary.isEmpty()) return false;
+        for (const auto& selected : ordinary) {
+            const auto id=selected.toStdString();
+            const auto found=source.entities().find(id);
+            if (found!=source.entities().end()) {
+                const auto& type=found->second.type;
+                if (type!="roof" && type!="slab" && type!="column" && type!="beam" &&
+                    type!="stair" && type!="railing" && type!="assembly_instance") return false;
+            }
+            // Missing persisted IDs must resolve to genuine geometric embedded
+            // roots. Hosted rails require their explicitly selected real stair;
+            // a single-object predicate cannot admit that complete cohort.
+            if (!supports_coordinated_plan_member(id,source,ordinary)) return false;
+        }
+        for (const auto& child : children) {
+            if (!ordinary.contains(child.roof_id) || child.opening_id.isEmpty()) return false;
+            const auto roof=source.entities().find(child.roof_id.toStdString());
+            if (roof==source.entities().end() || roof->second.type!="roof") return false;
+            try {
+                const auto object=decode_roof_entity(roof->second);
+                const auto opening_id=child.opening_id.toStdString();
+                if (!std::visit([&opening_id](const auto& value) {
+                    return std::any_of(value.openings.begin(),value.openings.end(),[&opening_id](const auto& opening) {
+                        return opening.id==opening_id && opening.skylight.has_value();
+                    });
+                },object)) return false;
+            } catch (...) { return false; }
+        }
+        return true;
+    }
+
+    bool coordinated_vertical_translation_supported() const {
+        return coordinated_plan_transform_enabled() && published_snapshot &&
+            supports_coordinated_vertical_translation(*published_snapshot,selected_entity_ids,selected_roof_openings);
+    }
+
     bool supports_coordinated_plan_member(const std::string& id, const DocumentSnapshot& source,
         const QStringList& ordinary, bool require_editable_source=true) const {
         if (supports_direct_transform(id,source,require_editable_source)) return true;
@@ -981,6 +1023,17 @@ public:
             try {
                 const auto corner=parse_corner_window(found->second);
                 return selected_wall(corner.wall_ids[0]) && selected_wall(corner.wall_ids[1]);
+            } catch (...) { return false; }
+        }
+        if (found->second.type=="railing") {
+            try {
+                const auto rail=decode_railing_properties(id,found->second.properties);
+                const auto host=rail.host ? rail.host->stair_id :
+                    (rail.landing_host ? rail.landing_host->stair_id : std::string{});
+                const auto stair=source.entities().find(host);
+                return !host.empty() && ordinary.contains(QString::fromStdString(host)) &&
+                    stair!=source.entities().end() && stair->second.type=="stair" &&
+                    supports_direct_transform(host,source,require_editable_source);
             } catch (...) { return false; }
         }
         return false;
@@ -1092,7 +1145,8 @@ public:
         options.SetAdjustPosition(true).SetAdjustSize(false).SetEnableModes(true);
         auto group = occ::handle<NCollection_HSequence<occ::handle<AIS_InteractiveObject>>>(
             new NCollection_HSequence<occ::handle<AIS_InteractiveObject>>());
-        manipulator->SetPart(2, AIS_MM_Translation, !cohort);
+        manipulator->SetPart(2, AIS_MM_Translation, !cohort ||
+            (coordinated && coordinated_vertical_translation_supported()));
         // Restore the ordinary/single-child scaler handles when switching away
         // from a cohort whose projected extent disabled a directional axis.
         manipulator->SetPart(AIS_MM_Scaling, true);
@@ -1186,7 +1240,8 @@ public:
             if (coordinated) {
                 const auto mode=manipulator->ActiveMode();
                 const int axis=manipulator->ActiveAxisIndex();
-                if (!((mode==AIS_MM_Translation && (axis==0 || axis==1)) ||
+                if (!((mode==AIS_MM_Translation && (axis==0 || axis==1 ||
+                        (axis==2 && coordinated_vertical_translation_supported()))) ||
                     (mode==AIS_MM_Rotation && axis==2) || (mode==AIS_MM_Scaling && axis==2))) return false;
             }
             roof_transform_resize_axis.reset();
@@ -1473,9 +1528,14 @@ public:
         }
         auto pivot = gp_Pnt(roof_transform_pivot[0],roof_transform_pivot[1],roof_transform_pivot[2]);
         const auto moved = pivot.Transformed(transform);
+        const bool vertical=supports_coordinated_vertical_translation(*roof_transform_capture->source,
+            roof_transform_capture->selection,roof_transform_capture->roof_openings);
+        const auto delta_z=moved.Z()-pivot.Z();
         NativeRoofOpeningTransform proposal{roof_transform_capture->roof_openings,roof_transform_pivot,
-            {moved.X()-pivot.X(),moved.Y()-pivot.Y(),0.0},angle,scale};
-        if (std::abs(moved.Z()-pivot.Z()) > epsilon ||
+            {moved.X()-pivot.X(),moved.Y()-pivot.Y(),vertical ? delta_z : 0.0},angle,scale};
+        if (!std::isfinite(delta_z) || (!vertical && std::abs(delta_z)>epsilon) ||
+            (std::abs(delta_z)>epsilon && (std::abs(angle)>epsilon || std::abs(scale-1.0)>epsilon ||
+                manipulator.IsNull() || manipulator->ActiveMode()!=AIS_MM_Translation || manipulator->ActiveAxisIndex()!=2)) ||
             !std::isfinite(proposal.translation_world_m[0]) || !std::isfinite(proposal.translation_world_m[1])) {
             owner->cancelInteraction(); return;
         }
@@ -1510,8 +1570,12 @@ public:
                 owner->cancelInteraction(); return;
             }
         }
-        for (int i=0;i<2;++i) proposal.translation_world_m[i] =
+        for (int i=0;i<(vertical ? 3 : 2);++i) proposal.translation_world_m[i] =
             std::round(proposal.translation_world_m[i]/step)*step;
+        if (!std::all_of(proposal.translation_world_m.begin(),proposal.translation_world_m.end(),
+            [](double delta) { return std::isfinite(delta); })) {
+            owner->cancelInteraction(); return;
+        }
         if (!roof_transform_resize_axis && std::abs(scale-1.0) > epsilon) {
             const auto length = std::max(step,std::round(roof_transform_reference_length*scale/step)*step);
             proposal.uniform_scale = length/roof_transform_reference_length;
@@ -1532,12 +1596,16 @@ public:
         // Never retain an older admitted presentation under a newer proposal.
         if (!restore_roof_preview()) { owner->cancelInteraction(); return; }
         const double display_factor = roof_transform_metric_units ? 1.0 : 1.0/0.0254;
-        roof_transform_feedback = QStringLiteral("Skylights: ΔX %1 %5 · ΔY %2 %5 · %3° · size %4 %5 — checking")
+        const auto display_units=roof_transform_metric_units ? QStringLiteral("m") : QStringLiteral("in");
+        const auto vertical_feedback=vertical ? QStringLiteral(" · ΔZ %1 %2")
+            .arg(proposal.translation_world_m[2]*display_factor,0,'f',3).arg(display_units) : QString{};
+        roof_transform_feedback = QStringLiteral("Skylights: ΔX %1 %5 · ΔY %2 %5%6 · %3° · size %4 %5 — checking")
             .arg(proposal.translation_world_m[0]*display_factor,0,'f',3)
             .arg(proposal.translation_world_m[1]*display_factor,0,'f',3)
             .arg(proposal.rotation_radians*180.0/pi,0,'f',1)
             .arg(roof_transform_reference_length*proposal.uniform_scale*display_factor,0,'f',3)
-            .arg(roof_transform_metric_units ? QStringLiteral("m") : QStringLiteral("in"));
+            .arg(display_units)
+            .arg(vertical_feedback);
         if (!roof_transform_capture->selection.isEmpty())
             roof_transform_feedback.replace(QStringLiteral("Skylights:"),QStringLiteral("Selection:"));
         if (roof_transform_resize_axis) {
@@ -2482,7 +2550,8 @@ std::optional<NativeModelView::TransformControl> NativeModelView::transformContr
     if (m_impl->coordinated_plan_selection()) {
         if (!m_impl->coordinated_plan_transform_enabled() || !m_impl->coordinated_plan_callbacks_available() ||
             m_impl->roof_transform_proxy.IsNull()) return std::nullopt;
-        if (!((detected->Mode()==AIS_MM_Translation && (detected->Index()==0 || detected->Index()==1)) ||
+        if (!((detected->Mode()==AIS_MM_Translation && (detected->Index()==0 || detected->Index()==1 ||
+                (detected->Index()==2 && m_impl->coordinated_vertical_translation_supported()))) ||
             (detected->Mode()==AIS_MM_Rotation && detected->Index()==2) ||
             (detected->Mode()==AIS_MM_Scaling && detected->Index()==2))) return std::nullopt;
     }

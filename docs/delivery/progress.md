@@ -14,6 +14,43 @@ changed source does not acquire runtime acceptance without later qualification.
 
 ## Current delivery state
 
+### October 10 shared profile authoring and vertical 3D cohorts
+
+Alternative Properties integration is committed and pushed as 564e1bab, with
+exact local and remote branch references matched. The current source adds direct
+editing of stored component-profile outlines and cutouts through local vertices
+and signed circular sweeps. Analytical validation, a combined 1,024-segment
+budget and an actual geometry preview govern acceptance. Same-topology edits
+retain source endpoints and sweeps unless their values actually change. The
+existing shared-type impact preview and atomic update remain the publication
+path. Source-fenced 2D and 3D right-click actions expose Edit component type.
+
+Coordinated native Z controls now derive eligibility from the entire captured
+selection. Supported roofs, slabs, columns, beams, stairs, railings and genuine
+components use the existing explicit XYZ source producers; hosted railings need
+their actual selected stair, and typed skylights need their selected roof.
+Finite Z movement uses the existing length magnet and visible displacement.
+The shell retains source-frame movement rather than dropping Z. Current native
+pure-vertical gestures retain selected embedded rows as identity membership when
+their selected roof/slab/stair/railing carries them; exact original-source row replay
+proves that carry before accepting the complete preview.
+
+Independent review found selected hosted-rail eligibility and conflicting host
+plus embedded-row consequences. Root corrected both for this vertical workflow
+without relaxing historical producer/composer guards. Independent review approved
+the corrected bounded source integration with no remaining confirmed P1/P2 in
+the reviewed paths; scoped whitespace checking passed. No builds, tests, probes, native jobs, launches, packages or
+installations run; compilation, native interaction and history/reopen behavior
+remain unverified. The installed app is unchanged; all ten production gates
+remain open.
+
+Full wall-group vertical placement and room completion, protected-baseline
+component replacement, directional mixed geometry resizing and general carried
+embedded XY/rotation/scale gestures remain required. New profiles/cutouts still
+start from captured outlines; coordinated outer/cutout changes currently require
+each accepted draft to be valid. These limits remain implementation work, not
+qualification claims or scope exclusions.
+
 ### October 10 alternative Properties - command and workspace integration
 
 The source foundation is committed and pushed as 810478ec, with exact local and

@@ -18589,6 +18589,19 @@ public:
         return true;
     }
 
+    static std::optional<std::pair<std::string,std::string>> selectedAssemblyTypeBinding(
+        const DocumentSnapshot& source,const QString& selected_id) {
+        const auto persisted=source.entities().find(selected_id.toStdString());
+        if (persisted!=source.entities().end()) {
+            if (persisted->second.type!="assembly_instance") return std::nullopt;
+            const auto binding=decode_document_assembly_instance(persisted->second);
+            return std::pair{binding.assembly_catalog_id,binding.instance.type_id};
+        }
+        if (const auto binding=embeddedAssemblyChild(source,selected_id.toStdString()))
+            return std::pair{binding->assembly_catalog_id,binding->instance.type_id};
+        return std::nullopt;
+    }
+
     bool editAssemblyType(const std::string& catalog_id, std::optional<std::string> type_id = std::nullopt) {
         try {
             const auto source = authoringSnapshot();
@@ -54066,6 +54079,15 @@ private:
                         auto* properties = menu.addAction(QStringLiteral("Properties"));
                         QObject::connect(properties, &QAction::triggered, owner,
                                          guarded([this] { if (m_selected_ids.size()!=1 || !editEmbeddedAssemblyFromDialog()) positionContextEditor(true); }));
+                        if (single) if (const auto binding=selectedAssemblyTypeBinding(*source,m_selected_id)) {
+                            auto* definition=menu.addAction(QStringLiteral("Edit component type…"));
+                            definition->setObjectName(QStringLiteral("componentTypeContextAction"));
+                            definition->setToolTip(QStringLiteral("Edit the shared definition and preview its effect on all instances."));
+                            definition->setEnabled(m_document->is_editable());
+                            QObject::connect(definition,&QAction::triggered,owner,guarded([this,binding] {
+                                (void)editAssemblyType(binding->first,binding->second);
+                            }));
+                        }
                         if (const auto selected = selectedEntity(); single && selected && supportsObjectAppearance(selected->type)) {
                             auto* appearance = menu.addAction(QStringLiteral("Drawing appearance…"));
                             appearance->setObjectName(QStringLiteral("objectAppearanceContextAction"));
@@ -55979,6 +56001,15 @@ private:
                     selection->setEnabled(false);
                     if (m_selected_ids.size() == 1) {
                         const auto entity = selectedEntity();
+                        if (const auto binding=selectedAssemblyTypeBinding(*menu_source,m_selected_id)) {
+                            auto* definition=menu.addAction(QStringLiteral("Edit component type…"));
+                            definition->setObjectName(QStringLiteral("componentTypeContextAction"));
+                            definition->setToolTip(QStringLiteral("Edit the shared definition and preview its effect on all instances."));
+                            definition->setEnabled(m_document->is_editable());
+                            QObject::connect(definition,&QAction::triggered,owner,guarded([this,binding] {
+                                (void)editAssemblyType(binding->first,binding->second);
+                            }));
+                        }
                         if (entity && supportsObjectAppearance(entity->type)) {
                             auto* appearance = menu.addAction(QStringLiteral("Drawing appearance…"));
                             appearance->setObjectName(QStringLiteral("objectAppearanceContextAction"));
@@ -68169,12 +68200,12 @@ private:
                         return std::all_of(values.begin(),values.end(),[](double value){return std::isfinite(value);});
                     };
                     if (gesture.targets!=capture.targets || !finite(gesture.pivot_world_m) ||
-                        !finite(gesture.translation_world_m) || gesture.translation_world_m[2]!=0.0 ||
+                        !finite(gesture.translation_world_m) ||
                         !std::isfinite(gesture.rotation_radians) || std::abs(gesture.rotation_radians)>std::numbers::pi ||
                         !std::isfinite(gesture.uniform_scale) || gesture.uniform_scale<=0.0 ||
                         gesture.axis_scale!=std::array<double,2>{1.0,1.0} ||
                         !std::isfinite(gesture.axis_rotation_radians))
-                        throw std::invalid_argument("Group 3D controls support horizontal movement, Z-axis rotation and positive uniform plan scaling.");
+                        throw std::invalid_argument("Group 3D controls require finite movement, Z-axis rotation and positive uniform plan scaling.");
                     std::vector<CanvasRoofOpeningTarget> children;
                     for (const auto& target:capture.targets)
                         children.push_back({target.roof_id,target.opening_id,capture.source->revision()});
@@ -68182,7 +68213,7 @@ private:
                         gesture.rotation_radians,false,false,{gesture.translation_world_m[0],gesture.translation_world_m[1]}};
                     auto mixed=prepareMixedSelectionTransform(capture.source,capture.ordinary,children,world,true,
                         std::nullopt,capture.ordinary_frames,SiteCanvasPresentationFrames{}, {},
-                        "Transform complete selection in 3D",gesture.uniform_scale);
+                        "Transform complete selection in 3D",gesture.uniform_scale,gesture.translation_world_m[2]);
                     if (cancellation.is_cancelled()) return RegenerationReceipt{capture.source->revision(),{}};
                     request.result->mixed_preparation=std::make_shared<MixedSelectionEditPreparation>(std::move(mixed));
                     request.result->candidate=std::make_shared<DocumentSnapshot>(request.result->mixed_preparation->preview_snapshot());
@@ -69687,10 +69718,31 @@ public:
         const std::optional<BuildingViewFrame>& frame,
         const std::map<QString,SitePresentationPlacement>& ordinary_site_frames,
         const SiteCanvasPresentationFrames& source_frames,
-        const std::map<QString,SiteAnnotationTarget>& annotation_targets,const std::string& message,double scale=1.0) {
+        const std::map<QString,SiteAnnotationTarget>& annotation_targets,const std::string& message,double scale=1.0,
+        double vertical_offset_m=0.0) {
         if (!source || ordinary.isEmpty() || ordinary.size()+children.size()>1000)
             throw std::invalid_argument("Select a supported group of at most 1000 objects and skylights.");
         if (!std::isfinite(scale) || scale<=0.0) throw std::invalid_argument("Enter a positive finite scale factor.");
+        if (!std::isfinite(vertical_offset_m)) throw std::invalid_argument("Enter a finite vertical movement.");
+        if (vertical_offset_m!=0.0) {
+            // This extends the existing explicit XYZ architectural/embedded
+            // lane. Plan-only geometry cannot acquire elevation authority.
+            // Rotation/scaling keep the established independently resolved
+            // base-plane pivots; a vertical gesture is translation only.
+            if (scale!=1.0 || world.rotation_radians!=0.0 || world.flip_horizontal || world.flip_vertical)
+                throw std::invalid_argument("Apply vertical movement separately from rotation or scaling.");
+            for (const auto& id:ordinary) {
+                if (embeddedAssemblyChild(*source,id.toStdString())) continue;
+                const auto found=source->entities().find(id.toStdString());
+                if (found==source->entities().end() ||
+                    (found->second.type!="roof" && found->second.type!="slab" && found->second.type!="column" &&
+                     found->second.type!="beam" && found->second.type!="stair" && found->second.type!="railing" &&
+                     found->second.type!="assembly_instance"))
+                    throw std::invalid_argument("This selection needs a supported physical 3D movement workflow.");
+            }
+            for (const auto& child:children) if (!ordinary.contains(child.roof_id))
+                throw std::invalid_argument("Select the skylight's roof to move them vertically together.");
+        }
         json request={{"version",4},{"expected_revision",source->revision()},{"transaction_id",new_id("mixed-transform")},
             {"architectural",json::array()},{"embedded",json::array()},{"annotations",json::array()},
             {"references",json::array()},{"geometry",nullptr},{"message",message}};
@@ -69776,8 +69828,11 @@ public:
                         std::get<2>(row.first)==std::get<2>(key) && std::get<3>(row.first)==std::get<3>(key);
                 })) throw std::invalid_argument("The selected architectural object uses a different source frame from its wall scaling plane.");
             }
+            const auto delta=site ? site_transform_delta({world.offset.x,world.offset.y,vertical_offset_m},
+                placement_for(id).inverse) : Vec3{t.offset.x,t.offset.y,vertical_offset_m};
+            if (!std::isfinite(delta.z)) throw std::invalid_argument("The source-frame vertical movement is not finite.");
             return json{{"pivot",json::array({t.pivot.x,t.pivot.y,base})},
-            {"offset",json::array({t.offset.x,t.offset.y,0.0})},{"rotation_z_radians",t.rotation_radians},
+            {"offset",json::array({t.offset.x,t.offset.y,delta.z})},{"rotation_z_radians",t.rotation_radians},
             {"scale",scale},{"flip_horizontal",t.flip_horizontal},{"flip_vertical",t.flip_vertical}};
         };
         const auto operation=[&](const QString& id) {
@@ -69804,6 +69859,7 @@ public:
         SelectionGeometryTransformRequest geometry; geometry.expected_revision=source->revision();geometry.message=message;
         if (scale!=1.0) geometry.version=2;
         std::set<std::string,std::less<>> parents;
+        std::map<std::string,std::map<std::string,AssemblyTransform,std::less<>>,std::less<>> carried_components;
         for (const auto& id:ordinary) {
             const auto persisted=source->entities().find(id.toStdString());
             const auto embedded=embeddedAssemblyChild(*source,id.toStdString());
@@ -69814,8 +69870,28 @@ public:
             } else if (const auto found=annotation_owners.find(id.toStdString());found!=annotation_owners.end()) annotation={{found->second,id.toStdString()}};
             if (embedded && (persisted!=source->entities().end() || annotation))
                 throw std::invalid_argument("A selected component identity has conflicting owners.");
-            if (embedded) { request["embedded"].push_back({{"catalog_id",embedded->assembly_catalog_id},
-                {"instance_id",embedded->instance.id},{"transform",model_json(operation(id),id)}});continue; }
+            if (embedded) {
+                bool carried=false;
+                if (site && vertical_offset_m!=0.0 && world.offset.x==0.0 && world.offset.y==0.0 &&
+                    embedded->instance.placement && geometric_assembly_for_child(*source,id.toStdString())) {
+                    const auto& host=embedded->instance.placement->host_entity_id;
+                    const auto found=source->entities().find(host);
+                    carried=ordinary.contains(id_from(host)) && found!=source->entities().end() &&
+                        (found->second.type=="roof" || found->second.type=="slab" || found->second.type=="stair" ||
+                         found->second.type=="railing");
+                    if (carried) carried_components[embedded->assembly_catalog_id].emplace(embedded->instance.id,
+                        AssemblyTransform{{0.0,0.0,vertical_offset_m},0.0,1.0,false});
+                }
+                // Retain the selected qualified row as an explicit identity
+                // membership contribution. Its selected host supplies the
+                // movement; replay below proves the exact requested carry.
+                const auto transform=carried
+                    ? json{{"pivot",json::array({0.0,0.0,0.0})},{"offset",json::array({0.0,0.0,0.0})},
+                        {"rotation_z_radians",0.0},{"scale",1.0},{"flip_horizontal",false},{"flip_vertical",false}}
+                    : model_json(operation(id),id);
+                request["embedded"].push_back({{"catalog_id",embedded->assembly_catalog_id},
+                    {"instance_id",embedded->instance.id},{"transform",transform}});continue;
+            }
             if (annotation) {
                 const auto state=decode_annotation_entity(source->entities().at(annotation->owner_id));
                 const auto symbol=std::find_if(state.symbols.begin(),state.symbols.end(),[&](const auto& item){return item.id==annotation->child_id;});
@@ -69904,7 +69980,25 @@ public:
                 throw std::invalid_argument("The complete skylight transform has no typed source authority.");
             roof_authoring=typed->phase_constraint_authoring_intent;
         }
-        return prepare_mixed_selection_edit(*source,request,roof_authoring,roster,message,roof_identity_requests);
+        auto prepared=prepare_mixed_selection_edit(*source,request,roof_authoring,roster,message,roof_identity_requests);
+        for (const auto& [catalog,transforms]:carried_components) {
+            const auto expected=transform_hosted_assembly_model(source->entities().at(catalog).properties.at("model"),transforms,true);
+            const auto& actual=prepared.preview_snapshot().entities().at(catalog).properties.at("model");
+            const auto find_row=[](const json& model,const std::string& id)->const json& {
+                const auto& rows=model.at("instances");
+                const auto found=std::find_if(rows.begin(),rows.end(),[&](const auto& row){return row.at("id")==id;});
+                if (found==rows.end()) throw std::invalid_argument("A carried component lost its qualified source row.");
+                return *found;
+            };
+            for (const auto& [id,transform]:transforms) {
+                (void)transform;
+                const auto& expected_row=find_row(expected,id);
+                const auto& actual_row=find_row(actual,id);
+                if (expected_row!=actual_row || expected_row.dump()!=actual_row.dump())
+                    throw std::invalid_argument("The selected component was not carried once by its actual host.");
+            }
+        }
+        return prepared;
     }
 
     void cancelMixedPlanTransformPreview() {

@@ -39,7 +39,9 @@ struct NativeRoofOpeningTarget {
 // caused by rotation or scaling. Child-only hosts retain authored placements.
 // Opted-in coordinated routes capture ordinary IDs separately and use the same
 // proposal for the complete roster; targets remains the exact typed child list
-// and is empty for an ordinary-only group.
+// and is empty for an ordinary-only group. Z translation is admitted only for
+// supported physical owners with every typed child's roof explicitly selected;
+// child-only proposals always retain zero Z translation.
 struct NativeRoofOpeningTransform {
     std::vector<NativeRoofOpeningTarget> targets;
     std::array<double, 3> pivot_world_m{};
@@ -146,13 +148,16 @@ public:
     // Opt in only after the shell coordinates one complete ordinary/typed-child
     // candidate and transaction through the roof-opening callbacks. Defaults
     // false. Mixed gestures support XY translation, Z rotation and positive
-    // uniform scale via the Z scale handle; directional and Z moves are hidden.
+    // uniform scale via the Z scale handle; directional scaling is hidden.
+    // Z translation appears only when every actual ordinary owner supports it
+    // and each typed child has its roof explicitly in the ordinary roster.
     // Changing this policy retires any captured gesture before controls rebuild.
     void setMixedSelectionPlanTransformEnabled(bool enabled);
     // Separate default-false opt-in for ordinary-only selections of at least
     // two members. Uses the same complete candidate/transaction callbacks with
     // empty child targets and supports XY moves, Z rotation and uniform scale
-    // through the Z scale handle. Directional scaling and Z moves stay hidden.
+    // through the Z scale handle. Directional scaling stays hidden; Z movement
+    // is available only for a complete cohort of supported physical 3D owners.
     // Changing this policy retires any captured gesture before controls rebuild.
     void setOrdinarySelectionPlanTransformEnabled(bool enabled);
     // Export the OCCT framebuffer directly. This deliberately does not use
