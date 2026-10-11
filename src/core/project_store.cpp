@@ -11,6 +11,10 @@
 #include "sketch/annotation_entity_codec.hpp"
 #include "sketch/room_relationships.hpp"
 #include "sketch/roof_join_phase_ownership.hpp"
+#include "sketch/phase_constraint_authoring.hpp"
+#include "sketch/phase_roof_replacement.hpp"
+#include "sketch/phase_slab_replacement.hpp"
+#include "sketch/phase_structural_replacement.hpp"
 
 #include <sqlite3.h>
 
@@ -391,6 +395,50 @@ std::uint32_t required_format_version_internal(const DocumentSnapshot& snapshot,
             const auto literal_true=[](const nlohmann::json& child,const char* field) {
                 return child.contains(field) && child.at(field).is_boolean() && child.at(field)==true;
             };
+            if (floor<235 && closed_shape({"version","authoring","complete_component_dimensions","dimension_identities"}) &&
+                value.at("version").is_number_integer() && literal_true(value,"complete_component_dimensions") &&
+                value.at("dimension_identities").is_object()) {
+                // The native codecs own the closed canonical body, identity,
+                // byte/node/nesting and combined allocation contracts. An empty
+                // map still declares the complete dimension-copy authority.
+                try {
+                    const auto& body=value.at("authoring");
+                    if (body.is_object() && body.contains("version") && body.at("version").is_number_integer()) {
+                        if (value.at("version")==11 && (body.at("version")==9 || body.at("version")==10)) {
+                            (void)decode_phase_roof_replacement_authoring(value);
+                            floor=235U;
+                        } else if (value.at("version")==8 && body.at("version")>=1 && body.at("version")<=7) {
+                            (void)decode_phase_slab_replacement_authoring(value);
+                            floor=235U;
+                        } else if (value.at("version")==5 && (body.at("version")==3 || body.at("version")==4)) {
+                            (void)decode_phase_structural_replacement_authoring(value);
+                            floor=235U;
+                        }
+                    }
+                } catch (const std::invalid_argument&) {
+                    // Unknown or malformed lookalikes do not acquire authority.
+                } catch (const nlohmann::json::exception&) {
+                }
+            }
+            const bool family_dimension_phase=typed_shape(value,38,{"version","roof_edit_version","expected_revision",
+                "source_snapshot_digest","source_authoring_digest","source_entities_digest","source_saved_revision",
+                "phase_selections","intent","roof_replacement"}) ||
+                typed_shape(value,39,{"version","slab_edit_version","expected_revision","source_snapshot_digest",
+                    "source_authoring_digest","source_entities_digest","source_saved_revision","phase_selections",
+                    "intent","slab_replacement"}) ||
+                typed_shape(value,40,{"version","structural_edit_version","expected_revision","source_snapshot_digest",
+                    "source_authoring_digest","source_entities_digest","source_saved_revision","phase_selections",
+                    "intent","structural_replacement"});
+            if (floor<235 && family_dimension_phase) {
+                try {
+                    // The phase codec pairs each historical scalar/vertical
+                    // lane with its canonical complete-dimension leaf.
+                    (void)decode_phase_constraint_authoring_intent(value);
+                    floor=235U;
+                } catch (const std::invalid_argument&) {
+                } catch (const nlohmann::json::exception&) {
+                }
+            }
             const bool coordinated_wall_dimensions=closed_shape({"version","authoring",
                 "complete_hosted_component_dimensions","complete_wall_component_dimensions"}) ||
                 closed_shape({"version","authoring","complete_hosted_component_dimensions",
@@ -1167,9 +1215,9 @@ std::uint32_t required_format_version_internal(const DocumentSnapshot& snapshot,
     };
     for (const auto& revision : snapshot.history()) {
         if (revision.phase_entity_import) required=std::max(required,160U);
-        if (required<234 && revision.boundary_geometry_edit)
+        if (required<235 && revision.boundary_geometry_edit)
             required=std::max(required,typed_edit_reader_floor(encode_boundary_geometry_edit(*revision.boundary_geometry_edit)));
-        if (required<234 && revision.boundary_constraint_changes)
+        if (required<235 && revision.boundary_constraint_changes)
             required=std::max(required,typed_edit_reader_floor(command_to_json(Command{*revision.boundary_constraint_changes})));
         if (required<122 && revision.boundary_geometry_edit)
             required=std::max(required,quantity_reader_floor(encode_boundary_geometry_edit(*revision.boundary_geometry_edit)));
@@ -3691,6 +3739,7 @@ bool verify_sqlite_schema(sqlite3* database, bool allow_recovery = false) {
          sqlite3_column_int(user_version.get(), 0) != 232 &&
          sqlite3_column_int(user_version.get(), 0) != 233 &&
          sqlite3_column_int(user_version.get(), 0) != 234 &&
+         sqlite3_column_int(user_version.get(), 0) != 235 &&
          sqlite3_column_int(user_version.get(), 0) != 207 &&
          sqlite3_column_int(user_version.get(), 0) != 202 &&
          sqlite3_column_int(user_version.get(), 0) != 200 &&
@@ -4416,6 +4465,8 @@ DocumentSnapshot read_snapshot(sqlite3* database, RecoveryLedger* recovery = nul
     // here and authenticate the manifest with its stored version below.
     const auto required_format = required_format_version_internal(snapshot, format_number < 28);
     if (required_format > format_number) {
+        if (required_format>=235)
+            storage_error(StorageErrorCode::unsupported_format,"This project requires reader 235 for roof, slab and structural component dimension copies");
         if (required_format>=234)
             storage_error(StorageErrorCode::unsupported_format,"This project requires reader 234 for wall component dimension Properties receipts");
         if (required_format>=233)

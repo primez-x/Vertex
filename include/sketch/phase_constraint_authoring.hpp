@@ -154,6 +154,12 @@ struct PhaseConstraintAuthoringIntent {
     // qualified embedded extents before the final host/frame carry. Original
     // baseline dimensions retain their exact source envelopes; historical
     // twenty-eight/leaf-eleven cannot acquire this authority.
+    // Dialects thirty-eight/thirty-nine/forty add standalone roof/slab/
+    // structural embedded dimension copies. Their separate roof_edit_version
+    // (four/twenty-one), slab_edit_version (five/twenty-seven), and
+    // structural_edit_version (nine/twenty-four) retain the exact historical
+    // physical lane; the leaf is respectively eleven/eight/five. Historical
+    // coordinated and Properties envelopes cannot borrow these new wrappers.
     // Dialect twenty-two retains a pure per-owner similarity joint intent.
     // It keeps the ordinary eight outer keys and grants no replacement lane;
     // historical wrappers cannot carry the new nested operator dialect.

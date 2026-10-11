@@ -16,6 +16,22 @@ struct AssemblyDimensionTransformRequest {
     std::map<std::string, std::string, std::less<>> fresh_dimension_ids;
 };
 
+// Source-only inventory for exact embedded catalog/instance roots (at most
+// 4096). Complete raw/catalog admission precedes discovery; affected malformed,
+// unsupported or future targets refuse. Independent owners remain untouched.
+// Returns supported v6 dimension IDs and their complete source component target,
+// including nested paths, in ascending ID order. At most 1000 associations share
+// one actual-source measurement batch. This grants no clone or phase authority.
+[[nodiscard]] std::map<std::string, AssemblyInstancePropertyEditTarget, std::less<>>
+inspect_embedded_assembly_dimension_clone_roster(
+    const AssemblyDocumentEntities& source,
+    std::span<const std::pair<std::string, std::string>> roots);
+
+// For an already discovered supported embedded v6 extent only. Releases its
+// understood qualified target fields for an enclosing dependency scan; opaque
+// property/extension siblings remain exact and must still be checked by callers.
+[[nodiscard]] Entity assembly_dimension_clone_dependency_remainder(const Entity&);
+
 // Pure dimension contribution for an already derived component transform or
 // clone. Both maps must be complete actual maps captured/derived by the caller;
 // neither map nor this result establishes command, phase or publication authority.

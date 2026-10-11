@@ -36,6 +36,8 @@ struct PhaseSlabReplacementPlan {
     std::vector<PhaseSlabReplacementDiagnostic> diagnostics;
     // Embedded identities are qualified by their actual source catalog.
     std::vector<PhaseSlabReplacementHostedInstanceKey> required_hosted_instance_ids;
+    bool complete_component_dimensions{false};
+    std::vector<std::string> required_dimension_ids;
     [[nodiscard]] bool ready() const noexcept;
     bool operator==(const PhaseSlabReplacementPlan&) const = default;
 };
@@ -45,14 +47,15 @@ struct PhaseSlabReplacementResult {
     // Complete source roster, including removed layers whose mapped IDs are
     // reserved without becoming live proposed children.
     PhaseSlabReplacementIdentityMap original_to_proposed;
-    // Entity/child/qualified instance mapping outputs and new stack row IDs.
+    // Entity/child/dimension/qualified instance outputs and new stack row IDs.
     std::vector<std::string> fresh_identity_ids;
     PhaseSlabReplacementHostedInstanceIdentityMap original_to_hosted_instance_proposed;
 };
 
 [[nodiscard]] PhaseSlabReplacementPlan inspect_phase_slab_replacement_plan(
     const PhaseSlabReplacementEntities& source, const std::vector<std::string>& seed_slab_ids,
-    const std::string& registry_id, const std::string& alternative_id);
+    const std::string& registry_id, const std::string& alternative_id,
+    bool complete_component_dimensions = false);
 
 // Reinspect the source, independently replay typed inputs and derive fresh
 // owners. Shared-baseline originals remain exact; qualified presentation rows
@@ -75,7 +78,8 @@ struct PhaseSlabReplacementResult {
     const std::vector<SlabGeometryEditIntent>& ordinary_geometry = {},
     const PhaseSlabReplacementHostedInstanceIdentityMap& hosted_instance_identities = {},
     bool coordinate_ordinary_hosted_geometry = false,
-    bool coordinate_hosted_profiles = false);
+    bool coordinate_hosted_profiles = false,
+    const PhaseSlabReplacementIdentityMap& dimension_identities = {});
 
 struct PhaseSlabReplacementAuthoring {
     std::string registry_id;
@@ -93,6 +97,10 @@ struct PhaseSlabReplacementAuthoring {
     bool coordinate_ordinary_hosted_geometry{false};
     // V7 opts into actual-source hosted elevation consequences for profiles.
     bool coordinate_hosted_profiles{false};
+    // V8 adds exact embedded dimension clones and ordinary hosted carry after
+    // the complete historical physical/catalog candidate has been derived.
+    bool complete_component_dimensions{false};
+    PhaseSlabReplacementIdentityMap dimension_identities;
 };
 
 // Exact v1 fields: version, registry_id, alternative_id, seed_slab_ids,
@@ -111,6 +119,8 @@ struct PhaseSlabReplacementAuthoring {
 // V7 adds coordinate_hosted_profiles:true to the V5 envelope, allows an empty
 // hosted copy roster, and requires only profiles with at least one leaf v3.
 // Other profiles in that same phase cohort retain historical placement semantics.
+// V8 is a closed wrapper: version, authoring (canonical historical v1..v7),
+// complete_component_dimensions:true and dimension_identities. It cannot nest.
 [[nodiscard]] nlohmann::json encode_phase_slab_replacement_authoring(
     const PhaseSlabReplacementAuthoring& authoring);
 [[nodiscard]] PhaseSlabReplacementAuthoring decode_phase_slab_replacement_authoring(

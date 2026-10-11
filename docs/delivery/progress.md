@@ -14,6 +14,59 @@ changed source does not acquire runtime acceptance without later qualification.
 
 ## Current delivery state
 
+### October 11 roof, slab and structural component dimension integration
+
+The Properties wall dimension batch is committed and pushed as 6c239f6e;
+its exact remote branch matched local HEAD. Current source work adds standalone
+roof leaf11/phase38, slab leaf8/phase39 and structural leaf5/phase40. Each closed
+leaf wraps one canonical historical physical body with literal dimension
+completion and a separate exact dimension mapping. Explicit outer edit-version
+fields preserve the actual historical roof, slab and structural lane. Earlier
+standalone, coordinated and Properties contracts retain their authority.
+
+Shared actual-source discovery admits complete raw inputs and catalogs before
+resolving supported embedded v6 extents, including nested paths. Malformed
+affected targets cannot silently bypass the roster; independent document-owned
+roots must retain actual framing and remain outside copy authority. Only known
+qualified target fields are consumed. Opaque sibling references to copied owners,
+catalogs, instances, aliases, dimensions and overlays remain dependency checks.
+Borrowed discovery keys retain the original input lifetime.
+
+Each family clones dimensions once from the original source to the complete
+physical/catalog candidate. Original dimension envelopes remain exact; fresh
+dimensions join only the actual active alternative's proposed registry.
+Qualified views and annotation overrides retain correspondence. Ordinary changed
+hosts carry their existing dimensions with ordinary phase-policy validation
+under the remaining shared 1000-association budget. Combined fresh allocations
+remain bounded to 4096. The slab and roof clone inspection paths consume only
+actual qualified dimension targets; no synthetic source authority is used.
+
+Standalone controller producers derive and allocate the new separate dimension
+inventory, reserving retained-history aliases. Historical mixed transforms,
+clipboard and removal enclosures explicitly keep their older child lanes.
+Document reserves current and undone dimension destinations and actual scoped
+proof vocabulary. Reader235/extraction233 cover current, nested and undone new
+proofs even with empty maps; extraction derives from the native reader floor.
+Independent integrated source review found two introduced P2 gaps: incomplete
+slab opaque-reference checks and historical mixed-removal admission of roof11.
+Both were corrected and reviewed against updated source; no proved introduced
+P1/P2 remains in the examined batch. Root source review confirms actual-source
+rosters, exact originals, scoped historical authority and reader-derived
+extraction. Scoped whitespace inspection passes; Git records the source backup.
+Compilation, canvas interaction, Undo/redo, save/reopen and extraction execution
+remain unverified. No builds/tests/jobs, launches, packages or installations ran;
+the installed candidate is unchanged. All ten production gates remain open.
+
+Next source work must add explicit coordinated and Properties integration for
+these three families, including the complete final combined candidate and a
+single ordinary-host contribution. Preserve historical contracts and scoped
+permissions; do not route a new leaf through an older enclosure. Root/part
+profile and path editing, nested and linked-view references, and complete mixed
+editing/clipboard controls remain unfinished. Broader drawing, normative
+appraisal, compatibility/exchange, assistance, offline distribution and final
+qualification remain part of the complete approved plan. No aggregate percent
+or delivery ETA is defensible from this source-only evidence.
+
 ### October 11 Properties wall component dimension integration
 
 The coordinated wall dimension batch is committed and pushed as 87a26205;

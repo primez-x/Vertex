@@ -51,9 +51,13 @@ struct RoofCloneResult {
 // Reads actual saved active roof owners, including baseline owners. A join is
 // copied only when every member is explicitly selected. Partial selections
 // become independent roofs retaining the effective join material assignment.
+// Dimension opt-in is discovery only for an enclosing dimension-aware phase
+// replacement. It releases only source-validated embedded extent references;
+// replay_roof_clone retains its historical authority and cannot borrow it.
 [[nodiscard]] RoofClonePlan inspect_roof_clone_plan(
     const RoofCloneEntities& source, const std::vector<std::string>& selected_roof_ids,
-    bool include_hosted_instances = false);
+    bool include_hosted_instances = false,
+    bool complete_component_dimensions = false);
 
 // Reinspects source and requires an exact fresh mapping for every entity/child
 // slot. Source owners and phase registries remain exact. Qualified presentation

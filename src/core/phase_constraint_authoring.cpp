@@ -450,12 +450,16 @@ CoordinatedReplacements coordinated(const Json& value,const PhaseConstraintAutho
         if (leaf.is_object() && leaf.contains("version") && leaf.at("version") == 10)
             invalid("Historical coordinated authoring cannot borrow roof rotation replacement authority");
         result.roof=decode_phase_roof_replacement_authoring(leaf);
+        if (result.roof->complete_component_dimensions)
+            invalid("Historical coordinated authoring cannot borrow roof component dimension copies");
         if (result.roof->demolition || encode_phase_roof_replacement_authoring(*result.roof).dump()!=leaf.dump())
             invalid("Coordinated roof replacement requires canonical replacement authority without demolition");
     }
     if (!value.at("slab_replacement").is_null()) {
         const auto& leaf=value.at("slab_replacement");
         result.slab=decode_phase_slab_replacement_authoring(leaf);
+        if (result.slab->complete_component_dimensions)
+            invalid("Historical coordinated authoring cannot borrow slab component dimension copies");
         if (result.slab->coordinate_hosted_profiles)
             invalid("Coordinated replacement dialects cannot borrow slab elevation carry authority");
         if (result.slab->slab_geometry.empty() || !result.slab->slab_profiles.empty() || !result.slab->slab_stacks.empty() ||
@@ -469,6 +473,8 @@ CoordinatedReplacements coordinated(const Json& value,const PhaseConstraintAutho
     if (structural && !value.at("structural_replacement").is_null()) {
         const auto& leaf=value.at("structural_replacement");
         result.structural=decode_phase_structural_replacement_authoring(leaf);
+        if (result.structural->complete_component_dimensions)
+            invalid("Historical coordinated authoring cannot borrow structural component dimension copies");
         if (result.structural->demolition || result.structural->edits.empty() ||
             encode_phase_structural_replacement_authoring(*result.structural).dump()!=leaf.dump())
             invalid("Coordinated structural replacement requires canonical non-demolition authority");
@@ -1515,7 +1521,12 @@ nlohmann::json encode_phase_constraint_authoring_intent(const PhaseConstraintAut
         if (encode_intent(value.intent) != encode_intent(empty))
             invalid("Roof replacement cannot borrow geometry or relationship authority");
         result["roof_replacement"] = value.roof_replacement;
-        if (value.roof_replacement.at("version") == 10) result["version"] = 21;
+        const auto& roof_body=replacement.complete_component_dimensions ? value.roof_replacement.at("authoring") : value.roof_replacement;
+        if (roof_body.at("version") == 10) result["version"] = 21;
+        if (replacement.complete_component_dimensions) {
+            result["roof_edit_version"]=result.at("version");
+            result["version"]=38;
+        }
     }
     if (!value.slab_replacement.is_null()) {
         const auto replacement = decode_phase_slab_replacement_authoring(value.slab_replacement);
@@ -1527,6 +1538,10 @@ nlohmann::json encode_phase_constraint_authoring_intent(const PhaseConstraintAut
             invalid("Slab replacement cannot borrow geometry or relationship authority");
         result["slab_replacement"] = value.slab_replacement;
         if (replacement.coordinate_hosted_profiles) result["version"] = 27;
+        if (replacement.complete_component_dimensions) {
+            result["slab_edit_version"]=result.at("version");
+            result["version"]=39;
+        }
     }
     if (!value.slab_demolition.is_null()) {
         const auto demolition = decode_slab_demolition_intent(value.slab_demolition);
@@ -1554,7 +1569,12 @@ nlohmann::json encode_phase_constraint_authoring_intent(const PhaseConstraintAut
         if (encode_intent(value.intent)!=encode_intent(empty))
             invalid("Structural replacement cannot borrow geometry or relationship authority");
         result["structural_replacement"]=value.structural_replacement;
-        if (value.structural_replacement.at("version")==4) result["version"]=24;
+        const auto& structural_body=replacement.complete_component_dimensions ? value.structural_replacement.at("authoring") : value.structural_replacement;
+        if (structural_body.at("version")==4) result["version"]=24;
+        if (replacement.complete_component_dimensions) {
+            result["structural_edit_version"]=result.at("version");
+            result["version"]=40;
+        }
     }
     if (!value.stair_demolition.is_null()) {
         const auto demolition=decode_stair_demolition_intent(value.stair_demolition);
@@ -1640,15 +1660,30 @@ PhaseConstraintAuthoringIntent decode_phase_constraint_authoring_intent(const Js
     const bool scalar_walls=vertical_walls || wall_edit_version==23;
     const bool replacement=hosted_walls || scalar_walls || (value.is_object() && value.contains("version") && value.at("version")==2);
     const bool demolition=value.is_object() && value.contains("version") && value.at("version")==3;
-    const bool roof_rotation=value.is_object() && value.contains("version") && value.at("version")==21;
-    const bool roof=roof_rotation || (value.is_object() && value.contains("version") && value.at("version")==4);
-    const bool vertical_slabs=value.is_object() && value.contains("version") && value.at("version")==27;
-    const bool slab=vertical_slabs || (value.is_object() && value.contains("version") && value.at("version")==5);
+    const bool roof_dimensions=value.is_object() && value.contains("version") && value.at("version")==38;
+    if (roof_dimensions && (!value.contains("roof_edit_version") || !value.at("roof_edit_version").is_number_integer() ||
+        (value.at("roof_edit_version")!=4 && value.at("roof_edit_version")!=21)))
+        invalid("Roof dimension copies require an explicit historical roof edit lane");
+    const bool roof_rotation=roof_dimensions ? value.at("roof_edit_version")==21 :
+        value.is_object() && value.contains("version") && value.at("version")==21;
+    const bool roof=roof_dimensions || roof_rotation || (value.is_object() && value.contains("version") && value.at("version")==4);
+    const bool slab_dimensions=value.is_object() && value.contains("version") && value.at("version")==39;
+    if (slab_dimensions && (!value.contains("slab_edit_version") || !value.at("slab_edit_version").is_number_integer() ||
+        (value.at("slab_edit_version")!=5 && value.at("slab_edit_version")!=27)))
+        invalid("Slab dimension copies require an explicit historical slab edit lane");
+    const bool vertical_slabs=slab_dimensions ? value.at("slab_edit_version")==27 :
+        value.is_object() && value.contains("version") && value.at("version")==27;
+    const bool slab=slab_dimensions || vertical_slabs || (value.is_object() && value.contains("version") && value.at("version")==5);
     const bool slab_demolition=value.is_object() && value.contains("version") && value.at("version")==6;
     const bool coordinated_replacements=value.is_object() && value.contains("version") &&
         (value.at("version")==7 || value.at("version")==8 || value.at("version")==10 || value.at("version")==14 || value.at("version")==29 || value.at("version")==31 || value.at("version")==34 || value.at("version")==37);
-    const bool scalar_structural=value.is_object() && value.contains("version") && value.at("version")==24;
-    const bool structural=scalar_structural || (value.is_object() && value.contains("version") && value.at("version")==9);
+    const bool structural_dimensions=value.is_object() && value.contains("version") && value.at("version")==40;
+    if (structural_dimensions && (!value.contains("structural_edit_version") || !value.at("structural_edit_version").is_number_integer() ||
+        (value.at("structural_edit_version")!=9 && value.at("structural_edit_version")!=24)))
+        invalid("Structural dimension copies require an explicit historical structural edit lane");
+    const bool scalar_structural=structural_dimensions ? value.at("structural_edit_version")==24 :
+        value.is_object() && value.contains("version") && value.at("version")==24;
+    const bool structural=structural_dimensions || scalar_structural || (value.is_object() && value.contains("version") && value.at("version")==9);
     const bool stair_demolition=value.is_object() && value.contains("version") && value.at("version")==11;
     const bool scalar_stairs=value.is_object() && value.contains("version") && value.at("version")==25;
     const bool ordinary_stair_dimensions=value.is_object() && value.contains("version") && value.at("version")==35;
@@ -1673,14 +1708,20 @@ PhaseConstraintAuthoringIntent decode_phase_constraint_authoring_intent(const Js
         "source_entities_digest","source_saved_revision","phase_selections","intent","wall_replacement"});
     else if (demolition) keys(value,{"version","expected_revision","source_snapshot_digest","source_authoring_digest",
         "source_entities_digest","source_saved_revision","phase_selections","intent","opening_demolition"});
+    else if (roof_dimensions) keys(value,{"version","roof_edit_version","expected_revision","source_snapshot_digest","source_authoring_digest",
+        "source_entities_digest","source_saved_revision","phase_selections","intent","roof_replacement"});
     else if (roof) keys(value,{"version","expected_revision","source_snapshot_digest","source_authoring_digest",
         "source_entities_digest","source_saved_revision","phase_selections","intent","roof_replacement"});
+    else if (slab_dimensions) keys(value,{"version","slab_edit_version","expected_revision","source_snapshot_digest","source_authoring_digest",
+        "source_entities_digest","source_saved_revision","phase_selections","intent","slab_replacement"});
     else if (slab) keys(value,{"version","expected_revision","source_snapshot_digest","source_authoring_digest",
         "source_entities_digest","source_saved_revision","phase_selections","intent","slab_replacement"});
     else if (slab_demolition) keys(value,{"version","expected_revision","source_snapshot_digest","source_authoring_digest",
         "source_entities_digest","source_saved_revision","phase_selections","intent","slab_demolition"});
     else if (coordinated_replacements) keys(value,{"version","expected_revision","source_snapshot_digest","source_authoring_digest",
         "source_entities_digest","source_saved_revision","phase_selections","intent","coordinated_replacements"});
+    else if (structural_dimensions) keys(value,{"version","structural_edit_version","expected_revision","source_snapshot_digest","source_authoring_digest",
+        "source_entities_digest","source_saved_revision","phase_selections","intent","structural_replacement"});
     else if (structural) keys(value,{"version","expected_revision","source_snapshot_digest","source_authoring_digest",
         "source_entities_digest","source_saved_revision","phase_selections","intent","structural_replacement"});
     else if (stair_demolition) keys(value,{"version","expected_revision","source_snapshot_digest","source_authoring_digest",
@@ -1700,7 +1741,7 @@ PhaseConstraintAuthoringIntent decode_phase_constraint_authoring_intent(const Js
         "source_entities_digest","source_saved_revision","phase_selections","intent","ordinary_roof_edits"});
     else keys(value,{"version","expected_revision","source_snapshot_digest","source_authoring_digest",
         "source_entities_digest","source_saved_revision","phase_selections","intent"});
-    if (!value.at("version").is_number_integer() || value.at("version")<1 || value.at("version")>37 ||
+    if (!value.at("version").is_number_integer() || value.at("version")<1 || value.at("version")>40 ||
         !value.at("expected_revision").is_number_unsigned()) invalid("Phase constraint proof version or revision is invalid");
     if (!value.at("source_saved_revision").is_null() && !value.at("source_saved_revision").is_number_unsigned())
         invalid("Phase constraint saved revision is invalid");
@@ -1730,15 +1771,16 @@ PhaseConstraintAuthoringIntent decode_phase_constraint_authoring_intent(const Js
     if (roof) {
         result.roof_replacement = value.at("roof_replacement");
         if (result.roof_replacement.is_null()) invalid("Roof replacement dialect requires replacement decisions");
-        (void)decode_phase_roof_replacement_authoring(result.roof_replacement);
-        if ((result.roof_replacement.at("version") == 10) != roof_rotation)
+        const auto leaf=decode_phase_roof_replacement_authoring(result.roof_replacement);
+        const auto& body=leaf.complete_component_dimensions ? result.roof_replacement.at("authoring") : result.roof_replacement;
+        if (leaf.complete_component_dimensions!=roof_dimensions || (body.at("version") == 10) != roof_rotation)
             invalid("Roof replacement outer and rotation leaf versions do not match");
     }
     if (slab) {
         result.slab_replacement = value.at("slab_replacement");
         if (result.slab_replacement.is_null()) invalid("Version five requires slab replacement decisions");
         const auto leaf=decode_phase_slab_replacement_authoring(result.slab_replacement);
-        if (leaf.coordinate_hosted_profiles!=vertical_slabs)
+        if (leaf.complete_component_dimensions!=slab_dimensions || leaf.coordinate_hosted_profiles!=vertical_slabs)
             invalid("Slab elevation carry outer and leaf versions do not match");
     }
     if (slab_demolition) {
@@ -1762,8 +1804,9 @@ PhaseConstraintAuthoringIntent decode_phase_constraint_authoring_intent(const Js
     if (structural) {
         result.structural_replacement=value.at("structural_replacement");
         if (result.structural_replacement.is_null()) invalid("Version nine requires structural replacement decisions");
-        (void)decode_phase_structural_replacement_authoring(result.structural_replacement);
-        if ((result.structural_replacement.at("version")==4)!=scalar_structural)
+        const auto leaf=decode_phase_structural_replacement_authoring(result.structural_replacement);
+        const auto& body=leaf.complete_component_dimensions ? result.structural_replacement.at("authoring") : result.structural_replacement;
+        if (leaf.complete_component_dimensions!=structural_dimensions || (body.at("version")==4)!=scalar_structural)
             invalid("Structural scalar cohort outer and leaf versions do not match");
     }
     if (stair_demolition) {

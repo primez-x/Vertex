@@ -2,6 +2,7 @@
 
 #include "sketch/annotation_entity_codec.hpp"
 #include "sketch/assembly_document_adapter.hpp"
+#include "sketch/assembly_dimension_transform.hpp"
 #include "sketch/assembly_geometry.hpp"
 #include "sketch/assembly_model.hpp"
 #include "sketch/boundary_dimension.hpp"
@@ -346,7 +347,8 @@ Ids discover_hosted_assemblies(SlabClonePlan& plan, const SlabCloneEntities& sou
     std::sort(plan.required_hosted_instance_ids.begin(), plan.required_hosted_instance_ids.end());
     return catalogs;
 }
-SlabClonePlan derive(const SlabCloneEntities& source, const std::vector<std::string>& selected) {
+SlabClonePlan derive(const SlabCloneEntities& source, const std::vector<std::string>& selected,
+    bool complete_component_dimensions = false) {
     SlabClonePlan plan;
     try {
         (void)occupied_strings(source);
@@ -377,6 +379,12 @@ SlabClonePlan derive(const SlabCloneEntities& source, const std::vector<std::str
         }
         admit_slabs(source, owners);
         const auto catalogs = discover_hosted_assemblies(plan, source, owners, scope);
+        // Admission uses the complete original source and exactly the actual
+        // hosted roots. Only this returned roster grants target-slot release;
+        // the enclosing phase producer carries and publishes dimension copies.
+        const auto component_dimensions = complete_component_dimensions ?
+            inspect_embedded_assembly_dimension_clone_roster(source, plan.required_hosted_instance_ids) :
+            std::map<std::string, AssemblyInstancePropertyEditTarget, std::less<>>{};
         for (const auto& id : catalogs) admit_catalog_opaque_instance_references(source.at(id), plan.required_hosted_instance_ids);
         std::map<std::string, std::size_t, std::less<>> declarations;
         // Historical slab_id/layer_id slots do not declare current children.
@@ -406,7 +414,8 @@ SlabClonePlan derive(const SlabCloneEntities& source, const std::vector<std::str
                     validate_annotation_entity(entity);
                     for (const auto& row : entity.properties.at("state").at("overrides"))
                         if (owners.contains(row.at("target_id").get<std::string>())) ++plan.copied_annotation_override_count;
-                } else if (can_recognize_boundary_dimension_entity_type(entity.type)) {
+                } else if (can_recognize_boundary_dimension_entity_type(entity.type) &&
+                    !component_dimensions.contains(id)) {
                     const auto decoded = decode_boundary_dimension_entity(entity);
                     if (decoded.supported() && owners.contains(decoded.dimension->boundary_id))
                         diagnostic(plan, id, "source-bound dimension on native slab " + decoded.dimension->boundary_id +
@@ -419,6 +428,18 @@ SlabClonePlan derive(const SlabCloneEntities& source, const std::vector<std::str
         for (const auto& child : children) if (source.contains(child) || declarations[child] != 1)
             diagnostic(plan, child, "copied child must have exactly one current declaration and no entity alias");
         Ids affected = owners; affected.insert(children.begin(), children.end());
+        Ids dimension_dependencies = affected;
+        if (complete_component_dimensions) {
+            const auto aliases = embedded_assembly_presentation_ids(source);
+            for (const auto& root : plan.required_hosted_instance_ids) {
+                dimension_dependencies.insert(root.first);
+                dimension_dependencies.insert(root.second);
+                dimension_dependencies.insert(aliases.at(root));
+            }
+            for (const auto& [id, target] : component_dimensions) {
+                (void)target; dimension_dependencies.insert(id);
+            }
+        }
         for (const auto& [id, entity] : source) {
             try {
                 if (entity.type == kSheetViewEntityType) {
@@ -441,11 +462,15 @@ SlabClonePlan derive(const SlabCloneEntities& source, const std::vector<std::str
                     for (const auto& row : entity.properties.at("state").at("overrides"))
                         if (children.contains(row.at("target_id").get<std::string>())) reject("override targets a child without a qualified owner codec");
                 }
-                const auto remainder = opaque_remainder(entity);
-                if (touches(remainder.properties, affected) || touches(remainder.extensions, affected))
+                const auto remainder = component_dimensions.contains(id) ?
+                    assembly_dimension_clone_dependency_remainder(entity) : opaque_remainder(entity);
+                const auto& dependencies = component_dimensions.contains(id) ? dimension_dependencies : affected;
+                if (touches(remainder.properties, dependencies) || touches(remainder.extensions, dependencies))
                     diagnostic(plan, id, "affected live reference has no qualified clone codec; original remains preserved");
             } catch (const std::exception& error) {
-                if (owners.contains(id) || touches(entity.properties, affected) || touches(entity.extensions, affected)) diagnostic(plan, id, error.what());
+                const auto& dependencies = component_dimensions.contains(id) ? dimension_dependencies : affected;
+                if (owners.contains(id) || component_dimensions.contains(id) || touches(entity.properties, dependencies) || touches(entity.extensions, dependencies))
+                    diagnostic(plan, id, error.what());
             }
         }
         plan.required_entity_ids.assign(owners.begin(), owners.end());
@@ -506,13 +531,15 @@ void complete_presentation(SlabCloneEntities& candidate, const SlabCloneEntities
 bool SlabClonePlan::ready() const noexcept {
     return std::none_of(diagnostics.begin(), diagnostics.end(), [](const auto& item) { return item.blocking; });
 }
-SlabClonePlan inspect_slab_clone_plan(const SlabCloneEntities& source, const std::vector<std::string>& selected_slab_ids) {
-    return derive(source, selected_slab_ids);
+SlabClonePlan inspect_slab_clone_plan(const SlabCloneEntities& source, const std::vector<std::string>& selected_slab_ids,
+    bool complete_component_dimensions) {
+    return derive(source, selected_slab_ids, complete_component_dimensions);
 }
 SlabCloneResult replay_slab_clone(const SlabCloneEntities& source, const SlabClonePlan& plan,
-    const SlabCloneIdentityMap& identities, const SlabCloneHostedInstanceIdentityMap& hosted_instance_identities) {
+    const SlabCloneIdentityMap& identities, const SlabCloneHostedInstanceIdentityMap& hosted_instance_identities,
+    bool complete_component_dimensions) {
     try {
-        const auto derived = derive(source, plan.selected_slab_ids);
+        const auto derived = derive(source, plan.selected_slab_ids, complete_component_dimensions);
         if (derived != plan) reject("supplied plan differs from actual source discovery");
         if (!plan.ready()) reject("clone has unresolved affected dependencies");
         Ids expected(plan.required_entity_ids.begin(), plan.required_entity_ids.end());
@@ -589,6 +616,9 @@ SlabCloneResult replay_slab_clone(const SlabCloneEntities& source, const SlabClo
             reject("copied hosted roster differs from actual qualified source replay");
         for (const auto& id : plan.required_entity_ids) if (result.entities.at(id) != source.at(id))
             reject("replay changed an original slab or assembly catalog");
+        if (complete_component_dimensions) for (const auto& [id, original] : source)
+            if (can_recognize_boundary_dimension_entity_type(original.type) && result.entities.at(id) != original)
+                reject("replay changed an original dimension");
         result.fresh_identity_ids.assign(fresh.begin(), fresh.end());
         return result;
     } catch (const Json::exception& error) { reject(std::string("malformed source-derived replay: ") + error.what()); }

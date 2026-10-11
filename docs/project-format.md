@@ -1,4 +1,37 @@
-# Vertex project formats v1 through v234
+# Vertex project formats v1 through v235
+
+Reader235 retains standalone roof, slab, and structural component dimension
+copies. Roof leaf11, slab leaf8, and structural leaf5 each have exactly four
+fields: `version`, `authoring`, `complete_component_dimensions:true`, and
+`dimension_identities:<object>`. The canonical, nonnested historical body is
+respectively roof9/10, slab1 through7, or structural3/4. Roof and structural
+copies require complete hosted authority and exclude demolition. Empty
+dimension inventories still require the new reader.
+
+Outer phase38 requires `roof_edit_version:4` or `21`, phase39 requires
+`slab_edit_version:5` or `27`, and phase40 requires
+`structural_edit_version:9` or `24`. Each closed envelope matches its actual
+historical body. Older standalone, coordinated, and Properties contracts retain
+their original authority. Current standalone producers allocate dimension
+destinations separately from physical, child, catalog, and hosted identities.
+
+Discovery admits the full original raw source and catalogs, then resolves the
+actual embedded v6 extent roster, including nested part paths. Known qualified
+target slots can participate; malformed affected references and opaque affected
+siblings cannot silently bypass dependency review. Independent document-owned
+dimensions remain outside this copy authority. Copies follow the final physical
+and catalog candidate in one grouped contribution. Original dimensions remain
+exact; fresh owners join only the saved active alternative's proposed registry.
+Views and annotation overrides retain qualified correspondence. Existing
+dimensions on changed ordinary hosts carry under the remaining shared
+1000-association budget. The combined fresh inventory remains bounded to4096.
+
+Current and undone history reserve dimension destinations and retained aliases.
+Current, nested, and undone new proofs require reader235/extraction233, with
+extraction derived from the reader floor. Mixed-family and Properties activation
+for these three new leaves requires separate explicit contracts and remains a
+follow-on; historical enclosures do not acquire it. These source additions have
+not been compiled or exercised and do not establish production acceptance.
 
 Reader234 retains wall component dimensions in Properties edits. Phase Properties
 request7 retains request6's exact fields and adds

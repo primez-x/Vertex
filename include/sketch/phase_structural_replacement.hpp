@@ -30,13 +30,16 @@ struct PhaseStructuralReplacementPlan {
     std::vector<std::string> required_child_ids;
     std::vector<PhaseStructuralReplacementDiagnostic> diagnostics;
     std::vector<std::pair<std::string, std::string>> required_hosted_instance_ids;
+    bool complete_component_dimensions{false};
+    std::vector<std::string> required_dimension_ids;
     [[nodiscard]] bool ready() const noexcept;
     bool operator==(const PhaseStructuralReplacementPlan&) const = default;
 };
 
 [[nodiscard]] PhaseStructuralReplacementPlan inspect_phase_structural_replacement_plan(
     const PhaseStructuralReplacementEntities& actual, const std::vector<std::string>& seed_object_ids,
-    const std::string& registry_id, const std::string& alternative_id, bool complete_hosted = false);
+    const std::string& registry_id, const std::string& alternative_id, bool complete_hosted = false,
+    bool complete_component_dimensions = false);
 
 struct PhaseStructuralReplacementAuthoring {
     std::string registry_id;
@@ -48,6 +51,8 @@ struct PhaseStructuralReplacementAuthoring {
     bool complete_hosted{};
     std::map<std::pair<std::string, std::string>, std::string> hosted_instance_identities;
     std::vector<StructuralProfileEditIntent> scalar_profiles;
+    bool complete_component_dimensions{false};
+    PhaseStructuralReplacementIdentityMap dimension_identities;
 };
 
 // Closed v1: version, registry_id, alternative_id, seed_object_ids, identities,
@@ -65,6 +70,10 @@ struct PhaseStructuralReplacementAuthoring {
 // profiles are mutually exclusive with full edits and require complete_hosted.
 // Every proposed body derives from the actual raw source, preserving dormant
 // dimension fields and opaque quantity receipt siblings exactly.
+// Closed v5: {version:5, authoring:<canonical v3 or v4>,
+// complete_component_dimensions:true, dimension_identities:<object>}. Copies
+// the exact supported embedded dimension roster after complete body replay and
+// carries existing dimensions on changed ordinary hosts under ordinary policy.
 [[nodiscard]] nlohmann::json encode_phase_structural_replacement_authoring(
     const PhaseStructuralReplacementAuthoring& authoring);
 [[nodiscard]] PhaseStructuralReplacementAuthoring decode_phase_structural_replacement_authoring(

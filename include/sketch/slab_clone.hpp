@@ -50,8 +50,12 @@ struct SlabCloneResult {
 // Discover a bounded, unique explicit selection from the actual saved active
 // source, including baseline owners. Unsupported affected live dependencies
 // block copying; native slabs do not acquire measurement-boundary authority.
+// The dedicated phase component-dimension lane may opt in to source-admitted
+// embedded v6 target slots. Dimensions remain outside this physical clone plan;
+// their copies and presentation transport belong to the enclosing producer.
 [[nodiscard]] SlabClonePlan inspect_slab_clone_plan(
-    const SlabCloneEntities& source, const std::vector<std::string>& selected_slab_ids);
+    const SlabCloneEntities& source, const std::vector<std::string>& selected_slab_ids,
+    bool complete_component_dimensions = false);
 
 // Reinspect the source and require an exact fresh owner/layer/overlay mapping.
 // Originals and phase registries remain exact; qualified presentation rows gain
@@ -66,9 +70,12 @@ struct SlabCloneResult {
 // returned together for enclosing history reservation.
 // This performs no transform or phase enrollment. Enclosing Document creation
 // reserves identities throughout history and enrolls the new owners.
+// Pass the same component-dimension opt-in used during discovery. Associated
+// original dimensions remain exact; this replay never creates dimension copies.
 [[nodiscard]] SlabCloneResult replay_slab_clone(
     const SlabCloneEntities& source, const SlabClonePlan& plan,
     const SlabCloneIdentityMap& identities,
-    const SlabCloneHostedInstanceIdentityMap& hosted_instance_identities = {});
+    const SlabCloneHostedInstanceIdentityMap& hosted_instance_identities = {},
+    bool complete_component_dimensions = false);
 
 } // namespace sketch

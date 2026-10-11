@@ -35593,7 +35593,7 @@ public:
             if (!session->admitted.roof_intents.empty()) {
                 const auto physical=replay_roof_edit_entities(session->source->entities(),session->admitted.roof_intents);
                 const auto roof=sourceDerivedRoofMathEditCommand(*session->source,physical,session->admitted.roof_intents,
-                    "Paste mixed selection",&session->reserved);
+                    "Paste mixed selection",&session->reserved,false,false);
                 const auto* typed=std::get_if<ApplyBoundaryConstraintChanges>(&roof);
                 if (!typed || !typed->phase_constraint_authoring_completion)
                     throw std::invalid_argument("The complete skylight placement has no closed roof authoring authority.");
@@ -37206,7 +37206,7 @@ public:
             const auto edits=prepare_roof_opening_group_removal(stage.entities(),remaining);
             const auto physical=replay_roof_edit_entities(stage.entities(),edits);
             if (partition_phase_roof_geometry_edits(stage.entities(),edits).replacement) {
-                children=sourceDerivedRoofMathEditCommand(stage,physical,edits,"Delete selected skylights");
+                children=sourceDerivedRoofMathEditCommand(stage,physical,edits,"Delete selected skylights",nullptr,false,false);
             } else {
                 // Retaining a rotated source schema is not rotation authoring.
                 // This operation has only independently reconstructed removal
@@ -50062,7 +50062,8 @@ private:
         const std::map<std::string, Entity, std::less<>>& physical,
         std::vector<RoofEditIntent> edits, const std::string& message,
         std::set<std::string,std::less<>>* shared_reservation=nullptr,
-        bool retain_typed_ordinary_authority=false) {
+        bool retain_typed_ordinary_authority=false,
+        bool complete_component_dimensions=true) {
         if (edits.empty()) return ApplyEntityChanges{source.revision(), {}, {}, message};
         const auto partition = partition_phase_roof_geometry_edits(source.entities(), edits);
         const auto& request = partition.replacement;
@@ -50116,7 +50117,7 @@ private:
             return command;
         }
         const auto plan = inspect_phase_roof_replacement_plan(source.entities(), request->seed_roof_ids,
-            request->registry_id, request->alternative_id, true, true);
+            request->registry_id, request->alternative_id, true, true, complete_component_dimensions);
         if (!plan.ready()) {
             std::string reasons;
             for (const auto& diagnostic : plan.diagnostics) if (diagnostic.blocking) {
@@ -50133,7 +50134,8 @@ private:
         replacement.ordinary_roof_edits = partition.ordinary_roof_edits;
         replacement.phase_qualified_joins = true;
         replacement.include_hosted_instances = true;
-        auto occupied = retainedSlabIdentityNames(source);
+        replacement.complete_component_dimensions = plan.complete_component_dimensions;
+        auto occupied = retainedSlabIdentityNames(source, complete_component_dimensions);
         if (shared_reservation) occupied.insert(shared_reservation->begin(),shared_reservation->end());
         for (const auto* ids : {&plan.required_entity_ids, &plan.required_child_ids})
             for (const auto& id : *ids) {
@@ -50145,6 +50147,12 @@ private:
             auto proposed=new_id("proposed-roof-component");
             while (!occupied.insert(proposed).second) proposed=new_id("proposed-roof-component");
             replacement.hosted_instance_identities.emplace(original,std::move(proposed));
+        }
+        for (const auto& original:plan.required_dimension_ids) {
+            auto proposed=new_id("proposed-roof-dimension");
+            while (!occupied.insert(proposed).second) proposed=new_id("proposed-roof-dimension");
+            if (!replacement.dimension_identities.emplace(original,std::move(proposed)).second)
+                throw std::invalid_argument("A roof dimension has multiple qualified owners.");
         }
         ConstraintAuthoringIntent semantic;
         semantic.message = message;
@@ -50220,7 +50228,8 @@ private:
     }
 
     static Command sourceDerivedStructuralEditCommand(const DocumentSnapshot& source,
-        const std::vector<StructuralObjectEditIntent>& edits,const std::string& message) {
+        const std::vector<StructuralObjectEditIntent>& edits,const std::string& message,
+        bool complete_component_dimensions=true) {
         const auto request=phase_structural_edit_replacement_request(source.entities(),edits);
         if (!request) {
             const auto staged=replay_structural_hosted_component_geometry(source.entities(),edits);
@@ -50235,7 +50244,7 @@ private:
             return augmentAuthoredCommandForRegistry(command,source);
         }
         const auto plan=inspect_phase_structural_replacement_plan(source.entities(),request->seed_object_ids,
-            request->registry_id,request->alternative_id,true);
+            request->registry_id,request->alternative_id,true,complete_component_dimensions);
         if (!plan.ready()) {
             std::string reasons;
             for (const auto& diagnostic:plan.diagnostics) if (diagnostic.blocking) {
@@ -50250,6 +50259,7 @@ private:
         replacement.seed_object_ids=request->seed_object_ids;
         replacement.edits=edits;
         replacement.complete_hosted=true;
+        replacement.complete_component_dimensions=plan.complete_component_dimensions;
         auto occupied=retainedSlabIdentityNames(source,true);
         for (const auto* ids:{&plan.required_entity_ids,&plan.required_child_ids})
             for (const auto& original:*ids) {
@@ -50263,6 +50273,12 @@ private:
             while (!occupied.insert(proposed).second) proposed=new_id("proposed-component");
             if (!replacement.hosted_instance_identities.emplace(original,std::move(proposed)).second)
                 throw std::invalid_argument("A structural component has multiple qualified owners.");
+        }
+        for (const auto& original:plan.required_dimension_ids) {
+            auto proposed=new_id("proposed-structural-dimension");
+            while (!occupied.insert(proposed).second) proposed=new_id("proposed-structural-dimension");
+            if (!replacement.dimension_identities.emplace(original,std::move(proposed)).second)
+                throw std::invalid_argument("A structural dimension has multiple qualified owners.");
         }
         ConstraintAuthoringIntent semantic;
         semantic.message=message;
@@ -51380,7 +51396,8 @@ private:
     static Command sourceDerivedSlabEditCommand(const DocumentSnapshot& source,
         const std::vector<SlabProfileEditIntent>& profiles,
         const std::vector<SlabLayerStackEditIntent>& stacks,
-        const std::vector<SlabGeometryEditIntent>& geometry, const std::string& message) {
+        const std::vector<SlabGeometryEditIntent>& geometry, const std::string& message,
+        bool complete_component_dimensions=true) {
         if ((static_cast<int>(!profiles.empty()) + static_cast<int>(!stacks.empty()) +
              static_cast<int>(!geometry.empty())) > 1)
             throw std::invalid_argument("Edit horizontal profiles, layer inventories and outlines separately.");
@@ -51404,7 +51421,7 @@ private:
                     if (std::any_of(original.layers.begin(), original.layers.end(), [&](const auto& layer) {
                             return layer.id == row.layer_id;
                         })) continue;
-                    if (!occupied) occupied = retainedSlabIdentityNames(source);
+                    if (!occupied) occupied = retainedSlabIdentityNames(source,complete_component_dimensions);
                     if (!occupied->insert(row.layer_id).second)
                         throw std::invalid_argument("A new assembly layer identity is already reserved in retained history.");
                 }
@@ -51425,7 +51442,7 @@ private:
             return command;
         }
         const auto plan = inspect_phase_slab_replacement_plan(source.entities(), request->seed_slab_ids,
-            request->registry_id, request->alternative_id);
+            request->registry_id, request->alternative_id, complete_component_dimensions);
         if (!plan.ready()) {
             std::string reasons;
             for (const auto& diagnostic : plan.diagnostics) if (diagnostic.blocking) {
@@ -51440,12 +51457,13 @@ private:
         replacement.seed_slab_ids = request->seed_slab_ids;
         replacement.slab_profiles = profiles;
         replacement.slab_stacks = stacks;
+        replacement.complete_component_dimensions = plan.complete_component_dimensions;
         if (geometry_partition) {
             replacement.slab_geometry = geometry_partition->baseline_geometry;
             replacement.ordinary_geometry = geometry_partition->ordinary_geometry;
             replacement.coordinate_ordinary_hosted_geometry = !replacement.ordinary_geometry.empty();
         }
-        if (!occupied) occupied = retainedSlabIdentityNames(source);
+        if (!occupied) occupied = retainedSlabIdentityNames(source,complete_component_dimensions);
         for (const auto* slots : {&plan.required_entity_ids, &plan.required_child_ids})
             for (const auto& original : *slots) {
                 auto proposed = new_id("proposed");
@@ -51456,6 +51474,12 @@ private:
             auto proposed = new_id("proposed-component");
             while (!occupied->insert(proposed).second) proposed = new_id("proposed-component");
             replacement.hosted_instance_identities.emplace(original, std::move(proposed));
+        }
+        for (const auto& original:plan.required_dimension_ids) {
+            auto proposed=new_id("proposed-slab-dimension");
+            while (!occupied->insert(proposed).second) proposed=new_id("proposed-slab-dimension");
+            if (!replacement.dimension_identities.emplace(original,std::move(proposed)).second)
+                throw std::invalid_argument("A slab dimension has multiple qualified owners.");
         }
         ConstraintAuthoringIntent semantic;
         semantic.message = message;
@@ -51481,8 +51505,9 @@ private:
     }
 
     static Command sourceDerivedSlabGeometryEditCommand(const DocumentSnapshot& source,
-        const std::vector<SlabGeometryEditIntent>& geometry, const std::string& message) {
-        return sourceDerivedSlabEditCommand(source, {}, {}, geometry, message);
+        const std::vector<SlabGeometryEditIntent>& geometry, const std::string& message,
+        bool complete_component_dimensions=true) {
+        return sourceDerivedSlabEditCommand(source, {}, {}, geometry, message, complete_component_dimensions);
     }
 
     static Command sourceDerivedStairPhysicalGroupTransformCommand(const DocumentSnapshot& source,
@@ -51503,7 +51528,7 @@ private:
         if (stairs.empty()) throw std::invalid_argument("The stair group requires an actual stair or railing.");
         const auto stair_command=sourceDerivedStairTransformCommand(source,stairs,message);
         if (other.empty()) return stair_command;
-        const auto other_command=sourceDerivedPhysicalGroupTransformCommand(source,other,message);
+        const auto other_command=sourceDerivedPhysicalGroupTransformCommand(source,other,message,false);
         const auto empty=[](const Command& command) {
             const auto ordinary=std::get_if<ApplyEntityChanges>(&command);
             return ordinary && ordinary->entity_changes.empty() && ordinary->asset_changes.empty();
@@ -51572,7 +51597,8 @@ private:
     }
 
     static Command sourceDerivedPhysicalGroupTransformCommand(const DocumentSnapshot& source,
-        std::span<const ArchitecturalGroupTransformTarget> targets, const std::string& message) {
+        std::span<const ArchitecturalGroupTransformTarget> targets, const std::string& message,
+        bool complete_component_dimensions=true) {
         if (targets.empty() || targets.size() > maximum_architectural_group_targets)
             throw std::invalid_argument("Select a bounded group of actual architectural objects.");
         if (std::any_of(targets.begin(),targets.end(),[&](const auto& target) {
@@ -51594,7 +51620,7 @@ private:
             } else if (found->second.type == "roof" || found->second.type == "slab") other.push_back(target);
             else throw std::invalid_argument("This group requires columns, beams, roofs or horizontal assemblies.");
         }
-        if (structural.empty()) return sourceDerivedRoofSlabTransformCommand(source, other, message);
+        if (structural.empty()) return sourceDerivedRoofSlabTransformCommand(source, other, message,complete_component_dimensions);
         const auto physical = replay_structural_object_edit_entities(source.entities(), structural);
         std::erase_if(structural, [&](const auto& edit) {
             const auto& before = source.entities().at(edit.object_id);
@@ -51603,10 +51629,13 @@ private:
                 before.extensions.dump() == after.extensions.dump();
         });
         if (structural.empty()) return other.empty() ? Command{ApplyEntityChanges{source.revision(), {}, {}, message}} :
-            sourceDerivedRoofSlabTransformCommand(source, other, message);
-        const auto structural_command = sourceDerivedStructuralEditCommand(source, structural, message);
+            sourceDerivedRoofSlabTransformCommand(source, other, message,complete_component_dimensions);
+        // Historical mixed-family records cannot grant the new standalone
+        // dimension-copy authority. Their dedicated enclosure is separate.
+        const auto structural_command = sourceDerivedStructuralEditCommand(source, structural, message,
+            complete_component_dimensions && other.empty());
         if (other.empty()) return structural_command;
-        const auto other_command = sourceDerivedRoofSlabTransformCommand(source, other, message);
+        const auto other_command = sourceDerivedRoofSlabTransformCommand(source, other, message,false);
         const auto* ordinary_structural = std::get_if<ApplyEntityChanges>(&structural_command);
         const auto* ordinary_other = std::get_if<ApplyEntityChanges>(&other_command);
         if (ordinary_other && ordinary_other->entity_changes.empty()) return structural_command;
@@ -51730,7 +51759,8 @@ private:
             const auto& type=source.entities().at(target.entity_id).type;
             return type=="stair" || type=="railing";
         });
-        const auto physical_command = sourceDerivedPhysicalGroupTransformCommand(source, physical_targets, message);
+        const auto physical_command = sourceDerivedPhysicalGroupTransformCommand(source, physical_targets, message,
+            wall_move.targets.empty());
         if (wall_move.targets.empty()) return physical_command;
         ConstraintAuthoringIntent wall_semantic;
         wall_semantic.wall_geometry_move = std::move(wall_move);
@@ -51866,7 +51896,8 @@ private:
     }
 
     static Command sourceDerivedRoofSlabTransformCommand(const DocumentSnapshot& source,
-        std::span<const ArchitecturalGroupTransformTarget> targets, const std::string& message) {
+        std::span<const ArchitecturalGroupTransformTarget> targets, const std::string& message,
+        bool complete_component_dimensions=true) {
         if (targets.empty() || targets.size() > maximum_architectural_group_targets)
             throw std::invalid_argument("Select a bounded group of actual roofs and horizontal assemblies.");
         std::set<std::string, std::less<>> owners;
@@ -51895,11 +51926,12 @@ private:
         }
         if (roof_edits.empty())
             return slabs.empty() ? Command{ApplyEntityChanges{source.revision(), {}, {}, message}} :
-                sourceDerivedSlabGeometryEditCommand(source, slabs, message);
-        if (slabs.empty()) return sourceDerivedRoofMathEditCommand(source, roof_physical, std::move(roof_edits), message);
+                sourceDerivedSlabGeometryEditCommand(source, slabs, message,complete_component_dimensions);
+        if (slabs.empty()) return sourceDerivedRoofMathEditCommand(source, roof_physical, std::move(roof_edits), message,
+            nullptr,false,complete_component_dimensions);
 
-        const auto roof_command = sourceDerivedRoofMathEditCommand(source, roof_physical, roof_edits, message);
-        const auto slab_command = sourceDerivedSlabGeometryEditCommand(source, slabs, message);
+        const auto roof_command = sourceDerivedRoofMathEditCommand(source, roof_physical, roof_edits, message,nullptr,false,false);
+        const auto slab_command = sourceDerivedSlabGeometryEditCommand(source, slabs, message,false);
         const auto* ordinary_roofs = std::get_if<ApplyEntityChanges>(&roof_command);
         const auto* ordinary_slabs = std::get_if<ApplyEntityChanges>(&slab_command);
         if (ordinary_roofs && ordinary_slabs) {
@@ -52249,7 +52281,7 @@ private:
         const auto& request=partition.replacement;
         if (!request) throw std::invalid_argument("The roof's active baseline membership changed before replacement.");
         const auto plan=inspect_phase_roof_replacement_plan(source.entities(),request->seed_roof_ids,
-            request->registry_id,request->alternative_id,true,true);
+            request->registry_id,request->alternative_id,true,true,true);
         if (!plan.ready()) {
             QStringList reasons;
             for (const auto& diagnostic:plan.diagnostics) if (diagnostic.blocking)
@@ -52264,10 +52296,11 @@ private:
         replacement.ordinary_roof_edits=partition.ordinary_roof_edits;
         replacement.phase_qualified_joins=true;
         replacement.include_hosted_instances=true;
+        replacement.complete_component_dimensions=plan.complete_component_dimensions;
         // Current and retained entity names are reserved before allocation;
         // replay and Document also check owned children, opaque retained names
         // and every declared replacement identity, including after Undo.
-        auto occupied=retainedSlabIdentityNames(source);
+        auto occupied=retainedSlabIdentityNames(source,true);
         for (const auto* ids:{&plan.required_entity_ids,&plan.required_child_ids})
             for (const auto& original:*ids) {
                 auto proposed=new_id("proposed");
@@ -52278,6 +52311,12 @@ private:
             auto proposed=new_id("proposed-roof-component");
             while (!occupied.insert(proposed).second) proposed=new_id("proposed-roof-component");
             replacement.hosted_instance_identities.emplace(original,std::move(proposed));
+        }
+        for (const auto& original:plan.required_dimension_ids) {
+            auto proposed=new_id("proposed-roof-dimension");
+            while (!occupied.insert(proposed).second) proposed=new_id("proposed-roof-dimension");
+            if (!replacement.dimension_identities.emplace(original,std::move(proposed)).second)
+                throw std::invalid_argument("A roof dimension has multiple qualified owners.");
         }
         ConstraintAuthoringIntent semantic;
         semantic.message=raw->message;
@@ -71576,7 +71615,7 @@ public:
                 std::pair{b.at("roof_id").template get<std::string>(),b.at("opening_id").template get<std::string>()}; });
         if (!roof_edits.empty()) {
             const auto physical=replay_roof_edit_entities(source->entities(),roof_edits);
-            const auto leaf=sourceDerivedRoofMathEditCommand(*source,physical,roof_edits,message,nullptr,true);
+            const auto leaf=sourceDerivedRoofMathEditCommand(*source,physical,roof_edits,message,nullptr,true,false);
             const auto* typed=std::get_if<ApplyBoundaryConstraintChanges>(&leaf);
             if (!typed || !typed->phase_constraint_authoring_completion)
                 throw std::invalid_argument("The complete skylight transform has no typed source authority.");

@@ -41,6 +41,10 @@ struct PhaseRoofReplacementPlan {
     // local instance identities are qualified by their original catalog owner.
     bool include_hosted_instances{};
     std::vector<PhaseRoofReplacementHostedInstanceKey> required_hosted_instance_ids;
+    // Exact embedded v6 extent roster, including nested paths, discovered from
+    // the selected original hosted roots. Requires complete hosted authority.
+    bool complete_component_dimensions{};
+    std::vector<std::string> required_dimension_ids;
     [[nodiscard]] bool ready() const noexcept;
     bool operator==(const PhaseRoofReplacementPlan&) const = default;
 };
@@ -56,7 +60,8 @@ struct PhaseRoofReplacementResult {
 [[nodiscard]] PhaseRoofReplacementPlan inspect_phase_roof_replacement_plan(
     const PhaseRoofReplacementEntities& source, const std::vector<std::string>& seed_roof_ids,
     const std::string& registry_id, const std::string& alternative_id,
-    bool phase_qualified_joins = false, bool include_hosted_instances = false);
+    bool phase_qualified_joins = false, bool include_hosted_instances = false,
+    bool complete_component_dimensions = false);
 
 // Reinspects the full retained map, independently replays typed edits on source
 // owners, then derives copies. Registry and qualified presentation owners change
@@ -75,7 +80,8 @@ struct PhaseRoofReplacementResult {
     const std::vector<RoofEditIntent>& ordinary_roof_edits = {},
     bool phase_qualified_joins = false,
     const PhaseRoofReplacementHostedInstanceIdentityMap& hosted_instance_identities = {},
-    bool include_hosted_instances = false);
+    bool include_hosted_instances = false,
+    const PhaseRoofReplacementIdentityMap& dimension_identities = {});
 
 struct PhaseRoofReplacementAuthoring {
     std::string registry_id;
@@ -104,6 +110,10 @@ struct PhaseRoofReplacementAuthoring {
     // except for independently admitted ordinary hosted movement.
     bool include_hosted_instances{};
     PhaseRoofReplacementHostedInstanceIdentityMap hosted_instance_identities;
+    // Version eleven measures source-to-final copied frames and carries existing
+    // dimensions on actual changed ordinary hosts under one association budget.
+    bool complete_component_dimensions{};
+    PhaseRoofReplacementIdentityMap dimension_identities;
 };
 
 // Version 1 retains exactly its six profile fields. Version 2 adds only
@@ -125,6 +135,9 @@ struct PhaseRoofReplacementAuthoring {
 // least one composite v9 / opening v4 across the baseline and ordinary lists.
 // Historical leaves cannot borrow those nested versions. The complete source
 // replacement path preserves original owners and remaps admitted child IDs.
+// Version 11 is a closed wrapper containing version, canonical version-nine/ten
+// authoring, complete_component_dimensions:true and dimension_identities only.
+// It carries the exact source embedded dimension roster after final host replay.
 [[nodiscard]] nlohmann::json encode_phase_roof_replacement_authoring(
     const PhaseRoofReplacementAuthoring& authoring);
 [[nodiscard]] PhaseRoofReplacementAuthoring decode_phase_roof_replacement_authoring(

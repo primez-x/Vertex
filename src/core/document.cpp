@@ -4130,6 +4130,7 @@ static void validate_retained_authoring_receipt_identities(
                     const auto slab = decode_phase_slab_replacement_authoring(intent.slab_replacement);
                     require_unused(slab.identities);
                     require_unused(slab.hosted_instance_identities);
+                    require_unused(slab.dimension_identities);
                     for (const auto& stack : slab.slab_stacks)
                         for (const auto& row : stack.layers) if (fresh.contains(row.layer_id))
                             throw std::invalid_argument("Slab layer identity was already reserved by retained intent: " + row.layer_id);
@@ -4138,6 +4139,7 @@ static void validate_retained_authoring_receipt_identities(
                     const auto roof=decode_phase_roof_replacement_authoring(intent.roof_replacement);
                     require_unused(roof.identities);
                     require_unused(roof.hosted_instance_identities);
+                    require_unused(roof.dimension_identities);
                     for (const auto& [original, ids] : roof.demolition_additional_identities) {
                         (void)original;
                         for (const auto& id : ids) if (fresh.contains(id))
@@ -4155,6 +4157,7 @@ static void validate_retained_authoring_receipt_identities(
                     const auto structural=decode_phase_structural_replacement_authoring(intent.structural_replacement);
                     require_unused(structural.identities);
                     require_unused(structural.hosted_instance_identities);
+                    require_unused(structural.dimension_identities);
                 }
                 if (!intent.stair_replacement.is_null()) {
                     const auto stair=decode_phase_stair_replacement_authoring(intent.stair_replacement);
@@ -4286,6 +4289,9 @@ static void validate_phase_constraint_fresh_lifetime(const std::map<std::string,
     bool complete_component_dimension_demolition=false;
     bool complete_stair_component_dimension_copies=false;
     bool complete_wall_component_dimension_copies=false;
+    bool complete_roof_component_dimension_copies=false;
+    bool complete_slab_component_dimension_copies=false;
+    bool complete_structural_component_dimension_copies=false;
     bool complete_stair_ordinary_dimension_carry=false;
     bool complete_coordinated_stair_dimension_copies=false;
     bool complete_coordinated_wall_dimension_copies=false;
@@ -4448,6 +4454,8 @@ static void validate_phase_constraint_fresh_lifetime(const std::map<std::string,
             complete_envelope_reservation=true;
             structural_asset_reservation=true;
             structural_hosted_alias_reservation=structural_hosted_alias_reservation || replacement.complete_hosted;
+            complete_structural_component_dimension_copies=complete_structural_component_dimension_copies ||
+                replacement.complete_component_dimensions;
             for (const auto& [original,id]:replacement.identities) {
                 (void)original;fresh.insert(id);nested_fresh.insert(id);
             }
@@ -4457,14 +4465,24 @@ static void validate_phase_constraint_fresh_lifetime(const std::map<std::string,
                 nested_fresh.insert(id);
                 proposed_hosted_instances.emplace(replacement.identities.at(original.first),id);
             }
+            for (const auto& [original,id]:replacement.dimension_identities) {
+                (void)original;
+                // Persisted dimensions already appear in candidate fresh owners.
+                if (!nested_fresh.insert(id).second)
+                    throw std::invalid_argument("A proposed structural dimension overlaps another declared identity: "+id);
+                fresh.insert(id);
+            }
         }
         if (!intent.roof_replacement.is_null()) {
             const auto replacement=decode_phase_roof_replacement_authoring(intent.roof_replacement);
+            complete_roof_component_dimension_copies=complete_roof_component_dimension_copies ||
+                replacement.complete_component_dimensions;
+            structural_hosted_alias_reservation=structural_hosted_alias_reservation || replacement.complete_component_dimensions;
             roof_mixed_asset_reservation=roof_mixed_asset_reservation ||
                 !replacement.ordinary_roof_edits.empty() || replacement.phase_qualified_joins;
             complete_envelope_reservation=complete_envelope_reservation ||
                 !replacement.roof_opening_edits.empty() || !replacement.roof_edits.empty() || replacement.demolition ||
-                replacement.include_hosted_instances;
+                replacement.include_hosted_instances || replacement.complete_component_dimensions;
             hosted_slab_asset_reservation=hosted_slab_asset_reservation || replacement.include_hosted_instances;
             for (const auto& [original,id]:replacement.identities) {
                 (void)original;fresh.insert(id);nested_fresh.insert(id);
@@ -4474,6 +4492,13 @@ static void validate_phase_constraint_fresh_lifetime(const std::map<std::string,
                     throw std::invalid_argument("A proposed roof-hosted component overlaps another fresh identity: "+id);
                 nested_fresh.insert(id);
                 proposed_hosted_instances.emplace(replacement.identities.at(original.first),id);
+            }
+            for (const auto& [original,id]:replacement.dimension_identities) {
+                (void)original;
+                // Persisted dimensions already appear in candidate fresh owners.
+                if (!nested_fresh.insert(id).second)
+                    throw std::invalid_argument("A proposed roof dimension overlaps another declared identity: "+id);
+                fresh.insert(id);
             }
             for (const auto& [original, ids] : replacement.demolition_additional_identities) {
                 (void)original;
@@ -4492,16 +4517,27 @@ static void validate_phase_constraint_fresh_lifetime(const std::map<std::string,
         if (!intent.slab_replacement.is_null()) {
             const auto replacement=decode_phase_slab_replacement_authoring(intent.slab_replacement);
             complete_envelope_reservation=true;
+            complete_slab_component_dimension_copies=complete_slab_component_dimension_copies ||
+                replacement.complete_component_dimensions;
+            structural_hosted_alias_reservation=structural_hosted_alias_reservation || replacement.complete_component_dimensions;
             for (const auto& [original,id]:replacement.identities) {
                 (void)original;fresh.insert(id);nested_fresh.insert(id);
             }
             hosted_slab_asset_reservation=hosted_slab_asset_reservation ||
-                !replacement.hosted_instance_identities.empty() || replacement.coordinate_ordinary_hosted_geometry;
+                !replacement.hosted_instance_identities.empty() || replacement.coordinate_ordinary_hosted_geometry ||
+                replacement.complete_component_dimensions;
             for (const auto& [original,id]:replacement.hosted_instance_identities) {
                 if (!fresh.insert(id).second)
                     throw std::invalid_argument("A proposed hosted component overlaps another fresh replacement identity: "+id);
                 nested_fresh.insert(id);
                 proposed_hosted_instances.emplace(replacement.identities.at(original.first),id);
+            }
+            for (const auto& [original,id]:replacement.dimension_identities) {
+                (void)original;
+                // Persisted dimensions already appear in candidate fresh owners.
+                if (!nested_fresh.insert(id).second)
+                    throw std::invalid_argument("A proposed slab dimension overlaps another declared identity: "+id);
+                fresh.insert(id);
             }
             for (const auto& stack : replacement.slab_stacks) {
                 Slab original; std::string diagnostic;
@@ -4666,6 +4702,18 @@ static void validate_phase_constraint_fresh_lifetime(const std::map<std::string,
         for (const auto* token:{"authoring","complete_component_dimensions","dimension_identities"})
             if (fresh.contains(token))
                 throw std::invalid_argument("A proposed wall destination borrows a dimension copy proof field: "+std::string(token));
+    if (complete_roof_component_dimension_copies)
+        for (const auto* token:{"authoring","complete_component_dimensions","dimension_identities","roof_edit_version"})
+            if (fresh.contains(token))
+                throw std::invalid_argument("A proposed roof destination borrows a dimension copy proof field: "+std::string(token));
+    if (complete_slab_component_dimension_copies)
+        for (const auto* token:{"authoring","complete_component_dimensions","dimension_identities","slab_edit_version"})
+            if (fresh.contains(token))
+                throw std::invalid_argument("A proposed slab destination borrows a dimension copy proof field: "+std::string(token));
+    if (complete_structural_component_dimension_copies)
+        for (const auto* token:{"authoring","complete_component_dimensions","dimension_identities","structural_edit_version"})
+            if (fresh.contains(token))
+                throw std::invalid_argument("A proposed structural destination borrows a dimension copy proof field: "+std::string(token));
     if (complete_coordinated_stair_dimension_copies && fresh.contains("complete_stair_component_dimensions"))
         throw std::invalid_argument("A coordinated stair destination borrows its dimension copy proof field");
     if (complete_coordinated_wall_dimension_copies && fresh.contains("complete_wall_component_dimensions"))

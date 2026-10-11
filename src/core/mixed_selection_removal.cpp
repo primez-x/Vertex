@@ -115,6 +115,8 @@ Command closed_command(const Json& value,bool child) {
         const auto intent=decode_phase_constraint_authoring_intent(typed.phase_constraint_authoring_intent);
         if (intent.roof_replacement.is_null()) reject("child phase command must retain a roof replacement");
         const auto replacement=decode_phase_roof_replacement_authoring(intent.roof_replacement);
+        if (replacement.complete_component_dimensions)
+            reject("historical mixed removal cannot borrow roof component dimension copies");
         if (replacement.demolition || !replacement.phase_qualified_joins || !replacement.include_hosted_instances ||
             !replacement.roof_profiles.empty() || !replacement.roof_opening_edits.empty() || replacement.roof_edits.empty())
             reject("child replacement must retain combined roof edit authority only");

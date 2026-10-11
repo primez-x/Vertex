@@ -338,7 +338,8 @@ public:
     // v232 retains wall leaf12 component dimension copies through phase outer36 and retained history.
     // v233 retains coordinated wall component dimension copies through inner8/outer37 and history.
     // v234 retains wall dimension Properties request7 and sealed mixed receipts24/25/26.
-    static constexpr std::uint32_t format_version = 234;
+    // v235 retains roof11/slab8/structural5 dimension copies and phase outer38/39/40 throughout history.
+    static constexpr std::uint32_t format_version = 235;
     static constexpr std::uint32_t recovery_format_version = 4;
     [[nodiscard]] static std::uint32_t required_format_version(const DocumentSnapshot& snapshot);
     static constexpr std::uint64_t maximum_file_bytes = 4ULL * 1024ULL * 1024ULL * 1024ULL;

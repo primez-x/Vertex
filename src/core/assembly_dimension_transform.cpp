@@ -398,6 +398,95 @@ std::vector<Entity> carry_requests(
 }
 } // namespace
 
+std::map<std::string, Root, std::less<>> inspect_embedded_assembly_dimension_clone_roster(
+    const AssemblyDocumentEntities& source,
+    std::span<const std::pair<std::string, std::string>> roots) {
+    require(roots.size() <= 4096, "embedded clone root count exceeds bound");
+    RawBudget raw; raw.map(source);
+    AssemblyCatalogTransferBudget catalogs;
+    for (const auto& [id, entity] : source) {
+        (void)id;
+        if (entity.type == "assembly_model") admit_existing_assembly_catalog_work(entity, catalogs);
+    }
+    std::set<std::pair<std::string_view, std::string_view>> requested;
+    std::set<std::string_view> requested_catalogs;
+    RootRows rows(source);
+    for (const auto& root : roots) {
+        raw.text(root.first); raw.text(root.second);
+        require(requested.emplace(root.first, root.second).second, "embedded clone root is duplicated");
+        requested_catalogs.insert(root.first);
+        const Root target{root.first, root.second, std::nullopt, {}};
+        (void)encode_assembly_dimension_target({target, AssemblyDimensionAxis::width});
+        require(rows.find(RootKey{root.first, root.second, std::nullopt}), "embedded clone root is missing");
+    }
+    const auto field = [](const Json& object, const char* name) -> const Json* {
+        if (!object.is_object()) return nullptr;
+        const auto found = object.find(name);
+        return found == object.end() ? nullptr : &*found;
+    };
+    std::map<std::string, Root, std::less<>> result;
+    std::vector<AssemblyDimensionTarget> targets;
+    for (const auto& [id, entity] : source) {
+        if (!can_recognize_boundary_dimension_entity_type(entity.type)) continue;
+        const auto* target = field(entity.properties, "target");
+        const auto* assembly = target ? field(*target, "assembly") : nullptr;
+        const auto* catalog = assembly ? field(*assembly, "catalog_id") : nullptr;
+        const auto* instance = assembly ? field(*assembly, "instance_id") : nullptr;
+        const auto* carrier = target ? field(*target, "entity_id") : nullptr;
+        const bool selected_carrier = carrier && carrier->is_string() &&
+            requested_catalogs.contains(carrier->get_ref<const std::string&>());
+        const bool selected_catalog = catalog && catalog->is_string() &&
+            requested_catalogs.contains(catalog->get_ref<const std::string&>());
+        if (!selected_catalog) {
+            require(!selected_carrier, "affected clone dimension has no qualified catalog target");
+            continue;
+        }
+        require(instance && instance->is_string(), "affected clone dimension has no qualified instance target");
+        if (!requested.contains({catalog->get_ref<const std::string&>(), instance->get_ref<const std::string&>()})) continue;
+        const auto* owner = field(*assembly, "document_entity_id");
+        if (owner && !owner->is_null()) {
+            require(owner->is_string(), "affected clone dimension has an invalid independent owner");
+            const auto& owner_id = owner->get_ref<const std::string&>();
+            document_id(owner_id);
+            require(rows.find(RootKey{catalog->get_ref<const std::string&>(),
+                instance->get_ref<const std::string&>(), std::string_view(owner_id)}),
+                "affected clone dimension has no actual independent root");
+            continue;
+        }
+        const auto decoded = decode_boundary_dimension_entity(entity);
+        require(owner && decoded.supported() && decoded.version == 6 && decoded.dimension &&
+            decoded.dimension->kind == BoundaryDimensionKind::assembly_extent && decoded.dimension->assembly_target &&
+            !decoded.dimension->assembly_target->component.document_entity_id,
+            "affected embedded clone dimension requires a supported v6 extent");
+        const auto& component = decoded.dimension->assembly_target->component;
+        require(component.catalog_id == catalog->get_ref<const std::string&>() &&
+            component.instance_id == instance->get_ref<const std::string&>() &&
+            decoded.dimension->boundary_id == component.catalog_id, "embedded clone dimension target framing differs");
+        require(result.size() < dimension_limit, "embedded clone dimension count exceeds bound");
+        raw.entity(entity);
+        targets.push_back(*decoded.dimension->assembly_target);
+        result.emplace(id, component);
+    }
+    if (!targets.empty()) (void)resolve_assembly_dimensions(source, targets);
+    return result;
+}
+
+Entity assembly_dimension_clone_dependency_remainder(const Entity& entity) {
+    RawBudget raw; raw.entity(entity);
+    const auto decoded = decode_boundary_dimension_entity(entity);
+    require(decoded.supported() && decoded.version == 6 && decoded.dimension &&
+        decoded.dimension->kind == BoundaryDimensionKind::assembly_extent && decoded.dimension->assembly_target &&
+        !decoded.dimension->assembly_target->component.document_entity_id,
+        "dependency remainder requires a supported embedded v6 extent");
+    auto result = entity;
+    auto& target = result.properties.at("target");
+    target.erase("entity_id");
+    auto& assembly = target.at("assembly");
+    for (const auto* name : {"version", "form", "catalog_id", "instance_id", "document_entity_id", "part_path", "axis"})
+        assembly.erase(name);
+    return result;
+}
+
 std::vector<Entity> carry_assembly_dimension_transform_entities(
     const AssemblyDocumentEntities& source, const AssemblyDocumentEntities& candidate,
     const Root& source_root, const Root& destination_root, AssemblyDimensionTransformMode mode,

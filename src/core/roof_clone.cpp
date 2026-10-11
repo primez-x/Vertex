@@ -3,6 +3,7 @@
 #include "sketch/annotation_entity_codec.hpp"
 #include "sketch/architecture.hpp"
 #include "sketch/assembly_document_adapter.hpp"
+#include "sketch/assembly_dimension_transform.hpp"
 #include "sketch/assembly_geometry.hpp"
 #include "sketch/assembly_model.hpp"
 #include "sketch/boundary_dimension.hpp"
@@ -315,12 +316,14 @@ struct Derivation {
     std::map<std::string, Json, std::less<>> independent_assignments;
 };
 Derivation derive(const RoofCloneEntities& source, const std::vector<std::string>& selected,
-    bool include_hosted_instances) {
+    bool include_hosted_instances, bool complete_component_dimensions = false) {
     Derivation result;
     auto& plan = result.plan; plan.selected_roof_ids = selected;
     plan.include_hosted_instances = include_hosted_instances;
     try {
         (void)occupied_strings(source, include_hosted_instances);
+        if (complete_component_dimensions && !include_hosted_instances)
+            reject("component dimension discovery requires hosted clone discovery");
         if (selected.empty() || selected.size() > maximum_identities) reject("requires bounded nonempty explicit roof selection");
         std::sort(plan.selected_roof_ids.begin(), plan.selected_roof_ids.end());
         if (std::adjacent_find(plan.selected_roof_ids.begin(), plan.selected_roof_ids.end()) != plan.selected_roof_ids.end())
@@ -409,7 +412,14 @@ Derivation derive(const RoofCloneEntities& source, const std::vector<std::string
                 admit_assignment(source, assignment); result.independent_assignments.emplace(roof, std::move(assignment));
             }
         }
+        Ids catalogs;
+        std::map<std::string, AssemblyInstancePropertyEditTarget, std::less<>> component_dimensions;
+        if (complete_component_dimensions) {
+            catalogs = discover_hosted_assemblies(plan, source, roofs, scope);
+            component_dimensions = inspect_embedded_assembly_dimension_clone_roster(source, plan.required_hosted_instance_ids);
+        }
         for (const auto& [id, entity] : source) if (can_recognize_boundary_dimension_entity_type(entity.type)) {
+            if (component_dimensions.contains(id)) continue;
             try {
                 const auto decoded = decode_boundary_dimension_entity(entity);
                 if (decoded.supported() && owners.contains(decoded.dimension->boundary_id)) {
@@ -421,13 +431,14 @@ Derivation derive(const RoofCloneEntities& source, const std::vector<std::string
                 if (touches(entity.properties, owners) || touches(entity.extensions, owners)) diagnostic(plan, id, error.what());
             }
         }
-        const auto catalogs = include_hosted_instances ?
-            discover_hosted_assemblies(plan, source, roofs, scope) : Ids{};
+        if (!complete_component_dimensions && include_hosted_instances)
+            catalogs = discover_hosted_assemblies(plan, source, roofs, scope);
         for (const auto& id : catalogs)
             admit_catalog_opaque_instance_references(source.at(id), plan.required_hosted_instance_ids);
         const auto embedded_presentations = include_hosted_instances ?
             embedded_assembly_presentation_ids(source) : EmbeddedAssemblyPresentationIds{};
         Ids all_embedded_aliases, selected_embedded_aliases, presentation_owners = owners;
+        for (const auto& [id, target] : component_dimensions) { (void)target; presentation_owners.insert(id); }
         for (const auto& [key, alias] : embedded_presentations) {
             (void)key; all_embedded_aliases.insert(alias);
         }
@@ -524,11 +535,12 @@ Derivation derive(const RoofCloneEntities& source, const std::vector<std::string
                     validate_annotation_entity(entity);
                     for (const auto& row : entity.properties.at("state").at("overrides"))
                         if (children.contains(row.at("target_id").get<std::string>())) reject("override targets a child without a qualified owner codec");
-                } else if (can_recognize_boundary_dimension_entity_type(entity.type)) {
+                } else if (can_recognize_boundary_dimension_entity_type(entity.type) && !component_dimensions.contains(id)) {
                     const auto decoded = decode_boundary_dimension_entity(entity);
                     if (decoded.supported() && children.contains(decoded.dimension->boundary_id)) reject("dimension targets a child without a qualified owner codec");
                 }
-                const auto remainder = opaque_remainder(entity, include_hosted_instances);
+                const auto remainder = component_dimensions.contains(id) ?
+                    assembly_dimension_clone_dependency_remainder(entity) : opaque_remainder(entity, include_hosted_instances);
                 const bool catalog = include_hosted_instances && entity.type == "assembly_model";
                 const auto& owner_targets = catalog ? native_affected : affected;
                 if (catalog && !selected_embedded_aliases.empty()) {
@@ -546,7 +558,7 @@ Derivation derive(const RoofCloneEntities& source, const std::vector<std::string
                 if (owners.contains(id) || touches(entity.properties, affected) || touches(entity.extensions, affected)) diagnostic(plan, id, error.what());
             }
         }
-        if (owners.size() + catalogs.size() + children.size() + plan.required_hosted_instance_ids.size() > maximum_identities)
+        if (owners.size() + catalogs.size() + children.size() + plan.required_hosted_instance_ids.size() + component_dimensions.size() > maximum_identities)
             reject(include_hosted_instances ? "clone entity/child/hosted identity budget exceeded" :
                 "clone entity/child identity budget exceeded");
         plan.required_entity_ids.assign(owners.begin(), owners.end());
@@ -619,8 +631,8 @@ bool RoofClonePlan::ready() const noexcept {
     return std::none_of(diagnostics.begin(), diagnostics.end(), [](const auto& item) { return item.blocking; });
 }
 RoofClonePlan inspect_roof_clone_plan(const RoofCloneEntities& source, const std::vector<std::string>& selected_roof_ids,
-    bool include_hosted_instances) {
-    return derive(source, selected_roof_ids, include_hosted_instances).plan;
+    bool include_hosted_instances, bool complete_component_dimensions) {
+    return derive(source, selected_roof_ids, include_hosted_instances, complete_component_dimensions).plan;
 }
 RoofCloneResult replay_roof_clone(const RoofCloneEntities& source, const RoofClonePlan& plan,
     const RoofCloneIdentityMap& identities, const RoofCloneHostedInstanceIdentityMap& hosted_instance_identities) {

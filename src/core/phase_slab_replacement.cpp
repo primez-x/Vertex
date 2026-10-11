@@ -2,8 +2,10 @@
 
 #include "sketch/annotation_entity_codec.hpp"
 #include "sketch/assembly_document_adapter.hpp"
+#include "sketch/assembly_dimension_transform.hpp"
 #include "sketch/assembly_model.hpp"
 #include "sketch/assembly_phase_membership_transport.hpp"
+#include "sketch/boundary_dimension.hpp"
 #include "sketch/constraint_phase_scope.hpp"
 #include "sketch/document_solid.hpp"
 #include "sketch/model_phases.hpp"
@@ -25,6 +27,7 @@ using Json = nlohmann::json;
 using Ids = std::set<std::string, std::less<>>;
 constexpr std::size_t maximum_entities = 65536;
 constexpr std::size_t maximum_replacements = 4096;
+constexpr std::size_t maximum_component_dimensions = 1000;
 constexpr std::size_t maximum_authoring_bytes = 1024 * 1024;
 
 [[noreturn]] void reject(const std::string& reason) {
@@ -373,7 +376,8 @@ bool PhaseSlabReplacementPlan::ready() const noexcept {
 
 PhaseSlabReplacementPlan inspect_phase_slab_replacement_plan(
     const PhaseSlabReplacementEntities& source, const std::vector<std::string>& seeds,
-    const std::string& registry_id, const std::string& alternative_id) {
+    const std::string& registry_id, const std::string& alternative_id,
+    bool complete_component_dimensions) {
     try {
         identity(registry_id); identity(alternative_id); (void)occupied_strings(source);
         if (!source.contains(registry_id) || source.at(registry_id).type != "model_phases")
@@ -387,6 +391,7 @@ PhaseSlabReplacementPlan inspect_phase_slab_replacement_plan(
             if (!memberships.emplace(id, registry.registry_id).second) reject("overlapping all-registry model membership: " + id);
         PhaseSlabReplacementPlan plan;
         plan.registry_id = registry_id; plan.alternative_id = alternative_id; plan.seed_slab_ids = seeds;
+        plan.complete_component_dimensions = complete_component_dimensions;
         if (seeds.empty() || seeds.size() > maximum_replacements) reject("requires bounded nonempty explicit slab seeds");
         std::sort(plan.seed_slab_ids.begin(), plan.seed_slab_ids.end());
         if (std::adjacent_find(plan.seed_slab_ids.begin(), plan.seed_slab_ids.end()) != plan.seed_slab_ids.end())
@@ -404,11 +409,21 @@ PhaseSlabReplacementPlan inspect_phase_slab_replacement_plan(
         if (has_hosted_instances(source, owners)) {
             // Reuse the bounded actual-host/native admission producer, without
             // importing its additive presentation replay into replacement.
-            const auto hosted = inspect_slab_clone_plan(source, plan.seed_slab_ids);
+            const auto hosted = inspect_slab_clone_plan(source, plan.seed_slab_ids, complete_component_dimensions);
             for (const auto& item : hosted.diagnostics) diagnostic(plan, item.entity_id, item.reason);
             required_entities.insert(hosted.required_entity_ids.begin(), hosted.required_entity_ids.end());
             plan.required_hosted_instance_ids = hosted.required_hosted_instance_ids;
         }
+        if (complete_component_dimensions) {
+            const auto dimensions = inspect_embedded_assembly_dimension_clone_roster(source,
+                plan.required_hosted_instance_ids);
+            for (const auto& [id, component] : dimensions) {
+                (void)component;
+                plan.required_dimension_ids.push_back(id);
+            }
+        }
+        Ids presentation_owners = owners;
+        presentation_owners.insert(plan.required_dimension_ids.begin(), plan.required_dimension_ids.end());
         Ids children, ambiguous;
         std::map<std::string, std::string, std::less<>> child_owners;
         const auto reserve_child = [&](const std::string& child, const std::string& owner, bool required) {
@@ -424,26 +439,40 @@ PhaseSlabReplacementPlan inspect_phase_slab_replacement_plan(
                 } else if (entity.type == kSheetViewEntityType) {
                     const auto views = decode_sheet_view_entity(entity);
                     for (const auto& view : views.views()) for (const auto& overlay : view.overlays)
-                        reserve_child(overlay.id, id + ":" + view.id, owners.contains(overlay.object_id) ||
-                            (overlay.dimension_binding && owners.contains(overlay.dimension_binding->object_id)));
+                        reserve_child(overlay.id, id + ":" + view.id, presentation_owners.contains(overlay.object_id) ||
+                            (overlay.dimension_binding && presentation_owners.contains(overlay.dimension_binding->object_id)));
                 }
             } catch (const std::exception& error) {
-                if (owners.contains(id) || touches(entity.properties, owners) || touches(entity.extensions, owners))
+                if (presentation_owners.contains(id) || touches(entity.properties, presentation_owners) || touches(entity.extensions, presentation_owners))
                     diagnostic(plan, id, "affected child roster is unsupported: " + std::string(error.what()));
             }
         }
         for (const auto& child : children) if (ambiguous.contains(child))
             diagnostic(plan, child, "copied child identity aliases another retained owner or actual entity");
-        if (required_entities.size() + children.size() + plan.required_hosted_instance_ids.size() > maximum_replacements)
+        if (required_entities.size() + children.size() + plan.required_hosted_instance_ids.size() +
+            plan.required_dimension_ids.size() > maximum_replacements)
             reject("replacement entity/child/hosted budget exceeded");
-        Ids affected = owners; affected.insert(children.begin(), children.end());
+        Ids affected = presentation_owners; affected.insert(children.begin(), children.end());
+        const Ids dimensions(plan.required_dimension_ids.begin(), plan.required_dimension_ids.end());
+        Ids dimension_dependencies = affected;
+        if (complete_component_dimensions) {
+            const auto aliases = embedded_assembly_presentation_ids(source);
+            for (const auto& root : plan.required_hosted_instance_ids) {
+                dimension_dependencies.insert(root.first);
+                dimension_dependencies.insert(root.second);
+                dimension_dependencies.insert(aliases.at(root));
+            }
+        }
         for (const auto& [id, entity] : source) {
             try {
-                const auto remainder = opaque_remainder(entity);
-                if (touches(remainder.properties, affected) || touches(remainder.extensions, affected))
+                const auto remainder = dimensions.contains(id) ?
+                    assembly_dimension_clone_dependency_remainder(entity) : opaque_remainder(entity);
+                const auto& dependencies = dimensions.contains(id) ? dimension_dependencies : affected;
+                if (touches(remainder.properties, dependencies) || touches(remainder.extensions, dependencies))
                     diagnostic(plan, id, "affected reference has no qualified replacement codec; original remains preserved");
             } catch (const std::exception& error) {
-                if (owners.contains(id) || touches(entity.properties, affected) || touches(entity.extensions, affected))
+                const auto& dependencies = dimensions.contains(id) ? dimension_dependencies : affected;
+                if (owners.contains(id) || dimensions.contains(id) || touches(entity.properties, dependencies) || touches(entity.extensions, dependencies))
                     diagnostic(plan, id, "affected typed record is unsupported: " + std::string(error.what()));
             }
         }
@@ -464,8 +493,11 @@ PhaseSlabReplacementResult replay_phase_slab_replacement(
     const std::vector<SlabLayerStackEditIntent>& stacks, const std::vector<SlabGeometryEditIntent>& geometry,
     const std::vector<SlabGeometryEditIntent>& ordinary_geometry,
     const PhaseSlabReplacementHostedInstanceIdentityMap& hosted_instance_identities,
-    bool coordinate_ordinary_hosted_geometry, bool coordinate_hosted_profiles) {
+    bool coordinate_ordinary_hosted_geometry, bool coordinate_hosted_profiles,
+    const PhaseSlabReplacementIdentityMap& dimension_identities) {
     try {
+        if (!plan.complete_component_dimensions && !dimension_identities.empty())
+            reject("dimension identities require v8 component dimension authority");
         const bool profile_edit = !profiles.empty(), stack_edit = !stacks.empty(), geometry_edit = !geometry.empty();
         if ((profile_edit + stack_edit + geometry_edit) != 1)
             reject("requires exactly one nonempty profile, stack or geometry edit family");
@@ -479,7 +511,8 @@ PhaseSlabReplacementResult replay_phase_slab_replacement(
             [](const auto& profile) { return profile.coordinate_hosted_elevation; });
         if (carries_profiles != coordinate_hosted_profiles)
             reject("hosted profile envelope requires at least one carry and historical envelopes prohibit carry");
-        const auto derived = inspect_phase_slab_replacement_plan(source, plan.seed_slab_ids, plan.registry_id, plan.alternative_id);
+        const auto derived = inspect_phase_slab_replacement_plan(source, plan.seed_slab_ids, plan.registry_id,
+            plan.alternative_id, plan.complete_component_dimensions);
         if (derived != plan) reject("supplied plan differs from actual source discovery");
         if (!derived.ready()) reject("replacement has unresolved affected dependencies");
         const Ids seeds(plan.seed_slab_ids.begin(), plan.seed_slab_ids.end());
@@ -518,7 +551,8 @@ PhaseSlabReplacementResult replay_phase_slab_replacement(
         Ids expected(plan.required_entity_ids.begin(), plan.required_entity_ids.end());
         expected.insert(plan.required_child_ids.begin(), plan.required_child_ids.end());
         if (identities.size() != expected.size()) reject("requires complete exact entity/child mapping");
-        if (plan.required_entity_ids.size() > maximum_entities - source.size()) reject("final entity budget exceeded");
+        if (plan.required_entity_ids.size() + plan.required_dimension_ids.size() > maximum_entities - source.size())
+            reject("final entity budget exceeded");
         const auto occupied = occupied_strings(source);
         Ids fresh;
         for (const auto& [old_id, new_id] : identities) {
@@ -534,10 +568,29 @@ PhaseSlabReplacementResult replay_phase_slab_replacement(
             identity(new_id);
             if (occupied.values.contains(new_id) || !fresh.insert(new_id).second) reject("fresh hosted identity collision: " + new_id);
         }
+        const Ids expected_dimensions(plan.required_dimension_ids.begin(), plan.required_dimension_ids.end());
+        if (dimension_identities.size() != expected_dimensions.size()) reject("requires exact component dimension mapping");
+        for (const auto& [old_id, new_id] : dimension_identities) {
+            identity(old_id); identity(new_id);
+            if (!expected_dimensions.contains(old_id)) reject("unrequested component dimension mapping");
+            if (occupied.values.contains(new_id) || !fresh.insert(new_id).second)
+                reject("fresh component dimension identity collision: " + new_id);
+        }
+        if (plan.complete_component_dimensions) {
+            PhaseSlabReplacementAuthoring body{plan.registry_id, plan.alternative_id, plan.seed_slab_ids,
+                identities, profiles, stacks, geometry, ordinary_geometry, hosted_instance_identities,
+                coordinate_ordinary_hosted_geometry, coordinate_hosted_profiles, false, {}};
+            Strings declared; declared.read(encode_phase_slab_replacement_authoring(body));
+            for (const auto& [old_id, new_id] : dimension_identities) {
+                (void)old_id;
+                if (declared.values.contains(new_id)) reject("dimension identity collides with declared body vocabulary");
+            }
+        }
         // Material bindings deliberately retain the actual material catalog.
         // Catalog identity discovery grants no blanket reference remapping.
         Ids affected = seeds;
         affected.insert(plan.required_child_ids.begin(), plan.required_child_ids.end());
+        affected.insert(plan.required_dimension_ids.begin(), plan.required_dimension_ids.end());
         Ids new_layers;
         for (const auto& stack : stacks) {
             const auto before = actual_slab(source.at(stack.slab_id));
@@ -558,6 +611,8 @@ PhaseSlabReplacementResult replay_phase_slab_replacement(
             if (touches(remainder.properties, affected) || touches(remainder.extensions, affected))
                 reject("proposed geometry metadata has an unqualified affected reference: " + intent.slab_id);
         }
+        if (plan.complete_component_dimensions && fresh.size() > maximum_replacements)
+            reject("combined replacement/dimension/new-layer identity budget exceeded");
         admit_slabs(physical, seeds);
         PhaseSlabReplacementResult result{source, identities, {}, hosted_instance_identities};
         const bool has_companions = std::any_of(source.begin(), source.end(),
@@ -584,11 +639,12 @@ PhaseSlabReplacementResult replay_phase_slab_replacement(
             if (!result.entities.emplace(copy_id, std::move(copy)).second) reject("copy insertion collides");
         }
         if (!expected_instances.empty()) {
-            const auto hosted_plan = inspect_slab_clone_plan(source, plan.seed_slab_ids);
+            const auto hosted_plan = inspect_slab_clone_plan(source, plan.seed_slab_ids, plan.complete_component_dimensions);
             PhaseSlabReplacementIdentityMap clone_ids;
             for (const auto& id : hosted_plan.required_entity_ids) clone_ids.emplace(id, identities.at(id));
             for (const auto& id : hosted_plan.required_child_ids) clone_ids.emplace(id, identities.at(id));
-            const auto hosted_copies = replay_slab_clone(source, hosted_plan, clone_ids, hosted_instance_identities);
+            const auto hosted_copies = replay_slab_clone(source, hosted_plan, clone_ids, hosted_instance_identities,
+                plan.complete_component_dimensions);
             AssemblyExpansionBudget hosted_source_budget;
             for (const auto& id : plan.required_entity_ids) {
                 if (seeds.contains(id)) continue;
@@ -674,7 +730,69 @@ PhaseSlabReplacementResult replay_phase_slab_replacement(
             result.entities = transport_assembly_phase_memberships_for_host_copies(source, result.entities,
                 copied_roots, copied_hosts, plan.registry_id, plan.alternative_id);
         }
-        complete_presentation(result.entities, source, seeds, identities);
+        Ids presentation_owners = seeds;
+        auto presentation_identities = identities;
+        if (plan.complete_component_dimensions) {
+            auto candidate_names = occupied_strings(result.entities);
+            for (const auto& [key, alias] : embedded_assembly_presentation_ids(result.entities)) {
+                (void)key; candidate_names.values.insert(alias);
+            }
+            std::map<PhaseSlabReplacementHostedInstanceKey, std::size_t> requests_by_root;
+            std::vector<AssemblyDimensionTransformRequest> requests;
+            for (const auto& id : plan.required_dimension_ids) {
+                const auto& destination = dimension_identities.at(id);
+                if (candidate_names.values.contains(destination))
+                    reject("fresh dimension collides with complete body or computed presentation alias");
+                if (!exact(result.entities.at(id), source.at(id))) reject("body changed an original component dimension");
+                const auto decoded = decode_boundary_dimension_entity(source.at(id));
+                auto component = decoded.dimension->assembly_target->component;
+                const PhaseSlabReplacementHostedInstanceKey key{component.catalog_id, component.instance_id};
+                const auto [request, inserted] = requests_by_root.emplace(key, requests.size());
+                if (inserted) {
+                    component.part_path.clear();
+                    requests.push_back({component,
+                        {identities.at(key.first), hosted_instance_identities.at(key), std::nullopt, {}},
+                        AssemblyDimensionTransformMode::clone, {}});
+                }
+                requests.at(request->second).fresh_dimension_ids.emplace(id, destination);
+            }
+            const auto dimensions = requests.empty() ? std::vector<Entity>{} :
+                carry_assembly_dimension_transform_entities(source, result.entities, requests);
+            if (dimensions.size() != expected_dimensions.size()) reject("dimension contribution differs from exact source roster");
+            Ids copied_dimension_ids;
+            for (const auto& [id, destination] : dimension_identities) {
+                presentation_owners.insert(id); presentation_identities.emplace(id, destination);
+                result.original_to_proposed.emplace(id, destination);
+                copied_dimension_ids.insert(destination);
+            }
+            for (const auto& dimension : dimensions)
+                if (!copied_dimension_ids.contains(dimension.id) || !result.entities.emplace(dimension.id, dimension).second)
+                    reject("dimension contribution has an undeclared or colliding owner");
+            // Append only the new dimensions to the actual saved active
+            // alternative; retain every existing raw list and opaque sibling.
+            auto& registry = result.entities.at(plan.registry_id);
+            const auto phases = ModelPhases::from_json(registry.properties.at("model"));
+            if (phases.active_alternative() != std::optional<std::string>{plan.alternative_id})
+                reject("component dimension clone lost its active alternative");
+            auto dimension_model_ids = phases.entity_ids();
+            auto dimension_alternatives = phases.alternatives();
+            const auto dimension_target = std::find_if(dimension_alternatives.begin(), dimension_alternatives.end(),
+                [&](const auto& row) { return row.id == plan.alternative_id; });
+            if (dimension_target == dimension_alternatives.end()) reject("component dimension clone lost its registry choice");
+            auto dimension_raw = registry.properties.at("model");
+            for (const auto& id : copied_dimension_ids) {
+                dimension_model_ids.push_back(id); dimension_target->proposed_ids.push_back(id);
+                dimension_raw.at("entity_ids").push_back(id);
+            }
+            for (auto& row : dimension_raw.at("alternatives")) if (row.at("id") == plan.alternative_id)
+                for (const auto& id : copied_dimension_ids) row.at("proposed_ids").push_back(id);
+            const auto dimension_phases = ModelPhases::create(dimension_model_ids, phases.baseline_ids(),
+                dimension_alternatives, phases.active_alternative());
+            if (ModelPhases::from_json(dimension_raw).to_json() != dimension_phases.to_json())
+                reject("raw dimension append differs from validated phase update");
+            registry.properties.at("model") = std::move(dimension_raw);
+        }
+        complete_presentation(result.entities, source, presentation_owners, presentation_identities);
         Ids copies;
         for (const auto& id : seeds) copies.insert(identities.at(id));
         copies.insert(ordinary_targets.begin(), ordinary_targets.end());
@@ -693,7 +811,7 @@ PhaseSlabReplacementResult replay_phase_slab_replacement(
             }
             std::vector<std::string> proposed_owners;
             for (const auto& id : seeds) proposed_owners.push_back(identities.at(id));
-            const auto final_plan = inspect_slab_clone_plan(result.entities, proposed_owners);
+            const auto final_plan = inspect_slab_clone_plan(result.entities, proposed_owners, plan.complete_component_dimensions);
             if (!final_plan.ready()) reject("proposed hosted geometry has unresolved actual dependencies");
             std::set<PhaseSlabReplacementHostedInstanceKey> proposed_instances;
             for (const auto& [key, new_id] : hosted_instance_identities)
@@ -722,6 +840,21 @@ PhaseSlabReplacementResult replay_phase_slab_replacement(
             for (const auto& id : plan.required_entity_ids)
                 if (!exact(result.entities.at(id), ordinary ? ordinary->at(id) : source.at(id)))
                     reject("replacement changed an original slab or source catalog");
+        }
+        if (plan.complete_component_dimensions) {
+            std::vector<std::string> actual_changed_hosts;
+            for (const auto& id : ordinary_targets)
+                if (!exact(source.at(id), result.entities.at(id))) actual_changed_hosts.push_back(id);
+            const auto dimensions = carry_hosted_assembly_dimension_transform_entities(source, result.entities,
+                actual_changed_hosts, maximum_component_dimensions - expected_dimensions.size());
+            std::vector<std::string> changed_dimension_ids;
+            for (const auto& dimension : dimensions) changed_dimension_ids.push_back(dimension.id);
+            validate_ordinary_assembly_dimension_changes(source, changed_dimension_ids);
+            for (const auto& dimension : dimensions) result.entities.at(dimension.id) = dimension;
+            for (const auto& id : plan.required_dimension_ids)
+                if (!exact(result.entities.at(id), source.at(id))) reject("replacement changed an original cloned dimension");
+            (void)occupied_strings(result.entities);
+            (void)constraint_phase_scope(result.entities);
         }
         result.fresh_identity_ids.assign(fresh.begin(), fresh.end());
         return result;
@@ -759,6 +892,37 @@ PhaseSlabGeometryEditPartition partition_phase_slab_geometry_edits(
 }
 
 nlohmann::json encode_phase_slab_replacement_authoring(const PhaseSlabReplacementAuthoring& authoring) {
+    if (authoring.complete_component_dimensions) {
+        if (authoring.dimension_identities.size() > maximum_component_dimensions ||
+            authoring.identities.size() > maximum_replacements ||
+            authoring.hosted_instance_identities.size() > maximum_replacements - authoring.identities.size() ||
+            authoring.dimension_identities.size() > maximum_replacements - authoring.identities.size() -
+                authoring.hosted_instance_identities.size())
+            reject("combined authoring/dimension identity budget exceeded");
+        auto historical = authoring;
+        historical.complete_component_dimensions = false;
+        historical.dimension_identities.clear();
+        auto body = encode_phase_slab_replacement_authoring(historical);
+        Strings declared; declared.node_limit = maximum_authoring_bytes; declared.byte_limit = maximum_authoring_bytes;
+        declared.read(body);
+        Ids fresh;
+        for (const auto& [old_id, new_id] : authoring.dimension_identities) {
+            identity(old_id); identity(new_id);
+            if (old_id == new_id || declared.values.contains(new_id) || !fresh.insert(new_id).second)
+                reject("dimension authoring identities must be fresh and injective across the historical body");
+        }
+        for (const auto& [old_id, new_id] : authoring.dimension_identities) {
+            (void)new_id;
+            if (fresh.contains(old_id)) reject("dimension authoring source aliases a fresh dimension identity");
+        }
+        Json result{{"version", 8}, {"authoring", std::move(body)},
+            {"complete_component_dimensions", true}, {"dimension_identities", authoring.dimension_identities}};
+        Strings budget; budget.node_limit = maximum_authoring_bytes; budget.byte_limit = maximum_authoring_bytes;
+        budget.read(result);
+        if (result.dump().size() > maximum_authoring_bytes) reject("authoring byte budget exceeded");
+        return result;
+    }
+    if (!authoring.dimension_identities.empty()) reject("dimension identities require v8 component dimension authority");
     identity(authoring.registry_id); identity(authoring.alternative_id);
     const bool profile_edit = !authoring.slab_profiles.empty();
     const bool stack_edit = !authoring.slab_stacks.empty();
@@ -844,6 +1008,32 @@ nlohmann::json encode_phase_slab_replacement_authoring(const PhaseSlabReplacemen
 
 PhaseSlabReplacementAuthoring decode_phase_slab_replacement_authoring(const nlohmann::json& value) {
     try {
+        if (value.is_object() && value.contains("version") && value.at("version").is_number_integer() &&
+            value.at("version") == 8) {
+            if (value.size() != 4 || !value.contains("authoring") ||
+                !value.contains("complete_component_dimensions") || !value.at("complete_component_dimensions").is_boolean() ||
+                value.at("complete_component_dimensions") != true || !value.contains("dimension_identities") ||
+                !value.at("dimension_identities").is_object() || value.at("dimension_identities").size() > maximum_component_dimensions)
+                reject("v8 requires exactly its dimension-authoring fields and explicit true authority");
+            const auto& body = value.at("authoring");
+            if (!body.is_object() || !body.contains("version") || !body.at("version").is_number_integer() ||
+                (body.at("version") != 1 && body.at("version") != 2 && body.at("version") != 3 &&
+                    body.at("version") != 4 && body.at("version") != 5 && body.at("version") != 6 && body.at("version") != 7))
+                reject("v8 requires one nonnested canonical historical authoring body");
+            Strings budget; budget.node_limit = maximum_authoring_bytes; budget.byte_limit = maximum_authoring_bytes;
+            budget.read(value);
+            if (value.dump().size() > maximum_authoring_bytes) reject("authoring byte budget exceeded");
+            auto result = decode_phase_slab_replacement_authoring(body);
+            result.complete_component_dimensions = true;
+            for (const auto& [old_id, destination] : value.at("dimension_identities").items()) {
+                identity(old_id);
+                if (!destination.is_string()) reject("dimension identity map requires string destinations");
+                result.dimension_identities.emplace(old_id, destination.get<std::string>());
+            }
+            const auto canonical = encode_phase_slab_replacement_authoring(result);
+            if (canonical != value || canonical.dump() != value.dump()) reject("v8 authoring differs from its canonical typed encoding");
+            return result;
+        }
         if (!value.is_object() || !value.contains("version") ||
             !value.at("version").is_number_integer() ||
             (value.at("version") != 1 && value.at("version") != 2 && value.at("version") != 3 &&
@@ -929,11 +1119,12 @@ PhaseSlabReplacementEntities replay_phase_slab_replacement_authoring(
     const auto encoded = encode_phase_slab_replacement_authoring(authoring);
     const auto canonical = encode_phase_slab_replacement_authoring(decode_phase_slab_replacement_authoring(encoded));
     if (canonical != encoded || canonical.dump() != encoded.dump()) reject("authoring typed round trip differs");
-    const auto plan = inspect_phase_slab_replacement_plan(source, authoring.seed_slab_ids, authoring.registry_id, authoring.alternative_id);
+    const auto plan = inspect_phase_slab_replacement_plan(source, authoring.seed_slab_ids, authoring.registry_id,
+        authoring.alternative_id, authoring.complete_component_dimensions);
     return replay_phase_slab_replacement(source, plan, authoring.identities, authoring.slab_profiles,
         authoring.slab_stacks, authoring.slab_geometry, authoring.ordinary_geometry,
         authoring.hosted_instance_identities, authoring.coordinate_ordinary_hosted_geometry,
-        authoring.coordinate_hosted_profiles).entities;
+        authoring.coordinate_hosted_profiles, authoring.dimension_identities).entities;
 }
 
 } // namespace sketch
