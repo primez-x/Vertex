@@ -3324,15 +3324,15 @@ static int room_review_geometry_dialect(const ApplyBoundaryConstraintChanges& co
 
 static bool mixed_properties_dialect(const nlohmann::json& intent) {
     const auto version=intent.at("version").get<int>();
-    return (version>=5 && version<=13) || (version>=15 && version<=17) || (version>=21 && version<=23);
+    return (version>=5 && version<=13) || (version>=15 && version<=17) || (version>=21 && version<=26);
 }
 static bool mixed_phase_properties_dialect(const nlohmann::json& intent) {
     const auto version=intent.at("version").get<int>();
-    return (version>=11 && version<=13) || (version>=15 && version<=17) || (version>=21 && version<=23);
+    return (version>=11 && version<=13) || (version>=15 && version<=17) || (version>=21 && version<=26);
 }
 static bool mixed_component_properties_dialect(const nlohmann::json& intent) {
     const auto version=intent.at("version").get<int>();
-    return version==16 || version==17 || version==22 || version==23;
+    return version==16 || version==17 || version==22 || version==23 || version==25 || version==26;
 }
 
 static std::vector<nlohmann::json> phase_constraint_authoring_proofs(const ApplyBoundaryConstraintChanges& command) {
@@ -4171,7 +4171,7 @@ static void validate_retained_authoring_receipt_identities(
                 for (const auto& allocation:phase.at("allocations")) {
                     for (const auto* field:{"identities","child_identities","hosted_instance_identities","overlay_identities"})
                         for (const auto& row:allocation.at(field)) require_unused_id(row.at("proposed_id").get<std::string>());
-                    if (phase.at("version")==6)
+                    if (phase.at("version")==6 || phase.at("version")==7)
                         for (const auto& [original,proposed]:allocation.at("dimension_identities").items()) {
                             (void)original;require_unused_id(proposed.get<std::string>());
                         }
@@ -5767,7 +5767,7 @@ static void validate_mixed_properties_replacement_lifetime(const nlohmann::json&
         for (const auto& allocation:phase.at("allocations")) {
             for (const auto* field:{"identities","child_identities","hosted_instance_identities","overlay_identities"})
                 for (const auto& row:allocation.at(field)) reserve(row.at("proposed_id").get<std::string>());
-            if (phase.at("version")==6)
+            if (phase.at("version")==6 || phase.at("version")==7)
                 for (const auto& [original,proposed]:allocation.at("dimension_identities").items()) {
                     (void)original;reserve(proposed.get<std::string>());
                 }

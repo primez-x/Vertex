@@ -1,4 +1,30 @@
-# Vertex project formats v1 through v233
+# Vertex project formats v1 through v234
+
+Reader234 retains wall component dimensions in Properties edits. Phase Properties
+request7 retains request6's exact fields and adds
+`complete_wall_component_dimensions:true`. It requires
+`complete_wall_hosted_instances:true`; `complete_stair_component_dimensions`
+is an explicit independent Boolean. Every allocation row includes the exact
+`dimension_identities` object, including empty maps. Nonempty maps require the
+actual wall or stair lane's permission; other family maps remain empty. Each
+allocation has at most 1000 dimension destinations and the combined fresh
+owner/child/catalog/hosted/overlay/dimension inventory is bounded to 4096.
+Historical request6 retains its literal stair completion and stair-only maps.
+
+Mixed Properties24 retains receipt21's closed fields and requires actual
+request7. Component receipts25/26 retain respectively receipt22/23's fields and
+add literal wall completion. Both require a sealed base24, coordinated hosts,
+and a stair Boolean matching that base's actual request7; receipt26 additionally
+requires presentation carry. Historical receipts21/22/23 retain their authority.
+Wall room decisions use canonical wall leaf12/phase36, with explicit hosted and
+dimension completion. Fresh copies derive from the final original-source
+inventory after dependency decisions; dimensions retain actual survivor
+correspondence, and original owners remain exact. Properties selection restore,
+current and undone history reservations, and saved-file reader detection retain
+the new receipt. Current, nested and undone proofs require reader234/extraction232
+even with an empty dimension map. Extraction derives its version from the native
+reader floor. Source implementation does not establish compilation, runtime
+behavior or production acceptance.
 
 Reader233 retains coordinated wall component dimensions. Phase37 requires
 coordinated inner8: `version:8`, `authoring:<canonical body5>`,

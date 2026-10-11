@@ -14,6 +14,44 @@ changed source does not acquire runtime acceptance without later qualification.
 
 ## Current delivery state
 
+### October 11 Properties wall component dimension integration
+
+The coordinated wall dimension batch is committed and pushed as 87a26205;
+its exact remote branch matched local HEAD. Current source work adds phase
+Properties request7, mixed receipt24 and component receipts25/26. Wall hosted
+and dimension completion are literal true; stair permission is independently
+Boolean and component wrappers match their sealed base24. Historical request6
+and receipts21/22/23 retain their authority. Wall allocation discovers the
+actual final required_dimension_ids after dependency decisions, separately
+from physical/catalog/hosted destinations, and emits leaf12/phase36 scalar or
+vertical authority. Original dimensions remain exact and preview correspondence
+uses actual fresh survivors. Each allocation retains its 1000-dimension bound
+and the combined fresh inventory remains bounded to 4096.
+
+Current Properties and wall elevation producers request the new inventory and
+reserve complete retained-history aliases. Component composition, selection
+restoration and current/undone dimension destination reservations retain the
+new receipts. Reader234/extraction232 cover current, nested and undone request7
+and receipts24/25/26, including empty dimension maps; historical floors and
+movement18/19/20 remain separate. Compilation, runtime interactions, Undo/redo,
+save/reopen and extraction execution remain unverified. No builds/tests/jobs,
+launches, packages or installations ran; the installed candidate is unchanged.
+Independent integrated source review found no proved introduced P1/P2 in the
+closed grammar, source-derived inventory, controller, component composition,
+selection restore, history or reader detection. Root source review confirms
+historical authority, exact separate allocations, original preservation and
+the reader-derived extraction floor. Scoped whitespace inspection passes;
+Git records the source backup. All ten production gates remain open, and the
+complete approved plan remains active.
+
+Next implementation remains the unfinished component and architectural
+lifecycles: other family dimension copies, root/part profile and path editing,
+nested and linked-view references, and complete mixed editing/clipboard controls.
+Broader drawing, normative appraisal, native compatibility and exchange,
+assistance, offline distribution and final qualification remain unfinished.
+The ten gates measure final acceptance, not absence of source implementation;
+there is no defensible aggregate completion percentage or delivery ETA yet.
+
 ### October 11 coordinated wall component dimension integration
 
 The standalone wall dimension batch is committed and pushed as 8fff7930; its

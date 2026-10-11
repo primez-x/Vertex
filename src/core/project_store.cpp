@@ -460,6 +460,95 @@ std::uint32_t required_format_version_internal(const DocumentSnapshot& snapshot,
                 value.at("clipboard_placement_completion")==true && value.at("clipboard_placement_intent").is_object() &&
                 value.at("clipboard_placement_intent").value("version",nlohmann::json())==3)
                 floor=std::max(floor,224U);
+            const auto exact_fields=[](const nlohmann::json& child,std::initializer_list<const char*> fields) {
+                return child.is_object() && child.size()==fields.size() &&
+                    std::all_of(fields.begin(),fields.end(),[&](const char* field) { return child.contains(field); });
+            };
+            const auto wall_dimension_properties_request=[&](const nlohmann::json& request) {
+                if (!typed_shape(request,7,{"version","expected_revision","source_snapshot_digest",
+                        "source_authoring_digest","source_entities_digest","source_saved_revision","scalar_request",
+                        "allocations","stair_dependency_dispositions","message","skylight_properties",
+                        "roof_opening_members","complete_wall_hosted_instances","complete_stair_component_dimensions",
+                        "complete_wall_component_dimensions"}) || !literal_true(request,"complete_wall_hosted_instances") ||
+                    !literal_true(request,"complete_wall_component_dimensions") ||
+                    !request.at("complete_stair_component_dimensions").is_boolean() ||
+                    !request.at("allocations").is_array() || request.at("allocations").size()>1000) return false;
+                return std::all_of(request.at("allocations").begin(),request.at("allocations").end(),[&](const nlohmann::json& row) {
+                    if (!exact_fields(row,{"lane","registry_id","alternative_id","identities","child_identities",
+                            "hosted_instance_identities","overlay_identities","dimension_identities"}) ||
+                        !row.at("registry_id").is_string() || !row.at("alternative_id").is_string() ||
+                        !row.at("identities").is_array() || !row.at("child_identities").is_array() ||
+                        !row.at("hosted_instance_identities").is_array() || !row.at("overlay_identities").is_array() ||
+                        !row.at("dimension_identities").is_object()) return false;
+                    std::size_t identities=row.at("dimension_identities").size();
+                    if (identities>1000) return false;
+                    for (const auto* field:{"identities","child_identities","hosted_instance_identities","overlay_identities"}) {
+                        if (row.at(field).size()>4096-identities) return false;
+                        identities+=row.at(field).size();
+                    }
+                    const auto& lane=row.at("lane");
+                    if (lane!="walls" && lane!="roofs" && lane!="slabs" && lane!="structural" && lane!="stairs") return false;
+                    // Empty maps still carry the explicit new allocation grammar.
+                    if (lane!="walls" && !(lane=="stairs" && request.at("complete_stair_component_dimensions")==true) &&
+                        !row.at("dimension_identities").empty()) return false;
+                    for (const auto& [original,proposed]:row.at("dimension_identities").items())
+                        if (original.empty() || !proposed.is_string() || proposed.get_ref<const std::string&>().empty() ||
+                            original==proposed.get_ref<const std::string&>()) return false;
+                    return true;
+                });
+            };
+            const auto wall_dimension_leaf=[&](const nlohmann::json& leaf) {
+                if (!typed_shape(leaf,12,{"version","authoring","complete_component_dimensions","dimension_identities"}) ||
+                    !literal_true(leaf,"complete_component_dimensions") || !leaf.at("dimension_identities").is_object()) return false;
+                const auto& hosted=leaf.at("authoring");
+                return typed_shape(hosted,11,{"version","authoring","complete_hosted_instances","hosted_instance_identities"}) &&
+                    literal_true(hosted,"complete_hosted_instances") && hosted.at("hosted_instance_identities").is_array() &&
+                    hosted.at("authoring").is_object() && hosted.at("authoring").contains("version") &&
+                    hosted.at("authoring").at("version").is_number_integer() &&
+                    hosted.at("authoring").at("version")>=1 && hosted.at("authoring").at("version")<=10;
+            };
+            const auto wall_dimension_phase_reviews=[&](const nlohmann::json& reviews) {
+                return reviews.is_array() && reviews.size()<=1000 &&
+                    std::all_of(reviews.begin(),reviews.end(),[&](const nlohmann::json& row) {
+                    return exact_fields(row,{"phase_authoring_index","wall_replacement"}) &&
+                        row.at("phase_authoring_index").is_number_integer() && row.at("phase_authoring_index")>=0 &&
+                        row.at("phase_authoring_index")<1000 &&
+                        wall_dimension_leaf(row.at("wall_replacement"));
+                });
+            };
+            const auto wall_dimension_properties_receipt=[&](const nlohmann::json& receipt) {
+                return typed_shape(receipt,24,{"version","expected_revision","source_snapshot_digest",
+                        "source_authoring_digest","source_entities_digest","source_saved_revision","phase_request",
+                        "presentation_request","skylight_properties","roof_opening_members","room_reviews",
+                        "phase_room_reviews","message","assembly_request"}) &&
+                    wall_dimension_properties_request(receipt.at("phase_request")) &&
+                    receipt.at("room_reviews").is_array() && wall_dimension_phase_reviews(receipt.at("phase_room_reviews"));
+            };
+            const bool wall_dimension_component_shape=
+                typed_shape(value,25,{"version","expected_revision","source_snapshot_digest","source_authoring_digest",
+                    "source_entities_digest","source_saved_revision","component_request","base_intent","room_reviews",
+                    "phase_room_reviews","message","coordinate_component_hosts","component_identity_reservations",
+                    "complete_stair_component_dimensions","complete_wall_component_dimensions"}) ||
+                (typed_shape(value,26,{"version","expected_revision","source_snapshot_digest","source_authoring_digest",
+                    "source_entities_digest","source_saved_revision","component_request","base_intent","room_reviews",
+                    "phase_room_reviews","message","coordinate_component_hosts","component_identity_reservations",
+                    "carry_component_presentation","complete_stair_component_dimensions","complete_wall_component_dimensions"}) &&
+                    literal_true(value,"carry_component_presentation"));
+            if (wall_dimension_properties_request(value) || wall_dimension_properties_receipt(value) ||
+                (wall_dimension_component_shape && literal_true(value,"complete_wall_component_dimensions") &&
+                    literal_true(value,"coordinate_component_hosts") && value.at("complete_stair_component_dimensions").is_boolean() &&
+                    wall_dimension_properties_receipt(value.at("base_intent")) &&
+                    value.at("complete_stair_component_dimensions")==
+                        value.at("base_intent").at("phase_request").at("complete_stair_component_dimensions") &&
+                    value.at("base_intent").at("assembly_request").is_null() &&
+                    value.at("base_intent").at("room_reviews").empty() &&
+                    value.at("base_intent").at("phase_room_reviews").empty() &&
+                    value.at("room_reviews").is_array() && wall_dimension_phase_reviews(value.at("phase_room_reviews")) &&
+                    value.at("component_identity_reservations").is_array() &&
+                    typed_shape(value.at("component_request"),value.at("version")==26 ? 2 : 1,
+                        {"version","expected_revision","source_snapshot_digest","source_authoring_digest",
+                            "source_entities_digest","source_saved_revision","authoring"})))
+                floor=std::max(floor,234U);
             const bool stair_dimension_properties_request=closed_shape({"version","expected_revision",
                 "source_snapshot_digest","source_authoring_digest","source_entities_digest","source_saved_revision",
                 "scalar_request","allocations","stair_dependency_dispositions","message","skylight_properties",
@@ -1078,9 +1167,9 @@ std::uint32_t required_format_version_internal(const DocumentSnapshot& snapshot,
     };
     for (const auto& revision : snapshot.history()) {
         if (revision.phase_entity_import) required=std::max(required,160U);
-        if (required<233 && revision.boundary_geometry_edit)
+        if (required<234 && revision.boundary_geometry_edit)
             required=std::max(required,typed_edit_reader_floor(encode_boundary_geometry_edit(*revision.boundary_geometry_edit)));
-        if (required<233 && revision.boundary_constraint_changes)
+        if (required<234 && revision.boundary_constraint_changes)
             required=std::max(required,typed_edit_reader_floor(command_to_json(Command{*revision.boundary_constraint_changes})));
         if (required<122 && revision.boundary_geometry_edit)
             required=std::max(required,quantity_reader_floor(encode_boundary_geometry_edit(*revision.boundary_geometry_edit)));
@@ -3601,6 +3690,7 @@ bool verify_sqlite_schema(sqlite3* database, bool allow_recovery = false) {
          sqlite3_column_int(user_version.get(), 0) != 231 &&
          sqlite3_column_int(user_version.get(), 0) != 232 &&
          sqlite3_column_int(user_version.get(), 0) != 233 &&
+         sqlite3_column_int(user_version.get(), 0) != 234 &&
          sqlite3_column_int(user_version.get(), 0) != 207 &&
          sqlite3_column_int(user_version.get(), 0) != 202 &&
          sqlite3_column_int(user_version.get(), 0) != 200 &&
@@ -4326,6 +4416,8 @@ DocumentSnapshot read_snapshot(sqlite3* database, RecoveryLedger* recovery = nul
     // here and authenticate the manifest with its stored version below.
     const auto required_format = required_format_version_internal(snapshot, format_number < 28);
     if (required_format > format_number) {
+        if (required_format>=234)
+            storage_error(StorageErrorCode::unsupported_format,"This project requires reader 234 for wall component dimension Properties receipts");
         if (required_format>=233)
             storage_error(StorageErrorCode::unsupported_format,"This project requires reader 233 for coordinated wall component dimension copies");
         if (required_format>=232)

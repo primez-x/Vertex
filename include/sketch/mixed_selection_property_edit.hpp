@@ -178,6 +178,10 @@ private:
 // twenty-one has exactly fifteen's fields and requires phase request v6, with
 // explicit complete_stair_component_dimensions:true. Its wall authority still
 // follows phase_request.complete_wall_hosted_instances, which may be false.
+// Twenty-four retains twenty-one's exact fields and requires phase request v7,
+// with literal complete_wall_component_dimensions:true and hosted completion.
+// Its stair dimension permission is an independent explicit Boolean. Wall room
+// completion uses canonical leaf twelve with hosted and dimension completion.
 // ordinary overloads also emit thirteen for explicit hosted slab carry.
 // Assembly request is nullable; stair review stays solely inside phase_request.
 // phase_room_reviews contains ordered {phase_authoring_index,wall_replacement}
@@ -191,7 +195,8 @@ private:
     const std::vector<PhaseSelectionPropertyIdentityAllocation>&,
     const std::vector<PhaseStairReplacementDependencyDisposition>&,
     bool complete_wall_hosted_instances = false,
-    bool complete_stair_component_dimensions = false);
+    bool complete_stair_component_dimensions = false,
+    bool complete_wall_component_dimensions = false);
 // Closed dialect fourteen: version, the five complete source fences,
 // component_request (sealed v1), base_intent (null or historical five-through-
 // thirteen without a nonnull assembly_request), room_reviews,
@@ -216,6 +221,10 @@ private:
 // complete_stair_component_dimensions:true and requires an actual nonnull
 // base twenty-one. Component request one and host coordination are unchanged;
 // fourteen/sixteen cannot accept base twenty-one or any component dialect.
+// Dialect twenty-five has twenty-two's exact fields plus literal
+// complete_wall_component_dimensions:true. Its mandatory base is twenty-four;
+// its explicit Boolean stair dimension permission must equal the base phase
+// request's permission. Component request one and host coordination are unchanged.
 [[nodiscard]] MixedSelectionPropertyEditPreparation prepare_coordinated_component_property_edit(
     const DocumentSnapshot&, const PhaseAssemblyInstancePropertyEditAuthoring&,
     const MixedSelectionPropertyEditPreparation& base, std::string_view message);
@@ -231,6 +240,11 @@ private:
 // twenty-one and component request two, and retains the same host/presentation
 // coordination. Seventeen cannot accept base twenty-one. No component dialect
 // may be used as a base. Producers choose twenty-two/twenty-three only for base twenty-one.
+// Dialect twenty-six has twenty-three's exact fields plus literal
+// complete_wall_component_dimensions:true and requires an actual base twenty-four.
+// It retains component request two and host/presentation coordination, with
+// explicit Boolean stair dimension permission matching the base phase request.
+// Producers choose twenty-five/twenty-six only for actual wall-authorized base twenty-four.
 [[nodiscard]] MixedSelectionPropertyEditPreparation prepare_component_presentation_property_edit(
     const DocumentSnapshot&, const PhaseAssemblyInstancePropertyEditAuthoring&,
     const MixedSelectionPropertyEditPreparation* base, std::string_view message);

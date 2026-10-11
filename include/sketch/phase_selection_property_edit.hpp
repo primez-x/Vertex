@@ -39,6 +39,7 @@ struct PhaseSelectionPropertyEditRequest {
     std::optional<RoofOpeningGroupProperties> roof_opening_properties;
     bool complete_wall_hosted_instances{false};
     bool complete_stair_component_dimensions{false};
+    bool complete_wall_component_dimensions{false};
 };
 
 struct PhaseSelectionPropertyReplacementInventory {
@@ -76,7 +77,7 @@ private:
     friend PhaseSelectionPropertyEditInspection inspect_phase_selection_property_edit(
         const DocumentSnapshot&, const SelectionPropertyEditRequest&,
         const std::vector<PhaseStairReplacementDependencyDisposition>&,
-        const std::optional<RoofOpeningGroupProperties>&, bool, bool);
+        const std::optional<RoofOpeningGroupProperties>&, bool, bool, bool);
 };
 
 // Sealed complete physical contribution. The captured source is never replaced
@@ -136,7 +137,8 @@ private:
     const std::vector<PhaseStairReplacementDependencyDisposition>& reviewed_stair_dispositions = {},
     const std::optional<RoofOpeningGroupProperties>& roof_opening_properties = std::nullopt,
     bool complete_wall_hosted_instances = false,
-    bool complete_stair_component_dimensions = false);
+    bool complete_stair_component_dimensions = false,
+    bool complete_wall_component_dimensions = false);
 // Closed v1: version, scalar_request (existing closed v1/v2/v3), allocations,
 // stair_dependency_dispositions, message. Allocation rows have exactly lane,
 // registry_id, alternative_id, identities, child_identities,
@@ -167,6 +169,12 @@ private:
 // the same null/V1..V5 grammar as V5. Each allocation also has the exact object
 // dimension_identities, empty outside stairs. Its source-to-fresh dimension
 // inventory derives only from the original source and selects stair child V7.
+// V7 has V6's exact fields plus complete_wall_component_dimensions:true,
+// requires complete_wall_hosted_instances:true, and retains an independent
+// explicit Boolean complete_stair_component_dimensions. Every allocation has
+// dimension_identities; only walls/stairs may populate it with their own
+// permission. Wall dimension slots derive separately from the original source
+// and select wall leaf V12/phase V36 with the existing scalar/vertical authority.
 [[nodiscard]] nlohmann::json encode_phase_selection_property_edit_request(
     const DocumentSnapshot&, const PhaseSelectionPropertyEditRequest&);
 [[nodiscard]] nlohmann::json validate_phase_selection_property_edit_request(const nlohmann::json&);
