@@ -23,7 +23,7 @@ namespace {
 using Json = nlohmann::json;
 using Entities = std::map<std::string, Entity, std::less<>>;
 using Ids = std::set<std::string, std::less<>>;
-using MemberKey = std::tuple<std::string, std::string, std::string>;
+using MemberKey = std::vector<std::string>;
 constexpr std::size_t byte_limit = 4 * 1024 * 1024;
 [[noreturn]] void reject(const char* reason) {
     throw std::invalid_argument(std::string("Mixed selection Properties: ") + reason);
@@ -209,8 +209,13 @@ Json ordinary_request(const DocumentSnapshot& source, const SelectionPropertyEdi
 }
 void validate(const Json& value) {
     Budget budget; budget.visit(value);
+    const bool assembly_dialect = value.is_object() && value.contains("version") && value.at("version") == 10;
     const bool reviewed_stair_dialect = value.is_object() && value.contains("version") && value.at("version") == 9;
-    if (reviewed_stair_dialect)
+    if (assembly_dialect)
+        fields(value, {"version", "expected_revision", "source_snapshot_digest", "source_authoring_digest",
+            "source_entities_digest", "source_saved_revision", "ordinary_request", "presentation_request",
+            "skylight_properties", "roof_opening_members", "room_reviews", "message", "stair_review_request", "assembly_request"});
+    else if (reviewed_stair_dialect)
         fields(value, {"version", "expected_revision", "source_snapshot_digest", "source_authoring_digest",
             "source_entities_digest", "source_saved_revision", "ordinary_request", "presentation_request",
             "skylight_properties", "roof_opening_members", "room_reviews", "message", "stair_review_request"});
@@ -219,8 +224,11 @@ void validate(const Json& value) {
             "source_entities_digest", "source_saved_revision", "ordinary_request", "presentation_request",
             "skylight_properties", "roof_opening_members", "room_reviews", "message"});
     if (!value.at("version").is_number_integer() ||
-        (value.at("version") != 5 && value.at("version") != 6 && value.at("version") != 7 && value.at("version") != 8 && !reviewed_stair_dialect))
+        (value.at("version") != 5 && value.at("version") != 6 && value.at("version") != 7 && value.at("version") != 8 &&
+            !reviewed_stair_dialect && !assembly_dialect))
         reject("unsupported Properties dialect");
+    const bool reviewed_stair = reviewed_stair_dialect ||
+        (assembly_dialect && !value.at("stair_review_request").is_null());
     const bool pose_dialect = value.at("version") == 6;
     const bool structural_dialect = value.at("version") == 7;
     const bool stair_dialect = value.at("version") == 8;
@@ -246,13 +254,13 @@ void validate(const Json& value) {
         if (lane.is_null()) continue;
         if (std::string_view(name) == "ordinary_request") {
             (void)validate_selection_property_edit_request(lane);
-            if (reviewed_stair_dialect ? (lane.at("version") != 1 && lane.at("version") != 2) :
-                lane.at("version") != (stair_dialect ? 3 : structural_dialect ? 2 : 1))
+            if (reviewed_stair ? (lane.at("version") != 1 && lane.at("version") != 2) :
+                !assembly_dialect && lane.at("version") != (stair_dialect ? 3 : structural_dialect ? 2 : 1))
                 reject("ordinary dialect differs from complete Properties authority");
         }
         else {
             (void)validate_selection_presentation_property_edit_request(lane);
-            if (!reviewed_stair_dialect && !structural_dialect && !stair_dialect && lane.at("version") != (pose_dialect ? 2 : 1))
+            if (!assembly_dialect && !reviewed_stair_dialect && !structural_dialect && !stair_dialect && lane.at("version") != (pose_dialect ? 2 : 1))
                 reject("presentation dialect differs from complete Properties authority");
         }
         for (const auto* fence : {"expected_revision", "source_snapshot_digest", "source_authoring_digest",
@@ -264,13 +272,28 @@ void validate(const Json& value) {
             else select({row.at("family").get<std::string>(), identity(row.at("owner_id")), identity(row.at("child_id"))});
         }
     }
-    if (reviewed_stair_dialect) {
+    if (reviewed_stair) {
         const auto& lane = value.at("stair_review_request");
         const auto request = decode_stair_property_review_request(lane);
         for (const auto* fence : {"expected_revision", "source_snapshot_digest", "source_authoring_digest",
                 "source_entities_digest", "source_saved_revision"})
             if (lane.at(fence).dump() != value.at(fence).dump()) reject("stair review source fences differ from complete original source");
         for (const auto& profile : request.profiles) select({"entity", profile.object_id, ""});
+    }
+    if (assembly_dialect) {
+        const auto& lane = value.at("assembly_request");
+        (void)validate_assembly_instance_property_edit_request(lane);
+        for (const auto* fence : {"expected_revision", "source_snapshot_digest", "source_authoring_digest",
+                "source_entities_digest", "source_saved_revision"})
+            if (lane.at(fence).dump() != value.at(fence).dump()) reject("assembly source fences differ from complete original source");
+        for (const auto& row : lane.at("intents")) {
+            const auto target = decode_assembly_instance_property_edit_intent(row).target;
+            // An absent entity occupies its own qualified slot; no displayed
+            // alias or flattened path can stand in for the actual source key.
+            MemberKey key{"assembly", target.catalog_id, target.instance_id, target.document_entity_id.value_or("")};
+            key.insert(key.end(), target.part_path.begin(), target.part_path.end());
+            select(std::move(key));
+        }
     }
     const auto& members = value.at("roof_opening_members");
     if (!members.is_array() || members.size() > 1000 || value.at("skylight_properties").is_null() != members.empty())
@@ -345,12 +368,13 @@ void require_selected_members_present(const Json& value, const Entities& candida
     const auto& ordinary = value.at("ordinary_request");
     if (!ordinary.is_null()) for (const auto& row : ordinary.at("selected"))
         (void)owner(row.at("entity_id").get<std::string>());
-    if (value.at("version") == 9) for (const auto& row : value.at("stair_review_request").at("profiles")) {
-        const auto id = row.at("object_id").get<std::string>();
-        // Only the independently rederived explicit rail disposition can retire
-        // a selected scalar member. Other selected owners/children still survive.
-        if (!retired_reviewed_rails.contains(id)) (void)owner(id);
-    }
+    if ((value.at("version") == 9 || value.at("version") == 10) && !value.at("stair_review_request").is_null())
+        for (const auto& row : value.at("stair_review_request").at("profiles")) {
+            const auto id = row.at("object_id").get<std::string>();
+            // Only the independently rederived explicit rail disposition can retire
+            // a selected scalar member. Other selected owners/children still survive.
+            if (!retired_reviewed_rails.contains(id)) (void)owner(id);
+        }
     const auto& presentation = value.at("presentation_request");
     if (!presentation.is_null()) for (const auto& row : presentation.at("selected")) {
         if (row.at("family") == "reference") (void)owner(row.at("entity_id").get<std::string>());
@@ -367,6 +391,57 @@ void require_selected_members_present(const Json& value, const Entities& candida
         if (std::count_if(members.begin(), members.end(), [&](const auto& member) {
                 return member.at("id") == row.at("opening_id");
             }) != 1) reject("reviewed retirement removed a selected skylight child");
+    }
+    if (value.at("version") == 10) {
+        using RootKey = std::tuple<std::string, std::string, std::optional<std::string>>;
+        std::map<RootKey, std::vector<std::vector<std::string>>> selected_roots;
+        std::vector<AssemblyInstancePropertyEditIntent> physical_checks;
+        for (const auto& row : value.at("assembly_request").at("intents")) {
+            auto target = decode_assembly_instance_property_edit_intent(row).target;
+            selected_roots[{target.catalog_id, target.instance_id, target.document_entity_id}].push_back(target.part_path);
+            AssemblyInstancePropertyEditIntent retained;
+            retained.target = std::move(target);
+            physical_checks.push_back(std::move(retained));
+        }
+        std::map<std::string, AssemblyModel, std::less<>> models;
+        AssemblyExpansionBudget budget;
+        for (const auto& [key, paths] : selected_roots) {
+            const auto& [catalog_id, instance_id, entity_id] = key;
+            const auto& catalog = owner(catalog_id);
+            if (catalog.type != "assembly_model") reject("selected assembly catalog changed its source role");
+            if (!models.contains(catalog_id)) models.emplace(catalog_id, AssemblyModel::from_json(catalog.properties.at("model")));
+            const auto& model = models.at(catalog_id);
+            AssemblyInstance instance;
+            if (entity_id) {
+                const auto& root = owner(*entity_id);
+                if (root.type != "assembly_instance") reject("selected independent assembly changed its source role");
+                const auto actual = decode_document_assembly_instance(root);
+                if (actual.assembly_catalog_id != catalog_id || actual.instance.id != instance_id)
+                    reject("selected independent assembly lost its exact qualified source identity");
+                instance = actual.instance;
+            } else {
+                const auto found = std::find_if(model.instances().begin(), model.instances().end(),
+                    [&](const auto& row) { return row.id == instance_id; });
+                if (found == model.instances().end()) reject("selected embedded assembly row disappeared");
+                instance = *found;
+            }
+            // A retained hosted row cannot survive by referencing a rail which
+            // another lane explicitly retired. Its actual source owner survives.
+            if (instance.placement) {
+                const auto& host = owner(instance.placement->host_entity_id);
+                if (!is_complete_assembly_catalog_host_type(host.type)) reject("selected assembly lost its actual host role");
+            }
+            const auto expansion = model.expand(instance, budget);
+            for (const auto& path : paths)
+                if (std::count_if(expansion.nodes.begin(), expansion.nodes.end(), [&](const auto& node) {
+                        return node.part_path == path;
+                    }) != 1) reject("selected assembly lost its exact expanded part path");
+        }
+        // Original-source leaves cannot certify a host body changed by another
+        // lane. Admit the complete composed physical cohort through no-op
+        // intents, including actual host copies and retained members. This
+        // discards the return map and grants no candidate authoring authority.
+        (void)replay_assembly_instance_property_entities(candidate, physical_checks);
     }
 }
 std::vector<SelectionGeometryRoomReviewRequirement> requirements(const DocumentSnapshot& source,
@@ -481,10 +556,17 @@ Stage derive(const DocumentSnapshot& source, const Json& value) {
         }
         leaves.push_back(replay_selection_presentation_property_edit_preparation(source, presentation).candidate_entities());
     }
+    std::optional<AssemblyInstancePropertyEditPreparation> assembly_prepared;
+    if (value.at("version") == 10) {
+        // The producer authenticates its own full original snapshot and derives
+        // the complete map. Assembly-only edits acquire no changed-host room
+        // authority; the ordinary lane still owns that source-derived roster.
+        assembly_prepared = replay_assembly_instance_property_edit_preparation(source, value.at("assembly_request"));
+    }
     Ids reviewed_erased;
     Ids retired_reviewed_rails;
     Entities candidate;
-    if (value.at("version") == 9) {
+    if ((value.at("version") == 9 || value.at("version") == 10) && !value.at("stair_review_request").is_null()) {
         for (const auto& row : value.at("stair_review_request").at("profiles"))
             if (scope.inactive_owner_ids.contains(row.at("object_id").get<std::string>()))
                 reject("selected reviewed stair owner is inactive");
@@ -493,9 +575,14 @@ Stage derive(const DocumentSnapshot& source, const Json& value) {
         retired_reviewed_rails.insert(reviewed.retired_rail_ids().begin(), reviewed.retired_rail_ids().end());
         // The sealed compositor separately replays this request and admits only
         // its exact existing-producer closure beside original-source leaves.
-        candidate = compose_stair_property_review_selection_edit_candidates(source, reviewed, leaves);
+        candidate = assembly_prepared
+            ? compose_assembly_property_selection_edit_candidates(source, *assembly_prepared, leaves, &reviewed)
+            : compose_stair_property_review_selection_edit_candidates(source, reviewed, leaves);
+    } else candidate = assembly_prepared
+        ? compose_assembly_property_selection_edit_candidates(source, *assembly_prepared, leaves)
+        : compose_mixed_selection_edit_candidates(original, leaves);
+    if (value.at("version") == 9 || value.at("version") == 10)
         require_selected_members_present(value, candidate, retired_reviewed_rails);
-    } else candidate = compose_mixed_selection_edit_candidates(original, leaves);
     protect_source(original, candidate, true, reviewed_erased);
     auto reviews = requirements(source, candidate, changed_hosts);
     return {std::move(candidate), std::move(reviews), std::move(reviewed_erased), std::move(retired_reviewed_rails)};
@@ -527,7 +614,8 @@ MixedSelectionPropertyEditPreparation prepare_properties(const DocumentSnapshot&
     const std::optional<SelectionPropertyEditRequest>& ordinary,
     const std::optional<SelectionPresentationPropertyEditRequest>& presentation,
     const std::optional<RoofOpeningGroupProperties>& children, std::string_view message,
-    const StairPropertyReviewRequest* stair_review) {
+    const StairPropertyReviewRequest* stair_review,
+    const AssemblyInstancePropertyEditPreparation* assemblies = nullptr) {
     if (message.size() > 1024 || (children && children->members.size() > 1000)) reject("typed request budget exceeded");
     auto value = source_fields(source);
     value["version"] = 5;
@@ -563,6 +651,11 @@ MixedSelectionPropertyEditPreparation prepare_properties(const DocumentSnapshot&
         value["version"] = 9;
         value["stair_review_request"] = std::move(encoded);
     }
+    if (assemblies) {
+        value["version"] = 10;
+        value["assembly_request"] = assemblies->request();
+        if (!stair_review) value["stair_review_request"] = nullptr;
+    }
     value["skylight_properties"] = children ? skylight_properties(*children) : Json(nullptr);
     value["roof_opening_members"] = Json::array();
     if (children) for (const auto& member : children->members)
@@ -584,6 +677,17 @@ MixedSelectionPropertyEditPreparation prepare_mixed_selection_property_edit(cons
     const std::optional<RoofOpeningGroupProperties>& children, std::string_view message,
     const StairPropertyReviewRequest& stair_review) {
     return prepare_properties(source, ordinary, presentation, children, message, &stair_review);
+}
+MixedSelectionPropertyEditPreparation prepare_mixed_selection_property_edit(const DocumentSnapshot& source,
+    const std::optional<SelectionPropertyEditRequest>& ordinary,
+    const std::optional<SelectionPresentationPropertyEditRequest>& presentation,
+    const std::optional<RoofOpeningGroupProperties>& children, std::string_view message,
+    std::span<const AssemblyInstancePropertyEditIntent> assemblies,
+    const std::optional<StairPropertyReviewRequest>& reviewed) {
+    if (assemblies.empty()) reject("assembly Properties requires a nonempty qualified target roster");
+    const auto prepared = prepare_assembly_instance_property_edit(source, assemblies);
+    return prepare_properties(source, ordinary, presentation, children, message,
+        reviewed ? &*reviewed : nullptr, &prepared);
 }
 MixedSelectionPropertyEditPreparation replay_mixed_selection_property_edit_preparation(const DocumentSnapshot& source, const Json& value) {
     (void)validate_mixed_selection_property_edit_intent(value);
@@ -637,7 +741,8 @@ ReplayedPhysicalWallRoomReview review_stage(const DocumentSnapshot& source, cons
     // rederives correspondences/transitions. The source metadata above never
     // substitutes a caller-reviewed map for that proof.
     protect_source(source.entities(), result.entities, false, stage.reviewed_erased);
-    if (value.at("version") == 9) require_selected_members_present(value, result.entities, stage.retired_reviewed_rails);
+    if (value.at("version") == 9 || value.at("version") == 10)
+        require_selected_members_present(value, result.entities, stage.retired_reviewed_rails);
     if (complete)
         if (const auto error = validate_active_phase_constraint_integrity(result.entities)) throw std::invalid_argument(*error);
     return result;
@@ -670,7 +775,8 @@ Json complete_mixed_selection_property_edit(const DocumentSnapshot& source,
 }
 bool mixed_selection_property_edit_has_geometry(const Json& value) {
     validate(value);
-    return value.at("version") == 9 || !value.at("ordinary_request").is_null() || !value.at("skylight_properties").is_null();
+    return value.at("version") == 9 || value.at("version") == 10 ||
+        !value.at("ordinary_request").is_null() || !value.at("skylight_properties").is_null();
 }
 bool mixed_selection_property_edit_active_phase_policy(const Json& value) {
     validate(value);

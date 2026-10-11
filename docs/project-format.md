@@ -1,4 +1,40 @@
-# Vertex project formats v1 through v197
+# Vertex project formats v1 through v198
+
+## Qualified component instance and part Properties (v198, source implementation)
+
+Mixed Properties dialect ten in command envelope52 adds a mandatory closed
+`assembly_request` version one and always-present nullable `stair_review_request`.
+The assembly request binds catalog, instance, optional independent document
+entity and stable part path to the same complete original snapshot as all other
+lanes. Without a stair review, ordinary requests one/two/three may compose;
+with a review, ordinary requests one/two retain the separately extracted stair
+authority. Presentation requests one/two retain their own fields. Historical
+dialects five through nine keep their original meanings.
+
+Instance intents support explicit keep/set/clear of actual declared property,
+material and quantity slots. Materials must exist in the actual catalog and
+quantities retain their declared dimension. Partial root/local pose inputs
+preserve other actual components; local pose clear restores the source part.
+Hosts, contexts, shared type/profile definitions and source identities are not
+editable through these intents. Equal values preserve raw source receipts and
+rows. Only affected legacy embedded rows acquire required pose envelopes; their
+catalog may promote to v7 while unrelated rows and definitions remain exact.
+The sealed composer independently reconstructs the assembly request before
+allowing its actual v1/v2 catalog promotion. Historical composers keep their
+original promotion rules.
+
+Complete selected roots and explicitly edited parts remain qualified and present
+before and after room review. Another lane's explicit rail retirement cannot
+silently remove a selected hosted component. Source/result native and constraint
+admission, original alias preservation and final Document publication remain
+required. Reader198/extraction196 cover direct, nested, retained and undone
+history. Shared-definition authoring and protected-baseline replacement remain
+separate workflows. Compilation and runtime qualification remain open.
+
+Before and after room review, all-null qualified intents physically admit the
+complete selected cohort against the composed result, including host bodies
+changed by another lane. This check discards its return map and supplies no new
+authoring authority. Large-catalog preparation cost remains unmeasured.
 
 ## Reviewed stair and railing group Properties (v197, source implementation)
 

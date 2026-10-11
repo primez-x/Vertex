@@ -30,6 +30,12 @@ constexpr std::size_t node_limit = 100000;
 constexpr std::size_t depth_limit = 64;
 constexpr std::size_t memo_limit = 128 * 1024 * 1024;
 
+bool properties_dialect(const Json& value) {
+    if (!value.is_object()) return false;
+    const auto version = value.value("version", Json());
+    return version == 5 || version == 6 || version == 7 || version == 8 || version == 9 || version == 10;
+}
+
 [[noreturn]] void reject(const char* reason) {
     throw std::invalid_argument(std::string("Mixed selection edit: ") + reason);
 }
@@ -374,33 +380,33 @@ MixedSelectionEditReplayScope::~MixedSelectionEditReplayScope() {
     if (!--replay_scope_depth) replay_memo.reset();
 }
 Json validate_mixed_selection_edit_intent(const Json& value) {
-    if (value.is_object() && (value.value("version", Json()) == 5 || value.value("version", Json()) == 6 || value.value("version", Json()) == 7 || value.value("version", Json()) == 8 || value.value("version", Json()) == 9))
+    if (properties_dialect(value))
         return validate_mixed_selection_property_edit_intent(value);
     try { validate(value); return value; }
     catch (const Json::exception&) { reject("malformed intent"); }
 }
 bool mixed_selection_edit_active_phase_policy(const Json& value) {
-    if (value.is_object() && (value.value("version", Json()) == 5 || value.value("version", Json()) == 6 || value.value("version", Json()) == 7 || value.value("version", Json()) == 8 || value.value("version", Json()) == 9))
+    if (properties_dialect(value))
         return mixed_selection_property_edit_active_phase_policy(value);
     validate(value);
     return !value.at("roof_authoring").is_null() ||
         (value.at("version") == 4 && !value.at("roof_identity_requests").empty());
 }
 bool mixed_selection_edit_has_geometry(const Json& value) {
-    if (value.is_object() && (value.value("version", Json()) == 5 || value.value("version", Json()) == 6 || value.value("version", Json()) == 7 || value.value("version", Json()) == 8 || value.value("version", Json()) == 9))
+    if (properties_dialect(value))
         return mixed_selection_property_edit_has_geometry(value);
     validate(value);
     return (value.at("version") == 3 || value.at("version") == 4) &&
         !value.at("ordinary_request").at("geometry").is_null();
 }
 std::vector<Json> mixed_selection_edit_room_reviews(const Json& value) {
-    if (value.is_object() && (value.value("version", Json()) == 5 || value.value("version", Json()) == 6 || value.value("version", Json()) == 7 || value.value("version", Json()) == 8 || value.value("version", Json()) == 9))
+    if (properties_dialect(value))
         return mixed_selection_property_edit_room_reviews(value);
     validate(value);
     return ordinary_selection_edit_room_reviews(value.at("ordinary_request"));
 }
 std::optional<Revision> mixed_selection_edit_source_saved_revision(const Json& value) {
-    if (value.is_object() && (value.value("version", Json()) == 5 || value.value("version", Json()) == 6 || value.value("version", Json()) == 7 || value.value("version", Json()) == 8 || value.value("version", Json()) == 9))
+    if (properties_dialect(value))
         return mixed_selection_property_edit_source_saved_revision(value);
     validate(value);
     return value.at("source_saved_revision").is_null() ? std::nullopt :
@@ -564,7 +570,7 @@ Json mixed_intent(const DocumentSnapshot& source, const Json& ordinary_request,
 } // namespace
 
 Entities replay_mixed_selection_edit(const DocumentSnapshot& source, const Json& value) {
-    if (value.is_object() && (value.value("version", Json()) == 5 || value.value("version", Json()) == 6 || value.value("version", Json()) == 7 || value.value("version", Json()) == 8 || value.value("version", Json()) == 9))
+    if (properties_dialect(value))
         return replay_mixed_selection_property_edit(source, value).entities;
     MixedSelectionEditReplayScope scope;
     validate(value);
@@ -578,7 +584,7 @@ Entities replay_mixed_selection_edit(const DocumentSnapshot& source, const Json&
 
 bool mixed_selection_edit_retires_dependencies(const Json& value) {
     (void)validate_mixed_selection_edit_intent(value);
-    if (value.at("version") != 9) return false;
+    if ((value.at("version") != 9 && value.at("version") != 10) || value.at("stair_review_request").is_null()) return false;
     const auto request = decode_stair_property_review_request(value.at("stair_review_request"));
     return std::any_of(request.dependency_dispositions.begin(), request.dependency_dispositions.end(),
         [](const auto& choice) { return choice.action == PhaseStairReplacementDependencyAction::retire; });

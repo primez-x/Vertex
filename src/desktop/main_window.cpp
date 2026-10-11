@@ -64,6 +64,7 @@
 #include "sketch/drawing_removal_command.hpp"
 #include "sketch/stair_edit_dependencies.hpp"
 #include "sketch/stair_property_review.hpp"
+#include "sketch/assembly_instance_property_edit.hpp"
 #include "sketch/opening_architectural_removal.hpp"
 #include "sketch/phase_roof_replacement.hpp"
 #include "sketch/phase_slab_replacement.hpp"
@@ -58543,17 +58544,25 @@ private:
                 if (value.mixed_selection_edit_completion || !value.mixed_selection_edit_intent.is_null()) {
                     mixed_edit=true;
                     const auto intent=validate_mixed_selection_edit_intent(value.mixed_selection_edit_intent);
-                    if (intent.at("version")==5 || intent.at("version")==6 || intent.at("version")==7 || intent.at("version")==8 || intent.at("version")==9) {
+                    if (intent.at("version")==5 || intent.at("version")==6 || intent.at("version")==7 || intent.at("version")==8 || intent.at("version")==9 || intent.at("version")==10) {
                         // Properties has its own typed lanes, including a null
                         // physical lane for annotation-only edits. Gesture
                         // ordinary_request codecs cannot decode this roster.
                         const auto& physical=intent.at("ordinary_request");
                         if (!physical.is_null()) for (const auto& target:physical.at("selected"))
                             targets.insert(target.at("entity_id").template get<std::string>());
-                        if (intent.at("version")==9) {
+                        if ((intent.at("version")==9 || intent.at("version")==10) && !intent.at("stair_review_request").is_null()) {
                             const auto review=decode_stair_property_review_request(intent.at("stair_review_request"));
                             for (const auto& profile:review.profiles) targets.insert(profile.object_id);
                             for (const auto& choice:review.dependency_dispositions) targets.insert(choice.rail_id);
+                        }
+                        if (intent.at("version")==10) {
+                            const auto aliases=embedded_assembly_presentation_ids(source.entities());
+                            for (const auto& row:intent.at("assembly_request").at("intents")) {
+                                const auto target=decode_assembly_instance_property_edit_intent(row).target;
+                                if (target.document_entity_id) targets.insert(*target.document_entity_id);
+                                else targets.insert(aliases.at({target.catalog_id,target.instance_id}));
+                            }
                         }
                         const auto& presentation=intent.at("presentation_request");
                         if (!presentation.is_null()) for (const auto& target:presentation.at("selected")) {
@@ -69253,6 +69262,7 @@ public:
             std::vector<SelectionPropertyTarget> physical;
             std::vector<SelectionPresentationPropertyTarget> presentation;
             std::vector<RoofOpeningGroupMember> skylights;
+            std::vector<AssemblyInstancePropertyEditTarget> assemblies;
             for (const auto& id:ordinary) {
                 std::optional<SiteAnnotationTarget> annotation;
                 if (site) {
@@ -69270,10 +69280,18 @@ public:
                         annotation->owner_entity_id,annotation->child_id});
                     continue;
                 }
+                if (const auto embedded=embeddedAssemblyChild(*source,id.toStdString())) {
+                    assemblies.push_back({embedded->assembly_catalog_id,embedded->instance.id,std::nullopt,{}});
+                    continue;
+                }
                 const auto found=source->entities().find(id.toStdString());
                 if (found==source->entities().end()) throw std::invalid_argument("A selected component lost its actual source.");
                 const auto& entity=found->second;
-                if (entity.type=="reference_asset") presentation.push_back({SelectionPresentationPropertyFamily::reference,entity.id,{}});
+                if (entity.type=="assembly_instance") {
+                    const auto binding=decode_document_assembly_instance(entity);
+                    assemblies.push_back({binding.assembly_catalog_id,binding.instance.id,entity.id,{}});
+                }
+                else if (entity.type=="reference_asset") presentation.push_back({SelectionPresentationPropertyFamily::reference,entity.id,{}});
                 else if (entity.type=="wall") physical.push_back({entity.id,SelectionPropertyFamily::wall});
                 else if (entity.type=="slab") physical.push_back({entity.id,SelectionPropertyFamily::slab});
                 else if (entity.type=="opening") physical.push_back({entity.id,SelectionPropertyFamily::hosted_opening});
@@ -69301,7 +69319,7 @@ public:
             };
             fence();
             SelectionPropertiesDialog dialog(*source,std::move(presentation),std::move(physical),std::move(skylights),
-                authority.context.metric_units,owner);
+                std::move(assemblies),authority.context.metric_units,owner);
             styleDialog(dialog);
             if (dialog.exec()!=QDialog::Accepted) return;
             fence();
@@ -69342,7 +69360,11 @@ public:
                     retired_stair_rails=reviewed.retired_rail_ids();
                 }
             }
-            const auto prepared=stair_review
+            const auto assembly_intents=dialog.assemblyIntents();
+            const auto prepared=!assembly_intents.empty()
+                ? prepare_mixed_selection_property_edit(*source,ordinary_request,dialog.presentationRequest(),
+                    dialog.roofOpeningProperties(),message,assembly_intents,stair_review)
+                : stair_review
                 ? prepare_mixed_selection_property_edit(*source,ordinary_request,dialog.presentationRequest(),
                     dialog.roofOpeningProperties(),message,*stair_review)
                 : prepare_mixed_selection_property_edit(*source,ordinary_request,dialog.presentationRequest(),

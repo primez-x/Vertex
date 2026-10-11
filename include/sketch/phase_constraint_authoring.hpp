@@ -10,6 +10,7 @@ namespace sketch {
 struct PhaseWallReplacementAuthoringPreview;
 struct ReplayedPhysicalWallRoomReview;
 class StairPropertyReviewPreparation;
+class AssemblyInstancePropertyEditPreparation;
 
 // Collision fence for newly declared global identities against one retained
 // state, including known owned topology/children and render aliases. References
@@ -179,6 +180,16 @@ struct PhaseConstraintAuthoringIntent {
     const DocumentSnapshot& actual,
     const StairPropertyReviewPreparation& reviewed,
     const std::vector<std::map<std::string,Entity,std::less<>>>& independently_admitted_ordinary_candidates);
+
+// Independently authenticate the assembly contribution against the complete
+// source. Only its actual legacy catalog promotions acquire the v1/v2-to-v7
+// row-local envelope authority; historical composers retain their rules.
+// Optional stair review keeps its exact separately reconstructed retirement.
+[[nodiscard]] std::map<std::string,Entity,std::less<>> compose_assembly_property_selection_edit_candidates(
+    const DocumentSnapshot& actual,
+    const AssemblyInstancePropertyEditPreparation& assemblies,
+    const std::vector<std::map<std::string,Entity,std::less<>>>& independently_admitted_ordinary_candidates,
+    const StairPropertyReviewPreparation* stair_review = nullptr);
 
 // Internal composition of independently admitted demolition leaves. Complete
 // typed leaf replay owns removals and fresh destinations; overlapping changes

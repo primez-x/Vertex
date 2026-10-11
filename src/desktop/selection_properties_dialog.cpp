@@ -1,4 +1,5 @@
 #include "sketch/desktop/selection_properties_dialog.hpp"
+#include "sketch/desktop/assembly_properties_panel.hpp"
 
 #include "sketch/annotation_entity_codec.hpp"
 #include "sketch/constraint_entity.hpp"
@@ -196,6 +197,8 @@ public:
     std::optional<SelectionPropertyEditRequest> accepted_ordinary;
     std::optional<SelectionPresentationPropertyEditRequest> accepted_presentation;
     std::optional<RoofOpeningGroupProperties> accepted_skylights;
+    AssemblyPropertiesPanel* assembly_panel{};
+    std::vector<AssemblyInstancePropertyEditIntent> accepted_assemblies;
 
     const Entity& entity(const std::string& id, const char* type) const {
         const auto found = source.entities().find(id);
@@ -398,10 +401,11 @@ public:
     Impl(SelectionPropertiesDialog* dialog, const DocumentSnapshot& captured,
          std::vector<SelectionPresentationPropertyTarget> presentation_targets,
          std::vector<SelectionPropertyTarget> ordinary_targets,
-         std::vector<RoofOpeningGroupMember> members, bool metric)
+         std::vector<RoofOpeningGroupMember> members,
+         std::vector<AssemblyInstancePropertyEditTarget> assembly_targets, bool metric)
         : owner(dialog), source(captured), unit(metric ? Unit::metre : Unit::foot), skylights(std::move(members)) {
         require(source.is_editable(), "The captured project is read only.");
-        const auto count = presentation_targets.size() + ordinary_targets.size() + skylights.size();
+        const auto count = presentation_targets.size() + ordinary_targets.size() + skylights.size() + assembly_targets.size();
         require(count > 0 && count <= 1000, "Select between one and 1000 supported items.");
         owner->setObjectName("selectionPropertiesDialog");
         owner->setWindowTitle("Selection properties");
@@ -780,6 +784,38 @@ public:
             row(name(original, "Roof") + QString(" / Skylight %1").arg(static_cast<qulonglong>(skylight_ids.size())),
                 "Skylight", q(member.roof_id + " / " + member.opening_id));
         }
+        if (!assembly_targets.empty()) {
+            assembly_panel = new AssemblyPropertiesPanel(source, assembly_targets, metric, tabs);
+            tabs->addTab(assembly_panel, "Components");
+            std::map<std::string, AssemblyModel, std::less<>> catalogs;
+            for (const auto& target : assembly_targets) {
+                if (!catalogs.contains(target.catalog_id)) catalogs.emplace(target.catalog_id,
+                    AssemblyModel::from_json(entity(target.catalog_id, "assembly_model").properties.at("model")));
+                const auto& model = catalogs.at(target.catalog_id);
+                AssemblyInstance instance;
+                QString label;
+                if (target.document_entity_id) {
+                    const auto& original = entity(*target.document_entity_id, "assembly_instance");
+                    const auto binding = decode_document_assembly_instance(original);
+                    require(binding.assembly_catalog_id == target.catalog_id && binding.instance.id == target.instance_id,
+                            "A selected component's qualified identity changed.");
+                    instance = binding.instance;
+                    label = name(original, q(target.instance_id));
+                } else {
+                    const auto found = std::find_if(model.instances().begin(), model.instances().end(),
+                        [&](const auto& value) { return value.id == target.instance_id; });
+                    require(found != model.instances().end(), "A selected embedded component is missing.");
+                    instance = *found;
+                    const auto type = std::find_if(model.types().begin(), model.types().end(),
+                        [&](const auto& value) { return value.id == instance.type_id; });
+                    require(type != model.types().end(), "A selected component type is missing.");
+                    label = q(type->name.empty() ? instance.id : type->name);
+                }
+                QString identity = q(target.catalog_id + " / " + target.instance_id);
+                for (const auto& part : target.part_path) identity += " / " + q(part);
+                row(label, "Component", identity);
+            }
+        }
         error = new QLabel(owner);
         error->setObjectName("selectionPropertiesError");
         error->setWordWrap(true);
@@ -1023,8 +1059,15 @@ SelectionPropertiesDialog::SelectionPropertiesDialog(const DocumentSnapshot& cap
     std::vector<SelectionPresentationPropertyTarget> presentation_targets,
     std::vector<SelectionPropertyTarget> ordinary_targets,
     std::vector<RoofOpeningGroupMember> skylight_members, bool metric, QWidget* parent)
+    : SelectionPropertiesDialog(captured, std::move(presentation_targets), std::move(ordinary_targets),
+          std::move(skylight_members), {}, metric, parent) {}
+SelectionPropertiesDialog::SelectionPropertiesDialog(const DocumentSnapshot& captured,
+    std::vector<SelectionPresentationPropertyTarget> presentation_targets,
+    std::vector<SelectionPropertyTarget> ordinary_targets,
+    std::vector<RoofOpeningGroupMember> skylight_members,
+    std::vector<AssemblyInstancePropertyEditTarget> assembly_targets, bool metric, QWidget* parent)
     : QDialog(parent), impl_(std::make_unique<Impl>(this, captured, std::move(presentation_targets),
-          std::move(ordinary_targets), std::move(skylight_members), metric)) {}
+          std::move(ordinary_targets), std::move(skylight_members), std::move(assembly_targets), metric)) {}
 SelectionPropertiesDialog::~SelectionPropertiesDialog() = default;
 std::optional<SelectionPropertyEditRequest> SelectionPropertiesDialog::ordinaryRequest() const {
     return impl_->accepted_ordinary;
@@ -1035,11 +1078,15 @@ std::optional<SelectionPresentationPropertyEditRequest> SelectionPropertiesDialo
 std::optional<RoofOpeningGroupProperties> SelectionPropertiesDialog::roofOpeningProperties() const {
     return impl_->accepted_skylights;
 }
+std::vector<AssemblyInstancePropertyEditIntent> SelectionPropertiesDialog::assemblyIntents() const {
+    return impl_->accepted_assemblies;
+}
 QString SelectionPropertiesDialog::lastError() const { return impl_->error->text(); }
 bool SelectionPropertiesDialog::submit() {
     impl_->accepted_ordinary.reset();
     impl_->accepted_presentation.reset();
     impl_->accepted_skylights.reset();
+    impl_->accepted_assemblies.clear();
     try {
         const auto ordinary = impl_->ordinary.empty() ? std::nullopt :
             std::optional<SelectionPropertyEditRequest>{impl_->ordinary_request()};
@@ -1047,9 +1094,12 @@ bool SelectionPropertiesDialog::submit() {
             std::optional<SelectionPresentationPropertyEditRequest>{impl_->presentation_request()};
         const auto skylights = impl_->skylights.empty() ? std::nullopt :
             std::optional<RoofOpeningGroupProperties>{impl_->skylight_request()};
+        const auto assemblies = impl_->assembly_panel ? impl_->assembly_panel->intents() :
+            std::vector<AssemblyInstancePropertyEditIntent>{};
         impl_->accepted_ordinary = ordinary;
         impl_->accepted_presentation = presentation;
         impl_->accepted_skylights = skylights;
+        impl_->accepted_assemblies = assemblies;
         impl_->error->clear();
         impl_->error->hide();
         accept();

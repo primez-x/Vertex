@@ -95,6 +95,8 @@ private:
 // scalar profiles and retains either explicit presentation request version.
 // Version nine adds exact actual-source stair dependency decisions and only
 // their independently rederived retirement closure beside other Properties.
+// Version ten adds actual catalog-qualified assembly instance/path Properties,
+// optionally beside the same authenticated stair dependency review.
 [[nodiscard]] nlohmann::json make_mixed_selection_edit_intent(
     const DocumentSnapshot& source, const nlohmann::json& ordinary_request,
     const nlohmann::json& roof_authoring, const nlohmann::json& roof_members,

@@ -14,6 +14,39 @@ changed source does not acquire runtime acceptance without later qualification.
 
 ## Current delivery state
 
+### October 10 qualified component Properties - source integration
+
+Reviewed stair/railing Properties are committed and pushed as a221716b, with
+exact local and remote branch references matched. The current source batch adds
+complete-selection component Properties for independent roots, catalog-qualified
+embedded rows and actual nested part paths. The component panel shows compatible
+declared values/materials/quantities and source-frame pose fields. Keep/set/use-
+definition operations are explicit; part pages retain entered edits and show
+actual component type names rather than using path IDs as display labels.
+
+Mixed dialect ten binds the instance producer to the same captured source as
+physical, presentation, skylight and optional reviewed-stair lanes. Selected
+roots remain retained while explicit nested edits add their qualified targets.
+The final guard refuses disappearing selected rows/paths/hosts. A sealed composer
+admits only the instance producer's actual legacy v1/v2-to-v7 promotion, leaving
+historical composers unchanged. Reader198/extraction196 carry retained history.
+The composed result also receives all-null physical admission of every selected
+qualified target before and after room review, including concurrently changed
+host-copy bodies. Root source review corrected legacy catalog promotion;
+independent source review confirmed the need for final composed native admission
+and approved that correction and the bounded integrated source. Scoped whitespace
+checking passed. Compilation, runtime and large-catalog preparation cost remain
+unverified.
+
+Shared component definition/profile authoring, protected-baseline Properties,
+directional mixed resizing and vertical 3D group movement remain required. Legacy
+host-copy rows without a native source body and metadata-only presentations do
+not acquire fabricated physical geometry from this instance editor.
+
+No builds, tests/new tests, scripts/probes, native jobs, launches, packages or
+installations have run. The installed app is unchanged; all ten production gates
+remain open.
+
 ### October 10 reviewed stair and railing group Properties - source integration
 
 Scalar stair/railing Properties are committed and pushed as f0e3c733. The next

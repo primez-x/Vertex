@@ -1,5 +1,14 @@
 # Portable project extraction
 
+Exchange version196 requires native reader198 for mixed Properties dialect ten.
+Its authenticated assembly request carries exact catalog/instance/entity/path
+targets, declared-slot keep/set/clear operations and partial source-frame poses.
+Selected qualified roots and parts must survive composition and room review.
+Affected legacy rows may acquire v7 envelopes without rewriting untouched rows
+or shared definitions. Optional stair review retains its separate exact removal
+authority. Direct, nested, retained and undone history retain the reader floor;
+runtime and round-trip qualification remain open.
+
 Exchange version195 requires native reader197 for mixed Properties dialect nine.
 Its closed stair review request binds actual-source scalar profiles and explicit
 rail dependency decisions. Only the independently derived removal closure and

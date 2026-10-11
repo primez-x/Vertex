@@ -32,6 +32,7 @@
 #include "sketch/structural_hosted_components.hpp"
 #include "sketch/stair_attachment_integrity.hpp"
 #include "sketch/stair_property_review.hpp"
+#include "sketch/assembly_instance_property_edit.hpp"
 #include "sketch/wall_measurement.hpp"
 
 #include <algorithm>
@@ -1720,7 +1721,8 @@ Entity merge_mixed_edit_annotation_rows(const Entity& source,const std::vector<c
 // Mixed edit maps have already passed their own typed row admission. Unlike
 // historical hosted placement composition, their authority can include an
 // independent root pose, parameters and complete raw instance suffixes.
-Entity merge_mixed_edit_instance_rows(const Entity& source,const std::vector<const Entity*>& candidates) {
+Entity merge_mixed_edit_instance_rows(const Entity& source,const std::vector<const Entity*>& candidates,
+    bool allow_legacy_assembly_promotion=false) {
     const auto& original=source.properties.at("model");
     (void)AssemblyModel::from_json(original);
     const auto& retained=original.at("instances");
@@ -1741,7 +1743,9 @@ Entity merge_mixed_edit_instance_rows(const Entity& source,const std::vector<con
             if (!((before=="sketch.assemblies.v3" || before=="sketch.assemblies.v4") &&
                     (after=="sketch.assemblies.v5" || after=="sketch.assemblies.v6" || after=="sketch.assemblies.v7")) &&
                 !(before=="sketch.assemblies.v5" && (after=="sketch.assemblies.v6" || after=="sketch.assemblies.v7")) &&
-                !(before=="sketch.assemblies.v6" && after=="sketch.assemblies.v7"))
+                !(before=="sketch.assemblies.v6" && after=="sketch.assemblies.v7") &&
+                !(allow_legacy_assembly_promotion && (before=="sketch.assemblies.v1" || before=="sketch.assemblies.v2") &&
+                    after=="sketch.assemblies.v7"))
                 invalid("Mixed edit catalog has an unsupported dialect change");
             promoted=true;
             normalized.at("schema")=original.at("schema");
@@ -2026,7 +2030,8 @@ Entity merge_reviewed_geometry_annotation_rows(const Entity& original,const Enti
 // Ordinary leaves cannot edit a retired row or remove any additional row.
 Entity merge_stair_review_instance_rows(const Entity& source,const Entity& review,
     const std::vector<const Entity*>& ordinary,
-    const std::set<std::pair<std::string,std::string>>& retired_bindings) {
+    const std::set<std::pair<std::string,std::string>>& retired_bindings,
+    bool allow_legacy_assembly_promotion=false) {
     const auto& retained=source.properties.at("model").at("instances");
     std::map<std::string,const Json*,std::less<>> retained_rows;
     for (const auto& row:retained)
@@ -2054,14 +2059,15 @@ Entity merge_stair_review_instance_rows(const Entity& source,const Entity& revie
     }
     std::vector<const Entity*> changes{&review};
     for (const auto& lane:normalized) changes.push_back(&lane);
-    return merge_mixed_edit_instance_rows(baseline,changes);
+    return merge_mixed_edit_instance_rows(baseline,changes,allow_legacy_assembly_promotion);
 }
 
 Entities compose_mixed_selection_edit_candidates_impl(const Entities& actual,
     const std::vector<Entities>& independently_admitted_candidates,
     const std::set<std::string,std::less<>>* retired_rooms=nullptr,
     const std::set<std::string,std::less<>>* removed_annotation_targets=nullptr,
-    const StairPropertyReviewPreparation* stair_review=nullptr) {
+    const StairPropertyReviewPreparation* stair_review=nullptr,
+    const std::set<std::string,std::less<>>* assembly_promoted_catalogs=nullptr) {
     coordinated_map_budget(actual);
     if (independently_admitted_candidates.empty() || independently_admitted_candidates.size()>(stair_review ? 6u : 5u))
         invalid("Mixed edit composition requires one to five independently admitted actual-source candidates");
@@ -2175,8 +2181,9 @@ Entities compose_mixed_selection_edit_candidates_impl(const Entities& actual,
                 for (std::size_t index=1;index<independently_admitted_candidates.size();++index)
                     ordinary.push_back(&independently_admitted_candidates[index].at(key));
                 result.at(key)=merge_stair_review_instance_rows(original,stair_review->entities().at(key),
-                    ordinary,reviewed_retired_bindings);
-            } else result.at(key)=merge_mixed_edit_instance_rows(original,changes);
+                    ordinary,reviewed_retired_bindings,assembly_promoted_catalogs && assembly_promoted_catalogs->contains(key));
+            } else result.at(key)=merge_mixed_edit_instance_rows(original,changes,
+                assembly_promoted_catalogs && assembly_promoted_catalogs->contains(key));
         }
         else if (original.type==kAnnotationEntityType) {
             if (removed_annotation_targets) {
@@ -2334,9 +2341,11 @@ Entities compose_reviewed_geometry_selection_edit_candidates(const Entities& act
     return result;
 }
 
-Entities compose_stair_property_review_selection_edit_candidates(const DocumentSnapshot& source,
+namespace {
+Entities compose_stair_property_review_selection_edit_candidates_impl(const DocumentSnapshot& source,
     const StairPropertyReviewPreparation& reviewed,
-    const std::vector<Entities>& independently_admitted_ordinary_candidates) {
+    const std::vector<Entities>& independently_admitted_ordinary_candidates,
+    const std::set<std::string,std::less<>>* assembly_promoted_catalogs=nullptr) {
     const auto& actual=source.entities();
     coordinated_map_budget(actual);
     if (independently_admitted_ordinary_candidates.size()>5)
@@ -2379,7 +2388,7 @@ Entities compose_stair_property_review_selection_edit_candidates(const DocumentS
     lanes.reserve(1+independently_admitted_ordinary_candidates.size());
     lanes.push_back(review);
     lanes.insert(lanes.end(),independently_admitted_ordinary_candidates.begin(),independently_admitted_ordinary_candidates.end());
-    auto result=compose_mixed_selection_edit_candidates_impl(actual,lanes,nullptr,&removed_targets,&replayed);
+    auto result=compose_mixed_selection_edit_candidates_impl(actual,lanes,nullptr,&removed_targets,&replayed,assembly_promoted_catalogs);
     for (const auto& [key,entity]:actual) {
         const auto expected=review.find(key);
         if (erased.contains(key)!=!result.contains(key))
@@ -2394,6 +2403,31 @@ Entities compose_stair_property_review_selection_edit_candidates(const DocumentS
         }
     }
     return result;
+}
+} // namespace
+
+Entities compose_stair_property_review_selection_edit_candidates(const DocumentSnapshot& source,
+    const StairPropertyReviewPreparation& reviewed,const std::vector<Entities>& ordinary) {
+    return compose_stair_property_review_selection_edit_candidates_impl(source,reviewed,ordinary);
+}
+
+Entities compose_assembly_property_selection_edit_candidates(const DocumentSnapshot& source,
+    const AssemblyInstancePropertyEditPreparation& assemblies,const std::vector<Entities>& ordinary,
+    const StairPropertyReviewPreparation* stair_review) {
+    if (ordinary.size()>4) invalid("Assembly Properties composition exceeds its source lane budget");
+    const auto replayed=replay_assembly_instance_property_edit_preparation(source,assemblies.request());
+    std::set<std::string,std::less<>> promoted;
+    for (const auto& [id,entity]:source.entities()) if (entity.type=="assembly_model") {
+        const auto& before=entity.properties.at("model").at("schema");
+        const auto& after=replayed.preview_entities().at(id).properties.at("model").at("schema");
+        if ((before=="sketch.assemblies.v1" || before=="sketch.assemblies.v2") && after=="sketch.assemblies.v7")
+            promoted.insert(id);
+    }
+    auto leaves=ordinary;
+    leaves.push_back(replayed.preview_entities());
+    if (stair_review)
+        return compose_stair_property_review_selection_edit_candidates_impl(source,*stair_review,leaves,&promoted);
+    return compose_mixed_selection_edit_candidates_impl(source.entities(),leaves,nullptr,nullptr,nullptr,&promoted);
 }
 
 namespace {
