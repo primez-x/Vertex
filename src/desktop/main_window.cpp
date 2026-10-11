@@ -8406,9 +8406,15 @@ public:
                 copied_dimension_ids.emplace(id,std::move(fresh));
             }
         }
-        for (auto& dimension:carry_assembly_dimension_transform_entities(source.entities(),candidate,
-                source_root,destination_root,clone ? AssemblyDimensionTransformMode::clone : AssemblyDimensionTransformMode::move,
-                copied_dimension_ids))
+        auto carried_dimensions = carry_assembly_dimension_transform_entities(source.entities(),candidate,
+            source_root,destination_root,clone ? AssemblyDimensionTransformMode::clone : AssemblyDimensionTransformMode::move,
+            copied_dimension_ids);
+        if (!clone) {
+            std::vector<std::string> changed_ids;
+            for (const auto& dimension : carried_dimensions) changed_ids.push_back(dimension.id);
+            validate_ordinary_assembly_dimension_changes(source.entities(), changed_ids);
+        }
+        for (auto& dimension : carried_dimensions)
             changes.push_back(EntityChange::upsert(std::move(dimension)));
         if (clone) for (const auto& [id, annotation] : source.entities()) {
             (void)id;
@@ -8550,6 +8556,15 @@ public:
                 const auto final = decode_boundary_dimension_entity(change.entity);
                 if (!initial.supported() || !final.supported())
                     throw std::invalid_argument("A copied saved dimension has an unsupported placement contract.");
+                if (initial.dimension->assembly_target &&
+                    initial.dimension->assembly_target->component.document_entity_id &&
+                    std::find(targets.begin(), targets.end(),
+                        *initial.dimension->assembly_target->component.document_entity_id) != targets.end()) {
+                    // The current independent-root producer already carried
+                    // both position and direction from the identity copy's
+                    // actual frame. Retain that exact consequence once.
+                    continue;
+                }
                 auto dimension = *final.dimension;
                 const auto point = initial.dimension->text_position;
                 dimension.text_position = point;
@@ -8609,7 +8624,15 @@ public:
                 "Select an editable architectural object before transforming it.");
         }
         const auto transform = parseArchitecturalTransform(rotation_degrees, offset_x, offset_y, offset_z, uniform_scale);
-        const auto target_id = clone ? new_id(original.type) : original.id;
+        auto target_id = clone ? new_id(original.type) : original.id;
+        if (clone && original.type == "assembly_instance") {
+            const auto occupied = retainedSlabIdentityNames(source, true);
+            for (std::size_t attempt = 0; occupied.contains(target_id); ++attempt) {
+                if (attempt == 64)
+                    throw std::invalid_argument("Could not reserve a fresh component copy identity.");
+                target_id = new_id(original.type);
+            }
+        }
         std::vector<ArchitecturalOperation> operations;
         if (clone) {
             ArchitecturalOperation duplicate{ArchitecturalAction::duplicate, original.id};
@@ -9960,6 +9983,7 @@ public:
         std::vector<BoundaryTranslation> translations;
         std::vector<std::string> walls;
         std::vector<ArchitecturalOperation> operations;
+        std::vector<std::string> independent_components;
         for (const auto& entity : graph) {
             if ((is_closed_boundary_entity(entity.type) || entity.type == "wall" || entity.type == "measurement_linework") && !model_ids.contains(id_from(entity.id)))
                 model_ids.push_back(id_from(entity.id));
@@ -9999,6 +10023,10 @@ public:
             }
             if (!can_transform_architectural_entity_type(entity.type))
                 throw std::invalid_argument("This selected object does not support movement.");
+            if (entity.type == "assembly_instance") {
+                independent_components.push_back(entity.id);
+                continue;
+            }
             walls.push_back(entity.id);
             ArchitecturalOperation operation{ArchitecturalAction::transform,entity.id};
             operation.transform = ArchitecturalTransform{offset.x,offset.y,0.0,0.0,1.0};
@@ -10010,6 +10038,13 @@ public:
             auto wall_changes = architectural_transaction_command(source,transaction,source.revision());
             changes.insert(changes.end(),std::make_move_iterator(wall_changes.entity_changes.begin()),
                 std::make_move_iterator(wall_changes.entity_changes.end()));
+        }
+        if (!independent_components.empty()) {
+            auto component_changes = architectural_group_transform_command(source, independent_components,
+                {{}, {offset.x, offset.y, 0.0}, 0.0, 1.0, false, false},
+                new_id("component-selection-move"), source.revision());
+            changes.insert(changes.end(), std::make_move_iterator(component_changes.entity_changes.begin()),
+                std::make_move_iterator(component_changes.entity_changes.end()));
         }
         Command movement;
         if(translations.empty())movement=ApplyEntityChanges{source.revision(),std::move(changes),{},"Move selected objects"};
@@ -10687,8 +10722,13 @@ public:
                 // consequence may already have moved its saved text position.
                 const auto original_dimension = decode_boundary_dimension_entity(entity);
                 if (!original_dimension.supported()) throw std::invalid_argument(original_dimension.unsupported_reason);
-                dimension.text_position = transform_point(original_dimension.dimension->text_position,
-                    operation_for(original_dimension.dimension->boundary_id));
+                const auto& component = original_dimension.dimension->assembly_target;
+                const bool component_carried = component && component->component.document_entity_id &&
+                    std::find(physical_roots.begin(), physical_roots.end(),
+                        *component->component.document_entity_id) != physical_roots.end();
+                if (!component_carried)
+                    dimension.text_position = transform_point(original_dimension.dimension->text_position,
+                        operation_for(original_dimension.dimension->boundary_id));
                 copied.insert_or_assign(metadata.id,encode_boundary_dimension_entity(dimension,&metadata));
             } else if (entity.type == kAnnotationEntityType) {
                 auto annotation = entity;
@@ -25720,9 +25760,72 @@ public:
         return constraint_authoring_verified_command(source, preview, nullptr);
     }
 
+    static ApplyEntityChanges independentComponentTransformCommand(const DocumentSnapshot& source,
+        const Entity& original, const ArchitecturalTransaction& transaction) {
+        const auto& operations = transaction.operations();
+        const bool clone = operations.size() == 2 &&
+            operations[0].action == ArchitecturalAction::duplicate && operations[0].object_id == original.id &&
+            operations[1].action == ArchitecturalAction::transform &&
+            operations[1].object_id == operations[0].duplicate_id && operations[1].transform;
+        const bool move = operations.size() == 1 &&
+            operations[0].action == ArchitecturalAction::transform && operations[0].object_id == original.id &&
+            operations[0].transform;
+        if (!clone && !move)
+            throw std::invalid_argument("A component transform requires one captured move or copy operation.");
+        const auto before = decode_document_assembly_instance(original);
+        auto command = architectural_transaction_command(source, transaction, source.revision());
+        const auto candidate = Document::preview_command(source, command);
+        const auto target_id = clone ? operations[0].duplicate_id : original.id;
+        const auto after = decode_document_assembly_instance(candidate.entities().at(target_id));
+        AssemblyInstancePropertyEditTarget source_root{
+            before.assembly_catalog_id, before.instance.id, original.id, {}};
+        AssemblyInstancePropertyEditTarget destination_root{
+            after.assembly_catalog_id, after.instance.id, target_id, {}};
+        std::map<std::string, std::string, std::less<>> copied_dimensions;
+        if (clone) {
+            auto occupied = retainedSlabIdentityNames(source, true);
+            if (!occupied.insert(target_id).second)
+                throw std::invalid_argument("The component copy identity is retained by project history.");
+            for (const auto& [id, entity] : source.entities()) {
+                if (!can_recognize_boundary_dimension_entity_type(entity.type) ||
+                    inspect_boundary_dimension_version(entity).format != BoundaryDimensionFormat::supported_v6)
+                    continue;
+                const auto decoded = decode_boundary_dimension_entity(entity);
+                if (!decoded.supported() || !decoded.dimension->assembly_target)
+                    throw std::invalid_argument("The component dimension has an unsupported copy contract.");
+                const auto& root = decoded.dimension->assembly_target->component;
+                if (root.catalog_id != source_root.catalog_id || root.instance_id != source_root.instance_id ||
+                    root.document_entity_id != source_root.document_entity_id) continue;
+                if (copied_dimensions.size() == 1000)
+                    throw std::invalid_argument("The component copy has too many associated dimensions.");
+                auto fresh = new_id("dimension");
+                for (std::size_t attempt = 0; !occupied.insert(fresh).second; ++attempt) {
+                    if (attempt == 64)
+                        throw std::invalid_argument("Could not reserve a fresh component dimension identity.");
+                    fresh = new_id("dimension");
+                }
+                copied_dimensions.emplace(id, std::move(fresh));
+            }
+        }
+        const auto dimensions = carry_assembly_dimension_transform_entities(source.entities(), candidate.entities(),
+            source_root, destination_root, clone ? AssemblyDimensionTransformMode::clone :
+                AssemblyDimensionTransformMode::move, copied_dimensions);
+        if (!clone) {
+            std::vector<std::string> changed_ids;
+            for (const auto& dimension : dimensions) changed_ids.push_back(dimension.id);
+            validate_ordinary_assembly_dimension_changes(source.entities(), changed_ids);
+        }
+        for (const auto& dimension : dimensions)
+            command.entity_changes.push_back(EntityChange::upsert(dimension));
+        (void)Document::preview_command(source, command);
+        return command;
+    }
+
     static Command architecturalObjectTransformCommand(const DocumentSnapshot& source,
         const Entity& original, const ArchitecturalTransaction& transaction, const std::string& registry_id) {
         const auto& operations=transaction.operations();
+        if (original.type == "assembly_instance")
+            return independentComponentTransformCommand(source, original, transaction);
         if ((original.type=="stair" || original.type=="railing") && operations.size()==2 &&
             operations[0].action==ArchitecturalAction::duplicate && operations[0].object_id==original.id &&
             operations[1].action==ArchitecturalAction::transform &&

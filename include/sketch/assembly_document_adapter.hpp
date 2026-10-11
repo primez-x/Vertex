@@ -185,8 +185,15 @@ struct AssemblyDocumentTypeUpdateImpact {
     const AssemblyDocumentEntities& entities, const std::string& catalog_id, AssemblyType replacement);
 [[nodiscard]] ApplyEntityChanges assembly_instance_create_command(const DocumentSnapshot& source,
     Entity entity, const AssemblyDocumentInstance& value, Revision expected_revision);
+// Current ordinary updates carry associated qualified dimensions in the same
+// command when catalog/root/type identity remains unchanged. Identity/type
+// replacement supplies no annotation retarget authority; full actual document
+// admission still validates retained targets and source phase protection.
 [[nodiscard]] ApplyEntityChanges assembly_instance_update_command(const DocumentSnapshot& source,
     const std::string& entity_id, const AssemblyDocumentInstance& value, Revision expected_revision);
+// Retires the independent owner and its exact associated v6 dimensions together.
+// Other catalog roots remain intact. Protected/inactive dimensions and unresolved
+// surviving references refuse the whole ordinary operation before publication.
 [[nodiscard]] ApplyEntityChanges assembly_instance_remove_command(const DocumentSnapshot& source,
     const std::string& entity_id, Revision expected_revision);
 // Updates an existing catalog and prunes actual phase membership rows only when

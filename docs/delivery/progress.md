@@ -14,7 +14,46 @@ changed source does not acquire runtime acceptance without later qualification.
 
 ## Current delivery state
 
+### October 11 independent component dimension lifecycle
+
+The preceding status-only turn made no implementation progress. The current
+source batch connects independent component group transforms and the ordinary
+canvas selection-move route to associated dimension carry. A shared cohort
+producer admits both actual maps once and measures at most 1000 dimensions in
+one source/candidate batch, preserving exact nested targets, raw metadata and
+unchanged numeric fields. Transform-dialog and plan-grip commands now carry
+independent dimension position/direction; transformed clones reserve dimension
+identities through retained history and keep original bodies and callouts.
+The existing graph-copy and mirrored-copy routes retain that owner consequence
+once rather than overwriting it or applying a second placement operation.
+
+Direct instance updates now carry same-root/type dimension frames atomically;
+removal qualifies exact independent-owner targets in one bounded source batch
+and retires them with the body. A separate ordinary-authoring policy check
+protects inactive dimensions and baseline dimensions in a saved alternative;
+pure carry itself supplies no phase permissions. Complete private document
+preview admits actual remaining references before either command is returned.
+Independent integrated source review approved this frozen batch with no proved
+P1/P2 findings, and scoped whitespace review passes. The batch is being committed
+and backed up. Source additions do not establish installed behavior. No builds,
+tests, probes, native jobs, launches, packages or installations ran; compilation,
+canvas/3D interaction, Undo/redo, save/reopen and migration remain unverified.
+Host-driven embedded carry, nested linked-view targets, cross-registry/phase
+replacement, mixed-family properties/transforms and the component-companion
+editing quarantine remain required implementation work. All ten production
+gates remain open.
+Follow-on discovery confirms embedded group transforms still return catalog-only
+changes. Embedded deletion closure matches a presentation alias against the
+dimension's catalog carrier rather than its exact qualified root; completing
+that path requires explicit retirement authority without changing historical
+producer meanings. Neither gap is treated as accepted functionality.
+
 ### October 11 ordinary component dimension carry
+
+This carry/clipboard batch is committed and pushed as 7049bee2; the exact
+remote branch ref matches the local commit. Current follow-on discovery traces
+independent component transforms/clone and component deletion so their actual
+dimension lifecycles can be completed without reinterpreting retained intents.
 
 The dimension/native batch below is committed and pushed as 41443100, with the
 exact remote ref verified. The current source batch implements the two concrete

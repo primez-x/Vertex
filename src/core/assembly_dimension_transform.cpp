@@ -1,11 +1,14 @@
 #include "sketch/assembly_dimension_transform.hpp"
 #include "sketch/boundary_dimension.hpp"
+#include "sketch/constraint_phase_scope.hpp"
+#include "sketch/model_phases.hpp"
 
 #include <algorithm>
 #include <cmath>
 #include <set>
 #include <stdexcept>
 #include <string_view>
+#include <tuple>
 #include <utility>
 
 namespace sketch {
@@ -82,37 +85,71 @@ bool same_raw(const Entity& a, const Entity& b) {
     return a.id == b.id && a.type == b.type && a.required == b.required &&
         a.properties.dump() == b.properties.dump() && a.extensions.dump() == b.extensions.dump();
 }
-bool has_root(const AssemblyDimensionTarget& target, const Root& root) {
-    const auto& component = target.component;
-    return component.catalog_id == root.catalog_id && component.instance_id == root.instance_id &&
-        component.document_entity_id == root.document_entity_id;
+using RootKey = std::tuple<std::string_view, std::string_view, std::optional<std::string_view>>;
+RootKey root_key(const Root& root) {
+    return {root.catalog_id, root.instance_id, root.document_entity_id
+        ? std::optional<std::string_view>(*root.document_entity_id) : std::nullopt};
 }
 
 // Borrow only framed actual rows. Catalog admission has already bounded all
 // rows/definitions; geometry expansion is deliberately deferred to measurement.
-const Json* root_row(const AssemblyDocumentEntities& actual, const Root& root) {
-    const auto catalog = actual.find(root.catalog_id);
-    if (catalog == actual.end()) return nullptr;
-    require(catalog->second.type == "assembly_model", "root catalog has the wrong entity type");
-    if (root.document_entity_id) {
-        const auto owner = actual.find(*root.document_entity_id);
-        if (owner == actual.end()) return nullptr;
-        const auto value = decode_document_assembly_instance(owner->second);
-        require(value.assembly_catalog_id == root.catalog_id && value.instance.id == root.instance_id,
-            "independent root framing differs from its qualified identity");
-        return &owner->second.properties.at("instance");
+class RootRows {
+public:
+    explicit RootRows(const AssemblyDocumentEntities& actual) : actual_(actual) {}
+    const Json* find(const Root& root) {
+        const auto key = root_key(root);
+        if (const auto cached = resolved_.find(key); cached != resolved_.end()) return cached->second;
+        const auto* row = find_uncached(root);
+        resolved_.emplace(key, row);
+        return row;
     }
-    const auto& rows = catalog->second.properties.at("model").at("instances");
-    require(rows.is_array(), "embedded root roster is invalid");
-    const Json* found = nullptr;
-    for (const auto& row : rows) {
-        require(row.is_object() && row.contains("id") && row.at("id").is_string(), "invalid embedded root row");
-        if (row.at("id") != root.instance_id) continue;
-        require(!found, "embedded qualified root is duplicated");
-        found = &row;
+private:
+    const AssemblyDocumentEntities& actual_;
+    std::map<RootKey, const Json*> resolved_;
+    std::map<std::string_view, std::map<std::string_view, const Json*>> embedded_;
+
+    const Json* find_uncached(const Root& root) {
+        const auto catalog = actual_.find(root.catalog_id);
+        if (catalog == actual_.end()) return nullptr;
+        require(catalog->second.type == "assembly_model", "root catalog has the wrong entity type");
+        if (root.document_entity_id) {
+            const auto owner = actual_.find(*root.document_entity_id);
+            if (owner == actual_.end()) return nullptr;
+            const auto value = decode_document_assembly_instance(owner->second);
+            require(value.assembly_catalog_id == root.catalog_id && value.instance.id == root.instance_id,
+                "independent root framing differs from its qualified identity");
+            return &owner->second.properties.at("instance");
+        }
+        auto cached = embedded_.find(root.catalog_id);
+        if (cached == embedded_.end()) {
+            const auto& rows = catalog->second.properties.at("model").at("instances");
+            require(rows.is_array(), "embedded root roster is invalid");
+            std::map<std::string_view, const Json*> indexed;
+            for (const auto& row : rows) {
+                require(row.is_object() && row.contains("id") && row.at("id").is_string(), "invalid embedded root row");
+                const auto& id = row.at("id").get_ref<const std::string&>();
+                const auto [found, inserted] = indexed.emplace(id, &row);
+                // Preserve the single-root rule: only a requested duplicate is
+                // refused here; unrelated rows remain the catalog codec's job.
+                if (!inserted) found->second = nullptr;
+            }
+            cached = embedded_.emplace(catalog->first, std::move(indexed)).first;
+        }
+        const auto found = cached->second.find(root.instance_id);
+        if (found == cached->second.end()) return nullptr;
+        require(found->second, "embedded qualified root is duplicated");
+        return found->second;
     }
-    return found;
-}
+};
+
+// Both public APIs borrow their mapping. In particular, the existing single-
+// root API never copies a caller's unchecked mapping to construct a request.
+struct RequestView {
+    const Root& source_root;
+    const Root& destination_root;
+    AssemblyDimensionTransformMode mode;
+    const std::map<std::string, std::string, std::less<>>& fresh_dimension_ids;
+};
 
 double finite(double value) {
     require(std::isfinite(value), "text transform arithmetic is unrepresentable");
@@ -204,52 +241,73 @@ Entity encode_carried(const Entity& original, const BoundaryDimension& before,
     }
     return result;
 }
-} // namespace
-
-std::vector<Entity> carry_assembly_dimension_transform_entities(
+std::vector<Entity> carry_requests(
     const AssemblyDocumentEntities& source, const AssemblyDocumentEntities& candidate,
-    const Root& source_root, const Root& destination_root, AssemblyDimensionTransformMode mode,
-    const std::map<std::string, std::string, std::less<>>& fresh_dimension_ids) {
-    require(mode == AssemblyDimensionTransformMode::move || mode == AssemblyDimensionTransformMode::clone,
-        "unknown carry mode");
-    require(source_root.part_path.empty() && destination_root.part_path.empty(), "targets must be qualified roots");
-    (void)encode_assembly_dimension_target({source_root, AssemblyDimensionAxis::width});
-    (void)encode_assembly_dimension_target({destination_root, AssemblyDimensionAxis::width});
-    require(source_root.document_entity_id.has_value() == destination_root.document_entity_id.has_value(),
-        "carry cannot change root form");
-    const bool clone = mode == AssemblyDimensionTransformMode::clone;
-    require(clone ? source_root != destination_root : source_root == destination_root,
-        "roots do not match the requested carry mode");
-    require(fresh_dimension_ids.size() <= dimension_limit && (clone || fresh_dimension_ids.empty()),
-        "unexpected or overbound dimension identities");
+    std::span<const RequestView> requests) {
+    require(!requests.empty() && requests.size() <= dimension_limit, "request count exceeds bound or is empty");
+    std::map<RootKey, std::size_t> source_requests, destination_requests;
     std::set<std::string, std::less<>> destinations;
-    for (const auto& [old_id, new_id] : fresh_dimension_ids) {
-        document_id(old_id); document_id(new_id);
-        require(destinations.insert(new_id).second && !source.contains(new_id) && !candidate.contains(new_id),
-            "fresh dimension identity is duplicated or collides");
+    std::size_t mapping_count = 0;
+    for (std::size_t i = 0; i < requests.size(); ++i) {
+        const auto& request = requests[i];
+        const auto& source_root = request.source_root;
+        const auto& destination_root = request.destination_root;
+        require(request.mode == AssemblyDimensionTransformMode::move || request.mode == AssemblyDimensionTransformMode::clone,
+            "unknown carry mode");
+        require(source_root.part_path.empty() && destination_root.part_path.empty(), "targets must be qualified roots");
+        (void)encode_assembly_dimension_target({source_root, AssemblyDimensionAxis::width});
+        (void)encode_assembly_dimension_target({destination_root, AssemblyDimensionAxis::width});
+        require(source_root.document_entity_id.has_value() == destination_root.document_entity_id.has_value(),
+            "carry cannot change root form");
+        const bool clone = request.mode == AssemblyDimensionTransformMode::clone;
+        require(clone ? source_root != destination_root : source_root == destination_root,
+            "roots do not match the requested carry mode");
+        require(request.fresh_dimension_ids.size() <= dimension_limit - mapping_count &&
+            (clone || request.fresh_dimension_ids.empty()), "unexpected or overbound dimension identities");
+        mapping_count += request.fresh_dimension_ids.size();
+        require(source_requests.emplace(root_key(source_root), i).second, "source root is duplicated");
+        require(destination_requests.emplace(root_key(destination_root), i).second, "destination root is duplicated");
+        for (const auto& [old_id, new_id] : request.fresh_dimension_ids) {
+            document_id(old_id); document_id(new_id);
+            require(destinations.insert(new_id).second && !source.contains(new_id) && !candidate.contains(new_id),
+                "fresh dimension identity is duplicated or collides");
+        }
     }
+    for (const auto& [key, index] : destination_requests) {
+        const auto found = source_requests.find(key);
+        require(found == source_requests.end() || (found->second == index &&
+            requests[index].mode == AssemblyDimensionTransformMode::move), "source and destination rosters overlap");
+    }
+
     RawBudget raw; raw.map(source); raw.map(candidate);
     AssemblyCatalogTransferBudget catalogs;
     for (const auto* actual : {&source, &candidate}) for (const auto& [id, value] : *actual) {
         (void)id;
         if (value.type == "assembly_model") admit_existing_assembly_catalog_work(value, catalogs);
     }
-    const auto* original_row = root_row(source, source_root);
-    const auto* destination_row = root_row(candidate, destination_root);
-    require(original_row && destination_row, "actual source or destination root is missing");
-    if (clone) {
-        if (destination_root.document_entity_id)
-            require(!source.contains(*destination_root.document_entity_id), "cloned document root already exists in source");
-        else require(!root_row(source, destination_root), "cloned embedded root already exists in source");
-        const auto* retained = root_row(candidate, source_root);
-        require(retained && retained->dump() == original_row->dump(), "clone changed its original component row");
-        if (source_root.document_entity_id)
-            require(same_raw(source.at(*source_root.document_entity_id), candidate.at(*source_root.document_entity_id)),
-                "clone changed its original component envelope");
+    RootRows source_rows(source), candidate_rows(candidate);
+    for (const auto& request : requests) {
+        const auto& source_root = request.source_root;
+        const auto& destination_root = request.destination_root;
+        const auto* original_row = source_rows.find(source_root);
+        const auto* destination_row = candidate_rows.find(destination_root);
+        require(original_row && destination_row, "actual source or destination root is missing");
+        if (request.mode == AssemblyDimensionTransformMode::clone) {
+            if (destination_root.document_entity_id)
+                require(!source.contains(*destination_root.document_entity_id), "cloned document root already exists in source");
+            else require(!source_rows.find(destination_root), "cloned embedded root already exists in source");
+            const auto* retained = candidate_rows.find(source_root);
+            require(retained && retained->dump() == original_row->dump(), "clone changed its original component row");
+            if (source_root.document_entity_id)
+                require(same_raw(source.at(*source_root.document_entity_id), candidate.at(*source_root.document_entity_id)),
+                    "clone changed its original component envelope");
+        }
     }
 
     std::vector<BoundaryDimension> dimensions;
     std::vector<AssemblyDimensionTarget> old_targets, new_targets;
+    std::vector<std::size_t> dimension_requests;
+    std::vector<std::size_t> dimension_counts(requests.size());
     for (const auto& [id, entity] : source) {
         if (!can_recognize_boundary_dimension_entity_type(entity.type)) continue;
         const auto version = inspect_boundary_dimension_version(entity);
@@ -257,19 +315,23 @@ std::vector<Entity> carry_assembly_dimension_transform_entities(
         auto decoded = decode_boundary_dimension_entity(entity);
         require(decoded.dimension && decoded.dimension->assembly_target, "known assembly dimension is malformed");
         auto& dimension = *decoded.dimension;
-        if (!has_root(*dimension.assembly_target, source_root)) continue;
+        const auto owner = source_requests.find(root_key(dimension.assembly_target->component));
+        if (owner == source_requests.end()) continue;
+        const auto& request = requests[owner->second];
+        const auto& destination_root = request.destination_root;
+        const bool clone = request.mode == AssemblyDimensionTransformMode::clone;
         require(dimensions.size() < dimension_limit, "associated dimension count exceeds bound");
         const auto unchanged = candidate.find(id);
         require(unchanged != candidate.end() && same_raw(entity, unchanged->second),
             "candidate must retain associated original dimensions unchanged");
-        require(!clone || fresh_dimension_ids.contains(id), "clone is missing a dimension identity mapping");
+        require(!clone || request.fresh_dimension_ids.contains(id), "clone is missing a dimension identity mapping");
         // Admit the complete raw output carrier before copying it for encoding.
         raw.entity(entity);
         // Reserve a possible new default presentation and longer destination
         // identity slots without first constructing their owning JSON values.
         raw.reserve(32);
         if (clone) {
-            raw.text(fresh_dimension_ids.at(id)); raw.text(destination_root.catalog_id);
+            raw.text(request.fresh_dimension_ids.at(id)); raw.text(destination_root.catalog_id);
             raw.text(destination_root.instance_id);
             if (destination_root.document_entity_id) raw.text(*destination_root.document_entity_id);
         }
@@ -280,14 +342,19 @@ std::vector<Entity> carry_assembly_dimension_transform_entities(
         target.component.document_entity_id = destination_root.document_entity_id;
         new_targets.push_back(std::move(target));
         dimensions.push_back(std::move(dimension));
+        dimension_requests.push_back(owner->second);
+        ++dimension_counts[owner->second];
     }
-    require(!clone || fresh_dimension_ids.size() == dimensions.size(), "clone has extraneous dimension identity mappings");
+    for (std::size_t i = 0; i < requests.size(); ++i)
+        require(requests[i].mode != AssemblyDimensionTransformMode::clone ||
+            requests[i].fresh_dimension_ids.size() == dimension_counts[i], "clone has extraneous dimension identity mappings");
     if (dimensions.empty()) return {};
 
     const auto before = resolve_assembly_dimensions(source, old_targets);
     const auto after = resolve_assembly_dimensions(candidate, new_targets);
     std::vector<BoundaryDimension> carried; carried.reserve(dimensions.size());
     for (std::size_t i = 0; i < dimensions.size(); ++i) {
+        const auto& request = requests[dimension_requests[i]];
         require(before[i].selected_node.type_id == after[i].selected_node.type_id,
             "carry replaced the selected component type");
         auto dimension = dimensions[i];
@@ -301,10 +368,10 @@ std::vector<Entity> carry_assembly_dimension_transform_entities(
             if (!dimension.presentation) dimension.presentation.emplace();
             dimension.presentation->rotation_radians = angle;
         }
-        if (clone) {
-            dimension.id = fresh_dimension_ids.at(dimension.id);
+        if (request.mode == AssemblyDimensionTransformMode::clone) {
+            dimension.id = request.fresh_dimension_ids.at(dimension.id);
             dimension.assembly_target = new_targets[i];
-            dimension.boundary_id = destination_root.document_entity_id.value_or(destination_root.catalog_id);
+            dimension.boundary_id = request.destination_root.document_entity_id.value_or(request.destination_root.catalog_id);
         }
         carried.push_back(std::move(dimension));
     }
@@ -312,10 +379,56 @@ std::vector<Entity> carry_assembly_dimension_transform_entities(
     // first owning entity copy. Publication remains the enclosing caller's job.
     std::vector<Entity> result; result.reserve(carried.size());
     for (std::size_t i = 0; i < carried.size(); ++i) {
-        if (!clone && carried[i] == dimensions[i]) continue;
+        if (requests[dimension_requests[i]].mode == AssemblyDimensionTransformMode::move && carried[i] == dimensions[i]) continue;
         result.push_back(encode_carried(source.at(dimensions[i].id), dimensions[i], carried[i]));
     }
     return result;
+}
+} // namespace
+
+std::vector<Entity> carry_assembly_dimension_transform_entities(
+    const AssemblyDocumentEntities& source, const AssemblyDocumentEntities& candidate,
+    const Root& source_root, const Root& destination_root, AssemblyDimensionTransformMode mode,
+    const std::map<std::string, std::string, std::less<>>& fresh_dimension_ids) {
+    const RequestView request{source_root, destination_root, mode, fresh_dimension_ids};
+    return carry_requests(source, candidate, std::span<const RequestView>(&request, 1));
+}
+
+std::vector<Entity> carry_assembly_dimension_transform_entities(
+    const AssemblyDocumentEntities& source, const AssemblyDocumentEntities& candidate,
+    std::span<const AssemblyDimensionTransformRequest> requests) {
+    require(!requests.empty() && requests.size() <= dimension_limit, "request count exceeds bound or is empty");
+    std::vector<RequestView> views;
+    views.reserve(requests.size());
+    for (const auto& request : requests)
+        views.push_back({request.source_root, request.destination_root, request.mode, request.fresh_dimension_ids});
+    return carry_requests(source, candidate, views);
+}
+
+void validate_ordinary_assembly_dimension_changes(
+    const AssemblyDocumentEntities& source, std::span<const std::string> dimension_ids) {
+    if (dimension_ids.empty()) return;
+    require(dimension_ids.size() <= dimension_limit, "ordinary dimension change roster exceeds bound");
+    std::set<std::string, std::less<>> unique;
+    for (const auto& id : dimension_ids) {
+        const auto found = source.find(id);
+        require(unique.insert(id).second && found != source.end() && found->second.id == id &&
+            can_recognize_boundary_dimension_entity_type(found->second.type) &&
+            inspect_boundary_dimension_version(found->second).format == BoundaryDimensionFormat::supported_v6,
+            "ordinary dimension change must name a unique supported source dimension");
+    }
+    const auto scope = constraint_phase_scope(source);
+    for (const auto& id : dimension_ids)
+        require(!scope.inactive_owner_ids.contains(id), "ordinary editing cannot change an inactive dimension");
+    for (const auto& [registry_id, entity] : source) {
+        (void)registry_id;
+        if (entity.type != "model_phases") continue;
+        const auto phases = ModelPhases::from_json(entity.properties.at("model"));
+        if (!phases.active_alternative()) continue;
+        for (const auto& id : dimension_ids)
+            require(std::find(phases.baseline_ids().begin(), phases.baseline_ids().end(), id) ==
+                phases.baseline_ids().end(), "ordinary editing requires replacement of a protected baseline dimension");
+    }
 }
 
 } // namespace sketch

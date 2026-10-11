@@ -3,6 +3,8 @@
 #include "sketch/architectural_document_adapter.hpp"
 #include "sketch/assembly_phase_membership_transport.hpp"
 #include "sketch/assembly_catalog_phase_edit.hpp"
+#include "sketch/assembly_dimension_transform.hpp"
+#include "sketch/boundary_dimension.hpp"
 #include "sketch/slab_semantics.hpp"
 #include "sketch/wall_semantics.hpp"
 #include <algorithm>
@@ -609,6 +611,42 @@ ApplyEntityChanges upsert(const DocumentSnapshot& source, Entity entity,
     candidate.insert_or_assign(entity.id, entity);
     validate_document_assembly_instances(candidate);
     return {expected, {EntityChange::upsert(std::move(entity))}, {}, label};
+}
+std::vector<std::string> independent_assembly_dimension_ids(
+    const AssemblyDocumentEntities& source, const AssemblyInstancePropertyEditTarget& root) {
+    require(source.size() <= 100000, "assembly dimension source entity count exceeds bound");
+    std::vector<std::string> ids;
+    std::vector<AssemblyDimensionTarget> targets;
+    std::size_t roster_size{};
+    for (const auto& [id, entity] : source) {
+        if (!can_recognize_boundary_dimension_entity_type(entity.type)) continue;
+        // Inspect borrowed version/kind fields before full decoding. The closed
+        // target codec bounds its own identity/path allocations; the complete
+        // resolver then admits all raw envelopes/catalogs before carrier decode.
+        const auto& properties = entity.properties;
+        require(properties.is_object(), "assembly dimension source properties must be an object");
+        const auto version = properties.find("dimension_version");
+        const auto kind = properties.find("dimension_kind");
+        if (version == properties.end() || !version->is_number_integer() || *version != 6 ||
+            kind == properties.end() || !kind->is_string() || *kind != "assembly_extent") continue;
+        require(roster_size++ < 1000, "assembly dimension source roster exceeds bound");
+        const auto target = decode_assembly_dimension_target(properties.at("target").at("assembly"));
+        const auto& component = target.component;
+        if (component.catalog_id != root.catalog_id || component.instance_id != root.instance_id ||
+            component.document_entity_id != root.document_entity_id) continue;
+        ids.push_back(id);
+        targets.push_back(target);
+    }
+    if (!targets.empty()) {
+        (void)resolve_assembly_dimensions(source, targets);
+        for (std::size_t i = 0; i < ids.size(); ++i) {
+            const auto decoded = decode_boundary_dimension_entity(source.at(ids[i]));
+            require(decoded.supported() && decoded.dimension->kind == BoundaryDimensionKind::assembly_extent &&
+                decoded.dimension->assembly_target == targets[i],
+                "assembly dimension source does not retain its exact qualified target");
+        }
+    }
+    return ids;
 }
 }
 
@@ -1220,19 +1258,49 @@ ApplyEntityChanges assembly_instance_update_command(const DocumentSnapshot& sour
     revision(source, expected_revision);
     const auto found = source.entities().find(entity_id);
     require(found != source.entities().end(), "assembly instance update target is missing");
-    (void)decode_document_assembly_instance(found->second);
-    return upsert(source, encode_document_assembly_instance(found->second, value), expected_revision, "Update assembly instance");
+    const auto before = decode_document_assembly_instance(found->second);
+    auto updated = encode_document_assembly_instance(found->second, value);
+    auto candidate = source.entities();
+    candidate.insert_or_assign(entity_id, updated);
+    ApplyEntityChanges command{expected_revision, {EntityChange::upsert(std::move(updated))}, {},
+        "Update assembly instance"};
+    if (before.assembly_catalog_id == value.assembly_catalog_id && before.instance.id == value.instance.id &&
+        before.instance.type_id == value.instance.type_id) {
+        const AssemblyInstancePropertyEditTarget root{before.assembly_catalog_id, before.instance.id, entity_id, {}};
+        auto dimensions = carry_assembly_dimension_transform_entities(source.entities(), candidate, root, root,
+            AssemblyDimensionTransformMode::move);
+        std::vector<std::string> changed_ids;
+        changed_ids.reserve(dimensions.size());
+        for (const auto& dimension : dimensions) changed_ids.push_back(dimension.id);
+        validate_ordinary_assembly_dimension_changes(source.entities(), changed_ids);
+        for (auto& dimension : dimensions)
+            command.entity_changes.push_back(EntityChange::upsert(std::move(dimension)));
+    }
+    // A type/catalog change retains its existing explicit body-edit authority,
+    // never dimension retarget authority. Actual admission refuses retired or
+    // nonmeasurable targets and protected source cohorts before publication.
+    (void)Document::preview_command(source, command);
+    return command;
 }
 ApplyEntityChanges assembly_instance_remove_command(const DocumentSnapshot& source,
     const std::string& entity_id, Revision expected_revision) {
     revision(source, expected_revision);
     const auto found = source.entities().find(entity_id);
     require(found != source.entities().end(), "assembly instance removal target is missing");
-    (void)decode_document_assembly_instance(found->second);
+    const auto before = decode_document_assembly_instance(found->second);
+    const AssemblyInstancePropertyEditTarget root{before.assembly_catalog_id, before.instance.id, entity_id, {}};
+    const auto dimension_ids = independent_assembly_dimension_ids(source.entities(), root);
+    validate_ordinary_assembly_dimension_changes(source.entities(), dimension_ids);
     auto candidate = source.entities();
     candidate.erase(entity_id);
+    ApplyEntityChanges command{expected_revision, {EntityChange::erase(entity_id)}, {}, "Remove assembly instance"};
+    for (const auto& id : dimension_ids) {
+        candidate.erase(id);
+        command.entity_changes.push_back(EntityChange::erase(id));
+    }
     validate_document_assembly_instances(candidate);
-    return {expected_revision, {EntityChange::erase(entity_id)}, {}, "Remove assembly instance"};
+    (void)Document::preview_command(source, command);
+    return command;
 }
 ApplyEntityChanges assembly_catalog_update_command(const DocumentSnapshot& source,
     const std::string& catalog_id, const AssemblyModel& replacement, Revision expected_revision,

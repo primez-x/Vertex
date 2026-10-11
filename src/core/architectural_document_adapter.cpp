@@ -1,5 +1,6 @@
 #include "sketch/architectural_document_adapter.hpp"
 #include "sketch/assembly_document_adapter.hpp"
+#include "sketch/assembly_dimension_transform.hpp"
 #include "sketch/assembly_geometry.hpp"
 #include "sketch/building_entity.hpp"
 #include "sketch/roof_entity_codec.hpp"
@@ -2483,6 +2484,8 @@ ApplyEntityChanges architectural_group_transform_command(const DocumentSnapshot&
     // Creating the validated transaction also checks transaction/target lexical
     // identities on the no-op path without re-encoding any source metadata.
     if (identity) return {expected_revision,{}, {},"Transform architectural group"};
+    std::vector<AssemblyDimensionTransformRequest> dimension_transforms;
+    dimension_transforms.reserve(targets.size());
     // Construct final descriptors directly from the captured source. An
     // intermediate proper move could fail world/level admission even though
     // its reflected final position is valid; it must never be published.
@@ -2511,6 +2514,8 @@ ApplyEntityChanges architectural_group_transform_command(const DocumentSnapshot&
             after = transform_room_entity(before, movement, horizontal, vertical);
         else if (before.type == "assembly_instance") {
             auto value = decode_document_assembly_instance(before);
+            const AssemblyInstancePropertyEditTarget qualified_root{
+                value.assembly_catalog_id, value.instance.id, before.id, {}};
             auto& root = *value.instance.root_transform;
             if (reflected) {
                 const auto position = transform_point({root.translation_m.x, root.translation_m.y,
@@ -2527,9 +2532,23 @@ ApplyEntityChanges architectural_group_transform_command(const DocumentSnapshot&
                 root=compose_assembly_transform(outer,root);
             }
             after = encode_document_assembly_instance(after, value);
+            dimension_transforms.push_back({qualified_root, qualified_root,
+                AssemblyDimensionTransformMode::move, {}});
         } else {
             after = transform_building_entity(source.entities(), before, movement, horizontal, vertical);
         }
+    }
+    // Only actual selected independent roots declare carry authority. Preserve
+    // every original dimension until the complete cohort has been measured.
+    if (!dimension_transforms.empty()) {
+        auto dimensions = carry_assembly_dimension_transform_entities(
+            source.entities(), candidate, dimension_transforms);
+        std::vector<std::string> changed_dimension_ids;
+        changed_dimension_ids.reserve(dimensions.size());
+        for (const auto& dimension : dimensions) changed_dimension_ids.push_back(dimension.id);
+        validate_ordinary_assembly_dimension_changes(source.entities(), changed_dimension_ids);
+        for (auto& dimension : dimensions)
+            candidate.at(dimension.id) = std::move(dimension);
     }
     return make_candidate_command(source, candidate, expected_revision, transaction.undo_label(), targets);
 }
