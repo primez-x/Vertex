@@ -1,4 +1,31 @@
-# Vertex project formats v1 through v195
+# Vertex project formats v1 through v196
+
+## Stair and railing scalar group Properties (v196, source implementation)
+
+Ordinary request three adds a nonempty `stair_profiles` lane and stair/railing
+selected families. It retains `structural_profiles`, which may be empty. Each
+selected owner has exactly one typed intent; historical request one/two keep
+their closed fields and admission rules. Mixed Properties dialect eight in
+command envelope52 requires ordinary request three and may compose presentation
+request one or two. Reader196/extraction194 cover direct, nested, retained and
+undone proofs, with the same immutable original-source and atomic publication
+fences as other Properties lanes.
+
+Closed scalar intents support stair rise, going, width and existing top-landing
+dimensions, plus rail height, thickness, post spacing and independent length.
+Entered going/width applies to stair defaults and existing explicit flight
+overrides; inherited slots remain absent. Each equal scalar retains its original
+raw number and receipt. Actual forms, child identities/counts, topology, turns,
+hosts, placement and connected levels remain source authority. Hosted rail
+length cannot be entered. Native admission through existing full producers
+checks original/result attached rails and hosted catalogs, including retained
+members, without giving identity checks placement authoring authority.
+
+Analytical preparation exposes exact source-derived editor entities to existing
+dependency review. This Properties lane does not invent rehost/removal choices:
+edits requiring such decisions remain an explicit integration gap, along with
+active-baseline group replacement and assembly group Properties. Source
+integration is not compilation, native interaction or save/reopen acceptance.
 
 ## Structural scalar group Properties (v195, source implementation)
 

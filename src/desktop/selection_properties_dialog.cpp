@@ -8,6 +8,8 @@
 #include "sketch/project_organization.hpp"
 #include "sketch/roof_entity_codec.hpp"
 #include "sketch/structural_object_edit.hpp"
+#include "sketch/stair_profile_edit.hpp"
+#include "sketch/stair_semantics.hpp"
 
 #include <QComboBox>
 #include <QDialogButtonBox>
@@ -154,7 +156,8 @@ bool same_annotation_floor(const DrawingContext& a, const DrawingContext& b) {
 struct Fields {
     QLineEdit *width{}, *depth{}, *height{}, *thickness{}, *elevation{}, *offset{}, *sill{},
         *rise{}, *overhang{}, *rotation{}, *outline{}, *surface{}, *content{}, *scale{},
-        *intensity{}, *frame{}, *curb{}, *glazing{}, *font{}, *x{}, *y{}, *radius{};
+        *intensity{}, *frame{}, *curb{}, *glazing{}, *font{}, *x{}, *y{}, *radius{},
+        *going{}, *landing_depth{}, *landing_thickness{}, *length{}, *post_spacing{};
     QComboBox *visible{}, *layer{}, *bold{}, *italic{}, *alignment{}, *flip_horizontal{}, *flip_vertical{};
 };
 struct LayerInput {
@@ -440,6 +443,8 @@ public:
             case SelectionPropertyFamily::roof: type = "roof"; title = "Roofs"; break;
             case SelectionPropertyFamily::column: type = "column"; title = "Columns"; break;
             case SelectionPropertyFamily::beam: type = "beam"; title = "Beams"; break;
+            case SelectionPropertyFamily::stair: type = "stair"; title = "Stairs"; break;
+            case SelectionPropertyFamily::railing: type = "railing"; title = "Railings"; break;
             default: throw std::invalid_argument("Selection Properties unavailable: unsupported ordinary family.");
             }
             const auto& original = entity(target.entity_id, type);
@@ -465,6 +470,20 @@ public:
                 } else if (target.family == SelectionPropertyFamily::beam) {
                     f.width = dimension(form, "Width", "selectionBeamWidth");
                     f.depth = dimension(form, "Depth", "selectionBeamDepth");
+                } else if (target.family == SelectionPropertyFamily::stair) {
+                    f.rise = dimension(form, "Total rise", "selectionStairTotalRise");
+                    f.going = dimension(form, "Going", "selectionStairGoing");
+                    f.width = dimension(form, "Width", "selectionStairWidth");
+                    auto* note = new QLabel("Going and width changes apply to the stair defaults and all existing flight overrides. Blank fields retain each flight's current dimensions. Top landing fields apply only to stairs that already have a top landing.", owner);
+                    note->setWordWrap(true);
+                    form->addRow(note);
+                } else if (target.family == SelectionPropertyFamily::railing) {
+                    f.height = dimension(form, "Height", "selectionRailingHeight");
+                    f.thickness = dimension(form, "Thickness", "selectionRailingThickness");
+                    f.post_spacing = dimension(form, "Post spacing", "selectionRailingPostSpacing");
+                    auto* note = new QLabel("Length applies only to independent railings. Attached railing length follows its stair and cannot be entered here. Blank fields retain current values.", owner);
+                    note->setWordWrap(true);
+                    form->addRow(note);
                 } else if (target.family == SelectionPropertyFamily::roof) {
                     f.width = dimension(form, "Length / horizontal run", "selectionRoofLength");
                     f.depth = dimension(form, "Span", "selectionRoofSpan");
@@ -528,6 +547,39 @@ public:
                     }
                     title_singular = "Column";
                 }
+            } else if (target.family == SelectionPropertyFamily::stair) {
+                validate_stair_profile_source_entity(original);
+                const auto stair = decode_stair_properties(original.id, original.properties);
+                auto& f = profiles.at(target.family);
+                current_length(f.rise, stair.total_rise);
+                current_length(f.going, stair.going);
+                current_length(f.width, stair.width);
+                for (const auto& flight : stair.flights) {
+                    current_length(f.going, flight.going.value_or(stair.going));
+                    current_length(f.width, flight.width.value_or(stair.width));
+                }
+                if (stair.top_landing) {
+                    if (!f.landing_depth) {
+                        auto* form = profile_forms.at(target.family);
+                        f.landing_depth = dimension(form, "Existing top landing depth", "selectionStairTopLandingDepth");
+                        f.landing_thickness = dimension(form, "Existing top landing thickness", "selectionStairTopLandingThickness");
+                    }
+                    current_length(f.landing_depth, stair.top_landing->depth);
+                    current_length(f.landing_thickness, stair.top_landing->thickness);
+                }
+                title_singular = "Stair";
+            } else if (target.family == SelectionPropertyFamily::railing) {
+                validate_stair_profile_source_entity(original);
+                const auto rail = decode_railing_properties(original.id, original.properties);
+                auto& f = profiles.at(target.family);
+                current_length(f.height, rail.height);
+                current_length(f.thickness, rail.thickness);
+                current_length(f.post_spacing, rail.post_spacing);
+                if (!rail.host && !rail.landing_host) {
+                    if (!f.length) f.length = dimension(profile_forms.at(target.family), "Independent length", "selectionRailingLength");
+                    current_length(f.length, rail.length);
+                }
+                title_singular = rail.host || rail.landing_host ? "Attached railing" : "Independent railing";
             } else if (target.family == SelectionPropertyFamily::roof) {
                 (void)decode_roof_entity(original);
                 const auto& f = profiles.at(target.family);
@@ -811,6 +863,27 @@ public:
                 }
                 if (target.family == SelectionPropertyFamily::column) intent.height = length(f.height, unit);
                 request.structural_profiles.push_back(std::move(intent));
+            } else if (target.family == SelectionPropertyFamily::stair || target.family == SelectionPropertyFamily::railing) {
+                validate_stair_profile_source_entity(original);
+                StairProfileEditIntent intent;
+                intent.object_id = target.entity_id;
+                if (target.family == SelectionPropertyFamily::stair) {
+                    intent.total_rise = length(f.rise, unit);
+                    intent.going = length(f.going, unit);
+                    intent.width = length(f.width, unit);
+                    if (decode_stair_properties(original.id, original.properties).top_landing) {
+                        intent.top_landing_depth = length(f.landing_depth, unit);
+                        intent.top_landing_thickness = length(f.landing_thickness, unit);
+                    }
+                } else {
+                    intent.height = length(f.height, unit);
+                    intent.thickness = length(f.thickness, unit);
+                    intent.post_spacing = length(f.post_spacing, unit);
+                    const auto rail = decode_railing_properties(original.id, original.properties);
+                    if (!rail.host && !rail.landing_host) intent.length = length(f.length, unit);
+                }
+                (void)encode_stair_profile_edit_intent(intent);
+                request.stair_profiles.push_back(std::move(intent));
             } else if (target.family == SelectionPropertyFamily::roof) {
                 RoofProfileEditIntent intent;
                 intent.roof_id = target.entity_id;

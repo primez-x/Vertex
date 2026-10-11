@@ -58542,7 +58542,7 @@ private:
                 if (value.mixed_selection_edit_completion || !value.mixed_selection_edit_intent.is_null()) {
                     mixed_edit=true;
                     const auto intent=validate_mixed_selection_edit_intent(value.mixed_selection_edit_intent);
-                    if (intent.at("version")==5 || intent.at("version")==6 || intent.at("version")==7) {
+                    if (intent.at("version")==5 || intent.at("version")==6 || intent.at("version")==7 || intent.at("version")==8) {
                         // Properties has its own typed lanes, including a null
                         // physical lane for annotation-only edits. Gesture
                         // ordinary_request codecs cannot decode this roster.
@@ -69274,6 +69274,8 @@ public:
                 else if (entity.type=="roof") physical.push_back({entity.id,SelectionPropertyFamily::roof});
                 else if (entity.type=="column") physical.push_back({entity.id,SelectionPropertyFamily::column});
                 else if (entity.type=="beam") physical.push_back({entity.id,SelectionPropertyFamily::beam});
+                else if (entity.type=="stair") physical.push_back({entity.id,SelectionPropertyFamily::stair});
+                else if (entity.type=="railing") physical.push_back({entity.id,SelectionPropertyFamily::railing});
                 else throw std::invalid_argument("Group Properties for "+entity.type+" is not yet available. The complete selection has been retained.");
             }
             for (const auto& child:children) skylights.push_back({child.roof_id.toStdString(),child.opening_id.toStdString()});

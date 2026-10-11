@@ -91,6 +91,8 @@ private:
 // placement/mirror authority; version five remains limited to request one.
 // Version seven requires ordinary Properties request two for column/beam
 // scalar profiles; presentation request one or two may compose beside it.
+// Version eight requires ordinary Properties request three for stair/railing
+// scalar profiles and retains either explicit presentation request version.
 [[nodiscard]] nlohmann::json make_mixed_selection_edit_intent(
     const DocumentSnapshot& source, const nlohmann::json& ordinary_request,
     const nlohmann::json& roof_authoring, const nlohmann::json& roof_members,

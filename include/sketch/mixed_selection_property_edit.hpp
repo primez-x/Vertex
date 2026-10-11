@@ -14,6 +14,8 @@ namespace sketch {
 // requires presentation request two for saved-frame placement and mirrors.
 // Dialect seven requires ordinary request two for column/beam scalar profiles
 // and may compose either explicit presentation request version.
+// Dialect eight requires ordinary request three for stair/railing scalar
+// profiles and may compose either explicit presentation request version.
 // Each lane reads the same
 // complete immutable original snapshot. No supplied entity map, transform,
 // selected-object identity generation, rehosting, deletion or active-baseline
@@ -42,7 +44,7 @@ private:
         const std::vector<nlohmann::json>&);
 };
 
-// Closed dialect-five/six/seven envelope: version, expected_revision, source_snapshot_digest,
+// Closed dialect-five/six/seven/eight envelope: version, expected_revision, source_snapshot_digest,
 // source_authoring_digest, source_entities_digest, source_saved_revision,
 // ordinary_request, presentation_request, skylight_properties,
 // roof_opening_members, room_reviews, message. Optional lanes are null; at

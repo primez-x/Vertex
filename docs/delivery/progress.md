@@ -14,6 +14,52 @@ changed source does not acquire runtime acceptance without later qualification.
 
 ## Current delivery state
 
+### October 10 stair and railing group Properties - source integration
+
+Column and beam Properties are committed and pushed as 163e2622, with exact
+local and remote branch references matched. Current source adds Stairs and
+Railings pages to complete-selection Properties and source-derived scalar
+intents for rise, going, width, existing top-landing dimensions, rail height,
+thickness, post spacing and independent length. Hosted rail length remains
+derived from its real stair. Going/width input applies to defaults and every
+existing explicit flight override, even when the default already equals the
+input; each individually equal value keeps its exact raw number and receipt.
+
+Ordinary request three requires the complete nonempty stair lane and can
+compose structural members. Mixed dialect eight binds that request alongside
+the other original-source Properties lanes. Old requests keep their original
+closed fields and meanings. Reader196/extraction194 carry direct, nested,
+retained and undone proofs. Identity-only admission through existing producers
+checks original/final actual hosts, attached rail cohorts and hosted catalogs
+while asserting exact raw preservation; it grants no placement authoring.
+
+The scalar preparation also exposes actual-source editor entities for existing
+analytical dependency review. Full reviewed rehost/removal composition and
+active-baseline group replacement remain implementation gaps. Ordinary scalar
+edits requiring those decisions refuse without manufacturing choices. Assembly
+group Properties, directional mixed resizing and vertical 3D group movement
+also remain required. Root review corrected bulk flight edits whose input equals
+the default but differs from an override, and retained-baseline members now
+skip ordinary dependency authoring while retaining full physical admission.
+Independent review found identity admission could exceed the explicit target
+budget by adding every selected rail and its host. Admission now deduplicates
+actual hosts and uses their existing complete active rail expansion; the scalar
+authoring roster stays exact. Follow-up review approved the revised source
+integration. Root reviewed interfaces and scoped whitespace checking passed.
+
+Focused assembly discovery established separate independent roots, embedded
+catalog-qualified rows and stable nested paths. Per-instance property/material/
+quantity and pose overrides have existing model authority; shared type/profile
+dimensions and catalog materials have wider impact. A source worker is adding
+a closed actual-source per-instance producer across both storage forms. This
+does not authorize shared-type changes through an instance patch or complete
+assembly group Properties until integration and admission are reviewed.
+
+No builds, tests/new tests, scripts/probes, native jobs, launches, packages or
+installations have run. The installed app is unchanged. Compilation, native
+interaction, Undo/Redo and save/reopen remain unverified; all ten production
+gates remain open.
+
 ### October 10 column and beam group Properties - source integration
 
 Placement and mirror Properties are committed and pushed as 7be5fc2d, with

@@ -5,12 +5,13 @@
 #include "sketch/phase_slab_profile_edit.hpp"
 #include "sketch/phase_wall_profile_edit.hpp"
 #include "sketch/structural_profile_edit.hpp"
+#include "sketch/stair_profile_edit.hpp"
 
 #include <set>
 
 namespace sketch {
 
-enum class SelectionPropertyFamily { wall, slab, hosted_opening, roof, column, beam };
+enum class SelectionPropertyFamily { wall, slab, hosted_opening, roof, column, beam, stair, railing };
 enum class SelectionPropertyUnchangedPolicy { reject, retain };
 
 struct SelectionPropertyTarget {
@@ -29,6 +30,7 @@ struct SelectionPropertyEditRequest {
     std::vector<HostedOpeningProfileEditIntent> hosted_openings;
     std::vector<RoofProfileEditIntent> roofs;
     std::vector<StructuralProfileEditIntent> structural_profiles;
+    std::vector<StairProfileEditIntent> stair_profiles;
     SelectionPropertyUnchangedPolicy unchanged_policy{SelectionPropertyUnchangedPolicy::reject};
 };
 
@@ -44,7 +46,7 @@ public:
     // Sorted actual wall roots and opening hosts, including invariant selections.
     // This roster identifies physical dependencies; it is not room review proof.
     [[nodiscard]] const std::set<std::string, std::less<>>& affected_wall_ids() const noexcept;
-    // Complete wall/slab/opening/roof/structural contributions, in that order when
+    // Complete wall/slab/opening/roof/structural/stair contributions, in that order when
     // nonempty. Every typed field derives from its actual original owner;
     // wall/opening contributions are staged authority, not independently
     // admitted physical hosts. Physical admission uses the complete composed
@@ -76,9 +78,12 @@ private:
 // V2 adds structural_profiles and column/beam families, and requires a nonempty
 // structural lane exactly covering those declared owners. V1 retains its exact
 // closed fields and historical family set. V2 is emitted only for that lane.
+// V3 adds stair_profiles and stair/railing families, requires a nonempty stair
+// lane, and always includes structural_profiles (which may be empty). It is
+// emitted only for a nonempty stair lane. Each lane exactly covers its owners.
 // Nested codecs retain their existing versions. Strict canonical round trips,
-// 1..1000 complete targets, 4 MiB wire, 100000 values, depth 64. Structural
-// all-null intents explicitly retain their declared members. Historical typed
+// 1..1000 complete targets, 4 MiB wire, 100000 values, depth 64. Structural and
+// stair all-null intents explicitly retain their declared members. Historical typed
 // lanes retain their own empty-intent rules. Duplicate/unsorted/missing targets
 // and undeclared fields refuse.
 [[nodiscard]] nlohmann::json validate_selection_property_edit_request(const nlohmann::json&);

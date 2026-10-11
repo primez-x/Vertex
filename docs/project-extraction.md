@@ -1,5 +1,14 @@
 # Portable project extraction
 
+Exchange version194 requires native reader196 for mixed Properties dialect eight
+and ordinary request three. The complete stair/railing roster carries closed
+scalar intents; structural and presentation lanes retain their explicit nested
+versions. Source topology, hosts, connected levels, quantities and opaque
+siblings remain preserved. Direct, nested, retained and undone history carry
+the reader floor. Required dependency dispositions and baseline replacement
+are separate authoring authority, not inferred exchange fields. Runtime and
+round-trip qualification remain open.
+
 Exchange version193 requires native reader195 for mixed Properties dialect seven
 and ordinary request two. Its complete column/beam roster carries closed scalar
 intents alongside other selected families; optional presentation request one or

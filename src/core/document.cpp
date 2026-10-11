@@ -3261,7 +3261,7 @@ static std::vector<nlohmann::json> phase_constraint_authoring_proofs(const Apply
         if (version==34) result.push_back(proof.at("phase_constraint_authoring_intent"));
         else if (version==52) {
             const auto& mixed=proof.at("mixed_selection_edit_intent");
-            if (mixed.at("version")!=5 && mixed.at("version")!=6 && mixed.at("version")!=7) {
+            if (mixed.at("version")!=5 && mixed.at("version")!=6 && mixed.at("version")!=7 && mixed.at("version")!=8) {
                 const auto& roof=mixed.at("roof_authoring");
                 if (!roof.is_null()) result.push_back(roof);
             }
@@ -3710,7 +3710,7 @@ static PhaseConstraintLifetimeProofs phase_constraint_lifetime_proofs(const Appl
         const auto version=proof.at("version").get<int>();
         if (version==52) {
             const auto& mixed=proof.at("mixed_selection_edit_intent");
-            if (mixed.at("version")!=5 && mixed.at("version")!=6 && mixed.at("version")!=7) {
+            if (mixed.at("version")!=5 && mixed.at("version")!=6 && mixed.at("version")!=7 && mixed.at("version")!=8) {
                 const auto& roof=mixed.at("roof_authoring");
                 if (!roof.is_null()) result.phase_proofs.push_back(roof);
             }

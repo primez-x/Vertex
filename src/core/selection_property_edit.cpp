@@ -96,16 +96,20 @@ const char* family_name(SelectionPropertyFamily family) {
     case SelectionPropertyFamily::roof: return "roof";
     case SelectionPropertyFamily::column: return "column";
     case SelectionPropertyFamily::beam: return "beam";
+    case SelectionPropertyFamily::stair: return "stair";
+    case SelectionPropertyFamily::railing: return "railing";
     }
     reject("unsupported selected family");
 }
-SelectionPropertyFamily family(const Json& value, bool structural) {
+SelectionPropertyFamily family(const Json& value, bool structural, bool stairs) {
     if (value == "wall") return SelectionPropertyFamily::wall;
     if (value == "slab") return SelectionPropertyFamily::slab;
     if (value == "hosted_opening") return SelectionPropertyFamily::hosted_opening;
     if (value == "roof") return SelectionPropertyFamily::roof;
     if (structural && value == "column") return SelectionPropertyFamily::column;
     if (structural && value == "beam") return SelectionPropertyFamily::beam;
+    if (stairs && value == "stair") return SelectionPropertyFamily::stair;
+    if (stairs && value == "railing") return SelectionPropertyFamily::railing;
     reject("unsupported selected family");
 }
 const char* source_type(SelectionPropertyFamily value) {
@@ -166,9 +170,14 @@ void authenticate_source(const DocumentSnapshot& source, const Json& value) {
 SelectionPropertyEditRequest decode_request(const Json& value) {
     Budget{}.visit(value);
     if (!value.is_object() || !value.contains("version") || !value.at("version").is_number_integer() ||
-        (value.at("version") != 1 && value.at("version") != 2)) reject("unsupported request version");
-    const bool structural = value.at("version") == 2;
-    if (structural)
+        (value.at("version") != 1 && value.at("version") != 2 && value.at("version") != 3)) reject("unsupported request version");
+    const bool stairs = value.at("version") == 3;
+    const bool structural = value.at("version") != 1;
+    if (stairs)
+        fields(value, {"version", "expected_revision", "source_snapshot_digest", "source_authoring_digest",
+            "source_entities_digest", "source_saved_revision", "selected", "walls", "slabs", "hosted_openings",
+            "roofs", "structural_profiles", "stair_profiles", "unchanged_policy"});
+    else if (structural)
         fields(value, {"version", "expected_revision", "source_snapshot_digest", "source_authoring_digest",
             "source_entities_digest", "source_saved_revision", "selected", "walls", "slabs", "hosted_openings",
             "roofs", "structural_profiles", "unchanged_policy"});
@@ -191,7 +200,7 @@ SelectionPropertyEditRequest decode_request(const Json& value) {
     for (const auto& row : selected) {
         fields(row, {"entity_id", "family"});
         const auto id = identity(row.at("entity_id"));
-        const auto kind = family(row.at("family"), structural);
+        const auto kind = family(row.at("family"), structural, stairs);
         if (!previous.empty() && id <= previous) reject("selected roster must be sorted and unique");
         previous = id;
         declared.emplace(id, kind);
@@ -219,7 +228,7 @@ SelectionPropertyEditRequest decode_request(const Json& value) {
     lane("roofs", "roof_id", SelectionPropertyFamily::roof, decode_roof_profile_edit_intent, encode_roof_profile_edit_intent, result.roofs);
     if (structural) {
         const auto& rows = value.at("structural_profiles");
-        if (!rows.is_array() || rows.empty() || rows.size() > target_limit) reject("invalid structural lane budget");
+        if (!rows.is_array() || (!stairs && rows.empty()) || rows.size() > target_limit) reject("invalid structural lane budget");
         std::string prior;
         for (const auto& row : rows) {
             auto intent = decode_structural_profile_edit_intent(row);
@@ -236,6 +245,25 @@ SelectionPropertyEditRequest decode_request(const Json& value) {
             result.structural_profiles.push_back(std::move(intent));
         }
     }
+    if (stairs) {
+        const auto& rows = value.at("stair_profiles");
+        if (!rows.is_array() || rows.empty() || rows.size() > target_limit) reject("invalid stair lane budget");
+        std::string prior;
+        for (const auto& row : rows) {
+            auto intent = decode_stair_profile_edit_intent(row);
+            if (encode_stair_profile_edit_intent(intent).dump() != row.dump())
+                reject("stair profile must use its exact canonical codec");
+            const auto id = identity(row.at("object_id"));
+            if (!prior.empty() && id <= prior) reject("typed lanes must be sorted and unique");
+            prior = id;
+            const auto owner = declared.find(id);
+            if (owner == declared.end() ||
+                (owner->second != SelectionPropertyFamily::stair && owner->second != SelectionPropertyFamily::railing))
+                reject("stair lane requires an exactly declared stair or railing");
+            if (!covered.emplace(id, owner->second).second) reject("typed target overlaps another lane");
+            result.stair_profiles.push_back(std::move(intent));
+        }
+    }
     if (covered != declared) reject("selected roster must exactly match every typed target and family");
     // Enforces portable UTF-8 after bounded traversal; no ignored fields survive.
     if (value.dump().size() > byte_limit) reject("encoded byte budget exceeded");
@@ -245,12 +273,12 @@ Json encode_request(const DocumentSnapshot& source, const SelectionPropertyEditR
     source_metadata(source);
     if (request.selected.empty() || request.selected.size() > target_limit || request.walls.size() > target_limit ||
         request.slabs.size() > target_limit || request.hosted_openings.size() > target_limit || request.roofs.size() > target_limit ||
-        request.structural_profiles.size() > target_limit)
+        request.structural_profiles.size() > target_limit || request.stair_profiles.size() > target_limit)
         reject("invalid typed target budget");
     if (request.unchanged_policy != SelectionPropertyUnchangedPolicy::reject &&
         request.unchanged_policy != SelectionPropertyUnchangedPolicy::retain) reject("unsupported unchanged policy");
     Json selected = Json::array(), walls = Json::array(), slabs = Json::array(), openings = Json::array(),
-        roofs = Json::array(), structural = Json::array();
+        roofs = Json::array(), structural = Json::array(), stairs = Json::array();
     for (const auto& target : request.selected)
         selected.push_back({{"entity_id", target.entity_id}, {"family", family_name(target.family)}});
     Budget budget;
@@ -267,7 +295,8 @@ Json encode_request(const DocumentSnapshot& source, const SelectionPropertyEditR
     lane(request.hosted_openings, encode_hosted_opening_profile_edit_intent, openings);
     lane(request.roofs, encode_roof_profile_edit_intent, roofs);
     lane(request.structural_profiles, encode_structural_profile_edit_intent, structural);
-    Json result = {{"version", request.structural_profiles.empty() ? 1 : 2}, {"expected_revision", source.revision()},
+    lane(request.stair_profiles, encode_stair_profile_edit_intent, stairs);
+    Json result = {{"version", !request.stair_profiles.empty() ? 3 : request.structural_profiles.empty() ? 1 : 2}, {"expected_revision", source.revision()},
         {"source_snapshot_digest", document_snapshot_digest(source)},
         {"source_authoring_digest", document_authoring_source_digest_v2(source)},
         {"source_entities_digest", entity_map_digest(source.entities())},
@@ -275,7 +304,8 @@ Json encode_request(const DocumentSnapshot& source, const SelectionPropertyEditR
         {"selected", std::move(selected)}, {"walls", std::move(walls)}, {"slabs", std::move(slabs)},
         {"hosted_openings", std::move(openings)}, {"roofs", std::move(roofs)},
         {"unchanged_policy", request.unchanged_policy == SelectionPropertyUnchangedPolicy::retain ? "retain" : "reject"}};
-    if (!request.structural_profiles.empty()) result["structural_profiles"] = std::move(structural);
+    if (!request.structural_profiles.empty() || !request.stair_profiles.empty()) result["structural_profiles"] = std::move(structural);
+    if (!request.stair_profiles.empty()) result["stair_profiles"] = std::move(stairs);
     (void)decode_request(result);
     return result;
 }
@@ -383,6 +413,9 @@ SelectionPropertyEditPreparation replay_selection_property_edit_preparation(cons
     if (!request.structural_profiles.empty())
         add(replay_structural_profile_entities(original, request.structural_profiles), request.structural_profiles,
             [](const StructuralProfileEditIntent& intent) -> const std::string& { return intent.object_id; });
+    if (!request.stair_profiles.empty())
+        add(replay_stair_profile_entities(original, request.stair_profiles), request.stair_profiles,
+            [](const StairProfileEditIntent& intent) -> const std::string& { return intent.object_id; });
     auto candidate = compose_mixed_selection_edit_candidates(original, leaves);
     // Admit the complete shared-host state, never an intermediate wall-only or
     // opening-only state. Original-source admission above cannot be repaired
@@ -416,7 +449,9 @@ SelectionPropertyEditPreparation replay_selection_property_edit_preparation(cons
         !exact(candidate, replay_hosted_opening_profile_entities(candidate, final_opening_checks, false)) ||
         !exact(candidate, replay_roof_profile_entities(candidate, request.roofs)) ||
         !exact(candidate, replay_roof_edit_entities(candidate, roof_dependency_checks)) ||
-        !exact(candidate, replay_structural_profile_entities(candidate, request.structural_profiles)))
+        !exact(candidate, replay_structural_profile_entities(candidate, request.structural_profiles)) ||
+        (!request.stair_profiles.empty() &&
+            !exact(candidate, replay_stair_profile_entities(candidate, request.stair_profiles))))
         reject("combined physical replay introduced another consequence");
     std::set<std::string, std::less<>> retained_baselines;
     for (const auto& [id, entity] : original) if (entity.type == "model_phases") {
