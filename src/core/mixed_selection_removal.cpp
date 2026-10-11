@@ -555,7 +555,7 @@ Json validate_mixed_selection_removal_intent(const Json& value) {
         if (value.dump().size()>1024*1024) reject("intent exceeds one MiB");
         fields(value,{"version","ordinary","ordinary_command","members","child_command","source_snapshot_digest",
             "source_authoring_digest","source_entities_digest","source_saved_revision","stage_snapshot_digest","stage_authoring_digest"});
-        if (!value.at("version").is_number_integer() || (value.at("version")!=1 && value.at("version")!=2 && value.at("version")!=3 && value.at("version")!=4 && value.at("version")!=5 && value.at("version")!=6 && value.at("version")!=7 && value.at("version")!=8 && value.at("version")!=9 && value.at("version")!=10 && value.at("version")!=11 && value.at("version")!=12 && value.at("version")!=13 && value.at("version")!=14 && value.at("version")!=15 && value.at("version")!=16 && value.at("version")!=17))
+        if (!value.at("version").is_number_integer() || (value.at("version")!=1 && value.at("version")!=2 && value.at("version")!=3 && value.at("version")!=4 && value.at("version")!=5 && value.at("version")!=6 && value.at("version")!=7 && value.at("version")!=8 && value.at("version")!=9 && value.at("version")!=10 && value.at("version")!=11 && value.at("version")!=12 && value.at("version")!=13 && value.at("version")!=14 && value.at("version")!=15 && value.at("version")!=16 && value.at("version")!=17 && value.at("version")!=18))
             reject("unsupported intent version");
         const bool standalone=value.at("version")==17;
         if (standalone && (!value.at("members").is_array() || !value.at("members").empty() ||
@@ -570,21 +570,23 @@ Json validate_mixed_selection_removal_intent(const Json& value) {
                 authority.drawing.owner_ids.size()+authority.drawing.annotations.size();
             (void)closed_completed_command(value.at("ordinary_command"),selection);
         } else if (value.at("version")==1 || value.at("version")==9 || value.at("version")==10 ||
-            value.at("version")==14 || value.at("version")==15) {
+            value.at("version")==14 || value.at("version")==15 || value.at("version")==18) {
             const auto ordinary=decode_architectural_drawing_removal_intent(value.at("ordinary"));
             // Membership retirement has distinct retained authority. Historical
             // mixed-one must never acquire the new ordinary codec's meaning.
-            const auto ordinary_version = value.at("version")==15 ? 5 : value.at("version")==14 ? 4 :
+            const auto ordinary_version = value.at("version")==18 ? 6 : value.at("version")==15 ? 5 : value.at("version")==14 ? 4 :
                 value.at("version")==10 ? 3 : value.at("version")==9 ? 2 : 1;
             if (value.at("ordinary").at("version") != ordinary_version)
                 reject("architectural/drawing authority differs from its mixed history dialect");
-            if (value.at("version")!=14 && value.at("version")!=15 && (ordinary.complete_component_phase_memberships !=
+            if (value.at("version")!=14 && value.at("version")!=15 && value.at("version")!=18 && (ordinary.complete_component_phase_memberships !=
                     (value.at("version")==9 || value.at("version")==10) ||
                 ordinary.complete_roof_component_phase_memberships != (value.at("version")==10)))
                 reject("component membership authority differs from its mixed history dialect");
             count=ordinary.architectural.object_ids.size()+ordinary.architectural.components.size()+
                 ordinary.drawing.owner_ids.size()+ordinary.drawing.annotations.size();
-            (void)closed_command(value.at("ordinary_command"),false);
+            if (value.at("version")==18)
+                (void)closed_completed_command(value.at("ordinary_command"),CompletedSelection{ordinary});
+            else (void)closed_command(value.at("ordinary_command"),false);
         } else if (value.at("version")==2) {
             const auto command=closed_phase_removal_command(value.at("ordinary_command"));
             const auto ordinary=decode_phase_selection(value.at("ordinary"),component_phase_command(command),
@@ -643,7 +645,7 @@ bool mixed_selection_removal_active_phase_policy(const Json& value) {
     // dimension completion alone grants no phase membership authority. Actual
     // typed child phase replacement still requires the active-phase policy.
     return value.at("version")==2 || value.at("version")==4 || value.at("version")==5 || value.at("version")==6 || value.at("version")==7 || value.at("version")==8 || value.at("version")==9 || value.at("version")==10 || value.at("version")==11 || value.at("version")==12 || value.at("version")==13 ||
-        ((value.at("version")==14 || value.at("version")==15) &&
+        ((value.at("version")==14 || value.at("version")==15 || value.at("version")==18) &&
             value.at("ordinary").at("complete_component_phase_memberships")==true) ||
         (!value.at("child_command").is_null() && value.at("child_command").at("version")==34);
 }
@@ -658,7 +660,16 @@ ArchitecturalDrawingRemovalIntent completed_component_selection_removal_authorit
 }
 DocumentSnapshot prepare_mixed_selection_removal_stage(const DocumentSnapshot& source,
     const ArchitecturalDrawingRemovalIntent& ordinary,const Command& ordinary_command) {
-    const auto wire=command_to_json(ordinary_command);(void)closed_command(wire,false);
+    if (ordinary.architectural.complete_owner_dimension_memberships) {
+        (void)encode_architectural_drawing_removal_intent(ordinary);
+    }
+    const auto wire=command_to_json(ordinary_command);
+    if (ordinary.architectural.complete_owner_dimension_memberships) {
+        std::size_t nodes=0,bytes=0;wire_budget(wire,nodes,bytes);
+        if (wire.dump().size()>1024*1024) reject("ordinary command exceeds one MiB");
+        (void)closed_completed_command(wire,CompletedSelection{ordinary});
+        completed_source_bounds(source);
+    } else (void)closed_command(wire,false);
     if (std::get<ApplyEntityChanges>(ordinary_command).expected_revision!=source.revision()) reject("ordinary source revision changed");
     const auto expected=replay_architectural_drawing_removal(source,ordinary);
     const auto stage=Document::preview_architectural_drawing_removal_stage(source,ordinary,ordinary_command);metadata(source,stage);
@@ -670,6 +681,16 @@ DocumentSnapshot prepare_mixed_selection_removal_stage(const DocumentSnapshot& s
 std::vector<RoofOpeningGroupMember> mixed_selection_removal_remaining_children(const DocumentSnapshot& source,
     const ArchitecturalDrawingRemovalIntent& ordinary,const std::vector<RoofOpeningGroupMember>& members) {
     (void)encode_architectural_drawing_removal_intent(ordinary);
+    if (ordinary.architectural.complete_owner_dimension_memberships) {
+        // This inventory is also queried before the controller prepares a
+        // stage. Bound both lanes and the complete actual source before roof
+        // decoding; child host spelling supplies no selected-owner authority.
+        (void)encode_members(members);
+        const auto count=ordinary.architectural.object_ids.size()+ordinary.architectural.components.size()+
+            ordinary.drawing.owner_ids.size()+ordinary.drawing.annotations.size();
+        if (count>1000-members.size()) reject("mixed selection exceeds 1000 aggregate members");
+        completed_source_bounds(source);
+    }
     return mixed_selection_removal_remaining_children(source,ordinary.architectural,members);
 }
 std::vector<RoofOpeningGroupMember> mixed_selection_removal_remaining_children(const DocumentSnapshot& source,
@@ -741,6 +762,7 @@ Entities replay_mixed_selection_removal(const DocumentSnapshot& source,const Jso
         remember(key,stage.entities());
         return stage.entities();
     }
+    if (value.at("version")==18) completed_source_bounds(source);
     if (source.history().empty() || source.history().size()>4096 || source.revision()>=source.history().size() ||
         source.history()[source.revision()].revision!=source.revision() || source.assets().size()>65536 ||
         source.named_revisions().size()>4096 ||
@@ -816,14 +838,32 @@ Entities replay_mixed_selection_removal(const DocumentSnapshot& source,const Jso
 }
 Json make_mixed_selection_removal_intent(const DocumentSnapshot& source,const ArchitecturalDrawingRemovalIntent& ordinary,
     const Command& ordinary_command,const std::vector<RoofOpeningGroupMember>& members,const std::optional<Command>& child_command) {
+    const auto selection=encode_architectural_drawing_removal_intent(ordinary);
+    const auto children=encode_members(members);
+    const auto base=command_to_json(ordinary_command);
+    const auto child=child_command ? command_to_json(*child_command) : Json(nullptr);
+    if (ordinary.architectural.complete_owner_dimension_memberships) {
+        // Bound the complete supplied selection/commands before detached source
+        // work. This preflight grants no authority: replay still derives the
+        // ordinary map and exact surviving skylight contribution independently.
+        const Json inventory={{"ordinary",selection},{"ordinary_command",base},{"members",children},{"child_command",child}};
+        std::size_t nodes=0,bytes=0;wire_budget(inventory,nodes,bytes);
+        if (inventory.dump().size()>1024*1024) reject("mixed selection inventory exceeds one MiB");
+        const auto count=ordinary.architectural.object_ids.size()+ordinary.architectural.components.size()+
+            ordinary.drawing.owner_ids.size()+ordinary.drawing.annotations.size();
+        if (count>1000-members.size()) reject("mixed selection exceeds 1000 aggregate members");
+        (void)closed_completed_command(base,CompletedSelection{ordinary});
+        if (!child.is_null()) (void)closed_command(child,true);
+    }
     const auto stage=prepare_mixed_selection_removal_stage(source,ordinary,ordinary_command);
-    Json value={{"version",ordinary.architectural.complete_hosted_component_dimensions ? 15 :
+    Json value={{"version",ordinary.architectural.complete_owner_dimension_memberships ? 18 :
+        ordinary.architectural.complete_hosted_component_dimensions ? 15 :
         ordinary.architectural.complete_component_dimensions ? 14 :
         ordinary.complete_roof_component_phase_memberships ? 10 :
         ordinary.complete_component_phase_memberships ? 9 : 1},
-        {"ordinary",encode_architectural_drawing_removal_intent(ordinary)},
-        {"ordinary_command",command_to_json(ordinary_command)},{"members",encode_members(members)},
-        {"child_command",child_command ? command_to_json(*child_command) : Json(nullptr)},
+        {"ordinary",selection},
+        {"ordinary_command",base},{"members",children},
+        {"child_command",child},
         {"source_snapshot_digest",document_snapshot_digest(source)},
         {"source_authoring_digest",document_authoring_source_digest_v2(source)},
         {"source_entities_digest",entity_map_digest(source.entities())},

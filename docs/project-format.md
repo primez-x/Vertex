@@ -1,4 +1,58 @@
-# Vertex project formats v1 through v248
+# Vertex project formats v1 through v252
+
+Reader252 adds placed `assembly_profile` dimensions under dimension wire7.
+Their closed target contains `entity_id` and `assembly`; the carrier is the
+actual independent owner or embedded catalog. Assembly target2 uses form
+`assembly_profile_dimension_target`, the qualified root/path, `profile_id`,
+`ring_id`, and either `measurement:edge_length` with `segment_id`, or
+`measurement:vertex_distance` with distinct `start_vertex_id`/`end_vertex_id`.
+Only the selected node's own retained profile can resolve. Edge length uses
+the analytical source segment, including circular arcs; vertex distance uses
+the source chord. Physical scale, reflection and Site placement apply once.
+No extent axis, synthetic plan edge or descendant profile grants authority.
+Dimension wire6 remains an extent with target1 and refuses target2.
+
+Current source carries profile targets through component moves/copies, associated
+retirement, phase protection, saved-view admission and native annotations.
+DXF phase graph7 adds profile semantics while graph6 remains extent-only;
+profile/ring/edge/vertex identities remain local during document remapping.
+Reader252 applies to actual retained dimension entities, including undone
+history. Native extraction250 follows it. This is not runtime certification.
+
+Reader251 adds catalog request3 and component property intent/request3, with
+phase authoring/request5 and mixed Properties34. These closed dialects preserve
+actual source profile topology and XY geometry while editing scalar/extrusion
+properties or materializing an exact inherited profile override. Catalog type
+metadata and extrusion edits retain source topology/geometry by actual profile
+identity. Older geometry-edit dialects remain anonymous. Source-preserving
+scalar/pose edits retain topology. The new lane cannot assign, redraw, remove
+or clear identified topology; those operations require their separate reviewed
+mapping/removal implementation. Exact source, phase, allocations, dimensions
+and presentation contracts remain required. Recognized direct/nested retained
+requests require reader251/native extraction249.
+
+Reader250 adds identified profile2 with the original profile fields plus literal
+`version:2` and closed `topology:{version:1,outer,holes}`. Each ring has
+`ring_id`, `segment_ids` and `vertex_ids`; counts exactly match actual source
+segments and vertex i identifies segment i's start. Ring IDs are profile-local,
+segment IDs are unique across its rings, and vertex IDs are independently unique
+across its rings. New topology IDs are nonblank portable UTF-8 without NUL,
+at most 128 bytes. Admission bounds geometry and escaped output before copying.
+Anonymous profiles keep their original six fields; identified catalog types
+require catalog8. Independent override envelopes remain instance3. Equality,
+expansion and raw unchanged-value retention include topology. Actual retained
+catalogs/overrides and admitted retained edit payloads require reader250/native
+extraction248. Array positions and equal edge counts cannot prove redraw identity.
+
+Reader249 adds mixed removal18, combining exact architectural/drawing6 ordinary
+owner-dimension retirement with independently prepared surviving skylight removal.
+The literal owner-membership opt-in applies to supported actual ordinary owners;
+skylight host IDs cannot invent ordinary roof authority. Exact source/stage
+proofs, phase dependents, registered dimension retirement, child dominance and
+fresh identities apply before one publication. Standalone17 and historical mixed
+dialects retain their meanings. Direct/nested history requires reader249/native
+extraction247. Compilation, runtime, Undo/reopen and output qualification of all
+four new floors remain outstanding under source-only steering.
 
 Reader248 adds closed Copy request4 and explicit embedded component drawing
 contexts. An `assembly_model` may own

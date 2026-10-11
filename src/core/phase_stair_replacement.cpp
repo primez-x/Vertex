@@ -223,8 +223,7 @@ ComponentDimensionRoots component_dimension_roster(const Entities& actual, Phase
         const auto document = field(*assembly, "document_entity_id");
         if (document && !document->is_null()) continue;
         const auto decoded = decode_boundary_dimension_entity(entity);
-        if (!document || !decoded.supported() || decoded.version != 6 ||
-            decoded.dimension->kind != BoundaryDimensionKind::assembly_extent || !decoded.dimension->assembly_target ||
+        if (!document || !decoded.supported() || !is_assembly_boundary_dimension_kind(decoded.dimension->kind) || !decoded.dimension->assembly_target ||
             decoded.dimension->assembly_target->component.document_entity_id)
             reject("affected embedded component dimension requires a supported v6 extent: " + id);
         if (result.size() >= dimension_limit) reject("associated embedded dimension budget exceeded");

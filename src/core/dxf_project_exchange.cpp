@@ -85,8 +85,9 @@ bool coordinated_corner_source_semantics(const Entity& entity) {
 }
 bool assembly_dimension_source_semantics(const Entity& entity) {
     return entity.type == "dimension" && entity.properties.is_object() &&
-        entity.properties.contains("dimension_version") && entity.properties.at("dimension_version") == 6 &&
-        entity.properties.contains("dimension_kind") && entity.properties.at("dimension_kind") == "assembly_extent";
+        entity.properties.contains("dimension_version") && entity.properties.contains("dimension_kind") &&
+        ((entity.properties.at("dimension_version") == 6 && entity.properties.at("dimension_kind") == "assembly_extent") ||
+         (entity.properties.at("dimension_version") == 7 && entity.properties.at("dimension_kind") == "assembly_profile"));
 }
 Entity read_catalog_source(const std::string& id, const Json& record);
 std::vector<std::string> catalog_identity_list(const Json& values);
@@ -1968,7 +1969,7 @@ bool annotation_has_inactive_owner(const Entity& entity, const ConstraintPhaseSc
 
 bool dimension_has_inactive_target(const BoundaryDimension& dimension, const ConstraintPhaseScope& scope,
     const AssemblyDocumentEntities& actual) {
-    if (dimension.kind != BoundaryDimensionKind::assembly_extent)
+    if (!is_assembly_boundary_dimension_kind(dimension.kind))
         return scope.inactive_owner_ids.contains(dimension.boundary_id);
     const auto& component = dimension.assembly_target->component;
     if (component.document_entity_id)
@@ -2208,6 +2209,85 @@ void export_native_entity(const DocumentSnapshot& document, const Entity& entity
                 }
                 diagnostic(result.diagnostics, entity.id, entity.type, fidelity);
             };
+            if (resolved.kind == BoundaryDimensionKind::assembly_profile) {
+                if (!resolved.assembly_geometry || !resolved.assembly_geometry->profile_geometry ||
+                    !resolved.assembly_geometry->target.profile)
+                    throw std::invalid_argument("DXF profile dimension has no admitted physical geometry");
+                const auto& geometry = *resolved.assembly_geometry;
+                const auto& profile = *geometry.target.profile;
+                const auto quantity_callout = [&] {
+                    callout(profile.measurement == AssemblyProfileDimensionMeasurement::edge_length ? "Length" : "Distance",
+                        geometry.span_metres, " m", "dimension_assembly_profile_exported_as_quantity_callout");
+                };
+                const auto& frame = assembly_authored_picture ? geometry.selected_node.transform : geometry.selected_world_frame;
+                const auto [c, s] = assembly_rotation_components(frame.rotation_radians);
+                const auto sign = frame.mirrored_y ? -1.0 : 1.0;
+                // Rotate/reflect the already physical-metre offsets, applying
+                // neither source scale nor independent Site placement twice.
+                const auto offset_point = [&](Vec2 point) {
+                    return Vec2{c * point.x - s * sign * point.y, s * point.x + c * sign * point.y};
+                };
+                const auto& source_segment = geometry.profile_geometry->segment_from_anchor_m;
+                Segment local{offset_point(source_segment.start), offset_point(source_segment.end),
+                    source_segment.sweep_radians * sign};
+                const auto& start = assembly_authored_picture ? geometry.start_authored_m : geometry.start_world_m;
+                const auto& end = assembly_authored_picture ? geometry.end_authored_m : geometry.end_world_m;
+                const auto tolerance = std::max(kGeometryTolerance, geometry.span_metres * 1e-9);
+                const auto represented_dx = end.x - start.x, represented_dy = end.y - start.y;
+                if (!std::isfinite(represented_dx) || !std::isfinite(represented_dy) ||
+                    std::hypot(represented_dx, represented_dy) <= kGeometryTolerance ||
+                    std::abs(represented_dx - (local.end.x - local.start.x)) > tolerance ||
+                    std::abs(represented_dy - (local.end.y - local.start.y)) > tolerance) {
+                    quantity_callout();
+                    return;
+                }
+                if (local.sweep_radians == 0.0) {
+                    result.drawing.dimensions.push_back({{start.x, start.y}, {end.x, end.y},
+                        {text_position.x, text_position.y}, {text_position.x, text_position.y},
+                        normalized_degrees(std::atan2(represented_dy, represented_dx)),
+                        dimension_length_text(geometry.span_metres, text), "Dimensions", true, text_rotation});
+                    return;
+                }
+                if (local.sweep_radians < 0.0) {
+                    std::swap(local.start, local.end);
+                    local.sweep_radians = -local.sweep_radians;
+                }
+                // Construct the actual analytical arc near its anchor before
+                // placing it. Absolute endpoints cannot safely recover a tiny
+                // radius at a distant document origin.
+                const auto arc = dxf_arc_from_segment(local, "Dimensions");
+                if (!arc) {
+                    quantity_callout();
+                    return;
+                }
+                const auto& anchor = assembly_authored_picture ? geometry.anchor_authored_m : geometry.anchor_world_m;
+                const Vec2 center{anchor.x + arc->center.x, anchor.y + arc->center.y};
+                const Vec2 first{anchor.x + local.start.x, anchor.y + local.start.y};
+                const Vec2 last{anchor.x + local.end.x, anchor.y + local.end.y};
+                if (!std::isfinite(center.x) || !std::isfinite(center.y) ||
+                    !std::isfinite(first.x) || !std::isfinite(first.y) ||
+                    !std::isfinite(last.x) || !std::isfinite(last.y) ||
+                    std::abs((first.x - center.x) - (local.start.x - arc->center.x)) > tolerance ||
+                    std::abs((first.y - center.y) - (local.start.y - arc->center.y)) > tolerance ||
+                    std::abs((last.x - center.x) - (local.end.x - arc->center.x)) > tolerance ||
+                    std::abs((last.y - center.y) - (local.end.y - arc->center.y)) > tolerance) {
+                    quantity_callout();
+                    return;
+                }
+                auto radius = std::hypot(text_position.x - center.x, text_position.y - center.y);
+                if (radius <= kGeometryTolerance) radius = arc->radius + 0.3;
+                const auto midpoint = arc->start_degrees * std::numbers::pi / 180.0 + local.sweep_radians * 0.5;
+                const Vec2 arc_position{center.x + radius * std::cos(midpoint), center.y + radius * std::sin(midpoint)};
+                if (!std::isfinite(radius) || !std::isfinite(arc_position.x) || !std::isfinite(arc_position.y)) {
+                    quantity_callout();
+                    return;
+                }
+                result.drawing.arc_dimensions.push_back({{first.x, first.y}, {last.x, last.y},
+                    {center.x, center.y}, {arc_position.x, arc_position.y},
+                    {text_position.x, text_position.y}, text_rotation,
+                    dimension_length_text(geometry.span_metres, text), "Dimensions"});
+                return;
+            }
             if (resolved.kind == BoundaryDimensionKind::assembly_extent) {
                 if (!resolved.assembly_geometry)
                     throw std::invalid_argument("DXF assembly dimension has no admitted physical geometry");
@@ -3062,7 +3142,7 @@ PhasePlans phase_support_plans(const NativeDxfPhaseSourceGraph& graph,
             (decoded.dimension->presentation && !decoded.dimension->presentation->visible)) continue;
         // Embedded roots already expand their actual host placement; their
         // catalog's container frame is not a second geometry presentation.
-        if (decoded.dimension->kind != BoundaryDimensionKind::assembly_extent ||
+        if (!is_assembly_boundary_dimension_kind(decoded.dimension->kind) ||
             decoded.dimension->assembly_target->component.document_entity_id)
             dimension_frame_ids.insert(decoded.dimension->boundary_id);
         if (owner.properties.contains("presentation_frame")) dimension_frame_ids.insert(id);
@@ -3169,7 +3249,7 @@ PhasePlans phase_support_plans(const NativeDxfPhaseSourceGraph& graph,
             if (!scope.inactive_owner_ids.contains(id) && !annotation_has_inactive_owner(owner, scope) &&
                 !dimension_has_inactive_target(dimension, scope, graph.entities) &&
                 (!dimension.presentation || dimension.presentation->visible)) {
-                const bool embedded_assembly = dimension.kind == BoundaryDimensionKind::assembly_extent &&
+                const bool embedded_assembly = is_assembly_boundary_dimension_kind(dimension.kind) &&
                     !dimension.assembly_target->component.document_entity_id;
                 const SiteRigidTransform identity_frame{};
                 const auto* frame = embedded_assembly ? nullptr : &dimension_presentations.at(dimension.boundary_id);
@@ -3193,7 +3273,8 @@ PhasePlans phase_support_plans(const NativeDxfPhaseSourceGraph& graph,
                 for (const auto& item : projected.diagnostics)
                     if (item.code != "dimension_area_exported_as_quantity_callout" && item.code != "dimension_chain_exported_as_total_callout" &&
                         item.code != "dimension_assembly_height_exported_as_quantity_callout" &&
-                        item.code != "dimension_assembly_extent_exported_as_quantity_callout")
+                        item.code != "dimension_assembly_extent_exported_as_quantity_callout" &&
+                        item.code != "dimension_assembly_profile_exported_as_quantity_callout")
                         throw std::invalid_argument("V9 support dimension CAD projection unavailable: " + item.code);
                 block.lines = std::move(projected.drawing.lines); block.arcs = std::move(projected.drawing.arcs);
                 block.polylines = std::move(projected.drawing.polylines); block.labels = std::move(projected.drawing.labels);

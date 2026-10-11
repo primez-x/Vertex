@@ -1257,8 +1257,7 @@ Entities derive(const Entities& source, const std::vector<std::string>& selectio
             // The borrowed tuple supplies discovery only. Full closed codecs
             // refuse affected future/malformed targets before granting removal.
             const auto decoded = decode_boundary_dimension_entity(entity);
-            if (!decoded.supported() || decoded.version != 6 ||
-                decoded.dimension->kind != BoundaryDimensionKind::assembly_extent ||
+            if (!decoded.supported() || !is_assembly_boundary_dimension_kind(decoded.dimension->kind) ||
                 !decoded.dimension->assembly_target)
                 reject("affected component dimension requires a supported extent target: " + id);
             if (targets.size() >= selection_limit) reject("associated component dimension budget exceeded");

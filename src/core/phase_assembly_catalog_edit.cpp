@@ -230,6 +230,17 @@ Entity edited_catalog(const Entity& original, const Json* edit) {
         require(exact(raw_row(saved, collection, key), change.at("original")), "actual original definition binding changed");
         auto replacement = change.at("replacement");
         if (std::string_view(collection) == "types") {
+            // Foundation request3 has already proved exact source topology/XY.
+            // Private carriers must retain the same raw source representations
+            // as ordinary replay, including when type metadata alone changes.
+            const auto& original_type=raw_row(saved,collection,key);
+            if(original_type.contains("profiles"))for(auto& profile:replacement.at("profiles")) {
+                const auto retained=std::find_if(original_type.at("profiles").begin(),original_type.at("profiles").end(),
+                    [&](const auto& value){return value.at("id")==profile.at("id");});
+                if(retained!=original_type.at("profiles").end() && retained->contains("topology")) {
+                    for(const auto* field:{"version","topology","outer","holes"})profile[field]=retained->at(field);
+                }
+            }
             const bool nested = schema == "sketch.assemblies.v4" || schema == "sketch.assemblies.v5" || schema == "sketch.assemblies.v6";
             if (!nested && !raw_row(saved, collection, key).contains("profiles") &&
                 replacement.at("profiles").empty() && replacement.at("parts").empty()) {

@@ -63,6 +63,10 @@ struct NativeDxfPhaseSourceGraph {
 // may be empty), and includes asset_manifest exactly when assets are retained.
 // Earlier versions refuse these semantics. Owner/host/cut closure is complete;
 // ordered leg indices and all other raw local values remain unchanged.
+// Version 6 carries qualified v6 component extent dimensions. Version 7
+// additionally carries v7 own-profile edge/vertex dimensions with exact local
+// profile/ring/segment/vertex selectors. Older graphs refuse the new semantics;
+// document/catalog remapping never changes those local topology identities.
 // No canonical entity/model encoder is used.
 // Admission precedes semantic decoders and the organizer;
 // failed attempts remain charged to the shared catalog/architectural ledger.

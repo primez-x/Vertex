@@ -29,6 +29,9 @@
 #include <BRepBndLib.hxx>
 #include <BRepBuilderAPI_Transform.hxx>
 #include <BRepBuilderAPI_MakeEdge.hxx>
+#include <BRepGProp.hxx>
+#include <GC_MakeArcOfCircle.hxx>
+#include <GProp_GProps.hxx>
 #include <Bnd_Box.hxx>
 #include <Aspect_DisplayConnection.hxx>
 #include <Aspect_Handle.hxx>
@@ -260,11 +263,14 @@ std::vector<ComponentDimensionPresentation> prepared_component_dimensions(
         (void)id;
         if (!can_recognize_boundary_dimension_entity_type(entity.type)) continue;
         const auto kind = entity.properties.find("dimension_kind");
-        if (kind == entity.properties.end() || !kind->is_string() || *kind != "assembly_extent") continue;
+        if (kind == entity.properties.end() || !kind->is_string() ||
+            (*kind != "assembly_extent" && *kind != "assembly_profile")) continue;
         // Inspect without copying an unsupported owner's opaque payload.
-        if (inspect_boundary_dimension_version(entity).format != BoundaryDimensionFormat::supported_v6) continue;
+        if (!is_assembly_boundary_dimension_format(inspect_boundary_dimension_version(entity).format)) continue;
         auto decoded = decode_boundary_dimension_entity(entity);
         if (!decoded.dimension) continue; // Future versions remain opaque.
+        if (!is_assembly_boundary_dimension_kind(decoded.dimension->kind) || !decoded.dimension->assembly_target)
+            throw std::invalid_argument("native component dimension has no typed assembly target");
         if (dimensions.size() == 1000)
             throw std::invalid_argument("native component dimension count exceeds 1000");
         targets.push_back(*decoded.dimension->assembly_target);
@@ -307,15 +313,15 @@ std::vector<ComponentDimensionPresentation> prepared_component_dimensions(
         annotation.visible = active && style.visible &&
             (!visible_ids || (visible_ids->contains(dimension.id) && visible_ids->contains(render_id)));
         // Saved XY belongs to the independent owner's authored frame. Embedded
-        // placement is already world. Width/depth stay at the physical base;
-        // height text occupies the actual measured vertical midpoint.
+        // placement is already world. Profile text stays at its actual source
+        // elevation; extent height text occupies the measured vertical midpoint.
         Vec3 text{dimension.text_position.x, dimension.text_position.y, 0.0};
         double rotation = style.rotation_radians;
         if (component.document_entity_id && measurement.presentation) {
             text = site_transform_point(text, measurement.presentation->forward);
             rotation += measurement.presentation->forward.rotation_radians;
         }
-        text.z = measurement.target.axis == AssemblyDimensionAxis::height
+        text.z = !measurement.target.profile && measurement.target.axis == AssemblyDimensionAxis::height
             ? measurement.start_world_m.z * 0.5 + measurement.end_world_m.z * 0.5
             : measurement.start_world_m.z;
         if (!std::isfinite(text.x) || !std::isfinite(text.y) || !std::isfinite(text.z) || !std::isfinite(rotation))
@@ -324,7 +330,12 @@ std::vector<ComponentDimensionPresentation> prepared_component_dimensions(
         if (!Quantity_Color::ColorFromHex(style.color.c_str(), color))
             throw std::invalid_argument("native component dimension color is invalid");
         auto label = occ::handle<AIS_TextLabel>(new AIS_TextLabel());
-        const auto text_utf8 = component_dimension_text(measurement.span_metres, metric).toUtf8();
+        const auto* profile = measurement.profile_geometry ? &*measurement.profile_geometry : nullptr;
+        const bool curved_profile = profile && profile->segment_from_anchor_m.sweep_radians != 0.0;
+        // This is a scalar callout for the analytical arc length. A native
+        // point-to-point length dimension would silently measure its chord.
+        const auto text_utf8 = ((curved_profile ? QStringLiteral("Arc length: ") : QString{}) +
+            component_dimension_text(measurement.span_metres, metric)).toUtf8();
         label->SetText(TCollection_ExtendedString(text_utf8.constData(), true));
         label->SetPosition(gp_Pnt(text.x, text.y, text.z));
         label->SetColor(color);
@@ -342,12 +353,26 @@ std::vector<ComponentDimensionPresentation> prepared_component_dimensions(
 
         const auto& start = measurement.start_world_m;
         const auto& end = measurement.end_world_m;
+        const auto world_offset = [&](AssemblyPoint3 point) {
+            const auto& width = measurement.width_direction_world;
+            const auto& depth = measurement.depth_direction_world;
+            return AssemblyPoint3{width.x * point.x + depth.x * point.y,
+                width.y * point.x + depth.y * point.y, point.z};
+        };
+        const auto& local_start = measurement.start_from_anchor_m;
+        const auto& local_end = measurement.end_from_anchor_m;
+        const auto expected_delta = world_offset({local_end.x - local_start.x,
+            local_end.y - local_start.y, local_end.z - local_start.z});
+        const auto chord_span = std::hypot(expected_delta.x, expected_delta.y, expected_delta.z);
         const auto represented_span = std::hypot(end.x - start.x, end.y - start.y, end.z - start.z);
+        const auto representation_tolerance = std::max(Precision::Confusion(), chord_span * 1e-6);
         // Distant origins may collapse or quantize a true physical span. Keep
         // its actual text, and omit an inaccurate line rather than invent edges.
         if (std::isfinite(represented_span) && represented_span > Precision::Confusion() &&
-            std::abs(represented_span - measurement.span_metres) <=
-                std::max(Precision::Confusion(), measurement.span_metres * 1e-6)) {
+            std::abs((end.x - start.x) - expected_delta.x) <= representation_tolerance &&
+            std::abs((end.y - start.y) - expected_delta.y) <= representation_tolerance &&
+            std::abs((end.z - start.z) - expected_delta.z) <= representation_tolerance &&
+            (curved_profile || std::abs(represented_span - measurement.span_metres) <= representation_tolerance)) {
             TopoDS_Compound lines;
             BRep_Builder builder;
             builder.MakeCompound(lines);
@@ -360,19 +385,81 @@ std::vector<ComponentDimensionPresentation> prepared_component_dimensions(
                 if (!edge.IsDone()) throw std::invalid_argument("native component dimension line could not be made");
                 builder.Add(lines, edge.Shape());
             };
-            add_line(start, end);
-            const auto& tick_direction = measurement.target.axis == AssemblyDimensionAxis::width
-                ? measurement.depth_direction_world : measurement.width_direction_world;
+            bool has_measurement_edge = false;
+            if (curved_profile) {
+                const auto& segment = profile->segment_from_anchor_m;
+                const auto dx = segment.end.x - segment.start.x;
+                const auto dy = segment.end.y - segment.start.y;
+                const auto local_chord = std::hypot(dx, dy);
+                // Midpoint sagitta avoids subtracting a large circle center.
+                // Mapping through the selected axes also retains reflection.
+                const auto sagitta = local_chord * 0.5 * std::tan(segment.sweep_radians * 0.25);
+                const auto midpoint_offset = world_offset({std::midpoint(segment.start.x, segment.end.x) + dy / local_chord * sagitta,
+                    std::midpoint(segment.start.y, segment.end.y) - dx / local_chord * sagitta, 0.0});
+                const auto& anchor = measurement.anchor_world_m;
+                const AssemblyPoint3 midpoint{anchor.x + midpoint_offset.x, anchor.y + midpoint_offset.y,
+                    anchor.z + midpoint_offset.z};
+                if (std::isfinite(sagitta) && std::abs(sagitta) > Precision::Confusion() &&
+                    std::isfinite(midpoint.x) && std::isfinite(midpoint.y) && std::isfinite(midpoint.z) &&
+                    std::abs((midpoint.x - anchor.x) - midpoint_offset.x) <= representation_tolerance &&
+                    std::abs((midpoint.y - anchor.y) - midpoint_offset.y) <= representation_tolerance &&
+                    std::abs((midpoint.z - anchor.z) - midpoint_offset.z) <= representation_tolerance) {
+                    try {
+                        // Same supported three-point arc API used by solid profiles.
+                        GC_MakeArcOfCircle arc(gp_Pnt(start.x, start.y, start.z),
+                            gp_Pnt(midpoint.x, midpoint.y, midpoint.z), gp_Pnt(end.x, end.y, end.z));
+                        if (arc.IsDone()) {
+                            BRepBuilderAPI_MakeEdge edge(arc.Value());
+                            if (edge.IsDone()) {
+                                GProp_GProps properties;
+                                BRepGProp::LinearProperties(edge.Shape(), properties);
+                                const auto represented_length = properties.Mass();
+                                if (std::isfinite(represented_length) &&
+                                    std::abs(represented_length - measurement.span_metres) <=
+                                        std::max(Precision::Confusion(), measurement.span_metres * 1e-6)) {
+                                    builder.Add(lines, edge.Shape());
+                                    has_measurement_edge = true;
+                                }
+                            }
+                        }
+                    } catch (const Standard_Failure&) {
+                        // Optional annotation topology can lose native precision;
+                        // the admitted physical scalar remains authoritative.
+                    }
+                    if (has_measurement_edge) add_line(midpoint, {text.x, text.y, text.z});
+                }
+            } else {
+                add_line(start, end);
+                has_measurement_edge = true;
+            }
             const auto tick = std::min(measurement.span_metres * 0.05, 0.05);
+            std::size_t endpoint = 0;
             for (const auto& point : {start, end}) {
+                if (!has_measurement_edge) break;
+                auto tick_direction = measurement.target.axis == AssemblyDimensionAxis::width
+                    ? measurement.depth_direction_world : measurement.width_direction_world;
+                if (profile) {
+                    const auto& segment = profile->segment_from_anchor_m;
+                    const auto dx = segment.end.x - segment.start.x;
+                    const auto dy = segment.end.y - segment.start.y;
+                    const auto chord = std::hypot(dx, dy);
+                    const auto angle = endpoint == 0
+                        ? -segment.sweep_radians * 0.5 : segment.sweep_radians * 0.5;
+                    const auto tangent_x = (dx * std::cos(angle) - dy * std::sin(angle)) / chord;
+                    const auto tangent_y = (dx * std::sin(angle) + dy * std::cos(angle)) / chord;
+                    tick_direction = world_offset({tangent_y, -tangent_x, 0.0});
+                }
                 add_line({point.x - tick_direction.x * tick, point.y - tick_direction.y * tick, point.z - tick_direction.z * tick},
                          {point.x + tick_direction.x * tick, point.y + tick_direction.y * tick, point.z + tick_direction.z * tick});
+                ++endpoint;
             }
-            auto line = occ::handle<AIS_Shape>(new AIS_Shape(lines));
-            line->SetColor(color);
-            line->SetDisplayMode(AIS_WireFrame);
-            line->SetInfiniteState(true);
-            annotation.objects.push_back(line);
+            if (has_measurement_edge) {
+                auto line = occ::handle<AIS_Shape>(new AIS_Shape(lines));
+                line->SetColor(color);
+                line->SetDisplayMode(AIS_WireFrame);
+                line->SetInfiniteState(true);
+                annotation.objects.push_back(line);
+            }
         }
         result.push_back(std::move(annotation));
     }

@@ -68,7 +68,7 @@ void supported_source(const Entity& source) {
                 (kind == "segment_length" || kind == "angle" || kind == "area")) ||
             (version == 3 && kind == "segment_length") || (version == 4 && kind == "wall_axis_length") ||
             (version == 5 && kind == "corner_window_leg_length") ||
-            (version == 6 && kind == "assembly_extent"),
+            (version == 6 && kind == "assembly_extent") || (version == 7 && kind == "assembly_profile"),
             "unsupported dimension schema/version/kind");
         require(p.contains("target") && p.at("target").is_object() && p.at("target").contains("entity_id"),
             "missing dimension target owner");
@@ -79,14 +79,31 @@ void supported_source(const Entity& source) {
                 target.at("corner_leg") >= 0 && target.at("corner_leg") <= 1,
                 "corner-window target requires only entity_id and numeric corner_leg zero or one");
         }
-        if (version == 6) {
+        if (version == 6 || version == 7) {
             const auto& target = p.at("target");
             require(target.size() == 2 && target.contains("assembly") && target.at("assembly").is_object(),
-                "assembly extent requires only entity_id and assembly");
+                "assembly measurement requires only entity_id and assembly");
             const auto& assembly = target.at("assembly");
-            require(assembly.size() == 7, "assembly measurement target requires closed fields");
-            for (const auto* key : {"version", "form", "catalog_id", "instance_id", "document_entity_id", "part_path", "axis"})
+            for (const auto* key : {"version", "form", "catalog_id", "instance_id", "document_entity_id", "part_path"})
                 require(assembly.contains(key), "missing assembly measurement target field");
+            if (version == 6) {
+                require(assembly.size() == 7 && assembly.contains("axis"),
+                    "assembly extent target requires closed fields");
+            } else {
+                require(assembly.at("version").is_number_integer() && assembly.at("version") == 2 &&
+                    assembly.at("form") == "assembly_profile_dimension_target" &&
+                    assembly.contains("profile_id") && assembly.at("profile_id").is_string() &&
+                    assembly.contains("ring_id") && assembly.at("ring_id").is_string() &&
+                    assembly.contains("measurement"), "invalid assembly profile target schema");
+                if (assembly.at("measurement") == "edge_length")
+                    require(assembly.size() == 10 && assembly.contains("segment_id") &&
+                        assembly.at("segment_id").is_string(), "profile edge requires only segment_id selector");
+                else
+                    require(assembly.at("measurement") == "vertex_distance" && assembly.size() == 11 &&
+                        assembly.contains("start_vertex_id") && assembly.at("start_vertex_id").is_string() &&
+                        assembly.contains("end_vertex_id") && assembly.at("end_vertex_id").is_string(),
+                        "profile chord requires only start_vertex_id and end_vertex_id selectors");
+            }
             require(assembly.at("catalog_id").is_string() && assembly.at("instance_id").is_string() &&
                 (assembly.at("document_entity_id").is_null() || assembly.at("document_entity_id").is_string()),
                 "invalid qualified assembly measurement identity");
@@ -115,7 +132,7 @@ template<class Callback> void references(const Entity& source, const Owners& aut
     NativeDxfWallSourceWorkBudget* work_budget) {
     supported_source(source);
     if (source.type != kAnnotationEntityType) {
-        if (source.properties.at("dimension_version") == 6) {
+        if (source.properties.at("dimension_version") == 6 || source.properties.at("dimension_version") == 7) {
             const auto& assembly = source.properties.at("target").at("assembly");
             visit(assembly.at("catalog_id"), std::string_view{"assembly_model"});
             if (!assembly.at("document_entity_id").is_null())
@@ -372,7 +389,8 @@ void remap_native_dxf_annotation_source_dependencies(Entity& source,
     const NativeDxfAnnotationChildMaps& child_mapping, const NativeDxfAnnotationChildMaps& sheet_view_mapping,
     NativeDxfWallSourceWorkBudget* work_budget) {
     (void)native_dxf_annotation_source_dependencies(source, authored, work_budget);
-    if (source.type != kAnnotationEntityType && source.properties.at("dimension_version") == 6) {
+    if (source.type != kAnnotationEntityType &&
+        (source.properties.at("dimension_version") == 6 || source.properties.at("dimension_version") == 7)) {
         NativeDxfWallSourceWorkBudget local;
         auto& budget = work_budget ? *work_budget : local;
         admit_native_dxf_annotation_source_work(source, authored, budget);
@@ -395,13 +413,14 @@ void remap_native_dxf_annotation_source_dependencies(Entity& source,
     if (result.type != kAnnotationEntityType) {
         auto& id = result.properties.at("target").at("entity_id");
         id = mapped(id, owner_mapping);
-        if (result.properties.at("dimension_version") == 6) {
+        if (result.properties.at("dimension_version") == 6 || result.properties.at("dimension_version") == 7) {
             auto& assembly = result.properties.at("target").at("assembly");
             assembly.at("catalog_id") = mapped(assembly.at("catalog_id"), owner_mapping);
             if (!assembly.at("document_entity_id").is_null()) {
                 assembly.at("document_entity_id") = mapped(assembly.at("document_entity_id"), owner_mapping);
                 // The established independent adapter changes instance.id to
-                // its mapped document owner. Embedded local rows/path IDs stay raw.
+                // its mapped document owner. Embedded local rows/path IDs and
+                // profile/ring/edge/vertex selectors stay in their source scope.
                 assembly.at("instance_id") = assembly.at("document_entity_id");
             }
         }
@@ -444,7 +463,8 @@ void remap_native_dxf_annotation_source_dependencies(Entity& source,
     // intrinsic shape/local identities; destination closure is the graph's job.
     (void)native_dxf_annotation_child_identity_ids(result);
     if (result.type != kAnnotationEntityType &&
-        (result.properties.at("dimension_version") == 5 || result.properties.at("dimension_version") == 6))
+        (result.properties.at("dimension_version") == 5 || result.properties.at("dimension_version") == 6 ||
+            result.properties.at("dimension_version") == 7))
         require(decode_boundary_dimension_entity(result).supported(), "invalid remapped native dimension");
     source = std::move(result);
 }
@@ -491,7 +511,7 @@ void admit_native_dxf_annotation_source_work(const Entity& source, const Owners&
             }
         }
     } else {
-        if (source.properties.at("dimension_version") == 6) {
+        if (source.properties.at("dimension_version") == 6 || source.properties.at("dimension_version") == 7) {
             reserve_assembly_measurement(source, authored, budget, codec_replays);
             return;
         }
@@ -514,7 +534,7 @@ void validate_native_dxf_annotation_source(const Entity& source, const Owners& a
     else {
         const auto decoded = decode_boundary_dimension_entity(source);
         require(decoded.supported(), "unsupported retained dimension: " + decoded.unsupported_reason);
-        if (decoded.dimension->kind == BoundaryDimensionKind::assembly_extent) {
+        if (is_assembly_boundary_dimension_kind(decoded.dimension->kind)) {
             // Entity-only admission cannot certify actual root/path provenance,
             // catalog closure, profile geometry or the independent Site frame.
             (void)decoded.dimension->resolve(authored);

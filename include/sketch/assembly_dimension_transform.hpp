@@ -19,7 +19,7 @@ struct AssemblyDimensionTransformRequest {
 // Source-only inventory for exact embedded catalog/instance roots (at most
 // 4096). Complete raw/catalog admission precedes discovery; affected malformed,
 // unsupported or future targets refuse. Independent owners remain untouched.
-// Returns supported v6 dimension IDs and their complete source component target,
+// Returns supported v6/v7 dimension IDs and their complete source component target,
 // including nested paths, in ascending ID order. At most 1000 associations share
 // one actual-source measurement batch. This grants no clone or phase authority.
 [[nodiscard]] std::map<std::string, AssemblyInstancePropertyEditTarget, std::less<>>
@@ -27,7 +27,7 @@ inspect_embedded_assembly_dimension_clone_roster(
     const AssemblyDocumentEntities& source,
     std::span<const std::pair<std::string, std::string>> roots);
 
-// For an already discovered supported embedded v6 extent only. Releases its
+// For an already discovered supported embedded v6 extent or v7 profile. Releases its
 // understood qualified target fields for an enclosing dependency scan; opaque
 // property/extension siblings remain exact and must still be checked by callers.
 [[nodiscard]] Entity assembly_dimension_clone_dependency_remainder(const Entity&);
@@ -43,8 +43,8 @@ inspect_embedded_assembly_dimension_clone_roster(
 // in the same catalog, with that entire original catalog retained exactly.
 // Candidate must still contain every associated original dimension unchanged.
 //
-// Only supported v6 assembly extents on the exact source root are carried.
-// Nested paths and axes stay exact. Each complete map is measured in one batch
+// Supported v6 extents and v7 profile dimensions on the exact root are carried.
+// Nested paths, axes and local topology selectors stay exact. Each complete map is measured in one batch
 // of at most 1000 targets; retired/nonmeasurable paths refuse. Saved XY text and
 // its direction follow the admitted selected-node authored similarity frames.
 // Independent Site presentation is not baked into saved authored coordinates;
@@ -98,7 +98,7 @@ inspect_embedded_assembly_dimension_clone_roster(
 // outside placement stay exact; independent owners are untouched. Unchanged raw
 // placement remains eligible because host-derived component frames can change.
 // Complete raw maps/catalog work are bounded before discovery. At most 1000
-// associated v6 dimensions share the existing carry's single source/candidate
+// associated v6/v7 dimensions share the existing carry's single source/candidate
 // measurement batches and envelope preservation. Empty association returns empty
 // after host/raw framing. Ordinary policy and publication remain the caller's job.
 [[nodiscard]] std::vector<Entity> carry_hosted_assembly_dimension_transform_entities(
@@ -127,7 +127,7 @@ inspect_embedded_assembly_dimension_clone_roster(
 
 // Separate current ordinary-authoring policy check for existing dimensions
 // actually changed or removed by a caller. Empty input is a no-op; otherwise
-// IDs must be unique supported v6 source dimensions (at most 1000). Inactive
+// IDs must be unique supported v6/v7 source dimensions (at most 1000). Inactive
 // dimensions and baseline dimensions protected by a saved active alternative
 // require their dedicated replacement lane. Pure carry does not invoke this:
 // phase producers and staging for fresh clones retain their own authority.

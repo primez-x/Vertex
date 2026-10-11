@@ -255,6 +255,11 @@ private:
 // four, whose exact dimension allocations and presentation roster derive from
 // the complete original source. It accepts the same optional sealed base
 // roster as thirty-two; family permissions remain exclusively base-owned.
+// Closed dialect thirty-four retains thirty-two's exact fields and requires
+// component request five with at least one topology-preserving leaf intent three.
+// It inherits the complete geometry dimension/presentation carry, optional sealed
+// base roster, host coordination and final room review contract. Thirty-two and
+// thirty-three retain their historical component request three/four authority.
 //
 // Closed dialect seventeen retains Properties16's source/reservation fields plus
 // carry_component_presentation:true. It requires component request two, whose

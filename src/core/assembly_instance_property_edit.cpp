@@ -177,6 +177,13 @@ template<class T> std::map<std::string, AssemblyInstancePropertyPatch<T>> decode
     return result;
 }
 Json optional(auto value) { return value ? Json(*value) : Json(nullptr); }
+bool has_identified_profiles(const std::vector<AssemblyProfile>& profiles) {
+    return std::any_of(profiles.begin(), profiles.end(), [](const auto& profile) { return profile.topology.has_value(); });
+}
+bool topology_preserving_geometry(const Intent& intent) {
+    return intent.profile_geometry.operation == Operation::set && intent.profile_geometry.value &&
+        has_identified_profiles(*intent.profile_geometry.value);
+}
 void preflight_intent(const Intent& intent, Budget& budget) {
     const auto bounded = [&](const std::string& value, std::size_t limit, bool nonblank) {
         if (value.size() > limit || value.find('\0') != std::string::npos ||
@@ -231,6 +238,26 @@ void preflight_intent(const Intent& intent, Budget& budget) {
                 if (++budget.nodes > 100000) reject("typed profile complexity budget exceeded");
                 boundary(hole);
             }
+            if (profile.topology) {
+                // Admit borrowed identity arrays before topology validation,
+                // which builds identity sets, or profile encoding copies them.
+                const auto& topology = *profile.topology;
+                if (topology.holes.size() != profile.holes.size()) reject("profile topology hole count mismatch");
+                const auto ring = [&](const AssemblyProfileRingIdentity& ids, const Boundary& edges) {
+                    if (ids.segment_ids.size() != edges.size() || ids.vertex_ids.size() != edges.size())
+                        reject("profile topology segment/vertex count mismatch");
+                    budget.add(128);
+                    if (8 > 100000 - budget.nodes) reject("typed topology complexity budget exceeded");
+                    budget.nodes += 8;
+                    bounded(ids.ring_id, 128, true);
+                    for (const auto* values : {&ids.segment_ids, &ids.vertex_ids}) for (const auto& id : *values) {
+                        if (++budget.nodes > 100000) reject("typed topology complexity budget exceeded");
+                        budget.add(1); bounded(id, 128, true);
+                    }
+                };
+                ring(topology.outer, profile.outer);
+                for (std::size_t i = 0; i < topology.holes.size(); ++i) ring(topology.holes[i], profile.holes[i]);
+            }
         }
         (void)validate_assembly_profiles(*geometry.value);
     }
@@ -245,7 +272,8 @@ Json encode_intent(const Intent& intent) {
     const auto& p = intent.pose;
     const auto string_value = [](const std::string& value) { return Json(text(Json(value), 4096, false)); };
     const auto material = [](const std::string& value) { return Json(text(Json(value), 1024, true)); };
-    Json result{{"version", intent.profile_geometry.operation == Operation::unchanged ? 1 : 2},
+    Json result{{"version", intent.profile_geometry.operation == Operation::unchanged ? 1 :
+            topology_preserving_geometry(intent) ? 3 : 2},
         {"target", {{"catalog_id", t.catalog_id}, {"instance_id", t.instance_id},
             {"document_entity_id", optional(t.document_entity_id)}, {"part_path", t.part_path}}},
         {"properties", encode_patches(intent.properties, string_value)},
@@ -262,8 +290,10 @@ Json encode_intent(const Intent& intent) {
 }
 Intent decode_intent(const Json& value) {
     if (!value.is_object() || !value.contains("version") || !value.at("version").is_number_integer() ||
-        (value.at("version") != 1 && value.at("version") != 2)) reject("unsupported intent version");
-    const bool geometry = value.at("version") == 2;
+        (value.at("version") != 1 && value.at("version") != 2 && value.at("version") != 3))
+        reject("unsupported intent version");
+    const bool topology = value.at("version") == 3;
+    const bool geometry = value.at("version") != 1;
     if (geometry) fields(value, {"version", "target", "properties", "materials", "quantities", "pose", "profile_geometry"});
     else fields(value, {"version", "target", "properties", "materials", "quantities", "pose"});
     Intent result;
@@ -284,9 +314,19 @@ Intent decode_intent(const Json& value) {
         const auto& patch = value.at("profile_geometry");
         fields(patch, {"operation", "value"});
         result.profile_geometry.operation = operation(patch.at("operation"));
-        if (result.profile_geometry.operation == Operation::unchanged) reject("v2 requires a profile geometry operation");
-        if (result.profile_geometry.operation == Operation::set)
+        if (result.profile_geometry.operation == Operation::unchanged) reject("geometry intent requires a profile operation");
+        if (topology && result.profile_geometry.operation != Operation::set)
+            reject("v3 requires topology-preserving profile Set");
+        if (result.profile_geometry.operation == Operation::set) {
+            // The shared profile codec admits both dialects. Historical intent
+            // authority remains anonymous regardless of that decoder's growth.
+            if (!topology && patch.at("value").is_array()) for (const auto& profile : patch.at("value"))
+                if (profile.is_object() && (profile.contains("topology") || profile.contains("version")))
+                    reject("v2 profile Set requires anonymous historical geometry");
             result.profile_geometry.value = decode_assembly_profiles(patch.at("value"));
+            if (topology && !has_identified_profiles(*result.profile_geometry.value))
+                reject("v3 requires identified profile geometry");
+        }
         else if (!patch.at("value").is_null()) reject("profile clear must carry null");
     }
     const auto& p = value.at("pose");
@@ -372,8 +412,40 @@ template<class T> void change_overrides(std::map<std::string, T>& overrides,
         }
     }
 }
+bool same_boundary(const Boundary& first, const Boundary& second) {
+    return first.size() == second.size() && std::equal(first.begin(), first.end(), second.begin(),
+        [](const auto& a, const auto& b) {
+            return a.start.x == b.start.x && a.start.y == b.start.y &&
+                a.end.x == b.end.x && a.end.y == b.end.y && a.sweep_radians == b.sweep_radians;
+        });
+}
+void require_preserved_profile_topology(const std::vector<AssemblyProfile>& source,
+    const std::vector<AssemblyProfile>& proposed) {
+    if (!has_identified_profiles(source)) reject("topology-preserving Set requires actual identified source profiles");
+    if (source.size() != proposed.size()) reject("topology-preserving Set changed the source profile roster");
+    for (const auto& profile : source) {
+        const auto found = std::find_if(proposed.begin(), proposed.end(),
+            [&](const auto& row) { return row.id == profile.id; });
+        if (found == proposed.end() || found->topology != profile.topology ||
+            !same_boundary(found->outer, profile.outer) || found->holes.size() != profile.holes.size() ||
+            !std::equal(found->holes.begin(), found->holes.end(), profile.holes.begin(), same_boundary))
+            reject("topology-preserving Set changed source identity, rings or edges; reviewed mapping is required");
+    }
+}
 void change_maps(auto& source, const AssemblyExpandedNode& node, const AssemblyType& type,
     const AssemblyModel& model, const Intent& intent) {
+    const auto& geometry = intent.profile_geometry;
+    // Own local profiles only. A path follows its actual path override or its
+    // resolved type; descendant profiles and world transforms grant no authority.
+    const auto& resolved = source.profile_overrides ? *source.profile_overrides : type.profiles;
+    if (geometry.operation == Operation::clear &&
+        (has_identified_profiles(resolved) || (source.profile_overrides && has_identified_profiles(type.profiles))))
+        reject("clearing identified source profiles requires reviewed identity mapping/removal");
+    if (geometry.operation == Operation::set) {
+        if (topology_preserving_geometry(intent)) require_preserved_profile_topology(resolved, *geometry.value);
+        else if (has_identified_profiles(resolved))
+            reject("historical profile Set cannot redraw identified source profiles");
+    }
     change_overrides(source.property_overrides, node.properties, type.properties, intent.properties,
         [](const auto&, const auto&) {});
     change_overrides(source.material_overrides, node.materials, type.materials, intent.materials,
@@ -385,10 +457,8 @@ void change_maps(auto& source, const AssemblyExpandedNode& node, const AssemblyT
         [&](const std::string& key, const AssemblyQuantityProperty& q) {
             if (q.unit != type.quantities.at(key).unit) reject("quantity override changes its declared dimension");
         });
-    const auto& geometry = intent.profile_geometry;
     if (geometry.operation == Operation::clear) source.profile_overrides.reset();
     else if (geometry.operation == Operation::set) {
-        const auto& resolved = source.profile_overrides ? *source.profile_overrides : type.profiles;
         auto changed = *geometry.value;
         std::sort(changed.begin(), changed.end(), [](const auto& a, const auto& b) { return a.id < b.id; });
         // Compare canonical values to preserve even equal explicit provenance,
@@ -467,7 +537,7 @@ template<class T> void patch_map(Json& raw, const std::map<std::string, T>& befo
         if (old == before.end() || old->second != value) raw[key] = encode(value);
     }
 }
-void patch_maps(Json& raw, const auto& before, const auto& after) {
+void patch_maps(Json& raw, const auto& before, const auto& after, const Json* inherited_profiles = nullptr) {
     patch_map(raw.at("property_overrides"), before.property_overrides, after.property_overrides,
         [](const std::string& value) { return Json(value); });
     patch_map(raw.at("material_overrides"), before.material_overrides, after.material_overrides,
@@ -476,21 +546,23 @@ void patch_maps(Json& raw, const auto& before, const auto& after) {
     if (before.profile_overrides != after.profile_overrides) {
         if (!after.profile_overrides) { raw.erase("profile_overrides"); return; }
         auto encoded = encode_assembly_profiles(*after.profile_overrides);
-        if (before.profile_overrides) {
+        std::vector<AssemblyProfile> inherited;
+        const auto* previous_profiles = before.profile_overrides ? &*before.profile_overrides : nullptr;
+        const Json* previous_raw = before.profile_overrides ? &raw.at("profile_overrides") : nullptr;
+        if (!previous_profiles && has_identified_profiles(*after.profile_overrides)) {
+            if (!inherited_profiles) reject("identified override materialization has no actual source profiles");
+            inherited = decode_assembly_profiles(*inherited_profiles);
+            previous_profiles = &inherited;
+            previous_raw = inherited_profiles;
+        }
+        if (previous_profiles) {
             std::map<std::string, const AssemblyProfile*, std::less<>> previous;
             std::map<std::string, const AssemblyProfile*, std::less<>> updated;
             std::map<std::string, const Json*, std::less<>> original;
-            for (const auto& profile : *before.profile_overrides) previous.emplace(profile.id, &profile);
+            for (const auto& profile : *previous_profiles) previous.emplace(profile.id, &profile);
             for (const auto& profile : *after.profile_overrides) updated.emplace(profile.id, &profile);
-            for (const auto& profile : raw.at("profile_overrides"))
+            for (const auto& profile : *previous_raw)
                 original.emplace(profile.at("id").template get<std::string>(), &profile);
-            const auto boundary_equal = [](const Boundary& first, const Boundary& second) {
-                return first.size() == second.size() && std::equal(first.begin(), first.end(), second.begin(),
-                    [](const auto& a, const auto& b) {
-                        return a.start.x == b.start.x && a.start.y == b.start.y &&
-                            a.end.x == b.end.x && a.end.y == b.end.y && a.sweep_radians == b.sweep_radians;
-                    });
-            };
             for (auto& profile : encoded) {
                 const auto& next = *updated.at(profile.at("id").template get<std::string>());
                 const auto old = previous.find(next.id);
@@ -499,13 +571,31 @@ void patch_maps(Json& raw, const auto& before, const auto& after) {
                 if (source == original.end()) reject("saved profile override is missing");
                 const auto& retained = *source->second;
                 if (*old->second == next) { profile = retained; continue; }
-                if (boundary_equal(old->second->outer, next.outer)) profile["outer"] = retained.at("outer");
+                if (same_boundary(old->second->outer, next.outer)) profile["outer"] = retained.at("outer");
                 if (old->second->holes.size() == next.holes.size() &&
-                    std::equal(old->second->holes.begin(), old->second->holes.end(), next.holes.begin(), boundary_equal))
+                    std::equal(old->second->holes.begin(), old->second->holes.end(), next.holes.begin(), same_boundary))
                     profile["holes"] = retained.at("holes");
                 if (old->second->elevation_m == next.elevation_m) profile["elevation_m"] = retained.at("elevation_m");
                 if (old->second->height_m == next.height_m) profile["height_m"] = retained.at("height_m");
                 if (old->second->material_slot == next.material_slot) profile["material_slot"] = retained.at("material_slot");
+                if (old->second->topology == next.topology && next.topology) {
+                    // Scalar changes never regenerate the authored topology
+                    // representation or widen/downgrade its profile envelope.
+                    profile["version"] = retained.at("version");
+                    profile["topology"] = retained.at("topology");
+                }
+            }
+            if (has_identified_profiles(*after.profile_overrides)) {
+                // The identified lane preserves the complete roster, including
+                // its raw source order, even when one profile scalar changes.
+                auto retained_order = Json::array();
+                for (const auto& profile : *previous_raw) {
+                    const auto found = std::find_if(encoded.begin(), encoded.end(),
+                        [&](const Json& row) { return row.at("id") == profile.at("id"); });
+                    if (found == encoded.end()) reject("identified raw profile roster changed");
+                    retained_order.push_back(*found);
+                }
+                encoded = std::move(retained_order);
             }
         }
         raw["profile_overrides"] = std::move(encoded);
@@ -519,6 +609,25 @@ Json encode_path(const AssemblyPathOverride& path) {
         {"quantity_overrides", std::move(quantities)}};
     if (path.profile_overrides) result["profile_overrides"] = encode_assembly_profiles(*path.profile_overrides);
     return result;
+}
+const Json* source_type_profiles(const Json& catalog, const std::string& root_type, const Path& path) {
+    std::string type_id = root_type;
+    for (const auto& part_id : path) {
+        const auto& types = catalog.at("types");
+        const auto type = std::find_if(types.begin(), types.end(),
+            [&](const Json& row) { return row.at("id") == type_id; });
+        if (type == types.end() || !type->contains("parts")) reject("actual path type definition is missing");
+        const auto& parts = type->at("parts");
+        const auto part = std::find_if(parts.begin(), parts.end(),
+            [&](const Json& row) { return row.at("id") == part_id; });
+        if (part == parts.end()) reject("actual path part definition is missing");
+        type_id = part->at("type_id").get<std::string>();
+    }
+    const auto& types = catalog.at("types");
+    const auto type = std::find_if(types.begin(), types.end(),
+        [&](const Json& row) { return row.at("id") == type_id; });
+    if (type == types.end()) reject("actual source profile type is missing");
+    return type->contains("profiles") ? &type->at("profiles") : nullptr;
 }
 const Json& source_part_pose(const Json& catalog, const std::string& root_type, const Path& path) {
     std::string type_id = root_type;
@@ -547,7 +656,12 @@ Json new_path_pose(const Json& catalog, const AssemblyInstance& source, const As
     return pose;
 }
 void patch_instance(Json& raw, const AssemblyInstance& before, const AssemblyInstance& after, const Json& catalog) {
-    patch_maps(raw, before, after);
+    const auto inherited_profiles = [&](const Path& path, const auto& old, const auto& changed) -> const Json* {
+        if (old.profile_overrides || !changed.profile_overrides || !has_identified_profiles(*changed.profile_overrides))
+            return nullptr;
+        return source_type_profiles(catalog, before.type_id, path);
+    };
+    patch_maps(raw, before, after, inherited_profiles({}, before, after));
     if (before.placement) patch_pose(raw.at("placement"), root_pose(before), root_pose(after), true);
     else if (before.root_transform && after.root_transform)
         patch_pose(raw.at("root_transform"), *before.root_transform, *after.root_transform, false);
@@ -563,13 +677,16 @@ void patch_instance(Json& raw, const AssemblyInstance& before, const AssemblyIns
             const auto row = std::find_if(rows.begin(), rows.end(),
                 [&](const Json& value) { return value.at("part_path").get<Path>() == changed.part_path; });
             if (old == before.nested_overrides.end()) {
-                auto added = encode_path(changed);
+                AssemblyPathOverride empty;
+                empty.part_path = changed.part_path;
+                auto added = encode_path(empty);
+                patch_maps(added, empty, changed, inherited_profiles(changed.part_path, empty, changed));
                 if (changed.transform) added["transform"] = new_path_pose(catalog, before, changed);
                 rows.push_back(std::move(added));
             }
             else {
                 if (row == rows.end()) reject("saved path override is missing");
-                patch_maps(*row, *old, changed);
+                patch_maps(*row, *old, changed, inherited_profiles(changed.part_path, *old, changed));
                 if (old->transform && changed.transform) patch_pose(row->at("transform"), *old->transform, *changed.transform, false);
                 else if (old->transform != changed.transform)
                     (*row)["transform"] = changed.transform ? new_path_pose(catalog, before, changed) : Json(nullptr);
@@ -824,7 +941,8 @@ std::vector<Intent> decode_request(const Json& request) {
     Budget{}.visit(request);
     fields(request, {"version", "expected_revision", "source_snapshot_digest", "source_authoring_digest",
         "source_entities_digest", "source_saved_revision", "intents"});
-    if (!request.at("version").is_number_integer() || (request.at("version") != 1 && request.at("version") != 2))
+    if (!request.at("version").is_number_integer() ||
+        (request.at("version") != 1 && request.at("version") != 2 && request.at("version") != 3))
         reject("unsupported request version");
     (void)revision(request.at("expected_revision"));
     for (const auto* name : {"source_snapshot_digest", "source_authoring_digest", "source_entities_digest"}) digest(request.at(name));
@@ -834,6 +952,9 @@ std::vector<Intent> decode_request(const Json& request) {
         return intent.profile_geometry.operation != Operation::unchanged;
     });
     if (request.at("version") == 1 && geometry) reject("v1 request cannot carry profile geometry authority");
+    const bool topology = std::any_of(intents.begin(), intents.end(), topology_preserving_geometry);
+    if (request.at("version") != 3 && topology) reject("identified profile Set requires request v3");
+    if (request.at("version") == 3 && !topology) reject("v3 request requires topology-preserving profile Set");
     return intents;
 }
 void authenticate(const DocumentSnapshot& source, const Json& request) {
@@ -1601,8 +1722,9 @@ Json validate_assembly_instance_property_edit_request(const Json& request) {
 AssemblyInstancePropertyEditPreparation prepare_assembly_instance_property_edit(const DocumentSnapshot& source,
     std::span<const Intent> intents) {
     auto wire = encode_intents(intents);
-    const bool geometry = std::any_of(wire.begin(), wire.end(), [](const Json& intent) { return intent.at("version") == 2; });
-    Json request{{"version", geometry ? 2 : 1}, {"expected_revision", source.revision()},
+    const bool topology = std::any_of(wire.begin(), wire.end(), [](const Json& intent) { return intent.at("version") == 3; });
+    const bool geometry = std::any_of(wire.begin(), wire.end(), [](const Json& intent) { return intent.at("version") != 1; });
+    Json request{{"version", topology ? 3 : geometry ? 2 : 1}, {"expected_revision", source.revision()},
         {"source_snapshot_digest", document_snapshot_digest(source)},
         {"source_authoring_digest", document_authoring_source_digest_v2(source)},
         {"source_entities_digest", entity_map_digest(source.entities())},

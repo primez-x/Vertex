@@ -235,8 +235,7 @@ std::optional<Entity> component_dimension_reference_remainder(const Entity& enti
         instance == assembly->end() || !instance->is_string() ||
         !retired_keys.contains({catalog->get<std::string>(), instance->get<std::string>()})) return std::nullopt;
     const auto decoded = decode_boundary_dimension_entity(entity);
-    if (!decoded.supported() || decoded.version != 6 ||
-        decoded.dimension->kind != BoundaryDimensionKind::assembly_extent || !decoded.dimension->assembly_target)
+    if (!decoded.supported() || !is_assembly_boundary_dimension_kind(decoded.dimension->kind) || !decoded.dimension->assembly_target)
         reject("affected component dimension requires a supported extent target: " + entity.id);
     auto scratch = entity;
     scratch.properties.erase("target");

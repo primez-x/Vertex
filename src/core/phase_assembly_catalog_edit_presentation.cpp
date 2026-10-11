@@ -179,7 +179,7 @@ Dimensions inspect_dimensions(const Entities& source, const PhaseAssemblyCatalog
     std::vector<AssemblyDimensionTarget> targets;
     for (const auto& [id, entity] : source) if (can_recognize_boundary_dimension_entity_type(entity.type)) {
         const auto decoded = decode_boundary_dimension_entity(entity);
-        if (!decoded.supported() || decoded.dimension->kind != BoundaryDimensionKind::assembly_extent) continue;
+        if (!decoded.supported() || !is_assembly_boundary_dimension_kind(decoded.dimension->kind)) continue;
         require(dimensions.size() < dimension_limit, "complete standalone assembly dimension inventory exceeds bound");
         const auto& dimension = *decoded.dimension;
         require(roots.contains(root_target(dimension.assembly_target->component)),
@@ -261,7 +261,7 @@ Entity remainder(const Entity& entity, const Ids& affected, const Ids& copied_ov
     } else if (can_recognize_boundary_dimension_entity_type(entity.type)) {
         const auto decoded = decode_boundary_dimension_entity(entity);
         if (decoded.supported()) {
-            if (decoded.dimension->kind == BoundaryDimensionKind::assembly_extent) {
+            if (is_assembly_boundary_dimension_kind(decoded.dimension->kind)) {
                 // The closed target codecs have genuinely validated these
                 // owned fields, including local path/axis values. The scratch
                 // remainder supplies no opaque document-reference authority.

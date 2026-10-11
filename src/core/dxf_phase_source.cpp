@@ -181,12 +181,14 @@ bool corner_graph_semantics(const Owners& owners) {
             properties.at("model").at("version") == 9;
     });
 }
-bool assembly_dimension_graph_semantics(const Owners& owners) {
-    return std::any_of(owners.begin(),owners.end(),[](const auto& row) {
+bool assembly_dimension_graph_semantics(const Owners& owners, bool profiles_only = false) {
+    return std::any_of(owners.begin(),owners.end(),[&](const auto& row) {
         const auto& owner=row.second;
         return can_recognize_boundary_dimension_entity_type(owner.type) &&
-            owner.properties.value("dimension_version",Json{})==6 &&
-            owner.properties.value("dimension_kind",Json{})=="assembly_extent";
+            ((!profiles_only && owner.properties.value("dimension_version",Json{})==6 &&
+                owner.properties.value("dimension_kind",Json{})=="assembly_extent") ||
+             (owner.properties.value("dimension_version",Json{})==7 &&
+                owner.properties.value("dimension_kind",Json{})=="assembly_profile"));
     });
 }
 const Entity& actual(const Owners& owners, const std::string& id, std::string_view type = {}) {
@@ -913,7 +915,8 @@ Json unchecked_encode(const NativeDxfPhaseSourceGraph& graph, NativeDxfWallSourc
     });
     const bool corners = corner_graph_semantics(graph.entities);
     const bool component_dimensions=assembly_dimension_graph_semantics(graph.entities);
-    Json value{{"version", component_dimensions ? 6 : corners ? 5 : !graph.assets.empty() ? 4 : graph.support_ids.empty() ? 1 : sheet_companions ? 3 : 2}, {"entities", std::move(entities)}, {"body_ids", graph.body_ids},
+    const bool profile_dimensions=assembly_dimension_graph_semantics(graph.entities, true);
+    Json value{{"version", profile_dimensions ? 7 : component_dimensions ? 6 : corners ? 5 : !graph.assets.empty() ? 4 : graph.support_ids.empty() ? 1 : sheet_companions ? 3 : 2}, {"entities", std::move(entities)}, {"body_ids", graph.body_ids},
         {"catalog_ids", graph.catalog_ids}, {"registry_ids", graph.registry_ids}, {"context_ids", graph.context_ids},
         {"enrolled_hierarchy_ids", graph.enrolled_hierarchy_ids}, {"depicted_body_ids", graph.depicted_body_ids}};
     if (!graph.support_ids.empty() || !graph.assets.empty() || corners || component_dimensions) value["support_ids"] = graph.support_ids;
@@ -1704,11 +1707,12 @@ NativeDxfPhaseSourceGraph decode_native_dxf_phase_source_graph(const Json& value
             ((value.at("version") == 1 && value.size() == 8 && !value.contains("support_ids")) ||
              ((value.at("version") == 2 || value.at("version") == 3) && value.size() == 9 && value.contains("support_ids")) ||
              (value.at("version") == 4 && value.size() == 10 && value.contains("support_ids") && value.contains("asset_manifest")) ||
-             ((value.at("version") == 5 || value.at("version") == 6) && value.contains("support_ids") &&
+             ((value.at("version") == 5 || value.at("version") == 6 || value.at("version") == 7) && value.contains("support_ids") &&
                 ((!value.contains("asset_manifest") && value.size() == 9) || (value.contains("asset_manifest") && value.size() == 10)))),
             "unsupported graph schema/version");
         const bool corner_version = value.at("version") == 5;
-        const bool component_version = value.at("version") == 6;
+        const bool profile_version = value.at("version") == 7;
+        const bool component_version = value.at("version") == 6 || profile_version;
         const bool assets_present = value.contains("asset_manifest");
         if (assets_present) {
             const auto manifest = decode_native_dxf_phase_asset_manifest(value.at("asset_manifest"), &budget.phase_assets);
@@ -1733,8 +1737,10 @@ NativeDxfPhaseSourceGraph decode_native_dxf_phase_source_graph(const Json& value
         result.body_ids = read_ids("body_ids"); result.catalog_ids = read_ids("catalog_ids");
         result.registry_ids = read_ids("registry_ids"); result.context_ids = read_ids("context_ids");
         require(component_version == assembly_dimension_graph_semantics(result.entities),
-            "component dimension semantics require exactly graph version six");
-        require(component_version || corner_version == corner_graph_semantics(result.entities), "corner semantics require graph version five or component dimension version six");
+            "component dimension semantics require graph version six or seven");
+        require(profile_version == assembly_dimension_graph_semantics(result.entities, true),
+            "profile dimension semantics require exactly graph version seven");
+        require(component_version || corner_version == corner_graph_semantics(result.entities), "corner semantics require graph version five or component dimension version six/seven");
         if (value.at("version") == 2 || value.at("version") == 3 || assets_present || corner_version || component_version) {
             result.support_ids = read_ids("support_ids");
             require(assets_present || corner_version || component_version || !result.support_ids.empty(), "support inventory cannot be empty");

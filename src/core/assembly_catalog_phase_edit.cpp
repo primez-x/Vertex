@@ -104,6 +104,23 @@ void preflight_type(const AssemblyType& value, RawBudget& budget) {
             segments += hole.size(); budget.reserve_nodes(1);
         }
         budget.reserve_nodes(10 * segments);
+        if (profile.topology) {
+            const auto& topology = *profile.topology;
+            require(topology.holes.size() == profile.holes.size(),
+                "catalog edit typed topology hole count mismatch");
+            budget.reserve_nodes(6);
+            const auto ring = [&](const AssemblyProfileRingIdentity& identity, const Boundary& boundary) {
+                require(identity.segment_ids.size() == boundary.size() && identity.vertex_ids.size() == boundary.size(),
+                    "catalog edit typed topology segment/vertex count mismatch");
+                budget.reserve_nodes(6 + 2 * boundary.size());
+                budget.text(identity.ring_id);
+                for (const auto& id : identity.segment_ids) budget.text(id);
+                for (const auto& id : identity.vertex_ids) budget.text(id);
+            };
+            ring(topology.outer, profile.outer);
+            for (std::size_t i = 0; i < topology.holes.size(); ++i) ring(topology.holes[i], profile.holes[i]);
+            validate_assembly_profile_topology(profile);
+        }
     }
     for (const auto& part : value.parts) {
         budget.reserve_nodes(16); budget.text(part.id); budget.text(part.type_id);
@@ -175,11 +192,13 @@ Json boundary(const Boundary& value) {
         {"end", {edge.end.x, edge.end.y}}, {"sweep_radians", edge.sweep_radians}});
     return result;
 }
-Json encode_type(const AssemblyType& value) {
+Json encode_type(const AssemblyType& value, bool identified_profiles = false) {
     require(value.profiles.size() <= definition_limit && value.parts.size() <= definition_limit,
         "catalog edit type collection exceeds bound");
     Json profiles = Json::array(), parts = Json::array();
-    for (const auto& profile : value.profiles) {
+    if (identified_profiles) profiles = encode_assembly_profiles(value.profiles);
+    else for (const auto& profile : value.profiles) {
+        require(!profile.topology, "identified catalog edit profiles require request version 3");
         require(profile.holes.size() <= 1024, "catalog edit profile hole count exceeds bound");
         Json holes = Json::array();
         std::size_t segments = profile.outer.size();
@@ -202,13 +221,14 @@ Json encode_material(const AssemblyMaterial& value) {
     if (value.color_srgb) result["color_srgb"] = *value.color_srgb;
     return result;
 }
-void closed_type(const Json& value) {
+void closed_type(const Json& value, bool identified_profiles = false) {
     fields(value, {"id", "name", "properties", "materials", "quantities", "profiles", "parts"});
     (void)local_id(value.at("id"));
     require(value.at("profiles").is_array() && value.at("parts").is_array() &&
         value.at("profiles").size() <= definition_limit && value.at("parts").size() <= definition_limit,
         "catalog edit replacement collections exceed bound");
-    for (const auto& profile : value.at("profiles")) {
+    if (identified_profiles) (void)preflight_assembly_profiles(value.at("profiles"));
+    else for (const auto& profile : value.at("profiles")) {
         fields(profile, {"id", "outer", "holes", "elevation_m", "height_m", "material_slot"});
         require(profile.at("outer").is_array() && profile.at("holes").is_array(), "catalog edit replacement profile is invalid");
         const auto edges = [](const Json& edges) {
@@ -253,10 +273,59 @@ Models models(const Entities& values) {
     return result;
 }
 std::string catalog_digest(const Entity& value) { return entity_map_digest(Entities{{value.id, value}}); }
+bool identified_profiles(const Json& type) {
+    if (!type.contains("profiles")) return false;
+    return std::any_of(type.at("profiles").begin(), type.at("profiles").end(), [](const auto& profile) {
+        return profile.contains("version") || profile.contains("topology");
+    });
+}
+bool same_boundary(const Boundary& a, const Boundary& b) {
+    if (a.size() != b.size()) return false;
+    for (std::size_t i = 0; i < a.size(); ++i)
+        if (a[i].start.x != b[i].start.x || a[i].start.y != b[i].start.y ||
+            a[i].end.x != b[i].end.x || a[i].end.y != b[i].end.y ||
+            a[i].sweep_radians != b[i].sweep_radians) return false;
+    return true;
+}
+// Request3 carries no assignment, redraw, reassignment or removal authority.
+// Match actual profile identities, never the position of a saved profile row.
+// Canonical replacements are checked first; this restores exact source topology
+// and XY numeric representations for the permitted metadata/extrusion edits.
+void retain_identified_profiles(const Json& original, Json& candidate,
+    const AssemblyType& before, const AssemblyType& after) {
+    for (const auto& profile : after.profiles) if (profile.topology) {
+        const auto source = std::find_if(before.profiles.begin(), before.profiles.end(),
+            [&](const auto& value) { return value.id == profile.id; });
+        require(source != before.profiles.end() && source->topology,
+            "catalog edit cannot assign profile topology; use reviewed identity mapping");
+    }
+    for (const auto& profile : before.profiles) if (profile.topology) {
+        const auto retained = std::find_if(after.profiles.begin(), after.profiles.end(),
+            [&](const auto& value) { return value.id == profile.id; });
+        require(retained != after.profiles.end(),
+            "catalog edit cannot remove identified profiles; use reviewed identity mapping");
+        const auto& replacement = *retained;
+        require(profile.topology == replacement.topology,
+            "catalog edit must retain source profile topology; use reviewed identity mapping");
+        require(same_boundary(profile.outer, replacement.outer) && profile.holes.size() == replacement.holes.size(),
+            "catalog edit cannot redraw identified profile boundaries; use reviewed identity mapping");
+        for (std::size_t i = 0; i < profile.holes.size(); ++i)
+            require(same_boundary(profile.holes[i], replacement.holes[i]),
+                "catalog edit cannot redraw identified profile holes; use reviewed identity mapping");
+        const auto& saved = row(original, "profiles", profile.id);
+        for (auto& value : candidate.at("profiles")) if (value.at("id") == profile.id) {
+            value.at("version") = saved.at("version");
+            value.at("topology") = saved.at("topology");
+            value.at("outer") = saved.at("outer");
+            value.at("holes") = saved.at("holes");
+            break;
+        }
+    }
+}
 
 // Patch only requested existing definition rows. Retained unrelated rows never
-// pass through a semantic serializer. A union v7 promotion is used only when
-// the old dialect cannot express a changed row's new envelope.
+// pass through a semantic serializer. A union v7/v8 promotion is used only
+// when the old dialect cannot express a changed row's new envelope.
 Entities derive_raw(const Entities& actual, const Json& request) {
     Entities result = actual;
     for (const auto& edit : request.at("edits")) {
@@ -267,12 +336,15 @@ Entities derive_raw(const Entities& actual, const Json& request) {
         require(catalog_digest(found->second) == edit.at("source_catalog_digest"), "catalog edit original catalog binding changed");
         auto& candidate = result.at(id).properties.at("model");
         const auto schema = original.at("schema").get<std::string>();
-        bool promote = false;
+        bool promote = false, promote_geometry = false;
         for (const auto* collection : {"types", "materials"}) for (const auto& change : edit.at(collection)) {
             const auto key = local_id(change.at("replacement").at("id"));
             require(exact(row(original, collection, key), change.at("original")), "catalog edit original definition binding changed");
             auto replacement = change.at("replacement");
             if (std::string_view(collection) == "types") {
+                require(request.at("version") == 3 || !identified_profiles(row(original, collection, key)),
+                    "identified source catalog profiles require request version 3");
+                promote_geometry = promote_geometry || identified_profiles(replacement);
                 const bool old_nested = schema == "sketch.assemblies.v4" || schema == "sketch.assemblies.v5" ||
                     schema == "sketch.assemblies.v6";
                 if (!old_nested && !row(original, collection, key).contains("profiles") &&
@@ -285,7 +357,8 @@ Entities derive_raw(const Entities& actual, const Json& request) {
             } else if (schema == "sketch.assemblies.v1" && replacement.contains("color_srgb")) promote = true;
             for (auto& saved : candidate.at(collection)) if (saved.at("id") == key) { saved = std::move(replacement); break; }
         }
-        if (promote) candidate.at("schema") = schema == "sketch.assemblies.v8" ? "sketch.assemblies.v8" : "sketch.assemblies.v7";
+        if (promote_geometry) candidate.at("schema") = "sketch.assemblies.v8";
+        else if (promote) candidate.at("schema") = schema == "sketch.assemblies.v8" ? "sketch.assemblies.v8" : "sketch.assemblies.v7";
     }
     return result;
 }
@@ -561,8 +634,16 @@ Inspection inspect(const Entities& actual, const Json& request,
         const auto id = edit.at("catalog_id").get<std::string>();
         for (const auto& change : edit.at("types")) {
             const auto key = local_id(change.at("replacement").at("id"));
-            require(exact(encode_type(typed_row(after.at(id).types(), key)), change.at("replacement")),
+            require(exact(encode_type(typed_row(after.at(id).types(), key), request.at("version") == 3), change.at("replacement")),
                 "catalog edit replacement type is not canonical typed data");
+            if (request.at("version") == 3) {
+                auto& model = candidate.at(id).properties.at("model");
+                for (auto& value : model.at("types")) if (value.at("id") == key) {
+                    retain_identified_profiles(row(raw_model(actual.at(id)), "types", key), value,
+                        typed_row(before.at(id).types(), key), typed_row(after.at(id).types(), key));
+                    break;
+                }
+            }
         }
         for (const auto& change : edit.at("materials")) {
             const auto key = local_id(change.at("replacement").at("id"));
@@ -606,7 +687,7 @@ Inspection inspect(const Entities& actual, const Json& request,
         }
         plan.roots.push_back(std::move(impact));
     }
-    if (request.at("version") == 2) {
+    if (request.at("version") != 1) {
         plan.material_consumers = material_consumers(actual, phases, before, &after);
         for (const auto& consumer : plan.material_consumers)
             if (consumer.definitions_changed && consumer.cohort != AssemblyCatalogPhaseEditCohort::active_ordinary)
@@ -623,7 +704,8 @@ Json validate_assembly_catalog_phase_edit_request(const Json& request) {
         require(budget.bytes <= assembly_catalog_transport_byte_limit && budget.nodes <= 262144,
             "catalog edit request exceeds transport bound");
         fields(request, {"version", "source_entities_digest", "edits"});
-        require(request.at("version").is_number_integer() && (request.at("version") == 1 || request.at("version") == 2),
+        require(request.at("version").is_number_integer() &&
+            (request.at("version") == 1 || request.at("version") == 2 || request.at("version") == 3),
             "catalog edit request version is unsupported");
         digest(request.at("source_entities_digest"));
         const auto& edits = request.at("edits");
@@ -646,7 +728,7 @@ Json validate_assembly_catalog_phase_edit_request(const Json& request) {
                     fields(change, {"original", "replacement"});
                     require(change.at("original").is_object() && change.at("original").contains("id"),
                         "catalog edit original definition is invalid");
-                    if (std::string_view(collection) == "types") closed_type(change.at("replacement"));
+                    if (std::string_view(collection) == "types") closed_type(change.at("replacement"), request.at("version") == 3);
                     else closed_material(change.at("replacement"));
                     const auto key = local_id(change.at("replacement").at("id"));
                     require(local_id(change.at("original").at("id")) == key &&
@@ -670,42 +752,62 @@ Json prepare_assembly_catalog_phase_edit_request(const Entities& actual,
         require(!intents.empty() && intents.size() <= 1000, "catalog edit intent count is invalid");
         RawBudget budget; budget.map(actual);
         AssemblyCatalogTransferBudget catalog_work; admit_catalogs(actual, catalog_work);
-        Json edits = Json::array();
+        // Admit the complete typed input, including topology strings, before
+        // allocating any encoded replacement. Source topology selects request3
+        // even if an erroneous typed copy omitted it; inspection then refuses.
+        int version = 2;
+        std::size_t admitted_count = 0;
         std::optional<std::string> previous;
-        std::size_t count = 0;
         for (const auto& intent : intents) {
             document_id(intent.catalog_id);
             require(!previous || *previous < intent.catalog_id, "catalog edit intents must be sorted unique");
             previous = intent.catalog_id;
-            require(intent.replacement_types.size() <= definition_limit - count, "catalog edit type intent count exceeds bound");
-            count += intent.replacement_types.size();
-            require(intent.replacement_materials.size() <= definition_limit - count, "catalog edit material intent count exceeds bound");
-            count += intent.replacement_materials.size();
-            require(!intent.replacement_types.empty() || !intent.replacement_materials.empty(), "catalog edit intent has no replacement");
+            require(intent.replacement_types.size() <= definition_limit - admitted_count,
+                "catalog edit type intent count exceeds bound");
+            admitted_count += intent.replacement_types.size();
+            require(intent.replacement_materials.size() <= definition_limit - admitted_count,
+                "catalog edit material intent count exceeds bound");
+            admitted_count += intent.replacement_materials.size();
+            require(!intent.replacement_types.empty() || !intent.replacement_materials.empty(),
+                "catalog edit intent has no replacement");
             const auto found = actual.find(intent.catalog_id);
             require(found != actual.end(), "catalog edit actual intent catalog is missing");
             const auto& model = raw_model(found->second);
-            Json types = Json::array(), materials = Json::array();
             std::optional<std::string> previous_type, previous_material;
             for (const auto& value : intent.replacement_types) {
+                preflight_type(value, budget);
                 require(!previous_type || *previous_type < value.id, "catalog edit replacement types must be sorted unique");
                 previous_type = value.id;
-                preflight_type(value, budget);
-                auto replacement = encode_type(value); budget.read(replacement);
+                if (identified_profiles(row(model, "types", value.id)) ||
+                    std::any_of(value.profiles.begin(), value.profiles.end(), [](const auto& profile) {
+                        return profile.topology.has_value();
+                    })) version = 3;
+            }
+            for (const auto& value : intent.replacement_materials) {
+                budget.reserve_nodes(4); budget.text(value.id); budget.text(value.name);
+                if (value.color_srgb) budget.text(*value.color_srgb);
+                require(!previous_material || *previous_material < value.id, "catalog edit replacement materials must be sorted unique");
+                previous_material = value.id;
+                (void)row(model, "materials", value.id);
+            }
+        }
+        Json edits = Json::array();
+        for (const auto& intent : intents) {
+            const auto& catalog = actual.at(intent.catalog_id);
+            const auto& model = raw_model(catalog);
+            Json types = Json::array(), materials = Json::array();
+            for (const auto& value : intent.replacement_types) {
+                auto replacement = encode_type(value, version == 3); budget.read(replacement);
                 types.push_back({{"original", row(model, "types", value.id)}, {"replacement", std::move(replacement)}});
             }
             for (const auto& value : intent.replacement_materials) {
-                require(!previous_material || *previous_material < value.id, "catalog edit replacement materials must be sorted unique");
-                previous_material = value.id;
-                budget.reserve_nodes(4); budget.text(value.id); budget.text(value.name);
-                if (value.color_srgb) budget.text(*value.color_srgb);
                 auto replacement = encode_material(value); budget.read(replacement);
                 materials.push_back({{"original", row(model, "materials", value.id)}, {"replacement", std::move(replacement)}});
             }
-            edits.push_back({{"catalog_id", intent.catalog_id}, {"source_catalog_digest", catalog_digest(found->second)},
+            edits.push_back({{"catalog_id", intent.catalog_id}, {"source_catalog_digest", catalog_digest(catalog)},
                 {"types", std::move(types)}, {"materials", std::move(materials)}});
         }
-        Json request{{"version", 2}, {"source_entities_digest", entity_map_digest(actual)}, {"edits", std::move(edits)}};
+        Json request{{"version", version}, {"source_entities_digest", entity_map_digest(actual)}, {"edits", std::move(edits)}};
         (void)inspect(actual, request, &catalog_work);
         return request;
     } catch (const Json::exception& error) {

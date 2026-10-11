@@ -1493,18 +1493,20 @@ PhaseWallCanvasProjection project_phase_wall_canvas(const DocumentSnapshot& sour
                 else if (resolved.kind==BoundaryDimensionKind::angle) projected.segments=angle_overlay(owner,decoded);
                 projected.dimension_end_ticks=resolved.kind==BoundaryDimensionKind::segment_length || resolved.kind==BoundaryDimensionKind::wall_axis_length ||
                     resolved.kind==BoundaryDimensionKind::corner_window_leg_length;
-                if (resolved.kind==BoundaryDimensionKind::assembly_extent) {
+                if (is_assembly_boundary_dimension_kind(resolved.kind)) {
                     projected.segments.clear();
                     projected.dimension_end_ticks=false;
                     if (!resolved.assembly_geometry)
                         throw std::invalid_argument("Phase wall dimension has no resolved assembly geometry.");
                     const auto& assembly=*resolved.assembly_geometry;
-                    if (assembly.target.axis!=AssemblyDimensionAxis::height &&
+                    if ((assembly.target.profile || assembly.target.axis!=AssemblyDimensionAxis::height) &&
                         (!decoded.presentation || decoded.presentation->visible)) {
                         // Keep the endpoints alongside the authored text position;
                         // the common canvas projection below applies the view once.
+                        const auto sweep=assembly.profile_geometry ? assembly.profile_geometry->segment_from_anchor_m.sweep_radians *
+                            (assembly.selected_node.transform.mirrored_y ? -1.0 : 1.0) : 0.0;
                         const Segment baseline{{assembly.start_authored_m.x,assembly.start_authored_m.y},
-                            {assembly.end_authored_m.x,assembly.end_authored_m.y},0};
+                            {assembly.end_authored_m.x,assembly.end_authored_m.y},sweep};
                         const auto start=view_context ? project_point(baseline.start,view_context->frame) : baseline.start;
                         const auto end=view_context ? project_point(baseline.end,view_context->frame) : baseline.end;
                         const auto chord=std::hypot(end.x-start.x,end.y-start.y);
@@ -1574,11 +1576,11 @@ PhaseWallCanvasProjection project_phase_wall_canvas(const DocumentSnapshot& sour
                 else if (resolved.kind==BoundaryDimensionKind::segment_length || resolved.kind==BoundaryDimensionKind::wall_axis_length ||
                     resolved.kind==BoundaryDimensionKind::corner_window_leg_length)
                     projected.text=length_text(resolved.segment_length_metres,metric_units,ansi_dimensions(stage,owner));
-                else if (resolved.kind==BoundaryDimensionKind::assembly_extent) {
+                else if (is_assembly_boundary_dimension_kind(resolved.kind)) {
                     if (!resolved.assembly_geometry)
                         throw std::invalid_argument("Phase wall dimension label has no resolved assembly geometry.");
                     projected.text=length_text(resolved.segment_length_metres,metric_units,ansi_dimensions(stage,owner));
-                    if (resolved.assembly_geometry->target.axis==AssemblyDimensionAxis::height)
+                    if (!resolved.assembly_geometry->target.profile && resolved.assembly_geometry->target.axis==AssemblyDimensionAxis::height)
                         projected.text=QStringLiteral("H ")+projected.text;
                 }
                 else if (resolved.kind==BoundaryDimensionKind::angle) projected.text=QStringLiteral("%1°").arg(resolved.angle_radians*180/std::numbers::pi,0,'f',1);

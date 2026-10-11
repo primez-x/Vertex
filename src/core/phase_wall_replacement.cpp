@@ -286,8 +286,7 @@ ComponentDimensionRoots discover_component_dimensions(PhaseWallReplacementPlan& 
         if (document && !document->is_null()) continue;
         try {
             const auto decoded = decode_boundary_dimension_entity(entity);
-            if (!document || !decoded.supported() || decoded.version != 6 ||
-                decoded.dimension->kind != BoundaryDimensionKind::assembly_extent || !decoded.dimension->assembly_target ||
+            if (!document || !decoded.supported() || !is_assembly_boundary_dimension_kind(decoded.dimension->kind) || !decoded.dimension->assembly_target ||
                 decoded.dimension->assembly_target->component.document_entity_id)
                 reject("affected embedded component dimension requires a supported v6 extent");
             if (dimensions.size() >= maximum_component_dimensions) reject("associated embedded dimension budget exceeded");
@@ -1007,7 +1006,7 @@ PhaseWallReplacementPlan inspect_phase_wall_replacement_plan(
                 diagnostic(plan, id, "unsupported physical-room transit requires reviewed source completion");
         for (const auto& [id, entity] : source) if (can_recognize_boundary_dimension_entity_type(entity.type)) {
             const auto decoded = decode_boundary_dimension_entity(entity);
-            if (decoded.dimension && (!complete_component_dimensions || decoded.dimension->kind != BoundaryDimensionKind::assembly_extent) &&
+            if (decoded.dimension && (!complete_component_dimensions || !is_assembly_boundary_dimension_kind(decoded.dimension->kind)) &&
                 owners.contains(decoded.dimension->boundary_id)) {
                 validate_boundary_dimension_target(*decoded.dimension, source.at(decoded.dimension->boundary_id)); owners.insert(id);
             }
@@ -1558,7 +1557,7 @@ PhaseWallReplacementResult replay_phase_wall_replacement(
                 if (original != retained || original.properties.dump() != retained.properties.dump() ||
                     original.extensions.dump() != retained.extensions.dump()) reject("component copy changed an original dimension");
                 const auto decoded = decode_boundary_dimension_entity(result.entities.at(dimension_identities.at(old_id)));
-                if (!decoded.supported() || decoded.version != 6 || decoded.dimension->kind != BoundaryDimensionKind::assembly_extent ||
+                if (!decoded.supported() || !is_assembly_boundary_dimension_kind(decoded.dimension->kind) ||
                     !decoded.dimension->assembly_target || decoded.dimension->assembly_target->component.document_entity_id)
                     reject("component dimension copy lost its supported embedded extent");
                 auto expected_target = *decode_boundary_dimension_entity(original).dimension->assembly_target;

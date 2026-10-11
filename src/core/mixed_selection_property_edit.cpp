@@ -280,17 +280,17 @@ bool phase_room_dialect(const Json& value) {
     return phase_selection_dialect(value) || value.at("version") == 14 || value.at("version") == 16 ||
         value.at("version") == 17 || value.at("version") == 22 || value.at("version") == 23 ||
         value.at("version") == 25 || value.at("version") == 26 || value.at("version") == 28 ||
-        value.at("version") == 29 || value.at("version") == 32 || value.at("version") == 33;
+        value.at("version") == 29 || value.at("version") == 32 || value.at("version") == 33 || value.at("version") == 34;
 }
 bool component_dialect(const Json& value) {
     return value.at("version") == 14 || value.at("version") == 16 || value.at("version") == 17 ||
         value.at("version") == 22 || value.at("version") == 23 || value.at("version") == 25 ||
-        value.at("version") == 26 || value.at("version") == 28 || value.at("version") == 29 || value.at("version") == 32 || value.at("version") == 33;
+        value.at("version") == 26 || value.at("version") == 28 || value.at("version") == 29 || value.at("version") == 32 || value.at("version") == 33 || value.at("version") == 34;
 }
 bool coordinated_component_dialect(const Json& value) {
     return value.at("version") == 16 || value.at("version") == 17 ||
         value.at("version") == 22 || value.at("version") == 23 || value.at("version") == 25 ||
-        value.at("version") == 26 || value.at("version") == 28 || value.at("version") == 29 || value.at("version") == 32 || value.at("version") == 33;
+        value.at("version") == 26 || value.at("version") == 28 || value.at("version") == 29 || value.at("version") == 32 || value.at("version") == 33 || value.at("version") == 34;
 }
 bool vertical_scalar(const Json& scalar) {
     return !scalar.is_null() && (scalar.at("version") == 4 || scalar.at("version") == 5);
@@ -324,7 +324,8 @@ void historical_selected_members(const Json& value, std::set<MemberKey>& selecte
 void validate(const Json& value) {
     Budget budget; budget.visit(value);
     if (value.is_object() && value.contains("version") && component_dialect(value)) {
-        const bool profile_geometry = value.at("version") == 32;
+        const bool topology_geometry = value.at("version") == 34;
+        const bool profile_geometry = value.at("version") == 32 || topology_geometry;
         const bool component_dimensions = value.at("version") == 33;
         const bool complete_component = profile_geometry || component_dimensions;
         const auto base_version = complete_component && value.contains("base_intent") && value.at("base_intent").is_object()
@@ -428,7 +429,7 @@ void validate(const Json& value) {
         }
         if (!value.at("version").is_number_integer()) reject("Properties dialect must be an integer");
         const auto component = validate_phase_assembly_instance_property_edit_request(value.at("component_request"));
-        if (component.at("version") != (component_dimensions ? 4 : profile_geometry ? 3 : presentation_carry ? 2 : 1))
+        if (component.at("version") != (topology_geometry ? 5 : component_dimensions ? 4 : profile_geometry ? 3 : presentation_carry ? 2 : 1))
             reject("component request authority differs from its explicit Properties dialect");
         const auto fence = [&](const Json& lane) {
             for (const auto* key : {"expected_revision", "source_snapshot_digest", "source_authoring_digest", "source_entities_digest", "source_saved_revision"})
@@ -1050,7 +1051,7 @@ Stage derive(const DocumentSnapshot& source, const Json& value) {
             stage.component_mapping = std::move(coordinated.original_to_proposed);
             stage.reserved_component_identity_ids = std::move(coordinated.reserved_component_identity_ids);
             stage.elided_component_identity_ids = std::move(coordinated.elided_component_identity_ids);
-        } else if (value.at("version") == 17 || value.at("version") == 32 || value.at("version") == 33) {
+        } else if (value.at("version") == 17 || value.at("version") == 32 || value.at("version") == 33 || value.at("version") == 34) {
             stage.entities = component.preview_entities();
             stage.component_mapping = component.result().original_to_proposed;
             stage.reserved_component_identity_ids = component.result().fresh_identity_ids;
@@ -1483,7 +1484,8 @@ MixedSelectionPropertyEditPreparation prepare_component_presentation_property_ed
     const MixedSelectionPropertyEditPreparation* base, std::string_view message) {
     if (message.size() > 1024 || message.find('\0') != std::string_view::npos) reject("invalid message");
     const auto component = prepare_phase_assembly_instance_property_edit(source, authoring);
-    const bool profile_geometry = component.request().at("version") == 3;
+    const bool topology_geometry = component.request().at("version") == 5;
+    const bool profile_geometry = component.request().at("version") == 3 || topology_geometry;
     const bool component_dimensions = component.request().at("version") == 4;
     const bool complete_component = profile_geometry || component_dimensions;
     if (!complete_component && component.request().at("version") != 2) reject("component presentation Properties requires reference-carry authoring");
@@ -1492,7 +1494,7 @@ MixedSelectionPropertyEditPreparation prepare_component_presentation_property_ed
     const bool stair_dimensions = !complete_component && base && base->intent().at("version") == 21;
     const bool family_dimensions = !complete_component && base && base->intent().at("version") == 27;
     const bool wall_dimensions = !complete_component && base && (base->intent().at("version") == 24 || family_dimensions);
-    value["version"] = component_dimensions ? 33 : profile_geometry ? 32 : family_dimensions ? 29 : wall_dimensions ? 26 : stair_dimensions ? 23 : 17;
+    value["version"] = topology_geometry ? 34 : component_dimensions ? 33 : profile_geometry ? 32 : family_dimensions ? 29 : wall_dimensions ? 26 : stair_dimensions ? 23 : 17;
     if (profile_geometry) value["complete_instance_profile_geometry"] = true;
     if (component_dimensions) value["complete_component_dimensions"] = true;
     if (wall_dimensions) {

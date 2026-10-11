@@ -752,8 +752,10 @@ std::vector<std::string> independent_assembly_dimension_ids(
         require(properties.is_object(), "assembly dimension source properties must be an object");
         const auto version = properties.find("dimension_version");
         const auto kind = properties.find("dimension_kind");
-        if (version == properties.end() || !version->is_number_integer() || *version != 6 ||
-            kind == properties.end() || !kind->is_string() || *kind != "assembly_extent") continue;
+        if (version == properties.end() || !version->is_number_integer() ||
+            kind == properties.end() || !kind->is_string() ||
+            !((*version == 6 && *kind == "assembly_extent") ||
+                (*version == 7 && *kind == "assembly_profile"))) continue;
         require(roster_size++ < 1000, "assembly dimension source roster exceeds bound");
         const auto target = decode_assembly_dimension_target(properties.at("target").at("assembly"));
         const auto& component = target.component;
@@ -766,7 +768,7 @@ std::vector<std::string> independent_assembly_dimension_ids(
         (void)resolve_assembly_dimensions(source, targets);
         for (std::size_t i = 0; i < ids.size(); ++i) {
             const auto decoded = decode_boundary_dimension_entity(source.at(ids[i]));
-            require(decoded.supported() && decoded.dimension->kind == BoundaryDimensionKind::assembly_extent &&
+            require(decoded.supported() && is_assembly_boundary_dimension_kind(decoded.dimension->kind) &&
                 decoded.dimension->assembly_target == targets[i],
                 "assembly dimension source does not retain its exact qualified target");
         }
@@ -2104,7 +2106,7 @@ void append_embedded_group_dimensions(const DocumentSnapshot& source,
         identifier(old_id); identifier(new_id);
         const auto found = source.entities().find(old_id);
         require(found != source.entities().end() && can_recognize_boundary_dimension_entity_type(found->second.type) &&
-            inspect_boundary_dimension_version(found->second).format == BoundaryDimensionFormat::supported_v6,
+            is_assembly_boundary_dimension_format(inspect_boundary_dimension_version(found->second).format),
             "embedded assembly copy has an extraneous dimension identity mapping");
         fresh_dimension_ids.insert(new_id);
         // Decode only the closed, allocation-bounded target here. Complete raw

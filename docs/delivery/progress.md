@@ -14,6 +14,67 @@ changed source does not acquire runtime acceptance without later qualification.
 
 ## Current delivery state
 
+### October 11 identified component dimension integration
+
+The preceding complete drawing-context batch is committed and pushed as
+32a2aaf1; the remote branch was verified. The current source continuation fixes
+mixed skylight/ordinary deletion with explicit mixed18: exact ordinary owner
+dimension retirement now participates before both early reconstruction and final
+publication. Document protection/lifetime dispatch and reader249/extraction247
+retain it without widening standalone17 or old mixed dialects.
+
+Component profiles now have explicit persistent ring/edge/vertex topology under
+profile2/topology1. The shared target2 resolver measures an exact own-profile
+edge analytically or a pair of actual vertices, preserving source identity,
+physical scale/reflection, Site framing and small-distance anchor offsets.
+Reader250/extraction248 retains topology in actual and retained edit sources.
+New identifiers have bounded portable UTF-8/NUL and uniqueness admission.
+
+Independent review proved two integration defects: catalog replacement encoding
+discarded topology, and the historical property geometry decoder accidentally
+admitted identified profile authority. Explicit catalog request3 and component
+intent/request3 now preserve actual source topology/XY while permitting metadata,
+extrusion/material edits and exact inherited-profile materialization. Phase5 and
+mixed Properties34 retain their dimension/presentation allocations. Historical
+geometry dialects remain anonymous. Reader251/extraction249 retains these paths.
+
+Dedicated placed assembly_profile wire7 now persists target2; extent wire6 stays
+target1. The component dimension dialog selects actual own profiles, their outer
+or hole rings, an edge or two vertices. Shared current/retained/batch resolution,
+selection/properties, transformed/copied dimension carry, ordinary and phased
+retirement, dependency scans, actual context and saved-view/native admission are
+integrated in source. Plan and manufactured phase previews use analytical span
+and reflected sweep; height prefixes apply to extents only. DXF graph7 retains
+profile semantics and exact local selectors, with physical arc/chord output and
+explicit quantity fallback when geometry is unrepresentable. Reader252/native
+extraction250 applies to retained placed annotations. Root owns integration,
+controller, Document/store and docs; bounded writers returned their source paths.
+Independent integrated source review proved missing phase-preview and native3D
+annotation admission. Both were corrected: phase overlays/labels preserve actual
+analytical length/reflected sweep, while native arc annotations derive the curve
+near its physical anchor, validate represented length and retain scalar fallback
+when geometry is unrepresentable. Private catalog isolation also retains source
+topology/XY raw representations after foundation admission. Amended review
+approved the bounded source with no remaining proved P1/P2 finding. Root reviewed
+interfaces, historical dialect framing, actual source context, current/retained
+resolution, fresh allocation/reference policy, copy/removal, UI selectors,
+projection/reflection and storage/exchange floors. Scoped diff checks pass.
+This record joins the source in one scoped backup commit. Source presence is
+not compilation, runtime or product acceptance.
+
+The next required component source work is initial topology authoring for actual
+anonymous profiles and explicit reviewed mapping/removal on redraw, cutouts,
+profile retirement and clear-to-type. The current UI only offers profile targets
+with existing retained identities; it cannot silently invent them from ordinal
+positions. Those gaps remain unfinished functionality, not optional cleanup.
+Complete authoring/transport/render/Undo/reopen lifecycles and the full broad
+delivery packages remain required. All ten production gates remain open.
+
+No builds, tests, new tests, scripts, probes, native jobs, launches, packages or
+installations ran under the current source-only instruction. The installed
+application is unchanged. Compilation, runtime, user-observed resolution and
+output qualification remain unverified. No overall percentage or ETA is supported.
+
 ### October 11 component Copy presentation continuation
 
 The preceding alternative-editing batch is committed and pushed as c7241e01.

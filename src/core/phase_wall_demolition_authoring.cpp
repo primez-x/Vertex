@@ -602,9 +602,8 @@ Ids prove_component_dimension_retirements(const Entities& actual,const Entities&
         // dimensions. Their existing typed policy owns those consequences;
         // this additional proof authenticates assembly extents only.
         if (!affected && decoded.supported() &&
-            decoded.dimension->kind!=BoundaryDimensionKind::assembly_extent) continue;
-        if (!decoded.supported() || decoded.version!=6 ||
-            decoded.dimension->kind!=BoundaryDimensionKind::assembly_extent || !decoded.dimension->assembly_target)
+            !is_assembly_boundary_dimension_kind(decoded.dimension->kind)) continue;
+        if (!decoded.supported() || !is_assembly_boundary_dimension_kind(decoded.dimension->kind) || !decoded.dimension->assembly_target)
             invalid("affected component dimension requires its supported qualified extent: "+id);
         const auto& component=decoded.dimension->assembly_target->component;
         if (component.document_entity_id) {
@@ -639,7 +638,7 @@ void protected_source(const Entities& actual,const Entities& result,const PhaseW
     for (const auto& [id,entity]:actual) {
         if (dimension_retirements && !result.contains(id) && can_recognize_boundary_dimension_entity_type(entity.type)) {
             const auto decoded=decode_boundary_dimension_entity(entity);
-            if (decoded.supported() && decoded.dimension->kind==BoundaryDimensionKind::assembly_extent &&
+            if (decoded.supported() && is_assembly_boundary_dimension_kind(decoded.dimension->kind) &&
                 (!decoded.dimension->assembly_target || decoded.dimension->assembly_target->component.document_entity_id ||
                     !dimension_retirements->contains(id)))
                 invalid("erased extent dimension lacks its actual embedded-row producer proof: "+id);
@@ -1365,7 +1364,7 @@ Entities physical_stage(const Entities& actual,const PhaseConstraintAuthoringInt
                 if (can_recognize_boundary_dimension_entity_type(entity.type)) {
                     const auto decoded=decode_boundary_dimension_entity(entity);
                     bound=decoded.supported() &&
-                        (decoded.dimension->kind==BoundaryDimensionKind::assembly_extent ?
+                        (is_assembly_boundary_dimension_kind(decoded.dimension->kind) ?
                             edit.complete_component_dimensions && dimension_retirements.contains(id) &&
                                 decoded.dimension->assembly_target && !decoded.dimension->assembly_target->component.document_entity_id :
                             shared_aggregate.contains(decoded.dimension->boundary_id));

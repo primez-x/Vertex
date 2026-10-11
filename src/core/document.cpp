@@ -3357,16 +3357,16 @@ static bool mixed_properties_dialect(const nlohmann::json& intent) {
     const auto version=intent.at("version").get<int>();
     // Transform30 remains outside Properties: its actual roof phase38 is
     // traversed by the same source, registry and lifetime proof walks as20.
-    return (version>=5 && version<=13) || (version>=15 && version<=17) || (version>=21 && version<=29) || version==32 || version==33;
+    return (version>=5 && version<=13) || (version>=15 && version<=17) || (version>=21 && version<=29) || version==32 || version==33 || version==34;
 }
 static bool mixed_phase_properties_dialect(const nlohmann::json& intent) {
     const auto version=intent.at("version").get<int>();
-    return (version>=11 && version<=13) || (version>=15 && version<=17) || (version>=21 && version<=29) || version==32 || version==33;
+    return (version>=11 && version<=13) || (version>=15 && version<=17) || (version>=21 && version<=29) || version==32 || version==33 || version==34;
 }
 static bool mixed_component_properties_dialect(const nlohmann::json& intent) {
     const auto version=intent.at("version").get<int>();
     return version==16 || version==17 || version==22 || version==23 || version==25 || version==26 ||
-        version==28 || version==29 || version==32 || version==33;
+        version==28 || version==29 || version==32 || version==33 || version==34;
 }
 
 static std::vector<nlohmann::json> phase_constraint_authoring_proofs(const ApplyBoundaryConstraintChanges& command) {
@@ -3694,7 +3694,7 @@ static std::map<std::string,Entity,std::less<>> checked_phase_selection_removal_
 static void validate_phase_mixed_removal_dependents(const DocumentSnapshot& source,
     const std::map<std::string,Entity,std::less<>>& result,const nlohmann::json& encoded) {
     const auto intent=validate_mixed_selection_removal_intent(encoded);
-    if (intent.at("version")!=4 && intent.at("version")!=5 && intent.at("version")!=6 && intent.at("version")!=7 && intent.at("version")!=8 && intent.at("version")!=9 && intent.at("version")!=10 && intent.at("version")!=11 && intent.at("version")!=12 && intent.at("version")!=13 && intent.at("version")!=17) return;
+    if (intent.at("version")!=4 && intent.at("version")!=5 && intent.at("version")!=6 && intent.at("version")!=7 && intent.at("version")!=8 && intent.at("version")!=9 && intent.at("version")!=10 && intent.at("version")!=11 && intent.at("version")!=12 && intent.at("version")!=13 && intent.at("version")!=17 && intent.at("version")!=18) return;
     validate_active_design_preserved_dependents(source.entities(),result,false,true);
 }
 #endif
@@ -4369,7 +4369,7 @@ static void validate_phase_constraint_fresh_lifetime(const std::map<std::string,
     const auto mixed_dialect=has_mixed_selection_removal(command)
         ? validate_mixed_selection_removal_intent(command.mixed_selection_removal_intent).at("version").get<int>() : 0;
     const bool phase_completion=has_phase_selection_removal(command) || mixed_dialect==4 || mixed_dialect==5 || mixed_dialect==6 || mixed_dialect==7 || mixed_dialect==8 || mixed_dialect==9 || mixed_dialect==10 || mixed_dialect==11 || mixed_dialect==12 || mixed_dialect==13 ||
-        ((mixed_dialect==14 || mixed_dialect==15) &&
+        ((mixed_dialect==14 || mixed_dialect==15 || mixed_dialect==18) &&
             command.mixed_selection_removal_intent.at("ordinary").at("complete_component_phase_memberships")==true);
     const auto current_phase_proofs=phase_completion ? lifetime_proofs.phase_proofs : phase_constraint_authoring_proofs(command);
     const bool phase_drawing_enclosure=phase_completion ||
@@ -5169,7 +5169,7 @@ static void complete_dimension_placements(const std::map<std::string, Entity, st
         const auto new_owner = candidate.find(b.boundary_id);
         if (old_owner == source.end() || new_owner == candidate.end() || old_owner->second.type != new_owner->second.type)
             throw std::invalid_argument("Dimension placement analytical owner must survive with the same type");
-        if (a.kind==BoundaryDimensionKind::corner_window_leg_length || a.kind==BoundaryDimensionKind::assembly_extent) {
+        if (a.kind==BoundaryDimensionKind::corner_window_leg_length || is_assembly_boundary_dimension_kind(a.kind)) {
             (void)a.resolve(source); (void)b.resolve(candidate);
         } else { (void)a.resolve(old_owner->second); (void)b.resolve(new_owner->second); }
         b.text_position = {a.text_position.x + move.offset.x, a.text_position.y + move.offset.y};
@@ -6168,7 +6168,7 @@ static void validate_mixed_properties_replacement_lifetime(const nlohmann::json&
                 "complete_structural_component_dimensions"})
             if (fresh.contains(token))
                 throw std::invalid_argument("A Properties destination borrows its family dimension proof field: "+std::string(token));
-    if (mixed.at("version")==32)
+    if (mixed.at("version")==32 || mixed.at("version")==34)
         for (const auto* token:{"complete_instance_profile_geometry","profile_geometry","profile_overrides","dimension_identities"})
             if (fresh.contains(token))
                 throw std::invalid_argument("A component geometry destination borrows its Properties proof field: "+std::string(token));
@@ -7187,7 +7187,7 @@ std::map<std::string, Entity, std::less<>> boundary_transform_entities(
             if (current == result.end() || !decode_boundary_dimension_entity(current->second).supported())
                 throw std::invalid_argument("Rigid source reconciliation lost an attached analytical callout");
             if (decoded.dimension->kind==BoundaryDimensionKind::corner_window_leg_length ||
-                decoded.dimension->kind==BoundaryDimensionKind::assembly_extent)
+                is_assembly_boundary_dimension_kind(decoded.dimension->kind))
                 (void)decoded.dimension->resolve(result);
             else (void)decoded.dimension->resolve(result.at(decoded.dimension->boundary_id));
             current->second = entity;
@@ -7793,7 +7793,7 @@ std::map<std::string, Entity, std::less<>> completed_boundary_constraint_entitie
                 current.dimension->assembly_target!=decoded.dimension->assembly_target)
                 throw std::invalid_argument("Rigid source reconciliation changed a saved analytical target");
             if (decoded.dimension->kind==BoundaryDimensionKind::corner_window_leg_length ||
-                decoded.dimension->kind==BoundaryDimensionKind::assembly_extent)
+                is_assembly_boundary_dimension_kind(decoded.dimension->kind))
                 (void)decoded.dimension->resolve(rigid_result);
             else (void)decoded.dimension->resolve(rigid_result.at(decoded.dimension->boundary_id));
             rigid_result.at(id)=entity;
@@ -8509,7 +8509,7 @@ JointTranslationOffsets resolve_joint_translation_offsets(
             (void)resolve_current_boundary_dimension(*decoded.dimension, source);
             current_room_callout = current_room_callout || is_physical_wall_room(owner_entity);
         } else if (decoded.dimension->kind==BoundaryDimensionKind::corner_window_leg_length ||
-                   decoded.dimension->kind==BoundaryDimensionKind::assembly_extent)
+                   is_assembly_boundary_dimension_kind(decoded.dimension->kind))
             (void)resolve_current_boundary_dimension(*decoded.dimension,source);
         else (void)decoded.dimension->resolve(owner_entity);
         if (!per_owner) result.dimension_offsets.emplace(id, intent.offset);

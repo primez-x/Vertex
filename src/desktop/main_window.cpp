@@ -1001,7 +1001,7 @@ void remap_entity_references(Entity& entity,
     }
     if (entity.type == "dimension" && properties.contains("target")) {
         auto& target = properties.at("target");
-        if (inspect_boundary_dimension_version(entity).format==BoundaryDimensionFormat::supported_v6) {
+        if (is_assembly_boundary_dimension_format(inspect_boundary_dimension_version(entity).format)) {
             // Document/catalog identities and local part paths are separate
             // namespaces. Never recursively remap the qualified target.
             const auto decoded=decode_boundary_dimension_entity(entity);
@@ -1336,7 +1336,7 @@ std::vector<Entity> clipboard_entities_for_selection(const DocumentSnapshot& sna
             if (target.is_object() && target.value("entity_id", "") == root_id) {
                 if (root->second.type=="assembly_instance") {
                     const auto decoded=decode_boundary_dimension_entity(entity);
-                    if (!decoded.supported() || decoded.dimension->kind!=BoundaryDimensionKind::assembly_extent ||
+                    if (!decoded.supported() || !is_assembly_boundary_dimension_kind(decoded.dimension->kind) ||
                         decoded.dimension->assembly_target->component.document_entity_id!=root_id)
                         throw std::invalid_argument("The component has an unsupported attached dimension. Resolve it before copying.");
                 }
@@ -2389,10 +2389,12 @@ QString format_boundary_area(double square_metres, bool metric, bool ansi) {
 std::optional<Segment> assembly_dimension_plan_segment(const BoundaryDimensionResolution& resolved) {
     if (!resolved.assembly_geometry) throw std::invalid_argument("Component dimension has no resolved geometry.");
     const auto& geometry=*resolved.assembly_geometry;
-    if (geometry.target.axis==AssemblyDimensionAxis::height) return std::nullopt;
+    if (!geometry.target.profile && geometry.target.axis==AssemblyDimensionAxis::height) return std::nullopt;
     const auto& a=geometry.start_authored_m; const auto& b=geometry.end_authored_m;
     if (std::hypot(b.x-a.x,b.y-a.y)==0) return std::nullopt;
-    return Segment{{a.x,a.y},{b.x,b.y},0};
+    const auto sweep=geometry.profile_geometry ? geometry.profile_geometry->segment_from_anchor_m.sweep_radians *
+        (geometry.selected_node.transform.mirrored_y ? -1.0 : 1.0) : 0.0;
+    return Segment{{a.x,a.y},{b.x,b.y},sweep};
 }
 
 DimensionCanvasProjection project_boundary_dimension_resolution(const BoundaryDimension& dimension,
@@ -2404,9 +2406,10 @@ DimensionCanvasProjection project_boundary_dimension_resolution(const BoundaryDi
         resolved.kind==BoundaryDimensionKind::corner_window_leg_length) {
         text=format_boundary_length(resolved.segment_length_metres,metric,ansi);
         overlay=dimension_overlay(resolved.segment,dimension.text_position);
-    } else if (resolved.kind==BoundaryDimensionKind::assembly_extent) {
+    } else if (is_assembly_boundary_dimension_kind(resolved.kind)) {
         text=format_boundary_length(resolved.segment_length_metres,metric,false);
-        if (dimension.assembly_target->axis==AssemblyDimensionAxis::height) text.prepend(QStringLiteral("H "));
+        if (!dimension.assembly_target->profile && dimension.assembly_target->axis==AssemblyDimensionAxis::height)
+            text.prepend(QStringLiteral("H "));
         if (const auto segment=assembly_dimension_plan_segment(resolved))
             overlay=dimension_overlay(*segment,dimension.text_position);
     } else if (resolved.kind==BoundaryDimensionKind::angle) {
@@ -2429,7 +2432,7 @@ DimensionCanvasProjection project_boundary_dimension_resolution(const BoundaryDi
         result.line=CanvasEntity{id_from(dimension.id),QStringLiteral("dimension_line"),*overlay,0.0,selected};
         result.line->dimension_end_ticks=resolved.kind==BoundaryDimensionKind::segment_length ||
             resolved.kind==BoundaryDimensionKind::wall_axis_length || resolved.kind==BoundaryDimensionKind::corner_window_leg_length ||
-            resolved.kind==BoundaryDimensionKind::assembly_extent;
+            is_assembly_boundary_dimension_kind(resolved.kind);
     }
     return result;
 }
@@ -8600,7 +8603,7 @@ public:
             for (const auto& [id,entity]:source.entities()) {
                 if (!can_recognize_boundary_dimension_entity_type(entity.type)) continue;
                 const auto decoded=decode_boundary_dimension_entity(entity);
-                if (!decoded.supported() || decoded.dimension->kind!=BoundaryDimensionKind::assembly_extent) continue;
+                if (!decoded.supported() || !is_assembly_boundary_dimension_kind(decoded.dimension->kind)) continue;
                 const auto& component=decoded.dimension->assembly_target->component;
                 if (component.catalog_id!=source_root.catalog_id || component.instance_id!=source_root.instance_id ||
                     component.document_entity_id!=source_root.document_entity_id) continue;
@@ -14522,7 +14525,7 @@ public:
                             std::map<std::string, std::string, std::less<>> dimension_copies;
                             for (const auto& [id, entity] : source.entities()) {
                                 if (!can_recognize_boundary_dimension_entity_type(entity.type) ||
-                                    inspect_boundary_dimension_version(entity).format != BoundaryDimensionFormat::supported_v6)
+                                    !is_assembly_boundary_dimension_format(inspect_boundary_dimension_version(entity).format))
                                     continue;
                                 const auto dimension = decode_boundary_dimension_entity(entity);
                                 if (!dimension.supported() || !dimension.dimension->assembly_target)
@@ -26192,7 +26195,7 @@ public:
                 throw std::invalid_argument("The component copy identity is retained by project history.");
             for (const auto& [id, entity] : source.entities()) {
                 if (!can_recognize_boundary_dimension_entity_type(entity.type) ||
-                    inspect_boundary_dimension_version(entity).format != BoundaryDimensionFormat::supported_v6)
+                    !is_assembly_boundary_dimension_format(inspect_boundary_dimension_version(entity).format))
                     continue;
                 const auto decoded = decode_boundary_dimension_entity(entity);
                 if (!decoded.supported() || !decoded.dimension->assembly_target)
@@ -32334,9 +32337,9 @@ public:
             const bool architectural=!intent.architectural.object_ids.empty() || !intent.architectural.components.empty();
             intent.complete_component_phase_memberships=componentMembershipRemovalMode(source,intent.architectural);
             intent.complete_roof_component_phase_memberships=componentMembershipRoofRemovalMode(source,intent.architectural);
-            // Mixed skylight dialects retain their historical architectural
-            // selectors. The new owner dimension lane belongs to standalone17.
-            intent.architectural.complete_owner_dimension_memberships=m_selected_roof_openings.empty() &&
+            // Standalone17 and mixed18 carry the same explicit owner-dimension
+            // retirement authority through their exact ordinary6 stage.
+            intent.architectural.complete_owner_dimension_memberships=
                 hasOrdinaryOwnerDimensionRemovalLane(source,intent.architectural);
             intent.allow_manufactured_opening_hosts=architectural &&
                 (allow_manufactured_opening_hosts || intent.complete_component_phase_memberships ||
@@ -32391,7 +32394,7 @@ public:
                 complete_hosted_dimensions,hasComponentPhaseMemberships(snapshot),std::nullopt,
                 complete_hosted_dimensions);
             intent.complete_component_dimensions = intent.object_ids.empty() && !intent.components.empty();
-            intent.complete_owner_dimension_memberships=m_selected_roof_openings.empty() &&
+            intent.complete_owner_dimension_memberships=
                 hasOrdinaryOwnerDimensionRemovalLane(snapshot,intent);
             if (prepared_intent) *prepared_intent=intent;
             const bool complete_memberships=componentMembershipRemovalMode(snapshot,intent);
@@ -32497,7 +32500,7 @@ public:
             (void)id;
             if (can_recognize_boundary_dimension_entity_type(entity.type)) {
                 const auto decoded=decode_boundary_dimension_entity(entity);
-                if (decoded.supported() && decoded.dimension->kind==BoundaryDimensionKind::assembly_extent &&
+                if (decoded.supported() && is_assembly_boundary_dimension_kind(decoded.dimension->kind) &&
                     !decoded.dimension->assembly_target->component.document_entity_id) {
                     const auto& component=decoded.dimension->assembly_target->component;
                     const auto copied=copied_component_roots.find({component.catalog_id,component.instance_id});
@@ -32588,11 +32591,11 @@ public:
         for (const auto& entity:entities) {
             if (!can_recognize_boundary_dimension_entity_type(entity.type)) continue;
             const auto dimension=decode_boundary_dimension_entity(entity);
-            if (!dimension.supported() || dimension.dimension->kind!=BoundaryDimensionKind::assembly_extent) continue;
+            if (!dimension.supported() || !is_assembly_boundary_dimension_kind(dimension.dimension->kind)) continue;
             if (source_dimension_targets.size()==1000)
                 throw std::invalid_argument("The copied components exceed the associated dimension limit.");
             const auto original=decode_boundary_dimension_entity(source_snapshot.entities().at(entity.id));
-            if (!original.supported() || original.dimension->kind!=BoundaryDimensionKind::assembly_extent)
+            if (!original.supported() || !is_assembly_boundary_dimension_kind(original.dimension->kind))
                 throw std::invalid_argument("The copied component dimension lost its actual source identity.");
             source_dimension_targets.push_back(*original.dimension->assembly_target);
             captured_dimension_targets.push_back(*dimension.dimension->assembly_target);
@@ -33922,7 +33925,7 @@ public:
             const auto found = source.entities().find(dimension.boundary_id);
             const bool wall_axis = dimension.kind == BoundaryDimensionKind::wall_axis_length;
             const bool corner_leg = dimension.kind == BoundaryDimensionKind::corner_window_leg_length;
-            const bool component_extent = dimension.kind == BoundaryDimensionKind::assembly_extent;
+            const bool component_extent = is_assembly_boundary_dimension_kind(dimension.kind);
             if (found == source.entities().end() ||
                 (wall_axis ? found->second.type != "wall" :
                     corner_leg ? found->second.type != "corner_window" :
@@ -33953,6 +33956,18 @@ public:
             }
             for (const auto* key : {"property_id", "building_id", "floor_id", "layer_id", "level_id"}) {
                 if (context_owner->properties.contains(key)) encoded.properties[key] = context_owner->properties.at(key);
+            }
+            if(component_extent && !dimension.assembly_target->component.document_entity_id) {
+                const auto& component=dimension.assembly_target->component;
+                if(const auto drawing_context=resolve_embedded_assembly_drawing_context(source.entities(),
+                        component.catalog_id,component.instance_id)) {
+                    encoded.properties["property_id"]=drawing_context->property_id;
+                    encoded.properties["building_id"]=drawing_context->building_id;
+                    encoded.properties["floor_id"]=drawing_context->floor_id;
+                    encoded.properties["layer_id"]=drawing_context->layer_id;
+                    if(drawing_context->level_id.empty())encoded.properties.erase("level_id");
+                    else encoded.properties["level_id"]=drawing_context->level_id;
+                }
             }
             std::vector<EntityChange> changes;
             if (target.properties != original_target.properties ||
@@ -34016,11 +34031,26 @@ public:
             axes->addItem(QStringLiteral("Width"),static_cast<int>(AssemblyDimensionAxis::width));
             axes->addItem(QStringLiteral("Depth"),static_cast<int>(AssemblyDimensionAxis::depth));
             axes->addItem(QStringLiteral("Height"),static_cast<int>(AssemblyDimensionAxis::height));
+            axes->addItem(QStringLiteral("Profile edge length"),3);
+            axes->addItem(QStringLiteral("Between profile vertices"),4);
+            auto* profiles=new QComboBox(&dialog);
+            auto* rings=new QComboBox(&dialog);
+            auto* first_feature=new QComboBox(&dialog);
+            auto* second_feature=new QComboBox(&dialog);
+            auto* profile_label=new QLabel(QStringLiteral("Profile"),&dialog);
+            auto* ring_label=new QLabel(QStringLiteral("Boundary"),&dialog);
+            auto* first_label=new QLabel(QStringLiteral("Edge"),&dialog);
+            auto* second_label=new QLabel(QStringLiteral("End vertex"),&dialog);
+            std::vector<const AssemblyExpandedProfile*> own_profiles;
             auto* value=new QLabel(&dialog);
             value->setWordWrap(true);
             auto* buttons=new QDialogButtonBox(QDialogButtonBox::Ok|QDialogButtonBox::Cancel,&dialog);
             layout->addRow(QStringLiteral("Component"),parts);
             layout->addRow(QStringLiteral("Dimension"),axes);
+            layout->addRow(profile_label,profiles);
+            layout->addRow(ring_label,rings);
+            layout->addRow(first_label,first_feature);
+            layout->addRow(second_label,second_feature);
             layout->addRow(QStringLiteral("Measured size"),value);
             layout->addRow(buttons);
             std::optional<BoundaryDimension> draft;
@@ -34029,11 +34059,33 @@ public:
                 try {
                     auto selected=target;
                     selected.component.part_path=paths.at(static_cast<std::size_t>(parts->currentIndex()));
-                    selected.axis=static_cast<AssemblyDimensionAxis>(axes->currentData().toInt());
+                    const auto mode=axes->currentData().toInt();
+                    if(mode<3)selected.axis=static_cast<AssemblyDimensionAxis>(mode);
+                    else {
+                        if(profiles->currentIndex()<0 || rings->currentIndex()<0 || first_feature->currentIndex()<0)
+                            throw std::invalid_argument("This component has no identified profile for the selected measurement.");
+                        const auto& profile=own_profiles.at(static_cast<std::size_t>(profiles->currentIndex()))->profile;
+                        const auto ring_index=rings->currentIndex();
+                        const auto& identity=ring_index==0 ? profile.topology->outer :
+                            profile.topology->holes.at(static_cast<std::size_t>(ring_index-1));
+                        AssemblyProfileDimensionTarget feature;
+                        feature.profile_id=profile.id;
+                        feature.ring_id=identity.ring_id;
+                        if(mode==3) {
+                            feature.measurement=AssemblyProfileDimensionMeasurement::edge_length;
+                            feature.segment_id=identity.segment_ids.at(static_cast<std::size_t>(first_feature->currentIndex()));
+                        } else {
+                            if(second_feature->currentIndex()<0)throw std::invalid_argument("Choose two distinct vertices.");
+                            feature.measurement=AssemblyProfileDimensionMeasurement::vertex_distance;
+                            feature.start_vertex_id=identity.vertex_ids.at(static_cast<std::size_t>(first_feature->currentIndex()));
+                            feature.end_vertex_id=identity.vertex_ids.at(static_cast<std::size_t>(second_feature->currentIndex()));
+                        }
+                        selected.profile=std::move(feature);
+                    }
                     BoundaryDimension dimension;
                     dimension.id="component-dimension-preview";
                     dimension.boundary_id=selected.component.document_entity_id.value_or(selected.component.catalog_id);
-                    dimension.kind=BoundaryDimensionKind::assembly_extent;
+                    dimension.kind=selected.profile ? BoundaryDimensionKind::assembly_profile : BoundaryDimensionKind::assembly_extent;
                     dimension.assembly_target=selected;
                     const auto resolved=resolve_current_boundary_dimension(dimension,source);
                     const auto& geometry=*resolved.assembly_geometry;
@@ -34041,7 +34093,16 @@ public:
                     const auto gap=std::max(0.15,geometry.span_metres*0.15);
                     const auto [c,s]=assembly_rotation_components(geometry.selected_node.transform.rotation_radians);
                     const auto sign=geometry.selected_node.transform.mirrored_y ? -1.0 : 1.0;
-                    const auto outward=selected.axis==AssemblyDimensionAxis::width ? Vec2{s*sign,-c*sign} : Vec2{-c,-s};
+                    auto outward=selected.axis==AssemblyDimensionAxis::width ? Vec2{s*sign,-c*sign} : Vec2{-c,-s};
+                    if(geometry.profile_geometry) {
+                        const auto& edge=geometry.profile_geometry->segment_from_anchor_m;
+                        const auto dx=edge.end.x-edge.start.x,dy=edge.end.y-edge.start.y;
+                        const auto chord=std::hypot(dx,dy);
+                        if(chord>0) {
+                            const Vec2 tangent{(c*dx-s*sign*dy)/chord,(s*dx+c*sign*dy)/chord};
+                            outward={tangent.y,-tangent.x};
+                        }
+                    }
                     dimension.text_position={a.x+(b.x-a.x)*0.5+outward.x*gap,
                         a.y+(b.y-a.y)*0.5+outward.y*gap};
                     value->setText(format_boundary_length(geometry.span_metres,m_metric_units,false));
@@ -34049,11 +34110,61 @@ public:
                 } catch (const std::exception& error) { value->setText(QString::fromUtf8(error.what())); }
                 buttons->button(QDialogButtonBox::Ok)->setEnabled(draft.has_value());
             };
-            QObject::connect(parts,qOverload<int>(&QComboBox::currentIndexChanged),&dialog,[&](int){update();});
-            QObject::connect(axes,qOverload<int>(&QComboBox::currentIndexChanged),&dialog,[&](int){update();});
+            const auto reload_features=[&] {
+                const QSignalBlocker first_blocker(first_feature),second_blocker(second_feature);
+                first_feature->clear();second_feature->clear();
+                const auto mode=axes->currentData().toInt();
+                if(profiles->currentIndex()>=0 && rings->currentIndex()>=0) {
+                    const auto& profile=own_profiles.at(static_cast<std::size_t>(profiles->currentIndex()))->profile;
+                    const auto ring_index=rings->currentIndex();
+                    const auto& boundary=ring_index==0 ? profile.outer : profile.holes.at(static_cast<std::size_t>(ring_index-1));
+                    for(std::size_t i=0;i<boundary.size();++i) {
+                        first_feature->addItem(mode==3 ? QStringLiteral("Edge %1 · %2").arg(static_cast<qulonglong>(i+1))
+                            .arg(format_boundary_length(segment_length(boundary[i])*expansion.nodes.at(static_cast<std::size_t>(parts->currentIndex())).transform.scale,m_metric_units,false)) :
+                            QStringLiteral("Vertex %1").arg(static_cast<qulonglong>(i+1)));
+                        second_feature->addItem(QStringLiteral("Vertex %1").arg(static_cast<qulonglong>(i+1)));
+                    }
+                    if(second_feature->count()>1)second_feature->setCurrentIndex(1);
+                }
+                update();
+            };
+            const auto reload_rings=[&] {
+                const QSignalBlocker blocker(rings);rings->clear();
+                if(profiles->currentIndex()>=0) {
+                    const auto& topology=*own_profiles.at(static_cast<std::size_t>(profiles->currentIndex()))->profile.topology;
+                    rings->addItem(QStringLiteral("Outer boundary"));
+                    for(std::size_t i=0;i<topology.holes.size();++i)
+                        rings->addItem(QStringLiteral("Opening %1").arg(static_cast<qulonglong>(i+1)));
+                }
+                reload_features();
+            };
+            const auto reload_profiles=[&] {
+                const QSignalBlocker blocker(profiles);profiles->clear();own_profiles.clear();
+                if(parts->currentIndex()>=0) {
+                    const auto& path=paths.at(static_cast<std::size_t>(parts->currentIndex()));
+                    for(const auto& profile:expansion.profiles)if(profile.part_path==path && profile.profile.topology) {
+                        own_profiles.push_back(&profile);profiles->addItem(QString::fromStdString(profile.profile.id));
+                    }
+                }
+                reload_rings();
+            };
+            const auto change_mode=[&] {
+                const auto mode=axes->currentData().toInt();
+                for(auto* widget:std::array<QWidget*,6>{profile_label,profiles,ring_label,rings,first_label,first_feature})
+                    widget->setVisible(mode>=3);
+                second_label->setVisible(mode==4);second_feature->setVisible(mode==4);
+                first_label->setText(mode==3 ? QStringLiteral("Edge") : QStringLiteral("Start vertex"));
+                reload_features();
+            };
+            QObject::connect(parts,qOverload<int>(&QComboBox::currentIndexChanged),&dialog,[&](int){reload_profiles();});
+            QObject::connect(axes,qOverload<int>(&QComboBox::currentIndexChanged),&dialog,[&](int){change_mode();});
+            QObject::connect(profiles,qOverload<int>(&QComboBox::currentIndexChanged),&dialog,[&](int){reload_rings();});
+            QObject::connect(rings,qOverload<int>(&QComboBox::currentIndexChanged),&dialog,[&](int){reload_features();});
+            QObject::connect(first_feature,qOverload<int>(&QComboBox::currentIndexChanged),&dialog,[&](int){update();});
+            QObject::connect(second_feature,qOverload<int>(&QComboBox::currentIndexChanged),&dialog,[&](int){update();});
             QObject::connect(buttons,&QDialogButtonBox::accepted,&dialog,&QDialog::accept);
             QObject::connect(buttons,&QDialogButtonBox::rejected,&dialog,&QDialog::reject);
-            update();
+            reload_profiles();change_mode();
             if (dialog.exec()!=QDialog::Accepted || !draft || !modalContextUnchanged(context) ||
                 !assemblyDraftSourceUnchanged(source,workspace)) return;
             (void)createSemanticBoundaryDimension(std::move(*draft),"Add component dimension",source.revision());
@@ -36347,7 +36458,7 @@ public:
             const auto found=entities.find(id);
             if (found==entities.end()) throw std::invalid_argument("A copied dimension is missing from its prepared graph.");
             const auto decoded=decode_boundary_dimension_entity(found->second);
-            if (decoded.supported() && decoded.dimension->kind==BoundaryDimensionKind::assembly_extent) {
+            if (decoded.supported() && is_assembly_boundary_dimension_kind(decoded.dimension->kind)) {
                 if (component_dimensions.size()==1000)
                     throw std::invalid_argument("The copied component dimension preview exceeds 1000 targets.");
                 component_dimensions.push_back(*decoded.dimension);
@@ -36392,7 +36503,7 @@ public:
                 session.external_dimension_ids.insert(id);
             // Resolve before visibility decisions: unsupported/stale targets
             // are errors, never silently replaced with retained source ink.
-            auto projected=dimension.kind==BoundaryDimensionKind::assembly_extent ?
+            auto projected=is_assembly_boundary_dimension_kind(dimension.kind) ?
                 project_boundary_dimension_resolution(dimension,owner->second,component_measurements.at(id),
                     session.authority->context.metric_units,false,false) :
                 project_boundary_dimension(dimension,owner->second,entities,
@@ -50071,7 +50182,7 @@ private:
         if (!has_roof) return std::nullopt;
         auto intent=captureArchitecturalSelectionRemoval(source,std::move(roots),std::move(components),
             true,hasComponentPhaseMemberships(source),std::nullopt,true);
-        intent.complete_owner_dimension_memberships=m_selected_roof_openings.empty() &&
+        intent.complete_owner_dimension_memberships=
             hasOrdinaryOwnerDimensionRemovalLane(source,intent);
         if (prepared_intent) *prepared_intent=intent;
         const bool complete_memberships=componentMembershipRemovalMode(source,intent);
@@ -51236,7 +51347,7 @@ private:
                     validate_mixed_clipboard_placement_intent(encoded.at("clipboard_placement_intent")) :
                     validate_mixed_selection_edit_intent(encoded.at("mixed_selection_edit_intent"));
                 const auto dialect=intent.at("version").get<int>();
-                if (version==52 && ((dialect>=5 && dialect<=13) || (dialect>=15 && dialect<=17) || (dialect>=21 && dialect<=29) || dialect==32 || dialect==33)) {
+                if (version==52 && ((dialect>=5 && dialect<=13) || (dialect>=15 && dialect<=17) || (dialect>=21 && dialect<=29) || dialect==32 || dialect==33 || dialect==34)) {
                     // Properties dialects have no transform roof_authoring.
                     // Active-baseline redirects require independently replayed
                     // source authority rather than extracting supplied maps.
@@ -59690,7 +59801,7 @@ private:
         const auto found=source.entities().find(id);
         if (found==source.entities().end() || !can_recognize_boundary_dimension_entity_type(found->second.type)) return placement;
         const auto decoded=decode_boundary_dimension_entity(found->second);
-        if (!decoded.supported() || decoded.dimension->kind!=BoundaryDimensionKind::assembly_extent ||
+        if (!decoded.supported() || !is_assembly_boundary_dimension_kind(decoded.dimension->kind) ||
             decoded.dimension->assembly_target->component.document_entity_id) return placement;
         const auto resolved=resolve_current_boundary_dimension(*decoded.dimension,source);
         const auto& component=decoded.dimension->assembly_target->component;
@@ -60297,11 +60408,11 @@ private:
                     mixed_edit=true;
                     const auto intent=validate_mixed_selection_edit_intent(value.mixed_selection_edit_intent);
                     const auto properties_dialect=intent.at("version").get<int>();
-                    if ((properties_dialect>=5 && properties_dialect<=13) || (properties_dialect>=15 && properties_dialect<=17) || (properties_dialect>=21 && properties_dialect<=29) || properties_dialect==32 || properties_dialect==33) {
+                    if ((properties_dialect>=5 && properties_dialect<=13) || (properties_dialect>=15 && properties_dialect<=17) || (properties_dialect>=21 && properties_dialect<=29) || properties_dialect==32 || properties_dialect==33 || properties_dialect==34) {
                         // Properties has its own typed lanes, including a null
                         // physical lane for annotation-only edits. Gesture
                         // ordinary_request codecs cannot decode this roster.
-                        const bool component_properties=properties_dialect==16 || properties_dialect==17 || properties_dialect==22 || properties_dialect==23 || properties_dialect==25 || properties_dialect==26 || properties_dialect==28 || properties_dialect==29 || properties_dialect==32 || properties_dialect==33;
+                        const bool component_properties=properties_dialect==16 || properties_dialect==17 || properties_dialect==22 || properties_dialect==23 || properties_dialect==25 || properties_dialect==26 || properties_dialect==28 || properties_dialect==29 || properties_dialect==32 || properties_dialect==33 || properties_dialect==34;
                         const auto& selection_properties=component_properties ? intent.at("base_intent") : intent;
                         const bool phased=!selection_properties.is_null() &&
                             (selection_properties.at("version")==11 || selection_properties.at("version")==12 || selection_properties.at("version")==13 || selection_properties.at("version")==15 || selection_properties.at("version")==21 || selection_properties.at("version")==24 || selection_properties.at("version")==27);
@@ -60352,7 +60463,7 @@ private:
                     }
                     // Qualified children never promote their compatibility host
                     // IDs into ordinary presented-object selection authority.
-                    const auto& roof_selection=(intent.at("version")==16 || intent.at("version")==17 || intent.at("version")==22 || intent.at("version")==23 || intent.at("version")==25 || intent.at("version")==26 || intent.at("version")==28 || intent.at("version")==29 || intent.at("version")==32 || intent.at("version")==33)
+                    const auto& roof_selection=(intent.at("version")==16 || intent.at("version")==17 || intent.at("version")==22 || intent.at("version")==23 || intent.at("version")==25 || intent.at("version")==26 || intent.at("version")==28 || intent.at("version")==29 || intent.at("version")==32 || intent.at("version")==33 || intent.at("version")==34)
                         ? intent.at("base_intent") : intent;
                     if (!roof_selection.is_null()) for (const auto& child:roof_selection.at("roof_opening_members"))
                         targets.insert(child.at("opening_id").template get<std::string>());
@@ -73315,7 +73426,7 @@ public:
                     const auto dimension_text = [&](const BoundaryDimensionResolution& resolved) {
                         if (resolved.kind == BoundaryDimensionKind::segment_length || resolved.kind == BoundaryDimensionKind::wall_axis_length ||
                             resolved.kind == BoundaryDimensionKind::corner_window_leg_length ||
-                            resolved.kind == BoundaryDimensionKind::assembly_extent)
+                            is_assembly_boundary_dimension_kind(resolved.kind))
                             return format_boundary_length(resolved.segment_length_metres, context.metric_units, ansi);
                         if (resolved.kind == BoundaryDimensionKind::angle)
                             return format_dimension_angle(resolved.angle_radians);
@@ -73330,7 +73441,7 @@ public:
                         if (resolved.kind == BoundaryDimensionKind::segment_length || resolved.kind == BoundaryDimensionKind::wall_axis_length ||
                             resolved.kind == BoundaryDimensionKind::corner_window_leg_length)
                             overlay = dimension_overlay(resolved.segment, dimension.text_position);
-                        else if (resolved.kind == BoundaryDimensionKind::assembly_extent) {
+                        else if (is_assembly_boundary_dimension_kind(resolved.kind)) {
                             if (const auto segment=assembly_dimension_plan_segment(resolved))
                                 overlay=dimension_overlay(*segment,dimension.text_position);
                         }
@@ -73342,7 +73453,7 @@ public:
                             line.type = QStringLiteral("dimension_line");
                             line.dimension_end_ticks = resolved.kind == BoundaryDimensionKind::segment_length ||
                                 resolved.kind == BoundaryDimensionKind::wall_axis_length || resolved.kind == BoundaryDimensionKind::corner_window_leg_length ||
-                                resolved.kind == BoundaryDimensionKind::assembly_extent;
+                                is_assembly_boundary_dimension_kind(resolved.kind);
                             geometry.push_back(std::move(line));
                         }
                         if (text.isEmpty()) return;

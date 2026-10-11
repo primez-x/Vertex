@@ -217,7 +217,7 @@ Entity encode_carried(const Entity& original, const BoundaryDimension& before,
     result.id = after.id;
     if (before.assembly_target != after.assembly_target) {
         // The closed target was admitted by both codecs. Retain raw version,
-        // form, path and axis; only genuinely changed qualified identity slots
+        // form, path and extent/profile selectors; only changed identity slots
         // come from the owning encoder's canonical result.
         const auto& encoded = result.properties.at("target").at("assembly");
         auto retained = original.properties.at("target").at("assembly");
@@ -323,7 +323,7 @@ std::vector<Entity> carry_requests(
     for (const auto& [id, entity] : source) {
         if (!can_recognize_boundary_dimension_entity_type(entity.type)) continue;
         const auto version = inspect_boundary_dimension_version(entity);
-        if (version.format != BoundaryDimensionFormat::supported_v6) continue;
+        if (!is_assembly_boundary_dimension_format(version.format)) continue;
         auto decoded = decode_boundary_dimension_entity(entity);
         require(decoded.dimension && decoded.dimension->assembly_target, "known assembly dimension is malformed");
         auto& dimension = *decoded.dimension;
@@ -352,6 +352,9 @@ std::vector<Entity> carry_requests(
         target.component.catalog_id = destination_root.catalog_id;
         target.component.instance_id = destination_root.instance_id;
         target.component.document_entity_id = destination_root.document_entity_id;
+        // This is a source-derived root transfer. Own profile/ring/edge/vertex
+        // identities and nested part paths stay exact; topology edits require
+        // their separate explicit mapping authority.
         new_targets.push_back(std::move(target));
         dimensions.push_back(std::move(dimension));
         dimension_requests.push_back(owner->second);
@@ -454,10 +457,10 @@ std::map<std::string, Root, std::less<>> inspect_embedded_assembly_dimension_clo
             continue;
         }
         const auto decoded = decode_boundary_dimension_entity(entity);
-        require(owner && decoded.supported() && decoded.version == 6 && decoded.dimension &&
-            decoded.dimension->kind == BoundaryDimensionKind::assembly_extent && decoded.dimension->assembly_target &&
+        require(owner && decoded.supported() && decoded.dimension &&
+            is_assembly_boundary_dimension_kind(decoded.dimension->kind) && decoded.dimension->assembly_target &&
             !decoded.dimension->assembly_target->component.document_entity_id,
-            "affected embedded clone dimension requires a supported v6 extent");
+            "affected embedded clone dimension requires a supported assembly dimension");
         const auto& component = decoded.dimension->assembly_target->component;
         require(component.catalog_id == catalog->get_ref<const std::string&>() &&
             component.instance_id == instance->get_ref<const std::string&>() &&
@@ -474,10 +477,10 @@ std::map<std::string, Root, std::less<>> inspect_embedded_assembly_dimension_clo
 Entity assembly_dimension_clone_dependency_remainder(const Entity& entity) {
     RawBudget raw; raw.entity(entity);
     const auto decoded = decode_boundary_dimension_entity(entity);
-    require(decoded.supported() && decoded.version == 6 && decoded.dimension &&
-        decoded.dimension->kind == BoundaryDimensionKind::assembly_extent && decoded.dimension->assembly_target &&
+    require(decoded.supported() && decoded.dimension &&
+        is_assembly_boundary_dimension_kind(decoded.dimension->kind) && decoded.dimension->assembly_target &&
         !decoded.dimension->assembly_target->component.document_entity_id,
-        "dependency remainder requires a supported embedded v6 extent");
+        "dependency remainder requires a supported embedded assembly dimension");
     auto result = entity;
     auto& target = result.properties.at("target");
     target.erase("entity_id");
@@ -548,7 +551,7 @@ static std::vector<Entity> carry_hosted_dimension_contribution(
     for (const auto& [id, entity] : source) {
         (void)id;
         if (!can_recognize_boundary_dimension_entity_type(entity.type) ||
-            inspect_boundary_dimension_version(entity).format != BoundaryDimensionFormat::supported_v6) continue;
+            !is_assembly_boundary_dimension_format(inspect_boundary_dimension_version(entity).format)) continue;
         const auto& target = entity.properties.at("target");
         require(target.is_object() && target.size() == 2 && target.contains("entity_id") &&
             target.contains("assembly"), "known assembly dimension target is not closed");
@@ -594,7 +597,7 @@ static std::vector<Entity> carry_hosted_dimension_contribution(
         requests.push_back({qualified, qualified, AssemblyDimensionTransformMode::move, {}});
     }
     if (requests.empty()) return {};
-    // One shared batch preserves closed paths/axes and original dimension
+    // One shared batch preserves closed paths/selectors and original dimension
     // envelopes, then resolves actual selected-node frames on both complete maps.
     // Raw placement equality cannot establish equality of host-derived frames.
     return carry_assembly_dimension_transform_entities(source, candidate, requests);
@@ -621,7 +624,7 @@ void validate_ordinary_assembly_dimension_changes(
         const auto found = source.find(id);
         require(unique.insert(id).second && found != source.end() && found->second.id == id &&
             can_recognize_boundary_dimension_entity_type(found->second.type) &&
-            inspect_boundary_dimension_version(found->second).format == BoundaryDimensionFormat::supported_v6,
+            is_assembly_boundary_dimension_format(inspect_boundary_dimension_version(found->second).format),
             "ordinary dimension change must name a unique supported source dimension");
     }
     const auto scope = constraint_phase_scope(source);

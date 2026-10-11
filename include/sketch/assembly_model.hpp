@@ -52,6 +52,20 @@ struct AssemblyRotationComponents {
 // Difference-origin arithmetic retains small moves at distant frame origins.
 [[nodiscard]] AssemblyTransform conjugate_assembly_transform_through_rigid_frame(
     const AssemblyTransform& operation, const AssemblyTransform& frame);
+// Authored local identities in boundary order. vertex_ids[i] identifies the
+// start of segment_ids[i]; closed-ring geometry is validated separately.
+// Redraw requires an explicit identity assignment/remap, never count matching.
+struct AssemblyProfileRingIdentity {
+    std::string ring_id;
+    std::vector<std::string> segment_ids;
+    std::vector<std::string> vertex_ids;
+    bool operator==(const AssemblyProfileRingIdentity&) const = default;
+};
+struct AssemblyProfileTopology {
+    AssemblyProfileRingIdentity outer;
+    std::vector<AssemblyProfileRingIdentity> holes;
+    bool operator==(const AssemblyProfileTopology&) const = default;
+};
 struct AssemblyProfile {
     std::string id;
     Boundary outer;
@@ -59,8 +73,16 @@ struct AssemblyProfile {
     double elevation_m{};
     double height_m{};
     std::optional<std::string> material_slot;
+    // Appended for aggregate compatibility. Anonymous historical geometry
+    // retains its exact six-field wire; identified profiles use explicit v2.
+    std::optional<AssemblyProfileTopology> topology;
     bool operator==(const AssemblyProfile& other) const;
 };
+// Optional topology only: exact ring/segment counts and profile-local unique
+// ring, segment and vertex identities; IDs are nonblank and at most 128 bytes.
+// Conservative escaped JSON budgets: 1 MiB/profile, 64 MiB/collection.
+// Boundary closure and extrusion validity remain profile admission checks.
+void validate_assembly_profile_topology(const AssemblyProfile& profile);
 // Canonical profile arrays use unique IDs sorted lexically. Preflight checks
 // raw shapes and segment budgets before materializing boundaries; admission
 // also checks analytical rings/cutouts and finite positive extrusion volumes.

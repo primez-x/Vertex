@@ -498,7 +498,7 @@ void verify_final_component_dimensions(const Entities& source, const Json& value
     std::map<std::string, Root, std::less<>> associated_dimensions;
     for (const auto& [id, entity] : source) {
         if (!can_recognize_boundary_dimension_entity_type(entity.type) ||
-            inspect_boundary_dimension_version(entity).format != BoundaryDimensionFormat::supported_v6) continue;
+            !is_assembly_boundary_dimension_format(inspect_boundary_dimension_version(entity).format)) continue;
         const auto dimension = decode_boundary_dimension_entity(entity);
         if (!dimension.dimension || !dimension.dimension->assembly_target) continue;
         const auto root = root_of(dimension.dimension->assembly_target->component);
@@ -566,7 +566,7 @@ void verify_final_component_dimensions(const Entities& source, const Json& value
     std::set<std::string, std::less<>> moved_dimensions;
     for (const auto& [id, entity] : source) {
         if (!can_recognize_boundary_dimension_entity_type(entity.type) ||
-            inspect_boundary_dimension_version(entity).format != BoundaryDimensionFormat::supported_v6) continue;
+            !is_assembly_boundary_dimension_format(inspect_boundary_dimension_version(entity).format)) continue;
         const auto dimension = decode_boundary_dimension_entity(entity);
         if (!dimension.dimension || !dimension.dimension->assembly_target) continue;
         const auto root = root_of(dimension.dimension->assembly_target->component);

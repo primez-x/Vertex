@@ -351,7 +351,11 @@ public:
     // v246 retains catalog material impact on architectural assignments/layers.
     // v247 retains complete component Copy presentation and overlay allocations.
     // v248 retains explicit embedded-root drawing contexts and Copy request4.
-    static constexpr std::uint32_t format_version = 248;
+    // v249 retains mixed skylight removal with ordinary owner dimension retirement.
+    // v250 retains explicitly identified component profile topology.
+    // v251 retains explicit topology-preserving component edit dialects.
+    // v252 retains placed own-profile edge/vertex component dimensions.
+    static constexpr std::uint32_t format_version = 252;
     static constexpr std::uint32_t recovery_format_version = 4;
     [[nodiscard]] static std::uint32_t required_format_version(const DocumentSnapshot& snapshot);
     static constexpr std::uint64_t maximum_file_bytes = 4ULL * 1024ULL * 1024ULL * 1024ULL;

@@ -1616,7 +1616,7 @@ std::optional<std::string> validate_boundary_integrity(
         }
         const auto& dimension = *decoded.dimension;
         const auto owner = entities.find(dimension.boundary_id);
-        if (dimension.kind == BoundaryDimensionKind::assembly_extent) {
+        if (is_assembly_boundary_dimension_kind(dimension.kind)) {
             // Qualified roots and part paths need the complete authoritative
             // catalog/instance map. A carrier-only boundary check cannot prove
             // their measurement identity or geometry. Inactive retained roots

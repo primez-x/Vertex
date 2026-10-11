@@ -220,7 +220,7 @@ struct AssemblyDocumentTypeUpdateImpact {
 // admission still validates retained targets and source phase protection.
 [[nodiscard]] ApplyEntityChanges assembly_instance_update_command(const DocumentSnapshot& source,
     const std::string& entity_id, const AssemblyDocumentInstance& value, Revision expected_revision);
-// Retires the independent owner and its exact associated v6 dimensions together.
+// Retires the independent owner and its exact associated v6/v7 dimensions together.
 // Other catalog roots remain intact. Protected/inactive dimensions and unresolved
 // surviving references refuse the whole ordinary operation before publication.
 [[nodiscard]] ApplyEntityChanges assembly_instance_remove_command(const DocumentSnapshot& source,
@@ -262,7 +262,7 @@ struct EmbeddedAssemblyGroupTarget {
 // Ordinary protected baseline mutation requires the dedicated replacement
 // route. Active source copies retain their source roles and all original rows;
 // undeclared local copies reserve their qualified identity through history.
-// Changed roots carry their associated v6 dimensions in the same command.
+// Changed roots carry their associated v6/v7 dimensions in the same command.
 // Local row copies require an exact original dimension ID to caller-reserved
 // fresh document ID mapping; missing, extraneous or colliding mappings refuse.
 // Full canonical document admission precedes return; no snapshot is mutated.
@@ -276,7 +276,7 @@ struct EmbeddedAssemblyGroupTarget {
 // Pure preparation for sealed same-catalog embedded copies. Every target must
 // name a fresh copy_instance_id; actual saved row and host activity govern the
 // source read, including an active baseline source retained without mutation.
-// Geometry and exact associated v6 dimensions are derived from the actual
+// Geometry and exact associated v6/v7 dimensions are derived from the actual
 // source, preserving original rows and raw overrides. Fresh local/document/
 // presentation identities are reserved through current and undone history and
 // typed allocations. Exact existing companions enroll declared copies in their
@@ -329,7 +329,7 @@ enum class EmbeddedAssemblyCopyContextPolicy { preserve_source };
 // for its already world-authored pose. Per-target operators have the same
 // fallback meaning as transform. Callers register phase/page membership and
 // clone selected presentation through their complete authored command.
-// Associated v6 dimensions are copied to the exact fresh independent owner,
+// Associated v6/v7 dimensions are copied to the exact fresh independent owner,
 // preserving their actual nested paths, axes, metadata and moved text frames.
 // An exact original dimension ID to caller-reserved fresh document ID mapping
 // is mandatory when associated dimensions exist; no IDs are allocated here.

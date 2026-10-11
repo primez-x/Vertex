@@ -7,6 +7,9 @@ namespace sketch {
 
 // Existing definitions only. No row, owner, host, membership or allocation
 // authority. Types/materials in each list must have sorted unique actual IDs.
+// Existing identified profiles retain their exact topology and XY boundaries;
+// metadata, material slots and elevation/height may change. Identity assignment,
+// reassignment, identified profile removal and redraw require a reviewed lane.
 struct AssemblyCatalogPhaseEditIntent {
     std::string catalog_id;
     std::vector<AssemblyType> replacement_types;
@@ -61,7 +64,7 @@ struct AssemblyCatalogPhaseEditPlan {
     // private catalog/proposed-root replacement; inspect never discards them.
     std::vector<std::size_t> replacement_required_roots;
     bool ordinary_replay_safe{};
-    // v2 actual architectural root/layer materials, including support consumers.
+    // v2/v3 actual architectural root/layer materials, including support consumers.
     // Appended for aggregate compatibility; v1 retains its root-only meaning.
     std::vector<AssemblyCatalogPhaseEditMaterialConsumerImpact> material_consumers;
 };
@@ -69,7 +72,9 @@ struct AssemblyCatalogPhaseEditPlan {
 // Closed canonical source-bound request. Captures the actual complete entity
 // map digest, exact original catalog binding and original edited definitions.
 // Carries canonical typed definition replacements, never a candidate map. New
-// preparation emits v2; validation/replay also retain historical v1 requests.
+// preparation emits v3 for edits carrying or retaining identified type profiles,
+// otherwise v2. Historical v1/v2 keep anonymous replacement profile framing.
+// v3 retains exact source topology/XY and grants no identity mapping authority.
 // Complete raw map/catalog work is admitted before semantic decoding.
 [[nodiscard]] nlohmann::json prepare_assembly_catalog_phase_edit_request(
     const AssemblyDocumentEntities&, const std::vector<AssemblyCatalogPhaseEditIntent>&);
@@ -79,7 +84,7 @@ struct AssemblyCatalogPhaseEditPlan {
 // model/phase expansion. Expands every embedded and independent root using
 // shared bounded budgets, including transitive nested/profile dependencies.
 // Actual companion, registry choices, independent owner and inherited opening/
-// corner host closure establish root cohorts. v2 also inventories all supported
+// corner host closure establish root cohorts. v2/v3 also inventory all supported
 // architectural root/layer materials under actual owner and typed host cohorts.
 // No native or Document work occurs. Physical consumers grant no replacement
 // authority.
@@ -89,7 +94,7 @@ struct AssemblyCatalogPhaseEditPlan {
 // Re-derives from the bound original. Only ordinary edits whose original
 // protected/inactive root expansions and reached definitions remain exact may
 // replay. Otherwise inspect's replacement plan remains available and replay
-// refuses. v2 also preserves protected/inactive architectural reached materials.
+// refuses. v2/v3 also preserve protected/inactive architectural reached materials.
 // Unrelated rows/definitions, dialect, envelopes and entities stay raw.
 // No allocation, phase mutation, command or publication authority is supplied.
 [[nodiscard]] AssemblyDocumentEntities replay_assembly_catalog_phase_edit_entities(

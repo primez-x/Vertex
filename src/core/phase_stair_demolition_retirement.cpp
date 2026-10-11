@@ -523,8 +523,7 @@ void derive_component_dimensions(Derivation& derived, const Entities& source) {
         // identity. The exact affected tuple discovers all embedded and
         // independent targets, whose closed codecs and paths resolve together.
         const auto decoded = decode_boundary_dimension_entity(entity);
-        if (!decoded.supported() || decoded.version != 6 ||
-            decoded.dimension->kind != BoundaryDimensionKind::assembly_extent || !decoded.dimension->assembly_target)
+        if (!decoded.supported() || !is_assembly_boundary_dimension_kind(decoded.dimension->kind) || !decoded.dimension->assembly_target)
             invalid("affected component dimension requires a supported extent target: " + id);
         if (targets.size() >= target_limit) invalid("associated component dimension budget exceeded");
         targets.push_back(*decoded.dimension->assembly_target);

@@ -1114,7 +1114,7 @@ Entities replay_coordinated(const Entities& source,const PhaseConstraintAuthorin
         for (const auto& [key,original]:source) {
             const auto found=candidate.find(key);
             if (can_recognize_boundary_dimension_entity_type(original.type) &&
-                inspect_boundary_dimension_version(original).format==BoundaryDimensionFormat::supported_v6 &&
+                is_assembly_boundary_dimension_format(inspect_boundary_dimension_version(original).format) &&
                 (found==candidate.end() || (!lanes.complete_family_component_dimensions && !exact(original,found->second))))
                 invalid("Coordinated ordinary host candidates must retain original component dimension rows");
             if (std::find(physical_types.begin(),physical_types.end(),original.type)==physical_types.end()) continue;
@@ -1138,7 +1138,7 @@ Entities replay_coordinated(const Entities& source,const PhaseConstraintAuthorin
             std::vector<std::string> changed;
             for (const auto& [key,original]:source)
                 if (can_recognize_boundary_dimension_entity_type(original.type) &&
-                    inspect_boundary_dimension_version(original).format==BoundaryDimensionFormat::supported_v6 &&
+                    is_assembly_boundary_dimension_format(inspect_boundary_dimension_version(original).format) &&
                     !exact(original,candidate.at(key))) {
                     if (copied_dimension_identities.contains(key))
                         invalid("Coordinated leaf changed a protected original copied dimension");
@@ -2138,7 +2138,7 @@ Entities replay_phase_constraint_authoring(const Entities& source,const Json& pr
         for (const auto& [key,original]:source) {
             const auto found=candidate.find(key);
             if (can_recognize_boundary_dimension_entity_type(original.type) &&
-                inspect_boundary_dimension_version(original).format==BoundaryDimensionFormat::supported_v6 &&
+                is_assembly_boundary_dimension_format(inspect_boundary_dimension_version(original).format) &&
                 (found==candidate.end() || !exact(original,found->second)))
                 invalid("Ordinary roof candidates must retain original component dimension rows");
             if (original.type!="roof") continue;
@@ -3571,7 +3571,7 @@ CoordinatedComponentPropertyComposition compose_coordinated_component_property_d
         // Keep the physical base carrier until the one final-frame calculation.
         for (const auto& [id,entity]:actual) {
             if (!can_recognize_boundary_dimension_entity_type(entity.type) ||
-                inspect_boundary_dimension_version(entity).format!=BoundaryDimensionFormat::supported_v6) continue;
+                !is_assembly_boundary_dimension_format(inspect_boundary_dimension_version(entity).format)) continue;
             const auto decoded=decode_boundary_dimension_entity(entity);
             if (decoded.dimension && decoded.dimension->assembly_target &&
                 geometry_move_roots.contains(component_root(decoded.dimension->assembly_target->component)))
@@ -3688,7 +3688,7 @@ CoordinatedComponentPropertyComposition compose_coordinated_component_property_d
         // their independent base proof, for one source-to-final frame calculation.
         for (const auto& [key,entity]:actual) {
             if (!can_recognize_boundary_dimension_entity_type(entity.type) ||
-                inspect_boundary_dimension_version(entity).format!=BoundaryDimensionFormat::supported_v6) continue;
+                !is_assembly_boundary_dimension_format(inspect_boundary_dimension_version(entity).format)) continue;
             const auto decoded=decode_boundary_dimension_entity(entity);
             if (!decoded.dimension || !decoded.dimension->assembly_target) continue;
             const auto root=component_root(decoded.dimension->assembly_target->component);

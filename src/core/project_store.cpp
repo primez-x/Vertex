@@ -3,6 +3,7 @@
 #include "sketch/windows_project_path.hpp"
 #include "sketch/boundary_entity.hpp"
 #include "sketch/boundary_dimension.hpp"
+#include "sketch/assembly_model.hpp"
 #include "sketch/boundary_translation.hpp"
 #include "sketch/boundary_transform.hpp"
 #include "sketch/boundary_edit.hpp"
@@ -274,6 +275,51 @@ bool has_architectural_reflection_v68_semantics(const Entity& entity) {
     return false;
 }
 
+bool has_identified_assembly_profile_rows(const nlohmann::json& rows) {
+    if (!rows.is_array()) return false;
+    const bool identified=std::any_of(rows.begin(),rows.end(),[](const auto& row) {
+        return row.is_object() && row.value("version",nlohmann::json())==2 && row.contains("topology");
+    });
+    if (!identified) return false;
+    try { (void)preflight_assembly_profiles(rows); return true; }
+    catch (const std::invalid_argument&) { return false; }
+}
+
+bool has_identified_assembly_instance_profiles(const nlohmann::json& instance) {
+    if (!instance.is_object()) return false;
+    if (const auto profiles=instance.find("profile_overrides"); profiles!=instance.end() &&
+        has_identified_assembly_profile_rows(*profiles)) return true;
+    const auto nested=instance.find("nested_overrides");
+    if (nested==instance.end() || !nested->is_array()) return false;
+    for (const auto& node:*nested) {
+        if (!node.is_object()) continue;
+        const auto profiles=node.find("profile_overrides");
+        if (profiles!=node.end() && has_identified_assembly_profile_rows(*profiles)) return true;
+    }
+    return false;
+}
+
+bool has_identified_assembly_entity_profiles(const Entity& entity) {
+    if (!entity.properties.is_object()) return false;
+    if (entity.type=="assembly_instance") {
+        const auto instance=entity.properties.find("instance");
+        return instance!=entity.properties.end() && has_identified_assembly_instance_profiles(*instance);
+    }
+    if (entity.type!="assembly_model") return false;
+    const auto model=entity.properties.find("model");
+    if (model==entity.properties.end() || !model->is_object()) return false;
+    if (const auto types=model->find("types"); types!=model->end() && types->is_array())
+        for (const auto& type:*types) {
+            if (!type.is_object()) continue;
+            const auto profiles=type.find("profiles");
+            if (profiles!=type.end() && has_identified_assembly_profile_rows(*profiles)) return true;
+        }
+    if (const auto instances=model->find("instances"); instances!=model->end() && instances->is_array())
+        for (const auto& instance:*instances)
+            if (has_identified_assembly_instance_profiles(instance)) return true;
+    return false;
+}
+
 std::uint32_t required_format_version_internal(const DocumentSnapshot& snapshot,
                                                bool reading_legacy_lineage = false) {
     std::uint32_t required = 1;
@@ -410,16 +456,19 @@ std::uint32_t required_format_version_internal(const DocumentSnapshot& snapshot,
                 if (version==59 && command->assembly_catalog_edit_completion &&
                     !command->assembly_catalog_edit_intent.is_null()) {
                     const auto request=validate_assembly_catalog_phase_edit_request(command->assembly_catalog_edit_intent);
+                    if (request.at("version")==3) return 251U;
                     if (request.at("version")==2) return 246U;
                 }
                 if (version==60 && command->phase_assembly_catalog_edit_completion &&
                     !command->phase_assembly_catalog_edit_intent.is_null()) {
                     const auto request=validate_phase_assembly_catalog_edit_request(command->phase_assembly_catalog_edit_intent);
+                    if (request.at("authoring").at("catalog_request").at("version")==3) return 251U;
                     if (request.at("authoring").at("catalog_request").at("version")==2) return 246U;
                 }
                 if (version==52 && command->mixed_selection_edit_completion &&
                     !command->mixed_selection_edit_intent.is_null()) {
                     const auto intent=validate_mixed_selection_property_edit_intent(command->mixed_selection_edit_intent);
+                    if (intent.at("version")==34) return 251U;
                     if (intent.at("version")==33) return 244U;
                 }
                 const auto child=[&](const nlohmann::json& owner,const char* name) {
@@ -435,6 +484,7 @@ std::uint32_t required_format_version_internal(const DocumentSnapshot& snapshot,
                 if (version==45) {
                     const auto& intent=value.at("mixed_selection_removal_intent");
                     const auto nested=std::max(child(intent,"ordinary_command"),child(intent,"child_command"));
+                    if (intent.at("version")==18) return std::max(nested,249U);
                     if (intent.at("version")==17 && intent.at("ordinary").at("kind")=="architectural_drawing" &&
                         intent.at("ordinary").at("selection").at("version")==6)
                         return std::max(nested,245U);
@@ -462,6 +512,10 @@ std::uint32_t required_format_version_internal(const DocumentSnapshot& snapshot,
             const auto& value=*pending.back(); pending.pop_back();
             if (++nodes>ProjectStore::maximum_json_values)
                 storage_error(StorageErrorCode::resource_limit,"Typed edit reader-floor scan exceeds its JSON budget");
+            // An explicit profile dialect may survive only in retained edit
+            // authoring after composition elides a temporary destination. This
+            // raises the reader floor; it supplies no geometry/edit authority.
+            if (floor<250 && has_identified_assembly_profile_rows(value)) floor=250U;
             const auto closed_shape=[&](std::initializer_list<const char*> fields) {
                 if (!value.is_object() || value.size()!=fields.size()) return false;
                 return std::all_of(fields.begin(),fields.end(),[&](const char* field) { return value.contains(field); });
@@ -475,6 +529,31 @@ std::uint32_t required_format_version_internal(const DocumentSnapshot& snapshot,
             const auto literal_true=[](const nlohmann::json& child,const char* field) {
                 return child.contains(field) && child.at(field).is_boolean() && child.at(field)==true;
             };
+            if (floor<251) {
+                const bool catalog=typed_shape(value,3,{"version","source_entities_digest","edits"});
+                const bool intent=typed_shape(value,3,{"version","target","properties","materials","quantities","pose","profile_geometry"});
+                const bool request=typed_shape(value,3,{"version","expected_revision","source_snapshot_digest",
+                    "source_authoring_digest","source_entities_digest","source_saved_revision","intents"});
+                const bool authoring=typed_shape(value,5,{"version","intents","allocation","carry_presentation_references",
+                    "presentation_overlay_identities","dimension_identities"});
+                const bool phase_request=typed_shape(value,5,{"version","expected_revision","source_snapshot_digest",
+                    "source_authoring_digest","source_entities_digest","source_saved_revision","authoring"});
+                const bool properties=typed_shape(value,34,{"version","expected_revision","source_snapshot_digest",
+                    "source_authoring_digest","source_entities_digest","source_saved_revision","component_request",
+                    "base_intent","room_reviews","phase_room_reviews","message","coordinate_component_hosts",
+                    "component_identity_reservations","carry_component_presentation","complete_instance_profile_geometry"});
+                if(catalog || intent || request || authoring || phase_request || properties)try {
+                    if(catalog)(void)validate_assembly_catalog_phase_edit_request(value);
+                    else if(intent)(void)decode_assembly_instance_property_edit_intent(value);
+                    else if(request)(void)validate_assembly_instance_property_edit_request(value);
+                    else if(authoring)(void)decode_phase_assembly_instance_property_edit_authoring(value);
+                    else if(phase_request)(void)validate_phase_assembly_instance_property_edit_request(value);
+                    else (void)validate_mixed_selection_property_edit_intent(value);
+                    floor=251U;
+                } catch(const std::invalid_argument&) {
+                } catch(const nlohmann::json::exception&) {
+                }
+            }
             if (floor<246 && typed_shape(value,2,{"version","source_entities_digest","edits"})) {
                 try {
                     (void)validate_assembly_catalog_phase_edit_request(value);
@@ -1576,11 +1655,11 @@ std::uint32_t required_format_version_internal(const DocumentSnapshot& snapshot,
     };
     for (const auto& revision : snapshot.history()) {
         if (revision.phase_entity_import) required=std::max(required,160U);
-        if (required<248 && revision.boundary_constraint_changes)
+        if (required<252 && revision.boundary_constraint_changes)
             required=std::max(required,retained_component_reader_floor(command_to_json(Command{*revision.boundary_constraint_changes})));
-        if (required<248 && revision.boundary_geometry_edit)
+        if (required<252 && revision.boundary_geometry_edit)
             required=std::max(required,typed_edit_reader_floor(encode_boundary_geometry_edit(*revision.boundary_geometry_edit)));
-        if (required<248 && revision.boundary_constraint_changes)
+        if (required<252 && revision.boundary_constraint_changes)
             required=std::max(required,typed_edit_reader_floor(command_to_json(Command{*revision.boundary_constraint_changes})));
         if (required<122 && revision.boundary_geometry_edit)
             required=std::max(required,quantity_reader_floor(encode_boundary_geometry_edit(*revision.boundary_geometry_edit)));
@@ -1679,7 +1758,7 @@ std::uint32_t required_format_version_internal(const DocumentSnapshot& snapshot,
                 required=std::max(required,178U);
             if (command.mixed_selection_removal_completion || !command.mixed_selection_removal_intent.is_null()) {
                 const auto dialect=command.mixed_selection_removal_intent.value("version",1);
-                required=std::max(required,dialect==17 ? 243U : dialect==16 ? 226U : dialect==15 ? 225U : dialect>=11 && dialect<=13 ? 211U : dialect==10 ? 210U : dialect==9 ? 209U : dialect>=8 ? 186U : dialect==7 ? 182U : dialect==6 ? 181U : dialect==5 ? 180U : dialect==4 ? 179U : dialect==3 ? 178U : dialect==2 ? 177U : 176U);
+                required=std::max(required,dialect==18 ? 249U : dialect==17 ? 243U : dialect==16 ? 226U : dialect==15 ? 225U : dialect>=11 && dialect<=13 ? 211U : dialect==10 ? 210U : dialect==9 ? 209U : dialect>=8 ? 186U : dialect==7 ? 182U : dialect==6 ? 181U : dialect==5 ? 180U : dialect==4 ? 179U : dialect==3 ? 178U : dialect==2 ? 177U : 176U);
             }
             if (command.independent_drawing_removal_completion || !command.independent_drawing_removal_intent.is_null())
                 required=std::max(required,
@@ -2167,6 +2246,8 @@ std::uint32_t required_format_version_internal(const DocumentSnapshot& snapshot,
                 entity.properties.value("version", nlohmann::json()) == 3)
                 required = std::max(required, 118U);
             (void)id;
+            if (required<250 && has_identified_assembly_entity_profiles(entity))
+                required=250U;
             if (entity.type == "assembly_model" && entity.properties.is_object()) {
                 if (entity.properties.contains("embedded_instance_drawing_contexts"))
                     required=std::max(required,248U);
@@ -2255,6 +2336,8 @@ std::uint32_t required_format_version_internal(const DocumentSnapshot& snapshot,
                         required = std::max(required, 172U);
                     if (decoded.dimension->kind == BoundaryDimensionKind::assembly_extent)
                         required = std::max(required, 219U);
+                    if (decoded.dimension->kind == BoundaryDimensionKind::assembly_profile)
+                        required = std::max(required, 252U);
                     const auto owner=revision.entities.find(decoded.dimension->boundary_id);
                     if (owner!=revision.entities.end() && owner->second.type=="room_boundary" &&
                         owner->second.extensions.contains("physical_wall_room")) required=std::max(required,50U);
@@ -4129,6 +4212,10 @@ bool verify_sqlite_schema(sqlite3* database, bool allow_recovery = false) {
          sqlite3_column_int(user_version.get(), 0) != 246 &&
          sqlite3_column_int(user_version.get(), 0) != 247 &&
          sqlite3_column_int(user_version.get(), 0) != 248 &&
+         sqlite3_column_int(user_version.get(), 0) != 249 &&
+         sqlite3_column_int(user_version.get(), 0) != 250 &&
+         sqlite3_column_int(user_version.get(), 0) != 251 &&
+         sqlite3_column_int(user_version.get(), 0) != 252 &&
          sqlite3_column_int(user_version.get(), 0) != 242 &&
          sqlite3_column_int(user_version.get(), 0) != 207 &&
          sqlite3_column_int(user_version.get(), 0) != 202 &&
@@ -4855,6 +4942,14 @@ DocumentSnapshot read_snapshot(sqlite3* database, RecoveryLedger* recovery = nul
     // here and authenticate the manifest with its stored version below.
     const auto required_format = required_format_version_internal(snapshot, format_number < 28);
     if (required_format > format_number) {
+        if (required_format>=252)
+            storage_error(StorageErrorCode::unsupported_format,"This project requires reader 252 for placed component profile dimensions");
+        if (required_format>=251)
+            storage_error(StorageErrorCode::unsupported_format,"This project requires reader 251 for topology-preserving component edits");
+        if (required_format>=250)
+            storage_error(StorageErrorCode::unsupported_format,"This project requires reader 250 for identified component profile topology");
+        if (required_format>=249)
+            storage_error(StorageErrorCode::unsupported_format,"This project requires reader 249 for mixed skylight and owner dimension retirement");
         if (required_format>=248)
             storage_error(StorageErrorCode::unsupported_format,"This project requires reader 248 for embedded component drawing contexts and context-preserving Copy");
         if (required_format>=247)

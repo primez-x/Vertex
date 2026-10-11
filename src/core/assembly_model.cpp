@@ -21,6 +21,72 @@ void identifier(const std::string& value) {
     require(!value.empty() && !std::all_of(value.begin(), value.end(),
         [](unsigned char c) { return std::isspace(c); }), "assembly identifier/name must not be blank");
 }
+void portable_topology_identifier(std::string_view value) {
+    require(value.find('\0')==std::string_view::npos,"assembly profile topology identity contains NUL");
+    for(std::size_t i=0;i<value.size();++i) {
+        const auto c=static_cast<unsigned char>(value[i]);
+        if(c<0x80)continue;
+        const std::size_t tail=c>=0xc2 && c<=0xdf ? 1 :
+            c>=0xe0 && c<=0xef ? 2 : c>=0xf0 && c<=0xf4 ? 3 : 0;
+        require(tail && tail<value.size()-i,"assembly profile topology identity contains invalid UTF-8");
+        const auto first=static_cast<unsigned char>(value[i+1]);
+        require(!((c==0xe0 && first<0xa0) || (c==0xed && first>=0xa0) ||
+            (c==0xf0 && first<0x90) || (c==0xf4 && first>=0x90)),
+            "assembly profile topology identity contains invalid UTF-8");
+        for(std::size_t j=1;j<=tail;++j) {
+            const auto byte=static_cast<unsigned char>(value[i+j]);
+            require(byte>=0x80 && byte<=0xbf,"assembly profile topology identity contains invalid UTF-8");
+        }
+        i+=tail;
+    }
+}
+constexpr std::size_t profile_topology_byte_limit=1024*1024;
+constexpr std::size_t collection_topology_byte_limit=64*1024*1024;
+constexpr std::size_t catalog_topology_byte_limit=256*1024*1024;
+// Upper bounds escaped JSON output, including punctuation/member names. Raw
+// strings are inspected by reference before any topology arrays are copied.
+struct ProfileTopologyAdmission {
+    std::size_t bytes{128};
+    std::set<std::string_view> rings,segments,vertices;
+    void add(const std::string& id,std::set<std::string_view>& identities) {
+        require(id.size()<=128,"assembly profile topology identifier budget exceeded");
+        identifier(id);
+        portable_topology_identifier(id);
+        require(identities.insert(id).second,"duplicate assembly profile topology identity");
+        const auto count=6*id.size()+4;
+        require(count<=profile_topology_byte_limit-bytes,"assembly profile topology output budget exceeded");
+        bytes+=count;
+    }
+    void ring(const std::string& id) {
+        require(128<=profile_topology_byte_limit-bytes,"assembly profile topology output budget exceeded");
+        bytes+=128;add(id,rings);
+    }
+};
+std::size_t profile_topology_bytes(const AssemblyProfile& profile) {
+    if(!profile.topology)return 0;
+    require(profile.outer.size()<=1024 && profile.holes.size()<=1024,
+        "assembly profile topology ring budget exceeded");
+    const auto& topology=*profile.topology;
+    require(topology.holes.size()==profile.holes.size(),"assembly profile topology hole count mismatch");
+    ProfileTopologyAdmission admission;
+    std::size_t count=0;
+    const auto ring=[&](const AssemblyProfileRingIdentity& identity,const Boundary& boundary) {
+        require(!boundary.empty() && boundary.size()<=1024-count,"assembly profile topology segment budget exceeded");
+        count+=boundary.size();
+        require(identity.segment_ids.size()==boundary.size() && identity.vertex_ids.size()==boundary.size(),
+            "assembly profile topology segment/vertex count mismatch");
+        admission.ring(identity.ring_id);
+        for(const auto& id:identity.segment_ids)admission.add(id,admission.segments);
+        for(const auto& id:identity.vertex_ids)admission.add(id,admission.vertices);
+    };
+    ring(topology.outer,profile.outer);
+    for(std::size_t i=0;i<topology.holes.size();++i)ring(topology.holes[i],profile.holes[i]);
+    return admission.bytes;
+}
+void add_topology_bytes(std::size_t& target,std::size_t count,std::size_t limit) {
+    require(target<=limit && count<=limit-target,"assembly profile topology collection output budget exceeded");
+    target+=count;
+}
 const char* unit_name(AssemblyQuantityUnit unit) {
     switch (unit) {
     case AssemblyQuantityUnit::count: return "count";
@@ -108,20 +174,36 @@ double profile_volume(const AssemblyProfile& profile) {
 }
 std::size_t profile_collection_segments(const std::vector<AssemblyProfile>& profiles) {
     require(profiles.size()<=4096,"assembly profile collection budget exceeded");
-    std::size_t segments=0;
+    std::size_t segments=0,topology_bytes=0;
     for(const auto& profile:profiles) {
         const auto count=profile_segments(profile);
         require(count<=262144-segments,"assembly profile collection work budget exceeded");segments+=count;
+        add_topology_bytes(topology_bytes,profile_topology_bytes(profile),collection_topology_byte_limit);
     }
     return segments;
 }
+std::size_t profile_collection_topology_bytes(const std::vector<AssemblyProfile>& profiles) {
+    std::size_t result=0;
+    for(const auto& profile:profiles)add_topology_bytes(result,profile_topology_bytes(profile),collection_topology_byte_limit);
+    return result;
+}
+std::size_t instance_profile_topology_bytes(const AssemblyInstance& instance) {
+    std::size_t result=0;
+    const auto add=[&](const auto& profiles) {
+        if(profiles)add_topology_bytes(result,profile_collection_topology_bytes(*profiles),collection_topology_byte_limit);
+    };
+    add(instance.profile_overrides);
+    for(const auto& path:instance.nested_overrides)add(path.profile_overrides);
+    return result;
+}
 std::size_t instance_profile_segments(const AssemblyInstance& instance) {
     require(instance.nested_overrides.size()<=4096,"assembly override budget exceeded");
-    std::size_t segments=0;
+    std::size_t segments=0,topology_bytes=0;
     const auto add=[&](const auto& profiles) {
         if(!profiles)return;
         const auto count=profile_collection_segments(*profiles);
         require(count<=262144-segments,"assembly override profile work budget exceeded");segments+=count;
+        add_topology_bytes(topology_bytes,profile_collection_topology_bytes(*profiles),collection_topology_byte_limit);
     };
     add(instance.profile_overrides);
     for(const auto& path:instance.nested_overrides)add(path.profile_overrides);
@@ -152,6 +234,41 @@ template<class T> void override_keys(const std::map<std::string, T>& base, const
 void fields(const nlohmann::json& value, std::initializer_list<const char*> keys) {
     require(value.is_object() && value.size() == keys.size(), "invalid assembly JSON fields");
     for (const auto* key : keys) require(value.contains(key), "missing assembly JSON field");
+}
+void profile_fields(const nlohmann::json& value,bool identified=true) {
+    if(value.is_object() && (value.contains("version") || value.contains("topology"))) {
+        require(identified,"identified assembly profiles require a supporting schema version");
+        fields(value,{"version","id","outer","holes","elevation_m","height_m","material_slot","topology"});
+        require(value.at("version").is_number_integer() && value.at("version")==2,
+            "unsupported assembly profile version");
+    } else fields(value,{"id","outer","holes","elevation_m","height_m","material_slot"});
+}
+std::size_t preflight_profile_topology(const nlohmann::json& profile) {
+    if(!profile.contains("topology"))return 0;
+    const auto& topology=profile.at("topology");
+    fields(topology,{"version","outer","holes"});
+    require(topology.at("version").is_number_integer() && topology.at("version")==1,
+        "unsupported assembly profile topology version");
+    require(topology.at("holes").is_array() && topology.at("holes").size()==profile.at("holes").size(),
+        "assembly profile topology hole count mismatch");
+    ProfileTopologyAdmission admission;
+    const auto ring=[&](const nlohmann::json& identity,const nlohmann::json& boundary) {
+        fields(identity,{"ring_id","segment_ids","vertex_ids"});
+        require(identity.at("segment_ids").is_array() && identity.at("vertex_ids").is_array() &&
+            identity.at("segment_ids").size()==boundary.size() && identity.at("vertex_ids").size()==boundary.size(),
+            "assembly profile topology segment/vertex count mismatch");
+        admission.ring(identity.at("ring_id").get_ref<const std::string&>());
+        for(const auto& id:identity.at("segment_ids"))admission.add(id.get_ref<const std::string&>(),admission.segments);
+        for(const auto& id:identity.at("vertex_ids"))admission.add(id.get_ref<const std::string&>(),admission.vertices);
+    };
+    ring(topology.at("outer"),profile.at("outer"));
+    for(std::size_t i=0;i<topology.at("holes").size();++i)ring(topology.at("holes")[i],profile.at("holes")[i]);
+    return admission.bytes;
+}
+std::size_t raw_collection_topology_bytes(const nlohmann::json& profiles) {
+    std::size_t result=0;
+    for(const auto& profile:profiles)add_topology_bytes(result,preflight_profile_topology(profile),collection_topology_byte_limit);
+    return result;
 }
 void fields_with_profiles(const nlohmann::json& value, std::initializer_list<const char*> keys,
     bool geometry) {
@@ -251,6 +368,42 @@ Boundary decode_boundary(const nlohmann::json& value) {
     }
     return result;
 }
+nlohmann::json encode_profile(const AssemblyProfile& profile) {
+    auto holes=nlohmann::json::array();for(const auto& hole:profile.holes)holes.push_back(encode_boundary(hole));
+    nlohmann::json result{{"id",profile.id},{"outer",encode_boundary(profile.outer)},
+        {"holes",std::move(holes)},{"elevation_m",profile.elevation_m},{"height_m",profile.height_m},
+        {"material_slot",profile.material_slot ? nlohmann::json(*profile.material_slot):nlohmann::json(nullptr)}};
+    if(profile.topology) {
+        const auto ring=[](const AssemblyProfileRingIdentity& identity) -> nlohmann::json {
+            return {{"ring_id",identity.ring_id},{"segment_ids",identity.segment_ids},{"vertex_ids",identity.vertex_ids}};
+        };
+        auto identified_holes=nlohmann::json::array();
+        for(const auto& hole:profile.topology->holes)identified_holes.push_back(ring(hole));
+        result["version"]=2;
+        result["topology"]={{"version",1},{"outer",ring(profile.topology->outer)},{"holes",std::move(identified_holes)}};
+    }
+    return result;
+}
+AssemblyProfile decode_profile(const nlohmann::json& encoded) {
+    AssemblyProfile profile;profile.id=encoded.at("id").get<std::string>();profile.outer=decode_boundary(encoded.at("outer"));
+    auto segment_count=profile.outer.size();
+    for(const auto& hole:encoded.at("holes")) {
+        require(hole.is_array() && hole.size()<=1024-segment_count,"assembly profile segment budget exceeded");
+        segment_count+=hole.size();profile.holes.push_back(decode_boundary(hole));
+    }
+    profile.elevation_m=encoded.at("elevation_m").get<double>();profile.height_m=encoded.at("height_m").get<double>();
+    if(!encoded.at("material_slot").is_null())profile.material_slot=encoded.at("material_slot").get<std::string>();
+    if(encoded.contains("topology")) {
+        const auto ring=[](const nlohmann::json& identity) {
+            return AssemblyProfileRingIdentity{identity.at("ring_id").get<std::string>(),
+                identity.at("segment_ids").get<std::vector<std::string>>(),identity.at("vertex_ids").get<std::vector<std::string>>()};
+        };
+        const auto& topology=encoded.at("topology");
+        profile.topology=AssemblyProfileTopology{ring(topology.at("outer")),{}};
+        for(const auto& hole:topology.at("holes"))profile.topology->holes.push_back(ring(hole));
+    }
+    return profile;
+}
 template<class T> nlohmann::json encode_overrides(const T& value) {
     return {{"property_overrides",value.property_overrides},{"material_overrides",value.material_overrides},
         {"quantity_overrides",encode_quantities(value.quantity_overrides)}};
@@ -280,14 +433,16 @@ AssemblyTransform decode_versioned_transform(const nlohmann::json& value,bool ve
     return decode_assembly_transform(value);
 }
 std::vector<AssemblyPathOverride> decode_paths(const nlohmann::json& paths,bool vertical=true,bool geometry=false,
-    std::size_t initial_segments=0) {
+    std::size_t initial_segments=0,std::size_t initial_topology_bytes=0) {
     require(paths.is_array() && paths.size()<=4096,"invalid assembly override collection");
     auto segments=initial_segments;
+    auto topology_bytes=initial_topology_bytes;
     require(segments<=262144,"assembly override profile work budget exceeded");
     for(const auto& value:paths)if(value.contains("profile_overrides")) {
         require(geometry,"assembly profile overrides require a supporting schema version");
         const auto count=preflight_assembly_profiles(value.at("profile_overrides"));
         require(count<=262144-segments,"assembly override profile work budget exceeded");segments+=count;
+        add_topology_bytes(topology_bytes,raw_collection_topology_bytes(value.at("profile_overrides")),collection_topology_byte_limit);
     }
     std::vector<AssemblyPathOverride> result;
     std::set<std::vector<std::string>> identities;
@@ -310,10 +465,10 @@ std::vector<AssemblyPathOverride> decode_paths(const nlohmann::json& paths,bool 
 std::size_t preflight_assembly_profiles(const nlohmann::json& value) {
     try {
         require(value.is_array() && value.size()<=4096,"invalid assembly profile collection");
-        std::size_t segments=0;
+        std::size_t segments=0,topology_bytes=0;
         std::set<std::string_view> ids;
         for(const auto& encoded:value) {
-            fields(encoded,{"id","outer","holes","elevation_m","height_m","material_slot"});
+            profile_fields(encoded);
             const auto& id=encoded.at("id").get_ref<const std::string&>();identifier(id);
             require(ids.insert(id).second,"duplicate assembly profile identifier");
             if(!encoded.at("material_slot").is_null())identifier(encoded.at("material_slot").get_ref<const std::string&>());
@@ -342,20 +497,25 @@ std::size_t preflight_assembly_profiles(const nlohmann::json& value) {
             };
             ring(encoded.at("outer"));for(const auto& hole:encoded.at("holes"))ring(hole);
             require(profile_count<=262144-segments,"assembly profile collection work budget exceeded");segments+=profile_count;
+            add_topology_bytes(topology_bytes,preflight_profile_topology(encoded),collection_topology_byte_limit);
         }
         return segments;
     } catch(const nlohmann::json::exception& error) {
         throw std::invalid_argument(std::string("invalid assembly profiles JSON: ")+error.what());
     }
 }
+void validate_assembly_profile_topology(const AssemblyProfile& profile) {
+    (void)profile_topology_bytes(profile);
+}
 std::size_t validate_assembly_profiles(const std::vector<AssemblyProfile>& profiles) {
     require(profiles.size()<=4096,"assembly profile collection budget exceeded");
-    std::size_t segments=0;
+    std::size_t segments=0,topology_bytes=0;
     std::set<std::string_view> ids;
     for(const auto& profile:profiles) {
         identifier(profile.id);require(ids.insert(profile.id).second,"duplicate assembly profile identifier");
         const auto count=profile_segments(profile);
         require(count<=262144-segments,"assembly profile collection work budget exceeded");segments+=count;
+        add_topology_bytes(topology_bytes,profile_topology_bytes(profile),collection_topology_byte_limit);
     }
     for(const auto& profile:profiles) {
         require(!validate_boundary_holes(profile.outer,profile.holes).has_value(),"invalid assembly profile boundary/holes");
@@ -370,24 +530,13 @@ nlohmann::json encode_assembly_profiles(const std::vector<AssemblyProfile>& prof
     for(const auto& profile:profiles)ordered.push_back(&profile);
     std::sort(ordered.begin(),ordered.end(),[](const auto* a,const auto* b){return a->id<b->id;});
     auto result=nlohmann::json::array();
-    for(const auto* profile:ordered) {
-        auto holes=nlohmann::json::array();for(const auto& hole:profile->holes)holes.push_back(encode_boundary(hole));
-        result.push_back({{"id",profile->id},{"outer",encode_boundary(profile->outer)},
-            {"holes",std::move(holes)},{"elevation_m",profile->elevation_m},{"height_m",profile->height_m},
-            {"material_slot",profile->material_slot ? nlohmann::json(*profile->material_slot):nlohmann::json(nullptr)}});
-    }
+    for(const auto* profile:ordered)result.push_back(encode_profile(*profile));
     return result;
 }
 std::vector<AssemblyProfile> decode_assembly_profiles(const nlohmann::json& value) {
     (void)preflight_assembly_profiles(value);
     std::vector<AssemblyProfile> result;result.reserve(value.size());
-    for(const auto& encoded:value) {
-        AssemblyProfile profile;profile.id=encoded.at("id").get<std::string>();profile.outer=decode_boundary(encoded.at("outer"));
-        for(const auto& hole:encoded.at("holes"))profile.holes.push_back(decode_boundary(hole));
-        profile.elevation_m=encoded.at("elevation_m").get<double>();profile.height_m=encoded.at("height_m").get<double>();
-        if(!encoded.at("material_slot").is_null())profile.material_slot=encoded.at("material_slot").get<std::string>();
-        result.push_back(std::move(profile));
-    }
+    for(const auto& encoded:value)result.push_back(decode_profile(encoded));
     (void)validate_assembly_profiles(result);
     std::sort(result.begin(),result.end(),[](const auto& a,const auto& b){return a.id<b.id;});
     return result;
@@ -395,7 +544,7 @@ std::vector<AssemblyProfile> decode_assembly_profiles(const nlohmann::json& valu
 
 bool AssemblyProfile::operator==(const AssemblyProfile& other) const {
     if(id!=other.id || elevation_m!=other.elevation_m || height_m!=other.height_m ||
-        material_slot!=other.material_slot || !boundary_equal(outer,other.outer) || holes.size()!=other.holes.size())return false;
+        material_slot!=other.material_slot || topology!=other.topology || !boundary_equal(outer,other.outer) || holes.size()!=other.holes.size())return false;
     for(std::size_t i=0;i<holes.size();++i)if(!boundary_equal(holes[i],other.holes[i]))return false;
     return true;
 }
@@ -547,7 +696,8 @@ AssemblyInstance decode_assembly_instance(const nlohmann::json& value) {
         identifier(result.id);identifier(result.type_id);decode_overrides(value,result);
         result.root_transform=decode_versioned_transform(value.at("root_transform"),vertical);
         const auto segments=value.contains("profile_overrides") ? preflight_assembly_profiles(value.at("profile_overrides")):0;
-        result.nested_overrides=decode_paths(value.at("nested_overrides"),vertical,geometry,segments);
+        const auto topology_bytes=value.contains("profile_overrides") ? raw_collection_topology_bytes(value.at("profile_overrides")):0;
+        result.nested_overrides=decode_paths(value.at("nested_overrides"),vertical,geometry,segments,topology_bytes);
         if(value.contains("profile_overrides"))result.profile_overrides=decode_assembly_profiles(value.at("profile_overrides"));
         return result;
     } catch(const nlohmann::json::exception& error) {throw std::invalid_argument(std::string("invalid assembly instance JSON: ")+error.what());}
@@ -556,14 +706,16 @@ AssemblyInstance decode_assembly_instance(const nlohmann::json& value) {
 AssemblyModel AssemblyModel::create(std::vector<AssemblyMaterial> materials,
     std::vector<AssemblyType> types, std::vector<AssemblyInstance> instances) {
     require(types.size()<=4096 && instances.size()<=4096,"assembly catalog collection budget exceeded");
-    std::size_t type_segments=0,override_segments=0;
+    std::size_t type_segments=0,override_segments=0,type_topology_bytes=0,override_topology_bytes=0;
     for(const auto& type:types) {
         const auto count=profile_collection_segments(type.profiles);
         require(count<=1048576-type_segments,"assembly catalog validation profile work budget exceeded");type_segments+=count;
+        add_topology_bytes(type_topology_bytes,profile_collection_topology_bytes(type.profiles),catalog_topology_byte_limit);
     }
     for(const auto& instance:instances) {
         const auto count=instance_profile_segments(instance);
         require(count<=262144-override_segments,"assembly document profile segment budget exceeded");override_segments+=count;
+        add_topology_bytes(override_topology_bytes,instance_profile_topology_bytes(instance),collection_topology_byte_limit);
     }
     canonical(materials); canonical(types); canonical(instances);
     for (const auto& material : materials) {
@@ -803,6 +955,7 @@ nlohmann::json AssemblyModel::to_json() const {
     bool vertical = false;
     bool nested = false;
     bool geometry = false;
+    for(const auto& type:types_)for(const auto& profile:type.profiles)geometry=geometry || profile.topology.has_value();
     for(const auto& type:types_)nested=nested || !type.profiles.empty() || !type.parts.empty();
     for(const auto& type:types_)for(const auto& part:type.parts)vertical=vertical || part.transform.vertical_scale!=1;
     for(const auto& instance:instances_)nested=nested || instance.root_transform.has_value() || !instance.nested_overrides.empty();
@@ -838,12 +991,7 @@ nlohmann::json AssemblyModel::to_json() const {
             {"materials",type.materials},{"quantities",encode_quantities(type.quantities)}};
         if(geometry ? (!type.profiles.empty() || !type.parts.empty()):nested) {
             value["profiles"]=nlohmann::json::array();value["parts"]=nlohmann::json::array();
-            for(const auto& profile:type.profiles) {
-                auto holes=nlohmann::json::array();for(const auto& hole:profile.holes)holes.push_back(encode_boundary(hole));
-                value["profiles"].push_back({{"id",profile.id},{"outer",encode_boundary(profile.outer)},
-                    {"holes",std::move(holes)},{"elevation_m",profile.elevation_m},{"height_m",profile.height_m},
-                    {"material_slot",profile.material_slot ? nlohmann::json(*profile.material_slot):nlohmann::json(nullptr)}});
-            }
+            for(const auto& profile:type.profiles)value["profiles"].push_back(encode_profile(profile));
             for(const auto& part:type.parts) {
                 auto encoded=encode_overrides(part);encoded["id"]=part.id;encoded["type_id"]=part.type_id;
                 encoded["transform"]=encode_assembly_transform(part.transform);value["parts"].push_back(std::move(encoded));
@@ -896,17 +1044,19 @@ AssemblyModel AssemblyModel::from_json(const nlohmann::json& value) {
         if(geometry) {
             // Admission precedes boundary allocation for the complete new
             // dialect, including payloads spread over many rows and paths.
-            std::size_t type_segments=0,override_segments=0;
+            std::size_t type_segments=0,override_segments=0,type_topology_bytes=0,override_topology_bytes=0;
             for(const auto& item:value.at("types"))if(item.contains("profiles")) {
                 const auto count=preflight_assembly_profiles(item.at("profiles"));
                 require(count<=1048576-type_segments,"assembly catalog validation profile work budget exceeded");
                 type_segments+=count;
+                add_topology_bytes(type_topology_bytes,raw_collection_topology_bytes(item.at("profiles")),catalog_topology_byte_limit);
             }
             const auto preflight_override=[&](const nlohmann::json& item) {
                 if(!item.contains("profile_overrides"))return;
                 const auto count=preflight_assembly_profiles(item.at("profile_overrides"));
                 require(count<=262144-override_segments,"assembly document profile segment budget exceeded");
                 override_segments+=count;
+                add_topology_bytes(override_topology_bytes,raw_collection_topology_bytes(item.at("profile_overrides")),collection_topology_byte_limit);
             };
             for(const auto& item:value.at("instances")) {
                 preflight_override(item);
@@ -939,18 +1089,10 @@ AssemblyModel AssemblyModel::from_json(const nlohmann::json& value) {
                 require(item.at("profiles").is_array() && item.at("profiles").size()<=4096 &&
                     item.at("parts").is_array() && item.at("parts").size()<=4096,"invalid assembly type collections");
                 for(const auto& encoded:item.at("profiles")) {
-                    fields(encoded,{"id","outer","holes","elevation_m","height_m","material_slot"});
+                    profile_fields(encoded,geometry);
                     require(encoded.at("holes").is_array() && encoded.at("holes").size()<=1024 &&
                         encoded.at("elevation_m").is_number() && encoded.at("height_m").is_number(),"invalid assembly profile");
-                    AssemblyProfile profile;profile.id=encoded.at("id").get<std::string>();profile.outer=decode_boundary(encoded.at("outer"));
-                    auto segment_count=profile.outer.size();
-                    for(const auto& hole:encoded.at("holes")) {
-                        require(hole.is_array() && hole.size()<=1024-segment_count,"assembly profile segment budget exceeded");
-                        segment_count+=hole.size();profile.holes.push_back(decode_boundary(hole));
-                    }
-                    profile.elevation_m=encoded.at("elevation_m").get<double>();profile.height_m=encoded.at("height_m").get<double>();
-                    if(!encoded.at("material_slot").is_null())profile.material_slot=encoded.at("material_slot").get<std::string>();
-                    type.profiles.push_back(std::move(profile));
+                    type.profiles.push_back(decode_profile(encoded));
                 }
                 for(const auto& encoded:item.at("parts")) {
                     fields(encoded,{"id","type_id","transform","property_overrides","material_overrides","quantity_overrides"});
@@ -1011,7 +1153,8 @@ AssemblyModel AssemblyModel::from_json(const nlohmann::json& value) {
             const auto segments=item.contains("profile_overrides") ? preflight_assembly_profiles(item.at("profile_overrides")):0;
             if(instance_nested) {
                 if(!item.at("root_transform").is_null())instance.root_transform=decode_versioned_transform(item.at("root_transform"),vertical);
-                instance.nested_overrides=decode_paths(item.at("nested_overrides"),vertical,geometry,segments);
+                const auto topology_bytes=item.contains("profile_overrides") ? raw_collection_topology_bytes(item.at("profile_overrides")):0;
+                instance.nested_overrides=decode_paths(item.at("nested_overrides"),vertical,geometry,segments,topology_bytes);
             }
             if(item.contains("profile_overrides"))instance.profile_overrides=decode_assembly_profiles(item.at("profile_overrides"));
             instances.push_back(std::move(instance));
@@ -1209,6 +1352,10 @@ nlohmann::json retain_assembly_catalog_dialect(
                 if(old->elevation_m==next->elevation_m)encoded["elevation_m"]=old_raw.at("elevation_m");
                 if(old->height_m==next->height_m)encoded["height_m"]=old_raw.at("height_m");
                 if(old->material_slot==next->material_slot)encoded["material_slot"]=old_raw.at("material_slot");
+                if(old->topology==next->topology && old->topology) {
+                    encoded["version"]=old_raw.at("version");
+                    encoded["topology"]=old_raw.at("topology");
+                }
             }
         };
         // Geometry edits can change one field of an instance. Retain its

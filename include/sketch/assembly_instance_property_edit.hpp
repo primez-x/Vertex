@@ -52,12 +52,20 @@ struct AssemblyInstancePropertyEditIntent {
     AssemblyInstancePosePropertyPatch pose;
     // Only the selected node's own solid profiles. Set may be empty to suppress
     // them while other node profiles retain an actual solid; clear returns to
-    // the shared type without changing its definition.
+    // the shared type without changing its definition. Those historical edits
+    // require anonymous source geometry. Identified Set retains the complete
+    // actual own-source profile roster, rings/edges and topology; only profile
+    // material_slot/elevation_m/height_m may change. It may materialize an own
+    // override from the resolved type. Identified redraw/clear requires a
+    // separate reviewed mapping/removal workflow and currently refuses.
     AssemblyInstancePropertyPatch<std::vector<AssemblyProfile>> profile_geometry;
 };
 
-// Closed canonical v1/v2 codec. V2 adds profile_geometry and is emitted only
-// for a non-unchanged profile operation. V1 rejects that field. All operations
+// Closed canonical v1/v2/v3 codec. V2 adds anonymous profile_geometry and is
+// emitted for a non-unchanged anonymous profile operation. V3 requires Set
+// containing identified profiles and explicit topology-preserving authority;
+// source replay checks the exact selected node's own geometry. V1 rejects the
+// geometry field; historical V2 rejects identified profiles. All operations
 // are explicit; set carries a value and unchanged/clear carry null. Pose fields are always present
 // (unsupplied components are null). Values are finite, scales positive, counts
 // integral/nonnegative; property strings <=4096 bytes and local keys <=1024.
@@ -123,6 +131,9 @@ private:
         const DocumentSnapshot&, const nlohmann::json&);
 };
 [[nodiscard]] nlohmann::json validate_assembly_instance_property_edit_request(const nlohmann::json&);
+// Request v3 is manufactured only when an intent v3 is present. Requests v1/v2
+// retain historical authority and reject intent v3. Every request dialect uses
+// the same complete source snapshot, authoring, entity and save-state fences.
 [[nodiscard]] AssemblyInstancePropertyEditPreparation prepare_assembly_instance_property_edit(
     const DocumentSnapshot&, std::span<const AssemblyInstancePropertyEditIntent>);
 [[nodiscard]] AssemblyInstancePropertyEditPreparation replay_assembly_instance_property_edit_preparation(

@@ -388,7 +388,7 @@ void gather_group_dimension_transforms(const EntityState& source, const EntitySt
     for (const auto& [id, entity] : source) {
         (void)id;
         if (!can_recognize_boundary_dimension_entity_type(entity.type) ||
-            inspect_boundary_dimension_version(entity).format != BoundaryDimensionFormat::supported_v6) continue;
+            !is_assembly_boundary_dimension_format(inspect_boundary_dimension_version(entity).format)) continue;
         const auto& target = entity.properties.at("target").at("assembly");
         const auto& catalog_id = target.at("catalog_id").get_ref<const std::string&>();
         const auto& instance_id = target.at("instance_id").get_ref<const std::string&>();
@@ -446,7 +446,7 @@ void gather_group_dimension_transforms(const EntityState& source, const EntitySt
                 ? hosted_admission.emplace(root_key, admit_hosted()).first->second : known->second;
         }
         if (!admitted) continue;
-        // Closed target decoding retains nested paths/axes for later measurement;
+        // Closed target decoding retains nested paths/selectors for measurement;
         // only qualified root identity participates in this discovery roster.
         if (++dimension_count > 1000)
             throw std::invalid_argument("Architectural group associated dimension count exceeds bound.");
