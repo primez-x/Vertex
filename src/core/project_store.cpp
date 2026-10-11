@@ -419,6 +419,25 @@ std::uint32_t required_format_version_internal(const DocumentSnapshot& snapshot,
                     value.at("coordinate_component_hosts").is_boolean() && value.at("coordinate_component_hosts")==true &&
                     value.at("base_intent").is_object() && value.at("base_intent").value("version",nlohmann::json())==21))
                 floor=std::max(floor,230U);
+            if (closed_shape({"version","authoring","complete_hosted_component_dimensions",
+                    "complete_stair_component_dimensions"}) && value.at("version").is_number_integer() &&
+                value.at("version")==7 && value.at("complete_hosted_component_dimensions").is_boolean() &&
+                value.at("complete_hosted_component_dimensions")==true &&
+                value.at("complete_stair_component_dimensions").is_boolean() &&
+                value.at("complete_stair_component_dimensions")==true) {
+                const auto& body=value.at("authoring");
+                if (body.is_object() && body.contains("version") && body.at("version").is_number_integer() &&
+                    (body.at("version")==4 || body.at("version")==5) && body.contains("stair_replacement") &&
+                    body.at("stair_replacement").is_object() &&
+                    body.at("stair_replacement").value("version",nlohmann::json())==8)
+                    floor=std::max(floor,231U);
+            }
+            if (closed_shape({"version","authoring","complete_ordinary_component_dimensions"}) &&
+                value.at("version").is_number_integer() && value.at("version")==8 &&
+                value.at("complete_ordinary_component_dimensions").is_boolean() &&
+                value.at("complete_ordinary_component_dimensions")==true && value.at("authoring").is_object() &&
+                value.at("authoring").value("version",nlohmann::json())==7)
+                floor=std::max(floor,231U);
             if (closed_shape({"version","authoring","complete_component_dimensions","dimension_identities"}) &&
                 value.at("version").is_number_integer() && value.at("version")==7 &&
                 value.at("complete_component_dimensions").is_boolean() && value.at("complete_component_dimensions")==true &&
@@ -987,9 +1006,9 @@ std::uint32_t required_format_version_internal(const DocumentSnapshot& snapshot,
     };
     for (const auto& revision : snapshot.history()) {
         if (revision.phase_entity_import) required=std::max(required,160U);
-        if (required<230 && revision.boundary_geometry_edit)
+        if (required<231 && revision.boundary_geometry_edit)
             required=std::max(required,typed_edit_reader_floor(encode_boundary_geometry_edit(*revision.boundary_geometry_edit)));
-        if (required<230 && revision.boundary_constraint_changes)
+        if (required<231 && revision.boundary_constraint_changes)
             required=std::max(required,typed_edit_reader_floor(command_to_json(Command{*revision.boundary_constraint_changes})));
         if (required<122 && revision.boundary_geometry_edit)
             required=std::max(required,quantity_reader_floor(encode_boundary_geometry_edit(*revision.boundary_geometry_edit)));
@@ -3507,6 +3526,7 @@ bool verify_sqlite_schema(sqlite3* database, bool allow_recovery = false) {
          sqlite3_column_int(user_version.get(), 0) != 228 &&
          sqlite3_column_int(user_version.get(), 0) != 229 &&
          sqlite3_column_int(user_version.get(), 0) != 230 &&
+         sqlite3_column_int(user_version.get(), 0) != 231 &&
          sqlite3_column_int(user_version.get(), 0) != 207 &&
          sqlite3_column_int(user_version.get(), 0) != 202 &&
          sqlite3_column_int(user_version.get(), 0) != 200 &&
@@ -4232,6 +4252,8 @@ DocumentSnapshot read_snapshot(sqlite3* database, RecoveryLedger* recovery = nul
     // here and authenticate the manifest with its stored version below.
     const auto required_format = required_format_version_internal(snapshot, format_number < 28);
     if (required_format > format_number) {
+        if (required_format>=231)
+            storage_error(StorageErrorCode::unsupported_format,"This project requires reader 231 for stair component dimension copies and ordinary carry");
         if (required_format>=230)
             storage_error(StorageErrorCode::unsupported_format,"This project requires reader 230 for stair component dimension Properties receipts");
         if (required_format>=229)

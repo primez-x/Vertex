@@ -187,6 +187,7 @@ PhaseStairReplacementAuthoring historical_authoring(const PhaseStairReplacementA
     if (authoring.dimension_identities.size() > dimension_limit) reject("dimension identity budget exceeded");
     auto result = authoring;
     result.complete_component_dimensions = false;
+    result.complete_ordinary_component_dimensions = false;
     result.dimension_identities.clear();
     return result;
 }
@@ -1694,6 +1695,8 @@ std::vector<StairCompoundEditIntent> capture_phase_stair_replacement_compound_ed
 PhaseStairReplacementPlan inspect_phase_stair_replacement_plan(const Entities& actual,
     const PhaseStairReplacementAuthoring& authoring) {
     try {
+        if (authoring.complete_ordinary_component_dimensions && !authoring.complete_component_dimensions)
+            reject("ordinary component dimension carry requires the explicit child7 copy body");
         if (authoring.complete_component_dimensions) {
             admit_component_dimension_source(actual);
             auto result = inspect_phase_stair_replacement_plan(actual, historical_authoring(authoring));
@@ -1771,6 +1774,14 @@ PhaseStairReplacementPlan inspect_phase_stair_replacement_plan(const Entities& a
 }
 
 Json encode_phase_stair_replacement_authoring(const PhaseStairReplacementAuthoring& authoring) {
+    if (authoring.complete_ordinary_component_dimensions) {
+        if (!authoring.complete_component_dimensions)
+            reject("v8 requires explicit component dimension copies");
+        auto body=authoring; body.complete_ordinary_component_dimensions=false;
+        Json result{{"version",8},{"authoring",encode_phase_stair_replacement_authoring(body)},
+            {"complete_ordinary_component_dimensions",true}};
+        proof_budget(result); return result;
+    }
     if (authoring.complete_component_dimensions) {
         // The historical encoder retains every existing lane/version/default.
         auto body = encode_phase_stair_replacement_authoring(historical_authoring(authoring));
@@ -1906,6 +1917,19 @@ Json encode_phase_stair_replacement_authoring(const PhaseStairReplacementAuthori
 PhaseStairReplacementAuthoring decode_phase_stair_replacement_authoring(const Json& value) {
     try {
         proof_budget(value);
+        if (value.is_object() && value.contains("version") && value.at("version").is_number_integer() && value.at("version")==8) {
+            keys(value,{"version","authoring","complete_ordinary_component_dimensions"});
+            if (!value.at("complete_ordinary_component_dimensions").is_boolean() ||
+                value.at("complete_ordinary_component_dimensions")!=true)
+                reject("v8 requires literal ordinary component dimension carry");
+            const auto& body=value.at("authoring");
+            if (!body.is_object() || !body.contains("version") || !body.at("version").is_number_integer() ||
+                body.at("version")!=7) reject("v8 requires one canonical child7 copy body");
+            auto result=decode_phase_stair_replacement_authoring(body);
+            result.complete_ordinary_component_dimensions=true;
+            if (encode_phase_stair_replacement_authoring(result)!=value) reject("v8 authoring is not canonical");
+            return result;
+        }
         if (value.is_object() && value.contains("version") && value.at("version").is_number_integer() && value.at("version") == 7) {
             keys(value, {"version", "authoring", "complete_component_dimensions", "dimension_identities"});
             if (!value.at("complete_component_dimensions").is_boolean() || value.at("complete_component_dimensions") != true ||
@@ -2000,6 +2024,43 @@ PhaseStairReplacementAuthoring decode_phase_stair_replacement_authoring(const Js
 Entities replay_phase_stair_replacement_authoring(const Entities& actual, const PhaseStairReplacementAuthoring& authoring) {
     try {
         const auto proof = encode_phase_stair_replacement_authoring(authoring);
+        if (authoring.complete_ordinary_component_dimensions) {
+            admit_component_dimension_source(actual);
+            auto body=authoring; body.complete_ordinary_component_dimensions=false;
+            auto candidate=replay_phase_stair_replacement_authoring(actual,body);
+            const auto scope=constraint_phase_scope(actual);
+            Ids protected_baselines;
+            for (const auto& [id,entity]:actual) if (entity.type=="model_phases") {
+                (void)id;
+                const auto phases=ModelPhases::from_json(entity.properties.at("model"));
+                if (phases.active_alternative())
+                    protected_baselines.insert(phases.baseline_ids().begin(),phases.baseline_ids().end());
+            }
+            std::vector<std::string> hosts;
+            for (const auto& [id,original]:actual) {
+                if (original.type!="stair" && original.type!="railing") continue;
+                const auto after=candidate.find(id);
+                // Actual dependency retirement has its own typed closure;
+                // only surviving changed physical hosts grant carry authority.
+                if (after==candidate.end()) continue;
+                if (after->second.id!=id || after->second.type!=original.type)
+                    reject("ordinary component dimension host lost its original identity or type");
+                if (exact(original,after->second)) continue;
+                if (scope.inactive_owner_ids.contains(id) || protected_baselines.contains(id))
+                    reject("ordinary component dimension host is inactive or protected baseline");
+                if (hosts.size()>=geometry_limit) reject("ordinary component dimension host budget exceeded");
+                hosts.push_back(id);
+            }
+            auto dimensions=carry_hosted_assembly_dimension_transform_entities(actual,candidate,hosts,
+                dimension_limit-authoring.dimension_identities.size());
+            std::vector<std::string> changed_ids;
+            for (const auto& dimension:dimensions) changed_ids.push_back(dimension.id);
+            validate_ordinary_assembly_dimension_changes(actual,changed_ids);
+            for (auto& dimension:dimensions) candidate.at(dimension.id)=std::move(dimension);
+            (void)source_budget(candidate);
+            (void)constraint_phase_scope(candidate);
+            return candidate;
+        }
         if (authoring.complete_component_dimensions) {
             admit_component_dimension_source(actual);
             const auto body = historical_authoring(authoring);

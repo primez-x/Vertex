@@ -1,4 +1,29 @@
-# Vertex project formats v1 through v230
+# Vertex project formats v1 through v231
+
+Reader231 retains coordinated stair-component dimension copies. Outer phase
+authoring34 requires inner7's exact four fields: `version:7`,
+`authoring:<canonical inner4/5>`, `complete_hosted_component_dimensions:true`,
+and `complete_stair_component_dimensions:true`. The nonnested historical body
+must contain an actual canonical stair child8. Other family permissions remain
+unchanged; historical coordinated1 through6 reject this new stair authority.
+
+The stair leaf derives its dimension inventory from the complete original
+source and copies it to the actual proposed component roots. Its dimension
+destinations join the coordinated fresh-identity inventory and cross-family
+collision checks; original dimensions on copied baseline components remain
+exact. Child8 is a separate three-key wrapper: `version:8`,
+`authoring:<canonical child7>`, `complete_ordinary_component_dimensions:true`.
+It derives surviving changed active nonbaseline stair/rail hosts from the
+complete typed candidate and carries their existing embedded dimensions under
+ordinary dimension policy. Copied and ordinary dimensions share a 1000-target
+bound. Historical child7 remains clone-only; outer phase35 alone admits child8.
+Existing ordinary hosted dimension carry for other coordinated families runs
+once against the final coordinated candidate. Current
+standalone stair replacement producers also allocate the actual dimension
+inventory after dependency decisions and use phase35's complete child8 contract.
+Current, nested and undone child8/coordinated proofs require reader231/extraction229,
+including empty dimension inventories. This source integration does not
+establish compilation, runtime behavior or production acceptance.
 
 Reader230 retains explicit stair-component dimension copies through Properties.
 Phase Properties request6 has request5's exact source-fenced fields plus

@@ -420,6 +420,13 @@ std::vector<Entity> carry_assembly_dimension_transform_entities(
 std::vector<Entity> carry_hosted_assembly_dimension_transform_entities(
     const AssemblyDocumentEntities& source, const AssemblyDocumentEntities& candidate,
     std::span<const std::string> actual_host_ids) {
+    return carry_hosted_assembly_dimension_transform_entities(source,candidate,actual_host_ids,dimension_limit);
+}
+
+std::vector<Entity> carry_hosted_assembly_dimension_transform_entities(
+    const AssemblyDocumentEntities& source, const AssemblyDocumentEntities& candidate,
+    std::span<const std::string> actual_host_ids, std::size_t maximum_associated_dimensions) {
+    require(maximum_associated_dimensions<=dimension_limit, "hosted dimension association budget exceeds bound");
     require(actual_host_ids.size() <= 100000, "actual host roster exceeds entity bound");
     // Admit both complete raw inputs and all catalog work before indexing rows
     // or decoding targets. Discovery borrows these already bounded carriers.
@@ -488,7 +495,7 @@ std::vector<Entity> carry_hosted_assembly_dimension_transform_entities(
         const bool first = known == hosted_roots.end();
         const bool admitted = first ? hosted_roots.emplace(key, admit()).first->second : known->second;
         if (!admitted) continue;
-        require(associated_count < dimension_limit, "associated hosted dimension count exceeds bound");
+        require(associated_count < maximum_associated_dimensions, "associated hosted dimension count exceeds bound");
         ++associated_count;
         if (!first) continue;
         qualified.part_path.clear();

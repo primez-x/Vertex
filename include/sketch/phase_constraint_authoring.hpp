@@ -83,6 +83,12 @@ struct PhaseConstraintAuthoringIntent {
     // (including producer-discovered attached rails) admit one final carry of
     // existing supported component dimensions. Active/baseline dimension policy
     // still applies; no replacement dimension copies or fresh IDs are admitted.
+    // Dialect thirty-four alone pairs closed inner seven: inner six's fields
+    // plus complete_stair_component_dimensions:true. Its nonnested body is
+    // inner four/five with an actual canonical stair child8. That leaf copies
+    // its source-derived component dimensions to fresh proposed identities;
+    // historical enclosures cannot borrow this authority. The existing
+    // ordinary hosted carry remains a single final composition contribution.
     nlohmann::json coordinated_replacements=nullptr;
     // Dialect nine: source-derived column/beam edits in one saved alternative.
     // Shared baseline owners remain exact; explicit structural intent alone
@@ -97,6 +103,8 @@ struct PhaseConstraintAuthoringIntent {
     // and hosted parts receive copies, while proposed rails retain identity.
     // Dialect thirty-three alone admits child7 component dimension copies;
     // its historical child body retains existing scalar/dependency authority.
+    // Dialect thirty-five alone admits child8's explicit ordinary dimension
+    // carry after the complete child7 copies. Historical33 retains clone only.
     nlohmann::json stair_replacement=nullptr;
     // Dialect thirteen: retire actual active proposed rail dependents before
     // demolishing their retained baseline stair. No arbitrary erase authority.
@@ -152,8 +160,8 @@ struct PhaseConstraintAuthoringIntent {
 [[nodiscard]] nlohmann::json encode_phase_constraint_authoring_intent(
     const PhaseConstraintAuthoringIntent& intent);
 // Borrow the historical coordinated body from an already validated canonical
-// enclosing intent. Inner six's exact closed, literal-true, nonnested wrapper
-// is checked before unwrapping once; historical bodies return unchanged.
+// enclosing intent. Inner six/seven's exact closed, literal-true, nonnested
+// wrapper is checked before unwrapping once; historical bodies return unchanged.
 // Mutation callers must re-encode the enclosing intent to validate completion.
 // This accessor grants no edit, replay, replacement or publication authority.
 [[nodiscard]] const nlohmann::json& phase_constraint_coordinated_authoring_body(

@@ -50038,8 +50038,13 @@ private:
     }
 
     static json withHostedDimensionAuthoring(json authoring) {
-        return {{"version",6},{"authoring",std::move(authoring)},
+        const bool stair_dimensions=authoring.contains("stair_replacement") &&
+            !authoring.at("stair_replacement").is_null() &&
+            decode_phase_stair_replacement_authoring(authoring.at("stair_replacement")).complete_component_dimensions;
+        json result={{"version",stair_dimensions ? 7 : 6},{"authoring",std::move(authoring)},
             {"complete_hosted_component_dimensions",true}};
+        if (stair_dimensions) result["complete_stair_component_dimensions"]=true;
+        return result;
     }
 
     static Command sourceDerivedRoofMathEditCommand(const DocumentSnapshot& source,
@@ -50617,17 +50622,25 @@ private:
     }
 
     static Command sourceDerivedStairReplacementCommand(const DocumentSnapshot& source,
-        const PhaseStairReplacementPlan& plan, PhaseStairReplacementAuthoring replacement,
+        const PhaseStairReplacementPlan& captured_plan, PhaseStairReplacementAuthoring replacement,
         const std::string& message) {
-        if (!plan.ready()) {
+        const auto require_ready=[](const PhaseStairReplacementPlan& plan) {
+            if (plan.ready()) return;
             std::string reasons;
             for (const auto& diagnostic:plan.diagnostics) if (diagnostic.blocking) {
                 if (!reasons.empty()) reasons+='\n';
                 reasons+=diagnostic.entity_id+": "+diagnostic.reason;
             }
             throw std::invalid_argument(reasons.empty() ? "The stair replacement has an unresolved dependency." : reasons);
-        }
-        replacement.preserved_inactive_rail_ids=plan.preserved_inactive_rail_ids;
+        };
+        require_ready(captured_plan);
+        replacement.preserved_inactive_rail_ids=captured_plan.preserved_inactive_rail_ids;
+        replacement.complete_component_dimensions=true;
+        replacement.complete_ordinary_component_dimensions=true;
+        // Discover dimensions only from the actual original source and the
+        // final dependency choices, before allocating any replacement IDs.
+        const auto plan=inspect_phase_stair_replacement_plan(source.entities(),replacement);
+        require_ready(plan);
         auto occupied=retainedSlabIdentityNames(source, true);
         // The edited topology can introduce child names that were absent from
         // the snapshot. They are source names in this proof, not destinations.
@@ -50645,6 +50658,8 @@ private:
             replacement.hosted_instance_identities.emplace(original, allocate("proposed-stair-component"));
         for (const auto& original:plan.required_overlay_ids)
             replacement.overlay_identities.emplace(original, allocate("proposed-stair-overlay"));
+        for (const auto& original:plan.required_dimension_ids)
+            replacement.dimension_identities.emplace(original, allocate("proposed-stair-dimension"));
         const auto candidate=replay_phase_stair_replacement_authoring(source.entities(), replacement);
         if (!replacement.hosted_instance_identities.empty()) {
             const auto aliases=embedded_assembly_presentation_ids(candidate);

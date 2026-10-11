@@ -2,6 +2,7 @@
 
 #include "sketch/assembly_dimension.hpp"
 
+#include <cstddef>
 #include <span>
 
 namespace sketch {
@@ -88,6 +89,16 @@ struct AssemblyDimensionTransformRequest {
     const AssemblyDocumentEntities& source,
     const AssemblyDocumentEntities& candidate,
     std::span<const std::string> actual_host_ids);
+
+// Same contribution with a caller's remaining shared association budget
+// (0..1000). Every associated target counts before measurement, including
+// unchanged frames that produce no entity upsert. The three-argument overload
+// retains its historical 1000-target bound.
+[[nodiscard]] std::vector<Entity> carry_hosted_assembly_dimension_transform_entities(
+    const AssemblyDocumentEntities& source,
+    const AssemblyDocumentEntities& candidate,
+    std::span<const std::string> actual_host_ids,
+    std::size_t maximum_associated_dimensions);
 
 // Separate current ordinary-authoring policy check for existing dimensions
 // actually changed or removed by a caller. Empty input is a no-op; otherwise

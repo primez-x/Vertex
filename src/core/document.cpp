@@ -3445,7 +3445,8 @@ static bool phase_constraint_authoring_retires_proposals(const ApplyBoundaryCons
         if (intent.contains("wall_demolition") && !intent.at("wall_demolition").is_null()) return true;
 #ifdef VERTEX_HAS_CONSTRAINT_AUTHORING
         const auto replacement_retires=[](const nlohmann::json& value) {
-            if (!value.is_object() || (value.value("version",0)!=5 && value.value("version",0)!=6)) return false;
+            if (!value.is_object() || (value.value("version",0)!=5 && value.value("version",0)!=6 &&
+                value.value("version",0)!=7 && value.value("version",0)!=8)) return false;
             const auto replacement=decode_phase_stair_replacement_authoring(value);
             return std::any_of(replacement.dependency_dispositions.begin(),replacement.dependency_dispositions.end(),
                 [](const auto& decision) { return decision.action==PhaseStairReplacementDependencyAction::retire; });
@@ -4283,6 +4284,8 @@ static void validate_phase_constraint_fresh_lifetime(const std::map<std::string,
     bool complete_opening_demolition=false;
     bool complete_component_dimension_demolition=false;
     bool complete_stair_component_dimension_copies=false;
+    bool complete_stair_ordinary_dimension_carry=false;
+    bool complete_coordinated_stair_dimension_copies=false;
     for (const auto& [id,entity] : candidate) {
         (void)entity;
         if (!source.contains(id)) fresh.insert(id);
@@ -4375,6 +4378,8 @@ static void validate_phase_constraint_fresh_lifetime(const std::map<std::string,
         if (!root_intent.coordinated_replacements.is_null()) {
             complete_envelope_reservation=true;
             roof_mixed_asset_reservation=true;
+            complete_coordinated_stair_dimension_copies=complete_coordinated_stair_dimension_copies ||
+                root_intent.coordinated_replacements.at("version")==7;
             std::vector<RoofEditIntent> ordinary_roof_edits;
             for (const auto& row : phase_constraint_coordinated_authoring_body(root_intent.coordinated_replacements).at("ordinary_roof_edits"))
                 ordinary_roof_edits.push_back(decode_roof_edit_intent(row));
@@ -4417,6 +4422,8 @@ static void validate_phase_constraint_fresh_lifetime(const std::map<std::string,
             reserve_nested(replacement.hosted_instance_identities);
             reserve_nested(replacement.overlay_identities);
             complete_stair_component_dimension_copies=complete_stair_component_dimension_copies || replacement.complete_component_dimensions;
+            complete_stair_ordinary_dimension_carry=complete_stair_ordinary_dimension_carry ||
+                replacement.complete_ordinary_component_dimensions;
             for (const auto& [original,id]:replacement.dimension_identities) {
                 (void)original;
                 // Unlike stair-local children, dimensions are persisted owners
@@ -4637,6 +4644,10 @@ static void validate_phase_constraint_fresh_lifetime(const std::map<std::string,
         for (const auto* token:{"authoring","complete_component_dimensions","dimension_identities"})
             if (fresh.contains(token))
                 throw std::invalid_argument("A proposed stair destination borrows a dimension copy proof field: "+std::string(token));
+    if (complete_coordinated_stair_dimension_copies && fresh.contains("complete_stair_component_dimensions"))
+        throw std::invalid_argument("A coordinated stair destination borrows its dimension copy proof field");
+    if (complete_stair_ordinary_dimension_carry && fresh.contains("complete_ordinary_component_dimensions"))
+        throw std::invalid_argument("A proposed stair destination borrows its ordinary dimension carry proof field");
     if (phase_drawing_enclosure) {
         // The complete new enclosure reserves every resulting or declared
         // destination against both stage vocabularies, even for older phase

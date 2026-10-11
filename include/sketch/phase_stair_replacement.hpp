@@ -164,6 +164,9 @@ struct PhaseStairReplacementAuthoring {
     // in the canonical v1..6 body. IDs are allocated by the enclosing Document.
     bool complete_component_dimensions{false};
     PhaseStairReplacementIdentityMap dimension_identities;
+    // Separate child8 carries existing dimensions on surviving changed
+    // ordinary/proposed stair and rail hosts after the complete child7 replay.
+    bool complete_ordinary_component_dimensions{false};
 };
 
 [[nodiscard]] PhaseStairReplacementPlan inspect_phase_stair_replacement_plan(
@@ -194,6 +197,11 @@ struct PhaseStairReplacementAuthoring {
 // complete_component_dimensions:true, dimension_identities:<object>}.
 // The original-source embedded dimension roster is discovered independently;
 // its exact source-to-fresh mapping supplies identities, never clone authority.
+// Closed v8 wraps exactly {version:8, authoring:<canonical child7>,
+// complete_ordinary_component_dimensions:true}. Its complete typed candidate
+// derives surviving changed active nonbaseline stair/rail hosts and carries
+// their existing embedded dimensions. Copied and ordinary dimensions share
+// the 1000-target bound; child7 retains its clone-only historical meaning.
 [[nodiscard]] nlohmann::json encode_phase_stair_replacement_authoring(
     const PhaseStairReplacementAuthoring& authoring);
 [[nodiscard]] PhaseStairReplacementAuthoring decode_phase_stair_replacement_authoring(

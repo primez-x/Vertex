@@ -14,6 +14,60 @@ changed source does not acquire runtime acceptance without later qualification.
 
 ## Current delivery state
 
+### October 11 stair transform and coordinated dimension copy integration
+
+The Properties integration is committed and pushed as 8d602800; the exact remote
+branch matches that source checkpoint. Current source work connects standalone
+stair transform/profile/compound producers to original-source dimension
+discovery and fresh allocation after final dependency decisions. The new
+coordinated inner7/outer34 enclosure admits actual stair child8 while retaining
+historical family authority and the single final ordinary-host dimension carry.
+Dimension destinations participate in cross-family freshness and saved-history
+reservation; original baseline dimensions remain exact. Reader231/extraction229
+retain the new enclosure even with an empty dimension inventory. Historical
+coordinated1 through6 cannot acquire this permission.
+
+Independent source review identified two concrete P2 gaps. The retirement
+consumer now canonical-decodes new stair leaves before checking actual retire
+decisions, preserving exact inactive annotation subsequences when earlier active
+rows disappear. Separate child8/phase35 authority also carries existing
+dimensions on changed surviving ordinary/proposed stair/rail hosts inside a
+replacement cohort. This covers a group containing both a copied baseline stair
+and a moved proposed stair; child7 remains clone-only. Copied/ordinary dimensions
+share the existing 1000-target bound. New proof-token reservation is scoped to
+the actual new enclosures, preserving historical destination vocabulary.
+
+Independent revised source review confirmed those two corrections and found a
+shared-budget gap: unchanged ordinary targets were omitted from the emitted
+change count. The hosted dimension helper now accepts a remaining association
+budget and counts every admitted target before measurement, while its existing
+three-argument API retains the historical 1000-target bound. Narrow independent
+review approves that correction with no directly introduced P1/P2. Root source
+review covers integrated codecs, actual host/copy inventories, history and reader
+consumers; scoped whitespace review passes. Git records the source backup.
+No builds/tests/jobs, launches,
+packages or installations ran, and the installed candidate remains unchanged.
+Compilation, actual canvas/Properties behavior, Undo/redo, save/reopen and
+extraction execution remain unverified. Protected wall replacement copies,
+other object-family copies, component profile/path and linked-view lifecycles,
+remaining mixed-family editing and the complete production qualification still
+require work. All ten production gates remain open; the full plan remains active.
+
+Next source work is protected wall replacement component dimensions.
+`phase_wall_replacement.cpp` currently copies ordinary boundary dimensions but
+has no qualified embedded extent roster or dimension-specific fresh map. Extend
+its actual-source hosted catalog/instance plan separately from ordinary owner
+dimensions; independent owners must remain exact. The complete original map,
+catalog budgets and precise closed targets must govern admission and dependency
+scanning. `phase_wall_replacement_command.cpp` constructs copies at its physical
+stage, then solves actual profiles/geometry and completes hosted carry. New
+component dimensions must measure those final component frames after hosted
+carry, before room-review presentation/publication; copying against the initial
+unchanged poses is insufficient. Mixed baseline/proposed cohorts also need
+explicit existing-dimension carry. Retain historical authority, original baseline
+rows/dimensions, source-bound room decisions, fresh identity/history reservations
+and current/undone format detection across controller and Properties integration.
+
 ### October 11 stair dimension Properties integration
 
 The core dimension-copy batch is committed and pushed as c8dfee40; the exact
