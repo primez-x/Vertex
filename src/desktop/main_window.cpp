@@ -58542,15 +58542,36 @@ private:
                 if (value.mixed_selection_edit_completion || !value.mixed_selection_edit_intent.is_null()) {
                     mixed_edit=true;
                     const auto intent=validate_mixed_selection_edit_intent(value.mixed_selection_edit_intent);
-                    const auto aliases=embedded_assembly_presentation_ids(source.entities());
-                    for (const auto& target:ordinary_selection_edit_semantic_targets(intent.at("ordinary_request"))) {
-                        if (target.at("kind")=="embedded") {
-                            const auto key=std::pair{target.at("catalog_id").template get<std::string>(),
-                                target.at("instance_id").template get<std::string>()};
-                            targets.insert(aliases.at(key));
-                        } else if (target.at("kind")=="annotation") {
-                            targets.insert(target.at("owner_id").template get<std::string>());
-                        } else targets.insert(target.at("entity_id").template get<std::string>());
+                    if (intent.at("version")==5 || intent.at("version")==6) {
+                        // Properties has its own typed lanes, including a null
+                        // physical lane for annotation-only edits. Gesture
+                        // ordinary_request codecs cannot decode this roster.
+                        const auto& physical=intent.at("ordinary_request");
+                        if (!physical.is_null()) for (const auto& target:physical.at("selected"))
+                            targets.insert(target.at("entity_id").template get<std::string>());
+                        const auto& presentation=intent.at("presentation_request");
+                        if (!presentation.is_null()) for (const auto& target:presentation.at("selected")) {
+                            if (target.at("family")=="reference")
+                                targets.insert(target.at("entity_id").template get<std::string>());
+                            else {
+                                targets.insert(target.at("owner_id").template get<std::string>());
+                                // Child IDs are qualified by the captured owner;
+                                // Site aliases are resolved below against that
+                                // exact original publication and child roster.
+                                targets.insert(target.at("child_id").template get<std::string>());
+                            }
+                        }
+                    } else {
+                        const auto aliases=embedded_assembly_presentation_ids(source.entities());
+                        for (const auto& target:ordinary_selection_edit_semantic_targets(intent.at("ordinary_request"))) {
+                            if (target.at("kind")=="embedded") {
+                                const auto key=std::pair{target.at("catalog_id").template get<std::string>(),
+                                    target.at("instance_id").template get<std::string>()};
+                                targets.insert(aliases.at(key));
+                            } else if (target.at("kind")=="annotation") {
+                                targets.insert(target.at("owner_id").template get<std::string>());
+                            } else targets.insert(target.at("entity_id").template get<std::string>());
+                        }
                     }
                     // Qualified children never promote their compatibility host
                     // IDs into ordinary presented-object selection authority.

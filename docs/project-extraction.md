@@ -1,5 +1,12 @@
 # Portable project extraction
 
+Exchange version192 requires native reader194 for mixed Properties dialect six
+and its explicit presentation request two. Saved-frame Symbol/Text positions
+retain exact entered quantity intents; Symbol/Reference mirrors retain absolute
+booleans and source defaults. Historical Properties dialect five retains request
+one only. Reader-floor scanning covers direct, nested, retained and undone
+proofs. Source integration does not certify runtime or round-trip fidelity.
+
 Exchange version191 requires native reader193 for mixed scalar Properties
 dialect five in command envelope52, including its complete typed selected
 rosters, original snapshot/save bindings and mandatory room decisions. The

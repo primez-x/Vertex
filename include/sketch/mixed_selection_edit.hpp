@@ -87,6 +87,8 @@ private:
 // mixed_selection_property_edit.hpp. It rederives physical/presentation/child
 // edits together and requires every affected retained-room review. Historical
 // gesture requests keep their original versions and meanings.
+// Version six retains that composition with explicit presentation request two
+// placement/mirror authority; version five remains limited to request one.
 [[nodiscard]] nlohmann::json make_mixed_selection_edit_intent(
     const DocumentSnapshot& source, const nlohmann::json& ordinary_request,
     const nlohmann::json& roof_authoring, const nlohmann::json& roof_members,

@@ -1,4 +1,29 @@
-# Vertex project formats v1 through v193
+# Vertex project formats v1 through v194
+
+## Saved-frame presentation pose Properties (v194, source implementation)
+
+Mixed edit dialect six in command envelope52 requires presentation request two.
+Historical mixed dialect five still requires request one. The new request adds
+signed two-quantity `position` to every Symbol/Text presentation patch and
+nullable absolute `flip_horizontal`/`flip_vertical` to every Symbol/Reference
+row. Request two must contain at least one supplied new field; typed inputs with
+all new fields absent emit request one and mixed dialect five. An explicit false
+mirror is a supplied field. Equal edits preserve the exact original raw values.
+
+Positions retain the child's saved placement frame, layer and model-plan flag.
+They do not convert contexts or authorize new owners. The saved annotation
+schema carries numeric coordinates; exact entered quantities remain in the
+command intent without invented annotation receipt fields. A partial X/Y dialog
+edit reconstructs the other actual coordinate exactly, independently of optional
+historical raw receipts. Reference assets, calibration, artwork, opaque siblings
+and original save/history authority remain unchanged. Legacy symbol mirror
+changes use the existing annotation schema promotion; equal absent-default
+mirrors do not add fields or promote schemas.
+
+The complete original-source composition, mandatory room decisions and atomic
+publication are unchanged. Reader194/extraction192 cover direct, nested,
+retained and undone command proofs. Source integration is not compilation,
+interaction, save/reopen or recovery acceptance.
 
 ## Mixed scalar Properties (v193, source implementation)
 

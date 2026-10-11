@@ -203,7 +203,12 @@ void validate(const Json& value) {
     fields(value, {"version", "expected_revision", "source_snapshot_digest", "source_authoring_digest",
         "source_entities_digest", "source_saved_revision", "ordinary_request", "presentation_request",
         "skylight_properties", "roof_opening_members", "room_reviews", "message"});
-    if (!value.at("version").is_number_integer() || value.at("version") != 5) reject("unsupported Properties dialect");
+    if (!value.at("version").is_number_integer() ||
+        (value.at("version") != 5 && value.at("version") != 6)) reject("unsupported Properties dialect");
+    const bool pose_dialect = value.at("version") == 6;
+    const auto& presentation = value.at("presentation_request");
+    if (pose_dialect && (presentation.is_null() || presentation.value("version", Json()) != 2))
+        reject("pose Properties requires its explicit presentation dialect two");
     (void)revision(value.at("expected_revision"));
     for (const auto* key : {"source_snapshot_digest", "source_authoring_digest", "source_entities_digest"}) digest(value.at(key));
     if (!value.at("source_saved_revision").is_null()) (void)revision(value.at("source_saved_revision"));
@@ -217,7 +222,11 @@ void validate(const Json& value) {
         const auto& lane = value.at(name);
         if (lane.is_null()) continue;
         if (std::string_view(name) == "ordinary_request") (void)validate_selection_property_edit_request(lane);
-        else (void)validate_selection_presentation_property_edit_request(lane);
+        else {
+            (void)validate_selection_presentation_property_edit_request(lane);
+            if (lane.at("version") != (pose_dialect ? 2 : 1))
+                reject("presentation dialect differs from complete Properties authority");
+        }
         for (const auto* fence : {"expected_revision", "source_snapshot_digest", "source_authoring_digest",
                 "source_entities_digest", "source_saved_revision"})
             if (lane.at(fence).dump() != value.at(fence).dump()) reject("leaf source fences differ from complete original source");
@@ -426,6 +435,8 @@ MixedSelectionPropertyEditPreparation prepare_mixed_selection_property_edit(cons
     value["version"] = 5;
     value["ordinary_request"] = ordinary ? ordinary_request(source, *ordinary) : Json(nullptr);
     value["presentation_request"] = presentation ? prepare_selection_presentation_property_edit(source, *presentation).request() : Json(nullptr);
+    if (!value.at("presentation_request").is_null() && value.at("presentation_request").at("version") == 2)
+        value["version"] = 6;
     value["skylight_properties"] = children ? skylight_properties(*children) : Json(nullptr);
     value["roof_opening_members"] = Json::array();
     if (children) for (const auto& member : children->members)

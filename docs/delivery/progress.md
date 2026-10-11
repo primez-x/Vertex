@@ -14,6 +14,49 @@ changed source does not acquire runtime acceptance without later qualification.
 
 ## Current delivery state
 
+### October 10 presentation placement and mirror Properties - source integration
+
+The ordinary native-group batch is committed and pushed as b6b93f14, with exact
+local and remote branch references matched. Current source adds signed X/Y
+quick-Properties controls for Symbols and Text, plus absolute horizontal and
+vertical mirror controls for Symbols and Reference images. Blank controls
+preserve every selected member; a partial coordinate edit retains the other
+actual number exactly. Positions use each child's saved drawing frame and do
+not reassign contexts, alter model-plan anchoring or replace calibration/assets.
+
+Presentation request two owns the new placement/mirror fields and is emitted
+only when at least one is supplied, including an explicit false or same-value
+mirror. Historical request one keeps its exact closed fields. Mixed Properties
+dialect six requires request two; historical dialect five remains request-one
+only. Both use existing atomic command52 and complete original-source room
+review. Reader194/extraction192 cover direct, nested, retained and undone proofs.
+Equal coordinates/mirrors retain exact raw source; changed legacy-symbol mirrors
+use existing targeted schema promotion, preserving pinned artwork and siblings.
+
+Integration found an existing Site Properties dispatch defect: its physical
+request was passed to the ordinary gesture decoder, including null requests
+for annotation-only selections. Properties five/six now read their own typed
+rosters and fence actual annotation aliases through original qualified owners
+and published frames. Both phase proof walkers distinguish these Properties
+dialects from gesture roof-authoring proofs. Independent source review approved
+the integrated codec, history floors, UI interfaces and Site admission; root
+reviewed the diff and scoped whitespace checking passed.
+
+Focused architectural Properties discovery found existing closed edit/capture
+and phase replacement APIs for stairs/railings and structural columns/beams,
+but no selected-group Properties lane for those families. Reuse those producers
+when completing the roster, including active-baseline replacement and stair
+dependents. Assembly type/root/nested override authoring has a separate existing
+model and needs explicit group-property composition. No authoritative footing
+source type was found in that bounded inspection; this remains a gap to resolve,
+not permission to substitute a column symbol. Directional mixed geometry still
+requires the previously recorded complete operator and replay work.
+
+No builds, tests/new tests, scripts/probes, native jobs, launches, packages or
+installations have run. Compilation, UI appearance/interaction, Undo/Redo and
+save/reopen remain unverified. The installed app is unchanged and all ten
+production gates remain open.
+
 ### October 10 ordinary 3D group controls - source integration
 
 Floor scaling planes and contextual Text/Reference fields are committed and

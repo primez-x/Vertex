@@ -154,7 +154,7 @@ struct Fields {
     QLineEdit *width{}, *depth{}, *height{}, *thickness{}, *elevation{}, *offset{}, *sill{},
         *rise{}, *overhang{}, *rotation{}, *outline{}, *surface{}, *content{}, *scale{},
         *intensity{}, *frame{}, *curb{}, *glazing{}, *font{}, *x{}, *y{};
-    QComboBox *visible{}, *layer{}, *bold{}, *italic{}, *alignment{};
+    QComboBox *visible{}, *layer{}, *bold{}, *italic{}, *alignment{}, *flip_horizontal{}, *flip_vertical{};
 };
 struct LayerInput {
     std::string id;
@@ -538,11 +538,15 @@ public:
                 appearance_forms.emplace(target.family, form);
                 auto& f = appearances[target.family];
                 if (target.family == SelectionPresentationPropertyFamily::symbol) {
+                    f.x = dimension(form, "X position", "selectionSymbolX");
+                    f.y = dimension(form, "Y position", "selectionSymbolY");
                     f.width = dimension(form, "Physical width", "selectionSymbolWidth");
                     f.depth = dimension(form, "Physical depth", "selectionSymbolDepth");
                     f.outline = field(form, "Outline color", "selectionSymbolOutline", "#111111 (unchanged)");
                     f.surface = field(form, "Surface color", "selectionSymbolSurface", "#FFFFFF (unchanged)");
                 } else if (target.family == SelectionPresentationPropertyFamily::label) {
+                    f.x = dimension(form, "X position", "selectionLabelX");
+                    f.y = dimension(form, "Y position", "selectionLabelY");
                     f.content = field(form, "Text", "selectionLabelContent");
                     f.content->setMaxLength(65536);
                     f.height = dimension(form, "Text size", "selectionLabelSize");
@@ -558,6 +562,14 @@ public:
                     f.scale = field(form, "Scale", "selectionReferenceScale");
                     f.scale->setToolTip("Absolute image scale relative to its calibrated source. Leave blank to retain each current scale.");
                     f.intensity = field(form, "Intensity (0–1)", "selectionReferenceIntensity");
+                }
+                for (auto* coordinate : {f.x, f.y})
+                    coordinate->setToolTip("Position in each object's saved drawing coordinates. Leave blank to retain its current position.");
+                if (target.family != SelectionPresentationPropertyFamily::label) {
+                    f.flip_horizontal = choice(form, "Mirror horizontally", target.family == SelectionPresentationPropertyFamily::symbol ?
+                        "selectionSymbolMirrorHorizontal" : "selectionReferenceMirrorHorizontal", {"On", "Off"});
+                    f.flip_vertical = choice(form, "Mirror vertically", target.family == SelectionPresentationPropertyFamily::symbol ?
+                        "selectionSymbolMirrorVertical" : "selectionReferenceMirrorVertical", {"On", "Off"});
                 }
                 f.rotation = field(form, "Rotation (degrees)", target.family == SelectionPresentationPropertyFamily::symbol ?
                     "selectionSymbolRotation" : target.family == SelectionPresentationPropertyFamily::label ?
@@ -578,6 +590,8 @@ public:
                 current(f.intensity, q(native(original.properties.value("intensity", 1.0))));
                 current(f.rotation, q(native(original.properties.value("rotation_degrees", 0.0))) + "°");
                 current_visibility(f.visible, original.properties.value("visible", true));
+                current_choice(f.flip_horizontal, original.properties.value("flip_horizontal", false) ? "on" : "off");
+                current_choice(f.flip_vertical, original.properties.value("flip_vertical", false) ? "on" : "off");
                 row(name(original, QString("Reference image %1").arg(static_cast<qulonglong>(presentation.size() + 1))),
                     "Reference image", q(target.owner_id));
             } else {
@@ -602,6 +616,10 @@ public:
                     if (value.symbol->definition) value.definition = *value.symbol->definition;
                     const auto& f = appearances.at(target.family);
                     const auto& symbol = *value.symbol;
+                    current_length(f.x, symbol.placement.position.x);
+                    current_length(f.y, symbol.placement.position.y);
+                    current_choice(f.flip_horizontal, symbol.flip_horizontal ? "on" : "off");
+                    current_choice(f.flip_vertical, symbol.flip_vertical ? "on" : "off");
                     current_length(f.width, value.definition->width_metres * (symbol.placement.scale * symbol.width_scale));
                     current_length(f.depth, value.definition->depth_metres * (symbol.placement.scale * symbol.depth_scale));
                     current_angle(f.rotation, symbol.placement.rotation_radians);
@@ -613,6 +631,8 @@ public:
                         q(target.owner_id + " / " + target.child_id));
                 } else {
                     const auto& f = appearances.at(target.family);
+                    current_length(f.x, value.label->placement.position.x);
+                    current_length(f.y, value.label->placement.position.y);
                     current(f.content, q(value.label->content));
                     current_length(f.height, value.label->style.text_height_metres);
                     current(f.outline, q(value.label->style.stroke_color));
@@ -786,10 +806,23 @@ public:
                 intent.scale = number(f.scale, std::numeric_limits<double>::min(), std::numeric_limits<double>::max());
                 intent.intensity = number(f.intensity, 0, 1);
                 intent.visible = visibility(f.visible);
+                intent.flip_horizontal = visibility(f.flip_horizontal);
+                intent.flip_vertical = visibility(f.flip_vertical);
                 request.references.push_back(std::move(intent));
                 continue;
             }
             SelectionAnnotationPresentationPropertyEdit patch;
+            const auto x = length(f.x, unit, false, true);
+            const auto y = length(f.y, unit, false, true);
+            if (x || y) {
+                const auto& original = source.entities().at(target.owner_id);
+                const auto& position = value.symbol ? value.symbol->placement.position : value.label->placement.position;
+                // Keep the saved source frame and each member's actual untouched
+                // coordinate; optional raw receipts may refer to an older pose.
+                patch.position = std::array<Quantity, 2>{
+                    x ? *x : exact_numeric_quantity(original, position.x),
+                    y ? *y : exact_numeric_quantity(original, position.y)};
+            }
             patch.rotation_radians = angle(f.rotation);
             patch.visible = visibility(f.visible);
             patch.layer_id = annotation_layer(f.layer);
@@ -800,6 +833,8 @@ public:
                 intent.child_id = target.child_id;
                 intent.width = length(f.width, unit);
                 intent.depth = length(f.depth, unit);
+                intent.flip_horizontal = visibility(f.flip_horizontal);
+                intent.flip_vertical = visibility(f.flip_vertical);
                 const auto surface = color(f.surface);
                 if (outline || surface) {
                     if (value.definition->svg_asset) {

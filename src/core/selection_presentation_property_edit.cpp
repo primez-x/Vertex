@@ -152,6 +152,14 @@ Json quantity(const Quantity& value) {
 }
 template<class T> Json nullable(const std::optional<T>& value) { return value ? Json(*value) : Json(nullptr); }
 Json quantity(const std::optional<Quantity>& value) { return value ? quantity(*value) : Json(nullptr); }
+Json position(const std::optional<std::array<Quantity, 2>>& value) {
+    return value ? Json::array({quantity((*value)[0]), quantity((*value)[1])}) : Json(nullptr);
+}
+void validate_position(const Json& value) {
+    if (value.is_null()) return;
+    if (!value.is_array() || value.size() != 2) reject("position requires two quantities");
+    for (const auto& coordinate : value) (void)quantity(coordinate, -1);
+}
 Json palette(const SymbolSvgPalette& value) {
     if (value.profile.size() > 256 || value.outline_color.size() > 7 || value.surface_color.size() > 7)
         reject("palette string budget exceeded");
@@ -191,17 +199,21 @@ void validate_style(const Json& value) {
         if (!value.at("fill_opacity").at("value").is_null()) fraction(value.at("fill_opacity").at("value"));
     }
 }
-Json presentation(const SelectionAnnotationPresentationPropertyEdit& value) {
+Json presentation(const SelectionAnnotationPresentationPropertyEdit& value, bool pose) {
     if (value.layer_id && value.layer_id->size() > 256) reject("layer identity budget exceeded");
-    return {{"rotation_radians", nullable(value.rotation_radians)}, {"visible", nullable(value.visible)},
+    Json result{{"rotation_radians", nullable(value.rotation_radians)}, {"visible", nullable(value.visible)},
         {"style", value.style ? style(*value.style) : Json(nullptr)}, {"layer_id", nullable(value.layer_id)}};
+    if (pose) result["position"] = position(value.position);
+    return result;
 }
-void validate_presentation(const Json& value) {
-    fields(value, {"rotation_radians", "visible", "style", "layer_id"});
+void validate_presentation(const Json& value, bool pose) {
+    if (pose) fields(value, {"rotation_radians", "visible", "style", "layer_id", "position"});
+    else fields(value, {"rotation_radians", "visible", "style", "layer_id"});
     if (!value.at("rotation_radians").is_null()) (void)number(value.at("rotation_radians"));
     if (!value.at("visible").is_null()) boolean(value.at("visible"));
     if (!value.at("style").is_null()) validate_style(value.at("style"));
     if (!value.at("layer_id").is_null()) (void)identity(value.at("layer_id"));
+    if (pose) validate_position(value.at("position"));
 }
 const char* family_name(SelectionPresentationPropertyFamily family) {
     switch (family) {
@@ -233,7 +245,10 @@ void validate_request(const Json& value) {
     Budget{}.visit(value); // Before copying, dumping or traversing nested codecs.
     fields(value, {"version", "expected_revision", "source_snapshot_digest", "source_authoring_digest",
         "source_entities_digest", "source_saved_revision", "selected", "symbols", "labels", "references", "unchanged_policy"});
-    if (!value.at("version").is_number_integer() || value.at("version") != 1) reject("unsupported request version");
+    if (!value.at("version").is_number_integer() ||
+        (value.at("version") != 1 && value.at("version") != 2)) reject("unsupported request version");
+    const bool pose = value.at("version") == 2;
+    bool supplied_pose = false;
     (void)revision(value.at("expected_revision"));
     if (!value.at("source_saved_revision").is_null()) (void)revision(value.at("source_saved_revision"));
     for (const auto* key : {"source_snapshot_digest", "source_authoring_digest", "source_entities_digest"}) digest(value.at(key));
@@ -272,10 +287,13 @@ void validate_request(const Json& value) {
             const bool symbol = std::string_view(lane) == "symbols", label = std::string_view(lane) == "labels";
             Key key;
             if (symbol || label) {
-                if (symbol) fields(row, {"owner_id", "child_id", "presentation", "width", "depth", "svg_palette"});
+                if (symbol && pose) fields(row, {"owner_id", "child_id", "presentation", "width", "depth", "svg_palette",
+                    "flip_horizontal", "flip_vertical"});
+                else if (symbol) fields(row, {"owner_id", "child_id", "presentation", "width", "depth", "svg_palette"});
                 else fields(row, {"owner_id", "child_id", "presentation", "content"});
                 key = qualified(row);
-                validate_presentation(row.at("presentation"));
+                validate_presentation(row.at("presentation"), pose);
+                if (pose && !row.at("presentation").at("position").is_null()) supplied_pose = true;
                 if (symbol) {
                     for (const auto* dimension : {"width", "depth"})
                         if (!row.at(dimension).is_null()) (void)quantity(row.at(dimension), 1);
@@ -285,16 +303,19 @@ void validate_request(const Json& value) {
                     }
                 } else if (!row.at("content").is_null()) (void)text(row.at("content"), 65536, false);
             } else {
-                fields(row, {"entity_id", "position", "rotation_degrees", "scale", "visible", "intensity"});
+                if (pose) fields(row, {"entity_id", "position", "rotation_degrees", "scale", "visible", "intensity",
+                    "flip_horizontal", "flip_vertical"});
+                else fields(row, {"entity_id", "position", "rotation_degrees", "scale", "visible", "intensity"});
                 key = {identity(row.at("entity_id")), {}};
-                if (!row.at("position").is_null()) {
-                    if (!row.at("position").is_array() || row.at("position").size() != 2) reject("position requires two quantities");
-                    for (const auto& coordinate : row.at("position")) (void)quantity(coordinate, -1);
-                }
+                validate_position(row.at("position"));
                 if (!row.at("rotation_degrees").is_null()) (void)number(row.at("rotation_degrees"));
                 if (!row.at("scale").is_null()) positive(row.at("scale"));
                 if (!row.at("visible").is_null()) boolean(row.at("visible"));
                 if (!row.at("intensity").is_null()) fraction(row.at("intensity"));
+            }
+            if (pose && !label) for (const auto* mirror : {"flip_horizontal", "flip_vertical"}) {
+                if (row.at(mirror).is_null()) continue;
+                boolean(row.at(mirror)); supplied_pose = true;
             }
             if ((!prior.first.empty() && key <= prior) ||
                 !covered.emplace(key, symbol ? "symbol" : label ? "label" : "reference").second)
@@ -303,6 +324,7 @@ void validate_request(const Json& value) {
         }
     }
     if (declared != covered) reject("selected roster must exactly match all typed members and families");
+    if (pose && !supplied_pose) reject("request version 2 requires a supplied pose field");
     if (value.dump().size() > byte_limit) reject("wire byte budget exceeded"); // Also verifies portable UTF-8.
 }
 
@@ -312,6 +334,13 @@ Json encode_request(const DocumentSnapshot& source, const SelectionPresentationP
         request.labels.size() > target_limit || request.references.size() > target_limit) reject("typed target budget exceeded");
     if (request.unchanged_policy != SelectionPresentationPropertyUnchangedPolicy::reject &&
         request.unchanged_policy != SelectionPresentationPropertyUnchangedPolicy::retain) reject("unsupported unchanged policy");
+    const bool pose = std::any_of(request.symbols.begin(), request.symbols.end(), [](const auto& intent) {
+        return intent.presentation.position.has_value() || intent.flip_horizontal.has_value() || intent.flip_vertical.has_value();
+    }) || std::any_of(request.labels.begin(), request.labels.end(), [](const auto& intent) {
+        return intent.presentation.position.has_value();
+    }) || std::any_of(request.references.begin(), request.references.end(), [](const auto& intent) {
+        return intent.flip_horizontal.has_value() || intent.flip_vertical.has_value();
+    });
     Json selected = Json::array(), symbols = Json::array(), labels = Json::array(), references = Json::array();
     Budget budget;
     const auto append = [&](Json& array, Json row) { budget.visit(row); array.push_back(std::move(row)); };
@@ -326,22 +355,30 @@ Json encode_request(const DocumentSnapshot& source, const SelectionPresentationP
         if (intent.owner_id.size() > 256 || intent.child_id.size() > 256) reject("symbol identity budget exceeded");
         Json svg = nullptr;
         if (intent.svg_palette) svg = {{"value", *intent.svg_palette ? palette(**intent.svg_palette) : Json(nullptr)}};
-        append(symbols, {{"owner_id", intent.owner_id}, {"child_id", intent.child_id}, {"presentation", presentation(intent.presentation)},
-            {"width", quantity(intent.width)}, {"depth", quantity(intent.depth)}, {"svg_palette", std::move(svg)}});
+        Json row{{"owner_id", intent.owner_id}, {"child_id", intent.child_id}, {"presentation", presentation(intent.presentation, pose)},
+            {"width", quantity(intent.width)}, {"depth", quantity(intent.depth)}, {"svg_palette", std::move(svg)}};
+        if (pose) {
+            row["flip_horizontal"] = nullable(intent.flip_horizontal);
+            row["flip_vertical"] = nullable(intent.flip_vertical);
+        }
+        append(symbols, std::move(row));
     }
     for (const auto& intent : request.labels) {
         if (intent.owner_id.size() > 256 || intent.child_id.size() > 256 ||
             (intent.content && intent.content->size() > 65536)) reject("label field budget exceeded");
-        append(labels, {{"owner_id", intent.owner_id}, {"child_id", intent.child_id}, {"presentation", presentation(intent.presentation)},
+        append(labels, {{"owner_id", intent.owner_id}, {"child_id", intent.child_id}, {"presentation", presentation(intent.presentation, pose)},
             {"content", nullable(intent.content)}});
     }
     for (const auto& intent : request.references) {
         if (intent.entity_id.size() > 256) reject("reference identity budget exceeded");
-        Json position = nullptr;
-        if (intent.position) position = Json::array({quantity((*intent.position)[0]), quantity((*intent.position)[1])});
-        append(references, {{"entity_id", intent.entity_id}, {"position", std::move(position)},
+        Json row{{"entity_id", intent.entity_id}, {"position", position(intent.position)},
             {"rotation_degrees", nullable(intent.rotation_degrees)}, {"scale", nullable(intent.scale)},
-            {"visible", nullable(intent.visible)}, {"intensity", nullable(intent.intensity)}});
+            {"visible", nullable(intent.visible)}, {"intensity", nullable(intent.intensity)}};
+        if (pose) {
+            row["flip_horizontal"] = nullable(intent.flip_horizontal);
+            row["flip_vertical"] = nullable(intent.flip_vertical);
+        }
+        append(references, std::move(row));
     }
     const auto sort = [](Json& array, bool roster, bool reference) {
         std::sort(array.begin(), array.end(), [&](const Json& a, const Json& b) {
@@ -353,7 +390,7 @@ Json encode_request(const DocumentSnapshot& source, const SelectionPresentationP
         });
     };
     sort(selected, true, false); sort(symbols, false, false); sort(labels, false, false); sort(references, false, true);
-    Json result{{"version", 1}, {"expected_revision", source.revision()},
+    Json result{{"version", pose ? 2 : 1}, {"expected_revision", source.revision()},
         {"source_snapshot_digest", document_snapshot_digest(source)},
         {"source_authoring_digest", document_authoring_source_digest_v2(source)},
         {"source_entities_digest", entity_map_digest(source.entities())},
@@ -465,6 +502,15 @@ void patch_style(Entity& candidate, const AnnotationState& original, Json& raw, 
 void patch_presentation(Entity& candidate, const Entity& source, const AnnotationState& original,
     const ProjectOrganization& organization, Json& raw, const AnnotationPlacement& placement,
     const AnnotationStyle& old_style, bool visible, const Json& request) {
+    if (request.contains("position") && !request.at("position").is_null()) {
+        // The request retains exact quantities; the saved annotation schema owns
+        // numeric coordinates only. Retain each equal raw axis independently.
+        for (std::size_t i = 0; i < 2; ++i) {
+            const auto wanted = quantity(request.at("position").at(i), -1).metres;
+            const auto previous = i == 0 ? placement.position.x : placement.position.y;
+            if (wanted != previous) raw["placement"][i == 0 ? "x" : "y"] = wanted;
+        }
+    }
     patch(raw.at("placement"), "rotation_radians", request.at("rotation_radians"), placement.rotation_radians);
     patch(raw, "visible", request.at("visible"), visible);
     assign_layer(organization, source, raw.at("placement"), request.at("layer_id"));
@@ -507,6 +553,14 @@ void replay_annotations(const DocumentSnapshot& source, const Json& request, Ent
             validate_child_context(organization, *item.source, old.placement);
             patch_presentation(item.candidate, *item.source, item.original, organization, raw,
                 old.placement, old.style, old.visible, row.at("presentation"));
+            if (request.at("version") == 2) for (const auto* mirror : {"flip_horizontal", "flip_vertical"}) {
+                const auto& value = row.at(mirror);
+                const bool previous = std::string_view(mirror) == "flip_horizontal" ? old.flip_horizontal : old.flip_vertical;
+                if (!value.is_null() && value != previous) {
+                    promote(item.candidate, item.original, 3);
+                    raw[mirror] = value;
+                }
+            }
             // Appearance authoring uses the saved definition directly. The
             // rendering resolver intentionally suppresses stale external SVG
             // paths and must not remove saved palette eligibility here.
@@ -600,6 +654,8 @@ void replay_references(const DocumentSnapshot& source, const Json& request, Enti
         patch(p, "scale", row.at("scale"), reference_number(original, "scale", 1));
         patch(p, "visible", row.at("visible"), reference_boolean(original, "visible", true));
         patch(p, "intensity", row.at("intensity"), reference_number(original, "intensity", 1));
+        if (request.at("version") == 2) for (const auto* mirror : {"flip_horizontal", "flip_vertical"})
+            patch(p, mirror, row.at(mirror), reference_boolean(original, mirror, false));
         validate_reference(source, candidate);
         result.at(id) = std::move(candidate);
     }

@@ -275,7 +275,9 @@ public:
     // v191 retains separate model-label baselines and invariant roof-child proofs.
     // v192 retains selected similarity geometry, joint v11 and measured replay v6.
     // v193 retains mixed scalar Properties with exact typed room decisions.
-    static constexpr std::uint32_t format_version = 193;
+    // v194 retains explicit saved-frame annotation positions and symbol/reference
+    // mirrors in mixed Properties dialect six without broadening dialect five.
+    static constexpr std::uint32_t format_version = 194;
     static constexpr std::uint32_t recovery_format_version = 4;
     [[nodiscard]] static std::uint32_t required_format_version(const DocumentSnapshot& snapshot);
     static constexpr std::uint64_t maximum_file_bytes = 4ULL * 1024ULL * 1024ULL * 1024ULL;

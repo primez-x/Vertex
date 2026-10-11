@@ -48,6 +48,8 @@ struct SelectionAnnotationPresentationPropertyEdit {
     // context-free carrier; contradictory owner context cannot fall back.
     // No owner recontextualization, coordinate conversion or material authority.
     std::optional<std::string> layer_id;
+    // Signed coordinates in this child's existing saved placement frame.
+    std::optional<std::array<Quantity, 2>> position;
 };
 
 struct SelectionSymbolPropertyEditIntent {
@@ -58,6 +60,9 @@ struct SelectionSymbolPropertyEditIntent {
     std::optional<Quantity> width;
     std::optional<Quantity> depth;
     std::optional<std::optional<SymbolSvgPalette>> svg_palette;
+    // Absolute mirror states on the saved definition's local axes.
+    std::optional<bool> flip_horizontal;
+    std::optional<bool> flip_vertical;
 };
 
 struct SelectionLabelPropertyEditIntent {
@@ -74,6 +79,8 @@ struct SelectionReferencePropertyEditIntent {
     std::optional<double> scale;
     std::optional<bool> visible;
     std::optional<double> intensity;
+    std::optional<bool> flip_horizontal;
+    std::optional<bool> flip_vertical;
 };
 
 struct SelectionPresentationPropertyEditRequest {
@@ -103,13 +110,13 @@ private:
         const DocumentSnapshot&, const nlohmann::json&);
 };
 
-// Closed canonical v1 with full snapshot, authoring-v2, entity-map and saved
+// Closed canonical v1/v2 with full snapshot, authoring-v2, entity-map and saved
 // revision fences. All members, including retained ones, appear exactly once
 // in both the sorted selected roster and their typed lane. Qualified annotation
 // identities may repeat across owners but never alias symbols and labels in
 // one owner. References use their actual entity identity. Strict nullable patch
 // fields, 1..1000 members, 4 MiB wire, 100000 values, depth 64. No caller maps,
-// names, definitions, asset/calibration replacement, flips or model-plan changes.
+// names, definitions, asset/calibration replacement or model-plan changes.
 // Envelope fields: version, expected_revision, source_snapshot_digest,
 // source_authoring_digest, source_entities_digest, source_saved_revision,
 // selected, symbols, labels, references, unchanged_policy. Annotation selected
@@ -121,6 +128,11 @@ private:
 // outline_color,surface_color. Quantities use the shared exact v1 receipt shape.
 // Symbol rows additionally have width,depth,svg_palette; label rows have content.
 // Reference rows carry entity_id,position,rotation_degrees,scale,visible,intensity.
+// V1 retains exactly those fields. V2 adds nullable position to every annotation
+// presentation and nullable flip_horizontal/flip_vertical to every symbol and
+// reference row. V2 requires at least one nonnull new field; typed requests with
+// all new fields absent emit v1. Position uses two signed quantity receipts;
+// mirrors are absolute booleans. Equal or absent fields retain exact raw source.
 // Roster ordering is owner/entity ID then child ID; each lane follows that order.
 [[nodiscard]] nlohmann::json validate_selection_presentation_property_edit_request(const nlohmann::json&);
 [[nodiscard]] SelectionPresentationPropertyEditPreparation prepare_selection_presentation_property_edit(
