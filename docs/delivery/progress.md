@@ -14,6 +14,35 @@ changed source does not acquire runtime acceptance without later qualification.
 
 ## Current delivery state
 
+### October 10 reviewed stair and railing group Properties - source integration
+
+Scalar stair/railing Properties are committed and pushed as f0e3c733. The next
+source batch connects the existing dependency-review dialog to multi-object
+Properties, requires explicit rehost/retirement choices and composes their exact
+producer-derived consequences with other selected families. A closed original-
+snapshot request and independent composer preserve selected retained members,
+surviving aliases, protected owners and the exact authenticated removal closure.
+Selected rails are removed from the restored selection only when explicitly
+retired. Concurrent same-host rail dimension edits use their final dimensions
+when inspecting fit and keep those values when applying an explicit rehost
+choice. Typed retirement also admits its derived design-registry cleanup while
+preserving inactive annotation rows by exact subsequence in live and retained
+replay. Reader197/extraction195 cover retained history. Independent source review
+identified the scalar-edit/rehost conflict and a final-admission registry freeze
+that prevented explicit proposed-rail retirement. Root corrected both; follow-up
+source review found those corrections preserve historical authority and protect
+inactive annotation rows. Scoped whitespace checking passed. Runtime acceptance
+remains open.
+
+The per-instance assembly producer has returned from its worker. UI, complete-
+selection composition and history integration remain pending; shared type/profile
+editing has wider authority and remains distinct. Active-baseline Properties,
+directional mixed resizing and vertical 3D group movement are still required.
+
+No builds, tests/new tests, scripts/probes, native jobs, launches, packages or
+installations have run. The installed app is unchanged. Compilation, interaction,
+Undo/Redo and save/reopen remain unverified; all ten production gates remain open.
+
 ### October 10 stair and railing group Properties - source integration
 
 Column and beam Properties are committed and pushed as 163e2622, with exact

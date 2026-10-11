@@ -63,6 +63,7 @@
 #include "sketch/mixed_wall_opening_removal.hpp"
 #include "sketch/drawing_removal_command.hpp"
 #include "sketch/stair_edit_dependencies.hpp"
+#include "sketch/stair_property_review.hpp"
 #include "sketch/opening_architectural_removal.hpp"
 #include "sketch/phase_roof_replacement.hpp"
 #include "sketch/phase_slab_replacement.hpp"
@@ -58542,13 +58543,18 @@ private:
                 if (value.mixed_selection_edit_completion || !value.mixed_selection_edit_intent.is_null()) {
                     mixed_edit=true;
                     const auto intent=validate_mixed_selection_edit_intent(value.mixed_selection_edit_intent);
-                    if (intent.at("version")==5 || intent.at("version")==6 || intent.at("version")==7 || intent.at("version")==8) {
+                    if (intent.at("version")==5 || intent.at("version")==6 || intent.at("version")==7 || intent.at("version")==8 || intent.at("version")==9) {
                         // Properties has its own typed lanes, including a null
                         // physical lane for annotation-only edits. Gesture
                         // ordinary_request codecs cannot decode this roster.
                         const auto& physical=intent.at("ordinary_request");
                         if (!physical.is_null()) for (const auto& target:physical.at("selected"))
                             targets.insert(target.at("entity_id").template get<std::string>());
+                        if (intent.at("version")==9) {
+                            const auto review=decode_stair_property_review_request(intent.at("stair_review_request"));
+                            for (const auto& profile:review.profiles) targets.insert(profile.object_id);
+                            for (const auto& choice:review.dependency_dispositions) targets.insert(choice.rail_id);
+                        }
                         const auto& presentation=intent.at("presentation_request");
                         if (!presentation.is_null()) for (const auto& target:presentation.at("selected")) {
                             if (target.at("family")=="reference")
@@ -69300,8 +69306,47 @@ public:
             if (dialog.exec()!=QDialog::Accepted) return;
             fence();
             const std::string message="Edit selection properties";
-            const auto prepared=prepare_mixed_selection_property_edit(*source,dialog.ordinaryRequest(),
-                dialog.presentationRequest(),dialog.roofOpeningProperties(),message);
+            const auto ordinary_request=dialog.ordinaryRequest();
+            std::optional<StairPropertyReviewRequest> stair_review;
+            std::vector<std::string> retired_stair_rails;
+            if (ordinary_request && !ordinary_request->stair_profiles.empty()) {
+                const auto plan=inspect_stair_property_review_dependencies(*source,ordinary_request->stair_profiles);
+                if (!plan.ready()) {
+                    std::string reasons;
+                    for (const auto& diagnostic:plan.diagnostics) if (diagnostic.blocking) {
+                        if (!reasons.empty()) reasons+='\n';
+                        reasons+=diagnostic.reason;
+                    }
+                    throw std::invalid_argument(reasons.empty() ? "The stair attachments could not be reviewed." : reasons);
+                }
+                if (!plan.dependencies.empty()) {
+                    auto edited=prepare_stair_profile_edit_entities(source->entities(),ordinary_request->stair_profiles);
+                    std::erase_if(edited,[&](const auto& entity) {
+                        const auto& original=source->entities().at(entity.id);
+                        return entity==original && entity.properties.dump()==original.properties.dump() &&
+                            entity.extensions.dump()==original.extensions.dump();
+                    });
+                    fence();
+                    StairDependencyReviewDialog dependency_dialog(*source,plan,[&] {
+                        fence();return authoringSnapshot();
+                    },owner);
+                    dependency_dialog.setDispositionValidator([source,edited](const auto& choices) {
+                        validate_ordinary_stair_dependency_dispositions(source->entities(),edited,choices);
+                    });
+                    styleDialog(dependency_dialog);
+                    if (dependency_dialog.exec()!=QDialog::Accepted || !dependency_dialog.acceptedDispositions()) return;
+                    fence();
+                    const auto reviewed=prepare_stair_property_review(*source,ordinary_request->stair_profiles,
+                        *dependency_dialog.acceptedDispositions(),message);
+                    stair_review=decode_stair_property_review_request(reviewed.request());
+                    retired_stair_rails=reviewed.retired_rail_ids();
+                }
+            }
+            const auto prepared=stair_review
+                ? prepare_mixed_selection_property_edit(*source,ordinary_request,dialog.presentationRequest(),
+                    dialog.roofOpeningProperties(),message,*stair_review)
+                : prepare_mixed_selection_property_edit(*source,ordinary_request,dialog.presentationRequest(),
+                    dialog.roofOpeningProperties(),message);
             const auto reviews=reviewSelectionPropertyRoomIntents(*source,prepared,authority,owner,fence);
             if (!reviews) { owner->statusBar()->showMessage(QStringLiteral("Properties edit cancelled."),4000);return; }
             fence();
@@ -69318,8 +69363,13 @@ public:
             const auto published=std::make_shared<DocumentSnapshot>(authoringSnapshot());
             auto restored=ordinary;
             auto order=authority.semantic_selection_order;
+            for (const auto& id:retired_stair_rails) restored.remove(QString::fromStdString(id));
+            std::erase_if(order,[&](const auto& member) {
+                return !member.child && std::binary_search(retired_stair_rails.begin(),retired_stair_rails.end(),
+                    member.ordinary_id.toStdString());
+            });
             if (site) {
-                restored=remapSiteAnnotationSelection(ordinary,annotation_targets,m_site_annotation_targets);
+                restored=remapSiteAnnotationSelection(restored,annotation_targets,m_site_annotation_targets);
                 for (auto& member:order) if (!member.child) {
                     const auto mapped=remapSiteAnnotationSelection({member.ordinary_id},annotation_targets,m_site_annotation_targets);
                     if (mapped.size()!=1) throw std::invalid_argument("The edited selection lost its Site alias.");

@@ -9,6 +9,7 @@ namespace sketch {
 
 struct PhaseWallReplacementAuthoringPreview;
 struct ReplayedPhysicalWallRoomReview;
+class StairPropertyReviewPreparation;
 
 // Collision fence for newly declared global identities against one retained
 // state, including known owned topology/children and render aliases. References
@@ -165,6 +166,18 @@ struct PhaseConstraintAuthoringIntent {
 [[nodiscard]] std::map<std::string,Entity,std::less<>> compose_reviewed_geometry_selection_edit_candidates(
     const std::map<std::string,Entity,std::less<>>& actual,
     const ReplayedPhysicalWallRoomReview& independently_replayed_geometry,
+    const std::vector<std::map<std::string,Entity,std::less<>>>& independently_admitted_ordinary_candidates);
+
+// Independently replay the closed scalar/explicit dependency review against
+// the complete captured source before composing up to five ordinary edit maps.
+// Only that exact replay's removal closure and explicitly retired rail hosted
+// rows may disappear. Surviving reviewed physical consequences and qualified
+// render aliases remain exact; disjoint admitted catalog/annotation rows merge.
+// Ordinary maps retain their own admission responsibility. No candidate map or
+// projected source supplies review, fresh identity or publication authority.
+[[nodiscard]] std::map<std::string,Entity,std::less<>> compose_stair_property_review_selection_edit_candidates(
+    const DocumentSnapshot& actual,
+    const StairPropertyReviewPreparation& reviewed,
     const std::vector<std::map<std::string,Entity,std::less<>>>& independently_admitted_ordinary_candidates);
 
 // Internal composition of independently admitted demolition leaves. Complete

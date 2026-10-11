@@ -472,18 +472,14 @@ public:
                     f.depth = dimension(form, "Depth", "selectionBeamDepth");
                 } else if (target.family == SelectionPropertyFamily::stair) {
                     f.rise = dimension(form, "Total rise", "selectionStairTotalRise");
-                    f.going = dimension(form, "Going", "selectionStairGoing");
-                    f.width = dimension(form, "Width", "selectionStairWidth");
-                    auto* note = new QLabel("Going and width changes apply to the stair defaults and all existing flight overrides. Blank fields retain each flight's current dimensions. Top landing fields apply only to stairs that already have a top landing.", owner);
-                    note->setWordWrap(true);
-                    form->addRow(note);
+                    f.going = dimension(form, "Going (all flights)", "selectionStairGoing");
+                    f.width = dimension(form, "Width (all flights)", "selectionStairWidth");
+                    f.going->setToolTip("Applies to every flight in the selected stairs. Leave blank to keep current dimensions.");
+                    f.width->setToolTip(f.going->toolTip());
                 } else if (target.family == SelectionPropertyFamily::railing) {
                     f.height = dimension(form, "Height", "selectionRailingHeight");
                     f.thickness = dimension(form, "Thickness", "selectionRailingThickness");
                     f.post_spacing = dimension(form, "Post spacing", "selectionRailingPostSpacing");
-                    auto* note = new QLabel("Length applies only to independent railings. Attached railing length follows its stair and cannot be entered here. Blank fields retain current values.", owner);
-                    note->setWordWrap(true);
-                    form->addRow(note);
                 } else if (target.family == SelectionPropertyFamily::roof) {
                     f.width = dimension(form, "Length / horizontal run", "selectionRoofLength");
                     f.depth = dimension(form, "Span", "selectionRoofSpan");
@@ -561,8 +557,10 @@ public:
                 if (stair.top_landing) {
                     if (!f.landing_depth) {
                         auto* form = profile_forms.at(target.family);
-                        f.landing_depth = dimension(form, "Existing top landing depth", "selectionStairTopLandingDepth");
-                        f.landing_thickness = dimension(form, "Existing top landing thickness", "selectionStairTopLandingThickness");
+                        f.landing_depth = dimension(form, "Top landing depth", "selectionStairTopLandingDepth");
+                        f.landing_thickness = dimension(form, "Top landing thickness", "selectionStairTopLandingThickness");
+                        f.landing_depth->setToolTip("Applies to selected stairs that already have a top landing.");
+                        f.landing_thickness->setToolTip(f.landing_depth->toolTip());
                     }
                     current_length(f.landing_depth, stair.top_landing->depth);
                     current_length(f.landing_thickness, stair.top_landing->thickness);
@@ -576,7 +574,10 @@ public:
                 current_length(f.thickness, rail.thickness);
                 current_length(f.post_spacing, rail.post_spacing);
                 if (!rail.host && !rail.landing_host) {
-                    if (!f.length) f.length = dimension(profile_forms.at(target.family), "Independent length", "selectionRailingLength");
+                    if (!f.length) {
+                        f.length = dimension(profile_forms.at(target.family), "Independent length", "selectionRailingLength");
+                        f.length->setToolTip("Applies to independent railings. Attached railing lengths follow their stairs.");
+                    }
                     current_length(f.length, rail.length);
                 }
                 title_singular = rail.host || rail.landing_host ? "Attached railing" : "Independent railing";

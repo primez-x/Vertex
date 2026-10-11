@@ -3261,7 +3261,7 @@ static std::vector<nlohmann::json> phase_constraint_authoring_proofs(const Apply
         if (version==34) result.push_back(proof.at("phase_constraint_authoring_intent"));
         else if (version==52) {
             const auto& mixed=proof.at("mixed_selection_edit_intent");
-            if (mixed.at("version")!=5 && mixed.at("version")!=6 && mixed.at("version")!=7 && mixed.at("version")!=8) {
+            if (mixed.at("version")!=5 && mixed.at("version")!=6 && mixed.at("version")!=7 && mixed.at("version")!=8 && mixed.at("version")!=9) {
                 const auto& roof=mixed.at("roof_authoring");
                 if (!roof.is_null()) result.push_back(roof);
             }
@@ -3710,7 +3710,7 @@ static PhaseConstraintLifetimeProofs phase_constraint_lifetime_proofs(const Appl
         const auto version=proof.at("version").get<int>();
         if (version==52) {
             const auto& mixed=proof.at("mixed_selection_edit_intent");
-            if (mixed.at("version")!=5 && mixed.at("version")!=6 && mixed.at("version")!=7 && mixed.at("version")!=8) {
+            if (mixed.at("version")!=5 && mixed.at("version")!=6 && mixed.at("version")!=7 && mixed.at("version")!=8 && mixed.at("version")!=9) {
                 const auto& roof=mixed.at("roof_authoring");
                 if (!roof.is_null()) result.phase_proofs.push_back(roof);
             }
@@ -10517,8 +10517,10 @@ Revision Document::apply(const Command& command) {
                             validate_room_review_lifetime(review,history_,history_.size(),true);
 #endif
                         next.entities=replay_mixed_selection_edit(snapshot(),typed_command.mixed_selection_edit_intent);
+                        const bool retires_dependencies=mixed_selection_edit_retires_dependencies(typed_command.mixed_selection_edit_intent);
                         validate_active_design_preserved_dependents(current.entities,next.entities,
-                            phase_constraint_authoring_preserves_registries(typed_command) && reviews.empty(),!reviews.empty());
+                            phase_constraint_authoring_preserves_registries(typed_command) && reviews.empty() && !retires_dependencies,
+                            !reviews.empty() || retires_dependencies);
                     } catch (const DocumentError&) { throw; }
                     catch (const std::exception& error) { document_error(DocumentErrorCode::invalid_entity,error.what()); }
 #else
@@ -11132,8 +11134,10 @@ Document Document::restore(DocumentSnapshot snapshot) {
                             validate_room_review_lifetime(review,snapshot.history(),index,true);
 #endif
                         expected.entities=replay_mixed_selection_edit(prefix,proof.mixed_selection_edit_intent);
+                        const bool retires_dependencies=mixed_selection_edit_retires_dependencies(proof.mixed_selection_edit_intent);
                         validate_active_design_preserved_dependents(previous.entities,expected.entities,
-                            phase_constraint_authoring_preserves_registries(proof) && reviews.empty(),!reviews.empty());
+                            phase_constraint_authoring_preserves_registries(proof) && reviews.empty() && !retires_dependencies,
+                            !reviews.empty() || retires_dependencies);
 #else
                         throw std::invalid_argument("Mixed selection edit requires the production authoring engine");
 #endif

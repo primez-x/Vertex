@@ -209,11 +209,17 @@ Json ordinary_request(const DocumentSnapshot& source, const SelectionPropertyEdi
 }
 void validate(const Json& value) {
     Budget budget; budget.visit(value);
-    fields(value, {"version", "expected_revision", "source_snapshot_digest", "source_authoring_digest",
-        "source_entities_digest", "source_saved_revision", "ordinary_request", "presentation_request",
-        "skylight_properties", "roof_opening_members", "room_reviews", "message"});
+    const bool reviewed_stair_dialect = value.is_object() && value.contains("version") && value.at("version") == 9;
+    if (reviewed_stair_dialect)
+        fields(value, {"version", "expected_revision", "source_snapshot_digest", "source_authoring_digest",
+            "source_entities_digest", "source_saved_revision", "ordinary_request", "presentation_request",
+            "skylight_properties", "roof_opening_members", "room_reviews", "message", "stair_review_request"});
+    else
+        fields(value, {"version", "expected_revision", "source_snapshot_digest", "source_authoring_digest",
+            "source_entities_digest", "source_saved_revision", "ordinary_request", "presentation_request",
+            "skylight_properties", "roof_opening_members", "room_reviews", "message"});
     if (!value.at("version").is_number_integer() ||
-        (value.at("version") != 5 && value.at("version") != 6 && value.at("version") != 7 && value.at("version") != 8))
+        (value.at("version") != 5 && value.at("version") != 6 && value.at("version") != 7 && value.at("version") != 8 && !reviewed_stair_dialect))
         reject("unsupported Properties dialect");
     const bool pose_dialect = value.at("version") == 6;
     const bool structural_dialect = value.at("version") == 7;
@@ -240,12 +246,13 @@ void validate(const Json& value) {
         if (lane.is_null()) continue;
         if (std::string_view(name) == "ordinary_request") {
             (void)validate_selection_property_edit_request(lane);
-            if (lane.at("version") != (stair_dialect ? 3 : structural_dialect ? 2 : 1))
+            if (reviewed_stair_dialect ? (lane.at("version") != 1 && lane.at("version") != 2) :
+                lane.at("version") != (stair_dialect ? 3 : structural_dialect ? 2 : 1))
                 reject("ordinary dialect differs from complete Properties authority");
         }
         else {
             (void)validate_selection_presentation_property_edit_request(lane);
-            if (!structural_dialect && !stair_dialect && lane.at("version") != (pose_dialect ? 2 : 1))
+            if (!reviewed_stair_dialect && !structural_dialect && !stair_dialect && lane.at("version") != (pose_dialect ? 2 : 1))
                 reject("presentation dialect differs from complete Properties authority");
         }
         for (const auto* fence : {"expected_revision", "source_snapshot_digest", "source_authoring_digest",
@@ -256,6 +263,14 @@ void validate(const Json& value) {
                 select({"entity", identity(row.at("entity_id")), ""});
             else select({row.at("family").get<std::string>(), identity(row.at("owner_id")), identity(row.at("child_id"))});
         }
+    }
+    if (reviewed_stair_dialect) {
+        const auto& lane = value.at("stair_review_request");
+        const auto request = decode_stair_property_review_request(lane);
+        for (const auto* fence : {"expected_revision", "source_snapshot_digest", "source_authoring_digest",
+                "source_entities_digest", "source_saved_revision"})
+            if (lane.at(fence).dump() != value.at(fence).dump()) reject("stair review source fences differ from complete original source");
+        for (const auto& profile : request.profiles) select({"entity", profile.object_id, ""});
     }
     const auto& members = value.at("roof_opening_members");
     if (!members.is_array() || members.size() > 1000 || value.at("skylight_properties").is_null() != members.empty())
@@ -300,7 +315,8 @@ Ids retained_baselines(const Entities& entities) {
     }
     return result;
 }
-void protect_source(const Entities& original, const Entities& candidate, bool before_review) {
+void protect_source(const Entities& original, const Entities& candidate, bool before_review,
+    const Ids& reviewed_erased = {}) {
     const auto scope = constraint_phase_scope(original);
     const auto baselines = retained_baselines(original);
     for (const auto& [id, entity] : original) {
@@ -309,9 +325,49 @@ void protect_source(const Entities& original, const Entities& candidate, bool be
             (before_review && (entity.type == "room" || is_physical_wall_room(entity))))
             if (found == candidate.end() || !exact(entity, found->second))
                 reject("ordinary Properties changed a protected inactive, baseline or retained room owner");
-        if (before_review && found == candidate.end()) reject("Properties cannot remove original identities");
+        if (before_review && (found == candidate.end()) != reviewed_erased.contains(id))
+            reject("Properties removal must exactly match independently derived stair review closure");
     }
-    if (before_review && candidate.size() != original.size()) reject("Properties cannot add identities");
+    for (const auto& id : reviewed_erased)
+        if (!original.contains(id) || candidate.contains(id)) reject("stair review closure must remain exactly erased");
+    if (before_review) for (const auto& [id, entity] : candidate) {
+        (void)entity;
+        if (!original.contains(id)) reject("Properties cannot add identities");
+    }
+}
+void require_selected_members_present(const Json& value, const Entities& candidate,
+    const Ids& retired_reviewed_rails = {}) {
+    const auto owner = [&](const std::string& id) -> const Entity& {
+        const auto found = candidate.find(id);
+        if (found == candidate.end() || found->second.id != id) reject("reviewed retirement removed a selected owner");
+        return found->second;
+    };
+    const auto& ordinary = value.at("ordinary_request");
+    if (!ordinary.is_null()) for (const auto& row : ordinary.at("selected"))
+        (void)owner(row.at("entity_id").get<std::string>());
+    if (value.at("version") == 9) for (const auto& row : value.at("stair_review_request").at("profiles")) {
+        const auto id = row.at("object_id").get<std::string>();
+        // Only the independently rederived explicit rail disposition can retire
+        // a selected scalar member. Other selected owners/children still survive.
+        if (!retired_reviewed_rails.contains(id)) (void)owner(id);
+    }
+    const auto& presentation = value.at("presentation_request");
+    if (!presentation.is_null()) for (const auto& row : presentation.at("selected")) {
+        if (row.at("family") == "reference") (void)owner(row.at("entity_id").get<std::string>());
+        else {
+            const auto& state = owner(row.at("owner_id").get<std::string>()).properties.at("state");
+            const auto& members = state.at(row.at("family") == "symbol" ? "symbols" : "labels");
+            if (std::count_if(members.begin(), members.end(), [&](const auto& member) {
+                    return member.at("id") == row.at("child_id");
+                }) != 1) reject("reviewed retirement removed a selected annotation child");
+        }
+    }
+    for (const auto& row : value.at("roof_opening_members")) {
+        const auto& members = owner(row.at("roof_id").get<std::string>()).properties.at("roof_openings");
+        if (std::count_if(members.begin(), members.end(), [&](const auto& member) {
+                return member.at("id") == row.at("opening_id");
+            }) != 1) reject("reviewed retirement removed a selected skylight child");
+    }
 }
 std::vector<SelectionGeometryRoomReviewRequirement> requirements(const DocumentSnapshot& source,
     const Entities& candidate, const Ids& changed_hosts) {
@@ -352,7 +408,12 @@ std::vector<SelectionGeometryRoomReviewRequirement> requirements(const DocumentS
     if (result.size() > 32) reject("affected room planes exceed review budget");
     return result;
 }
-struct Stage { Entities entities; std::vector<SelectionGeometryRoomReviewRequirement> reviews; };
+struct Stage {
+    Entities entities;
+    std::vector<SelectionGeometryRoomReviewRequirement> reviews;
+    Ids reviewed_erased;
+    Ids retired_reviewed_rails;
+};
 Stage derive(const DocumentSnapshot& source, const Json& value) {
     validate(value); authenticate(source, value);
     const auto& original = source.entities();
@@ -420,10 +481,24 @@ Stage derive(const DocumentSnapshot& source, const Json& value) {
         }
         leaves.push_back(replay_selection_presentation_property_edit_preparation(source, presentation).candidate_entities());
     }
-    auto candidate = compose_mixed_selection_edit_candidates(original, leaves);
-    protect_source(original, candidate, true);
+    Ids reviewed_erased;
+    Ids retired_reviewed_rails;
+    Entities candidate;
+    if (value.at("version") == 9) {
+        for (const auto& row : value.at("stair_review_request").at("profiles"))
+            if (scope.inactive_owner_ids.contains(row.at("object_id").get<std::string>()))
+                reject("selected reviewed stair owner is inactive");
+        const auto reviewed = replay_stair_property_review_preparation(source, value.at("stair_review_request"));
+        reviewed_erased.insert(reviewed.erased_entity_ids().begin(), reviewed.erased_entity_ids().end());
+        retired_reviewed_rails.insert(reviewed.retired_rail_ids().begin(), reviewed.retired_rail_ids().end());
+        // The sealed compositor separately replays this request and admits only
+        // its exact existing-producer closure beside original-source leaves.
+        candidate = compose_stair_property_review_selection_edit_candidates(source, reviewed, leaves);
+        require_selected_members_present(value, candidate, retired_reviewed_rails);
+    } else candidate = compose_mixed_selection_edit_candidates(original, leaves);
+    protect_source(original, candidate, true, reviewed_erased);
     auto reviews = requirements(source, candidate, changed_hosts);
-    return {std::move(candidate), std::move(reviews)};
+    return {std::move(candidate), std::move(reviews), std::move(reviewed_erased), std::move(retired_reviewed_rails)};
 }
 } // namespace
 
@@ -447,10 +522,12 @@ const DocumentSnapshot& MixedSelectionPropertyEditPreparation::preview_snapshot(
 const std::string& MixedSelectionPropertyEditPreparation::source_snapshot_digest() const noexcept { return source_digest_; }
 const std::vector<SelectionGeometryRoomReviewRequirement>& MixedSelectionPropertyEditPreparation::required_room_reviews() const noexcept { return room_reviews_; }
 
-MixedSelectionPropertyEditPreparation prepare_mixed_selection_property_edit(const DocumentSnapshot& source,
+namespace {
+MixedSelectionPropertyEditPreparation prepare_properties(const DocumentSnapshot& source,
     const std::optional<SelectionPropertyEditRequest>& ordinary,
     const std::optional<SelectionPresentationPropertyEditRequest>& presentation,
-    const std::optional<RoofOpeningGroupProperties>& children, std::string_view message) {
+    const std::optional<RoofOpeningGroupProperties>& children, std::string_view message,
+    const StairPropertyReviewRequest* stair_review) {
     if (message.size() > 1024 || (children && children->members.size() > 1000)) reject("typed request budget exceeded");
     auto value = source_fields(source);
     value["version"] = 5;
@@ -462,6 +539,30 @@ MixedSelectionPropertyEditPreparation prepare_mixed_selection_property_edit(cons
         value["version"] = 7;
     if (!value.at("ordinary_request").is_null() && value.at("ordinary_request").at("version") == 3)
         value["version"] = 8;
+    if (stair_review) {
+        if (!ordinary || ordinary->stair_profiles.empty()) reject("reviewed Properties requires a complete ordinary stair scalar roster");
+        for (const auto& target : ordinary->selected)
+            if (target.family == SelectionPropertyFamily::stair || target.family == SelectionPropertyFamily::railing) {
+                const auto found = source.entities().find(target.entity_id);
+                const auto* type = target.family == SelectionPropertyFamily::stair ? "stair" : "railing";
+                if (found == source.entities().end() || found->second.id != target.entity_id || found->second.type != type)
+                    reject("reviewed scalar selection requires its actual declared stair or railing family");
+            }
+        auto encoded = encode_stair_property_review_request(*stair_review);
+        if (encoded.at("profiles").dump() != value.at("ordinary_request").at("stair_profiles").dump())
+            reject("stair review must exactly cover the complete selected scalar profiles");
+        for (const auto* fence : {"expected_revision", "source_snapshot_digest", "source_authoring_digest",
+                "source_entities_digest", "source_saved_revision"})
+            if (encoded.at(fence).dump() != value.at(fence).dump()) reject("stair review is not bound to the actual complete source");
+        auto remaining = *ordinary;
+        remaining.stair_profiles.clear();
+        remaining.selected.erase(std::remove_if(remaining.selected.begin(), remaining.selected.end(), [](const auto& target) {
+            return target.family == SelectionPropertyFamily::stair || target.family == SelectionPropertyFamily::railing;
+        }), remaining.selected.end());
+        value["ordinary_request"] = remaining.selected.empty() ? Json(nullptr) : ordinary_request(source, remaining);
+        value["version"] = 9;
+        value["stair_review_request"] = std::move(encoded);
+    }
     value["skylight_properties"] = children ? skylight_properties(*children) : Json(nullptr);
     value["roof_opening_members"] = Json::array();
     if (children) for (const auto& member : children->members)
@@ -469,6 +570,20 @@ MixedSelectionPropertyEditPreparation prepare_mixed_selection_property_edit(cons
     value["room_reviews"] = Json::array();
     value["message"] = std::string(message);
     return replay_mixed_selection_property_edit_preparation(source, value);
+}
+} // namespace
+MixedSelectionPropertyEditPreparation prepare_mixed_selection_property_edit(const DocumentSnapshot& source,
+    const std::optional<SelectionPropertyEditRequest>& ordinary,
+    const std::optional<SelectionPresentationPropertyEditRequest>& presentation,
+    const std::optional<RoofOpeningGroupProperties>& children, std::string_view message) {
+    return prepare_properties(source, ordinary, presentation, children, message, nullptr);
+}
+MixedSelectionPropertyEditPreparation prepare_mixed_selection_property_edit(const DocumentSnapshot& source,
+    const std::optional<SelectionPropertyEditRequest>& ordinary,
+    const std::optional<SelectionPresentationPropertyEditRequest>& presentation,
+    const std::optional<RoofOpeningGroupProperties>& children, std::string_view message,
+    const StairPropertyReviewRequest& stair_review) {
+    return prepare_properties(source, ordinary, presentation, children, message, &stair_review);
 }
 MixedSelectionPropertyEditPreparation replay_mixed_selection_property_edit_preparation(const DocumentSnapshot& source, const Json& value) {
     (void)validate_mixed_selection_property_edit_intent(value);
@@ -521,7 +636,8 @@ ReplayedPhysicalWallRoomReview review_stage(const DocumentSnapshot& source, cons
     // Pure room replay checks each actual preceding entity-map digest and
     // rederives correspondences/transitions. The source metadata above never
     // substitutes a caller-reviewed map for that proof.
-    protect_source(source.entities(), result.entities, false);
+    protect_source(source.entities(), result.entities, false, stage.reviewed_erased);
+    if (value.at("version") == 9) require_selected_members_present(value, result.entities, stage.retired_reviewed_rails);
     if (complete)
         if (const auto error = validate_active_phase_constraint_integrity(result.entities)) throw std::invalid_argument(*error);
     return result;
@@ -554,7 +670,7 @@ Json complete_mixed_selection_property_edit(const DocumentSnapshot& source,
 }
 bool mixed_selection_property_edit_has_geometry(const Json& value) {
     validate(value);
-    return !value.at("ordinary_request").is_null() || !value.at("skylight_properties").is_null();
+    return value.at("version") == 9 || !value.at("ordinary_request").is_null() || !value.at("skylight_properties").is_null();
 }
 bool mixed_selection_property_edit_active_phase_policy(const Json& value) {
     validate(value);

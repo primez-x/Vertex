@@ -281,7 +281,9 @@ public:
     // two and mixed dialect seven, including exact source and retained history.
     // v196 retains stair/railing scalar profiles in selected Properties request
     // three and mixed dialect eight without broadening earlier requests.
-    static constexpr std::uint32_t format_version = 196;
+    // v197 retains mixed dialect nine with closed actual-source stair/rail
+    // dependency decisions and their exact independently derived retirements.
+    static constexpr std::uint32_t format_version = 197;
     static constexpr std::uint32_t recovery_format_version = 4;
     [[nodiscard]] static std::uint32_t required_format_version(const DocumentSnapshot& snapshot);
     static constexpr std::uint64_t maximum_file_bytes = 4ULL * 1024ULL * 1024ULL * 1024ULL;

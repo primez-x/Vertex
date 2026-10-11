@@ -847,6 +847,7 @@ if(SKETCH_BUILD_ARCHITECTURE OR SKETCH_BUILD_DESKTOP)
     src/core/authored_phase_membership.cpp src/core/mixed_clipboard_command.cpp
     src/core/ordinary_selection_edit.cpp src/core/mixed_selection_edit.cpp
     src/core/selection_property_edit.cpp src/core/structural_profile_edit.cpp src/core/stair_profile_edit.cpp
+    src/core/stair_property_review.cpp
     src/core/selection_presentation_property_edit.cpp src/core/mixed_selection_property_edit.cpp
     src/core/selection_geometry_transform.cpp
     src/core/selection_geometry_review.cpp

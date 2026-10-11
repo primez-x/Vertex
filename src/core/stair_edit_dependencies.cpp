@@ -259,7 +259,15 @@ Inspection inspect(const Entities& actual, const std::vector<Entity>& edited) {
         if (!host || !stairs.contains(*host)) continue;
         // Even unchanged bindings cannot authorize edits of historical geometry.
         ordinary_owner(result.phase, id);
-        const auto rail = decode_railing_properties(id, entity.properties);
+        // A concurrently edited rail can retain its actual binding while its
+        // new section dimensions fit the resulting stair. Inspect that exact
+        // source-derived descriptor rather than require a needless rehost
+        // decision based on its superseded dimensions. Binding changes still
+        // receive the original attachment's explicit disposition review.
+        const auto& descriptor = result.descriptors.at(id);
+        const bool retained_binding = descriptor.properties.contains("host") &&
+            descriptor.properties.at("host").dump() == entity.properties.at("host").dump();
+        const auto rail = decode_railing_properties(id, retained_binding ? descriptor.properties : entity.properties);
         const auto& stair = stairs.at(*host);
         std::optional<HostedRailingLayout> retained;
         try { retained = derive_hosted_railing_layout(rail, stair); }
@@ -355,6 +363,12 @@ Dispositions resolve_dispositions(const Entities& actual, const std::vector<Enti
             auto changed = actual.at(row.rail_id);
             for (const auto& [key, value] : target->host.items()) changed.properties.at("host")[key] = value;
             result.edited.push_back(std::move(changed)); supplied = std::prev(result.edited.end());
+        } else if (supplied->properties.at("host").dump() == actual.at(row.rail_id).properties.at("host").dump()) {
+            // A scalar edit retains its original attachment. The explicit
+            // reviewed choice now owns that binding, while the supplied rail's
+            // dimensions, receipts and opaque fields remain source-derived.
+            // An already changed binding still receives the conflict check.
+            for (const auto& [key, value] : target->host.items()) supplied->properties.at("host")[key] = value;
         }
         const auto captured = capture_stair_object_edit(actual.at(row.rail_id), *supplied);
         if (!captured || captured->profile_fields.at("host") != target->host)

@@ -93,6 +93,8 @@ private:
 // scalar profiles; presentation request one or two may compose beside it.
 // Version eight requires ordinary Properties request three for stair/railing
 // scalar profiles and retains either explicit presentation request version.
+// Version nine adds exact actual-source stair dependency decisions and only
+// their independently rederived retirement closure beside other Properties.
 [[nodiscard]] nlohmann::json make_mixed_selection_edit_intent(
     const DocumentSnapshot& source, const nlohmann::json& ordinary_request,
     const nlohmann::json& roof_authoring, const nlohmann::json& roof_members,
@@ -102,6 +104,11 @@ private:
     const DocumentSnapshot& source, const nlohmann::json& value);
 [[nodiscard]] bool mixed_selection_edit_active_phase_policy(const nlohmann::json& value);
 [[nodiscard]] bool mixed_selection_edit_has_geometry(const nlohmann::json& value);
+// Closed reviewed Properties authority only. After complete source replay,
+// explicit rail retirement permits its derived registry cleanup and preserves
+// inactive annotation rows by exact subsequence rather than old array index.
+// Historical gesture/Properties dialects never acquire this authority.
+[[nodiscard]] bool mixed_selection_edit_retires_dependencies(const nlohmann::json& value);
 [[nodiscard]] std::vector<nlohmann::json> mixed_selection_edit_room_reviews(const nlohmann::json& value);
 [[nodiscard]] std::optional<Revision> mixed_selection_edit_source_saved_revision(const nlohmann::json& value);
 

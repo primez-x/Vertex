@@ -1,4 +1,33 @@
-# Vertex project formats v1 through v196
+# Vertex project formats v1 through v197
+
+## Reviewed stair and railing group Properties (v197, source implementation)
+
+Mixed Properties dialect nine in command envelope52 adds a mandatory closed
+`stair_review_request` version one. It binds the complete selected scalar roster
+and explicit rail rehost/retirement decisions to the original revision, snapshot,
+authoring history, entity map and saved revision. Other ordinary members use
+request one/two; presentation members retain request one/two. Stair scalar
+authority is not duplicated in the ordinary lane. Historical dialects five
+through eight keep their exact fields and admission rules.
+
+Replay derives editor entities from the original scalar intents and invokes the
+existing ordinary dependency producer. Every retained selected member receives
+original/final physical admission. The composer independently reconstructs the
+review and admits exactly its erased closure and explicitly retired rail-hosted
+catalog rows. Surviving aliases, protected owners and reviewed physical
+consequences remain preserved while disjoint ordinary changes compose. Selected
+rails may disappear only through explicit retirement; no other selected member
+may silently disappear. Required room decisions remain part of the same atomic
+command. Concurrent unchanged-host rail dimensions participate in the actual
+final fit inspection and compose with an explicit resulting attachment choice.
+After full typed replay, explicit retirement permits its derived design-registry
+cleanup and preserves inactive annotation rows by exact retained subsequence.
+Live admission and retained-history replay use the same narrow policy.
+
+Reader197/extraction195 carry direct, nested, retained and undone history.
+Active-baseline group replacement remains separate unfinished integration.
+Source integration does not certify compilation, interaction, Undo/Redo or
+save/reopen behavior.
 
 ## Stair and railing scalar group Properties (v196, source implementation)
 

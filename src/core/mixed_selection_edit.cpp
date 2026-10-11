@@ -374,33 +374,33 @@ MixedSelectionEditReplayScope::~MixedSelectionEditReplayScope() {
     if (!--replay_scope_depth) replay_memo.reset();
 }
 Json validate_mixed_selection_edit_intent(const Json& value) {
-    if (value.is_object() && (value.value("version", Json()) == 5 || value.value("version", Json()) == 6 || value.value("version", Json()) == 7 || value.value("version", Json()) == 8))
+    if (value.is_object() && (value.value("version", Json()) == 5 || value.value("version", Json()) == 6 || value.value("version", Json()) == 7 || value.value("version", Json()) == 8 || value.value("version", Json()) == 9))
         return validate_mixed_selection_property_edit_intent(value);
     try { validate(value); return value; }
     catch (const Json::exception&) { reject("malformed intent"); }
 }
 bool mixed_selection_edit_active_phase_policy(const Json& value) {
-    if (value.is_object() && (value.value("version", Json()) == 5 || value.value("version", Json()) == 6 || value.value("version", Json()) == 7 || value.value("version", Json()) == 8))
+    if (value.is_object() && (value.value("version", Json()) == 5 || value.value("version", Json()) == 6 || value.value("version", Json()) == 7 || value.value("version", Json()) == 8 || value.value("version", Json()) == 9))
         return mixed_selection_property_edit_active_phase_policy(value);
     validate(value);
     return !value.at("roof_authoring").is_null() ||
         (value.at("version") == 4 && !value.at("roof_identity_requests").empty());
 }
 bool mixed_selection_edit_has_geometry(const Json& value) {
-    if (value.is_object() && (value.value("version", Json()) == 5 || value.value("version", Json()) == 6 || value.value("version", Json()) == 7 || value.value("version", Json()) == 8))
+    if (value.is_object() && (value.value("version", Json()) == 5 || value.value("version", Json()) == 6 || value.value("version", Json()) == 7 || value.value("version", Json()) == 8 || value.value("version", Json()) == 9))
         return mixed_selection_property_edit_has_geometry(value);
     validate(value);
     return (value.at("version") == 3 || value.at("version") == 4) &&
         !value.at("ordinary_request").at("geometry").is_null();
 }
 std::vector<Json> mixed_selection_edit_room_reviews(const Json& value) {
-    if (value.is_object() && (value.value("version", Json()) == 5 || value.value("version", Json()) == 6 || value.value("version", Json()) == 7 || value.value("version", Json()) == 8))
+    if (value.is_object() && (value.value("version", Json()) == 5 || value.value("version", Json()) == 6 || value.value("version", Json()) == 7 || value.value("version", Json()) == 8 || value.value("version", Json()) == 9))
         return mixed_selection_property_edit_room_reviews(value);
     validate(value);
     return ordinary_selection_edit_room_reviews(value.at("ordinary_request"));
 }
 std::optional<Revision> mixed_selection_edit_source_saved_revision(const Json& value) {
-    if (value.is_object() && (value.value("version", Json()) == 5 || value.value("version", Json()) == 6 || value.value("version", Json()) == 7 || value.value("version", Json()) == 8))
+    if (value.is_object() && (value.value("version", Json()) == 5 || value.value("version", Json()) == 6 || value.value("version", Json()) == 7 || value.value("version", Json()) == 8 || value.value("version", Json()) == 9))
         return mixed_selection_property_edit_source_saved_revision(value);
     validate(value);
     return value.at("source_saved_revision").is_null() ? std::nullopt :
@@ -564,7 +564,7 @@ Json mixed_intent(const DocumentSnapshot& source, const Json& ordinary_request,
 } // namespace
 
 Entities replay_mixed_selection_edit(const DocumentSnapshot& source, const Json& value) {
-    if (value.is_object() && (value.value("version", Json()) == 5 || value.value("version", Json()) == 6 || value.value("version", Json()) == 7 || value.value("version", Json()) == 8))
+    if (value.is_object() && (value.value("version", Json()) == 5 || value.value("version", Json()) == 6 || value.value("version", Json()) == 7 || value.value("version", Json()) == 8 || value.value("version", Json()) == 9))
         return replay_mixed_selection_property_edit(source, value).entities;
     MixedSelectionEditReplayScope scope;
     validate(value);
@@ -574,6 +574,14 @@ Entities replay_mixed_selection_edit(const DocumentSnapshot& source, const Json&
     auto result = derive_mixed_selection_edit(source, value, nullptr);
     remember(key, result);
     return result;
+}
+
+bool mixed_selection_edit_retires_dependencies(const Json& value) {
+    (void)validate_mixed_selection_edit_intent(value);
+    if (value.at("version") != 9) return false;
+    const auto request = decode_stair_property_review_request(value.at("stair_review_request"));
+    return std::any_of(request.dependency_dispositions.begin(), request.dependency_dispositions.end(),
+        [](const auto& choice) { return choice.action == PhaseStairReplacementDependencyAction::retire; });
 }
 
 Json make_mixed_selection_edit_intent(const DocumentSnapshot& source, const Json& ordinary_request,

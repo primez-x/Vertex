@@ -4,6 +4,7 @@
 #include "sketch/selection_geometry_transform.hpp"
 #include "sketch/selection_presentation_property_edit.hpp"
 #include "sketch/selection_property_edit.hpp"
+#include "sketch/stair_property_review.hpp"
 
 #include <optional>
 #include <string_view>
@@ -16,10 +17,16 @@ namespace sketch {
 // and may compose either explicit presentation request version.
 // Dialect eight requires ordinary request three for stair/railing scalar
 // profiles and may compose either explicit presentation request version.
+// Dialect nine separates a mandatory authenticated stair review request from
+// ordinary request one/two and admits only its independently derived removal
+// closure. Selected scalar owners remain present except explicitly retired
+// dependent rails; retirement grants no other lane deletion or replacement
+// authority.
 // Each lane reads the same
 // complete immutable original snapshot. No supplied entity map, transform,
-// selected-object identity generation, rehosting, deletion or active-baseline
-// replacement is accepted. Historical dialect five only admits presentation
+// selected-object identity generation or active-baseline replacement is
+// accepted. Historical dialects five through eight retain their no-deletion
+// authority. Historical dialect five only admits presentation
 // request one and never acquires the newer pose authority.
 // Room decisions retain their existing typed topology
 // authority and require Document's final identity-lifetime admission.
@@ -57,11 +64,25 @@ private:
 // independently proves every actual selected row; it grants no parent changes.
 // Room decisions use canonical existing codecs, up to 32 disjoint planes.
 // Wire/complexity limits: 4 MiB, 100000 values, depth 64, portable UTF-8.
+// Dialect nine adds exactly stair_review_request (mandatory nonnull canonical
+// v1). Its profile IDs join the complete selected roster; ordinary_request is
+// null or v1/v2 and presentation_request is null or v1/v2. All lanes bind the
+// same full source fences, with no duplicated stair scalar authority.
 [[nodiscard]] nlohmann::json validate_mixed_selection_property_edit_intent(const nlohmann::json&);
 [[nodiscard]] MixedSelectionPropertyEditPreparation prepare_mixed_selection_property_edit(
     const DocumentSnapshot&, const std::optional<SelectionPropertyEditRequest>&,
     const std::optional<SelectionPresentationPropertyEditRequest>&,
     const std::optional<RoofOpeningGroupProperties>&, std::string_view message);
+// The reviewed overload first validates the complete ordinary typed roster,
+// then extracts exactly its stair/railing scalar members into the authenticated
+// review request. The supplied review must have those exact profiles and actual
+// source fences; dependency choices retain the existing ordinary producer's
+// closed authority. Other ordinary families retain their exact scalar inputs.
+[[nodiscard]] MixedSelectionPropertyEditPreparation prepare_mixed_selection_property_edit(
+    const DocumentSnapshot&, const std::optional<SelectionPropertyEditRequest>&,
+    const std::optional<SelectionPresentationPropertyEditRequest>&,
+    const std::optional<RoofOpeningGroupProperties>&, std::string_view message,
+    const StairPropertyReviewRequest&);
 // Preparation accepts only empty room_reviews. A copied read-only snapshot
 // retains complete history/save/assets/opaque state and has no admission token.
 [[nodiscard]] MixedSelectionPropertyEditPreparation replay_mixed_selection_property_edit_preparation(

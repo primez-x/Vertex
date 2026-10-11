@@ -31,6 +31,7 @@
 #include "sketch/slab_hosted_geometry_edit.hpp"
 #include "sketch/structural_hosted_components.hpp"
 #include "sketch/stair_attachment_integrity.hpp"
+#include "sketch/stair_property_review.hpp"
 #include "sketch/wall_measurement.hpp"
 
 #include <algorithm>
@@ -2020,16 +2021,78 @@ Entity merge_reviewed_geometry_annotation_rows(const Entity& original,const Enti
     return result;
 }
 
+// Validate the review's exact deletion-only catalog consequence, then retain
+// the historical edit merger's typed row/promotion/suffix rules on survivors.
+// Ordinary leaves cannot edit a retired row or remove any additional row.
+Entity merge_stair_review_instance_rows(const Entity& source,const Entity& review,
+    const std::vector<const Entity*>& ordinary,
+    const std::set<std::pair<std::string,std::string>>& retired_bindings) {
+    const auto& retained=source.properties.at("model").at("instances");
+    std::map<std::string,const Json*,std::less<>> retained_rows;
+    for (const auto& row:retained)
+        if (!retained_rows.emplace(row.at("id").get<std::string>(),&row).second)
+            invalid("Reviewed stair catalog has ambiguous source instance identities");
+    auto deletion=source;
+    auto& surviving=deletion.properties.at("model").at("instances");
+    surviving.erase(std::remove_if(surviving.begin(),surviving.end(),[&](const auto& row) {
+        return retired_bindings.contains({source.id,row.at("id").template get<std::string>()});
+    }),surviving.end());
+    const auto baseline=merge_demolition_catalog(source,{&deletion},true,true);
+    std::vector<Entity> normalized;
+    normalized.reserve(ordinary.size());
+    for (const auto* lane:ordinary) {
+        normalized.push_back(*lane);
+        auto& rows=normalized.back().properties.at("model").at("instances");
+        rows.erase(std::remove_if(rows.begin(),rows.end(),[&](const auto& row) {
+            const auto id=row.at("id").template get<std::string>();
+            if (!retired_bindings.contains({source.id,id})) return false;
+            const auto original=retained_rows.find(id);
+            if (original==retained_rows.end() || !exact_json(*original->second,row))
+                invalid("Reviewed stair retirement overlaps an ordinary catalog row edit");
+            return true;
+        }),rows.end());
+    }
+    std::vector<const Entity*> changes{&review};
+    for (const auto& lane:normalized) changes.push_back(&lane);
+    return merge_mixed_edit_instance_rows(baseline,changes);
+}
+
 Entities compose_mixed_selection_edit_candidates_impl(const Entities& actual,
     const std::vector<Entities>& independently_admitted_candidates,
     const std::set<std::string,std::less<>>* retired_rooms=nullptr,
-    const std::set<std::string,std::less<>>* removed_annotation_targets=nullptr) {
+    const std::set<std::string,std::less<>>* removed_annotation_targets=nullptr,
+    const StairPropertyReviewPreparation* stair_review=nullptr) {
     coordinated_map_budget(actual);
-    if (independently_admitted_candidates.empty() || independently_admitted_candidates.size()>5)
+    if (independently_admitted_candidates.empty() || independently_admitted_candidates.size()>(stair_review ? 6u : 5u))
         invalid("Mixed edit composition requires one to five independently admitted actual-source candidates");
     for (const auto& candidate:independently_admitted_candidates) coordinated_map_budget(candidate);
     const auto original_owners=mixed_edit_identity_owners(actual);
     const auto original_aliases=embedded_assembly_presentation_ids(actual);
+    std::set<std::string,std::less<>> reviewed_erased;
+    std::set<std::pair<std::string,std::string>> reviewed_retired_bindings;
+    if (stair_review) {
+        reviewed_erased.insert(stair_review->erased_entity_ids().begin(),stair_review->erased_entity_ids().end());
+        const auto review_aliases=embedded_assembly_presentation_ids(stair_review->entities());
+        const std::set<std::string,std::less<>> rails(stair_review->retired_rail_ids().begin(),stair_review->retired_rail_ids().end());
+        for (const auto& [catalog,entity]:actual) if (entity.type=="assembly_model")
+            for (const auto& row:entity.properties.at("model").at("instances")) if (row.contains("placement") &&
+                rails.contains(row.at("placement").at("host_entity_id").get<std::string>()))
+                reviewed_retired_bindings.emplace(catalog,row.at("id").get<std::string>());
+        for (const auto& [binding,alias]:original_aliases) {
+            const auto next=review_aliases.find(binding);
+            if (reviewed_retired_bindings.contains(binding)) {
+                if (next!=review_aliases.end()) invalid("Reviewed stair replay retained an explicitly retired hosted row");
+                continue;
+            }
+            if (next==review_aliases.end())
+                invalid("Reviewed stair retired a catalog row outside explicit rail authority");
+            if (next->second!=alias) invalid("Reviewed stair changed a surviving qualified render alias");
+        }
+        for (const auto& [binding,alias]:review_aliases) {
+            (void)alias;
+            if (!original_aliases.contains(binding)) invalid("Reviewed stair introduced a fresh qualified catalog row");
+        }
+    }
     std::set<std::string,std::less<>> source_aliases;
     for (const auto& [key,alias]:original_aliases) { (void)key; source_aliases.insert(alias); }
     std::set<std::string,std::less<>> fresh;
@@ -2043,6 +2106,8 @@ Entities compose_mixed_selection_edit_candidates_impl(const Entities& actual,
                     invalid("Mixed edit reuses an actual owned identity for a different owner");
                 continue;
             }
+            if (stair_review && &candidate==&independently_admitted_candidates.front())
+                invalid("Reviewed stair replay introduced a fresh owned identity");
             if (owners.size()!=1 || source_aliases.contains(token))
                 invalid("Mixed edit fresh identity is ambiguous or reuses an actual render alias");
             lane_fresh.insert(token);
@@ -2065,8 +2130,11 @@ Entities compose_mixed_selection_edit_candidates_impl(const Entities& actual,
     for (const auto& [key,entity]:actual) if (entity.type=="model_phases") {
         (void)key;
         const auto model=ModelPhases::from_json(entity.properties.at("model"));
-        if (model.active_alternative()) retained_baselines.insert(model.baseline_ids().begin(),model.baseline_ids().end());
+        if (model.active_alternative() || (stair_review && !model.alternatives().empty()))
+            retained_baselines.insert(model.baseline_ids().begin(),model.baseline_ids().end());
     }
+    const auto inactive=stair_review ? constraint_phase_scope(actual).inactive_owner_ids :
+        std::set<std::string,std::less<>>{};
     auto result=actual;
     for (const auto& [key,original]:actual) {
         std::vector<const Entity*> changes;
@@ -2078,7 +2146,7 @@ Entities compose_mixed_selection_edit_candidates_impl(const Entities& actual,
                 [&](const auto* previous) { return exact(*previous,found->second); })) changes.push_back(&found->second);
         }
         if (erased) {
-            if (original.required || retained_baselines.contains(key) || !changes.empty())
+            if (original.required || retained_baselines.contains(key) || inactive.contains(key) || !changes.empty())
                 invalid("Mixed edit erased a required or baseline owner, or overlaps an upsert");
             const bool dimension=can_recognize_boundary_dimension_entity_type(original.type) &&
                 decode_boundary_dimension_entity(original).supported();
@@ -2086,16 +2154,30 @@ Entities compose_mixed_selection_edit_candidates_impl(const Entities& actual,
             const bool annotation=original.type==kAnnotationEntityType;
             if (annotation) validate_annotation_entity(original);
             const bool reviewed_room=retired_rooms && retired_rooms->contains(key);
-            if (!dimension && !constraint && !annotation && !reviewed_room)
+            const bool reviewed_retirement=stair_review && reviewed_erased.contains(key);
+            if (stair_review && !reviewed_retirement)
+                invalid("Reviewed stair composition erased an owner outside its authenticated removal closure");
+            if (!dimension && !constraint && !annotation && !reviewed_room && !reviewed_retirement)
                 invalid("Mixed edit erasure lacks a supported reference-cleanup owner");
             result.erase(key);
             continue;
         }
         if (changes.empty()) continue;
+        if (stair_review && (inactive.contains(key) || (original.required &&
+            original.type!="assembly_model" && original.type!=kAnnotationEntityType &&
+            original.type!="model_phases" && original.type!=kSheetViewEntityType)))
+            invalid("Reviewed stair composition changed a required or inactive physical owner");
         if (retained_baselines.contains(key) && original.type!="assembly_model")
             invalid("Mixed edit changed an actual retained baseline owner");
-        if (original.type=="assembly_model")
-            result.at(key)=merge_mixed_edit_instance_rows(original,changes);
+        if (original.type=="assembly_model") {
+            if (stair_review) {
+                std::vector<const Entity*> ordinary;
+                for (std::size_t index=1;index<independently_admitted_candidates.size();++index)
+                    ordinary.push_back(&independently_admitted_candidates[index].at(key));
+                result.at(key)=merge_stair_review_instance_rows(original,stair_review->entities().at(key),
+                    ordinary,reviewed_retired_bindings);
+            } else result.at(key)=merge_mixed_edit_instance_rows(original,changes);
+        }
         else if (original.type==kAnnotationEntityType) {
             if (removed_annotation_targets) {
                 std::vector<const Entity*> ordinary;
@@ -2120,16 +2202,28 @@ Entities compose_mixed_selection_edit_candidates_impl(const Entities& actual,
     for (const auto& [key,entity]:actual) if (entity.type=="assembly_model") {
         const auto& before=entity.properties.at("model").at("instances");
         const auto& after=result.at(key).properties.at("model").at("instances");
+        std::map<std::string,const Json*,std::less<>> retained_rows;
+        if (stair_review) for (const auto& row:after) retained_rows.emplace(row.at("id").get<std::string>(),&row);
         for (std::size_t i=0;i<before.size();++i) if (before[i].contains("placement") &&
-            retained_baselines.contains(before[i].at("placement").at("host_entity_id").get<std::string>()) &&
-            (i>=after.size() || !exact_json(before[i],after[i])))
-            invalid("Mixed edit changed an actual retained baseline hosted row");
+            (retained_baselines.contains(before[i].at("placement").at("host_entity_id").get<std::string>()) ||
+             (stair_review && inactive.contains(before[i].at("placement").at("host_entity_id").get<std::string>())))) {
+            if (stair_review) {
+                const auto retained=retained_rows.find(before[i].at("id").get<std::string>());
+                if (retained==retained_rows.end() || !exact_json(before[i],*retained->second))
+                    invalid("Mixed edit changed an actual retained baseline hosted row");
+            } else if (i>=after.size() || !exact_json(before[i],after[i]))
+                invalid("Mixed edit changed an actual retained baseline hosted row");
+        }
     }
     coordinated_map_budget(result);
     const auto final_aliases=embedded_assembly_presentation_ids(result);
     const auto preserve_aliases=[&](const auto& aliases) {
         for (const auto& [binding,alias]:aliases) {
             const auto found=final_aliases.find(binding);
+            if (stair_review && reviewed_retired_bindings.contains(binding)) {
+                if (found!=final_aliases.end()) invalid("Reviewed stair composition restored a retired catalog row");
+                continue;
+            }
             if (found==final_aliases.end() || found->second!=alias)
                 invalid("Mixed edit changed a source or independently admitted leaf render alias");
         }
@@ -2147,6 +2241,7 @@ Entities compose_mixed_selection_edit_candidates_impl(const Entities& actual,
     }
     (void)constraint_phase_scope(result);
     validate_document_assembly_instances(result);
+    if (stair_review) validate_stair_attachment_state(result);
     return result;
 }
 
@@ -2236,6 +2331,68 @@ Entities compose_reviewed_geometry_selection_edit_candidates(const Entities& act
     retain_geometry(actual);
     retain_geometry(geometry);
     retain_geometry(result);
+    return result;
+}
+
+Entities compose_stair_property_review_selection_edit_candidates(const DocumentSnapshot& source,
+    const StairPropertyReviewPreparation& reviewed,
+    const std::vector<Entities>& independently_admitted_ordinary_candidates) {
+    const auto& actual=source.entities();
+    coordinated_map_budget(actual);
+    if (independently_admitted_ordinary_candidates.size()>5)
+        invalid("Reviewed stair composition exceeds its actual-source lane budget");
+    // A sealed preparation is evidence, not authority from another snapshot.
+    // Reconstruct its closed request against the full original source/history.
+    const auto replayed=replay_stair_property_review_preparation(source,reviewed.request());
+    const auto& review=replayed.entities();
+    coordinated_map_budget(review);
+    std::set<std::string,std::less<>> erased(replayed.erased_entity_ids().begin(),replayed.erased_entity_ids().end());
+    std::set<std::string,std::less<>> removed_targets=erased;
+    for (const auto& [key,entity]:actual) {
+        (void)entity;
+        if (erased.contains(key)!=!review.contains(key))
+            invalid("Reviewed stair replay removal closure does not match its complete result");
+    }
+    for (const auto& [key,entity]:review) {
+        (void)entity;
+        if (!actual.contains(key)) invalid("Reviewed stair replay introduced a fresh physical owner");
+    }
+    const auto review_aliases=embedded_assembly_presentation_ids(review);
+    for (const auto& [binding,alias]:embedded_assembly_presentation_ids(actual))
+        if (!review_aliases.contains(binding)) removed_targets.insert(alias);
+    for (const auto& lane:independently_admitted_ordinary_candidates) {
+        coordinated_map_budget(lane);
+        for (const auto& [key,entity]:actual) if (entity.type=="stair" || entity.type=="railing") {
+            const auto next=lane.find(key);
+            // Matching explicit retirement is the only ordinary omission of a
+            // physical stair-family member that can coalesce with the review.
+            if (next==lane.end()) {
+                if (!erased.contains(key)) invalid("Ordinary reviewed-stair lane erased an unreviewed physical owner");
+            } else if (!exact(entity,next->second))
+                invalid("Ordinary reviewed-stair lane changed a protected stair or railing");
+        }
+        for (const auto& [key,entity]:lane) if (!actual.contains(key) &&
+            (entity.type=="stair" || entity.type=="railing"))
+            invalid("Ordinary reviewed-stair lane introduced a stair or railing");
+    }
+    std::vector<Entities> lanes;
+    lanes.reserve(1+independently_admitted_ordinary_candidates.size());
+    lanes.push_back(review);
+    lanes.insert(lanes.end(),independently_admitted_ordinary_candidates.begin(),independently_admitted_ordinary_candidates.end());
+    auto result=compose_mixed_selection_edit_candidates_impl(actual,lanes,nullptr,&removed_targets,&replayed);
+    for (const auto& [key,entity]:actual) {
+        const auto expected=review.find(key);
+        if (erased.contains(key)!=!result.contains(key))
+            invalid("Reviewed stair composition changed its exact authenticated removal closure");
+        if (expected==review.end()) {
+            if (result.contains(key)) invalid("Reviewed stair composition restored a retired source owner");
+        } else if (!exact(entity,expected->second) && entity.type!="assembly_model" &&
+            entity.type!=kAnnotationEntityType && entity.type!="model_phases" && entity.type!=kSheetViewEntityType) {
+            const auto final=result.find(key);
+            if (final==result.end() || !exact(expected->second,final->second))
+                invalid("Reviewed stair composition changed an exact replayed physical consequence");
+        }
+    }
     return result;
 }
 

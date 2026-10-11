@@ -1,5 +1,13 @@
 # Portable project extraction
 
+Exchange version195 requires native reader197 for mixed Properties dialect nine.
+Its closed stair review request binds actual-source scalar profiles and explicit
+rail dependency decisions. Only the independently derived removal closure and
+explicitly retired hosted rows may disappear; surviving qualified aliases and
+the complete selected roster remain fenced. Other scalar/presentation lanes
+keep their explicit request versions. Direct, nested, retained and undone
+history retain this floor. Runtime and round-trip qualification remain open.
+
 Exchange version194 requires native reader196 for mixed Properties dialect eight
 and ordinary request three. The complete stair/railing roster carries closed
 scalar intents; structural and presentation lanes retain their explicit nested
