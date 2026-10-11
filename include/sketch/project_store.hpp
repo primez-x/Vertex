@@ -295,7 +295,10 @@ public:
     // v203 requires qualified component phase membership in retained history.
     // v204 retains explicit qualified wall/opening component copies in phase
     // outer28, with the historical edit lane preserved by wall_edit_version.
-    static constexpr std::uint32_t format_version = 204;
+    // v205 retains qualified wall copying in coordinated inner5 / phase
+    // outer29 without extending historical coordinated authoring records.
+    // v206 retains qualified wall-hosted scalar Properties15 / phase request5.
+    static constexpr std::uint32_t format_version = 206;
     static constexpr std::uint32_t recovery_format_version = 4;
     [[nodiscard]] static std::uint32_t required_format_version(const DocumentSnapshot& snapshot);
     static constexpr std::uint64_t maximum_file_bytes = 4ULL * 1024ULL * 1024ULL * 1024ULL;

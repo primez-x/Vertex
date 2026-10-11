@@ -17,6 +17,7 @@
 #include "sketch/hosted_opening_plan.hpp"
 #include "sketch/measurement_linework.hpp"
 #include "sketch/measurement_linework_source.hpp"
+#include "sketch/opening_host_geometry.hpp"
 #include "sketch/physical_wall_room_data.hpp"
 #include "sketch/plan_axis_resize.hpp"
 #include "sketch/project_organization.hpp"
@@ -268,6 +269,27 @@ TopoDS_Shape opening_solid(const Entity& entity,const Wall& wall,const HostedOpe
     std::optional<DoorOperation> operation;
     if (kind=="door" && entity.properties.contains("door_operation")) operation=decode_door_operation(entity.properties.at("door_operation"));
     return make_opening_assembly(wall,opening,assembly,operation);
+}
+Boundary opening_plan(const Entity& entity,const Wall& wall,const HostedOpening& opening) {
+    const auto kind=wall_opening_kind(entity);
+    if (entity.properties.contains("opening_assembly")) {
+        const auto assembly=parse_opening_assembly(entity.properties.at("opening_assembly"));
+        if (opening_assembly_kind_name(assembly.kind)!=kind)
+            throw std::invalid_argument("Phase wall preview opening assembly kind differs from its owner.");
+        std::optional<DoorOperation> operation;
+        if (kind=="door" && entity.properties.contains("door_operation"))
+            operation=decode_door_operation(entity.properties.at("door_operation"));
+        return project_hosted_opening_plan(wall,opening,assembly,operation);
+    }
+    if (kind=="door" && entity.properties.contains("door_operation"))
+        return door_plan_symbol(wall.baseline,opening.offset,opening.width,decode_door_operation(entity.properties.at("door_operation")));
+    if (kind=="window") return window_plan_symbol(wall.baseline,opening.offset,opening.width,wall.thickness);
+    if (kind=="opening" || kind=="door") {
+        const auto span=hosted_opening_span(wall.baseline,opening.offset,opening.width);
+        const auto outline=wall_plan_footprint(span,{},wall.thickness);
+        return {outline.at(1),outline.at(3),span};
+    }
+    throw std::invalid_argument("Phase wall canvas preview has an unsupported opening kind.");
 }
 bool full_opening_depth(const Wall& wall,const HostedOpening& opening,const BuildingViewDepth& depth) {
     if (std::isinf(depth.far_depth_m) && depth.far_depth_m>0) return true;
@@ -878,25 +900,64 @@ PhaseWallCanvasProjection project_phase_wall_canvas(const DocumentSnapshot& sour
     std::map<std::string,AssemblyModel,std::less<>> source_catalogs,stage_catalogs;
     std::map<std::pair<std::string,std::string>,AssemblyExpansion> source_expansions,stage_expansions;
     AssemblyExpansionBudget source_assembly_budget,stage_assembly_budget;
-    std::map<std::pair<std::string,std::string>,std::pair<std::string,std::string>> qualified_hosted;
+    auto qualified_hosted=physical.replacement.hosted_instance_original_to_proposed;
     EmbeddedAssemblyPresentationIds stage_embedded;
     std::set<std::string,std::less<>> affected_components;
     if (coordinated) {
-        for (const auto& [owner,instance]:coordinated->original_to_hosted_instance_proposed)
-            qualified_hosted.emplace(owner,std::make_pair(proposed_id(owner.first),instance));
-        for (const auto& [owner,destination]:coordinated->original_to_hosted_destination_proposed) {
+        const auto merge_hosted=[&](const auto& owner,const auto& destination) {
             const auto [found,inserted]=qualified_hosted.emplace(owner,destination);
             if (!inserted && found->second!=destination)
                 throw std::invalid_argument("Coordinated canvas has conflicting qualified catalog destinations.");
+        };
+        for (const auto& [owner,instance]:coordinated->original_to_hosted_instance_proposed)
+            merge_hosted(owner,std::make_pair(proposed_id(owner.first),instance));
+        for (const auto& [owner,destination]:coordinated->original_to_hosted_destination_proposed)
+            merge_hosted(owner,destination);
+    }
+    const bool project_hosted=coordinated || !qualified_hosted.empty();
+    AssemblyCatalogTransferBudget source_catalog_budget,stage_catalog_budget;
+    std::set<std::string,std::less<>> admitted_source_catalogs,admitted_stage_catalogs;
+    const auto admit_catalog=[&](const Entities& entities,const std::string& id,
+        auto& admitted,auto& budget) {
+        if (admitted.contains(id)) return;
+        const auto found=entities.find(id);
+        if (found==entities.end() || found->second.id!=id || found->second.type!="assembly_model")
+            throw std::invalid_argument("Phase wall canvas lost an actual hosted catalog: "+id);
+        if (!qualified_hosted.empty()) admit_existing_assembly_catalog_work(found->second,budget);
+        admitted.insert(id);
+    };
+    const auto source_catalog=[&](const std::string& id) -> const AssemblyModel& {
+        admit_catalog(source.entities(),id,admitted_source_catalogs,source_catalog_budget);
+        if (!source_catalogs.contains(id)) source_catalogs.emplace(id,
+            AssemblyModel::from_json(source.entities().at(id).properties.at("model")));
+        return source_catalogs.at(id);
+    };
+    const auto stage_catalog=[&](const std::string& id) -> const AssemblyModel& {
+        admit_catalog(stage,id,admitted_stage_catalogs,stage_catalog_budget);
+        if (!stage_catalogs.contains(id)) stage_catalogs.emplace(id,
+            AssemblyModel::from_json(stage.at(id).properties.at("model")));
+        return stage_catalogs.at(id);
+    };
+    if (project_hosted) {
+        // Admit the complete reached catalogs before the first semantic decode.
+        // Repeated rows share the same catalog and expansion work ledgers.
+        for (const auto& [owner,destination]:qualified_hosted) {
+            admit_catalog(source.entities(),owner.first,admitted_source_catalogs,source_catalog_budget);
+            admit_catalog(stage,destination.first,admitted_stage_catalogs,stage_catalog_budget);
         }
-        for (const auto& [owner,render]:embedded_assembly_presentation_ids(source.entities()))
+        const auto source_embedded=embedded_assembly_presentation_ids(source.entities());
+        std::set<std::string,std::less<>> source_instance_ids;
+        for (const auto& [owner,render]:source_embedded) {
+            source_instance_ids.insert(owner.second);
             if (!embedded.emplace(render,owner).second)
                 throw std::invalid_argument("Coordinated canvas has ambiguous source assembly aliases.");
+        }
         std::set<std::string,std::less<>> hosted_fresh;
         std::map<std::string,std::string,std::less<>> private_catalog_sources;
         for (const auto& [owner,destination]:qualified_hosted) {
             const auto& [catalog_id,proposed]=destination;
-            if (proposed.empty() || fresh.contains(proposed) || source.entities().contains(proposed) ||
+            if (owner.second.empty() || proposed.empty() || source_instance_ids.contains(proposed) ||
+                fresh.contains(proposed) || source.entities().contains(proposed) || embedded.contains(proposed) ||
                 !hosted_fresh.insert(proposed).second || !source.entities().contains(owner.first) ||
                 source.entities().at(owner.first).type!="assembly_model")
                 throw std::invalid_argument("Coordinated canvas has invalid qualified hosted aliases.");
@@ -907,20 +968,29 @@ PhaseWallCanvasProjection project_phase_wall_canvas(const DocumentSnapshot& sour
             const auto [catalog_source,inserted]=private_catalog_sources.emplace(catalog_id,owner.first);
             if (!inserted && catalog_source->second!=owner.first)
                 throw std::invalid_argument("Coordinated canvas private catalog has conflicting source authority.");
-            if (!source_catalogs.contains(owner.first)) source_catalogs.emplace(owner.first,
-                AssemblyModel::from_json(source.entities().at(owner.first).properties.at("model")));
-            const auto& rows=source_catalogs.at(owner.first).instances();
+            const auto& rows=source_catalog(owner.first).instances();
             const auto row=std::find_if(rows.begin(),rows.end(),[&](const auto& value){return value.id==owner.second;});
             if (row==rows.end() || !row->placement || !aliases.contains(row->placement->host_entity_id) ||
-                !source.entities().contains(row->placement->host_entity_id) ||
-                (source.entities().at(row->placement->host_entity_id).type!="slab" &&
-                 !can_recognize_building_entity_type(source.entities().at(row->placement->host_entity_id).type)))
+                !source.entities().contains(row->placement->host_entity_id))
                 throw std::invalid_argument("Coordinated canvas hosted alias has no actual replacement host.");
-            if (!stage.contains(catalog_id) || stage.at(catalog_id).id!=catalog_id || stage.at(catalog_id).type!="assembly_model")
-                throw std::invalid_argument("Coordinated canvas hosted alias lost its actual proposed catalog.");
-            if (!stage_catalogs.contains(catalog_id)) stage_catalogs.emplace(catalog_id,
-                AssemblyModel::from_json(stage.at(catalog_id).properties.at("model")));
-            const auto& proposed_rows=stage_catalogs.at(catalog_id).instances();
+            const auto& source_host=source.entities().at(row->placement->host_entity_id);
+            const bool wall_host=source_host.type=="wall" || source_host.type=="opening";
+            const auto actual_wall_copy=physical.replacement.hosted_instance_original_to_proposed.find(owner);
+            if (source_host.id!=row->placement->host_entity_id ||
+                (!wall_host && (!coordinated || (source_host.type!="slab" &&
+                    !can_recognize_building_entity_type(source_host.type)))) ||
+                (actual_wall_copy!=physical.replacement.hosted_instance_original_to_proposed.end() &&
+                    (!wall_host || !physical.replacement.original_to_proposed.contains(owner.first) ||
+                        physical.replacement.original_to_proposed.at(owner.first)!=catalog_id ||
+                        !physical.replacement.original_to_proposed.contains(source_host.id))))
+                throw std::invalid_argument("Phase wall canvas hosted alias has an unsupported actual source host or catalog mapping.");
+            const auto target_host=stage.find(proposed_id(source_host.id));
+            if (target_host==stage.end() || target_host->second.id!=proposed_id(source_host.id) ||
+                target_host->second.type!=source_host.type)
+                throw std::invalid_argument("Phase wall canvas hosted alias lost its actual target host.");
+            if (source_host.type=="wall") (void)stage_wall(target_host->first);
+            else if (source_host.type=="opening") (void)qualified_opening_host(source_host.id,source_host);
+            const auto& proposed_rows=stage_catalog(catalog_id).instances();
             const auto proposed_row=std::find_if(proposed_rows.begin(),proposed_rows.end(),[&](const auto& value){return value.id==proposed;});
             if (proposed_row==proposed_rows.end() || !proposed_row->placement ||
                 proposed_row->placement->host_entity_id!=proposed_id(row->placement->host_entity_id))
@@ -932,11 +1002,14 @@ PhaseWallCanvasProjection project_phase_wall_canvas(const DocumentSnapshot& sour
                 throw std::invalid_argument("Coordinated canvas private catalog overlaps a fresh hosted instance.");
         }
         stage_embedded=embedded_assembly_presentation_ids(stage);
-        const auto source_embedded=embedded_assembly_presentation_ids(source.entities());
         for (const auto& [owner,destination]:qualified_hosted) {
-            const auto& original=source_embedded.at(owner);
-            const auto& proposed=stage_embedded.at(destination);
-            if (source.entities().contains(proposed) || aliases.contains(proposed) ||
+            const auto original_entry=source_embedded.find(owner),proposed_entry=stage_embedded.find(destination);
+            if (original_entry==source_embedded.end() || proposed_entry==stage_embedded.end() ||
+                !stage_embedded.contains(owner) || stage_embedded.at(owner)!=original_entry->second)
+                throw std::invalid_argument("Phase wall canvas lost an exact original or proposed component presentation alias.");
+            const auto& original=original_entry->second;
+            const auto& proposed=proposed_entry->second;
+            if (source.entities().contains(proposed) || embedded.contains(proposed) || aliases.contains(proposed) ||
                 !fresh.insert(proposed).second || hosted_fresh.contains(proposed))
                 throw std::invalid_argument("Coordinated canvas has an overlapping component presentation destination.");
             const auto [found,inserted]=aliases.emplace(original,proposed);
@@ -959,13 +1032,32 @@ PhaseWallCanvasProjection project_phase_wall_canvas(const DocumentSnapshot& sour
         if (!decoded.supported()) throw std::invalid_argument("Phase wall canvas preview dimension: "+decoded.unsupported_reason);
         return *decoded.dimension;
     };
+    std::size_t hosted_native_work{};
+    std::map<std::string,TopoDS_Shape,std::less<>> hosted_shapes;
+    const auto hosted_shape=[&](const Entity& host) -> const TopoDS_Shape& {
+        if (hosted_shapes.contains(host.id)) return hosted_shapes.at(host.id);
+        TopoDS_Shape shape;
+        if (host.type=="wall") {
+            const auto& wall=stage_wall(host.id);
+            const auto layers=std::max<std::size_t>(1,wall.layers.size());
+            if (wall.openings.size()>128 || layers>32 || hosted_native_work>262144 ||
+                layers*(wall.openings.size()+1)>262144-hosted_native_work)
+                throw std::invalid_argument("Phase wall canvas hosted native geometry budget exceeded.");
+            hosted_native_work+=layers*(wall.openings.size()+1);
+            shape=make_wall(wall);
+        } else if (host.type=="opening")
+            shape=make_document_opening_host_shape(stage,host.id,&hosted_native_work);
+        else if (coordinated) shape=coordinated_shape(stage,host.id);
+        else throw std::invalid_argument("Phase wall canvas hosted geometry requires an actual wall or opening.");
+        if (shape.IsNull()) throw std::invalid_argument("Phase wall canvas hosted geometry has no actual target body.");
+        return hosted_shapes.emplace(host.id,std::move(shape)).first->second;
+    };
     for (const auto& [key,prototype]:prototypes) {
         const auto id=prototype.id.toStdString();
-        if (coordinated && prototype.type==QStringLiteral("assembly_instance") && embedded.contains(id)) {
+        if (project_hosted && prototype.type==QStringLiteral("assembly_instance") && embedded.contains(id) &&
+            (coordinated || qualified_hosted.contains(embedded.at(id)))) {
             const auto& [catalog_id,instance_id]=embedded.at(id);
-            if (!source_catalogs.contains(catalog_id)) source_catalogs.emplace(catalog_id,
-                AssemblyModel::from_json(source.entities().at(catalog_id).properties.at("model")));
-            const auto& source_rows=source_catalogs.at(catalog_id).instances();
+            const auto& source_rows=source_catalog(catalog_id).instances();
             const auto original=std::find_if(source_rows.begin(),source_rows.end(),[&](const auto& value){return value.id==instance_id;});
             if (original==source_rows.end()) throw std::invalid_argument("Coordinated canvas lost an actual assembly source row.");
             const auto copied=qualified_hosted.find({catalog_id,instance_id});
@@ -976,9 +1068,7 @@ PhaseWallCanvasProjection project_phase_wall_canvas(const DocumentSnapshot& sour
             if (copied==qualified_hosted.end() &&
                 stage.at(target_catalog)==source.entities().at(catalog_id) &&
                 (!original->placement || !affected.contains(original->placement->host_entity_id))) continue;
-            if (!stage_catalogs.contains(target_catalog)) stage_catalogs.emplace(target_catalog,
-                AssemblyModel::from_json(stage.at(target_catalog).properties.at("model")));
-            const auto& rows=stage_catalogs.at(target_catalog).instances();
+            const auto& rows=stage_catalog(target_catalog).instances();
             const auto proposed=std::find_if(rows.begin(),rows.end(),[&](const auto& value){return value.id==target_instance;});
             if (proposed==rows.end()) throw std::invalid_argument("Coordinated canvas lost a qualified assembly stage row.");
             if (copied==qualified_hosted.end() && *proposed==*original &&
@@ -1030,23 +1120,45 @@ PhaseWallCanvasProjection project_phase_wall_canvas(const DocumentSnapshot& sour
                     projected.hit_segments=project_assembly_plan(part);
                 }
             } else {
-                if (!expansion.profiles.empty() || !proposed->placement || !original->placement)
+                const auto source_key=std::make_pair(catalog_id,instance_id);
+                if (!source_expansions.contains(source_key)) source_expansions.emplace(source_key,
+                    source_catalogs.at(catalog_id).expand(*original,source_assembly_budget));
+                if (!expansion.profiles.empty() || !source_expansions.at(source_key).profiles.empty() ||
+                    !proposed->placement || !original->placement)
                     throw std::invalid_argument("Coordinated canvas host-copy assembly changed geometry ownership.");
                 const auto& host=stage.at(proposed->placement->host_entity_id);
+                if (host.type=="wall" || host.type=="opening") (void)hosted_shape(host);
                 const auto transform=instance_transform(*proposed);
                 Boundary host_paths;
-                if (host.type=="slab") {
+                if (host.type=="wall") {
+                    const auto& wall=stage_wall(host.id);
+                    const auto plan=plans.find(host.id);
+                    if (plan==plans.end()) throw std::invalid_argument("Phase wall canvas hosted copy lost its actual wall plan.");
+                    host_paths=plan->second.footprint;
+                    projected.thickness_metres=wall.thickness*transform.scale;
+                } else if (host.type=="opening") {
+                    const auto wall_id=typed_opening_host(host);
+                    if (!wall_id) throw std::invalid_argument("Phase wall canvas hosted copy lost its actual opening wall.");
+                    const auto& wall=stage_wall(*wall_id);
+                    const auto opening=std::find_if(wall.openings.begin(),wall.openings.end(),
+                        [&](const auto& value){return value.id==host.id;});
+                    if (opening==wall.openings.end())
+                        throw std::invalid_argument("Phase wall canvas hosted copy lost its actual opening cut.");
+                    host_paths=opening_plan(host,wall,*opening);
+                    projected.thickness_metres=0;
+                } else if (coordinated && host.type=="slab") {
                     Slab slab;std::string error;
                     if (!read_document_slab(resolve_vertical_placement(stage,host),slab,error)) throw std::invalid_argument(error);
                     host_paths=slab.boundary;
                     projected.thickness_metres=slab.thickness*transform.scale*transform.vertical_scale;
-                } else if (can_recognize_building_entity_type(host.type)) {
+                } else if (coordinated && can_recognize_building_entity_type(host.type)) {
                     host_paths=project_building_plan(decode_building_entity(effective_building_entity(stage,host)),stage);
                     projected.thickness_metres=0;
                 } else throw std::invalid_argument("Coordinated canvas host-copy requires an actual supported physical owner.");
+                if (host_paths.empty()) throw std::invalid_argument("Phase wall canvas hosted copy has no actual target plan.");
                 frame_paths=placed_path(host_paths,transform);
                 if (view_context && !analytical_canvas_plan_context(BuildingViewKind::plan,*view_context)) {
-                    projected.segments=project_solid(transform_assembly_shape(coordinated_shape(stage,host.id),transform),*view_context);world=false;
+                    projected.segments=project_solid(transform_assembly_shape(hosted_shape(host),transform),*view_context);world=false;
                 } else projected.segments=frame_paths;
             }
             if (horizontal_plan && prototype.resize_frame && !frame_paths.empty()) {
@@ -1172,21 +1284,7 @@ PhaseWallCanvasProjection project_phase_wall_canvas(const DocumentSnapshot& sour
                 projected.segments=project_solid(opening_solid(entity,wall,*opening),*view_context);world=false;
                 projected.filled=false;projected.hatch_pattern=QStringLiteral("none");
             } else {
-                const auto kind=wall_opening_kind(entity);
-                if (entity.properties.contains("opening_assembly")) {
-                    const auto assembly=parse_opening_assembly(entity.properties.at("opening_assembly"));
-                    if (opening_assembly_kind_name(assembly.kind)!=kind) throw std::invalid_argument("Phase wall preview opening assembly kind differs from its owner.");
-                    std::optional<DoorOperation> operation;
-                    if (kind=="door" && entity.properties.contains("door_operation")) operation=decode_door_operation(entity.properties.at("door_operation"));
-                    projected.segments=project_hosted_opening_plan(wall,*opening,assembly,operation);
-                } else if (kind=="door" && entity.properties.contains("door_operation"))
-                    projected.segments=door_plan_symbol(wall.baseline,opening->offset,opening->width,decode_door_operation(entity.properties.at("door_operation")));
-                else if (kind=="window") projected.segments=window_plan_symbol(wall.baseline,opening->offset,opening->width,wall.thickness);
-                else if (kind=="opening" || kind=="door") {
-                    const auto span=hosted_opening_span(wall.baseline,opening->offset,opening->width);
-                    const auto outline=wall_plan_footprint(span,{},wall.thickness);
-                    projected.segments={outline.at(1),outline.at(3),span};
-                } else throw std::invalid_argument("Phase wall canvas preview has an unsupported opening kind: "+id);
+                projected.segments=opening_plan(entity,wall,*opening);
                 const auto span=hosted_opening_span(wall.baseline,opening->offset,opening->width);
                 projected.hit_segments={span};
                 if (prototype.opening_width_controls) projected.opening_width_controls=CanvasOpeningWidthControls{
@@ -1454,10 +1552,20 @@ PhaseWallCanvasProjection project_phase_wall_canvas(const DocumentSnapshot& sour
         result.labels.push_back(std::move(projected));
     }
     std::map<std::string,SectionOverlay,std::less<>> staged_overlays;
+    std::map<std::string,SectionOverlay,std::less<>> source_overlays;
     std::string overlay_owner;
-    if (view_context && coordinated) {
+    const auto standalone_component_overlay=[&](const SectionOverlay& overlay) {
+        if (coordinated || overlay.kind!=SectionOverlayKind::dimension || !overlay.dimension_binding ||
+            !physical.replacement.original_to_proposed.contains(overlay.id)) return false;
+        const auto component=embedded.find(overlay.dimension_binding->object_id);
+        return component!=embedded.end() &&
+            physical.replacement.hosted_instance_original_to_proposed.contains(component->second);
+    };
+    const bool standalone_component_overlays=view_context &&
+        std::any_of(view_context->overlays.begin(),view_context->overlays.end(),standalone_component_overlay);
+    if (view_context && (coordinated || standalone_component_overlays)) {
         overlay_owner=view_context->sheet_view_entity_id;
-        if (overlay_owner.empty()) {
+        if (overlay_owner.empty() && coordinated) {
             // Existing callers can omit the carrier. Infer it only from an
             // exact qualified source overlay, refusing ambiguous saved views.
             for (const auto& [key,proposed]:coordinated->original_to_overlay_proposed) {
@@ -1471,9 +1579,41 @@ PhaseWallCanvasProjection project_phase_wall_canvas(const DocumentSnapshot& sour
                 overlay_owner=std::get<0>(key);
             }
         }
+        if (overlay_owner.empty() && standalone_component_overlays) {
+            // An omitted carrier needs an exact captured source overlay in the
+            // actual saved view. A matching view spelling alone is no proof.
+            for (const auto& [id,entity]:source.entities()) {
+                if (entity.type!=kSheetViewEntityType) continue;
+                const auto model=decode_sheet_view_entity(entity);
+                const auto view=std::find_if(model.views().begin(),model.views().end(),[&](const auto& value) {
+                    return value.id==view_context->view_id;
+                });
+                if (view==model.views().end() || std::none_of(view_context->overlays.begin(),view_context->overlays.end(),[&](const auto& row) {
+                    return standalone_component_overlay(row) &&
+                        std::find(view->overlays.begin(),view->overlays.end(),row)!=view->overlays.end();
+                })) continue;
+                if (!overlay_owner.empty() && overlay_owner!=id)
+                    throw std::invalid_argument("Phase wall canvas component dimension carrier is ambiguous.");
+                overlay_owner=id;
+            }
+            if (overlay_owner.empty())
+                throw std::invalid_argument("Phase wall canvas component dimension has no actual saved carrier.");
+        }
         if (!overlay_owner.empty()) {
+            if (standalone_component_overlays) {
+                const auto saved=source.entities().find(overlay_owner);
+                if (saved==source.entities().end() || saved->second.id!=overlay_owner || saved->second.type!=kSheetViewEntityType)
+                    throw std::invalid_argument("Phase wall canvas component dimension lost its actual source carrier.");
+                const auto model=decode_sheet_view_entity(saved->second);
+                const auto view=std::find_if(model.views().begin(),model.views().end(),[&](const auto& value) {
+                    return value.id==view_context->view_id;
+                });
+                if (view==model.views().end())
+                    throw std::invalid_argument("Phase wall canvas component dimension lost its actual source view.");
+                for (const auto& row:view->overlays) source_overlays.emplace(row.id,row);
+            }
             const auto saved=stage.find(overlay_owner);
-            if (saved==stage.end() || saved->second.type!=kSheetViewEntityType)
+            if (saved==stage.end() || saved->second.id!=overlay_owner || saved->second.type!=kSheetViewEntityType)
                 throw std::invalid_argument("Coordinated canvas lost its actual saved overlay carrier.");
             const auto model=decode_sheet_view_entity(saved->second);
             const auto view=std::find_if(model.views().begin(),model.views().end(),[&](const auto& value) {
@@ -1489,11 +1629,31 @@ PhaseWallCanvasProjection project_phase_wall_canvas(const DocumentSnapshot& sour
         if (!staged_component_owners.emplace(alias,key).second)
             throw std::invalid_argument("Coordinated canvas has ambiguous staged component aliases.");
     if (view_context) for (const auto& overlay:view_context->overlays) {
+        const bool standalone_component=standalone_component_overlay(overlay);
         if (overlay.kind!=SectionOverlayKind::dimension || !overlay.dimension_binding ||
             (!affected.contains(overlay.dimension_binding->object_id) &&
-                !affected_components.contains(overlay.dimension_binding->object_id)) ||
+                (!coordinated || !affected_components.contains(overlay.dimension_binding->object_id)) &&
+                !standalone_component) ||
             !section_overlay_visible(overlay,view_context->presentation.detail)) continue;
         const SectionOverlay* staged=&overlay;
+        if (standalone_component) {
+            const auto captured_overlay=source_overlays.find(overlay.id);
+            if (captured_overlay==source_overlays.end() || captured_overlay->second!=overlay)
+                throw std::invalid_argument("Phase wall canvas component dimension differs from its actual source overlay.");
+            const auto found=staged_overlays.find(physical.replacement.original_to_proposed.at(overlay.id));
+            const auto component=embedded.at(overlay.dimension_binding->object_id);
+            const auto destination=physical.replacement.hosted_instance_original_to_proposed.at(component);
+            if (found==staged_overlays.end() || found->second.kind!=SectionOverlayKind::dimension ||
+                !found->second.dimension_binding || !stage_embedded.contains(destination) ||
+                found->second.dimension_binding->object_id!=stage_embedded.at(destination))
+                throw std::invalid_argument("Phase wall canvas component dimension lost its exact copied overlay or target binding.");
+            auto expected=overlay;expected.id=found->second.id;
+            expected.object_id=proposed_id(expected.object_id);
+            expected.dimension_binding->object_id=found->second.dimension_binding->object_id;
+            if (found->second!=expected)
+                throw std::invalid_argument("Phase wall canvas component dimension changed beyond its admitted identity mapping.");
+            staged=&found->second;
+        }
         if (coordinated && !staged_overlays.empty()) {
             const auto qualified=coordinated->original_to_overlay_proposed.find(
                 {overlay_owner,view_context->view_id,overlay.id});
@@ -1552,9 +1712,7 @@ PhaseWallCanvasProjection project_phase_wall_canvas(const DocumentSnapshot& sour
         Boundary support;
         if (const auto component=staged_component_owners.find(target);component!=staged_component_owners.end()) {
             const auto& [catalog_id,instance_id]=component->second;
-            if (!stage_catalogs.contains(catalog_id)) stage_catalogs.emplace(catalog_id,
-                AssemblyModel::from_json(stage.at(catalog_id).properties.at("model")));
-            const auto& rows=stage_catalogs.at(catalog_id).instances();
+            const auto& rows=stage_catalog(catalog_id).instances();
             const auto row=std::find_if(rows.begin(),rows.end(),[&](const auto& value){return value.id==instance_id;});
             if (row==rows.end() || !row->placement)
                 throw std::invalid_argument("Coordinated bound dimension lost its actual hosted component row.");
@@ -1566,9 +1724,7 @@ PhaseWallCanvasProjection project_phase_wall_canvas(const DocumentSnapshot& sour
             if (!expansion.profiles.empty()) shape=make_assembly_geometry(expansion).shape;
             else {
                 const auto& host=stage.at(row->placement->host_entity_id);
-                const auto host_shape=host.type=="wall" && walls.contains(host.id)
-                    ? make_wall(walls.at(host.id)) : coordinated_shape(stage,host.id);
-                shape=transform_assembly_shape(host_shape,instance_transform(*row));
+                shape=transform_assembly_shape(hosted_shape(host),instance_transform(*row));
             }
             support=project_shape_view(shape,BuildingViewKind::plan,view_context->frame);
         } else {

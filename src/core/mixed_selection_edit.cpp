@@ -33,7 +33,7 @@ constexpr std::size_t memo_limit = 128 * 1024 * 1024;
 bool properties_dialect(const Json& value) {
     if (!value.is_object()) return false;
     const auto version = value.value("version", Json());
-    return version == 5 || version == 6 || version == 7 || version == 8 || version == 9 || version == 10 || version == 11 || version == 12 || version == 13;
+    return version == 5 || version == 6 || version == 7 || version == 8 || version == 9 || version == 10 || version == 11 || version == 12 || version == 13 || version == 15;
 }
 
 [[noreturn]] void reject(const char* reason) {
@@ -584,7 +584,7 @@ Entities replay_mixed_selection_edit(const DocumentSnapshot& source, const Json&
 
 bool mixed_selection_edit_retires_dependencies(const Json& value) {
     (void)validate_mixed_selection_edit_intent(value);
-    if (value.at("version")==11 || value.at("version")==12 || value.at("version")==13) return mixed_selection_property_edit_retires_dependencies(value);
+    if (value.at("version")==11 || value.at("version")==12 || value.at("version")==13 || value.at("version")==15) return mixed_selection_property_edit_retires_dependencies(value);
     if ((value.at("version") != 9 && value.at("version") != 10) || value.at("stair_review_request").is_null()) return false;
     const auto request = decode_stair_property_review_request(value.at("stair_review_request"));
     return std::any_of(request.dependency_dispositions.begin(), request.dependency_dispositions.end(),
@@ -593,12 +593,12 @@ bool mixed_selection_edit_retires_dependencies(const Json& value) {
 
 bool mixed_selection_edit_has_phase_replacements(const Json& value) {
     (void)validate_mixed_selection_edit_intent(value);
-    return (value.at("version")==11 || value.at("version")==12 || value.at("version")==13) && mixed_selection_property_edit_has_phase_replacements(value);
+    return (value.at("version")==11 || value.at("version")==12 || value.at("version")==13 || value.at("version")==15) && mixed_selection_property_edit_has_phase_replacements(value);
 }
 
 std::vector<Json> mixed_selection_edit_phase_room_reviews(const Json& value) {
     (void)validate_mixed_selection_edit_intent(value);
-    return (value.at("version")==11 || value.at("version")==12 || value.at("version")==13) ? mixed_selection_property_edit_phase_room_reviews(value) : std::vector<Json>{};
+    return (value.at("version")==11 || value.at("version")==12 || value.at("version")==13 || value.at("version")==15) ? mixed_selection_property_edit_phase_room_reviews(value) : std::vector<Json>{};
 }
 
 Json make_mixed_selection_edit_intent(const DocumentSnapshot& source, const Json& ordinary_request,

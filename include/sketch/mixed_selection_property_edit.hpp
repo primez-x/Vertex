@@ -46,6 +46,13 @@ namespace sketch {
 // contribution with an optional independently replayed historical five-through-
 // thirteen intent. Its component request is the sole assembly Properties lane;
 // final room decisions belong to the complete composed stage.
+// Dialect fifteen is a separate detached phase request five envelope, with
+// eleven through thirteen's exact fields and explicit qualified wall-hosted
+// copy authority. Scalar requests one through five retain their own exact
+// authority; a null scalar retains child-only selection. Elevation and hosted
+// slab carry require the underlying scalar four/five codec. Qualified wall
+// room decisions use explicit leaf eleven on the final composed stage.
+// This preparation does not grant Document publication or a format floor.
 // Each lane reads the same
 // complete immutable original snapshot. No supplied entity map, transform,
 // or caller-derived selected-object identity map is accepted. Historical
@@ -154,7 +161,8 @@ private:
     std::span<const AssemblyInstancePropertyEditIntent>,
     const std::optional<StairPropertyReviewRequest>& reviewed = std::nullopt);
 // Dialect eleven replaces ordinary_request with mandatory phase_request v1/v2.
-// This overload emits twelve for phase request v3 and thirteen for v4;
+// This overload emits twelve for phase request v3, thirteen for v4 and the
+// detached fifteen only for explicit complete_wall_hosted_instances v5;
 // ordinary overloads also emit thirteen for explicit hosted slab carry.
 // Assembly request is nullable; stair review stays solely inside phase_request.
 // phase_room_reviews contains ordered {phase_authoring_index,wall_replacement}
@@ -166,7 +174,8 @@ private:
     const std::optional<RoofOpeningGroupProperties>&, std::string_view message,
     std::span<const AssemblyInstancePropertyEditIntent>,
     const std::vector<PhaseSelectionPropertyIdentityAllocation>&,
-    const std::vector<PhaseStairReplacementDependencyDisposition>&);
+    const std::vector<PhaseStairReplacementDependencyDisposition>&,
+    bool complete_wall_hosted_instances = false);
 // Closed dialect fourteen: version, the five complete source fences,
 // component_request (sealed v1), base_intent (null or historical five-through-
 // thirteen without a nonnull assembly_request), room_reviews,

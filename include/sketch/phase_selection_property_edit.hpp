@@ -36,6 +36,7 @@ struct PhaseSelectionPropertyEditRequest {
     std::vector<PhaseStairReplacementDependencyDisposition> stair_dependency_dispositions;
     std::string message;
     std::optional<RoofOpeningGroupProperties> roof_opening_properties;
+    bool complete_wall_hosted_instances{false};
 };
 
 struct PhaseSelectionPropertyReplacementInventory {
@@ -73,7 +74,7 @@ private:
     friend PhaseSelectionPropertyEditInspection inspect_phase_selection_property_edit(
         const DocumentSnapshot&, const SelectionPropertyEditRequest&,
         const std::vector<PhaseStairReplacementDependencyDisposition>&,
-        const std::optional<RoofOpeningGroupProperties>&);
+        const std::optional<RoofOpeningGroupProperties>&, bool);
 };
 
 // Sealed complete physical contribution. The captured source is never replaced
@@ -131,7 +132,8 @@ private:
 [[nodiscard]] PhaseSelectionPropertyEditInspection inspect_phase_selection_property_edit(
     const DocumentSnapshot&, const SelectionPropertyEditRequest&,
     const std::vector<PhaseStairReplacementDependencyDisposition>& reviewed_stair_dispositions = {},
-    const std::optional<RoofOpeningGroupProperties>& roof_opening_properties = std::nullopt);
+    const std::optional<RoofOpeningGroupProperties>& roof_opening_properties = std::nullopt,
+    bool complete_wall_hosted_instances = false);
 // Closed v1: version, scalar_request (existing closed v1/v2/v3), allocations,
 // stair_dependency_dispositions, message. Allocation rows have exactly lane,
 // registry_id, alternative_id, identities, child_identities,
@@ -150,6 +152,12 @@ private:
 // cohort containing coordinated slab profiles uses explicit slab leaf V7;
 // ordinary carry retains complete original-source scalar replay. Historical
 // V1..V3 reject scalar V5 and cannot acquire hosted-elevation carry authority.
+// V5 has V4's exact fields plus complete_wall_hosted_instances:true. It admits
+// the existing scalar V1..V5 dialects with their exact original authority, or
+// null for child-only selection, and requires the actual qualified wall-hosted
+// inventory. Wall leaf V11 wraps the same scalar/vertical historical body.
+// Historical V1..V4 reject qualified wall-hosted allocations. This detached
+// contribution requires an explicit enclosing receipt before publication.
 [[nodiscard]] nlohmann::json encode_phase_selection_property_edit_request(
     const DocumentSnapshot&, const PhaseSelectionPropertyEditRequest&);
 [[nodiscard]] nlohmann::json validate_phase_selection_property_edit_request(const nlohmann::json&);

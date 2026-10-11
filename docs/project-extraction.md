@@ -1,5 +1,17 @@
 # Portable project extraction
 
+Exchange version204 requires native reader206 for retained scalar Properties15
+and phase request5. Explicit qualified wall allocations, source fences and
+actual room decisions remain in retained commands, including undone history.
+Earlier Properties dialects keep their original authority. This describes
+source-format support; runtime and round-trip qualification remain open.
+
+Exchange version203 requires native reader205 for retained coordinated inner5 /
+phase outer29. Qualified wall copy identities and the independently authored
+family contributions remain bound to the same original source, including
+retained Undo history. Earlier coordinated records retain their authority.
+Runtime and round-trip qualification remain open.
+
 Exchange version202 requires native reader204 for retained phase outer28 wall
 and opening component copies. The explicit historical wall edit version,
 qualified catalog/instance allocations and original-source fences remain in

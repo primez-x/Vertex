@@ -41,6 +41,8 @@ struct PhaseWallCanvasCoordinatedPhysicalInput {
     // A shared source catalog can produce separate private catalogs for
     // different family leaves. Destination is (catalog, instance); the older
     // single-catalog input above remains supported for existing callers.
+    // Both inputs reconcile with the physical preview's actual qualified wall
+    // copies; conflicting destinations refuse instead of selecting a leaf.
     std::map<std::pair<std::string, std::string>, std::pair<std::string, std::string>>
         original_to_hosted_destination_proposed;
     std::map<std::tuple<std::string, std::string, std::string>, std::string>
@@ -58,6 +60,15 @@ struct PhaseWallCanvasCoordinatedPhysicalInput {
 // Unsupported affected geometry throws std::invalid_argument; no stale source
 // presentation is silently substituted. Unreviewed physical room facts and
 // their room labels deliberately remain outside this physical-stage preview.
+// Actual physical.replacement.hosted_instance_original_to_proposed rows also
+// project standalone wall/opening-hosted components from their final catalog
+// and row. Profiles retain exact source part/type/profile keys; legacy copies
+// rebuild the final actual host plan/body. Fresh catalog/row/render aliases,
+// exact host mappings and shared catalog/expansion budgets are validated.
+// Standalone component dimensions require an exact captured source overlay,
+// its physical replacement ID and its actual staged qualified target binding.
+// Unmapped overlays stay unchanged. This grants no coordinated owner/overlay
+// authority. Without the roster, standalone hosted behavior is unchanged.
 // Supplying coordinated input additionally projects actual changed roof/slab,
 // stair/railing and column/beam owners, their joins and hosted catalog
 // presentations from edited_entities. Hosted railings use the complete raw
@@ -68,7 +79,8 @@ struct PhaseWallCanvasCoordinatedPhysicalInput {
 // their managed cuts remain wall-roster data without independent hit targets.
 // Both leg controls retain source snapshot revisions and local host baselines,
 // and require complete captured source controls plus complete final depth/crop.
-// As with wall bodies, the caller applies captured Site placement exactly once.
+// As with wall bodies, hosted geometry remains in the model frame and the
+// caller applies captured Site placement exactly once.
 // Wall-group scaling can additionally admit active changed ordinary wall hosts,
 // their actual cuts/profiles and supported dimension consumers from the complete
 // stage. This opt-in does not broaden historical or coordinated admission.

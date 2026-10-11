@@ -14,6 +14,74 @@ changed source does not acquire runtime acceptance without later qualification.
 
 ## Current delivery state
 
+### October 11 coordinated qualified wall and building edits
+
+The preceding standalone wall-copy batch is committed and pushed as 20998d2c.
+Current source adds a closed coordinated inner5/phase outer29 for an actual
+qualified wall geometry-move contribution plus independently replayed roof,
+slab, structural and stair contributions. The wall child retains outer28's
+explicit historical move lane and leaf11's exact qualified allocations. Old
+coordinated receipts retain their prior authority. Disjoint catalog-row edits
+compose through the existing typed row merger; declared component partitions
+compose against the original carrier and final actual registry/catalog graph.
+Copied wall presentation aliases are derived from the actual replay and reserved
+alongside each leaf's fresh destinations. Same-row competing edits still require
+explicit dependency composition rather than accepting one candidate over another.
+
+The desktop mixed wall movement producer requests the complete qualified roster
+and uses inner5 only when an actual protected-wall proposal exists. Reader205
+and extraction203 identify new29 through direct, wrapped and undone history.
+Source inspection confirms membership retirement retains companions belonging
+to surviving registries; whole-companion removal requires actual registry
+removal. This is not authority to erase a companion during an unrelated edit.
+
+Independent review identified a missing wall-hosted canvas mapping: publication
+could use a copied row while the preview used the original. Current source seeds
+the projector from the actual wall replacement's qualified map, reconciles mixed
+maps, manufactures the final wall/opening host-copy or profile body and preserves
+original gesture presentation keys. Exact copied component dimensions use actual
+source carriers, copied bindings and admitted physical overlay identities;
+unmapped component dimensions retain their source behavior. The mixed caller
+forwards wall maps, excludes private catalogs from unqualified physical redirects
+and restores selected copied components through actual before/after render aliases.
+Corner profiles, constrained/group wall edits, wall layer stacks and wall profiles
+now allocate the complete qualified inventory through a shared desktop helper.
+
+Scalar phase request5 explicitly opts into qualified wall-hosted allocations;
+mixed Properties15 requires that request while scalar1..5 retain their own
+authority. Historical Properties11..13 reject the new request. Document/wrapper
+proof, phase policy and identity-lifetime consumers recognize15, including
+retained/undone receipt reservations. General Properties and wall elevation
+allocation paths opt in only when an actual wall replacement cohort exists.
+Qualified scalar wall leaves retain outer28's explicit23/26 lane in composition.
+Reader206/extraction204 preserve15 without changing reader205's coordinated29
+authority. Component Properties14 remains unpublished and keeps its historical
+base5..13 boundary. Independent review approved this expanded bounded source
+integration after the preview correction; no confirmed P1/P2 remained in its
+reviewed scope. Root inspected the interfaces, caller discriminators, linked
+source dependencies, lifetime and reader-floor integration. Whitespace checks
+remain the executable verification; source review is not runtime acceptance.
+
+Component-and-host co-edit carry, duplicate copy elision, complete reference
+retargeting, remaining mutation consumers and nested selection restoration remain
+implementation work. Arbitrary deformed/cross-Site world-profile carry and
+companion-project quarantine are still explicit gaps; these refusals do not
+constitute completion.
+The next co-edit reference-carry seam is concrete: wall/roof
+`complete_presentation` and stair `presentation` copy codec-owned sheet object
+IDs, appearance targets, overlay object/dimension bindings and annotation
+overrides through derived render aliases. They are private producer helpers,
+not a generic retarget API. Required membership transport consumes qualified
+roots plus actual host copies; it does not patch component rows. Co-edit
+deduplication needs a surviving qualified destination for each actual source,
+derived alias/ref accounting and lifetime reservation for elided allocations.
+Dropping a duplicate destination from the map is insufficient. Bounded read-only
+discovery inspected those three replacement modules and public codecs only.
+The source-only instruction remains binding: no builds, tests, probes, launches,
+packages or installs. The installed candidate is unchanged; compilation,
+interaction and retained-history behavior remain unverified. All ten production
+gates remain open.
+
 ### October 11 qualified wall copies and retained receipt reservations
 
 The preceding batch is committed and pushed as ac586175. Current source closes

@@ -1,4 +1,20 @@
-# Vertex project formats v1 through v204
+# Vertex project formats v1 through v206
+
+Reader206 retains mixed scalar Properties15 with phase request5. The request
+explicitly opts into exact qualified wall-hosted component copies; scalar
+versions1..5 retain their own geometry/elevation authority and source fences.
+Qualified leaf11 room completion retains the same captured wall contribution.
+Historical Properties11..13 reject phase request5; component Properties14
+remains a separate unpublished contribution. Native extraction emits204 for
+this authority, including retained and undone receipts. Runtime qualification
+remains open.
+
+Reader205 retains coordinated inner5 / phase outer29, pairing actual qualified
+wall component copying with independently reconstructed roof, slab, structural
+and stair contributions. The wall child retains outer28 and its explicit
+historical geometry edit lane. Earlier coordinated records keep their original
+meaning. Native extraction emits203 for this authority. Source-format support
+does not establish compilation, interaction, recovery or round-trip qualification.
 
 Reader204 retains explicit qualified wall/opening component-copy authority in
 phase outer28. `wall_edit_version` preserves the exact historical edit lane

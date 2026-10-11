@@ -25830,6 +25830,8 @@ public:
                         throw std::invalid_argument("The coordinated preview repeats a qualified hosted component identity.");
             };
             for (const auto& component : phase_constraint_replacement_components(intent)) {
+                if (!component.wall_replacement.is_null())
+                    append_hosted(decode_phase_wall_replacement_authoring(component.wall_replacement));
                 if (!component.slab_replacement.is_null()) {
                     append_hosted(decode_phase_slab_replacement_authoring(component.slab_replacement));
                 }
@@ -30559,6 +30561,25 @@ public:
             Command{hosted_opening_width_resize_command(source, opening_id, *relative_width_scale, keep_start_jamb)};
     }
 
+    static void allocateQualifiedWallReplacementIdentities(const PhaseWallReplacementPlan& plan,
+        PhaseWallReplacementAuthoring& replacement, std::set<std::string, std::less<>>& occupied) {
+        if (!plan.ready() || !plan.complete_hosted_instances)
+            throw std::invalid_argument("The wall edit requires its complete captured component inventory.");
+        replacement.complete_hosted_instances = true;
+        const auto allocate = [&]() {
+            auto proposed = new_id("proposed");
+            while (!occupied.insert(proposed).second) proposed = new_id("proposed");
+            return proposed;
+        };
+        for (const auto* slots : {&plan.required_entity_ids, &plan.required_child_ids})
+            for (const auto& original : *slots)
+                if (!replacement.identities.emplace(original, allocate()).second)
+                    throw std::invalid_argument("The wall edit repeats an allocated owner identity.");
+        for (const auto& original : plan.required_hosted_instance_ids)
+            if (!replacement.hosted_instance_identities.emplace(original, allocate()).second)
+                throw std::invalid_argument("The wall edit repeats a qualified component identity.");
+    }
+
     static Command cornerWindowProfileGeometryCommand(const DocumentSnapshot& source,
         const Entity& replacement, const std::string& message) {
         const auto profile=make_corner_window_profile_edit_intent(source.entities(),replacement);
@@ -30566,7 +30587,7 @@ public:
         const auto request=phase_corner_window_profile_replacement_request(source.entities(),{*profile});
         if (!request) return corner_window_upsert_command(source,replacement,source.revision());
         const auto plan=inspect_phase_wall_replacement_plan(source.entities(),request->seed_wall_ids,
-            request->registry_id,request->alternative_id,true,true);
+            request->registry_id,request->alternative_id,true,true,true);
         if (!plan.ready()) {
             std::string reason="The corner-window design edit has unsupported dependencies.";
             for (const auto& diagnostic:plan.diagnostics) if (diagnostic.blocking)
@@ -30579,12 +30600,7 @@ public:
         edit.complete_presentations=true; edit.complete_corner_windows=true;
         edit.corner_profiles={*profile};
         auto occupied=retainedSlabIdentityNames(source);
-        for (const auto* ids:{&plan.required_entity_ids,&plan.required_child_ids})
-            for (const auto& original:*ids) {
-                auto proposed=new_id("proposed");
-                while (!occupied.insert(proposed).second) proposed=new_id("proposed");
-                edit.identities.emplace(original,std::move(proposed));
-            }
+        allocateQualifiedWallReplacementIdentities(plan, edit, occupied);
         ConstraintAuthoringIntent semantic; semantic.message=message;
         auto intent=make_phase_constraint_authoring_intent(source,semantic);
         intent.wall_replacement=encode_phase_wall_replacement_authoring(edit);
@@ -49659,7 +49675,7 @@ private:
                 }
             };
             if (!component.wall_replacement.is_null())
-                identities = decode_phase_wall_replacement_authoring(component.wall_replacement).identities;
+                retain_physical(decode_phase_wall_replacement_authoring(component.wall_replacement));
             else if (!component.slab_replacement.is_null())
                 retain_physical(decode_phase_slab_replacement_authoring(component.slab_replacement));
             else if (!component.roof_replacement.is_null()) {
@@ -49687,7 +49703,8 @@ private:
         std::vector<PhaseStairReplacementAuthoring>* stair_components=nullptr,
         std::vector<PhaseSlabReplacementAuthoring>* slab_components=nullptr,
         std::vector<PhaseRoofReplacementAuthoring>* roof_components=nullptr,
-        const DocumentSnapshot* source=nullptr) {
+        const DocumentSnapshot* source=nullptr,
+        std::vector<PhaseWallReplacementAuthoring>* wall_components=nullptr) {
         PhaseWallReplacementIdentityMap identities;
         if (!std::holds_alternative<ApplyBoundaryConstraintChanges>(command)) return identities;
         // Room completion retains the complete geometry command in its closed
@@ -49699,6 +49716,10 @@ private:
             const auto version = encoded.at("version").get<int>();
             if (version == 34) {
                 const auto intent = decode_phase_constraint_authoring_intent(encoded.at("phase_constraint_authoring_intent"));
+                if (wall_components)
+                    for (const auto& component:phase_constraint_replacement_components(intent))
+                        if (!component.wall_replacement.is_null())
+                            wall_components->push_back(decode_phase_wall_replacement_authoring(component.wall_replacement));
                 if (structural_components)
                     for (const auto& component:phase_constraint_replacement_components(intent))
                         if (!component.structural_replacement.is_null())
@@ -49727,7 +49748,7 @@ private:
                     validate_mixed_clipboard_placement_intent(encoded.at("clipboard_placement_intent")) :
                     validate_mixed_selection_edit_intent(encoded.at("mixed_selection_edit_intent"));
                 const auto dialect=intent.at("version").get<int>();
-                if (version==52 && dialect>=5 && dialect<=13) {
+                if (version==52 && ((dialect>=5 && dialect<=13) || dialect==15)) {
                     // Properties dialects have no transform roof_authoring.
                     // Active-baseline redirects require independently replayed
                     // source authority rather than extracting supplied maps.
@@ -49741,6 +49762,8 @@ private:
                     }
                     for (const auto& encoded_leaf:prepared.phase_authorings()) {
                         const auto leaf=decode_phase_constraint_authoring_intent(encoded_leaf);
+                        if (wall_components && !leaf.wall_replacement.is_null())
+                            wall_components->push_back(decode_phase_wall_replacement_authoring(leaf.wall_replacement));
                         if (structural_components && !leaf.structural_replacement.is_null())
                             structural_components->push_back(decode_phase_structural_replacement_authoring(leaf.structural_replacement));
                         if (stair_components && !leaf.stair_replacement.is_null())
@@ -49781,7 +49804,8 @@ private:
         std::vector<PhaseStairReplacementAuthoring> stair_components;
         std::vector<PhaseSlabReplacementAuthoring> slab_components;
         std::vector<PhaseRoofReplacementAuthoring> roof_components;
-        const auto identities = alternativeCommandReplacementIdentities(command,&structural_components,&stair_components,&slab_components,&roof_components,&source);
+        std::vector<PhaseWallReplacementAuthoring> wall_components;
+        const auto identities = alternativeCommandReplacementIdentities(command,&structural_components,&stair_components,&slab_components,&roof_components,&source,&wall_components);
         for (const auto& [original_id, proposed_id] : identities) {
             const auto original = source.entities().find(original_id);
             if (original == source.entities().end() ||
@@ -49803,6 +49827,8 @@ private:
             return !component.hosted_instance_identities.empty();
         }) || std::any_of(roof_components.begin(),roof_components.end(),[](const auto& component) {
             return !component.hosted_instance_identities.empty();
+        }) || std::any_of(wall_components.begin(),wall_components.end(),[](const auto& component) {
+            return !component.hosted_instance_identities.empty();
         });
         if (hosted) {
             const auto before=embedded_assembly_presentation_ids(source.entities());
@@ -49821,6 +49847,7 @@ private:
             append(stair_components);
             append(slab_components);
             append(roof_components);
+            append(wall_components);
         }
         return result;
     }
@@ -50630,7 +50657,7 @@ private:
             auto proposed = new_id("proposed");
             while (!occupied.insert(proposed).second) proposed = new_id("proposed");
             return proposed;
-        }, true, true);
+        }, true, true, true);
         if (wall_proposal) wall_intent = std::move(wall_proposal->intent);
         const auto* physical_phase = std::get_if<ApplyBoundaryConstraintChanges>(&physical_command);
         if (!wall_proposal && (!physical_phase || !physical_phase->phase_constraint_authoring_completion)) {
@@ -50651,6 +50678,15 @@ private:
             coordinated["ordinary_structural_edits"] = json::array();
         }
         if (has_stairs) {
+            coordinated["stair_replacement"]=nullptr;
+            coordinated["ordinary_stair_transforms"]=json::array();
+        }
+        if (wall_proposal) {
+            // Qualified wall copies use their own complete mixed-family
+            // authority. Keep historical coordinated records unchanged.
+            coordinated.at("version")=5;
+            coordinated["structural_replacement"]=nullptr;
+            coordinated["ordinary_structural_edits"]=json::array();
             coordinated["stair_replacement"]=nullptr;
             coordinated["ordinary_stair_transforms"]=json::array();
         }
@@ -51242,7 +51278,7 @@ private:
         if (requests.size()!=1) throw std::invalid_argument("This edit replaces baseline walls in several design registries. Edit each building's alternative separately.");
         const auto& request=requests.front();
         const auto plan=inspect_phase_wall_replacement_plan(source.entities(),request.seed_wall_ids,
-            request.registry_id,request.alternative_id,true,true);
+            request.registry_id,request.alternative_id,true,true,true);
         if (!plan.ready()) {
             QStringList reasons;
             for (const auto& diagnostic:plan.diagnostics) if (diagnostic.blocking)
@@ -51254,12 +51290,7 @@ private:
         replacement.complete_presentations=true;
         replacement.complete_corner_windows=true;
         auto occupied=retainedSlabIdentityNames(source);
-        for (const auto* ids:{&plan.required_entity_ids,&plan.required_child_ids})
-            for (const auto& id:*ids) {
-                auto proposed=new_id("proposed");
-                while (!occupied.insert(proposed).second) proposed=new_id("proposed");
-                replacement.identities.emplace(id,std::move(proposed));
-            }
+        allocateQualifiedWallReplacementIdentities(plan, replacement, occupied);
         intent.wall_replacement=encode_phase_wall_replacement_authoring(replacement);
         return finishAlternativeWallEdit(source,intent,*constrained,proposed_ids);
     }
@@ -51354,7 +51385,7 @@ private:
         const auto request = phase_wall_layer_stack_replacement_request(source.entities(), {*captured});
         if (request) {
             const auto plan = inspect_phase_wall_replacement_plan(source.entities(), request->seed_wall_ids,
-                request->registry_id, request->alternative_id, true, true);
+                request->registry_id, request->alternative_id, true, true, true);
             if (!plan.ready()) {
                 QStringList reasons;
                 for (const auto& diagnostic : plan.diagnostics) if (diagnostic.blocking)
@@ -51368,12 +51399,7 @@ private:
             replacement.wall_stacks = {*captured};
             replacement.complete_presentations = true;
             replacement.complete_corner_windows = true;
-            for (const auto* slots : {&plan.required_entity_ids, &plan.required_child_ids})
-                for (const auto& id : *slots) {
-                    auto proposed = new_id("proposed");
-                    while (!occupied.insert(proposed).second) proposed = new_id("proposed");
-                    replacement.identities.emplace(id, std::move(proposed));
-                }
+            allocateQualifiedWallReplacementIdentities(plan, replacement, occupied);
             ConstraintAuthoringIntent semantic; semantic.message = "Edit wall layers and materials";
             auto phase = make_phase_constraint_authoring_intent(source, semantic);
             phase.wall_replacement = encode_phase_wall_replacement_authoring(replacement);
@@ -51450,7 +51476,7 @@ private:
         std::sort(replacement.seed_wall_ids.begin(),replacement.seed_wall_ids.end());
         const auto plan=inspect_phase_wall_replacement_plan(source.entities(),replacement.seed_wall_ids,
             replacement.registry_id,replacement.alternative_id,replacement.complete_presentations,
-            replacement.complete_corner_windows);
+            replacement.complete_corner_windows,true);
         if (!plan.ready()) {
             QStringList reasons;
             for (const auto& diagnostic:plan.diagnostics) if (diagnostic.blocking)
@@ -51458,12 +51484,7 @@ private:
             throw std::invalid_argument(reasons.join('\n').toStdString());
         }
         auto occupied=retainedSlabIdentityNames(source);
-        for (const auto* ids:{&plan.required_entity_ids,&plan.required_child_ids})
-            for (const auto& id:*ids) {
-                auto proposed=new_id("proposed");
-                while (!occupied.insert(proposed).second) proposed=new_id("proposed");
-                replacement.identities.emplace(id,std::move(proposed));
-            }
+        allocateQualifiedWallReplacementIdentities(plan, replacement, occupied);
         ConstraintAuthoringIntent semantic;semantic.message=raw->message;
         auto intent=make_phase_constraint_authoring_intent(source,semantic);
         intent.wall_replacement=encode_phase_wall_replacement_authoring(replacement);
@@ -58657,11 +58678,11 @@ private:
                 if (value.mixed_selection_edit_completion || !value.mixed_selection_edit_intent.is_null()) {
                     mixed_edit=true;
                     const auto intent=validate_mixed_selection_edit_intent(value.mixed_selection_edit_intent);
-                    if (intent.at("version")==5 || intent.at("version")==6 || intent.at("version")==7 || intent.at("version")==8 || intent.at("version")==9 || intent.at("version")==10 || intent.at("version")==11 || intent.at("version")==12 || intent.at("version")==13) {
+                    if (intent.at("version")==5 || intent.at("version")==6 || intent.at("version")==7 || intent.at("version")==8 || intent.at("version")==9 || intent.at("version")==10 || intent.at("version")==11 || intent.at("version")==12 || intent.at("version")==13 || intent.at("version")==15) {
                         // Properties has its own typed lanes, including a null
                         // physical lane for annotation-only edits. Gesture
                         // ordinary_request codecs cannot decode this roster.
-                        const bool phased=intent.at("version")==11 || intent.at("version")==12 || intent.at("version")==13;
+                        const bool phased=intent.at("version")==11 || intent.at("version")==12 || intent.at("version")==13 || intent.at("version")==15;
                         const auto& physical=phased ? intent.at("phase_request").at("scalar_request") : intent.at("ordinary_request");
                         if (!physical.is_null()) for (const auto& target:physical.at("selected"))
                             targets.insert(target.at("entity_id").template get<std::string>());
@@ -69527,7 +69548,7 @@ public:
                 return member.family!=SelectionPropertyFamily::wall && member.family!=SelectionPropertyFamily::slab &&
                     member.family!=SelectionPropertyFamily::hosted_opening;
             })) throw std::invalid_argument("This elevation workflow requires walls, floor slabs and their hosted openings.");
-        const auto inventory=inspect_phase_selection_property_edit(source,request,{});
+        const auto inventory=inspect_phase_selection_property_edit(source,request,{},std::nullopt,true);
         auto occupied=retainedSlabIdentityNames(source,true);
         std::vector<PhaseSelectionPropertyIdentityAllocation> allocations;
         for (const auto& cohort:inventory.replacements()) {
@@ -69549,12 +69570,6 @@ public:
                 for (const auto* roster:{&plan.required_entity_ids,&plan.required_child_ids})
                     for (const auto& id:*roster) if (!allocation.identities.contains(id))
                         allocation.identities.emplace(id,fresh("proposed"));
-            };
-            if (cohort.lane==PhaseSelectionPropertyLane::walls)
-                allocate(std::get<PhaseWallReplacementPlan>(cohort.plan));
-            else {
-                const auto& plan=std::get<PhaseSlabReplacementPlan>(cohort.plan);
-                allocate(plan);
                 for (const auto& key:plan.required_hosted_instance_ids) {
                     auto id=fresh("proposed-component");
                     auto alias=allocation.identities.at(key.first)+":instance:"+id;
@@ -69563,11 +69578,17 @@ public:
                     }
                     allocation.hosted_instance_identities.emplace(key,std::move(id));
                 }
-            }
+            };
+            if (cohort.lane==PhaseSelectionPropertyLane::walls)
+                allocate(std::get<PhaseWallReplacementPlan>(cohort.plan));
+            else allocate(std::get<PhaseSlabReplacementPlan>(cohort.plan));
             allocations.push_back(std::move(allocation));
         }
         return prepare_mixed_selection_property_edit(source,std::optional<SelectionPropertyEditRequest>{request},
-            std::nullopt,std::nullopt,message,std::span<const AssemblyInstancePropertyEditIntent>{},allocations,{});
+            std::nullopt,std::nullopt,message,std::span<const AssemblyInstancePropertyEditIntent>{},allocations,{},
+            std::any_of(inventory.replacements().begin(),inventory.replacements().end(),[](const auto& cohort) {
+                return cohort.lane==PhaseSelectionPropertyLane::walls;
+            }));
     }
 
     bool publishWallElevationProperties(const DocumentSnapshot& source,
@@ -69725,7 +69746,7 @@ public:
             if (ordinary_request || roof_properties) {
                 SelectionPropertyEditRequest empty;
                 empty.unchanged_policy=SelectionPropertyUnchangedPolicy::retain;
-                phase_inspection=inspect_phase_selection_property_edit(*source,ordinary_request.value_or(empty),{},roof_properties);
+                phase_inspection=inspect_phase_selection_property_edit(*source,ordinary_request.value_or(empty),{},roof_properties,true);
             }
             const bool replacing=phase_inspection && !phase_inspection->replacements().empty();
             std::vector<PhaseStairReplacementDependencyDisposition> phase_dispositions;
@@ -69777,7 +69798,7 @@ public:
                 SelectionPropertyEditRequest empty;empty.unchanged_policy=SelectionPropertyUnchangedPolicy::retain;
                 // Decisions may change the actual replacement closure. Discover
                 // that final inventory before assigning any fresh identity.
-                phase_inspection=inspect_phase_selection_property_edit(*source,ordinary_request.value_or(empty),phase_dispositions,roof_properties);
+                phase_inspection=inspect_phase_selection_property_edit(*source,ordinary_request.value_or(empty),phase_dispositions,roof_properties,true);
                 auto occupied=retainedSlabIdentityNames(*source,true);
                 for (const auto& id:ordinary) occupied.insert(id.toStdString());
                 for (const auto& child:children) { occupied.insert(child.roof_id.toStdString());occupied.insert(child.opening_id.toStdString()); }
@@ -69802,15 +69823,14 @@ public:
                             for (const auto& key:plan.required_overlay_ids) allocation.overlay_identities.emplace(key,fresh("proposed-overlay"));
                         } else for (const auto& id:plan.required_child_ids)
                             if (!allocation.identities.contains(id)) allocation.identities.emplace(id,fresh("proposed-child"));
-                        if constexpr (!std::is_same_v<Plan,PhaseWallReplacementPlan>)
-                            for (const auto& key:plan.required_hosted_instance_ids) {
-                                auto id=fresh("proposed-component");
-                                auto alias=allocation.identities.at(key.first)+":instance:"+id;
-                                while (!occupied.insert(alias).second) {
-                                    id=fresh("proposed-component");alias=allocation.identities.at(key.first)+":instance:"+id;
-                                }
-                                allocation.hosted_instance_identities.emplace(key,std::move(id));
+                        for (const auto& key:plan.required_hosted_instance_ids) {
+                            auto id=fresh("proposed-component");
+                            auto alias=allocation.identities.at(key.first)+":instance:"+id;
+                            while (!occupied.insert(alias).second) {
+                                id=fresh("proposed-component");alias=allocation.identities.at(key.first)+":instance:"+id;
                             }
+                            allocation.hosted_instance_identities.emplace(key,std::move(id));
+                        }
                     },cohort.plan);
                     allocations.push_back(std::move(allocation));
                 }
@@ -69850,9 +69870,13 @@ public:
                 }
             }
             const auto assembly_intents=dialog.assemblyIntents();
+            const bool copy_wall_components=phase_inspection &&
+                std::any_of(phase_inspection->replacements().begin(),phase_inspection->replacements().end(),[](const auto& cohort) {
+                    return cohort.lane==PhaseSelectionPropertyLane::walls;
+                });
             const auto prepared=replacing
                 ? prepare_mixed_selection_property_edit(*source,ordinary_request,dialog.presentationRequest(),
-                    roof_properties,message,assembly_intents,allocations,phase_dispositions)
+                    roof_properties,message,assembly_intents,allocations,phase_dispositions,copy_wall_components)
                 : !assembly_intents.empty()
                 ? prepare_mixed_selection_property_edit(*source,ordinary_request,dialog.presentationRequest(),
                     dialog.roofOpeningProperties(),message,assembly_intents,stair_review)

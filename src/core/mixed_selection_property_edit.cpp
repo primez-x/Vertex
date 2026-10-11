@@ -210,7 +210,7 @@ Json ordinary_request(const DocumentSnapshot& source, const SelectionPropertyEdi
     result["unchanged_policy"] = request.unchanged_policy == SelectionPropertyUnchangedPolicy::retain ? "retain" : "reject";
     return validate_selection_property_edit_request(result);
 }
-// Dialects twelve/thirteen validate their own lanes directly. A historical wrapper cannot
+// Elevation/carry scalar dialects validate their own lanes directly. A historical wrapper cannot
 // stand in for the new scalar/phase authority, even for selected-roster checks.
 void validate_vertical_members(const Json& value, const Json& scalar) {
     (void)revision(value.at("expected_revision"));
@@ -270,9 +270,15 @@ void validate_vertical_members(const Json& value, const Json& scalar) {
             reject("scalar Properties requires context/plane review without dimension movement authority");
     }
 }
-bool phase_room_dialect(const Json& value) {
+bool phase_selection_dialect(const Json& value) {
     return value.at("version") == 11 || value.at("version") == 12 ||
-        value.at("version") == 13 || value.at("version") == 14;
+        value.at("version") == 13 || value.at("version") == 15;
+}
+bool phase_room_dialect(const Json& value) {
+    return phase_selection_dialect(value) || value.at("version") == 14;
+}
+bool vertical_scalar(const Json& scalar) {
+    return !scalar.is_null() && (scalar.at("version") == 4 || scalar.at("version") == 5);
 }
 MemberKey component_key(const AssemblyInstancePropertyEditTarget& target) {
     MemberKey key{"assembly", target.catalog_id, target.instance_id, target.document_entity_id.value_or("")};
@@ -286,7 +292,7 @@ void historical_selected_members(const Json& value, std::set<MemberKey>& selecte
         if (!selected.insert(std::move(key)).second || selected.size() > 1000)
             reject("duplicate or over-budget selected member");
     };
-    const auto& scalar = phase_room_dialect(value) ? value.at("phase_request").at("scalar_request") : value.at("ordinary_request");
+    const auto& scalar = phase_selection_dialect(value) ? value.at("phase_request").at("scalar_request") : value.at("ordinary_request");
     if (!scalar.is_null()) for (const auto& row : scalar.at("selected"))
         select({"entity", identity(row.at("entity_id")), ""});
     const auto& presentation = value.at("presentation_request");
@@ -363,17 +369,20 @@ void validate(const Json& value) {
         if (value.dump().size() > byte_limit) reject("wire byte budget exceeded");
         return;
     }
-    if (value.is_object() && value.contains("version") && (value.at("version") == 11 || value.at("version") == 12 || value.at("version") == 13)) {
+    if (value.is_object() && value.contains("version") && phase_selection_dialect(value)) {
+        const bool qualified_walls = value.at("version") == 15;
         const bool slab_carry = value.at("version") == 13;
-        const bool vertical = value.at("version") == 12 || slab_carry;
+        const bool historical_vertical = value.at("version") == 12 || slab_carry;
         if (!value.at("version").is_number_integer()) reject("Properties dialect must be an integer");
         fields(value, {"version", "expected_revision", "source_snapshot_digest", "source_authoring_digest",
             "source_entities_digest", "source_saved_revision", "phase_request", "presentation_request",
             "skylight_properties", "roof_opening_members", "room_reviews", "phase_room_reviews", "message", "assembly_request"});
         const auto phase = validate_phase_selection_property_edit_request(value.at("phase_request"));
-        if (vertical ? phase.at("version") != (slab_carry ? 4 : 3) : (phase.at("version") == 3 || phase.at("version") == 4))
-            reject("elevation or hosted slab carry Properties requires its explicit phase request dialect");
+        if (qualified_walls ? phase.at("version") != 5 : historical_vertical ? phase.at("version") != (slab_carry ? 4 : 3) :
+            (phase.at("version") != 1 && phase.at("version") != 2))
+            reject("Properties requires its explicit phase request dialect");
         const auto& scalar = phase.at("scalar_request");
+        const bool vertical = qualified_walls ? vertical_scalar(scalar) : historical_vertical;
         const auto& phase_fences = phase.at("version") != 1 ? phase : scalar;
         for (const auto* fence : {"expected_revision", "source_snapshot_digest", "source_authoring_digest",
                 "source_entities_digest", "source_saved_revision"})
@@ -385,7 +394,8 @@ void validate(const Json& value) {
         } else if (!value.at("skylight_properties").is_null()) reject("phase request one has no skylight contribution");
         if (vertical) validate_vertical_members(value, scalar);
         else {
-            // Retain dialect eleven's historical roster validation exactly.
+            // Retain the exact ordinary roster authority for scalar one through
+            // three and child-only selection, including detached dialect fifteen.
             auto roster = value;
             roster.erase("phase_request"); roster.erase("phase_room_reviews");
             roster["ordinary_request"] = scalar;
@@ -407,6 +417,8 @@ void validate(const Json& value) {
             if (index >= 1000 || (previous && index <= *previous)) reject("phase room reviews must be an ordered unique leaf roster");
             previous = static_cast<std::size_t>(index);
             const auto leaf = decode_phase_wall_replacement_authoring(row.at("wall_replacement"));
+            if (qualified_walls && (row.at("wall_replacement").at("version") != 11 || !leaf.complete_hosted_instances))
+                reject("qualified wall Properties requires explicit leaf eleven room completion");
             if (!vertical && leaf.complete_vertical_profiles) reject("historical Properties has no elevation room completion authority");
             if (encode_phase_wall_replacement_authoring(leaf).dump() != row.at("wall_replacement").dump() || leaf.room_review_intent.is_null())
                 reject("phase room completion requires canonical explicit decisions");
@@ -688,7 +700,7 @@ void require_selected_members_present(const Json& value, const Entities& candida
                 return member.at("id") == child;
             }) != 1) reject("reviewed retirement removed a selected skylight child");
     }
-    if ((value.at("version") == 10 || value.at("version") == 11 || value.at("version") == 12 || value.at("version") == 13) && !value.at("assembly_request").is_null()) {
+    if ((value.at("version") == 10 || phase_selection_dialect(value)) && !value.at("assembly_request").is_null()) {
         std::vector<AssemblyInstancePropertyEditTarget> targets;
         for (const auto& row : value.at("assembly_request").at("intents")) {
             auto target = decode_assembly_instance_property_edit_intent(row).target;
@@ -789,6 +801,7 @@ struct Stage {
 };
 Stage derive_phase(const DocumentSnapshot& source, const Json& value) {
     auto phase = replay_phase_selection_property_edit_preparation(source, value.at("phase_request"));
+    const bool vertical = vertical_scalar(phase.inspection().scalar_request());
     const auto scope = constraint_phase_scope(source.entities());
     std::vector<Entities> leaves;
     Ids changed_hosts, erased, retired;
@@ -820,7 +833,7 @@ Stage derive_phase(const DocumentSnapshot& source, const Json& value) {
     }
     auto candidate = compose_phase_property_selection_edit_candidates(source, phase.phase_authorings(), leaves,
         stairs ? &*stairs : nullptr, assemblies ? &*assemblies : nullptr);
-    if (value.at("version") == 12 || value.at("version") == 13) {
+    if (vertical) {
         // Admit strict vertical dependencies only after every original-source
         // contribution has been composed, including copied hosts and catalog
         // Properties. No individual leaf certifies that final physical graph.
@@ -844,7 +857,7 @@ Stage derive_phase(const DocumentSnapshot& source, const Json& value) {
             if (preview.needs_room_review) phase_reviews.push_back(preview.room_inventory);
         }
     }
-    auto reviews = requirements(source, candidate, changed_hosts, value.at("version") == 12 || value.at("version") == 13);
+    auto reviews = requirements(source, candidate, changed_hosts, vertical);
     // Phase reviews own the entire affected analytical plane, including
     // ordinary wall edits composed there. Historical room codecs cannot grant
     // baseline lineage authority on that same plane.
@@ -903,7 +916,7 @@ Stage derive(const DocumentSnapshot& source, const Json& value) {
         }
         return stage;
     }
-    if (value.at("version") == 11 || value.at("version") == 12 || value.at("version") == 13) return derive_phase(source, value);
+    if (phase_selection_dialect(value)) return derive_phase(source, value);
     const auto scope = constraint_phase_scope(original);
     std::vector<Entities> leaves;
     std::vector<RoofProfileEditIntent> profiles;
@@ -1200,8 +1213,10 @@ MixedSelectionPropertyEditPreparation prepare_mixed_selection_property_edit(cons
     const std::optional<RoofOpeningGroupProperties>& children, std::string_view message,
     std::span<const AssemblyInstancePropertyEditIntent> assemblies,
     const std::vector<PhaseSelectionPropertyIdentityAllocation>& allocations,
-    const std::vector<PhaseStairReplacementDependencyDisposition>& dispositions) {
+    const std::vector<PhaseStairReplacementDependencyDisposition>& dispositions,
+    bool complete_wall_hosted_instances) {
     if (!ordinary && !children) {
+        if (complete_wall_hosted_instances) reject("qualified wall Properties requires an actual physical or skylight selection");
         if (!allocations.empty() || !dispositions.empty()) reject("phase allocations require an actual physical or skylight selection");
         if (assemblies.empty()) return prepare_properties(source, ordinary, presentation, children, message, nullptr);
         const auto prepared = prepare_assembly_instance_property_edit(source, assemblies);
@@ -1213,9 +1228,10 @@ MixedSelectionPropertyEditPreparation prepare_mixed_selection_property_edit(cons
     request.stair_dependency_dispositions = dispositions;
     request.message = std::string(message);
     request.roof_opening_properties = children;
+    request.complete_wall_hosted_instances = complete_wall_hosted_instances;
     const auto phase = prepare_phase_selection_property_edit(source, request);
     auto value = source_fields(source);
-    value["version"] = phase.request().at("version") == 4 ? 13 : phase.request().at("version") == 3 ? 12 : 11;
+    value["version"] = phase.request().at("version") == 5 ? 15 : phase.request().at("version") == 4 ? 13 : phase.request().at("version") == 3 ? 12 : 11;
     value["phase_request"] = phase.request();
     value["presentation_request"] = presentation ? prepare_selection_presentation_property_edit(source, *presentation).request() : Json(nullptr);
     value["assembly_request"] = assemblies.empty() ? Json(nullptr) : prepare_assembly_instance_property_edit(source, assemblies).request();
@@ -1459,7 +1475,7 @@ bool mixed_selection_property_edit_retires_dependencies(const Json& value) {
     validate(value);
     if (value.at("version") == 14) return !value.at("base_intent").is_null() &&
         mixed_selection_property_edit_retires_dependencies(value.at("base_intent"));
-    if (value.at("version") == 11 || value.at("version") == 12 || value.at("version") == 13) return std::any_of(
+    if (phase_selection_dialect(value)) return std::any_of(
         value.at("phase_request").at("stair_dependency_dispositions").begin(),
         value.at("phase_request").at("stair_dependency_dispositions").end(), [](const auto& choice) { return choice.at("action") == "retire"; });
     if ((value.at("version") == 9 || value.at("version") == 10) && !value.at("stair_review_request").is_null()) {
@@ -1473,7 +1489,7 @@ bool mixed_selection_property_edit_has_phase_replacements(const Json& value) {
     validate(value);
     if (value.at("version") == 14) return !value.at("component_request").at("authoring").at("allocation").at("roots").empty() ||
         (!value.at("base_intent").is_null() && mixed_selection_property_edit_has_phase_replacements(value.at("base_intent")));
-    return (value.at("version") == 11 || value.at("version") == 12 || value.at("version") == 13) && !value.at("phase_request").at("allocations").empty();
+    return phase_selection_dialect(value) && !value.at("phase_request").at("allocations").empty();
 }
 std::optional<Revision> mixed_selection_property_edit_source_saved_revision(const Json& value) {
     validate(value);
