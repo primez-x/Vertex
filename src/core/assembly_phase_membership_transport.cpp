@@ -188,6 +188,72 @@ void inherited_host(const Entities& entities, const Phases& phases,
 }
 } // namespace
 
+void validate_assembly_phase_retirement_roots(const Entities& actual,
+    const std::vector<AssemblyPhaseRoot>& retired_roots,
+    std::string_view registry_id, std::string_view alternative_id) {
+    try {
+        require(retired_roots.size() <= max_bindings, "assembly phase retirement root budget exceeded");
+        document_id(registry_id);
+        require(!alternative_id.empty() && alternative_id.size() <= 4096 &&
+            !std::all_of(alternative_id.begin(), alternative_id.end(), [](unsigned char c) { return std::isspace(c); }),
+            "assembly phase retirement requires a bounded nonblank alternative identity");
+        Budget raw_budget;
+        raw_budget.text(registry_id); raw_budget.text(alternative_id);
+        raw_budget.entities(actual);
+        std::set<AssemblyPhaseRoot> unique;
+        std::set<std::string, std::less<>> reached_catalogs, all_catalogs;
+        for (const auto& root : retired_roots) {
+            root_id(root);
+            raw_budget.text(root.first); raw_budget.text(root.second);
+            require(unique.insert(root).second, "assembly phase retirement requires unique actual roots");
+            reached_catalogs.insert(root.first);
+        }
+        for (const auto& [id, entity] : actual)
+            if (entity.type == "assembly_model") all_catalogs.insert(id);
+        AssemblyCatalogTransferBudget catalog_budget;
+        admit_catalogs(actual, all_catalogs, catalog_budget);
+        const Phases phases(actual);
+        (void)phases.selected(registry_id, alternative_id);
+        const auto scope = resolve_assembly_phase_memberships(actual);
+        const auto actual_catalogs = catalogs(actual, reached_catalogs);
+        std::map<std::string, AssemblyPhaseMembership, std::less<>> companions;
+        for (const auto& root : retired_roots) {
+            (void)instance(actual_catalogs, root);
+            const auto owner = scope.owners.find(root);
+            if (owner == scope.owners.end()) continue;
+            require(owner->second.registry_id == registry_id,
+                "assembly phase retirement row belongs to a foreign registry");
+            const auto state = scope.states.find(root);
+            require(state != scope.states.end() && state->second == ModelPhase::proposed &&
+                !scope.inactive_roots.contains(root),
+                "assembly phase retirement requires an actual active proposed row");
+            const auto& companion_id = owner->second.membership_entity_id;
+            if (!companions.contains(companion_id))
+                companions.emplace(companion_id, AssemblyPhaseMembership::from_json(
+                    model(actual.at(companion_id), assembly_phase_membership_entity_type)));
+            const auto& membership = companions.at(companion_id);
+            require(membership.registry_id() == registry_id &&
+                std::find(membership.baseline_roots().begin(), membership.baseline_roots().end(), root) ==
+                    membership.baseline_roots().end(),
+                "assembly phase retirement cannot delete a baseline row");
+            bool proposed = false;
+            for (const auto& alternative : membership.alternatives()) {
+                require(std::find(alternative.demolished_roots.begin(), alternative.demolished_roots.end(), root) ==
+                    alternative.demolished_roots.end(),
+                    "assembly phase retirement cannot delete a row with demolition usage");
+                if (std::find(alternative.proposed_roots.begin(), alternative.proposed_roots.end(), root) ==
+                    alternative.proposed_roots.end()) continue;
+                require(alternative.alternative_id == alternative_id && !proposed,
+                    "assembly phase retirement row has foreign or repeated proposed usage");
+                proposed = true;
+            }
+            require(proposed, "assembly phase retirement row lacks its exact source proposed partition");
+        }
+    } catch (const Json::exception& error) {
+        throw std::invalid_argument(std::string("invalid assembly phase retirement roots: ") + error.what());
+    }
+}
+
 AssemblyPhaseTransportEntities transport_assembly_phase_memberships_for_host_copies(
     const Entities& source, const Entities& candidate, const AssemblyPhaseCopiedRoots& copied_roots,
     const AssemblyPhaseCopiedHosts& copied_hosts, std::string_view registry_id, std::string_view alternative_id) {

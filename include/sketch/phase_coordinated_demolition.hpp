@@ -40,10 +40,18 @@ namespace sketch {
 // Child v2 still requires an actual roof. Without historical families, actual
 // roots, carriers, placement hosts and opening walls bind one active saved choice.
 // It admits complete placed-row retirement while preserving physical hosts.
+// Closed inner v8 adds nullable component_authoring (a canonical full phase-30
+// envelope) and complete_component_phase_memberships:true to v7's nine fields.
+// Ordinary removal may be null and openings empty; at least one actual lane remains.
+// Explicit baseline component demolition stays separate from physical removal,
+// with exact source-derived companion pruning and selected demolition additions.
+// V8 component local IDs use the phase-30 bounded nonblank 4096-byte grammar;
+// catalog/object IDs and every historical inner codec retain their ASCII rules.
 [[nodiscard]] nlohmann::json encode_phase_coordinated_demolition(
     const nlohmann::json& value, const PhaseConstraintAuthoringIntent& enclosing);
 
-// Validated full leaf envelopes in opening, roof, slab, structural, stair order.
+// Validated full leaf envelopes in opening, roof, slab, structural, stair order,
+// followed by the optional phase-30 component child in closed inner v8.
 [[nodiscard]] std::vector<PhaseConstraintAuthoringIntent> phase_coordinated_demolition_components(
     const nlohmann::json& value, const PhaseConstraintAuthoringIntent& enclosing);
 
@@ -58,31 +66,43 @@ struct PhaseCoordinatedOrdinaryRemoval {
 };
 
 // Validates the complete enclosure, including historical children and source
-// bindings. V1 and v4/v5 with null ordinary_removal return nullopt. V2 selections
+// bindings. Any admitted nullable ordinary_removal returns nullopt. V2 selections
 // are canonical ascending unique ASCII identities with aggregate size <=1000.
-// Inner v3/v4/v5/v6/v7 child v2 destinations are bounded nonempty arrays of fresh IDs; slot
+// Inner v3..v8 child v2 destinations are bounded nonempty arrays of fresh IDs; slot
 // order is authored join/overlay order rather than lexical identity order.
 [[nodiscard]] std::optional<PhaseCoordinatedOrdinaryRemoval> phase_coordinated_demolition_ordinary_removal(
     const nlohmann::json& value, const PhaseConstraintAuthoringIntent& enclosing);
 
 // Validates the entire enclosure; empty for closed inner v1..v4. V5 identities
 // grant no wall or room authoring authority and replay the same actual source.
-// V6/v7 return the same validated list, which may be empty.
+// V6/v7/v8 return the same validated list, which may be empty.
 [[nodiscard]] std::vector<std::string> phase_coordinated_demolition_ordinary_openings(
     const nlohmann::json& value, const PhaseConstraintAuthoringIntent& enclosing);
 
-// Validates the entire enclosure; true exclusively for closed inner v4..v7.
+// Validates the entire enclosure; true exclusively for closed inner v4..v8.
 [[nodiscard]] bool phase_coordinated_demolition_complete_hosted_catalog_consequences(
     const nlohmann::json& value, const PhaseConstraintAuthoringIntent& enclosing);
 
-// True exclusively for closed inner v6/v7. Historical/default roof producers keep
+// True exclusively for closed inner v6/v7/v8. Historical/default roof producers keep
 // their refusal semantics; controller capture and Site admission use this flag.
 [[nodiscard]] bool phase_coordinated_demolition_complete_roof_hosted_catalog_consequences(
     const nlohmann::json& value, const PhaseConstraintAuthoringIntent& enclosing);
 
-// True exclusively for closed inner v7; qualified rows grant no physical host
+// True exclusively for closed inner v7/v8; qualified rows grant no physical host
 // removal authority. Older complete producers retain their existing policies.
 [[nodiscard]] bool phase_coordinated_demolition_complete_placed_catalog_consequences(
+    const nlohmann::json& value, const PhaseConstraintAuthoringIntent& enclosing);
+
+// Validates the entire enclosure; true exclusively for closed inner v8.
+[[nodiscard]] bool phase_coordinated_demolition_complete_component_phase_memberships(
+    const nlohmann::json& value, const PhaseConstraintAuthoringIntent& enclosing);
+
+// Source-only admission before saved phase selections or membership resolution.
+// V8 reserves every source catalog across all possible independent lanes and the
+// final map cumulatively. Typed leaves own candidate admission before native
+// manufacture; replay charges returned growth before coordinator consumption.
+void preflight_phase_coordinated_demolition_component_catalogs(
+    const std::map<std::string, Entity, std::less<>>& source,
     const nlohmann::json& value, const PhaseConstraintAuthoringIntent& enclosing);
 
 // Every leaf independently replays the SAME actual source. Only the exported
@@ -102,6 +122,9 @@ struct PhaseCoordinatedOrdinaryRemoval {
 // V7 authenticates every explicit row/root/host before historical replay and
 // permits only source-produced requested row retirement on an exact retained
 // proposed opening and its exact baseline wall in the same actual saved choice.
+// V8 independently proves physical companion pruning and source-derived explicit
+// baseline component demolition. Only selected demolition additions merge onto
+// retained pruned companions; host inactivity never collapses explicit components.
 [[nodiscard]] std::map<std::string, Entity, std::less<>> replay_phase_coordinated_demolition(
     const std::map<std::string, Entity, std::less<>>& source,
     const PhaseConstraintAuthoringIntent& enclosing);

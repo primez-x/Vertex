@@ -1,5 +1,27 @@
 # Portable project extraction
 
+Exchange version211 requires native reader213 for coordinated demolition
+inner8 under unchanged phase authoring15/outer command34. The exact eleven
+fields are `version`, `opening_authoring`, `roof_authoring`, `slab_authoring`,
+`structural_authoring`, `stair_authoring`, `ordinary_removal`,
+`complete_hosted_catalog_consequences`, `ordinary_opening_ids`,
+`component_authoring`, and `complete_component_phase_memberships`. Both
+completion flags are literal `true`. The optional component child is a
+canonical full phase30 envelope; it preserves baseline rows and supplies only
+source-derived demolition additions. Physical candidates supply exact typed
+membership pruning. All lanes share one actual saved registry/alternative and
+the same source/history/save bindings. Historical inner1..7 retain their
+original authority.
+
+Explicit phase selection3 has the historical five fields plus literal
+`complete_coordinated_component_phase_memberships: true`; its full physical
+and qualified-component roster requires the canonical phase15/inner8 base.
+Completed47 and mixed4 retain this selector and the same base. Mixed2 admits
+bounded nonblank local component identities only through its canonical inner8
+context. Current, nested, wrapped, retained and undone history requires
+reader213, even after older reader212 rows. The existing emitter supplies
+exchange211. Compilation, runtime and extraction round trips remain unverified.
+
 Exchange version210 requires native reader212 for explicit phase constraint
 authoring30 inside unchanged outer command34. Its exact nine fields are
 `version`, `expected_revision`, `source_snapshot_digest`,

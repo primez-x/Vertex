@@ -30,6 +30,7 @@
 #include <Standard_Failure.hxx>
 
 #include <algorithm>
+#include <cctype>
 #include <cmath>
 #include <set>
 #include <stdexcept>
@@ -930,7 +931,10 @@ Entities derive(const Entities& source, const std::vector<std::string>& selectio
     bool complete_proposed_opening_catalog_consequences = false,
     bool complete_corner_window_removal = false,
     bool complete_corner_catalog_hosts = false,
-    bool complete_component_phase_memberships = false) {
+    bool complete_component_phase_memberships = false,
+    const std::optional<std::pair<std::string, std::string>>& required_component_phase_choice = std::nullopt) {
+    if (required_component_phase_choice && !complete_component_phase_memberships)
+        reject("required component phase choice needs complete component memberships");
     if (complete_corner_catalog_hosts && !complete_corner_window_removal)
         reject("corner catalog-host admission requires corner-removal authority");
     if (!allow_manufactured_opening_hosts && !complete_corner_catalog_hosts && reserved_native_work)
@@ -1026,6 +1030,21 @@ Entities derive(const Entities& source, const std::vector<std::string>& selectio
         if (entity.required) reject("attached physical owner is required: " + id);
         removable(phase, id); retired.insert(id);
         if (retired.size() > closure_limit) reject("attached railing closure budget exceeded");
+    }
+    if (required_component_phase_choice) {
+        // Derive the entire actual placed-row closure after attached owners,
+        // before catalog filtering, companion pruning or native factories.
+        std::vector<AssemblyPhaseRoot> retired_roots;
+        for (const auto& [id, entity] : source) if (entity.type == "assembly_model") {
+            const auto model = AssemblyModel::from_json(entity.properties.at("model"));
+            for (const auto& row : model.instances()) if (explicit_keys.contains({id, row.id}) ||
+                (row.placement && retired.contains(row.placement->host_entity_id))) {
+                if (retired_roots.size() >= closure_limit) reject("hosted instance retirement budget exceeded");
+                retired_roots.emplace_back(id, row.id);
+            }
+        }
+        validate_assembly_phase_retirement_roots(source, retired_roots,
+            required_component_phase_choice->first, required_component_phase_choice->second);
     }
     validate_stair_attachment_state(source);
     AssemblyExpansionBudget source_assembly_admission, candidate_assembly_admission;
@@ -1558,10 +1577,12 @@ std::map<std::string, Entity, std::less<>> replay_architectural_object_removal(
     const std::vector<std::pair<std::string, std::string>>& explicit_components,
     bool allow_manufactured_opening_hosts, std::size_t reserved_native_work, bool complete_hosted_catalog_consequences,
     bool complete_proposed_opening_catalog_consequences, bool complete_corner_window_removal,
-    bool complete_corner_catalog_hosts, bool complete_component_phase_memberships) {
+    bool complete_corner_catalog_hosts, bool complete_component_phase_memberships,
+    const std::optional<std::pair<std::string, std::string>>& required_component_phase_choice) {
     try { return derive(actual, selected_object_ids, explicit_components, allow_manufactured_opening_hosts,
         reserved_native_work, false, complete_hosted_catalog_consequences, complete_proposed_opening_catalog_consequences,
-        complete_corner_window_removal, complete_corner_catalog_hosts, complete_component_phase_memberships); }
+        complete_corner_window_removal, complete_corner_catalog_hosts, complete_component_phase_memberships,
+        required_component_phase_choice); }
     catch (const Json::exception& error) { reject(std::string("malformed actual source: ") + error.what()); }
     catch (const Standard_Failure& error) {
         const auto* message = error.GetMessageString();
@@ -1573,16 +1594,18 @@ void preflight_architectural_object_removal(const Entities& actual,
     const std::vector<std::pair<std::string, std::string>>& explicit_components,
     std::size_t reserved_native_work, bool complete_hosted_catalog_consequences,
     bool complete_proposed_opening_catalog_consequences, bool complete_corner_window_removal,
-    bool complete_corner_catalog_hosts, bool complete_component_phase_memberships) {
+    bool complete_corner_catalog_hosts, bool complete_component_phase_memberships,
+    const std::optional<std::pair<std::string, std::string>>& required_component_phase_choice) {
     try { (void)derive(actual, selected_object_ids, explicit_components, true, reserved_native_work, true,
         complete_hosted_catalog_consequences, complete_proposed_opening_catalog_consequences, complete_corner_window_removal,
-        complete_corner_catalog_hosts, complete_component_phase_memberships); }
+        complete_corner_catalog_hosts, complete_component_phase_memberships, required_component_phase_choice); }
     catch (const Json::exception& error) { reject(std::string("malformed actual source: ") + error.what()); }
 }
 std::vector<std::pair<std::string, std::string>> complete_proposed_opening_catalog_consequence_keys(
     const Entities& actual, const Entities& candidate,
     const std::vector<std::pair<std::string, std::string>>& requested_components,
-    const std::string& registry_id, const std::string& alternative_id) {
+    const std::string& registry_id, const std::string& alternative_id,
+    bool allow_wide_component_local_ids) {
     try {
         bounds(actual); bounds(candidate);
         identity(registry_id); identity(alternative_id);
@@ -1610,7 +1633,12 @@ std::vector<std::pair<std::string, std::string>> complete_proposed_opening_catal
         };
         for (const auto& key : requested_components) {
             const auto& [catalog_id, instance_id] = key;
-            identity(catalog_id); identity(instance_id);
+            identity(catalog_id);
+            if (allow_wide_component_local_ids) {
+                if (instance_id.empty() || instance_id.size()>4096 ||
+                    std::all_of(instance_id.begin(),instance_id.end(),[](unsigned char c) { return std::isspace(c); }))
+                    reject("component local identity must contain 1..4096 nonblank bytes");
+            } else identity(instance_id);
             if (remaining_aliases.contains(key)) continue;
             const auto catalog = actual.find(catalog_id), retained_catalog = candidate.find(catalog_id);
             if (catalog == actual.end() || catalog->second.type != "assembly_model" ||

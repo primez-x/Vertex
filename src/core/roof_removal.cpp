@@ -6,6 +6,7 @@
 #include "sketch/assembly_document_adapter.hpp"
 #include "sketch/assembly_model.hpp"
 #include "sketch/assembly_phase_membership.hpp"
+#include "sketch/assembly_phase_membership_transport.hpp"
 #include "sketch/boundary_dimension.hpp"
 #include "sketch/constraint_phase_scope.hpp"
 #include "sketch/model_phases.hpp"
@@ -373,11 +374,14 @@ void validate_retained_catalog_rows(const RoofRemovalEntities& source,
 }
 Derivation derive(const RoofRemovalEntities& source, const std::vector<std::string>& selected,
     bool preserve_phase_references, bool preserve_singleton_material, bool retire_hosted_components,
-    bool complete_hosted_catalog_consequences, bool complete_component_phase_memberships = false) {
+    bool complete_hosted_catalog_consequences, bool complete_component_phase_memberships = false,
+    const std::optional<std::pair<std::string, std::string>>& required_component_phase_choice = std::nullopt) {
     Derivation result;
     auto& plan = result.plan;
     plan.selected_roof_ids = selected;
     try {
+        if (required_component_phase_choice && !complete_component_phase_memberships)
+            reject("required component phase choice needs complete component memberships");
         (void)occupied_strings(source);
         if (complete_component_phase_memberships) {
             if (!retire_hosted_components || !complete_hosted_catalog_consequences)
@@ -566,6 +570,9 @@ Derivation derive(const RoofRemovalEntities& source, const std::vector<std::stri
                     plan.retired_hosted_component_keys.emplace_back(id, row.id);
                 }
             }
+            if (required_component_phase_choice)
+                validate_assembly_phase_retirement_roots(source, plan.retired_hosted_component_keys,
+                    required_component_phase_choice->first, required_component_phase_choice->second);
             bound_hosted_removal_work(source, admitted_roofs, admitted_joins, plan.retired_hosted_component_keys);
             if (!plan.retired_hosted_component_keys.empty()) {
                 const auto aliases = embedded_assembly_presentation_ids(source);
@@ -586,7 +593,8 @@ Derivation derive(const RoofRemovalEntities& source, const std::vector<std::stri
                     // Keep that pruned result; pruning it again against source
                     // would violate the helper's exact input-carrier contract.
                     result.hosted_candidate = replay_architectural_object_removal(source, {},
-                        plan.retired_hosted_component_keys, true, 0, true, false, false, false, true);
+                        plan.retired_hosted_component_keys, true, 0, true, false, false, false, true,
+                        required_component_phase_choice);
                 } else result.hosted_candidate = replay_architectural_object_removal(source, {}, plan.retired_hosted_component_keys);
                 validate_retained_catalog_rows(source, *result.hosted_candidate, result);
             }
@@ -925,18 +933,22 @@ bool RoofRemovalPlan::ready() const noexcept {
 
 RoofRemovalPlan inspect_roof_removal_plan(const RoofRemovalEntities& source,
     const std::vector<std::string>& selected_roof_ids, bool preserve_phase_references, bool preserve_singleton_material,
-    bool retire_hosted_components, bool complete_hosted_catalog_consequences, bool complete_component_phase_memberships) {
+    bool retire_hosted_components, bool complete_hosted_catalog_consequences, bool complete_component_phase_memberships,
+    const std::optional<std::pair<std::string, std::string>>& required_component_phase_choice) {
     return derive(source, selected_roof_ids, preserve_phase_references, preserve_singleton_material,
-        retire_hosted_components, complete_hosted_catalog_consequences, complete_component_phase_memberships).plan;
+        retire_hosted_components, complete_hosted_catalog_consequences, complete_component_phase_memberships,
+        required_component_phase_choice).plan;
 }
 
 RoofRemovalResult replay_roof_removal(const RoofRemovalEntities& source,
     const std::vector<std::string>& selected_roof_ids, const RoofRemovalAdditionalIdentities& additional_identities,
     bool preserve_phase_references, bool preserve_singleton_material, bool retire_hosted_components,
-    bool complete_hosted_catalog_consequences, bool complete_component_phase_memberships) {
+    bool complete_hosted_catalog_consequences, bool complete_component_phase_memberships,
+    const std::optional<std::pair<std::string, std::string>>& required_component_phase_choice) {
     try {
         const auto derived = derive(source, selected_roof_ids, preserve_phase_references, preserve_singleton_material,
-            retire_hosted_components, complete_hosted_catalog_consequences, complete_component_phase_memberships);
+            retire_hosted_components, complete_hosted_catalog_consequences, complete_component_phase_memberships,
+            required_component_phase_choice);
         if (!derived.plan.ready()) {
             for (const auto& item : derived.plan.diagnostics) if (item.blocking) reject(item.entity_id + ": " + item.reason);
         }

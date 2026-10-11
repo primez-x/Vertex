@@ -3,6 +3,8 @@
 #include "sketch/architectural_object_removal.hpp"
 #include "sketch/architectural_selection_removal.hpp"
 #include "sketch/assembly_document_adapter.hpp"
+#include "sketch/assembly_component_phase_demolition.hpp"
+#include "sketch/assembly_phase_membership_transport.hpp"
 #include "sketch/assembly_model.hpp"
 #include "sketch/constraint_phase_scope.hpp"
 #include "sketch/document_digest.hpp"
@@ -21,7 +23,9 @@
 
 #include <algorithm>
 #include <array>
+#include <cctype>
 #include <cmath>
+#include <iterator>
 #include <set>
 #include <stdexcept>
 #include <utility>
@@ -165,7 +169,8 @@ DemolitionChoice choice(const PhaseConstraintAuthoringIntent& child, std::size_t
     invalid("family slot contains a foreign historical authoring dialect");
 }
 
-PhaseCoordinatedOrdinaryRemoval ordinary_removal(const Json& value, bool roof_selection) {
+PhaseCoordinatedOrdinaryRemoval ordinary_removal(const Json& value, bool roof_selection,
+    bool component_memberships = false) {
     const int version = roof_selection ? 2 : 1;
     if (!value.is_object() || value.size() != (roof_selection ? 4u : 3u) || !value.contains("version") ||
         !value.at("version").is_number_integer() || value.at("version") != version ||
@@ -193,7 +198,14 @@ PhaseCoordinatedOrdinaryRemoval ordinary_removal(const Json& value, bool roof_se
             !row.at("catalog_id").is_string() || !row.contains("instance_id") || !row.at("instance_id").is_string())
             invalid("ordinary component requires exactly catalog_id and instance_id");
         auto key = std::pair{row.at("catalog_id").get<std::string>(), row.at("instance_id").get<std::string>()};
-        identity(key.first); identity(key.second);
+        identity(key.first);
+        if (component_memberships) {
+            // Match the phase-30 component codec's local identity grammar.
+            // Historical inner versions retain their narrower ASCII alphabet.
+            if (key.second.empty() || key.second.size() > 4096 ||
+                std::all_of(key.second.begin(), key.second.end(), [](unsigned char c) { return std::isspace(c); }))
+                invalid("ordinary component requires a bounded nonblank local identity");
+        } else identity(key.second);
         if (!result.components.empty() && !(result.components.back() < key))
             invalid("ordinary qualified component keys must be ascending and unique");
         result.components.push_back(std::move(key));
@@ -222,12 +234,15 @@ PhaseCoordinatedOrdinaryRemoval ordinary_removal(const Json& value, bool roof_se
 
 struct Decoded {
     std::vector<PhaseConstraintAuthoringIntent> leaves;
+    std::optional<PhaseConstraintAuthoringIntent> component;
+    std::vector<AssemblyPhaseRoot> component_roots;
     std::optional<PhaseCoordinatedOrdinaryRemoval> ordinary;
     std::vector<std::string> ordinary_opening_ids;
     std::pair<std::string, std::string> saved_choice;
     bool complete_hosted_catalog_consequences{false};
     bool complete_roof_hosted_catalog_consequences{false};
     bool complete_placed_catalog_consequences{false};
+    bool complete_component_phase_memberships{false};
 };
 
 Decoded components(const Json& value, const PhaseConstraintAuthoringIntent& enclosing) {
@@ -237,23 +252,31 @@ Decoded components(const Json& value, const PhaseConstraintAuthoringIntent& encl
     if (!value.is_object() || !value.contains("version") || !value.at("version").is_number_integer())
         invalid("inner demolition requires a known integer version");
     const bool roof_selection = value.at("version") == 3;
-    const bool complete_placed = value.at("version") == 7;
+    const bool component_memberships = value.at("version") == 8;
+    const bool complete_placed = value.at("version") == 7 || component_memberships;
     const bool complete_roof = value.at("version") == 6 || complete_placed;
     const bool independent_openings = value.at("version") == 5 || complete_roof;
     const bool complete = value.at("version") == 4 || independent_openings;
     const bool mixed = value.at("version") == 2 || roof_selection;
     if ((!mixed && !complete && (value.at("version") != 1 || value.size() != 6)) ||
         (mixed && (value.size() != 7 || !value.contains("ordinary_removal"))) ||
-        (complete && (value.size() != (independent_openings ? 9u : 8u) || !value.contains("ordinary_removal") ||
+        (complete && (value.size() != (component_memberships ? 11u : independent_openings ? 9u : 8u) || !value.contains("ordinary_removal") ||
             !value.contains("complete_hosted_catalog_consequences") ||
             !value.at("complete_hosted_catalog_consequences").is_boolean() ||
             value.at("complete_hosted_catalog_consequences") != true ||
-            (independent_openings && !value.contains("ordinary_opening_ids")))))
-        invalid(independent_openings ? "inner v5/v6/v7 requires exactly the eight v4 fields and ordinary_opening_ids" :
+            (independent_openings && !value.contains("ordinary_opening_ids")) ||
+            (component_memberships && (!value.contains("component_authoring") ||
+                !value.contains("complete_component_phase_memberships") ||
+                !value.at("complete_component_phase_memberships").is_boolean() ||
+                value.at("complete_component_phase_memberships") != true)))))
+        invalid(component_memberships ? "inner v8 requires exactly the nine v7 fields, nullable component_authoring and complete_component_phase_memberships:true" :
+            independent_openings ? "inner v5/v6/v7 requires exactly the eight v4 fields and ordinary_opening_ids" :
             complete ? "inner v4 requires exactly version, five family fields, nullable ordinary_removal and complete_hosted_catalog_consequences:true" :
             "inner demolition requires exactly version, five family fields and v2/v3 ordinary_removal");
     for (const auto* key : families) if (!value.contains(key)) invalid("required family field is missing");
     message_only(enclosing.intent);
+    if (component_memberships && enclosing.intent.wall_group_scale)
+        invalid("inner v8 permits only a semantic message without wall group geometry authority");
     // Root enforces outer exclusivity too; this public codec cannot validate a
     // mixed enclosure by ignoring a separately supplied historical operation.
     if (!enclosing.wall_replacement.is_null() || !enclosing.opening_demolition.is_null() ||
@@ -274,6 +297,7 @@ Decoded components(const Json& value, const PhaseConstraintAuthoringIntent& encl
     result.complete_hosted_catalog_consequences = complete;
     result.complete_roof_hosted_catalog_consequences = complete_roof;
     result.complete_placed_catalog_consequences = complete_placed;
+    result.complete_component_phase_memberships = component_memberships;
     if (independent_openings) {
         const auto& ids = value.at("ordinary_opening_ids");
         if (!ids.is_array() || (!complete_roof && ids.empty()) || ids.size() > 1000)
@@ -292,11 +316,11 @@ Decoded components(const Json& value, const PhaseConstraintAuthoringIntent& encl
         const auto& ordinary = value.at("ordinary_removal");
         const bool child_roof = ordinary.is_object() && ordinary.contains("version") &&
             ordinary.at("version").is_number_integer() && ordinary.at("version") == 2;
-        result.ordinary = ordinary_removal(ordinary, child_roof);
+        result.ordinary = ordinary_removal(ordinary, child_roof, component_memberships);
     }
     if (complete_roof && !complete_placed && (!result.ordinary || result.ordinary->version != 2))
         invalid("inner v6 requires its closed ordinary roof child v2");
-    if (complete_placed && (!result.ordinary || result.ordinary->components.empty()))
+    if (complete_placed && !component_memberships && (!result.ordinary || result.ordinary->components.empty()))
         invalid("inner v7 requires a closed ordinary child with actual explicit qualified components");
     std::optional<std::pair<std::string, std::string>> saved_choice;
     std::set<std::string, std::less<>> targets;
@@ -330,6 +354,22 @@ Decoded components(const Json& value, const PhaseConstraintAuthoringIntent& encl
         }
         result.leaves.push_back(std::move(child));
     }
+    if (component_memberships && !value.at("component_authoring").is_null()) {
+        const auto& wire = value.at("component_authoring");
+        if (!wire.is_object() || !wire.contains("version") || !wire.at("version").is_number_integer() ||
+            wire.at("version") != 30)
+            invalid("component slot requires its full phase-thirty demolition authoring envelope");
+        auto child = decode_phase_constraint_authoring_intent(wire);
+        if (encode_phase_constraint_authoring_intent(child).dump() != wire.dump())
+            invalid("component child envelope is not canonical");
+        message_only(child.intent);
+        same_binding(child, enclosing);
+        result.component_roots = decode_assembly_component_phase_demolition_intent(child.component_demolition).components;
+        if (result.ordinary) for (const auto& root : result.component_roots)
+            if (std::binary_search(result.ordinary->components.begin(), result.ordinary->components.end(), root))
+                invalid("ordinary and baseline component demolition roots must be disjoint");
+        result.component = std::move(child);
+    }
     if (result.leaves.size() < (independent_openings ? 0u : (mixed || result.ordinary) ? 1u : 2u))
         invalid((mixed || independent_openings) ? "mixed demolition requires at least one historical family" :
             "coordinated demolition requires at least two distinct families");
@@ -346,6 +386,13 @@ Decoded components(const Json& value, const PhaseConstraintAuthoringIntent& encl
             if (targets.contains(id) || (result.ordinary &&
                 std::binary_search(result.ordinary->object_ids.begin(), result.ordinary->object_ids.end(), id)))
                 invalid("ordinary openings and historical/ordinary demolition roots must be disjoint");
+    }
+    if (component_memberships) {
+        const auto ordinary_count = result.ordinary ? result.ordinary->object_ids.size() + result.ordinary->components.size() : 0;
+        if (result.component_roots.size() > 4096 - targets.size() - ordinary_count - result.ordinary_opening_ids.size())
+            invalid("aggregate demolition root/component/opening budget exceeded");
+        if (result.leaves.empty() && !result.component && !result.ordinary && result.ordinary_opening_ids.empty())
+            invalid("inner v8 requires at least one actual demolition lane");
     }
     if (saved_choice) result.saved_choice = *saved_choice;
     return result;
@@ -511,6 +558,88 @@ bool exact(const Entity& left, const Entity& right) {
         left.properties.dump() == right.properties.dump() && left.extensions.dump() == right.extensions.dump();
 }
 
+void admit_component_catalogs(const Entities& entities, AssemblyCatalogTransferBudget& budget) {
+    if (entities.size() > 100000) invalid("component completion entity budget exceeded");
+    for (const auto& [id, entity] : entities) {
+        (void)id;
+        if (entity.type == "assembly_model") admit_existing_assembly_catalog_work(entity, budget);
+    }
+}
+
+AssemblyCatalogTransferBudget reserve_component_catalogs(const Entities& source, const Decoded& decoded) {
+    AssemblyCatalogTransferBudget budget;
+    // Reserve source, each possible independent lane and the final inventory
+    // together before source phase/model resolution. Typed leaves own admission
+    // of their manufactured candidates before native work; returned growth is
+    // charged below before the coordinator consumes those actual catalogs.
+    const auto inventories = 2 + decoded.leaves.size() + static_cast<std::size_t>(decoded.component.has_value()) +
+        static_cast<std::size_t>(decoded.ordinary.has_value()) + static_cast<std::size_t>(!decoded.ordinary_opening_ids.empty());
+    for (std::size_t index = 0; index < inventories; ++index) admit_component_catalogs(source, budget);
+    return budget;
+}
+
+void charge_component_catalog_growth(const Entities& source, const Entities& candidate,
+    AssemblyCatalogTransferBudget& cumulative) {
+    if (candidate.size() > 100000) invalid("component completion candidate entity budget exceeded");
+    const auto charge = [](std::size_t& consumed, std::size_t limit, std::size_t actual, std::size_t reserved) {
+        if (actual <= reserved) return;
+        const auto growth = actual - reserved;
+        if (growth > limit - consumed) invalid("cumulative component catalog growth budget exceeded");
+        consumed += growth;
+    };
+    for (const auto& [id, entity] : candidate) {
+        if (entity.type != "assembly_model") continue;
+        AssemblyCatalogTransferBudget actual, reserved;
+        admit_existing_assembly_catalog_work(entity, actual);
+        const auto original = source.find(id);
+        if (original != source.end() && original->second.type == "assembly_model")
+            admit_existing_assembly_catalog_work(original->second, reserved);
+        charge(cumulative.consumed_json_bytes, cumulative.max_json_bytes,
+            actual.consumed_json_bytes, reserved.consumed_json_bytes);
+        charge(cumulative.consumed_json_nodes, cumulative.max_json_nodes,
+            actual.consumed_json_nodes, reserved.consumed_json_nodes);
+        charge(cumulative.consumed_validation_work, cumulative.max_validation_work,
+            actual.consumed_validation_work, reserved.consumed_validation_work);
+    }
+}
+
+// The only permission for a required companion is equality to typed pruning
+// of the original source. Restoring the source companions grants no enrollment.
+Entities prove_pruned_companions(const Entities& source, const Entities& candidate,
+    const std::pair<std::string,std::string>& saved_choice) {
+    const auto scope=resolve_assembly_phase_memberships(source);
+    std::map<std::string,std::set<std::string,std::less<>>,std::less<>> remaining_rows;
+    for (const auto& [id,entity]:candidate) if (entity.type=="assembly_model") {
+        auto& rows=remaining_rows[id];
+        for (const auto& row:entity.properties.at("model").at("instances"))
+            rows.insert(row.at("id").get<std::string>());
+    }
+    std::vector<AssemblyPhaseRoot> retired;
+    for (const auto& [root,owner]:scope.owners) {
+        (void)owner;
+        const auto catalog=remaining_rows.find(root.first);
+        if (catalog==remaining_rows.end() || !catalog->second.contains(root.second)) retired.push_back(root);
+    }
+    // Closure rows carry the same source-owned choice as explicit rows. Exact
+    // pruning alone cannot authorize changing a foreign required companion.
+    validate_assembly_phase_retirement_roots(source,retired,saved_choice.first,saved_choice.second);
+    auto projection = candidate;
+    for (const auto& [id, entity] : candidate) if (entity.type == assembly_phase_membership_entity_type &&
+        (!source.contains(id) || source.at(id).type != assembly_phase_membership_entity_type))
+        invalid("component completion cannot introduce a fresh companion");
+    for (const auto& [id, entity] : source) if (entity.type == assembly_phase_membership_entity_type)
+        projection.insert_or_assign(id, entity);
+    auto proof = prune_removed_assembly_phase_memberships(source, projection);
+    for (const auto& [id, entity] : source) if (entity.type == assembly_phase_membership_entity_type) {
+        const auto expected = proof.find(id);
+        const auto supplied = candidate.find(id);
+        if ((expected == proof.end()) != (supplied == candidate.end()) ||
+            (expected != proof.end() && !exact(expected->second, supplied->second)))
+            invalid("component completion leaf differs from exact source companion pruning");
+    }
+    return proof;
+}
+
 // Only the selected registry's codec-known ID lists have set semantics. All
 // raw metadata, alternative order and foreign registries remain source exact.
 void retain_registry_order(const Entities& source, Entities& candidate,
@@ -584,7 +713,7 @@ void retain_registry_order(const Entities& source, Entities& candidate,
 void protected_source(const Entities& source, const Entities& candidate,
     const std::pair<std::string, std::string>& saved_choice,
     const std::vector<std::string>& ordinary_opening_ids = {},
-    const QualifiedComponents& placed_retirements = {}) {
+    const QualifiedComponents& placed_retirements = {}, const Entities* companion_proof = nullptr) {
     std::set<std::string, std::less<>> baseline, protected_owners;
     const auto scope = constraint_phase_scope(source);
     protected_owners = scope.inactive_owner_ids;
@@ -601,6 +730,13 @@ void protected_source(const Entities& source, const Entities& candidate,
     }
     for (const auto& [id, entity] : source) {
         const auto next = candidate.find(id);
+        if (companion_proof && entity.type == assembly_phase_membership_entity_type) {
+            const auto expected = companion_proof->find(id);
+            if ((expected == companion_proof->end()) != (next == candidate.end()) ||
+                (next != candidate.end() && !exact(expected->second, next->second)))
+                invalid("complete demolition differs from its exact derived companion proof");
+            continue;
+        }
         if (entity.type != "assembly_model") {
             if (entity.type == "model_phases" && id == saved_choice.first) {
                 if (next == candidate.end()) invalid("complete demolition erased its actual saved registry");
@@ -806,6 +942,15 @@ std::pair<std::string, std::string> actual_removal_choice(const Entities& source
         for (const auto& id : registry.registered_entity_ids)
             if (!owners.emplace(id, &registry).second) invalid("overlapping actual phase ownership: " + id);
     std::optional<std::pair<std::string, std::string>> choice;
+    if (decoded.complete_component_phase_memberships && !decoded.saved_choice.first.empty()) {
+        const auto selected = std::find_if(scope.registries.begin(), scope.registries.end(), [&](const auto& registry) {
+            return registry.registry_id == decoded.saved_choice.first;
+        });
+        if (selected == scope.registries.end() || selected->alternative_id !=
+            std::optional<std::string>{decoded.saved_choice.second})
+            invalid("historical demolition choice is not the actual saved active choice");
+        choice = decoded.saved_choice;
+    }
     const auto admit_choice = [&](const std::string& id, const std::optional<std::string>& inherited_host) {
         auto owner = owners.find(id);
         if (owner == owners.end() && inherited_host) owner = owners.find(*inherited_host);
@@ -825,7 +970,7 @@ std::pair<std::string, std::string> actual_removal_choice(const Entities& source
         admit_choice(id,host.get<std::string>());
         if (decoded.complete_placed_catalog_consequences) admit_choice(host.get<std::string>(),std::nullopt);
     }
-    if (decoded.complete_placed_catalog_consequences) {
+    if (decoded.complete_placed_catalog_consequences && decoded.ordinary) {
         for (const auto& id : decoded.ordinary->object_ids) {
             const auto owner = source.find(id);
             if (owner == source.end()) invalid("ordinary selection requires actual source owners: " + id);
@@ -837,6 +982,24 @@ std::pair<std::string, std::string> actual_removal_choice(const Entities& source
             }
         }
         for (const auto& key : decoded.ordinary->components) {
+            if (decoded.complete_component_phase_memberships) {
+                const auto declared=scope.assembly_memberships.owners.find(key);
+                if (declared!=scope.assembly_memberships.owners.end()) {
+                    const auto state=scope.assembly_memberships.states.find(key);
+                    if (scope.assembly_memberships.inactive_roots.contains(key) ||
+                        state==scope.assembly_memberships.states.end() || state->second!=ModelPhase::proposed)
+                        invalid("ordinary component retirement requires its active proposed membership");
+                    const auto registry=std::find_if(scope.registries.begin(),scope.registries.end(),[&](const auto& row) {
+                        return row.registry_id==declared->second.registry_id;
+                    });
+                    if (registry==scope.registries.end() || !registry->alternative_id)
+                        invalid("ordinary component retirement requires its actual saved alternative");
+                    const auto current=std::pair{registry->registry_id,*registry->alternative_id};
+                    if (choice && *choice!=current)
+                        invalid("ordinary component memberships belong to a different actual saved choice");
+                    choice=current;
+                }
+            }
             const auto carrier = source.find(key.first);
             if (carrier == source.end() || carrier->second.type != "assembly_model")
                 invalid("selected component requires an actual catalog carrier");
@@ -859,14 +1022,138 @@ std::pair<std::string, std::string> actual_removal_choice(const Entities& source
                 admit_choice(wall.get<std::string>(),std::nullopt);
             }
         }
-    } else if (decoded.complete_roof_hosted_catalog_consequences)
+    } else if (decoded.complete_roof_hosted_catalog_consequences && decoded.ordinary)
         for (const auto& id : decoded.ordinary->object_ids) {
             const auto owner = source.find(id);
             if (owner == source.end()) invalid("ordinary roof selection requires actual source owners: " + id);
             if (owner->second.type == "roof") admit_choice(id,std::nullopt);
         }
+    if (decoded.component) {
+        const auto memberships = resolve_assembly_phase_memberships(source);
+        std::map<std::string, AssemblyPhaseMembership, std::less<>> admitted_memberships;
+        std::map<std::string, AssemblyModel, std::less<>> admitted_catalogs;
+        for (const auto& root : decoded.component_roots) {
+            const auto member = memberships.owners.find(root);
+            const auto state = memberships.states.find(root);
+            if (member == memberships.owners.end() || state == memberships.states.end() ||
+                state->second != ModelPhase::existing || memberships.inactive_roots.contains(root))
+                invalid("component demolition requires actual active baseline companion membership");
+            const auto registry = std::find_if(scope.registries.begin(), scope.registries.end(), [&](const auto& row) {
+                return row.registry_id == member->second.registry_id;
+            });
+            if (registry == scope.registries.end() || !registry->alternative_id)
+                invalid("component demolition requires an actual saved active registry");
+            const auto current = std::pair{registry->registry_id, *registry->alternative_id};
+            if (choice && *choice != current) invalid("component and physical demolition choices differ");
+            choice = current;
+            const auto& membership = source.at(member->second.membership_entity_id);
+            if (!membership.required) invalid("component demolition requires its actual required companion");
+            auto typed_member = admitted_memberships.find(member->second.membership_entity_id);
+            if (typed_member == admitted_memberships.end())
+                typed_member = admitted_memberships.emplace(member->second.membership_entity_id,
+                    AssemblyPhaseMembership::from_json(membership.properties.at("model"))).first;
+            const auto& typed = typed_member->second;
+            if (!std::binary_search(typed.baseline_roots().begin(), typed.baseline_roots().end(), root))
+                invalid("component demolition root is not in its actual source baseline partition");
+            admit_choice(root.first, std::nullopt);
+            const auto catalog = source.find(root.first);
+            if (catalog == source.end() || catalog->second.type != "assembly_model" ||
+                scope.inactive_owner_ids.contains(root.first))
+                invalid("component demolition requires an actual catalog carrier");
+            auto typed_catalog = admitted_catalogs.find(root.first);
+            if (typed_catalog == admitted_catalogs.end())
+                typed_catalog = admitted_catalogs.emplace(root.first,
+                    AssemblyModel::from_json(catalog->second.properties.at("model"))).first;
+            const auto& model = typed_catalog->second;
+            const auto row = std::find_if(model.instances().begin(), model.instances().end(),
+                [&](const auto& item) { return item.id == root.second; });
+            if (row == model.instances().end()) invalid("component demolition requires an actual qualified catalog row");
+            if (row->placement) {
+                const auto& host = row->placement->host_entity_id;
+                const auto owner = source.find(host);
+                if (owner == source.end() || scope.inactive_owner_ids.contains(host))
+                    invalid("component demolition requires an actual active placement host");
+                admit_choice(host, std::nullopt);
+                if (owner->second.type == "opening") {
+                    const auto& wall = owner->second.properties.at("wall_id");
+                    if (!wall.is_string() || !source.contains(wall.get<std::string>()) ||
+                        source.at(wall.get<std::string>()).type != "wall" ||
+                        scope.inactive_owner_ids.contains(wall.get<std::string>()))
+                        invalid("component demolition requires an actual active semantic wall host");
+                    admit_choice(wall.get<std::string>(), std::nullopt);
+                }
+            }
+        }
+    }
     if (!choice) invalid("ordinary removal requires actual saved active membership");
+    if (decoded.complete_component_phase_memberships && decoded.ordinary)
+        validate_assembly_phase_retirement_roots(source,decoded.ordinary->components,choice->first,choice->second);
     return *choice;
+}
+
+Entities add_component_demolition(const Entities& source, const Entities& physical,
+    const Decoded& decoded) {
+    auto result = physical;
+    const auto scope = resolve_assembly_phase_memberships(source);
+    std::map<std::string, std::vector<AssemblyPhaseRoot>, std::less<>> additions;
+    for (const auto& root : decoded.component_roots) {
+        const auto owner = scope.owners.find(root);
+        if (owner == scope.owners.end() || owner->second.registry_id != decoded.saved_choice.first)
+            invalid("component addition lacks the same actual source companion registry");
+        const auto carrier = result.find(root.first);
+        if (carrier == result.end() || carrier->second.type != "assembly_model")
+            invalid("component demolition cannot lose its actual retained catalog");
+        const auto& old_rows = source.at(root.first).properties.at("model").at("instances");
+        const auto& new_rows = carrier->second.properties.at("model").at("instances");
+        const auto selected = [&](const Json& row) { return row.at("id") == root.second; };
+        const auto before = std::find_if(old_rows.begin(), old_rows.end(), selected);
+        const auto after = std::find_if(new_rows.begin(), new_rows.end(), selected);
+        if (before == old_rows.end() || after == new_rows.end() || before->dump() != after->dump())
+            invalid("component demolition requires its exact retained source catalog row");
+        if (before->contains("placement") && !before->at("placement").is_null()) {
+            const auto host = before->at("placement").at("host_entity_id").get<std::string>();
+            if (!source.contains(host) || !result.contains(host) || !exact(source.at(host), result.at(host)))
+                invalid("baseline component demolition requires its retained physical placement host");
+            if (source.at(host).type == "opening") {
+                const auto wall = source.at(host).properties.at("wall_id").get<std::string>();
+                if (!source.contains(wall) || !result.contains(wall) || !exact(source.at(wall), result.at(wall)))
+                    invalid("baseline component demolition requires its retained semantic wall host");
+            }
+        }
+        additions[owner->second.membership_entity_id].push_back(root);
+    }
+    for (const auto& [id, roots] : additions) {
+        if (!result.contains(id)) invalid("component demolition cannot lose its retained source companion");
+        const auto& raw = result.at(id).properties.at("model");
+        const auto membership = AssemblyPhaseMembership::from_json(raw);
+        auto alternatives = membership.alternatives();
+        auto selected = std::find_if(alternatives.begin(), alternatives.end(), [&](const auto& row) {
+            return row.alternative_id == decoded.saved_choice.second;
+        });
+        if (selected == alternatives.end()) {
+            alternatives.push_back({decoded.saved_choice.second, {}, {}});
+            selected = std::prev(alternatives.end());
+        }
+        for (const auto& root : roots) {
+            if (!std::binary_search(membership.baseline_roots().begin(), membership.baseline_roots().end(), root))
+                invalid("physical removal pruned an explicit baseline component demolition root");
+            selected->demolished_roots.push_back(root);
+        }
+        const auto proposed = AssemblyPhaseMembership::create(membership.registry_id(), membership.roots(),
+            membership.baseline_roots(), std::move(alternatives));
+        result.at(id).properties.at("model") = retain_assembly_phase_membership_source(raw, proposed);
+    }
+    return result;
+}
+
+void prove_component_child(const Entities& source, const Entities& candidate, const Decoded& decoded) {
+    const auto proof = add_component_demolition(source, source, decoded);
+    if (proof.size() != candidate.size()) invalid("component child changed the source entity inventory");
+    for (const auto& [id, entity] : proof) {
+        const auto found = candidate.find(id);
+        if (found == candidate.end() || !exact(entity, found->second))
+            invalid("component child differs from exact source-derived baseline demolition additions");
+    }
 }
 
 // This proof is computed only after the v7 actual-source selection producer
@@ -876,33 +1163,54 @@ QualifiedComponents placed_retirements_from_source_producer(const Entities& sour
     const Entities& candidate, const PhaseCoordinatedOrdinaryRemoval& selection,
     const Decoded& decoded) {
     const auto keys = complete_proposed_opening_catalog_consequence_keys(source, candidate, selection.components,
-        decoded.saved_choice.first, decoded.saved_choice.second);
+        decoded.saved_choice.first, decoded.saved_choice.second,decoded.complete_component_phase_memberships);
     return {keys.begin(), keys.end()};
 }
 
 Entities replay_complete(const Entities& source, const PhaseConstraintAuthoringIntent& enclosing, Decoded decoded) {
+    AssemblyCatalogTransferBudget component_catalog_budget;
+    if (decoded.complete_component_phase_memberships)
+        component_catalog_budget = reserve_component_catalogs(source, decoded);
     if (enclosing.source_entities_digest != entity_map_digest(source) ||
         enclosing.phase_selections.dump() != phase_constraint_authoring_selections(source).dump())
         invalid("complete demolition differs from actual source entities or saved choices");
-    if (decoded.leaves.empty()) decoded.saved_choice = actual_removal_choice(source,decoded);
-    if (decoded.complete_roof_hosted_catalog_consequences)
+    if (decoded.leaves.empty() || decoded.complete_component_phase_memberships)
+        decoded.saved_choice = actual_removal_choice(source,decoded);
+    if (decoded.complete_roof_hosted_catalog_consequences && decoded.ordinary)
         (void)admitted_ordinary_selection(source,{},decoded);
     if (!decoded.ordinary_opening_ids.empty()) admit_ordinary_openings(source, decoded);
     std::vector<Entities> candidates;
+    std::optional<Entities> component_candidate;
     QualifiedComponents placed_retirements;
     candidates.reserve(decoded.leaves.size() + (decoded.ordinary ? 1 : 0) + (!decoded.ordinary_opening_ids.empty() ? 1 : 0));
     for (const auto& leaf : decoded.leaves) {
         auto candidate = replay_phase_constraint_authoring(source, encode_phase_constraint_authoring_intent(leaf));
+        if (decoded.complete_component_phase_memberships)
+            charge_component_catalog_growth(source, candidate, component_catalog_budget);
         retain_registry_order(source, candidate, decoded.saved_choice);
-        protected_source(source, candidate, decoded.saved_choice, decoded.ordinary_opening_ids);
+        const auto proof = decoded.complete_component_phase_memberships ?
+            std::optional<Entities>{prove_pruned_companions(source, candidate,decoded.saved_choice)} : std::nullopt;
+        protected_source(source, candidate, decoded.saved_choice, decoded.ordinary_opening_ids, {}, proof ? &*proof : nullptr);
         candidates.push_back(std::move(candidate));
     }
+    if (decoded.component) {
+        component_candidate = replay_phase_constraint_authoring(source, encode_phase_constraint_authoring_intent(*decoded.component));
+        charge_component_catalog_growth(source, *component_candidate, component_catalog_budget);
+        prove_component_child(source, *component_candidate, decoded);
+        protected_source(source, *component_candidate, decoded.saved_choice, {}, {}, &*component_candidate);
+    }
     if (!decoded.ordinary_opening_ids.empty()) {
-        auto candidate = replay_hosted_opening_removal(source, decoded.ordinary_opening_ids, true, true);
+        auto candidate = replay_hosted_opening_removal(source, decoded.ordinary_opening_ids, true, true,
+            decoded.complete_component_phase_memberships,
+            decoded.complete_component_phase_memberships ? std::optional{decoded.saved_choice} : std::nullopt);
         if (!candidate) invalid("independent ordinary openings were not admitted by their actual source producer");
+        if (decoded.complete_component_phase_memberships)
+            charge_component_catalog_growth(source, *candidate, component_catalog_budget);
         ordinary_phase_authority(source, *candidate, decoded.saved_choice);
         retain_registry_order(source, *candidate, decoded.saved_choice);
-        protected_source(source, *candidate, decoded.saved_choice, decoded.ordinary_opening_ids);
+        const auto proof = decoded.complete_component_phase_memberships ?
+            std::optional<Entities>{prove_pruned_companions(source, *candidate,decoded.saved_choice)} : std::nullopt;
+        protected_source(source, *candidate, decoded.saved_choice, decoded.ordinary_opening_ids, {}, proof ? &*proof : nullptr);
         candidates.push_back(std::move(*candidate));
     }
     if (decoded.ordinary) {
@@ -914,16 +1222,24 @@ Entities replay_complete(const Entities& source, const PhaseConstraintAuthoringI
                 invalid("ordinary child v2 requires an actual selected roof root");
             auto candidate = decoded.complete_placed_catalog_consequences ? replay_architectural_selection_removal(source,
                 ArchitecturalSelectionRemovalIntent{selection.object_ids, selection.components, selection.roof_additional_identities},
-                true, true, true, true) : roof_selection ? replay_architectural_selection_removal(source,
+                true, true, true, true, false, decoded.complete_component_phase_memberships,
+                decoded.complete_component_phase_memberships && roof_selection,
+                decoded.complete_component_phase_memberships,
+                decoded.complete_component_phase_memberships ? std::optional{decoded.saved_choice} : std::nullopt) : roof_selection ? replay_architectural_selection_removal(source,
                 ArchitecturalSelectionRemovalIntent{selection.object_ids, selection.components, selection.roof_additional_identities},
                 true, decoded.complete_roof_hosted_catalog_consequences) :
                 replay_architectural_object_removal(source, selection.object_ids, selection.components, true);
+            if (decoded.complete_component_phase_memberships)
+                charge_component_catalog_growth(source, candidate, component_catalog_budget);
             ordinary_phase_authority(source, candidate, decoded.saved_choice);
             if (roof_selection) roof_selection_phase_authority(source, candidate, selection, decoded.saved_choice);
             retain_registry_order(source, candidate, decoded.saved_choice);
             if (decoded.complete_placed_catalog_consequences)
                 placed_retirements = placed_retirements_from_source_producer(source, candidate, selection, decoded);
-            protected_source(source, candidate, decoded.saved_choice, decoded.ordinary_opening_ids, placed_retirements);
+            const auto proof = decoded.complete_component_phase_memberships ?
+                std::optional<Entities>{prove_pruned_companions(source, candidate,decoded.saved_choice)} : std::nullopt;
+            protected_source(source, candidate, decoded.saved_choice, decoded.ordinary_opening_ids, placed_retirements,
+                proof ? &*proof : nullptr);
             candidates.push_back(std::move(candidate));
         }
     }
@@ -948,10 +1264,24 @@ Entities replay_complete(const Entities& source, const PhaseConstraintAuthoringI
     }
     // A fully subsumed ordinary selection contributes no map. Historical
     // admission still owns every change; a single remaining leaf is complete.
-    auto result = candidates.size() == 1 ? candidates.front() :
-        compose_ordinary_architectural_removal_candidates(source, candidates, true, true);
+    auto result = candidates.empty() && decoded.complete_component_phase_memberships ? source :
+        candidates.size() == 1 ? candidates.front() :
+        compose_ordinary_architectural_removal_candidates(source, candidates, true, true,
+            decoded.complete_component_phase_memberships);
+    if (decoded.complete_component_phase_memberships)
+        charge_component_catalog_growth(source, result, component_catalog_budget);
     retain_registry_order(source, result, decoded.saved_choice);
-    protected_source(source, result, decoded.saved_choice, decoded.ordinary_opening_ids, placed_retirements);
+    std::optional<Entities> companion_proof;
+    if (decoded.complete_component_phase_memberships) {
+        companion_proof = prove_pruned_companions(source, result,decoded.saved_choice);
+        if (component_candidate) {
+            companion_proof = add_component_demolition(source, *companion_proof, decoded);
+            result = *companion_proof;
+        }
+        (void)resolve_assembly_phase_memberships(result);
+    }
+    protected_source(source, result, decoded.saved_choice, decoded.ordinary_opening_ids, placed_retirements,
+        companion_proof ? &*companion_proof : nullptr);
     if (embedded_assembly_presentation_ids(result) != expected_aliases)
         invalid("complete composition changed the admitted surviving alias inventory");
     if (constraint_phase_scope(result).inactive_owner_ids != expected_inactive)
@@ -973,7 +1303,9 @@ Json encode_phase_coordinated_demolition(const Json& value, const PhaseConstrain
 std::vector<PhaseConstraintAuthoringIntent> phase_coordinated_demolition_components(
     const Json& value, const PhaseConstraintAuthoringIntent& enclosing) {
     try {
-        return components(value, enclosing).leaves;
+        auto decoded = components(value, enclosing);
+        if (decoded.component) decoded.leaves.push_back(std::move(*decoded.component));
+        return decoded.leaves;
     } catch (const Json::exception& error) {
         invalid(std::string("malformed proof: ") + error.what());
     }
@@ -1021,6 +1353,26 @@ bool phase_coordinated_demolition_complete_placed_catalog_consequences(
         return components(value, enclosing).complete_placed_catalog_consequences;
     } catch (const Json::exception& error) {
         invalid(std::string("malformed proof: ") + error.what());
+    }
+}
+
+bool phase_coordinated_demolition_complete_component_phase_memberships(
+    const Json& value, const PhaseConstraintAuthoringIntent& enclosing) {
+    try {
+        return components(value, enclosing).complete_component_phase_memberships;
+    } catch (const Json::exception& error) {
+        invalid(std::string("malformed proof: ") + error.what());
+    }
+}
+
+void preflight_phase_coordinated_demolition_component_catalogs(const Entities& source,
+    const Json& value, const PhaseConstraintAuthoringIntent& enclosing) {
+    try {
+        source_budget(source);
+        const auto decoded = components(value, enclosing);
+        if (decoded.complete_component_phase_memberships) (void)reserve_component_catalogs(source, decoded);
+    } catch (const Json::exception& error) {
+        invalid(std::string("malformed component catalog preflight: ") + error.what());
     }
 }
 

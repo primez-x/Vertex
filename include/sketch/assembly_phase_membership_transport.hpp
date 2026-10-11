@@ -9,6 +9,15 @@ using AssemblyPhaseTransportEntities = std::map<std::string, Entity, std::less<>
 using AssemblyPhaseCopiedRoots = std::map<AssemblyPhaseRoot, AssemblyPhaseRoot>;
 using AssemblyPhaseCopiedHosts = std::map<std::string, std::string, std::less<>>;
 
+// Read-only admission of a complete source-derived physical retirement set.
+// Actual declared rows must be sole proposed members of the requested saved
+// active choice. Unlisted rows retain legacy behavior; no membership is inferred.
+// The full raw source and catalog work are bounded before model resolution.
+void validate_assembly_phase_retirement_roots(
+    const AssemblyPhaseTransportEntities& actual,
+    const std::vector<AssemblyPhaseRoot>& retired_roots,
+    std::string_view registry_id, std::string_view alternative_id);
+
 // The typed physical producer supplies an independently admitted complete
 // candidate and its exact source-derived copied row/host bindings. This helper
 // grants no geometry, command, fresh enrollment or presentation-alias authority.

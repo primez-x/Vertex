@@ -310,7 +310,9 @@ public:
     // with complete component phase membership retirement.
     // v212 retains explicit phase authoring30 component baseline demolition
     // through current, nested, wrapped, retained and undone typed history.
-    static constexpr std::uint32_t format_version = 212;
+    // v213 retains coordinated demolition8 and phase selection3 for complete
+    // component memberships plus separate baseline component demolition.
+    static constexpr std::uint32_t format_version = 213;
     static constexpr std::uint32_t recovery_format_version = 4;
     [[nodiscard]] static std::uint32_t required_format_version(const DocumentSnapshot& snapshot);
     static constexpr std::uint64_t maximum_file_bytes = 4ULL * 1024ULL * 1024ULL * 1024ULL;

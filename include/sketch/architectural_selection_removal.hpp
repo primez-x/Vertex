@@ -2,6 +2,8 @@
 
 #include "sketch/roof_removal.hpp"
 
+#include <optional>
+
 namespace sketch {
 
 struct ArchitecturalSelectionRemovalIntent {
@@ -27,6 +29,10 @@ struct ArchitecturalSelectionRemovalIntent {
 // Component membership retirement is an independent opt-in. It requires the
 // admitted component-host lane. Physical roof owners require the separate roof
 // membership opt-in and complete roof-hosted catalog consequences.
+// Wide catalog-local identities are a separate grammar opt-in for explicit
+// coordinated membership replay; historical complete producers stay strict.
+// A required component choice needs membership completion and is forwarded to
+// every leaf against this same complete actual source before native admission.
 [[nodiscard]] RoofRemovalEntities replay_architectural_selection_removal(
     const RoofRemovalEntities& actual, const ArchitecturalSelectionRemovalIntent& intent,
     bool allow_manufactured_opening_hosts = false,
@@ -35,6 +41,8 @@ struct ArchitecturalSelectionRemovalIntent {
     bool complete_placed_catalog_consequences = false,
     bool complete_corner_window_removal = false,
     bool complete_component_phase_memberships = false,
-    bool complete_roof_component_phase_memberships = false);
+    bool complete_roof_component_phase_memberships = false,
+    bool allow_wide_component_local_ids = false,
+    const std::optional<std::pair<std::string, std::string>>& required_component_phase_choice = std::nullopt);
 
 } // namespace sketch

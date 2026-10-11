@@ -14,6 +14,55 @@ changed source does not acquire runtime acceptance without later qualification.
 
 ## Current delivery state
 
+### October 11 coordinated component demolition integration
+
+The hosted-opening prerequisite is committed and pushed as ef1f1930. Current
+source adds closed coordinated demolition inner8 under unchanged phase15 and
+outer34. Its eleven fields separate nullable canonical phase30 component
+authoring from independently replayed physical/ordinary/opening lanes and
+require literal hosted-catalog and component-membership completion. Actual
+source companions, catalogs, placement hosts and physical registries bind one
+saved alternative. Baseline components remain in their catalogs; only explicit
+roots enter the demolition partition. Physically retired rows use exact typed
+pruning. Required companions can change only to independently derived carriers;
+raw siblings/extensions, other alternatives, baseline bodies and alias identity
+remain protected. Historical inner1..7 preserve their authority.
+
+Source admission reserves the source catalog inventory across the possible
+independent lanes and final map before phase/model resolution. Each typed leaf
+owns admission of its manufactured candidate; returned catalog growth is
+charged before coordinator consumption. The conservative reservation can
+refuse large cohorts; it does not enlarge resource limits or claim that future
+manufactured maps are known before the leaf produces them.
+
+Phase selection3 retains the complete physical/component roster and binds only
+the canonical new base. Completed47 and mixed4 propagate it; mixed2's private
+context admits wide local component IDs only for the explicit new base.
+Controller Delete separates actual baseline components from ordinary row
+retirement, including independent drawing and skylight composition. Site
+footprints retain qualified aliases, actual hosts and complete roof admission.
+Document live/retained source guards and replay admit catalogs before phase
+choices. Reader213/extraction211 retain current, nested, wrapped, retained and
+undone authority, including history following reader212 rows.
+
+Independent integrated source review found a P1 ownership omission: ordinary
+qualified rows with unregistered physical catalogs/hosts could prune a foreign
+companion, and valid component-only operations could fail to derive their own
+choice. The correction uses actual declared membership to establish the choice
+and authenticates full object/opening/roof retirement closures before native
+work. Final pruning independently checks every absent declared source row.
+Independent review approved the corrected bounded source integration with no
+confirmed P1/P2 findings remaining. Root reviewed source admission, exact
+pruning/addition composition, original typed sibling guards, default/explicit
+local-ID grammar, controller and Site routing, retained history and reader
+floors. Named whitespace checks pass. No builds, tests, scripts,
+probes, native jobs, launches, packages or installations ran; the installed app
+is unchanged. Compilation, runtime, Undo/Redo, save/reopen and extraction round
+trips remain unverified. Required-companion editing quarantine and all ten open
+production gates remain. Complete wall/coordinator composition, mixed clipboard,
+detach/shared-type semantics, uncaptured copies, nested profile selection,
+joint-only patches and deformed/cross-Site carry remain implementation gaps.
+
 ### October 11 coordinated demolition prerequisites
 
 The baseline component demolition and retained selection batch is committed

@@ -1679,8 +1679,10 @@ std::vector<PhaseConstraintAuthoringIntent> phase_constraint_replacement_compone
 }
 
 PhaseConstraintAuthoringIntent make_phase_constraint_authoring_intent(
-    const DocumentSnapshot& source,const ConstraintAuthoringIntent& intent,const Json& component_demolition) {
-    if (!component_demolition.is_null()) admit_component_demolition_source_catalogs(source.entities());
+    const DocumentSnapshot& source,const ConstraintAuthoringIntent& intent,const Json& component_demolition,
+    bool complete_component_membership_work) {
+    if (!component_demolition.is_null() || complete_component_membership_work)
+        admit_component_demolition_source_catalogs(source.entities());
     PhaseConstraintAuthoringIntent result{source.revision(),document_snapshot_digest(source),
         document_authoring_source_digest_v2(source),entity_map_digest(source.entities()),
         source.saved_revision_optional(),phase_constraint_authoring_selections(source.entities()),intent};
@@ -1691,6 +1693,9 @@ PhaseConstraintAuthoringIntent make_phase_constraint_authoring_intent(
 Entities replay_phase_constraint_authoring(const Entities& source,const Json& proof) {
     const auto decoded=decode_phase_constraint_authoring_intent(proof);
     if (!decoded.component_demolition.is_null()) admit_component_demolition_source_catalogs(source);
+    if (!decoded.coordinated_demolition.is_null() &&
+        phase_coordinated_demolition_complete_component_phase_memberships(decoded.coordinated_demolition,decoded))
+        preflight_phase_coordinated_demolition_component_catalogs(source,decoded.coordinated_demolition,decoded);
     if (decoded.source_entities_digest!=entity_map_digest(source) ||
         decoded.phase_selections!=phase_constraint_authoring_selections(source))
         invalid("Phase constraint proof does not describe the actual source entities and saved choices");

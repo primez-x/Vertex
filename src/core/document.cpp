@@ -3620,6 +3620,11 @@ static std::vector<bool> active_constraint_history_policies(const std::vector<Re
 static void admit_phase_component_demolition_source(
     const std::map<std::string,Entity,std::less<>>& entities,
     const PhaseConstraintAuthoringIntent& intent) {
+    if (!intent.coordinated_demolition.is_null() &&
+        phase_coordinated_demolition_complete_component_phase_memberships(intent.coordinated_demolition,intent)) {
+        preflight_phase_coordinated_demolition_component_catalogs(entities,intent.coordinated_demolition,intent);
+        return;
+    }
     if (intent.component_demolition.is_null()) return;
     AssemblyCatalogTransferBudget budget;
     for (const auto& [id,entity]:entities) {

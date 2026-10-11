@@ -2,6 +2,9 @@
 
 #include "sketch/document.hpp"
 
+#include <optional>
+#include <utility>
+
 namespace sketch {
 
 // Actual-map replay of the same bounded semantic opening retirement below.
@@ -20,13 +23,16 @@ namespace sketch {
 // consequences. It prunes only typed memberships of actually retired rows from
 // existing raw companions; retained baseline and other-choice rows stay protected.
 // This replay-only option grants no raw command or baseline demolition authority.
+// An optional required choice needs membership completion and authenticates the
+// full retired hosted-row closure as proposed in that actual saved choice.
 [[nodiscard]] std::optional<std::map<std::string, Entity, std::less<>>>
 replay_hosted_opening_removal(
     const std::map<std::string, Entity, std::less<>>& actual,
     const std::vector<std::string>& selected_opening_ids,
     bool active_phase_constraints,
     bool complete_hosted_catalog_consequences = false,
-    bool complete_component_phase_memberships = false);
+    bool complete_component_phase_memberships = false,
+    const std::optional<std::pair<std::string, std::string>>& required_component_phase_choice = std::nullopt);
 
 // Pure, bounded physical retirement of actual semantic opening entities from
 // the full captured source. Empty/non-opening selections return nullopt; a

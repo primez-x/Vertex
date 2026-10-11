@@ -3,6 +3,7 @@
 #include "sketch/document.hpp"
 
 #include <cstddef>
+#include <optional>
 #include <set>
 #include <utility>
 
@@ -46,6 +47,9 @@ void validate_completed_architectural_retirement_references(
 // their existing required companions. Present rows keep every partition and raw
 // carrier sibling; baseline rows with a saved active alternative still refuse.
 // This grants no additional physical-owner or phase-demolition authority.
+// A required component choice needs that opt-in and authenticates every actual
+// retired declared row against the same source saved active proposed partition
+// before filtering or native admission. Its default retains historical semantics.
 [[nodiscard]] std::map<std::string, Entity, std::less<>> replay_architectural_object_removal(
     const std::map<std::string, Entity, std::less<>>& actual,
     const std::vector<std::string>& selected_object_ids,
@@ -56,7 +60,8 @@ void validate_completed_architectural_retirement_references(
     bool complete_proposed_opening_catalog_consequences = false,
     bool complete_corner_window_removal = false,
     bool complete_corner_catalog_hosts = false,
-    bool complete_component_phase_memberships = false);
+    bool complete_component_phase_memberships = false,
+    const std::optional<std::pair<std::string, std::string>>& required_component_phase_choice = std::nullopt);
 
 // Source-only analytical admission for the opt-in opening-host lane. Includes
 // both complete supported source/candidate inventories and component work in
@@ -70,7 +75,8 @@ void preflight_architectural_object_removal(
     bool complete_proposed_opening_catalog_consequences = false,
     bool complete_corner_window_removal = false,
     bool complete_corner_catalog_hosts = false,
-    bool complete_component_phase_memberships = false);
+    bool complete_component_phase_memberships = false,
+    const std::optional<std::pair<std::string, std::string>>& required_component_phase_choice = std::nullopt);
 
 // Analytical protected-row eligibility for an already actual-source candidate.
 // Requires the real saved choice, an absent qualified row, exact raw carrier
@@ -81,6 +87,7 @@ void preflight_architectural_object_removal(
     const std::map<std::string, Entity, std::less<>>& actual,
     const std::map<std::string, Entity, std::less<>>& candidate,
     const std::vector<std::pair<std::string, std::string>>& requested_components,
-    const std::string& registry_id, const std::string& alternative_id);
+    const std::string& registry_id, const std::string& alternative_id,
+    bool allow_wide_component_local_ids = false);
 
 } // namespace sketch

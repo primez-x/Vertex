@@ -140,10 +140,13 @@ struct PhaseConstraintAuthoringIntent {
 [[nodiscard]] std::vector<PhaseConstraintAuthoringIntent> phase_constraint_replacement_components(
     const PhaseConstraintAuthoringIntent& intent);
 // Pass the component leaf directly to admit all source catalogs before saved
-// phase selections are decoded. Null preserves the historical make path.
+// phase selections are decoded. Complete membership work also admits them for
+// a subsequently enclosed coordinated child; this is admission, not authority.
+// Null/false preserve the historical make path.
 [[nodiscard]] PhaseConstraintAuthoringIntent make_phase_constraint_authoring_intent(
     const DocumentSnapshot& source, const ConstraintAuthoringIntent& intent,
-    const nlohmann::json& component_demolition = nullptr);
+    const nlohmann::json& component_demolition = nullptr,
+    bool complete_component_membership_work = false);
 [[nodiscard]] std::map<std::string,Entity,std::less<>> replay_phase_constraint_authoring(
     const std::map<std::string,Entity,std::less<>>& source, const nlohmann::json& proof);
 // Detached physical preview only for coordinated inner v2/v3/v4 wall replacements.

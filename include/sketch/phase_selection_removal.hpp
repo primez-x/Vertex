@@ -12,8 +12,11 @@ struct PhaseSelectionRemovalIntent {
     ArchitecturalSelectionRemovalIntent architectural;
     DrawingSelectionRemovalIntent drawing;
     // Selection dialect two exclusively binds a pure phase-authoring thirty
-    // component demolition. False retains the exact historical dialect one.
+    // component demolition. Both completion flags false retain dialect one.
     bool complete_component_phase_demolition = false;
+    // Selection dialect three exclusively binds pure phase15/inner8 complete
+    // component memberships, with physical roots and qualified component rows.
+    bool complete_coordinated_component_phase_memberships = false;
 };
 
 [[nodiscard]] nlohmann::json encode_phase_selection_removal_intent(
@@ -29,10 +32,13 @@ struct PhaseSelectionRemovalIntent {
 // remains the responsibility of the source-owning preview/composition paths.
 // Component completion is required exclusively for a pure phase30 base;
 // its canonical leaf owns local-ID spelling and exact qualified-root matching.
+// Coordinated completion separately requires pure phase15/inner8. Its complete
+// actual-source extraction admits the exact physical and qualified-root roster.
 [[nodiscard]] ArchitecturalSelectionRemovalIntent phase_selection_removal_base_authority(
     const DocumentSnapshot& source, const Command& pure_phase_deletion_command,
     const ArchitecturalSelectionRemovalIntent& explicit_selection,
-    bool complete_component_phase_demolition = false);
+    bool complete_component_phase_demolition = false,
+    bool complete_coordinated_component_phase_memberships = false);
 
 [[nodiscard]] DocumentSnapshot prepare_phase_selection_removal_stage(
     const DocumentSnapshot& source, const PhaseSelectionRemovalIntent& intent,

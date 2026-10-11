@@ -636,7 +636,10 @@ template<class ConstraintPolicy>
 std::optional<OpeningRemoval> derive(const Entities& actual,
     const std::vector<std::string>& selection, ConstraintPolicy active_phase_constraints,
     bool complete_hosted_catalog_consequences = false,
-    bool complete_component_phase_memberships = false) {
+    bool complete_component_phase_memberships = false,
+    const std::optional<std::pair<std::string, std::string>>& required_component_phase_choice = std::nullopt) {
+    if (required_component_phase_choice && !complete_component_phase_memberships)
+        reject("required component phase choice needs complete component memberships");
     if (complete_component_phase_memberships && !complete_hosted_catalog_consequences)
         reject("component membership completion requires complete hosted catalog consequences");
     if (!has_selected_opening(actual, selection)) return std::nullopt;
@@ -706,6 +709,17 @@ std::optional<OpeningRemoval> derive(const Entities& actual,
     std::map<std::string, AssemblyModel, std::less<>> catalogs;
     for (const auto& [id, entity] : actual) if (entity.type == "assembly_model")
         catalogs.emplace(id, AssemblyModel::from_json(entity.properties.at("model")));
+    if (required_component_phase_choice) {
+        std::vector<AssemblyPhaseRoot> retired_roots;
+        for (const auto& [id, catalog] : catalogs)
+            for (const auto& row : catalog.instances())
+                if (row.placement && retired.contains(row.placement->host_entity_id)) {
+                    if (retired_roots.size() >= closure_limit) reject("opening-hosted catalog closure budget exceeded");
+                    retired_roots.emplace_back(id, row.id);
+                }
+        validate_assembly_phase_retirement_roots(actual, retired_roots,
+            required_component_phase_choice->first, required_component_phase_choice->second);
+    }
     const auto material = [&](const Json& assignment, const std::string& owner) {
         const auto version = field(assignment, "version"), catalog = field(assignment, "catalog_id"), local = field(assignment, "material_id");
         if (!version || !version->is_number_integer() || *version != 1 || !catalog || !catalog->is_string() ||
@@ -968,10 +982,12 @@ std::optional<ApplyEntityChanges> derive_snapshot(const DocumentSnapshot& source
 std::optional<std::map<std::string, Entity, std::less<>>> replay_hosted_opening_removal(
     const std::map<std::string, Entity, std::less<>>& actual,
     const std::vector<std::string>& selected_opening_ids, bool active_phase_constraints,
-    bool complete_hosted_catalog_consequences, bool complete_component_phase_memberships) {
+    bool complete_hosted_catalog_consequences, bool complete_component_phase_memberships,
+    const std::optional<std::pair<std::string, std::string>>& required_component_phase_choice) {
     try {
         auto removal = derive(actual, selected_opening_ids, [active_phase_constraints] { return active_phase_constraints; },
-            complete_hosted_catalog_consequences, complete_component_phase_memberships);
+            complete_hosted_catalog_consequences, complete_component_phase_memberships,
+            required_component_phase_choice);
         if (!removal) return std::nullopt;
         return std::move(removal->entities);
     }

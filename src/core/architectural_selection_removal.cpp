@@ -9,6 +9,7 @@
 #include <Standard_Failure.hxx>
 
 #include <algorithm>
+#include <cctype>
 #include <cmath>
 #include <set>
 #include <stdexcept>
@@ -129,11 +130,17 @@ Entities replay_architectural_selection_removal(const Entities& actual,
     const ArchitecturalSelectionRemovalIntent& intent, bool allow_manufactured_opening_hosts,
     bool complete_roof_hosted_catalog_consequences, bool complete_wall_hosted_catalog_consequences,
     bool complete_placed_catalog_consequences, bool complete_corner_window_removal,
-    bool complete_component_phase_memberships, bool complete_roof_component_phase_memberships) {
+    bool complete_component_phase_memberships, bool complete_roof_component_phase_memberships,
+    bool allow_wide_component_local_ids,
+    const std::optional<std::pair<std::string, std::string>>& required_component_phase_choice) {
     try {
         bounds(actual);
+        if (required_component_phase_choice && !complete_component_phase_memberships)
+            reject("required component phase choice needs complete component memberships");
         if (complete_component_phase_memberships && !allow_manufactured_opening_hosts)
             reject("component membership retirement requires admitted component hosts");
+        if (allow_wide_component_local_ids && !complete_component_phase_memberships)
+            reject("wide local identities require explicit component membership retirement");
         if (complete_roof_component_phase_memberships &&
             (!complete_component_phase_memberships || !complete_roof_hosted_catalog_consequences))
             reject("roof membership retirement requires complete component and roof catalog consequences");
@@ -160,7 +167,12 @@ Entities replay_architectural_selection_removal(const Entities& actual,
         }
         Keys selected_components;
         for (const auto& key : intent.components) {
-            identity(key.first); identity(key.second);
+            identity(key.first);
+            if (allow_wide_component_local_ids) {
+                if (key.second.empty() || key.second.size()>4096 ||
+                    std::all_of(key.second.begin(),key.second.end(),[](unsigned char c) { return std::isspace(c); }))
+                    reject("component local identity must contain 1..4096 nonblank bytes");
+            } else identity(key.second);
             if (!selected_components.insert(key).second) reject("duplicate qualified component selection");
         }
         std::sort(roofs.begin(), roofs.end()); std::sort(objects.begin(), objects.end());
@@ -186,12 +198,13 @@ Entities replay_architectural_selection_removal(const Entities& actual,
                 preflight_architectural_object_removal(actual, objects, intent.components, 0,
                     complete_generic_catalog,
                     complete_placed_catalog_consequences,complete_corner_window_removal,complete_corner_window_removal,
-                    complete_component_phase_memberships);
+                    complete_component_phase_memberships,required_component_phase_choice);
         }
         std::vector<Entities> candidates;
         if (!roofs.empty()) {
             const auto plan = inspect_roof_removal_plan(actual, roofs, true, true, true,
-                complete_roof_hosted_catalog_consequences,complete_roof_component_phase_memberships);
+                complete_roof_hosted_catalog_consequences,complete_roof_component_phase_memberships,
+                required_component_phase_choice);
             if (!plan.ready()) {
                 for (const auto& row : plan.diagnostics) if (row.blocking)
                     reject(row.entity_id + ": " + row.reason);
@@ -199,7 +212,8 @@ Entities replay_architectural_selection_removal(const Entities& actual,
             }
             for (const auto& key : plan.retired_hosted_component_keys) selected_components.erase(key);
             auto roof = replay_roof_removal(actual, roofs, intent.roof_additional_identities, true, true, true,
-                complete_roof_hosted_catalog_consequences,complete_roof_component_phase_memberships);
+                complete_roof_hosted_catalog_consequences,complete_roof_component_phase_memberships,
+                required_component_phase_choice);
             bounds(roof.entities);
             candidates.push_back(std::move(roof.entities));
         }
@@ -210,11 +224,11 @@ Entities replay_architectural_selection_removal(const Entities& actual,
                 replay_architectural_object_removal(actual, objects, components, true, 0,
                     complete_generic_catalog,
                     complete_placed_catalog_consequences,complete_corner_window_removal,complete_corner_window_removal,
-                    complete_component_phase_memberships) :
+                    complete_component_phase_memberships,required_component_phase_choice) :
                 replay_architectural_object_removal(actual, objects, components, false, 0,
                     complete_generic_catalog,
                     complete_placed_catalog_consequences,complete_corner_window_removal,complete_corner_window_removal,
-                    complete_component_phase_memberships);
+                    complete_component_phase_memberships,required_component_phase_choice);
             bounds(ordinary);
             candidates.push_back(std::move(ordinary));
         }

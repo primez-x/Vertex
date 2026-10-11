@@ -1,4 +1,31 @@
-# Vertex project formats v1 through v212
+# Vertex project formats v1 through v213
+
+Reader213 retains coordinated demolition inner8 under unchanged phase
+authoring15/outer command34. Inner8 has exactly `version`, `opening_authoring`,
+`roof_authoring`, `slab_authoring`, `structural_authoring`, `stair_authoring`,
+`ordinary_removal`, `complete_hosted_catalog_consequences`,
+`ordinary_opening_ids`, `component_authoring`, and
+`complete_component_phase_memberships`. Both completion flags are literal
+`true`; the component child is null or one canonical full phase30 envelope.
+At least one actual lane is required. Every child binds the same original
+source, revision, saved revision and phase selections. Actual source membership
+must establish one saved registry/alternative across the complete operation.
+Physical removal uses exact source-derived companion pruning. Separate
+explicit baseline component demolition adds only its selected roots to the
+retained companion's demolition partition; it does not remove their rows.
+Historical inner1..7 retain their original codec and replay authority.
+
+Phase selection3 adds literal
+`complete_coordinated_component_phase_memberships: true` to the historical five
+selection fields. It requires the pure phase15/inner8 base and the complete
+actual architectural roster, allowing physical roots and qualified components.
+Local component identities use the same bounded nonblank grammar as phase30;
+historical ordinary local identities remain strict. Completed47 and mixed4
+retain selection3 and the exact base. Mixed2 admits the wider local grammar
+only with its canonical inner8 context. Current, nested, wrapped, retained and
+undone receipts require reader213, including histories after reader212 rows.
+The existing native-format-minus-two emitter supplies extraction211.
+These are source-format changes; compilation and runtime remain unqualified.
 
 Reader212 retains explicit phase constraint authoring30 inside unchanged outer
 command34. Its exact nine fields are `version`, `expected_revision`,

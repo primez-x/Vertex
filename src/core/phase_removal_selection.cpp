@@ -78,7 +78,9 @@ void pure_outer34(const ApplyBoundaryConstraintChanges& c) {
         c.wall_group_scale_completion || c.wall_group_scale || c.mixed_selection_removal_completion ||
         !c.mixed_selection_removal_intent.is_null() || c.ordinary_selection_removal_completion ||
         !c.ordinary_selection_removal_intent.is_null() || c.phase_selection_removal_completion ||
-        !c.phase_selection_removal_intent.is_null())
+        !c.phase_selection_removal_intent.is_null() || c.clipboard_placement_completion ||
+        !c.clipboard_placement_intent.is_null() || c.mixed_selection_edit_completion ||
+        !c.mixed_selection_edit_intent.is_null())
         invalid("requires an exclusive complete outer34 demolition command");
     ProofBudget budget;
     budget.reserve(256);
@@ -164,7 +166,7 @@ void preflight_selection(const Json& proof, std::size_t& count, std::size_t dept
     } else if (version == 15) {
         const auto& coordinated = field(proof, "coordinated_demolition");
         const auto& inner_version = field(coordinated, "version");
-        if (!inner_version.is_number_integer() || inner_version < 1 || inner_version > 7)
+        if (!inner_version.is_number_integer() || inner_version < 1 || inner_version > 8)
             invalid("unsupported coordinated demolition version");
         for (const auto* family : {"opening_authoring", "roof_authoring", "slab_authoring", "structural_authoring", "stair_authoring"}) {
             const auto& child = field(coordinated, family);
@@ -175,6 +177,17 @@ void preflight_selection(const Json& proof, std::size_t& count, std::size_t dept
             if (!ordinary.is_null()) preflight_ordinary(ordinary, count);
         }
         if (inner_version >= 5) preflight_ids(field(coordinated, "ordinary_opening_ids"), count);
+        if (inner_version == 8) {
+            const auto& complete = field(coordinated, "complete_component_phase_memberships");
+            if (!complete.is_boolean() || complete != true)
+                invalid("coordinated component memberships require literal completion authority");
+            const auto& component = field(coordinated, "component_authoring");
+            if (!component.is_null()) {
+                if (field(component, "version") != 30)
+                    invalid("coordinated component slot requires a phase30 child");
+                preflight_selection(component, count, depth + 1);
+            }
+        }
     } else if (version == 16) {
         const auto& wall = field(proof, "wall_demolition");
         const auto& inner_version = field(wall, "version");
@@ -241,7 +254,8 @@ void extract(const PhaseConstraintAuthoringIntent& proof,
             extract(child, actual_binding, selected, depth + 1);
         if (const auto ordinary = phase_coordinated_demolition_ordinary_removal(proof.coordinated_demolition, proof)) {
             selected.add(ordinary->object_ids);
-            selected.add(ordinary->components);
+            selected.add(ordinary->components,
+                phase_coordinated_demolition_complete_component_phase_memberships(proof.coordinated_demolition, proof));
         }
         selected.add(phase_coordinated_demolition_ordinary_openings(proof.coordinated_demolition, proof));
     } else if (!proof.wall_demolition.is_null()) {
@@ -284,7 +298,10 @@ ArchitecturalSelectionRemovalIntent phase_removal_selection_authority(
 
     ConstraintAuthoringIntent empty;
     empty.message = proof.intent.message;
-    const auto actual_binding = make_phase_constraint_authoring_intent(source, empty, proof.component_demolition);
+    const bool component_memberships = !proof.coordinated_demolition.is_null() &&
+        phase_coordinated_demolition_complete_component_phase_memberships(proof.coordinated_demolition, proof);
+    const auto actual_binding = make_phase_constraint_authoring_intent(source, empty, proof.component_demolition,
+        component_memberships);
     Selection selected;
     extract(proof, actual_binding, selected, 0);
     if (selected.objects.empty() && selected.components.empty()) invalid("demolition selection cannot be empty");
