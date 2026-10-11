@@ -304,7 +304,9 @@ public:
     // allocations in reference-carry component request/authoring two.
     // v209 retains explicit architectural/drawing removal2 and mixed removal9
     // with complete component phase membership retirement.
-    static constexpr std::uint32_t format_version = 209;
+    // v210 retains explicit architectural/drawing removal3 and mixed removal10
+    // with complete actual roof component phase membership retirement.
+    static constexpr std::uint32_t format_version = 210;
     static constexpr std::uint32_t recovery_format_version = 4;
     [[nodiscard]] static std::uint32_t required_format_version(const DocumentSnapshot& snapshot);
     static constexpr std::uint64_t maximum_file_bytes = 4ULL * 1024ULL * 1024ULL * 1024ULL;

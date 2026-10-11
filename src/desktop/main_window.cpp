@@ -31428,10 +31428,26 @@ public:
         return additional;
     }
 
+    static bool hasComponentPhaseMemberships(const DocumentSnapshot& source) {
+        return std::any_of(source.entities().begin(),source.entities().end(),[](const auto& row) {
+            return row.second.type==assembly_phase_membership_entity_type;
+        });
+    }
+
+    static void admitComponentMembershipRemovalSource(const DocumentSnapshot& source) {
+        if (!hasComponentPhaseMemberships(source)) return;
+        AssemblyCatalogTransferBudget catalog_budget;
+        for (const auto& [id,entity]:source.entities()) {
+            (void)id;
+            if (entity.type=="assembly_model") admit_existing_assembly_catalog_work(entity,catalog_budget);
+        }
+    }
+
     static ArchitecturalSelectionRemovalIntent captureArchitecturalSelectionRemoval(
         const DocumentSnapshot& source, std::vector<std::string> object_ids,
         std::vector<std::pair<std::string,std::string>> components={},
-        bool complete_roof_hosted_catalog_consequences=false) {
+        bool complete_roof_hosted_catalog_consequences=false,
+        bool complete_component_phase_memberships=false) {
         std::sort(object_ids.begin(),object_ids.end());
         std::sort(components.begin(),components.end());
         ArchitecturalSelectionRemovalIntent intent{std::move(object_ids),std::move(components),{}};
@@ -31440,20 +31456,22 @@ public:
             if (source.entities().at(id).type=="roof") roofs.push_back(id);
         if (!roofs.empty()) intent.roof_additional_identities=captureRoofRemovalIdentities(source,
             inspect_roof_removal_plan(source.entities(),roofs,true,true,true,
-                complete_roof_hosted_catalog_consequences));
+                complete_roof_hosted_catalog_consequences || complete_component_phase_memberships,
+                complete_component_phase_memberships));
         return intent;
     }
 
     static bool componentMembershipRemovalMode(const DocumentSnapshot& source,
         const ArchitecturalSelectionRemovalIntent& intent) {
         if (intent.object_ids.empty() && intent.components.empty()) return false;
-        // The actual captured roster selects this authority. A selected roof
-        // needs its own completed producer; a component on a surviving roof
-        // still belongs to the ordinary qualified-row lane.
-        for (const auto& id:intent.object_ids)
-            if (source.entities().at(id).type=="roof") return false;
-        return std::any_of(source.entities().begin(),source.entities().end(),[](const auto& row) {
-            return row.second.type==assembly_phase_membership_entity_type;
+        return hasComponentPhaseMemberships(source);
+    }
+
+    static bool componentMembershipRoofRemovalMode(const DocumentSnapshot& source,
+        const ArchitecturalSelectionRemovalIntent& intent) {
+        return componentMembershipRemovalMode(source,intent) &&
+            std::any_of(intent.object_ids.begin(),intent.object_ids.end(),[&](const auto& id) {
+                return source.entities().at(id).type=="roof";
         });
     }
 
@@ -31522,6 +31540,7 @@ public:
             if (selected_components.size()!=intent.architectural.components.size()) return;
             const bool architectural=!intent.architectural.object_ids.empty() || !intent.architectural.components.empty();
             intent.complete_component_phase_memberships=componentMembershipRemovalMode(source,intent.architectural);
+            intent.complete_roof_component_phase_memberships=componentMembershipRoofRemovalMode(source,intent.architectural);
             intent.allow_manufactured_opening_hosts=architectural &&
                 (allow_manufactured_opening_hosts || intent.complete_component_phase_memberships);
             if (hasIndependentDrawingRemoval(intent.drawing)) canonicalIndependentDrawingRemoval(intent.drawing);
@@ -31547,15 +31566,7 @@ public:
         bool allow_manufactured_opening_hosts=false,
         std::optional<ArchitecturalSelectionRemovalIntent>* prepared_intent=nullptr) const {
         if (allow_manufactured_opening_hosts) {
-            if (std::any_of(snapshot.entities().begin(),snapshot.entities().end(),[](const auto& row) {
-                return row.second.type==assembly_phase_membership_entity_type;
-            })) {
-                AssemblyCatalogTransferBudget catalog_budget;
-                for (const auto& [id,entity]:snapshot.entities()) {
-                    (void)id;
-                    if (entity.type=="assembly_model") admit_existing_assembly_catalog_work(entity,catalog_budget);
-                }
-            }
+            admitComponentMembershipRemovalSource(snapshot);
             validate_mixed_wall_removal_source_admission(snapshot.entities(),true);
         }
         std::vector<std::string> physical_roots;
@@ -31566,14 +31577,17 @@ public:
         const std::set<std::string,std::less<>> typed_roots(physical_roots.begin(),physical_roots.end());
         auto candidate=[&] {
             if (physical_roots.empty() && components.empty()) return snapshot.entities();
-            const auto intent=captureArchitecturalSelectionRemoval(snapshot,std::move(physical_roots),components);
+            const auto intent=captureArchitecturalSelectionRemoval(snapshot,std::move(physical_roots),components,
+                false,hasComponentPhaseMemberships(snapshot));
             if (prepared_intent) *prepared_intent=intent;
             const bool complete_memberships=componentMembershipRemovalMode(snapshot,intent);
+            const bool complete_roof_memberships=componentMembershipRoofRemovalMode(snapshot,intent);
             const bool admit_hosts=allow_manufactured_opening_hosts || complete_memberships;
             if (admit_hosts)
                 validate_physical_wall_join_removal_identity_lifetime(snapshot,intent.roof_additional_identities);
             return replay_architectural_selection_removal(snapshot.entities(),intent,admit_hosts,
-                false,complete_memberships,complete_memberships,false,complete_memberships);
+                complete_roof_memberships,complete_memberships,complete_memberships,false,
+                complete_memberships,complete_roof_memberships);
         }();
         for (const auto& entity : graph) {
             const auto surviving=candidate.find(entity.id);
@@ -33441,6 +33455,7 @@ public:
     ArchitecturalDrawingRemovalIntent captureExplicitSelectionRemoval(
         const DocumentSnapshot& source,const QStringList& selection,
         bool complete_corner_catalog_hosts=false) const {
+        admitComponentMembershipRemovalSource(source);
         ArchitecturalDrawingRemovalIntent selected;
         const auto annotations=annotation_selection_owners(source,selection);
         const auto aliases=embedded_assembly_presentation_ids(source.entities());
@@ -36155,6 +36170,7 @@ public:
     std::optional<PreparedSelectionRemoval> prepareOrdinarySelectionRemoval(const DocumentSnapshot& source) {
             std::optional<PreparedSelectionRemoval> prepared;
             if (!source.is_editable()) throw std::invalid_argument("This document is read-only.");
+            admitComponentMembershipRemovalSource(source);
             const auto source_guard=captureRemovalSourceGuard(source);
             const auto finish_preparation=[&] {
                 source_guard();
@@ -36306,6 +36322,7 @@ public:
         // displayed child source without invoking a child-only command gate.
         const auto source=selectedRoofOpeningCohortSource(false);
         if (!source->is_editable()) throw std::invalid_argument("This document is read-only.");
+        admitComponentMembershipRemovalSource(*source);
         const auto authority=captureSourceEditAuthority(*source);
         // Ordinary preparation can open a review, so capture its full roster
         // first. Corner preparation captures its complete roster itself before
@@ -48878,9 +48895,13 @@ private:
             }
         }
         if (!has_roof) return std::nullopt;
-        const auto intent=captureArchitecturalSelectionRemoval(source,std::move(roots),std::move(components));
+        const auto intent=captureArchitecturalSelectionRemoval(source,std::move(roots),std::move(components),
+            false,hasComponentPhaseMemberships(source));
         if (prepared_intent) *prepared_intent=intent;
-        const auto candidate=replay_architectural_selection_removal(source.entities(),intent);
+        const bool complete_memberships=componentMembershipRemovalMode(source,intent);
+        const auto candidate=replay_architectural_selection_removal(source.entities(),intent,complete_memberships,
+            complete_memberships,complete_memberships,complete_memberships,false,complete_memberships,
+            complete_memberships);
         ApplyEntityChanges command{source.revision(),{},{},message};
         for (const auto& [id,entity]:source.entities()) {
             const auto after=candidate.find(id);
@@ -48904,7 +48925,9 @@ private:
                 const auto found = source.entities().find(id);
                 return found != source.entities().end() && found->second.type == "roof";
             })) return alternativeRoofDemolitionCommand(source, selected_ids, message);
-        const auto plan = inspect_roof_removal_plan(source.entities(), selected_ids, true, true, true);
+        const bool complete_memberships=hasComponentPhaseMemberships(source);
+        const auto plan = inspect_roof_removal_plan(source.entities(), selected_ids, true, true, true,
+            complete_memberships,complete_memberships);
         // Retained members must enter the phase-preserving removal producer
         // before the older complete-baseline demolition path sees them.
         if (!plan.phase_retention_required)
@@ -48915,7 +48938,8 @@ private:
             std::sort(canonical_ids.begin(),canonical_ids.end());
             *prepared_intent=ArchitecturalSelectionRemovalIntent{std::move(canonical_ids),{},additional};
         }
-        const auto replay = replay_roof_removal(source.entities(), selected_ids, additional, true, true, true);
+        const auto replay = replay_roof_removal(source.entities(), selected_ids, additional, true, true, true,
+            complete_memberships,complete_memberships);
         ApplyEntityChanges command{source.revision(), {}, {}, message};
         for (const auto& [id, entity] : source.entities()) {
             const auto after = replay.entities.find(id);
@@ -49423,6 +49447,7 @@ private:
         if (ids.empty()) return std::nullopt;
         if (ids.size()>maximum_architectural_group_targets)
             throw std::invalid_argument("The architectural demolition selection is too large.");
+        admitComponentMembershipRemovalSource(source);
         std::map<std::string,std::vector<std::string>,std::less<>> families;
         std::vector<std::string> baseline_roots;
         std::vector<std::string> ordinary_roots;
@@ -49481,6 +49506,11 @@ private:
         const bool ordinary_roofs=std::any_of(ordinary_roots.begin(),ordinary_roots.end(),[&](const auto& id) {
             return source.entities().at(id).type=="roof";
         });
+        // These ordinary leaves now own their complete row memberships. The
+        // historical coordinated demolition receipt cannot borrow that newer
+        // authority; keep pure ordinary roof cohorts on their typed path.
+        if (baseline_roots.empty() && ordinary_roofs && ordinary_openings.empty() &&
+            hasComponentPhaseMemberships(source)) return std::nullopt;
         if ((families.empty() && ordinary_openings.empty() && !ordinary_roofs && ordinary_components.empty()) ||
             (!include_single_family && families.size()<2 &&
                 ordinary_roots.empty() && ordinary_components.empty() && ordinary_openings.empty()))

@@ -277,11 +277,16 @@ struct CoordinatedComponentPropertyComposition {
 // the entire source catalog envelope preserved. Every input must already be a
 // complete independently admitted typed primitive replay of this same source;
 // this composer grants neither fresh-row nor physical removal admission.
+// Component phase membership completion additionally requires complete hosted
+// catalog consequences. Each leaf must equal the exact typed pruning of source
+// companions against its actual catalog absences. Composition keeps those raw
+// source carriers until the final union is pruned; it grants no fresh enrollment.
 [[nodiscard]] std::map<std::string,Entity,std::less<>> compose_ordinary_architectural_removal_candidates(
     const std::map<std::string,Entity,std::less<>>& source,
     const std::vector<std::map<std::string,Entity,std::less<>>>& candidates,
     bool allow_shared_reference_retirement=false,
-    bool complete_hosted_catalog_consequences=false);
+    bool complete_hosted_catalog_consequences=false,
+    bool complete_component_phase_memberships=false);
 
 // Independently evaluated saved selections, including the empty-registry case.
 [[nodiscard]] nlohmann::json phase_constraint_authoring_selections(

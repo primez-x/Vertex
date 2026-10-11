@@ -260,15 +260,17 @@ Json validate_mixed_selection_removal_intent(const Json& value) {
         if (value.dump().size()>1024*1024) reject("intent exceeds one MiB");
         fields(value,{"version","ordinary","ordinary_command","members","child_command","source_snapshot_digest",
             "source_authoring_digest","source_entities_digest","source_saved_revision","stage_snapshot_digest","stage_authoring_digest"});
-        if (!value.at("version").is_number_integer() || (value.at("version")!=1 && value.at("version")!=2 && value.at("version")!=3 && value.at("version")!=4 && value.at("version")!=5 && value.at("version")!=6 && value.at("version")!=7 && value.at("version")!=8 && value.at("version")!=9))
+        if (!value.at("version").is_number_integer() || (value.at("version")!=1 && value.at("version")!=2 && value.at("version")!=3 && value.at("version")!=4 && value.at("version")!=5 && value.at("version")!=6 && value.at("version")!=7 && value.at("version")!=8 && value.at("version")!=9 && value.at("version")!=10))
             reject("unsupported intent version");
         const auto members=decode_members(value.at("members"));
         std::size_t count=0;
-        if (value.at("version")==1 || value.at("version")==9) {
+        if (value.at("version")==1 || value.at("version")==9 || value.at("version")==10) {
             const auto ordinary=decode_architectural_drawing_removal_intent(value.at("ordinary"));
             // Membership retirement has distinct retained authority. Historical
             // mixed-one must never acquire the new ordinary codec's meaning.
-            if (ordinary.complete_component_phase_memberships != (value.at("version")==9))
+            if (ordinary.complete_component_phase_memberships !=
+                    (value.at("version")==9 || value.at("version")==10) ||
+                ordinary.complete_roof_component_phase_memberships != (value.at("version")==10))
                 reject("component membership authority differs from its mixed history dialect");
             count=ordinary.architectural.object_ids.size()+ordinary.architectural.components.size()+
                 ordinary.drawing.owner_ids.size()+ordinary.drawing.annotations.size();
@@ -323,7 +325,7 @@ Json validate_mixed_selection_removal_intent(const Json& value) {
 }
 bool mixed_selection_removal_active_phase_policy(const Json& value) {
     (void)validate_mixed_selection_removal_intent(value);
-    return value.at("version")==2 || value.at("version")==4 || value.at("version")==5 || value.at("version")==6 || value.at("version")==7 || value.at("version")==8 || value.at("version")==9 ||
+    return value.at("version")==2 || value.at("version")==4 || value.at("version")==5 || value.at("version")==6 || value.at("version")==7 || value.at("version")==8 || value.at("version")==9 || value.at("version")==10 ||
         (!value.at("child_command").is_null() && value.at("child_command").at("version")==34);
 }
 std::optional<Revision> mixed_selection_removal_source_saved_revision(const Json& value) {
@@ -432,7 +434,8 @@ Entities replay_mixed_selection_removal(const DocumentSnapshot& source,const Jso
 Json make_mixed_selection_removal_intent(const DocumentSnapshot& source,const ArchitecturalDrawingRemovalIntent& ordinary,
     const Command& ordinary_command,const std::vector<RoofOpeningGroupMember>& members,const std::optional<Command>& child_command) {
     const auto stage=prepare_mixed_selection_removal_stage(source,ordinary,ordinary_command);
-    Json value={{"version",ordinary.complete_component_phase_memberships ? 9 : 1},
+    Json value={{"version",ordinary.complete_roof_component_phase_memberships ? 10 :
+        ordinary.complete_component_phase_memberships ? 9 : 1},
         {"ordinary",encode_architectural_drawing_removal_intent(ordinary)},
         {"ordinary_command",command_to_json(ordinary_command)},{"members",encode_members(members)},
         {"child_command",child_command ? command_to_json(*child_command) : Json(nullptr)},

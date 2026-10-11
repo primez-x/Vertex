@@ -14,6 +14,55 @@ changed source does not acquire runtime acceptance without later qualification.
 
 ## Current delivery state
 
+### October 11 roof component membership retirement and removal composition
+
+The preceding typed retirement batch is committed and pushed as 693cbc71.
+Current source extends roof inspection/replay through a default-false membership
+option requiring complete actual hosted-row retirement. The whole source
+catalog inventory is admitted before scope decoding. Actual physically removed
+roof rows use the existing membership-aware object leaf; its pruned companions
+remain intact through physical roof/join/dimension and registry cleanup.
+Phase-retained roof bodies and their hosted rows remain present. Candidate
+catalogs are admitted before final decoding. Inspection masks only decoded
+membership models; opaque carrier siblings/extensions remain refusal points.
+
+The ordinary architectural removal composer now has separate membership
+authority. Each complete leaf must exactly equal typed pruning after only its
+source companion carriers are restored. Fresh companions and altered raw
+carrier metadata refuse. The actual merged physical/catalog/registry union
+keeps source companions until one final prune. Source, all leaves and the final
+map share cumulative catalog admission before decoding; only the new mode
+defers merged catalog/registry result decoding until final admission. Ordinary
+and phase-demolition defaults retain their historical behavior.
+
+Architectural/drawing removal three and mixed removal ten explicitly retain
+selected-roof membership completion under unchanged outer command45. Three
+requires literal component/roof completion, opening-host admission and an
+actual selected roof; two still refuses physical roofs. Mixed one/nine/ten
+require ordinary one/two/three respectively. Original-source complete replay,
+selected-roof child dominance, staged child proof, preserved inactive dependents
+and retained phase destinations remain bound to one atomic publication.
+Reader210/extraction208 detect current/nested/wrapped/retained/undone authority,
+including histories already requiring209.
+
+Canvas roof-only, architectural roof cohorts and ordinary graph deletion route
+to the completed producer and capture the same option for mixed proof. Pure
+ordinary roof cohorts in companion projects bypass the older coordinated
+demolition receipt, which cannot borrow the newer membership authority.
+Baseline/coordinated demolition with ordinary roofs/openings, corner-aggregate
+consumers, complete mixed clipboard, detach/shared-type semantics, uncaptured
+copies, nested profile selection, joint-only patches and deformed/cross-Site
+carry remain required implementation gaps. Companion-bearing editing quarantine
+remains until all consumers integrate. All ten production gates remain open.
+No builds, tests, scripts, probes, native jobs, launches, packages or installations
+ran; the installed candidate is unchanged. Independent source review found and
+resolved catalog decoding before complete source admission in ordinary/mixed
+Delete classification and explicit selection capture. It approved the corrected
+bounded integration with no confirmed P1/P2 remaining. Root reviewed exact leaf
+proof and merged pruning, old/new command separation, retained phase protection,
+controller capture and reader floors; named whitespace checks pass. Compilation,
+runtime and production qualification are unverified.
+
 ### October 11 typed component retirement and retained mixed deletion
 
 The preceding ordinary-copy/catalog-editor batch is committed and pushed as

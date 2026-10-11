@@ -832,7 +832,7 @@ DrawingSelectionRemovalEntities replay_drawing_selection_removal_with_architectu
     const DrawingSelectionRemovalEntities& actual, const DrawingSelectionRemovalIntent& drawing,
     const ArchitecturalSelectionRemovalIntent& architectural,
     bool allow_manufactured_opening_hosts, bool active_phase_constraints,
-    bool complete_component_phase_memberships) {
+    bool complete_component_phase_memberships, bool complete_roof_component_phase_memberships) {
     try {
         if (complete_component_phase_memberships) {
             Budget source_budget; bounds(actual,source_budget);
@@ -846,9 +846,9 @@ DrawingSelectionRemovalEntities replay_drawing_selection_removal_with_architectu
         // No caller-supplied candidate can grant this narrower composition path.
         (void)replay(actual, actual, drawing, active_phase_constraints);
         const auto stage = replay_architectural_selection_removal(
-            actual, architectural, allow_manufactured_opening_hosts, false,
+            actual, architectural, allow_manufactured_opening_hosts, complete_roof_component_phase_memberships,
             complete_component_phase_memberships, complete_component_phase_memberships, false,
-            complete_component_phase_memberships);
+            complete_component_phase_memberships, complete_roof_component_phase_memberships);
         return replay(actual, stage, drawing, active_phase_constraints, &stage);
     } catch (const Json::exception& error) {
         reject(std::string("malformed actual/architectural source: ") + error.what());

@@ -17,6 +17,9 @@ struct ArchitecturalDrawingRemovalIntent {
     // Closed v2 authority for actual component-row retirement and its typed
     // saved-phase memberships. False preserves the exact historical v1 wire.
     bool complete_component_phase_memberships = false;
+    // Closed v3 extends that authority to actual selected roof owners and
+    // complete original-source companion composition across removal leaves.
+    bool complete_roof_component_phase_memberships = false;
 };
 
 [[nodiscard]] nlohmann::json encode_architectural_drawing_removal_intent(

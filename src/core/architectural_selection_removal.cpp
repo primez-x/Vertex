@@ -129,11 +129,14 @@ Entities replay_architectural_selection_removal(const Entities& actual,
     const ArchitecturalSelectionRemovalIntent& intent, bool allow_manufactured_opening_hosts,
     bool complete_roof_hosted_catalog_consequences, bool complete_wall_hosted_catalog_consequences,
     bool complete_placed_catalog_consequences, bool complete_corner_window_removal,
-    bool complete_component_phase_memberships) {
+    bool complete_component_phase_memberships, bool complete_roof_component_phase_memberships) {
     try {
         bounds(actual);
         if (complete_component_phase_memberships && !allow_manufactured_opening_hosts)
             reject("component membership retirement requires admitted component hosts");
+        if (complete_roof_component_phase_memberships &&
+            (!complete_component_phase_memberships || !complete_roof_hosted_catalog_consequences))
+            reject("roof membership retirement requires complete component and roof catalog consequences");
         if (intent.object_ids.size() > selection_limit ||
             intent.components.size() > selection_limit - intent.object_ids.size() ||
             (intent.object_ids.empty() && intent.components.empty()))
@@ -147,7 +150,7 @@ Entities replay_architectural_selection_removal(const Entities& actual,
             const auto found = actual.find(id);
             if (found == actual.end()) reject("selected actual owner is missing: " + id);
             if (found->second.type == "roof") {
-                if (complete_component_phase_memberships)
+                if (complete_component_phase_memberships && !complete_roof_component_phase_memberships)
                     reject("physical roof removal does not supply complete component phase memberships: " + id);
                 roofs.push_back(id);
             }
@@ -161,6 +164,8 @@ Entities replay_architectural_selection_removal(const Entities& actual,
             if (!selected_components.insert(key).second) reject("duplicate qualified component selection");
         }
         std::sort(roofs.begin(), roofs.end()); std::sort(objects.begin(), objects.end());
+        if (complete_roof_component_phase_memberships && roofs.empty())
+            reject("roof membership authority requires an actual selected roof owner");
         if (roofs.empty() && !intent.roof_additional_identities.empty())
             reject("roof destinations require an actual selected roof");
         const bool complete_generic_catalog = complete_wall_hosted_catalog_consequences || complete_placed_catalog_consequences;
@@ -186,7 +191,7 @@ Entities replay_architectural_selection_removal(const Entities& actual,
         std::vector<Entities> candidates;
         if (!roofs.empty()) {
             const auto plan = inspect_roof_removal_plan(actual, roofs, true, true, true,
-                complete_roof_hosted_catalog_consequences);
+                complete_roof_hosted_catalog_consequences,complete_roof_component_phase_memberships);
             if (!plan.ready()) {
                 for (const auto& row : plan.diagnostics) if (row.blocking)
                     reject(row.entity_id + ": " + row.reason);
@@ -194,7 +199,7 @@ Entities replay_architectural_selection_removal(const Entities& actual,
             }
             for (const auto& key : plan.retired_hosted_component_keys) selected_components.erase(key);
             auto roof = replay_roof_removal(actual, roofs, intent.roof_additional_identities, true, true, true,
-                complete_roof_hosted_catalog_consequences);
+                complete_roof_hosted_catalog_consequences,complete_roof_component_phase_memberships);
             bounds(roof.entities);
             candidates.push_back(std::move(roof.entities));
         }
@@ -226,7 +231,7 @@ Entities replay_architectural_selection_removal(const Entities& actual,
         }
         auto result = candidates.size() == 1 ? std::move(candidates.front()) :
             compose_ordinary_architectural_removal_candidates(actual, candidates,
-                complete_composition_catalog, complete_composition_catalog);
+                complete_composition_catalog, complete_composition_catalog,complete_component_phase_memberships);
         bounds(result);
         validate_document_assembly_instances(result);
         if (embedded_assembly_presentation_ids(result) != aliases)

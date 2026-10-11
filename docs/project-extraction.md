@@ -1,5 +1,22 @@
 # Portable project extraction
 
+Exchange version208 requires native reader210 for explicit
+ArchitecturalDrawingRemovalIntent3 and mixed selection removal intent10 inside
+unchanged outer command45. AD3 has exactly `version`, `architectural`, `drawing`,
+`allow_manufactured_opening_hosts`, `complete_component_phase_memberships`, and
+`complete_roof_component_phase_memberships`. All three options are literal
+`true`; architectural `object_ids` is nonempty and replay checks an actual
+selected physical roof. Actual removed component rows and all companion
+partitions are derived through the existing pruner; joint removal unions their
+memberships from the original source across lanes. Phase-retained roofs and
+rows remain retained, and baseline demolition authority is unchanged.
+Mixed10 has the same eleven fields as mixed9 and mixed1 and requires ordinary
+AD3. Current, nested, wrapped, retained and undone history preserves reader210,
+including after earlier reader209 receipts. AD1, AD2, mixed1 and mixed9 retain
+their exact historical authority; AD2 still refuses selected physical roof
+owners. This describes source-format support only, without runtime acceptance
+or lifting companion-bearing project quarantine.
+
 Exchange version207 requires native reader209 for explicit
 ArchitecturalDrawingRemovalIntent2 and mixed selection removal intent9 in the
 unchanged outer command45. AD2 retains exactly `version`, `architectural`,

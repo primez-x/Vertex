@@ -5,6 +5,7 @@
 #include "sketch/architectural_object_removal.hpp"
 #include "sketch/assembly_document_adapter.hpp"
 #include "sketch/assembly_model.hpp"
+#include "sketch/assembly_phase_membership.hpp"
 #include "sketch/boundary_dimension.hpp"
 #include "sketch/constraint_phase_scope.hpp"
 #include "sketch/model_phases.hpp"
@@ -279,7 +280,14 @@ Entity opaque_remainder(Entity entity, const Ids& retained_roofs) {
 
 // Inspection only: preserve the raw catalog while recognizing its validated
 // catalog-local declarations and references. Hosts remain document identities.
-Entity hosted_reference_remainder(Entity entity, const Ids& retained_roofs) {
+Entity hosted_reference_remainder(Entity entity, const Ids& retained_roofs,
+    bool complete_component_phase_memberships = false) {
+    if (complete_component_phase_memberships && entity.type == assembly_phase_membership_entity_type) {
+        // Only the closed typed model has qualified reference meaning. Carrier
+        // siblings and extensions remain subject to the opaque refusal policy.
+        (void)AssemblyPhaseMembership::from_json(entity.properties.at("model"));
+        entity.properties.erase("model");
+    }
     // Validate roof receipts before masking any material-local identity.
     if (entity.type != kAnnotationEntityType) entity = opaque_remainder(std::move(entity), retained_roofs);
     if (entity.type == "assembly_model" && entity.properties.contains("model") &&
@@ -329,6 +337,7 @@ struct Derivation {
     std::map<std::string, Json, std::less<>> singleton_assignments;
     std::optional<RoofRemovalEntities> hosted_candidate;
     Ids retained_baseline_catalogs;
+    AssemblyCatalogTransferBudget component_membership_catalog_budget;
 };
 // The retained carrier is still the actual source envelope. Raw filtering is
 // proved against qualified source-derived keys, never accepted from a caller.
@@ -364,12 +373,23 @@ void validate_retained_catalog_rows(const RoofRemovalEntities& source,
 }
 Derivation derive(const RoofRemovalEntities& source, const std::vector<std::string>& selected,
     bool preserve_phase_references, bool preserve_singleton_material, bool retire_hosted_components,
-    bool complete_hosted_catalog_consequences) {
+    bool complete_hosted_catalog_consequences, bool complete_component_phase_memberships = false) {
     Derivation result;
     auto& plan = result.plan;
     plan.selected_roof_ids = selected;
     try {
         (void)occupied_strings(source);
+        if (complete_component_phase_memberships) {
+            if (!retire_hosted_components || !complete_hosted_catalog_consequences)
+                reject("complete component memberships require complete hosted catalog retirement");
+            // Reserve the full raw actual inventory before scope can decode any
+            // catalog or companion and before either producer enters native work.
+            for (const auto& [id, entity] : source) {
+                (void)id;
+                if (entity.type == "assembly_model")
+                    admit_existing_assembly_catalog_work(entity, result.component_membership_catalog_budget);
+            }
+        }
         if (selected.empty() || selected.size() > maximum_identities) reject("requires bounded nonempty explicit roof selection");
         std::sort(plan.selected_roof_ids.begin(), plan.selected_roof_ids.end());
         if (std::adjacent_find(plan.selected_roof_ids.begin(), plan.selected_roof_ids.end()) != plan.selected_roof_ids.end())
@@ -560,7 +580,14 @@ Derivation derive(const RoofRemovalEntities& source, const std::vector<std::stri
                         reject("affected unqualified component reference has no retirement codec: " + id);
                 // This producer receives the complete actual source and no physical
                 // selection. It cannot acquire roof or join deletion authority.
-                result.hosted_candidate = replay_architectural_object_removal(source, {}, plan.retired_hosted_component_keys);
+                if (complete_component_phase_memberships) {
+                    // This leaf admits its entire candidate inventory before
+                    // decoding and prunes actual absent rows from raw companions.
+                    // Keep that pruned result; pruning it again against source
+                    // would violate the helper's exact input-carrier contract.
+                    result.hosted_candidate = replay_architectural_object_removal(source, {},
+                        plan.retired_hosted_component_keys, true, 0, true, false, false, false, true);
+                } else result.hosted_candidate = replay_architectural_object_removal(source, {}, plan.retired_hosted_component_keys);
                 validate_retained_catalog_rows(source, *result.hosted_candidate, result);
             }
         }
@@ -738,7 +765,8 @@ Derivation derive(const RoofRemovalEntities& source, const std::vector<std::stri
         for (const auto& [id, entity] : reference_source) {
             if (erased.contains(id)) continue;
             try {
-                const auto remainder = retire_hosted_components ? hosted_reference_remainder(entity, retained_roofs)
+                const auto remainder = retire_hosted_components ? hosted_reference_remainder(entity, retained_roofs,
+                    complete_component_phase_memberships)
                     : opaque_remainder(entity, retained_roofs);
                 if (touches(remainder.properties, affected) || touches(remainder.extensions, affected))
                     diagnostic(plan, id, "affected retained reference has no qualified removal codec");
@@ -897,18 +925,18 @@ bool RoofRemovalPlan::ready() const noexcept {
 
 RoofRemovalPlan inspect_roof_removal_plan(const RoofRemovalEntities& source,
     const std::vector<std::string>& selected_roof_ids, bool preserve_phase_references, bool preserve_singleton_material,
-    bool retire_hosted_components, bool complete_hosted_catalog_consequences) {
+    bool retire_hosted_components, bool complete_hosted_catalog_consequences, bool complete_component_phase_memberships) {
     return derive(source, selected_roof_ids, preserve_phase_references, preserve_singleton_material,
-        retire_hosted_components, complete_hosted_catalog_consequences).plan;
+        retire_hosted_components, complete_hosted_catalog_consequences, complete_component_phase_memberships).plan;
 }
 
 RoofRemovalResult replay_roof_removal(const RoofRemovalEntities& source,
     const std::vector<std::string>& selected_roof_ids, const RoofRemovalAdditionalIdentities& additional_identities,
     bool preserve_phase_references, bool preserve_singleton_material, bool retire_hosted_components,
-    bool complete_hosted_catalog_consequences) {
+    bool complete_hosted_catalog_consequences, bool complete_component_phase_memberships) {
     try {
         const auto derived = derive(source, selected_roof_ids, preserve_phase_references, preserve_singleton_material,
-            retire_hosted_components, complete_hosted_catalog_consequences);
+            retire_hosted_components, complete_hosted_catalog_consequences, complete_component_phase_memberships);
         if (!derived.plan.ready()) {
             for (const auto& item : derived.plan.diagnostics) if (item.blocking) reject(item.entity_id + ": " + item.reason);
         }
@@ -954,6 +982,15 @@ RoofRemovalResult replay_roof_removal(const RoofRemovalEntities& source,
         }
         for (const auto& [id, assignment] : derived.singleton_assignments)
             result.entities.at(id).properties["material_assignment"] = assignment;
+        if (complete_component_phase_memberships) {
+            // The source ledger was reserved before derivation. Charge the full
+            // staged candidate before any final catalog/phase/native admission.
+            auto catalog_budget = derived.component_membership_catalog_budget;
+            for (const auto& [id, entity] : result.entities) {
+                (void)id;
+                if (entity.type == "assembly_model") admit_existing_assembly_catalog_work(entity, catalog_budget);
+            }
+        }
         complete_registries(result.entities, source, derived, removed, copies);
         // Presentation rows compose from actual component-retirement consequences,
         // never from pre-cleanup source arrays that would resurrect deleted aliases.

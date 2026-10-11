@@ -1,4 +1,23 @@
-# Vertex project formats v1 through v209
+# Vertex project formats v1 through v210
+
+Reader210 retains explicit ArchitecturalDrawingRemovalIntent3 and mixed
+selection removal intent10 inside unchanged outer command45. AD3 has exactly
+`version`, `architectural`, `drawing`, `allow_manufactured_opening_hosts`,
+`complete_component_phase_memberships`, and
+`complete_roof_component_phase_memberships`. All three options must be literal
+`true`; architectural `object_ids` must be nonempty, with an actual selected
+physical roof checked by replay. This explicit authority completes retirement
+of actual removed roof component memberships. Replay derives actual removed
+rows and all companion partitions through the existing pruner, and joint
+composition unions memberships from the original source across removal lanes.
+Phase-retained roofs and their component rows remain retained; baseline
+demolition authority is unchanged.
+Mixed10 has the same eleven fields listed for mixed9 below and requires ordinary
+AD3. AD1, AD2, mixed1 and mixed9 retain their exact historical authority; AD2
+still refuses selected physical roof owners. Current, nested, wrapped, retained
+and undone receipts require reader210, including after earlier reader209
+receipts. Extraction emits208. This is source-format support only; runtime
+acceptance remains unqualified and companion-bearing quarantine remains.
 
 Reader209 retains explicit ArchitecturalDrawingRemovalIntent2 and mixed
 selection removal intent9; the outer command45 remains unchanged. AD2 has

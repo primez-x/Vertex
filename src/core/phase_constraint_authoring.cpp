@@ -8,6 +8,7 @@
 #include "sketch/annotation_entity_codec.hpp"
 #include "sketch/assembly_document_adapter.hpp"
 #include "sketch/assembly_phase_membership.hpp"
+#include "sketch/assembly_phase_membership_transport.hpp"
 #include "sketch/constraint_phase_scope.hpp"
 #include "sketch/constraint_integrity.hpp"
 #include "sketch/constraint_wall_edit.hpp"
@@ -606,7 +607,7 @@ Entity merge_append_container(const Entity& source,const Entity& roof,const Enti
 // remain disjoint suffixes in wall/roof/horizontal order.
 Entity merge_source_row_container(const Entity& source,const std::vector<const Entity*>& candidates,
     bool ordinary_removal_rosters=false,bool allow_shared_reference_retirement=false,
-    bool coalesce_exact_consequences=false) {
+    bool coalesce_exact_consequences=false,bool defer_registry_result_decode=false) {
     auto paths=append_paths(source,ordinary_removal_rosters);
     if (source.type==kAnnotationEntityType) {
         paths.push_back({Json::json_pointer("/state/labels"),"id"});
@@ -702,7 +703,11 @@ Entity merge_source_row_container(const Entity& source,const std::vector<const E
     }
     for (const auto& envelope:envelopes) if (!exact(source,envelope))
         invalid("Coordinated shared container changed fields outside its explicit source row authority");
-    if (source.type=="model_phases") (void)ModelPhases::from_json(merged.properties.at("model"));
+    if (source.type=="model_phases") {
+        // The membership removal union validates all final registries only
+        // after its complete final catalog admission, in the typed pruner.
+        if (!defer_registry_result_decode) (void)ModelPhases::from_json(merged.properties.at("model"));
+    }
     else if (source.type==kAnnotationEntityType) validate_annotation_entity(merged);
     else validate_sheet_view_entity(merged);
     return merged;
@@ -815,7 +820,8 @@ Entity compose_source_container(const Entity& source,const std::vector<const Ent
 // Restoring the source instances must still recover the exact source envelope;
 // this is no authority to normalize a dialect or merge arbitrary catalog data.
 Entity merge_demolition_catalog(const Entity& source,const std::vector<const Entity*>& candidates,
-    bool allow_shared_reference_retirement=false,bool complete_hosted_catalog_consequences=false) {
+    bool allow_shared_reference_retirement=false,bool complete_hosted_catalog_consequences=false,
+    bool defer_result_decode=false) {
     const auto& retained=source.properties.at("model").at("instances");
     std::map<std::string,std::size_t,std::less<>> positions;
     for (std::size_t i=0;i<retained.size();++i)
@@ -860,16 +866,18 @@ Entity merge_demolition_catalog(const Entity& source,const std::vector<const Ent
         if (!removed.contains(row.at("id").get<std::string>())) rows.push_back(row);
     for (const auto& row:fresh_rows) rows.push_back(row);
     result.properties.at("model").at("instances")=std::move(rows);
-    (void)AssemblyModel::from_json(result.properties.at("model"));
+    // Membership completion admits every final catalog together before its
+    // pruner and complete-map validation decode the composed result.
+    if (!defer_result_decode) (void)AssemblyModel::from_json(result.properties.at("model"));
     return result;
 }
 
 Entity merge_demolition_row_container(const Entity& source,const std::vector<const Entity*>& candidates,
     bool ordinary_removal_rosters=false,bool allow_shared_reference_retirement=false,
-    bool coalesce_exact_consequences=false) {
+    bool coalesce_exact_consequences=false,bool defer_registry_result_decode=false) {
     if (source.type!=kSheetViewEntityType)
         return merge_source_row_container(source,candidates,ordinary_removal_rosters,allow_shared_reference_retirement,
-            coalesce_exact_consequences);
+            coalesce_exact_consequences,defer_registry_result_decode);
     std::vector<Entity> normalized;
     normalized.reserve(candidates.size());
     const auto& source_views=source.properties.at("model").at("views");
@@ -3191,14 +3199,59 @@ Entities compose_phase_property_selection_edit_candidates(const DocumentSnapshot
 }
 
 namespace {
+void admit_removal_component_catalogs(const Entities& entities,AssemblyCatalogTransferBudget& budget) {
+    // Match the membership transport's complete-map inventory bound before
+    // any projected map copy or semantic registry/catalog decode.
+    if (entities.size()>100000) invalid("Component phase removal composition entity budget exceeded");
+    for (const auto& [key,entity]:entities) {
+        (void)key;
+        if (entity.type=="assembly_model") admit_existing_assembly_catalog_work(entity,budget);
+    }
+}
+
+void prove_removal_component_memberships(const Entities& source,const Entities& candidate) {
+    for (const auto& [key,entity]:candidate) if (entity.type==assembly_phase_membership_entity_type) {
+        const auto original=source.find(key);
+        if (original==source.end() || original->second.type!=assembly_phase_membership_entity_type)
+            invalid("Component phase removal composition cannot enroll a fresh companion");
+    }
+    auto projected_size=candidate.size();
+    for (const auto& [key,entity]:source)
+        if (entity.type==assembly_phase_membership_entity_type && !candidate.contains(key) && ++projected_size>100000)
+            invalid("Component phase removal projection entity budget exceeded");
+    auto projection=candidate;
+    // Restore every actual source companion, even when the leaf retired its
+    // registry. Only the typed pruner can prove that carrier's omission.
+    for (const auto& [key,entity]:source)
+        if (entity.type==assembly_phase_membership_entity_type) projection.insert_or_assign(key,entity);
+    const auto pruned=prune_removed_assembly_phase_memberships(source,projection);
+    if (pruned.size()!=candidate.size()) invalid("Component phase removal leaf differs from exact source pruning");
+    for (const auto& [key,entity]:pruned) {
+        const auto supplied=candidate.find(key);
+        if (supplied==candidate.end() || !exact(entity,supplied->second))
+            invalid("Component phase removal leaf differs from exact source pruning");
+    }
+}
+
 Entities compose_removal_candidates(const Entities& source,const std::vector<Entities>& candidates,
     bool include_ordinary_removal, bool complete_roof_removal, bool preserve_all_baselines,
-    bool allow_shared_reference_retirement=false,bool complete_hosted_catalog_consequences=false) {
+    bool allow_shared_reference_retirement=false,bool complete_hosted_catalog_consequences=false,
+    bool complete_component_phase_memberships=false) {
+    if (complete_component_phase_memberships && !complete_hosted_catalog_consequences)
+        invalid("Component phase removal composition requires complete hosted catalog consequences");
     coordinated_map_budget(source);
     if (candidates.size()<2 || candidates.size()>(include_ordinary_removal ?
             (complete_hosted_catalog_consequences ? 7u : 6u) : 5u))
         invalid("Coordinated demolition exceeds its complete family candidate bounds");
     for (const auto& candidate:candidates) coordinated_map_budget(candidate);
+    AssemblyCatalogTransferBudget component_catalog_budget;
+    if (complete_component_phase_memberships) {
+        // One cumulative ledger reserves ALL catalogs, including unreferenced
+        // ones, in the source and every leaf before the first semantic decode.
+        admit_removal_component_catalogs(source,component_catalog_budget);
+        for (const auto& candidate:candidates) admit_removal_component_catalogs(candidate,component_catalog_budget);
+        for (const auto& candidate:candidates) prove_removal_component_memberships(source,candidate);
+    }
     std::set<std::string,std::less<>> baseline;
     for (const auto& [key,entity]:source) if (entity.type=="model_phases") {
         (void)key;
@@ -3208,6 +3261,9 @@ Entities compose_removal_candidates(const Entities& source,const std::vector<Ent
     }
     auto result=source;
     for (const auto& [key,entity]:source) {
+        // Each complete leaf's carrier changes/omissions already have exact
+        // typed proof. Retain source carriers for one prune of the actual union.
+        if (complete_component_phase_memberships && entity.type==assembly_phase_membership_entity_type) continue;
         std::vector<const Entity*> changed;
         std::size_t erased{};
         for (const auto& candidate:candidates) {
@@ -3229,11 +3285,12 @@ Entities compose_removal_candidates(const Entities& source,const std::vector<Ent
             result.erase(key);
         } else if (include_ordinary_removal && entity.type=="assembly_model" && !changed.empty())
             result.at(key)=merge_demolition_catalog(entity,changed,allow_shared_reference_retirement,
-                complete_hosted_catalog_consequences);
+                complete_hosted_catalog_consequences,complete_component_phase_memberships);
         else if (changed.size()==1) result.at(key)=*changed.front();
         else if (changed.size()>1) result.at(key)=entity.type=="assembly_model"
             ? merge_demolition_catalog(entity,changed,allow_shared_reference_retirement) :
-                merge_demolition_row_container(entity,changed,complete_roof_removal,allow_shared_reference_retirement);
+                merge_demolition_row_container(entity,changed,complete_roof_removal,allow_shared_reference_retirement,
+                    false,complete_component_phase_memberships);
     }
     for (const auto& candidate:candidates) for (const auto& [key,entity]:candidate) {
         if (source.contains(key)) continue;
@@ -3241,6 +3298,10 @@ Entities compose_removal_candidates(const Entities& source,const std::vector<Ent
             invalid("Coordinated demolition family destinations overlap");
     }
     coordinated_map_budget(result);
+    if (complete_component_phase_memberships) {
+        admit_removal_component_catalogs(result,component_catalog_budget);
+        result=prune_removed_assembly_phase_memberships(source,result);
+    }
     const auto final_aliases=embedded_assembly_presentation_ids(result);
     const auto preserve_surviving_aliases=[&](const Entities& original) {
         for (const auto& [key,alias]:embedded_assembly_presentation_ids(original))
@@ -3264,8 +3325,9 @@ Entities compose_phase_demolition_candidates(const Entities& source,const std::v
 }
 
 Entities compose_ordinary_architectural_removal_candidates(const Entities& source,const std::vector<Entities>& candidates,
-    bool allow_shared_reference_retirement,bool complete_hosted_catalog_consequences) {
+    bool allow_shared_reference_retirement,bool complete_hosted_catalog_consequences,
+    bool complete_component_phase_memberships) {
     return compose_removal_candidates(source,candidates,true,true,false,allow_shared_reference_retirement,
-        complete_hosted_catalog_consequences);
+        complete_hosted_catalog_consequences,complete_component_phase_memberships);
 }
 } // namespace sketch

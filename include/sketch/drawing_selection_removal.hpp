@@ -72,7 +72,8 @@ struct DrawingSelectionRemovalIntent {
     const DrawingSelectionRemovalIntent& drawing,
     const ArchitecturalSelectionRemovalIntent& architectural,
     bool allow_manufactured_opening_hosts, bool active_phase_constraints,
-    bool complete_component_phase_memberships = false);
+    bool complete_component_phase_memberships = false,
+    bool complete_roof_component_phase_memberships = false);
 
 // These paths reconstruct typed deletion consequences from actual themselves;
 // no caller-supplied candidate grants annotation-override authority.

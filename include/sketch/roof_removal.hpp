@@ -68,10 +68,14 @@ struct RoofRemovalResult {
 // Complete catalog consequences may retain an active baseline catalog in the
 // same saved registry as an exclusively active proposed roof, filtering only
 // the admitted hosted rows and preserving the raw carrier and its membership.
+// Complete component memberships require both hosted opt-ins. Only actual
+// removed rows leave their existing companions; present inactive rows remain
+// declared and no additional baseline demolition authority is supplied.
 [[nodiscard]] RoofRemovalPlan inspect_roof_removal_plan(
     const RoofRemovalEntities& source, const std::vector<std::string>& selected_roof_ids,
     bool preserve_phase_references = false, bool preserve_singleton_material = false,
-    bool retire_hosted_components = false, bool complete_hosted_catalog_consequences = false);
+    bool retire_hosted_components = false, bool complete_hosted_catalog_consequences = false,
+    bool complete_component_phase_memberships = false);
 
 // Rederives the entire operation from source and explicit selection. Supplied
 // identities must exactly fill actual additional join/overlay slots and must
@@ -80,6 +84,7 @@ struct RoofRemovalResult {
     const RoofRemovalEntities& source, const std::vector<std::string>& selected_roof_ids,
     const RoofRemovalAdditionalIdentities& additional_identities,
     bool preserve_phase_references = false, bool preserve_singleton_material = false,
-    bool retire_hosted_components = false, bool complete_hosted_catalog_consequences = false);
+    bool retire_hosted_components = false, bool complete_hosted_catalog_consequences = false,
+    bool complete_component_phase_memberships = false);
 
 } // namespace sketch
