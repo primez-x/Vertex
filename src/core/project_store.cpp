@@ -19,6 +19,7 @@
 #include "sketch/phase_wall_replacement_command.hpp"
 #include "sketch/phase_selection_property_edit.hpp"
 #include "sketch/mixed_selection_property_edit.hpp"
+#include "sketch/mixed_clipboard_command.hpp"
 
 #include <sqlite3.h>
 
@@ -868,6 +869,32 @@ std::uint32_t required_format_version_internal(const DocumentSnapshot& snapshot,
                 value.at("assembly_catalog_edit_completion")==true &&
                 value.at("assembly_catalog_edit_intent").is_object())
                 floor=std::max(floor,217U);
+            if (floor<238 && typed_shape(value,4,{"version","expected_revision","source_snapshot_digest",
+                    "source_authoring_digest","source_entities_digest","source_saved_revision","roof_authoring",
+                    "additions","selected_registry_id","message","detached_components"})) {
+                try {
+                    const auto& roof=value.at("roof_authoring");
+                    if (typed_shape(roof,38,{"version","roof_edit_version","expected_revision",
+                            "source_snapshot_digest","source_authoring_digest","source_entities_digest",
+                            "source_saved_revision","phase_selections","intent","roof_replacement"}) &&
+                        roof.at("roof_edit_version").is_number_integer() &&
+                        (roof.at("roof_edit_version")==4 || roof.at("roof_edit_version")==21) &&
+                        typed_shape(roof.at("roof_replacement"),11,{"version","authoring",
+                            "complete_component_dimensions","dimension_identities"})) {
+                        const auto& replacement=roof.at("roof_replacement");
+                        const auto leaf=decode_phase_roof_replacement_authoring(replacement);
+                        // Empty maps still carry completion authority. Require
+                        // the actual canonical proposed leaf, never demolition.
+                        if (leaf.complete_component_dimensions && !leaf.demolition &&
+                            encode_phase_roof_replacement_authoring(leaf).dump()==replacement.dump()) {
+                            (void)validate_mixed_clipboard_placement_intent(value);
+                            floor=238U;
+                        }
+                    }
+                } catch (const std::invalid_argument&) {
+                } catch (const nlohmann::json::exception&) {
+                }
+            }
             if (closed_shape({"version","expected_revision","source_snapshot_digest","source_authoring_digest",
                     "source_entities_digest","source_saved_revision","roof_authoring","additions",
                     "selected_registry_id","message","detached_components"}) &&
@@ -1389,9 +1416,9 @@ std::uint32_t required_format_version_internal(const DocumentSnapshot& snapshot,
     };
     for (const auto& revision : snapshot.history()) {
         if (revision.phase_entity_import) required=std::max(required,160U);
-        if (required<237 && revision.boundary_geometry_edit)
+        if (required<238 && revision.boundary_geometry_edit)
             required=std::max(required,typed_edit_reader_floor(encode_boundary_geometry_edit(*revision.boundary_geometry_edit)));
-        if (required<237 && revision.boundary_constraint_changes)
+        if (required<238 && revision.boundary_constraint_changes)
             required=std::max(required,typed_edit_reader_floor(command_to_json(Command{*revision.boundary_constraint_changes})));
         if (required<122 && revision.boundary_geometry_edit)
             required=std::max(required,quantity_reader_floor(encode_boundary_geometry_edit(*revision.boundary_geometry_edit)));
@@ -3916,6 +3943,7 @@ bool verify_sqlite_schema(sqlite3* database, bool allow_recovery = false) {
          sqlite3_column_int(user_version.get(), 0) != 235 &&
          sqlite3_column_int(user_version.get(), 0) != 236 &&
          sqlite3_column_int(user_version.get(), 0) != 237 &&
+         sqlite3_column_int(user_version.get(), 0) != 238 &&
          sqlite3_column_int(user_version.get(), 0) != 207 &&
          sqlite3_column_int(user_version.get(), 0) != 202 &&
          sqlite3_column_int(user_version.get(), 0) != 200 &&
@@ -4641,6 +4669,8 @@ DocumentSnapshot read_snapshot(sqlite3* database, RecoveryLedger* recovery = nul
     // here and authenticate the manifest with its stored version below.
     const auto required_format = required_format_version_internal(snapshot, format_number < 28);
     if (required_format > format_number) {
+        if (required_format>=238)
+            storage_error(StorageErrorCode::unsupported_format,"This project requires reader 238 for complete proposed roof component dimensions in mixed clipboard placement");
         if (required_format>=237)
             storage_error(StorageErrorCode::unsupported_format,"This project requires reader 237 for roof, slab and structural component dimension Properties receipts");
         if (required_format>=236)

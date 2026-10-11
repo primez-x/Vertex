@@ -35593,7 +35593,7 @@ public:
             if (!session->admitted.roof_intents.empty()) {
                 const auto physical=replay_roof_edit_entities(session->source->entities(),session->admitted.roof_intents);
                 const auto roof=sourceDerivedRoofMathEditCommand(*session->source,physical,session->admitted.roof_intents,
-                    "Paste mixed selection",&session->reserved,false,false);
+                    "Paste mixed selection",&session->reserved,false,true);
                 const auto* typed=std::get_if<ApplyBoundaryConstraintChanges>(&roof);
                 if (!typed || !typed->phase_constraint_authoring_completion)
                     throw std::invalid_argument("The complete skylight placement has no closed roof authoring authority.");
@@ -50832,7 +50832,7 @@ private:
                     if (!inserted && found->second != proposed)
                         throw std::invalid_argument("The reviewed alternative edit has conflicting proposed identities.");
                 }
-            } else if (version == 51 || version == 58 || version == 61 || version == 52) {
+            } else if (version == 51 || version == 58 || version == 61 || version == 66 || version == 52) {
                 const auto intent=version!=52 ?
                     validate_mixed_clipboard_placement_intent(encoded.at("clipboard_placement_intent")) :
                     validate_mixed_selection_edit_intent(encoded.at("mixed_selection_edit_intent"));

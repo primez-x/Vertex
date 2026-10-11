@@ -161,13 +161,16 @@ ApplyEntityChanges decode_additions(const Json& value, Revision expected) {
 }
 void roof_shape(const Json& roof, const Json& enclosing) {
     const bool complete_ordinary_roof_dimensions = enclosing.at("version") == 3;
+    const bool complete_roof_dimension_copies = enclosing.at("version") == 4;
     if (roof.is_null()) {
         if (complete_ordinary_roof_dimensions) reject("version three requires complete ordinary roof dimension authority");
+        if (complete_roof_dimension_copies) reject("version four requires complete roof dimension copy authority");
         return;
     }
     if (!roof.is_object() || !roof.contains("version") ||
         !roof.at("version").is_number_integer() ||
         (complete_ordinary_roof_dimensions ? roof.at("version") != 32 :
+            complete_roof_dimension_copies ? roof.at("version") != 38 :
             (roof.at("version") != 4 && roof.at("version") != 17 &&
              roof.at("version") != 20 && roof.at("version") != 21)))
         reject("roof authority requires a standalone roof phase dialect");
@@ -223,9 +226,10 @@ void detached_shape(const Json& records, const ApplyEntityChanges& additions) {
 void validate(const Json& value) {
     Budget budget; budget.json(value, 0); // Before copies, dump or family codecs.
     if (!value.is_object() || !value.contains("version") || !value.at("version").is_number_integer() ||
-        (value.at("version") != 1 && value.at("version") != 2 && value.at("version") != 3))
+        (value.at("version") != 1 && value.at("version") != 2 && value.at("version") != 3 &&
+         value.at("version") != 4))
         reject("unsupported intent version");
-    if (value.at("version") == 2 || value.at("version") == 3)
+    if (value.at("version") == 2 || value.at("version") == 3 || value.at("version") == 4)
         fields(value, {"version", "expected_revision", "source_snapshot_digest", "source_authoring_digest",
             "source_entities_digest", "source_saved_revision", "roof_authoring", "additions",
             "selected_registry_id", "message", "detached_components"});
@@ -246,7 +250,7 @@ void validate(const Json& value) {
         value.at("message").get_ref<const std::string&>().find('\0') != std::string::npos)
         reject("invalid placement message");
     const auto additions = decode_additions(value.at("additions"), expected);
-    if (value.at("version") == 2 || value.at("version") == 3)
+    if (value.at("version") == 2 || value.at("version") == 3 || value.at("version") == 4)
         detached_shape(value.at("detached_components"), additions);
     roof_shape(value.at("roof_authoring"), value);
 }
@@ -384,7 +388,7 @@ struct ReservedNames {
     }
 };
 void reserve_detached_sources(ReservedNames& occupied, const Json& value) {
-    if (value.at("version") != 2 && value.at("version") != 3) return;
+    if (value.at("version") != 2 && value.at("version") != 3 && value.at("version") != 4) return;
     // The mapped destination is checked in the normal fresh lane, not treated
     // as an already occupied name. Every string in origin evidence is passive.
     for (const auto& row : value.at("detached_components")) occupied.json(row.at("source"));
@@ -397,7 +401,7 @@ void detached_fresh_names(const ReservedNames& origins, const ApplyEntityChanges
             if (origins.values.contains(child)) reject("fresh child is reserved in detached source evidence");
     }
 }
-Ids roof_new_names(const Entities& actual, const Entities& roof_stage) {
+Ids roof_new_names(const Entities& actual, const Entities& roof_stage, bool include_aliases = true) {
     Ids names;
     for (const auto& [id, entity] : roof_stage) {
         const auto original = actual.find(id);
@@ -409,11 +413,35 @@ Ids roof_new_names(const Entities& actual, const Entities& roof_stage) {
         const auto prior = original == actual.end() ? Ids{} : owned_children(original->second);
         for (const auto& child : children) if (!prior.contains(child)) names.insert(child);
     }
-    const auto aliases = embedded_assembly_presentation_ids(roof_stage);
-    const auto prior_aliases = embedded_assembly_presentation_ids(actual);
-    for (const auto& [qualified, alias] : aliases)
-        if (!prior_aliases.contains(qualified)) names.insert(alias);
+    if (include_aliases) {
+        const auto aliases = embedded_assembly_presentation_ids(roof_stage);
+        const auto prior_aliases = embedded_assembly_presentation_ids(actual);
+        for (const auto& [qualified, alias] : aliases)
+            if (!prior_aliases.contains(qualified)) names.insert(alias);
+    }
     return names;
+}
+void combined_fresh_identity_budget(const Entities& actual, const Entities& roof_stage,
+    const ApplyEntityChanges& additions, const Json& value) {
+    if (value.at("version") != 4) return;
+    // Count actual allocated owners/owned children once. An escaped assembly
+    // presentation alias is lifetime-reserved, not a second allocation.
+    auto names = roof_new_names(actual, roof_stage, false);
+    const auto phase=decode_phase_constraint_authoring_intent(value.at("roof_authoring"));
+    const auto roof=decode_phase_roof_replacement_authoring(phase.roof_replacement);
+    // Catalog instance IDs are qualified local slots, outside owned_children.
+    // Count the actual newly allocated hosted destinations from this sealed
+    // leaf, without charging retained locals in transported clipboard catalogs.
+    for (const auto& [original,proposed]:roof.hosted_instance_identities) {
+        (void)original; names.insert(proposed);
+    }
+    if (names.size() > change_limit) reject("combined fresh identity budget exceeded");
+    for (const auto& change : additions.entity_changes) {
+        names.insert(change.entity.id);
+        const auto children = owned_children(change.entity);
+        names.insert(children.begin(), children.end());
+        if (names.size() > change_limit) reject("combined fresh identity budget exceeded");
+    }
 }
 Entities roof_replay(const Entities& actual, const Json& value) {
     if (value.at("source_entities_digest") != entity_map_digest(actual))
@@ -467,7 +495,7 @@ std::optional<Revision> mixed_clipboard_placement_source_saved_revision(const Js
 Entities replay_mixed_clipboard_placement(const Entities& actual, const Json& value) {
     validate(value);
     auto additions = decode_additions(value.at("additions"), revision(value.at("expected_revision")));
-    if (value.at("version")==2 || value.at("version")==3) {
+    if (value.at("version")==2 || value.at("version")==3 || value.at("version")==4) {
         Entities candidates;
         for (const auto& change:additions.entity_changes) candidates.emplace(change.entity.id,change.entity);
         validate_assembly_component_clipboard_destinations(value.at("detached_components"),candidates,actual);
@@ -476,6 +504,7 @@ Entities replay_mixed_clipboard_placement(const Entities& actual, const Json& va
     reserve_detached_sources(origins, value);
     detached_fresh_names(origins, additions);
     const auto roof_stage = roof_replay(actual, value);
+    combined_fresh_identity_budget(actual, roof_stage, additions, value);
     if (!origins.values.empty()) for (const auto& name : roof_new_names(actual, roof_stage))
         if (origins.values.contains(name)) reject("roof-stage identity is reserved in detached source evidence");
     auto stage = roof_stage;
@@ -517,13 +546,14 @@ void validate_mixed_clipboard_placement_source(const DocumentSnapshot& source, c
     reserve_detached_sources(origins, value);
     reserve_detached_sources(occupied, value);
     const auto additions = decode_additions(value.at("additions"), source.revision());
-    if (value.at("version")==2 || value.at("version")==3) {
+    if (value.at("version")==2 || value.at("version")==3 || value.at("version")==4) {
         Entities candidates;
         for (const auto& change:additions.entity_changes) candidates.emplace(change.entity.id,change.entity);
         validate_assembly_component_clipboard_destinations(value.at("detached_components"),candidates,source.entities());
     }
     detached_fresh_names(origins, additions);
     auto stage = roof_replay(source.entities(), value);
+    combined_fresh_identity_budget(source.entities(), stage, additions, value);
     const auto roof_names = roof_new_names(source.entities(), stage);
     for (const auto& name : roof_names) {
         if (origins.values.contains(name)) reject("roof-stage identity is reserved in detached source evidence");
@@ -598,7 +628,9 @@ Json make_mixed_clipboard_placement_intent(const DocumentSnapshot& source, const
         reject("detached component placement roster exceeds admission bounds");
     const bool complete_ordinary_roof_dimensions = roof.is_object() && roof.contains("version") &&
         roof.at("version").is_number_integer() && roof.at("version") == 32;
-    const bool components = complete_ordinary_roof_dimensions || component_source_completion ||
+    const bool complete_roof_dimension_copies = roof.is_object() && roof.contains("version") &&
+        roof.at("version").is_number_integer() && roof.at("version") == 38;
+    const bool components = complete_ordinary_roof_dimensions || complete_roof_dimension_copies || component_source_completion ||
         !detached_components.empty();
     // Budget the prospective wire layout before constructing any JSON copy,
     // wrapping a typed command or entering a roof codec.
@@ -622,7 +654,7 @@ Json make_mixed_clipboard_placement_intent(const DocumentSnapshot& source, const
     budget.array(0, 2);
     if (components) budget.json(detached_components, 1);
     if (components) detached_shape(detached_components, additions);
-    Json value{{"version", complete_ordinary_roof_dimensions ? 3 : components ? 2 : 1},
+    Json value{{"version", complete_roof_dimension_copies ? 4 : complete_ordinary_roof_dimensions ? 3 : components ? 2 : 1},
         {"expected_revision", source.revision()},
         {"source_snapshot_digest", document_snapshot_digest(source)},
         {"source_authoring_digest", document_authoring_source_digest_v2(source)},

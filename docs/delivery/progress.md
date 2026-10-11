@@ -14,6 +14,41 @@ changed source does not acquire runtime acceptance without later qualification.
 
 ## Current delivery state
 
+### October 11 clipboard and mixed-transform dimension continuation
+
+The coordinated/Properties family batch is committed and pushed as d6d069f2;
+its exact remote branch matches the source checkpoint. The previous continuation
+made source progress, including final component-frame dimension carry.
+
+Current clipboard source adds placement4/composite66 for complete roof component
+dimension replacement phase38/leaf11. Core admission, actual-source replay,
+passive component provenance, shared fresh allocation bounds, controller
+production, preview replacement lookup, room review, current/undone lifetime
+walks and reader238/extraction236 are integrated. Historical clipboard1/2/3 and
+composites51/58/61 retain their original authority. Independent integrated source
+review found one P2: the shared fresh-allocation count omitted new qualified
+hosted instance slots. Root added the actual canonical roof leaf's destination
+slots to that count; aliases remain separately reserved and retained clipboard
+catalog locals remain uncharged. Review of the correction found no remaining
+proved introduced P1/P2 in the examined clipboard batch. Compilation and
+runtime remain unverified.
+
+A separate owner is implementing mixed transform30 for ordinary6 plus actual
+roof phase38, including final combined dimension frames. This work has not yet
+been integrated or reviewed. Source discovery additionally confirms that placed
+root/path Properties supports pose and declared metadata but has no per-instance
+profile geometry override. Actual outline/cutout/extrusion editing exists at
+shared assembly-type scope, already accessible through selected component type
+actions; adding a duplicate type-editor route would not close the per-instance
+gap. Complete instance/path geometry editing remains required.
+
+Remaining work includes mixed selection/removal/clipboard lifecycles, component
+profile/path and nested/linked-view editing, drawing, normative appraisal,
+compatibility/exchange, assistance, offline distribution and qualification.
+All ten production gates remain open. Source-only steering remains binding:
+no builds, tests, scripts, probes, jobs, launches, packages or installations ran,
+and the installed candidate is unchanged. No percentage or ETA is claimed.
+
 ### October 11 coordinated and Properties family dimension integration
 
 The standalone roof/slab/structural dimension batch is committed and pushed as

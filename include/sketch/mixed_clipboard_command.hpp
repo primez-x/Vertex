@@ -17,6 +17,12 @@ namespace sketch {
 // always including detached_components (which may be empty), and requires a
 // nonnull standalone roof phase intent 32 for complete ordinary roof component
 // dimensions. Versions 1 and 2 retain their original roof dialect admission.
+// Version 4 retains the same closed detached-component fields and requires a
+// nonnull standalone roof phase intent 38, carrying canonical non-demolition
+// roof leaf 11 component dimension copies through historical edit lane 4/21.
+// Version 3 remains exclusively the phase-32 ordinary roof dimension lane.
+// Version 4 jointly bounds roof-stage and added owners/owned children to 4096;
+// generated presentation aliases remain separately reserved for lifetime.
 [[nodiscard]] nlohmann::json make_mixed_clipboard_placement_intent(
     const DocumentSnapshot& source, const nlohmann::json& roof_authoring,
     const ApplyEntityChanges& fresh_additions, std::string_view selected_registry_id,

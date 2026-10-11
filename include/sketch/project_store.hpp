@@ -341,7 +341,8 @@ public:
     // v235 retains roof11/slab8/structural5 dimension copies and phase outer38/39/40 throughout history.
     // v236 retains coordinated family dimension copies through inner9/outer41 and history.
     // v237 retains family dimension Properties request8 and sealed mixed receipts27/28/29.
-    static constexpr std::uint32_t format_version = 237;
+    // v238 retains complete proposed roof component dimensions in mixed clipboard placement4.
+    static constexpr std::uint32_t format_version = 238;
     static constexpr std::uint32_t recovery_format_version = 4;
     [[nodiscard]] static std::uint32_t required_format_version(const DocumentSnapshot& snapshot);
     static constexpr std::uint64_t maximum_file_bytes = 4ULL * 1024ULL * 1024ULL * 1024ULL;

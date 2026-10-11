@@ -1,4 +1,29 @@
-# Vertex project formats v1 through v237
+# Vertex project formats v1 through v238
+
+Reader238 retains mixed clipboard placement4 through composite command66.
+Placement4 has placement2/3's exact fields, including mandatory
+`detached_components` (which may be empty), and requires a nonnull standalone
+roof phase38. The actual canonical leaf11 has complete hosted/component
+dimension authority, no demolition, and `roof_edit_version:4` or `21` matching
+its physical body. Placement1/2 retain their historical roof dialects;
+placement3 still requires ordinary roof phase32. Composite66 requires actual
+placement4; older composites51/58/61 retain their exact inner versions.
+
+The roof stage replays against the complete captured original source before
+fresh clipboard additions are appended. Passive component provenance cannot
+grant destination host or phase authority. New roof dimensions preserve exact
+original owners and join the actual active alternative's proposed inventory.
+Placement4 shares a 4096 fresh allocation limit across roof-stage owners/owned
+children, fresh hosted instance slots and new additions, including dimension entities. Computed presentation
+aliases remain collision/lifetime tokens without being charged twice as
+allocated identities. Current, nested and undone proof walks retain roof leaf
+allocations and aliases; room review retains its separately source-bound suffix.
+Preview replacement lookup follows composite66 to the actual roof destination.
+
+Current, nested and undone canonical proofs require reader238/extraction236,
+including empty component dimension maps. Extraction derives from the native
+reader floor. These source additions have not been compiled or exercised and
+do not establish production acceptance.
 
 Reader237 retains component dimensions through phase Properties request8,
 mixed receipt27 and component receipts28/29. Request8 adds three explicit

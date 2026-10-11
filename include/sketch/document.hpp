@@ -519,6 +519,8 @@ struct ApplyBoundaryConstraintChanges {
     // Envelope fifty-one combines fresh copied content with independently
     // replayed actual roof-host edits and deterministic membership enrollment.
     // One captured source owns the complete placement and retained Undo proof.
+    // Envelope sixty-six separately carries placement four with complete roof
+    // component dimension replacement; older envelopes retain their dialects.
     nlohmann::json clipboard_placement_intent=nullptr;
     bool clipboard_placement_completion{};
     // Envelope fifty-two independently reconstructs ordinary selected edits
