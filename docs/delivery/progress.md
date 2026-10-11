@@ -14,6 +14,38 @@ changed source does not acquire runtime acceptance without later qualification.
 
 ## Current delivery state
 
+### October 10 column and beam group Properties - source integration
+
+Placement and mirror Properties are committed and pushed as 7be5fc2d, with
+exact local and remote branch references matched. Current source adds separate
+Columns and Beams pages to multi-object Properties, with applicable width,
+depth, height and radius fields. Ordinary request two covers every structural
+member exactly; mixed dialect seven composes that request with the existing
+physical, presentation and skylight lanes. Reader195/extraction193 retain
+direct, nested, retained and undone proofs without reinterpreting old requests.
+
+Independent source review found one compatibility gap: the initial scalar
+wrapper refused opposite-form dimension slots accepted by the existing column
+reader. The corrected scalar-specific actual-source replay preserves those raw
+slots and their receipts, including all-null cohort members, and patches only
+supplied changed applicable dimensions. Complete physical host/hosted-component
+admission retains exact original catalogs, qualified component rosters and
+presentation aliases. The historical full-profile descriptor remains unchanged.
+Independent follow-up source review approved the correction. Root reviewed
+integration and scoped whitespace checking passed.
+
+The review found no additional actionable codec, composition, UI applicability,
+phase-protection or reader-floor defect in its bounded source inspection.
+Active-baseline Properties replacement, stair/railing and assembly group
+Properties, directional mixed resizing and vertical 3D group movement remain
+implementation gaps. A separate source worker is implementing the stair/railing
+scalar lane; its interface and physical dependent coverage are not yet accepted.
+
+No builds, tests/new tests, scripts/probes, native jobs, launches, packages or
+installations have run. The installed app is unchanged. Compilation, native
+interaction, Undo/Redo and save/reopen remain unverified; all ten production
+gates remain open.
+
 ### October 10 presentation placement and mirror Properties - source integration
 
 The ordinary native-group batch is committed and pushed as b6b93f14, with exact

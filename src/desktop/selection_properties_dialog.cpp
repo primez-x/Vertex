@@ -7,6 +7,7 @@
 #include "sketch/phase_wall_profile_capture.hpp"
 #include "sketch/project_organization.hpp"
 #include "sketch/roof_entity_codec.hpp"
+#include "sketch/structural_object_edit.hpp"
 
 #include <QComboBox>
 #include <QDialogButtonBox>
@@ -153,7 +154,7 @@ bool same_annotation_floor(const DrawingContext& a, const DrawingContext& b) {
 struct Fields {
     QLineEdit *width{}, *depth{}, *height{}, *thickness{}, *elevation{}, *offset{}, *sill{},
         *rise{}, *overhang{}, *rotation{}, *outline{}, *surface{}, *content{}, *scale{},
-        *intensity{}, *frame{}, *curb{}, *glazing{}, *font{}, *x{}, *y{};
+        *intensity{}, *frame{}, *curb{}, *glazing{}, *font{}, *x{}, *y{}, *radius{};
     QComboBox *visible{}, *layer{}, *bold{}, *italic{}, *alignment{}, *flip_horizontal{}, *flip_vertical{};
 };
 struct LayerInput {
@@ -437,6 +438,8 @@ public:
             case SelectionPropertyFamily::slab: type = "slab"; title = "Slabs"; break;
             case SelectionPropertyFamily::hosted_opening: type = "opening"; title = "Doors and windows"; break;
             case SelectionPropertyFamily::roof: type = "roof"; title = "Roofs"; break;
+            case SelectionPropertyFamily::column: type = "column"; title = "Columns"; break;
+            case SelectionPropertyFamily::beam: type = "beam"; title = "Beams"; break;
             default: throw std::invalid_argument("Selection Properties unavailable: unsupported ordinary family.");
             }
             const auto& original = entity(target.entity_id, type);
@@ -457,7 +460,12 @@ public:
                     f.height = dimension(form, "Height", "selectionOpeningHeight");
                     f.sill = dimension(form, "Sill height", "selectionOpeningSill");
                     f.offset = dimension(form, "Offset along wall", "selectionOpeningOffset");
-                } else {
+                } else if (target.family == SelectionPropertyFamily::column) {
+                    f.height = dimension(form, "Height (all columns)", "selectionColumnHeight");
+                } else if (target.family == SelectionPropertyFamily::beam) {
+                    f.width = dimension(form, "Width", "selectionBeamWidth");
+                    f.depth = dimension(form, "Depth", "selectionBeamDepth");
+                } else if (target.family == SelectionPropertyFamily::roof) {
                     f.width = dimension(form, "Length / horizontal run", "selectionRoofLength");
                     f.depth = dimension(form, "Span", "selectionRoofSpan");
                     f.rise = dimension(form, "Rise", "selectionRoofRise");
@@ -494,7 +502,33 @@ public:
                 current_length(f.sill, scalar(original, "sill_m", "sill"));
                 current_length(f.offset, scalar(original, "offset_m", "offset"));
                 title_singular = "Door / window";
-            } else {
+            } else if (target.family == SelectionPropertyFamily::column || target.family == SelectionPropertyFamily::beam) {
+                validate_structural_object_source_entity(original);
+                auto& f = profiles.at(target.family);
+                const auto& structural_form = original.properties.at("form");
+                if (target.family == SelectionPropertyFamily::beam) {
+                    require(structural_form == "straight_beam", "Selected beam form is unsupported.");
+                    current_length(f.width, scalar(original, "width_m"));
+                    current_length(f.depth, scalar(original, "depth_m"));
+                    title_singular = "Beam";
+                } else {
+                    current_length(f.height, scalar(original, "height_m"));
+                    auto* form = profile_forms.at(target.family);
+                    if (structural_form == "rectangular_column") {
+                        if (!f.width) {
+                            f.width = dimension(form, "Rectangular width", "selectionColumnWidth");
+                            f.depth = dimension(form, "Rectangular depth", "selectionColumnDepth");
+                        }
+                        current_length(f.width, scalar(original, "width_m"));
+                        current_length(f.depth, scalar(original, "depth_m"));
+                    } else {
+                        require(structural_form == "circular_column", "Selected column form is unsupported.");
+                        if (!f.radius) f.radius = dimension(form, "Circular radius", "selectionColumnRadius");
+                        current_length(f.radius, scalar(original, "radius_m"));
+                    }
+                    title_singular = "Column";
+                }
+            } else if (target.family == SelectionPropertyFamily::roof) {
                 (void)decode_roof_entity(original);
                 const auto& f = profiles.at(target.family);
                 current_length(f.width, scalar(original, original.properties.at("form") == "sloped_roof_panel" ? "run_m" : "length_m"));
@@ -765,7 +799,19 @@ public:
                 (void)encode_hosted_opening_profile_edit_intent(intent);
                 (void)replay_hosted_opening_profile_entity(original, intent);
                 request.hosted_openings.push_back(std::move(intent));
-            } else {
+            } else if (target.family == SelectionPropertyFamily::column || target.family == SelectionPropertyFamily::beam) {
+                validate_structural_object_source_entity(original);
+                StructuralProfileEditIntent intent;
+                intent.object_id = target.entity_id;
+                if (target.family == SelectionPropertyFamily::beam || original.properties.at("form") == "rectangular_column") {
+                    intent.width = length(f.width, unit);
+                    intent.depth = length(f.depth, unit);
+                } else {
+                    intent.radius = length(f.radius, unit);
+                }
+                if (target.family == SelectionPropertyFamily::column) intent.height = length(f.height, unit);
+                request.structural_profiles.push_back(std::move(intent));
+            } else if (target.family == SelectionPropertyFamily::roof) {
                 RoofProfileEditIntent intent;
                 intent.roof_id = target.entity_id;
                 intent.length = length(f.width, unit);

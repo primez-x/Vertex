@@ -277,7 +277,9 @@ public:
     // v193 retains mixed scalar Properties with exact typed room decisions.
     // v194 retains explicit saved-frame annotation positions and symbol/reference
     // mirrors in mixed Properties dialect six without broadening dialect five.
-    static constexpr std::uint32_t format_version = 194;
+    // v195 retains column/beam scalar profiles in selected Properties request
+    // two and mixed dialect seven, including exact source and retained history.
+    static constexpr std::uint32_t format_version = 195;
     static constexpr std::uint32_t recovery_format_version = 4;
     [[nodiscard]] static std::uint32_t required_format_version(const DocumentSnapshot& snapshot);
     static constexpr std::uint64_t maximum_file_bytes = 4ULL * 1024ULL * 1024ULL * 1024ULL;

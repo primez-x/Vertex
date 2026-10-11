@@ -89,6 +89,8 @@ private:
 // gesture requests keep their original versions and meanings.
 // Version six retains that composition with explicit presentation request two
 // placement/mirror authority; version five remains limited to request one.
+// Version seven requires ordinary Properties request two for column/beam
+// scalar profiles; presentation request one or two may compose beside it.
 [[nodiscard]] nlohmann::json make_mixed_selection_edit_intent(
     const DocumentSnapshot& source, const nlohmann::json& ordinary_request,
     const nlohmann::json& roof_authoring, const nlohmann::json& roof_members,

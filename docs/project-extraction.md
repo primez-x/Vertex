@@ -1,5 +1,13 @@
 # Portable project extraction
 
+Exchange version193 requires native reader195 for mixed Properties dialect seven
+and ordinary request two. Its complete column/beam roster carries closed scalar
+intents alongside other selected families; optional presentation request one or
+two retains its own explicit authority. Historical Properties dialects five/six
+and ordinary request one keep their original meanings. Direct, nested, retained
+and undone history preserve the floor. Runtime and round-trip qualification
+remain open.
+
 Exchange version192 requires native reader194 for mixed Properties dialect six
 and its explicit presentation request two. Saved-frame Symbol/Text positions
 retain exact entered quantity intents; Symbol/Reference mirrors retain absolute

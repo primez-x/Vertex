@@ -167,12 +167,13 @@ Json source_fields(const DocumentSnapshot& source) {
 }
 Json ordinary_request(const DocumentSnapshot& source, const SelectionPropertyEditRequest& request) {
     if (request.selected.empty() || request.selected.size() > 1000 || request.walls.size() > 1000 ||
-        request.slabs.size() > 1000 || request.hosted_openings.size() > 1000 || request.roofs.size() > 1000)
+        request.slabs.size() > 1000 || request.hosted_openings.size() > 1000 || request.roofs.size() > 1000 ||
+        request.structural_profiles.size() > 1000)
         reject("typed ordinary Properties budget exceeded");
     // Encode without admitting profile-only intermediate roofs. The canonical
     // leaf codec authenticates the complete scalar roster before fused replay.
     auto result = source_fields(source);
-    result["version"] = 1;
+    result["version"] = request.structural_profiles.empty() ? 1 : 2;
     result["selected"] = Json::array();
     for (const auto& target : request.selected) {
         const char* name = nullptr;
@@ -181,6 +182,8 @@ Json ordinary_request(const DocumentSnapshot& source, const SelectionPropertyEdi
         case SelectionPropertyFamily::slab: name = "slab"; break;
         case SelectionPropertyFamily::hosted_opening: name = "hosted_opening"; break;
         case SelectionPropertyFamily::roof: name = "roof"; break;
+        case SelectionPropertyFamily::column: name = "column"; break;
+        case SelectionPropertyFamily::beam: name = "beam"; break;
         default: reject("unsupported ordinary family");
         }
         result["selected"].push_back({{"entity_id", target.entity_id}, {"family", name}});
@@ -193,6 +196,8 @@ Json ordinary_request(const DocumentSnapshot& source, const SelectionPropertyEdi
     lane("slabs", request.slabs, encode_slab_profile_edit_intent);
     lane("hosted_openings", request.hosted_openings, encode_hosted_opening_profile_edit_intent);
     lane("roofs", request.roofs, encode_roof_profile_edit_intent);
+    if (!request.structural_profiles.empty())
+        lane("structural_profiles", request.structural_profiles, encode_structural_profile_edit_intent);
     if (request.unchanged_policy != SelectionPropertyUnchangedPolicy::retain &&
         request.unchanged_policy != SelectionPropertyUnchangedPolicy::reject) reject("unsupported unchanged policy");
     result["unchanged_policy"] = request.unchanged_policy == SelectionPropertyUnchangedPolicy::retain ? "retain" : "reject";
@@ -204,8 +209,13 @@ void validate(const Json& value) {
         "source_entities_digest", "source_saved_revision", "ordinary_request", "presentation_request",
         "skylight_properties", "roof_opening_members", "room_reviews", "message"});
     if (!value.at("version").is_number_integer() ||
-        (value.at("version") != 5 && value.at("version") != 6)) reject("unsupported Properties dialect");
+        (value.at("version") != 5 && value.at("version") != 6 && value.at("version") != 7))
+        reject("unsupported Properties dialect");
     const bool pose_dialect = value.at("version") == 6;
+    const bool structural_dialect = value.at("version") == 7;
+    const auto& physical = value.at("ordinary_request");
+    if (structural_dialect && (physical.is_null() || physical.value("version", Json()) != 2))
+        reject("structural Properties requires its explicit ordinary dialect two");
     const auto& presentation = value.at("presentation_request");
     if (pose_dialect && (presentation.is_null() || presentation.value("version", Json()) != 2))
         reject("pose Properties requires its explicit presentation dialect two");
@@ -221,10 +231,14 @@ void validate(const Json& value) {
     for (const auto* name : {"ordinary_request", "presentation_request"}) {
         const auto& lane = value.at(name);
         if (lane.is_null()) continue;
-        if (std::string_view(name) == "ordinary_request") (void)validate_selection_property_edit_request(lane);
+        if (std::string_view(name) == "ordinary_request") {
+            (void)validate_selection_property_edit_request(lane);
+            if (lane.at("version") != (structural_dialect ? 2 : 1))
+                reject("ordinary dialect differs from complete Properties authority");
+        }
         else {
             (void)validate_selection_presentation_property_edit_request(lane);
-            if (lane.at("version") != (pose_dialect ? 2 : 1))
+            if (!structural_dialect && lane.at("version") != (pose_dialect ? 2 : 1))
                 reject("presentation dialect differs from complete Properties authority");
         }
         for (const auto* fence : {"expected_revision", "source_snapshot_digest", "source_authoring_digest",
@@ -437,6 +451,8 @@ MixedSelectionPropertyEditPreparation prepare_mixed_selection_property_edit(cons
     value["presentation_request"] = presentation ? prepare_selection_presentation_property_edit(source, *presentation).request() : Json(nullptr);
     if (!value.at("presentation_request").is_null() && value.at("presentation_request").at("version") == 2)
         value["version"] = 6;
+    if (!value.at("ordinary_request").is_null() && value.at("ordinary_request").at("version") == 2)
+        value["version"] = 7;
     value["skylight_properties"] = children ? skylight_properties(*children) : Json(nullptr);
     value["roof_opening_members"] = Json::array();
     if (children) for (const auto& member : children->members)

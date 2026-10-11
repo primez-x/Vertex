@@ -94,14 +94,18 @@ const char* family_name(SelectionPropertyFamily family) {
     case SelectionPropertyFamily::slab: return "slab";
     case SelectionPropertyFamily::hosted_opening: return "hosted_opening";
     case SelectionPropertyFamily::roof: return "roof";
+    case SelectionPropertyFamily::column: return "column";
+    case SelectionPropertyFamily::beam: return "beam";
     }
     reject("unsupported selected family");
 }
-SelectionPropertyFamily family(const Json& value) {
+SelectionPropertyFamily family(const Json& value, bool structural) {
     if (value == "wall") return SelectionPropertyFamily::wall;
     if (value == "slab") return SelectionPropertyFamily::slab;
     if (value == "hosted_opening") return SelectionPropertyFamily::hosted_opening;
     if (value == "roof") return SelectionPropertyFamily::roof;
+    if (structural && value == "column") return SelectionPropertyFamily::column;
+    if (structural && value == "beam") return SelectionPropertyFamily::beam;
     reject("unsupported selected family");
 }
 const char* source_type(SelectionPropertyFamily value) {
@@ -161,10 +165,17 @@ void authenticate_source(const DocumentSnapshot& source, const Json& value) {
 
 SelectionPropertyEditRequest decode_request(const Json& value) {
     Budget{}.visit(value);
-    fields(value, {"version", "expected_revision", "source_snapshot_digest", "source_authoring_digest",
-        "source_entities_digest", "source_saved_revision", "selected", "walls", "slabs", "hosted_openings",
-        "roofs", "unchanged_policy"});
-    if (!value.at("version").is_number_integer() || value.at("version") != 1) reject("unsupported request version");
+    if (!value.is_object() || !value.contains("version") || !value.at("version").is_number_integer() ||
+        (value.at("version") != 1 && value.at("version") != 2)) reject("unsupported request version");
+    const bool structural = value.at("version") == 2;
+    if (structural)
+        fields(value, {"version", "expected_revision", "source_snapshot_digest", "source_authoring_digest",
+            "source_entities_digest", "source_saved_revision", "selected", "walls", "slabs", "hosted_openings",
+            "roofs", "structural_profiles", "unchanged_policy"});
+    else
+        fields(value, {"version", "expected_revision", "source_snapshot_digest", "source_authoring_digest",
+            "source_entities_digest", "source_saved_revision", "selected", "walls", "slabs", "hosted_openings",
+            "roofs", "unchanged_policy"});
     (void)revision(value.at("expected_revision"));
     for (const auto* key : {"source_snapshot_digest", "source_authoring_digest", "source_entities_digest"}) digest(value.at(key));
     // Undo may leave the saved revision ahead of the captured head. It still
@@ -180,7 +191,7 @@ SelectionPropertyEditRequest decode_request(const Json& value) {
     for (const auto& row : selected) {
         fields(row, {"entity_id", "family"});
         const auto id = identity(row.at("entity_id"));
-        const auto kind = family(row.at("family"));
+        const auto kind = family(row.at("family"), structural);
         if (!previous.empty() && id <= previous) reject("selected roster must be sorted and unique");
         previous = id;
         declared.emplace(id, kind);
@@ -206,6 +217,25 @@ SelectionPropertyEditRequest decode_request(const Json& value) {
     lane("hosted_openings", "opening_id", SelectionPropertyFamily::hosted_opening,
         decode_hosted_opening_profile_edit_intent, encode_hosted_opening_profile_edit_intent, result.hosted_openings);
     lane("roofs", "roof_id", SelectionPropertyFamily::roof, decode_roof_profile_edit_intent, encode_roof_profile_edit_intent, result.roofs);
+    if (structural) {
+        const auto& rows = value.at("structural_profiles");
+        if (!rows.is_array() || rows.empty() || rows.size() > target_limit) reject("invalid structural lane budget");
+        std::string prior;
+        for (const auto& row : rows) {
+            auto intent = decode_structural_profile_edit_intent(row);
+            if (encode_structural_profile_edit_intent(intent).dump() != row.dump())
+                reject("structural profile must use its exact canonical codec");
+            const auto& id = intent.object_id;
+            if (!prior.empty() && id <= prior) reject("typed lanes must be sorted and unique");
+            prior = id;
+            const auto owner = declared.find(id);
+            if (owner == declared.end() ||
+                (owner->second != SelectionPropertyFamily::column && owner->second != SelectionPropertyFamily::beam))
+                reject("structural lane requires an exactly declared column or beam");
+            if (!covered.emplace(id, owner->second).second) reject("typed target overlaps another lane");
+            result.structural_profiles.push_back(std::move(intent));
+        }
+    }
     if (covered != declared) reject("selected roster must exactly match every typed target and family");
     // Enforces portable UTF-8 after bounded traversal; no ignored fields survive.
     if (value.dump().size() > byte_limit) reject("encoded byte budget exceeded");
@@ -214,11 +244,13 @@ SelectionPropertyEditRequest decode_request(const Json& value) {
 Json encode_request(const DocumentSnapshot& source, const SelectionPropertyEditRequest& request) {
     source_metadata(source);
     if (request.selected.empty() || request.selected.size() > target_limit || request.walls.size() > target_limit ||
-        request.slabs.size() > target_limit || request.hosted_openings.size() > target_limit || request.roofs.size() > target_limit)
+        request.slabs.size() > target_limit || request.hosted_openings.size() > target_limit || request.roofs.size() > target_limit ||
+        request.structural_profiles.size() > target_limit)
         reject("invalid typed target budget");
     if (request.unchanged_policy != SelectionPropertyUnchangedPolicy::reject &&
         request.unchanged_policy != SelectionPropertyUnchangedPolicy::retain) reject("unsupported unchanged policy");
-    Json selected = Json::array(), walls = Json::array(), slabs = Json::array(), openings = Json::array(), roofs = Json::array();
+    Json selected = Json::array(), walls = Json::array(), slabs = Json::array(), openings = Json::array(),
+        roofs = Json::array(), structural = Json::array();
     for (const auto& target : request.selected)
         selected.push_back({{"entity_id", target.entity_id}, {"family", family_name(target.family)}});
     Budget budget;
@@ -234,7 +266,8 @@ Json encode_request(const DocumentSnapshot& source, const SelectionPropertyEditR
     lane(request.slabs, encode_slab_profile_edit_intent, slabs);
     lane(request.hosted_openings, encode_hosted_opening_profile_edit_intent, openings);
     lane(request.roofs, encode_roof_profile_edit_intent, roofs);
-    Json result = {{"version", 1}, {"expected_revision", source.revision()},
+    lane(request.structural_profiles, encode_structural_profile_edit_intent, structural);
+    Json result = {{"version", request.structural_profiles.empty() ? 1 : 2}, {"expected_revision", source.revision()},
         {"source_snapshot_digest", document_snapshot_digest(source)},
         {"source_authoring_digest", document_authoring_source_digest_v2(source)},
         {"source_entities_digest", entity_map_digest(source.entities())},
@@ -242,6 +275,7 @@ Json encode_request(const DocumentSnapshot& source, const SelectionPropertyEditR
         {"selected", std::move(selected)}, {"walls", std::move(walls)}, {"slabs", std::move(slabs)},
         {"hosted_openings", std::move(openings)}, {"roofs", std::move(roofs)},
         {"unchanged_policy", request.unchanged_policy == SelectionPropertyUnchangedPolicy::retain ? "retain" : "reject"}};
+    if (!request.structural_profiles.empty()) result["structural_profiles"] = std::move(structural);
     (void)decode_request(result);
     return result;
 }
@@ -346,6 +380,9 @@ SelectionPropertyEditPreparation replay_selection_property_edit_preparation(cons
         add(std::move(roof_candidate), request.roofs,
             [](const RoofProfileEditIntent& intent) -> const std::string& { return intent.roof_id; });
     }
+    if (!request.structural_profiles.empty())
+        add(replay_structural_profile_entities(original, request.structural_profiles), request.structural_profiles,
+            [](const StructuralProfileEditIntent& intent) -> const std::string& { return intent.object_id; });
     auto candidate = compose_mixed_selection_edit_candidates(original, leaves);
     // Admit the complete shared-host state, never an intermediate wall-only or
     // opening-only state. Original-source admission above cannot be repaired
@@ -378,7 +415,8 @@ SelectionPropertyEditPreparation replay_selection_property_edit_preparation(cons
         !exact(candidate, replay_slab_profile_entities(candidate, request.slabs)) ||
         !exact(candidate, replay_hosted_opening_profile_entities(candidate, final_opening_checks, false)) ||
         !exact(candidate, replay_roof_profile_entities(candidate, request.roofs)) ||
-        !exact(candidate, replay_roof_edit_entities(candidate, roof_dependency_checks)))
+        !exact(candidate, replay_roof_edit_entities(candidate, roof_dependency_checks)) ||
+        !exact(candidate, replay_structural_profile_entities(candidate, request.structural_profiles)))
         reject("combined physical replay introduced another consequence");
     std::set<std::string, std::less<>> retained_baselines;
     for (const auto& [id, entity] : original) if (entity.type == "model_phases") {

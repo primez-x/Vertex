@@ -1,4 +1,33 @@
-# Vertex project formats v1 through v194
+# Vertex project formats v1 through v195
+
+## Structural scalar group Properties (v195, source implementation)
+
+Ordinary Properties request two adds a nonempty `structural_profiles` lane and
+column/beam selected families. Every declared structural owner has exactly one
+closed scalar intent, including all-null retained members. Actual source form
+determines applicable width, depth, height and radius fields; supplied position,
+orientation, arbitrary property maps and family conversion are not authority.
+Historical ordinary request one keeps its exact fields and family set.
+
+Scalar replay starts from each actual raw owner and patches only supplied
+changed applicable dimensions and their admitted entered-quantity fields.
+Opposite-form dimension slots, their receipts and opaque siblings accepted by
+the existing reader remain exact. Equal/all-null inputs preserve raw numeric
+representations. Complete source/result host and hosted-component admission
+includes retained members; raw catalogs, qualified component rosters and
+original presentation aliases remain unchanged. Historical full-profile
+descriptor replacement keeps its original separate meaning.
+
+Mixed Properties dialect seven in command envelope52 requires ordinary request
+two and may compose presentation request one or two. Dialects five and six
+retain their original nested request requirements. The complete immutable
+source, retained-history fences, mandatory room decisions and atomic publication
+remain shared with other Properties lanes. Reader195/extraction193 cover direct,
+nested, retained and undone proofs.
+
+This source work does not complete active-baseline replacement, stair/railing
+Properties, assembly Properties or general directional group resizing.
+Compilation, native interaction and save/reopen remain unqualified.
 
 ## Saved-frame presentation pose Properties (v194, source implementation)
 
