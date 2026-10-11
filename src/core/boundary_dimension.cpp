@@ -2,6 +2,7 @@
 #include "sketch/measurement_linework.hpp"
 #include "sketch/document_wall.hpp"
 #include "sketch/constraint_wall_edit.hpp"
+#include "sketch/constraint_phase_scope.hpp"
 #include "sketch/physical_wall_room_data.hpp"
 #include "sketch/corner_window.hpp"
 #include "sketch/model_phases.hpp"
@@ -14,6 +15,7 @@
 #include <array>
 #include <cmath>
 #include <cstdint>
+#include <exception>
 #include <limits>
 #include <numbers>
 #include <set>
@@ -181,6 +183,7 @@ std::optional<BoundaryDimensionKind> kind_from_name(std::string_view name) {
     if (name == "area") return BoundaryDimensionKind::area;
     if (name == "wall_axis_length") return BoundaryDimensionKind::wall_axis_length;
     if (name == "corner_window_leg_length") return BoundaryDimensionKind::corner_window_leg_length;
+    if (name == "assembly_extent") return BoundaryDimensionKind::assembly_extent;
     return std::nullopt;
 }
 
@@ -220,6 +223,19 @@ void validate_model(const BoundaryDimension& dimension) {
     if (!valid_identifier(dimension.boundary_id)) {
         invalid("dimension target entity id is empty or invalid");
     }
+    if (dimension.kind == BoundaryDimensionKind::assembly_extent) {
+        if (!dimension.assembly_target)
+            invalid("assembly extent dimension requires its qualified assembly target");
+        // The shared closed codec validates document/local identities, path
+        // depth and axis without granting mutation authority.
+        (void)encode_assembly_dimension_target(*dimension.assembly_target);
+        const auto& component = dimension.assembly_target->component;
+        const auto& carrier = component.document_entity_id ? *component.document_entity_id : component.catalog_id;
+        if (dimension.boundary_id != carrier)
+            invalid("assembly dimension carrier identity differs from its qualified target");
+    } else if (dimension.assembly_target) {
+        invalid("only assembly extent dimensions can contain an assembly target");
+    }
     if (dimension.kind == BoundaryDimensionKind::corner_window_leg_length) {
         if (!dimension.corner_leg || *dimension.corner_leg > 1)
             invalid("corner-window dimension requires corner_leg zero or one");
@@ -258,6 +274,7 @@ void validate_model(const BoundaryDimension& dimension) {
         case BoundaryDimensionKind::area:
         case BoundaryDimensionKind::wall_axis_length:
         case BoundaryDimensionKind::corner_window_leg_length:
+        case BoundaryDimensionKind::assembly_extent:
             if (!dimension.segment_id.empty() || !dimension.vertex_id.empty() ||
                 !dimension.secondary_segment_id.empty()) {
                 invalid("owner-only dimension cannot contain segment or vertex target fields");
@@ -375,6 +392,7 @@ std::string_view boundary_dimension_kind_name(BoundaryDimensionKind kind) {
         case BoundaryDimensionKind::area: return "area";
         case BoundaryDimensionKind::wall_axis_length: return "wall_axis_length";
         case BoundaryDimensionKind::corner_window_leg_length: return "corner_window_leg_length";
+        case BoundaryDimensionKind::assembly_extent: return "assembly_extent";
     }
     invalid("unknown dimension kind");
 }
@@ -415,6 +433,11 @@ BoundaryDimensionVersion inspect_boundary_dimension_version(const Entity& entity
         if (kind != entity.properties.end() && kind->is_string() && *kind == "corner_window_leg_length")
             return {BoundaryDimensionFormat::supported_v5, version, {}};
     }
+    if (version == 6) {
+        const auto kind = entity.properties.find("dimension_kind");
+        if (kind != entity.properties.end() && kind->is_string() && *kind == "assembly_extent")
+            return {BoundaryDimensionFormat::supported_v6, version, {}};
+    }
     return {BoundaryDimensionFormat::unsupported_version, version,
             "unsupported boundary dimension version " + std::to_string(version)};
 }
@@ -436,7 +459,8 @@ BoundaryDimensionDecodeResult decode_boundary_dimension_entity(const Entity& ent
     const auto parsed_kind = kind_from_name(kind);
     if (!parsed_kind.has_value() ||
         (*parsed_kind == BoundaryDimensionKind::wall_axis_length && version != 4) ||
-        (*parsed_kind == BoundaryDimensionKind::corner_window_leg_length && version != 5)) {
+        (*parsed_kind == BoundaryDimensionKind::corner_window_leg_length && version != 5) ||
+        (*parsed_kind == BoundaryDimensionKind::assembly_extent && version != 6)) {
         return unsupported_result(entity, version, kind,
                                   "unsupported boundary dimension kind " + kind);
     }
@@ -454,7 +478,12 @@ BoundaryDimensionDecodeResult decode_boundary_dimension_entity(const Entity& ent
     std::string secondary_segment_id;
     std::vector<std::string> segment_chain_ids;
     std::optional<std::uint32_t> corner_leg;
-    if (version == 5) {
+    std::optional<AssemblyDimensionTarget> assembly_target;
+    if (version == 6) {
+        if (target.size() != 2 || !target.contains("entity_id") || !target.contains("assembly"))
+            invalid("assembly extent dimension target must contain exactly entity_id and assembly");
+        assembly_target = decode_assembly_dimension_target(required_property(target, "assembly"));
+    } else if (version == 5) {
         if (target.size() != 2 || !target.contains("entity_id") || !target.contains("corner_leg"))
             invalid("corner-window dimension target must contain exactly entity_id and corner_leg");
         corner_leg = json_uint32(required_property(target, "corner_leg"),
@@ -533,8 +562,9 @@ BoundaryDimensionDecodeResult decode_boundary_dimension_entity(const Entity& ent
         .secondary_segment_id = secondary_segment_id,
         .segment_chain_ids = std::move(segment_chain_ids),
         .corner_leg = corner_leg,
+        .assembly_target = std::move(assembly_target),
     };
-    if (version == 2 || ((version == 3 || version == 4 || version == 5) && entity.properties.contains("presentation")))
+    if (version == 2 || ((version == 3 || version == 4 || version == 5 || version == 6) && entity.properties.contains("presentation")))
         result.presentation = decode_presentation(required_property(entity.properties, "presentation"));
     validate_model(result);
     return BoundaryDimensionDecodeResult{
@@ -552,6 +582,8 @@ Entity encode_boundary_dimension_entity(const BoundaryDimension& dimension,
     Entity result{dimension.id, "dimension", Json::object(), false, Json::object()};
     bool preserve_presentation = false;
     bool preserve_text_position = false;
+    bool preserve_assembly_target = false;
+    bool original_assembly_extent = false;
     if (original != nullptr) {
         validate_entity_container(*original);
         if (original->id != dimension.id) {
@@ -561,11 +593,18 @@ Entity encode_boundary_dimension_entity(const BoundaryDimension& dimension,
         if (!previous.supported()) {
             invalid("cannot encode over unsupported dimension semantics");
         }
-        if ((previous.version == 2 || ((previous.version == 3 || previous.version == 4 || previous.version == 5) && previous.dimension->presentation)) && !dimension.presentation)
+        // Typed no-ops retain the exact admitted source envelope, including
+        // original numeric representations and all opaque sibling metadata.
+        if (dimension == *previous.dimension) return *original;
+        original_assembly_extent = previous.version == 6;
+        preserve_assembly_target = original_assembly_extent &&
+            dimension.assembly_target == previous.dimension->assembly_target;
+        if ((previous.version == 2 || ((previous.version == 3 || previous.version == 4 || previous.version == 5 || previous.version == 6) && previous.dimension->presentation)) && !dimension.presentation)
             invalid("cannot remove version two dimension presentation");
         if (previous.version == 1 && (dimension.presentation || !dimension.segment_chain_ids.empty() ||
             dimension.kind == BoundaryDimensionKind::wall_axis_length ||
-            dimension.kind == BoundaryDimensionKind::corner_window_leg_length) &&
+            dimension.kind == BoundaryDimensionKind::corner_window_leg_length ||
+            dimension.kind == BoundaryDimensionKind::assembly_extent) &&
             original->properties.contains("presentation"))
             invalid("dimension presentation upgrade would overwrite opaque version one metadata");
         preserve_presentation = dimension.presentation == previous.dimension->presentation;
@@ -575,9 +614,13 @@ Entity encode_boundary_dimension_entity(const BoundaryDimension& dimension,
     }
 
     auto& properties = result.properties;
-    properties["dimension_version"] = dimension.kind == BoundaryDimensionKind::corner_window_leg_length
+    const std::uint64_t version = dimension.kind == BoundaryDimensionKind::assembly_extent
+        ? 6 : (dimension.kind == BoundaryDimensionKind::corner_window_leg_length
         ? 5 : (dimension.kind == BoundaryDimensionKind::wall_axis_length
-        ? 4 : (!dimension.segment_chain_ids.empty() ? 3 : (dimension.presentation ? 2 : 1)));
+        ? 4 : (!dimension.segment_chain_ids.empty() ? 3 : (dimension.presentation ? 2 : 1))));
+    if (!properties.contains("dimension_version") ||
+        json_uint64(properties.at("dimension_version"), "dimension version must be a positive integer") != version)
+        properties["dimension_version"] = version;
     if (dimension.presentation && !preserve_presentation) {
         const auto& value = *dimension.presentation;
         properties["presentation"] = {{"text_height_mm", value.text_height_mm}, {"color", value.color},
@@ -595,6 +638,8 @@ Entity encode_boundary_dimension_entity(const BoundaryDimension& dimension,
     }
     target["entity_id"] = dimension.boundary_id;
     if (dimension.kind != BoundaryDimensionKind::corner_window_leg_length) target.erase("corner_leg");
+    if (original_assembly_extent && dimension.kind != BoundaryDimensionKind::assembly_extent)
+        target.erase("assembly");
     switch (dimension.kind) {
         case BoundaryDimensionKind::segment_length:
             if (dimension.segment_chain_ids.empty()) {
@@ -631,6 +676,21 @@ Entity encode_boundary_dimension_entity(const BoundaryDimension& dimension,
             }
             target = {{"entity_id", dimension.boundary_id}, {"corner_leg", *dimension.corner_leg}};
             break;
+        case BoundaryDimensionKind::assembly_extent: {
+            // A historical opaque field with this name cannot be overwritten
+            // merely by upgrading to newly known measurement semantics.
+            for (const auto& [key, ignored] : target.items()) {
+                (void)ignored;
+                if (key != "entity_id" && key != "corner_leg" && key != "segment_id" &&
+                    key != "segment_ids" && key != "second_segment_id" && key != "vertex_id" &&
+                    !(key == "assembly" && original_assembly_extent))
+                    invalid("assembly dimension upgrade would discard opaque target metadata");
+            }
+            Json assembly = preserve_assembly_target ? target.at("assembly") :
+                encode_assembly_dimension_target(*dimension.assembly_target);
+            target = {{"entity_id", dimension.boundary_id}, {"assembly", std::move(assembly)}};
+            break;
+        }
     }
     properties["target"] = std::move(target);
     if (!preserve_text_position)
@@ -639,8 +699,10 @@ Entity encode_boundary_dimension_entity(const BoundaryDimension& dimension,
     properties["placement_origin"] =
         std::string(boundary_dimension_placement_name(dimension.placement));
     if (dimension.placement == BoundaryDimensionPlacement::automatic) {
-        properties["automatic_placement_version"] =
-            *dimension.automatic_placement_version;
+        if (!properties.contains("automatic_placement_version") ||
+            json_uint32(properties.at("automatic_placement_version"), "automatic placement version must be valid") !=
+                *dimension.automatic_placement_version)
+            properties["automatic_placement_version"] = *dimension.automatic_placement_version;
     } else {
         properties.erase("automatic_placement_version");
     }
@@ -774,6 +836,58 @@ static void validate_current_corner_dimension_phase(
     }
 }
 
+static void validate_current_assembly_dimension_phase(
+    const AssemblyDimensionTarget& target,
+    const std::map<std::string, Entity, std::less<>>& entities,
+    const ConstraintPhaseScope& scope,const std::optional<std::string>& host_id,
+    const std::map<std::string, bool, std::less<>>* qualified_hosts = nullptr) {
+    // Only actual saved source membership establishes activity. Embedded row
+    // membership takes priority over its shared catalog's document membership;
+    // presentation aliases, visibility and unbound phase_id fields are no proof.
+    const auto& component = target.component;
+    const AssemblyPhaseRoot root{component.catalog_id, component.instance_id};
+    const bool declared_row = !component.document_entity_id && scope.assembly_memberships.owners.contains(root);
+    if (!component.document_entity_id && scope.assembly_memberships.inactive_roots.contains(root))
+        invalid("assembly dimension root is inactive in the saved phase selection");
+    const auto& owner_id = component.document_entity_id ? *component.document_entity_id : component.catalog_id;
+    if (!declared_row && scope.inactive_owner_ids.contains(owner_id))
+        invalid("assembly dimension owner is inactive in the saved phase selection");
+
+    // The admitted measurement supplies its actual retained placement host;
+    // nested dimensions do not decode their entire catalog again to recover it.
+    if (host_id) {
+        if (qualified_hosts) {
+            if (!qualified_hosts->at(*host_id))
+                invalid("assembly dimension placement host is inactive in the saved phase selection");
+            return;
+        }
+        // Admit actual host/context dependencies before relying on the shared
+        // activity helper, whose malformed-parent path deliberately defers to
+        // its caller. An opening must retain its actual wall host.
+        (void)resolve_vertical_placement(entities, entities.at(*host_id));
+        (void)resolve_site_presentation(entities, *host_id);
+        if (assembly_host_inactive_in_phase(entities, scope.inactive_owner_ids, *host_id))
+            invalid("assembly dimension placement host is inactive in the saved phase selection");
+    }
+}
+
+static BoundaryDimensionResolution resolve_assembly_extent_dimension(
+    const BoundaryDimension& dimension,
+    const std::map<std::string, Entity, std::less<>>& entities, bool current) {
+    // Pass the caller's entire actual map through unchanged. A carrier-only
+    // subset cannot admit all catalog definitions, independent roots and frames.
+    auto assembly = resolve_assembly_dimension(entities, *dimension.assembly_target);
+    if (current) validate_current_assembly_dimension_phase(*dimension.assembly_target, entities,
+        constraint_phase_scope(entities),assembly.placement_host_id);
+    BoundaryDimensionResolution result;
+    result.kind = BoundaryDimensionKind::assembly_extent;
+    result.segment_length_metres = assembly.span_metres;
+    result.assembly_geometry = std::move(assembly);
+    // segment deliberately remains empty for width/depth as well as height.
+    // Projection belongs to the renderer's actual view frame, never this codec.
+    return result;
+}
+
 static BoundaryDimensionResolution resolve_identified_dimension(
     const BoundaryDimension& dimension, const IdentifiedBoundary& source,
     std::optional<double> net_clear_area = std::nullopt) {
@@ -844,6 +958,8 @@ static BoundaryDimensionResolution resolve_identified_dimension(
 static BoundaryDimensionResolution resolve_retained_dimension_target(
     const BoundaryDimension& dimension, const Entity& boundary_entity) {
     validate_model(dimension);
+    if (dimension.kind == BoundaryDimensionKind::assembly_extent)
+        invalid("Assembly extent dimensions require complete actual catalogs and roots; use authoritative map or snapshot resolution");
     if (boundary_entity.id != dimension.boundary_id)
         invalid("dimension source boundary id does not match target entity id");
     if (dimension.kind == BoundaryDimensionKind::wall_axis_length) {
@@ -859,6 +975,10 @@ static BoundaryDimensionResolution resolve_retained_dimension_target(
 
 void validate_boundary_dimension_target(const BoundaryDimension& dimension,
                                        const Entity& boundary_entity) {
+    if (dimension.kind == BoundaryDimensionKind::assembly_extent) {
+        validate_model(dimension);
+        invalid("Assembly extent target admission requires the complete authoritative map or snapshot");
+    }
     if (dimension.kind == BoundaryDimensionKind::corner_window_leg_length) {
         // Entity-only structural admission can check the owner and leg, but
         // cannot certify either host, cut, placement or current leg value.
@@ -884,6 +1004,8 @@ BoundaryDimensionResolution resolve_boundary_dimension(const BoundaryDimension& 
 BoundaryDimensionResolution resolve_boundary_dimension(const BoundaryDimension& dimension,
     const std::map<std::string, Entity, std::less<>>& entities) {
     validate_model(dimension);
+    if (dimension.kind == BoundaryDimensionKind::assembly_extent)
+        return resolve_assembly_extent_dimension(dimension, entities, false);
     const auto owner = entities.find(dimension.boundary_id);
     if (owner == entities.end()) invalid("dimension source owner is missing from the authoritative map");
     if (owner->second.id != dimension.boundary_id)
@@ -909,6 +1031,8 @@ BoundaryDimensionResolution resolve_boundary_dimension(const BoundaryDimension& 
 BoundaryDimensionResolution resolve_current_boundary_dimension(const BoundaryDimension& dimension,
     const std::map<std::string, Entity, std::less<>>& entities) {
     validate_model(dimension);
+    if (dimension.kind == BoundaryDimensionKind::assembly_extent)
+        return resolve_assembly_extent_dimension(dimension, entities, true);
     const auto owner = entities.find(dimension.boundary_id);
     if (owner == entities.end()) invalid("dimension source owner is missing from the authoritative map");
     if (owner->second.id != dimension.boundary_id)
@@ -929,6 +1053,89 @@ BoundaryDimensionResolution resolve_current_boundary_dimension(const BoundaryDim
 
 BoundaryDimensionResolution resolve_current_boundary_dimension(const BoundaryDimension& dimension,
                                                                 const DocumentSnapshot& snapshot) {
+    validate_model(dimension);
+    if (dimension.kind == BoundaryDimensionKind::assembly_extent) {
+        // Only immutable, actual authoring-source identity admits reuse. Saved
+        // revision numbers and document IDs cannot identify geometry. Keep two
+        // bounded scenes so original/proposed preview painting does not thrash.
+        struct SceneMeasurements {
+            std::optional<DocumentSnapshot> source;
+            std::map<std::string, AssemblyDimensionResolution, std::less<>> measurements;
+            std::optional<ConstraintPhaseScope> phase;
+            std::map<std::string, bool, std::less<>> qualified_hosts;
+            std::exception_ptr failure;
+        };
+        thread_local std::array<SceneMeasurements, 2> scenes;
+        thread_local std::size_t next_scene = 0;
+        const auto& entities = snapshot.entities();
+        const auto stored = entities.find(dimension.id);
+        if (stored != entities.end() && can_recognize_boundary_dimension_entity_type(stored->second.type)) {
+            const auto decoded = decode_boundary_dimension_entity(stored->second);
+            if (decoded.dimension && decoded.dimension->kind == BoundaryDimensionKind::assembly_extent &&
+                decoded.dimension->boundary_id == dimension.boundary_id &&
+                decoded.dimension->assembly_target == dimension.assembly_target) {
+                auto scene = std::find_if(scenes.begin(), scenes.end(), [&](const auto& entry) {
+                    return entry.source && snapshot.shares_authoring_source_with(*entry.source);
+                });
+                if (scene == scenes.end()) {
+                    auto& entry = scenes[next_scene];
+                    next_scene = (next_scene + 1) % scenes.size();
+                    entry = SceneMeasurements{};
+                    try {
+                        if (entities.size() > 100'000) invalid("component dimension scene exceeds entity bound");
+                        std::vector<std::string> ids;
+                        std::vector<AssemblyDimensionTarget> targets;
+                        for (const auto& [id, entity] : entities) {
+                            if (!can_recognize_boundary_dimension_entity_type(entity.type)) continue;
+                            const auto kind = entity.properties.find("dimension_kind");
+                            if (kind == entity.properties.end() || *kind != "assembly_extent" ||
+                                inspect_boundary_dimension_version(entity).format != BoundaryDimensionFormat::supported_v6) continue;
+                            const auto parsed = decode_boundary_dimension_entity(entity);
+                            if (!parsed.dimension) continue;
+                            if (targets.size() == 1000) invalid("component dimension scene exceeds 1000 targets");
+                            ids.push_back(id);
+                            targets.push_back(*parsed.dimension->assembly_target);
+                        }
+                        auto measured = resolve_assembly_dimensions(entities, targets);
+                        entry.phase = constraint_phase_scope(entities);
+                        std::set<std::string, std::less<>> host_ids;
+                        for (const auto& value : measured)
+                            if (value.placement_host_id) host_ids.insert(*value.placement_host_id);
+                        const std::vector<std::string> hosts(host_ids.begin(), host_ids.end());
+                        if (!hosts.empty()) {
+                            (void)resolve_vertical_placements(entities, hosts);
+                            (void)resolve_site_presentations(entities, hosts);
+                            for (const auto& host : hosts)
+                                entry.qualified_hosts.emplace(host,
+                                    !assembly_host_inactive_in_phase(entities, entry.phase->inactive_owner_ids, host));
+                        }
+                        for (std::size_t i = 0; i < ids.size(); ++i)
+                            entry.measurements.emplace(ids[i], std::move(measured[i]));
+                    } catch (...) {
+                        // A rejected immutable scene must not repeat the same
+                        // complete-map admission for every painted annotation.
+                        entry.measurements.clear();
+                        entry.phase.reset();
+                        entry.qualified_hosts.clear();
+                        entry.failure = std::current_exception();
+                    }
+                    entry.source = snapshot;
+                    scene = scenes.begin() + static_cast<std::ptrdiff_t>((next_scene + scenes.size() - 1) % scenes.size());
+                }
+                if (scene->failure) std::rethrow_exception(scene->failure);
+                const auto& assembly = scene->measurements.at(dimension.id);
+                validate_current_assembly_dimension_phase(*dimension.assembly_target, entities,
+                    *scene->phase, assembly.placement_host_id, &scene->qualified_hosts);
+                BoundaryDimensionResolution result;
+                result.kind = BoundaryDimensionKind::assembly_extent;
+                result.segment_length_metres = assembly.span_metres;
+                result.assembly_geometry = assembly;
+                return result;
+            }
+        }
+        // New or retargeted dialog proposals are not stored scene dimensions.
+        // Resolve their actual requested target; never borrow an old ID's value.
+    }
     return resolve_current_boundary_dimension(dimension, snapshot.entities());
 }
 

@@ -4034,6 +4034,9 @@ static void validate_retained_authoring_receipt_identities(
             for (const auto& [original,copy]:presentation.overlay_ids) {
                 require_unused_id(original);require_unused_id(copy);
             }
+            for (const auto& [original,copy]:presentation.dimension_ids) {
+                require_unused_id(original);require_unused_id(copy);
+            }
         }
 #ifdef VERTEX_HAS_PHYSICAL_ROOM_REVIEW
         for (const auto& encoded:historical_proofs.phase_room_proofs)
@@ -4746,13 +4749,13 @@ static void complete_dimension_placements(const std::map<std::string, Entity, st
         const auto& a = *before.dimension; auto b = *after.dimension;
         if (a.id != b.id || a.boundary_id != b.boundary_id || a.kind != b.kind || a.segment_id != b.segment_id ||
             a.vertex_id != b.vertex_id || a.secondary_segment_id != b.secondary_segment_id || a.segment_chain_ids != b.segment_chain_ids ||
-            a.corner_leg != b.corner_leg)
+            a.corner_leg != b.corner_leg || a.assembly_target != b.assembly_target)
             throw std::invalid_argument("Dimension placement cannot remap its stable analytical target");
         const auto old_owner = source.find(a.boundary_id);
         const auto new_owner = candidate.find(b.boundary_id);
         if (old_owner == source.end() || new_owner == candidate.end() || old_owner->second.type != new_owner->second.type)
             throw std::invalid_argument("Dimension placement analytical owner must survive with the same type");
-        if (a.kind==BoundaryDimensionKind::corner_window_leg_length) {
+        if (a.kind==BoundaryDimensionKind::corner_window_leg_length || a.kind==BoundaryDimensionKind::assembly_extent) {
             (void)a.resolve(source); (void)b.resolve(candidate);
         } else { (void)a.resolve(old_owner->second); (void)b.resolve(new_owner->second); }
         b.text_position = {a.text_position.x + move.offset.x, a.text_position.y + move.offset.y};
@@ -6740,7 +6743,8 @@ std::map<std::string, Entity, std::less<>> boundary_transform_entities(
             const auto current = result.find(id);
             if (current == result.end() || !decode_boundary_dimension_entity(current->second).supported())
                 throw std::invalid_argument("Rigid source reconciliation lost an attached analytical callout");
-            if (decoded.dimension->kind==BoundaryDimensionKind::corner_window_leg_length)
+            if (decoded.dimension->kind==BoundaryDimensionKind::corner_window_leg_length ||
+                decoded.dimension->kind==BoundaryDimensionKind::assembly_extent)
                 (void)decoded.dimension->resolve(result);
             else (void)decoded.dimension->resolve(result.at(decoded.dimension->boundary_id));
             current->second = entity;
@@ -7334,9 +7338,11 @@ std::map<std::string, Entity, std::less<>> completed_boundary_constraint_entitie
                 current.dimension->kind!=decoded.dimension->kind || current.dimension->segment_id!=decoded.dimension->segment_id ||
                 current.dimension->vertex_id!=decoded.dimension->vertex_id || current.dimension->secondary_segment_id!=decoded.dimension->secondary_segment_id ||
                 current.dimension->segment_chain_ids!=decoded.dimension->segment_chain_ids ||
-                current.dimension->corner_leg!=decoded.dimension->corner_leg)
+                current.dimension->corner_leg!=decoded.dimension->corner_leg ||
+                current.dimension->assembly_target!=decoded.dimension->assembly_target)
                 throw std::invalid_argument("Rigid source reconciliation changed a saved analytical target");
-            if (decoded.dimension->kind==BoundaryDimensionKind::corner_window_leg_length)
+            if (decoded.dimension->kind==BoundaryDimensionKind::corner_window_leg_length ||
+                decoded.dimension->kind==BoundaryDimensionKind::assembly_extent)
                 (void)decoded.dimension->resolve(rigid_result);
             else (void)decoded.dimension->resolve(rigid_result.at(decoded.dimension->boundary_id));
             rigid_result.at(id)=entity;
@@ -8051,7 +8057,8 @@ JointTranslationOffsets resolve_joint_translation_offsets(
         if (intent.physical_room_dimension_completion) {
             (void)resolve_current_boundary_dimension(*decoded.dimension, source);
             current_room_callout = current_room_callout || is_physical_wall_room(owner_entity);
-        } else if (decoded.dimension->kind==BoundaryDimensionKind::corner_window_leg_length)
+        } else if (decoded.dimension->kind==BoundaryDimensionKind::corner_window_leg_length ||
+                   decoded.dimension->kind==BoundaryDimensionKind::assembly_extent)
             (void)resolve_current_boundary_dimension(*decoded.dimension,source);
         else (void)decoded.dimension->resolve(owner_entity);
         if (!per_owner) result.dimension_offsets.emplace(id, intent.offset);

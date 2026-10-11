@@ -1,4 +1,29 @@
-# Vertex project formats v1 through v218
+# Vertex project formats v1 through v219
+
+Reader219 retains dimension version6, kind `assembly_extent`. Its closed target
+contains `entity_id` and `assembly`; the nested version-one assembly target names
+the actual catalog, root instance, nullable independent document owner, exact
+nested part path and width/depth/height axis. The carrier is the independent
+document owner or embedded catalog, never a fabricated boundary or render alias.
+Resolution uses the complete actual map and analytical descendant profiles,
+including curves, rotations, reflections and scale. Current quantities also
+qualify saved phase activity and placement dependencies. Inactive retained roots
+remain valid stored targets. Entity-only resolution cannot certify these targets.
+
+The measured scalar and 3D endpoints are separate from authored plan endpoints;
+Site presentation applies once. Width/depth use real plan dimension lines;
+height has a measured callout without a fabricated plan edge. Historical dimension
+versions1-5 retain their meaning and unsupported future schemas remain opaque.
+Current, deleted and undone retained version6 dimensions raise the reader floor.
+Command60 presentation allocation version2 additionally carries closed
+`dimension_ids` rows mapping original dimensions to fresh proposed dimensions;
+an empty mapping retains the historical version-one shape. The retained new
+allocation also raises reader219 after its copied dimensions are deleted or
+undone. Targets retain the exact nested path and axis across private catalog
+and proposed-root remapping; disappeared or nonmeasurable paths reject the edit.
+Native DXF graph6 retains actual component dimension/catalog context, including
+unphased projects; older graphs cannot silently acquire this semantic target.
+Compilation, runtime, migrations and exchange round trips remain unverified.
 
 Reader218 retains phase-isolated component definition editing under exclusive
 command60. The six command fields are version, kind, expected revision, message,

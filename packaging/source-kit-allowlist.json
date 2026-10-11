@@ -3259,6 +3259,10 @@
     },
     {
       "category": "source",
+      "path": "include/sketch/assembly_dimension.hpp"
+    },
+    {
+      "category": "source",
       "path": "include/sketch/assembly_document_adapter.hpp"
     },
     {
@@ -4812,6 +4816,10 @@
     {
       "category": "source",
       "path": "src/core/assembly_component_phase_demolition.cpp"
+    },
+    {
+      "category": "source",
+      "path": "src/core/assembly_dimension.cpp"
     },
     {
       "category": "source",

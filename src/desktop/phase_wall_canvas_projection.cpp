@@ -1461,6 +1461,27 @@ PhaseWallCanvasProjection project_phase_wall_canvas(const DocumentSnapshot& sour
                 else if (resolved.kind==BoundaryDimensionKind::angle) projected.segments=angle_overlay(owner,decoded);
                 projected.dimension_end_ticks=resolved.kind==BoundaryDimensionKind::segment_length || resolved.kind==BoundaryDimensionKind::wall_axis_length ||
                     resolved.kind==BoundaryDimensionKind::corner_window_leg_length;
+                if (resolved.kind==BoundaryDimensionKind::assembly_extent) {
+                    projected.segments.clear();
+                    projected.dimension_end_ticks=false;
+                    if (!resolved.assembly_geometry)
+                        throw std::invalid_argument("Phase wall dimension has no resolved assembly geometry.");
+                    const auto& assembly=*resolved.assembly_geometry;
+                    if (assembly.target.axis!=AssemblyDimensionAxis::height &&
+                        (!decoded.presentation || decoded.presentation->visible)) {
+                        // Keep the endpoints alongside the authored text position;
+                        // the common canvas projection below applies the view once.
+                        const Segment baseline{{assembly.start_authored_m.x,assembly.start_authored_m.y},
+                            {assembly.end_authored_m.x,assembly.end_authored_m.y},0};
+                        const auto start=view_context ? project_point(baseline.start,view_context->frame) : baseline.start;
+                        const auto end=view_context ? project_point(baseline.end,view_context->frame) : baseline.end;
+                        const auto chord=std::hypot(end.x-start.x,end.y-start.y);
+                        if (std::isfinite(chord) && chord>1e-7) {
+                            projected.segments=dimension_overlay(baseline,decoded.text_position);
+                            projected.dimension_end_ticks=true;
+                        }
+                    }
+                }
             }
         } else throw std::invalid_argument("Phase wall canvas preview has unsupported affected geometry: "+id+" ("+entity.type+").");
         if (view_context && world) project_entity(projected,*view_context,prototype.type==QStringLiteral("dimension_line"));
@@ -1521,6 +1542,13 @@ PhaseWallCanvasProjection project_phase_wall_canvas(const DocumentSnapshot& sour
                 else if (resolved.kind==BoundaryDimensionKind::segment_length || resolved.kind==BoundaryDimensionKind::wall_axis_length ||
                     resolved.kind==BoundaryDimensionKind::corner_window_leg_length)
                     projected.text=length_text(resolved.segment_length_metres,metric_units,ansi_dimensions(stage,owner));
+                else if (resolved.kind==BoundaryDimensionKind::assembly_extent) {
+                    if (!resolved.assembly_geometry)
+                        throw std::invalid_argument("Phase wall dimension label has no resolved assembly geometry.");
+                    projected.text=length_text(resolved.segment_length_metres,metric_units,ansi_dimensions(stage,owner));
+                    if (resolved.assembly_geometry->target.axis==AssemblyDimensionAxis::height)
+                        projected.text=QStringLiteral("H ")+projected.text;
+                }
                 else if (resolved.kind==BoundaryDimensionKind::angle) projected.text=QStringLiteral("%1°").arg(resolved.angle_radians*180/std::numbers::pi,0,'f',1);
                 else projected.text=area_text(resolved.area_square_metres,metric_units,ansi_dimensions(stage,owner));
                 projected.position=decoded.text_position;

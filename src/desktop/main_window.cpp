@@ -2357,16 +2357,29 @@ QString format_boundary_area(double square_metres, bool metric, bool ansi) {
     return text;
 }
 
-DimensionCanvasProjection project_boundary_dimension(const BoundaryDimension& dimension,
-    const Entity& boundary, const std::map<std::string,Entity,std::less<>>& entities,
+std::optional<Segment> assembly_dimension_plan_segment(const BoundaryDimensionResolution& resolved) {
+    if (!resolved.assembly_geometry) throw std::invalid_argument("Component dimension has no resolved geometry.");
+    const auto& geometry=*resolved.assembly_geometry;
+    if (geometry.target.axis==AssemblyDimensionAxis::height) return std::nullopt;
+    const auto& a=geometry.start_authored_m; const auto& b=geometry.end_authored_m;
+    if (std::hypot(b.x-a.x,b.y-a.y)==0) return std::nullopt;
+    return Segment{{a.x,a.y},{b.x,b.y},0};
+}
+
+DimensionCanvasProjection project_boundary_dimension_resolution(const BoundaryDimension& dimension,
+    const Entity& boundary, const BoundaryDimensionResolution& resolved,
     bool metric, bool selected, bool ansi = false) {
-    const auto resolved=resolve_current_boundary_dimension(dimension, entities);
     QString text;
     std::optional<Boundary> overlay;
     if (resolved.kind==BoundaryDimensionKind::segment_length || resolved.kind==BoundaryDimensionKind::wall_axis_length ||
         resolved.kind==BoundaryDimensionKind::corner_window_leg_length) {
         text=format_boundary_length(resolved.segment_length_metres,metric,ansi);
         overlay=dimension_overlay(resolved.segment,dimension.text_position);
+    } else if (resolved.kind==BoundaryDimensionKind::assembly_extent) {
+        text=format_boundary_length(resolved.segment_length_metres,metric,false);
+        if (dimension.assembly_target->axis==AssemblyDimensionAxis::height) text.prepend(QStringLiteral("H "));
+        if (const auto segment=assembly_dimension_plan_segment(resolved))
+            overlay=dimension_overlay(*segment,dimension.text_position);
     } else if (resolved.kind==BoundaryDimensionKind::angle) {
         text=format_dimension_angle(resolved.angle_radians);
         overlay=angle_dimension_overlay(resolve_dimension_geometry_owner(boundary),dimension);
@@ -2386,15 +2399,24 @@ DimensionCanvasProjection project_boundary_dimension(const BoundaryDimension& di
     if (overlay) {
         result.line=CanvasEntity{id_from(dimension.id),QStringLiteral("dimension_line"),*overlay,0.0,selected};
         result.line->dimension_end_ticks=resolved.kind==BoundaryDimensionKind::segment_length ||
-            resolved.kind==BoundaryDimensionKind::wall_axis_length || resolved.kind==BoundaryDimensionKind::corner_window_leg_length;
+            resolved.kind==BoundaryDimensionKind::wall_axis_length || resolved.kind==BoundaryDimensionKind::corner_window_leg_length ||
+            resolved.kind==BoundaryDimensionKind::assembly_extent;
     }
     return result;
 }
 
 DimensionCanvasProjection project_boundary_dimension(const BoundaryDimension& dimension,
+    const Entity& boundary, const std::map<std::string,Entity,std::less<>>& entities,
+    bool metric, bool selected, bool ansi = false) {
+    return project_boundary_dimension_resolution(dimension,boundary,
+        resolve_current_boundary_dimension(dimension,entities),metric,selected,ansi);
+}
+
+DimensionCanvasProjection project_boundary_dimension(const BoundaryDimension& dimension,
     const Entity& boundary, const DocumentSnapshot& snapshot,
     bool metric, bool selected, bool ansi = false) {
-    return project_boundary_dimension(dimension,boundary,snapshot.entities(),metric,selected,ansi);
+    return project_boundary_dimension_resolution(dimension,boundary,
+        resolve_current_boundary_dimension(dimension,snapshot),metric,selected,ansi);
 }
 
 Vec2 assembly_placement_point(Vec2 point, const AssemblyPlacement& placement) {
@@ -18735,6 +18757,8 @@ public:
                     PhaseAssemblyCatalogEditPresentationAllocation presentation;
                     for (const auto& overlay:plan.required_overlay_ids)
                         presentation.overlay_ids.emplace(overlay,fresh("component-overlay"));
+                    for (const auto& dimension:plan.required_dimension_ids)
+                        presentation.dimension_ids.emplace(dimension,fresh("component-dimension"));
                     const auto prepared=prepare_phase_assembly_catalog_edit(source,authoring,presentation,definitions.message);
                     definitions.phase_assembly_catalog_edit_intent=prepared.request();
                     definitions.phase_assembly_catalog_edit_completion=true;
@@ -23673,7 +23697,7 @@ public:
         };
         const auto restore_authoritative_view = [&] {
             if (m_nativeModelView)
-                m_nativeModelView->setSnapshot(authoringSnapshot(), m_native_visible_ids);
+                m_nativeModelView->setSnapshot(authoringSnapshot(), m_native_visible_ids, m_metric_units);
         };
         const auto update_preview = [&] {
             try {
@@ -23726,7 +23750,7 @@ public:
                 }
                 status->setText(preview_status);
                 if (m_nativeModelView)
-                    m_nativeModelView->setSnapshot(preview, m_native_visible_ids);
+                    m_nativeModelView->setSnapshot(preview, m_native_visible_ids, m_metric_units);
                 apply->setEnabled(true);
             } catch (const std::exception& error) {
                 restore_authoritative_view();
@@ -33215,26 +33239,37 @@ public:
             const auto found = source.entities().find(dimension.boundary_id);
             const bool wall_axis = dimension.kind == BoundaryDimensionKind::wall_axis_length;
             const bool corner_leg = dimension.kind == BoundaryDimensionKind::corner_window_leg_length;
+            const bool component_extent = dimension.kind == BoundaryDimensionKind::assembly_extent;
             if (found == source.entities().end() ||
                 (wall_axis ? found->second.type != "wall" :
                     corner_leg ? found->second.type != "corner_window" :
+                    component_extent ? (found->second.type != "assembly_instance" && found->second.type != "assembly_model") :
                     (!can_recognize_boundary_entity_type(found->second.type) && found->second.type!="measurement_linework"))) {
                 throw std::invalid_argument("Choose a supported window leg, wall axis, identified boundary or measured line as the dimension source.");
             }
             auto target = found->second;
             const auto original_target = target;
-            if (!wall_axis && !corner_leg && target.type!="measurement_linework" && inspect_boundary_entity_version(target).format == BoundaryEntityFormat::anonymous_legacy) {
+            if (!wall_axis && !corner_leg && !component_extent && target.type!="measurement_linework" && inspect_boundary_entity_version(target).format == BoundaryEntityFormat::anonymous_legacy) {
                 target = upgrade_legacy_boundary_entity(target);
                 dimension.boundary_id = target.id;
             }
             dimension.id = new_id("dimension");
             // Resolve before committing so an invalid edge pair, shared vertex,
             // or open area boundary cannot create a dangling presentation row.
-            if (corner_leg || is_physical_wall_room(target)) (void)resolve_current_boundary_dimension(dimension, source);
+            if (corner_leg || component_extent || is_physical_wall_room(target)) (void)resolve_current_boundary_dimension(dimension, source);
             else (void)dimension.resolve(target);
             auto encoded = encode_boundary_dimension_entity(dimension);
+            const Entity* context_owner=&target;
+            if (component_extent && !dimension.assembly_target->component.document_entity_id) {
+                const auto model=AssemblyModel::from_json(target.properties.at("model"));
+                const auto row=std::find_if(model.instances().begin(),model.instances().end(),[&](const auto& instance) {
+                    return instance.id==dimension.assembly_target->component.instance_id;
+                });
+                if (row!=model.instances().end() && row->placement)
+                    context_owner=&source.entities().at(row->placement->host_entity_id);
+            }
             for (const auto* key : {"property_id", "building_id", "floor_id", "layer_id", "level_id"}) {
-                if (target.properties.contains(key)) encoded.properties[key] = target.properties.at(key);
+                if (context_owner->properties.contains(key)) encoded.properties[key] = context_owner->properties.at(key);
             }
             std::vector<EntityChange> changes;
             if (target.properties != original_target.properties ||
@@ -33254,6 +33289,93 @@ public:
         } catch (const std::exception& error) {
             setError(QStringLiteral("Create dimension: %1").arg(QString::fromUtf8(error.what())));
             return {};
+        }
+    }
+
+    void showAssemblyDimension(const QString& requested_id) {
+        try {
+            if (!m_document->is_editable() || m_boundary_session || m_pending_wall_start ||
+                m_linework_drawing || !m_pending_symbol_id.isEmpty() || !m_pending_opening_kind.isEmpty())
+                throw std::invalid_argument("Finish or cancel the pending placement before adding a dimension.");
+            if (m_selected_ids.size()!=1 || m_selected_ids.front()!=requested_id)
+                throw std::invalid_argument("Select one component before adding its dimension.");
+            const auto source=authoringSnapshot();
+            const auto context=captureModalContext();
+            const auto workspace=m_workspace;
+            AssemblyDimensionTarget target;
+            AssemblyDocumentInstance instance;
+            const auto found=source.entities().find(requested_id.toStdString());
+            if (found!=source.entities().end() && found->second.type=="assembly_instance") {
+                instance=decode_document_assembly_instance(found->second);
+                target.component={instance.assembly_catalog_id,instance.instance.id,found->first,{}};
+            } else if (const auto embedded=geometric_assembly_for_child(source,requested_id.toStdString())) {
+                instance=*embedded;
+                target.component={instance.assembly_catalog_id,instance.instance.id,std::nullopt,{}};
+            } else throw std::invalid_argument("Choose a component with physical geometry.");
+            // Admit the complete actual map before decoding an additional UI
+            // expansion. The dialog's paths come from real expanded nodes.
+            (void)resolve_assembly_dimension(source.entities(),target);
+            const auto model=AssemblyModel::from_json(source.entities().at(instance.assembly_catalog_id).properties.at("model"));
+            AssemblyExpansionBudget expansion_budget;
+            const auto expansion=model.expand(instance.instance,expansion_budget);
+            QDialog dialog(owner);
+            dialog.setWindowTitle(QStringLiteral("Add component dimension"));
+            auto* layout=new QFormLayout(&dialog);
+            auto* parts=new QComboBox(&dialog);
+            std::vector<std::vector<std::string>> paths;
+            for (const auto& node:expansion.nodes) {
+                paths.push_back(node.part_path);
+                QString name=node.part_path.empty() ? QStringLiteral("Whole component") :
+                    QString::fromStdString(node.type_id)+QStringLiteral(" / ")+QString::fromStdString(node.part_path.back());
+                parts->addItem(name);
+            }
+            auto* axes=new QComboBox(&dialog);
+            axes->addItem(QStringLiteral("Width"),static_cast<int>(AssemblyDimensionAxis::width));
+            axes->addItem(QStringLiteral("Depth"),static_cast<int>(AssemblyDimensionAxis::depth));
+            axes->addItem(QStringLiteral("Height"),static_cast<int>(AssemblyDimensionAxis::height));
+            auto* value=new QLabel(&dialog);
+            value->setWordWrap(true);
+            auto* buttons=new QDialogButtonBox(QDialogButtonBox::Ok|QDialogButtonBox::Cancel,&dialog);
+            layout->addRow(QStringLiteral("Component"),parts);
+            layout->addRow(QStringLiteral("Dimension"),axes);
+            layout->addRow(QStringLiteral("Measured size"),value);
+            layout->addRow(buttons);
+            std::optional<BoundaryDimension> draft;
+            const auto update=[&] {
+                draft.reset();
+                try {
+                    auto selected=target;
+                    selected.component.part_path=paths.at(static_cast<std::size_t>(parts->currentIndex()));
+                    selected.axis=static_cast<AssemblyDimensionAxis>(axes->currentData().toInt());
+                    BoundaryDimension dimension;
+                    dimension.id="component-dimension-preview";
+                    dimension.boundary_id=selected.component.document_entity_id.value_or(selected.component.catalog_id);
+                    dimension.kind=BoundaryDimensionKind::assembly_extent;
+                    dimension.assembly_target=selected;
+                    const auto resolved=resolve_current_boundary_dimension(dimension,source);
+                    const auto& geometry=*resolved.assembly_geometry;
+                    const auto& a=geometry.start_authored_m; const auto& b=geometry.end_authored_m;
+                    const auto gap=std::max(0.15,geometry.span_metres*0.15);
+                    const auto [c,s]=assembly_rotation_components(geometry.selected_node.transform.rotation_radians);
+                    const auto sign=geometry.selected_node.transform.mirrored_y ? -1.0 : 1.0;
+                    const auto outward=selected.axis==AssemblyDimensionAxis::width ? Vec2{s*sign,-c*sign} : Vec2{-c,-s};
+                    dimension.text_position={a.x+(b.x-a.x)*0.5+outward.x*gap,
+                        a.y+(b.y-a.y)*0.5+outward.y*gap};
+                    value->setText(format_boundary_length(geometry.span_metres,m_metric_units,false));
+                    draft=std::move(dimension);
+                } catch (const std::exception& error) { value->setText(QString::fromUtf8(error.what())); }
+                buttons->button(QDialogButtonBox::Ok)->setEnabled(draft.has_value());
+            };
+            QObject::connect(parts,qOverload<int>(&QComboBox::currentIndexChanged),&dialog,[&](int){update();});
+            QObject::connect(axes,qOverload<int>(&QComboBox::currentIndexChanged),&dialog,[&](int){update();});
+            QObject::connect(buttons,&QDialogButtonBox::accepted,&dialog,&QDialog::accept);
+            QObject::connect(buttons,&QDialogButtonBox::rejected,&dialog,&QDialog::reject);
+            update();
+            if (dialog.exec()!=QDialog::Accepted || !draft || !modalContextUnchanged(context) ||
+                !assemblyDraftSourceUnchanged(source,workspace)) return;
+            (void)createSemanticBoundaryDimension(std::move(*draft),"Add component dimension",source.revision());
+        } catch (const std::exception& error) {
+            setError(QStringLiteral("Component dimension: %1").arg(QString::fromUtf8(error.what())));
         }
     }
 
@@ -56602,6 +56724,15 @@ private:
                     selection->setEnabled(false);
                     if (m_selected_ids.size() == 1) {
                         const auto entity = selectedEntity();
+                        if ((entity && entity->type=="assembly_instance") ||
+                            geometric_assembly_for_child(*menu_source,m_selected_id.toStdString())) {
+                            auto* dimension=menu.addAction(QStringLiteral("Add component dimension…"));
+                            dimension->setObjectName(QStringLiteral("addComponentDimensionContextAction"));
+                            dimension->setEnabled(m_document->is_editable());
+                            const auto selected_id=m_selected_id;
+                            QObject::connect(dimension,&QAction::triggered,owner,
+                                guarded([this,selected_id]{showAssemblyDimension(selected_id);}));
+                        }
                         if (const auto binding=selectedAssemblyTypeBinding(*menu_source,m_selected_id)) {
                             auto* definition=menu.addAction(QStringLiteral("Edit component type…"));
                             definition->setObjectName(QStringLiteral("componentTypeContextAction"));
@@ -58668,6 +58799,28 @@ private:
             a.forward.translation_m.z==b.forward.translation_m.z;
     }
 
+    static SitePresentationPlacement siteDimensionPresentation(const DocumentSnapshot& source,
+        const std::string& id,SitePresentationPlacement placement) {
+        const auto found=source.entities().find(id);
+        if (found==source.entities().end() || !can_recognize_boundary_dimension_entity_type(found->second.type)) return placement;
+        const auto decoded=decode_boundary_dimension_entity(found->second);
+        if (!decoded.supported() || decoded.dimension->kind!=BoundaryDimensionKind::assembly_extent ||
+            decoded.dimension->assembly_target->component.document_entity_id) return placement;
+        const auto& target=decoded.dimension->assembly_target->component;
+        const auto model=AssemblyModel::from_json(source.entities().at(target.catalog_id).properties.at("model"));
+        const auto row=std::find_if(model.instances().begin(),model.instances().end(),[&](const auto& instance) {
+            return instance.id==target.instance_id;
+        });
+        if (row==model.instances().end()) throw std::invalid_argument("The component dimension's qualified root is unavailable.");
+        if (row->placement)
+            if (const auto context=organize_project(source).drawing_context(row->placement->host_entity_id))
+                placement.drawing_context=*context;
+        // Embedded poses already use world coordinates. Match the object's
+        // canonical Site presentation rather than applying its catalog frame.
+        placement.source_frame={};placement.forward={};placement.inverse={};
+        return placement;
+    }
+
     static std::map<std::string,SitePresentationPlacement,std::less<>> resolveSiteModelPresentationFrames(
         const DocumentSnapshot& source,const std::vector<std::string>& ids) {
         std::map<std::string,std::string,std::less<>> owners;
@@ -58682,10 +58835,11 @@ private:
         const auto resolved=resolve_site_presentations(source,batch);
         std::map<std::string,SitePresentationPlacement,std::less<>> result;
         for (const auto& [id,owner] : owners) {
+            auto placement=siteDimensionPresentation(source,id,resolved.at(owner));
             if (owner!=id && source.entities().at(id).properties.contains("presentation_frame") &&
-                !sameSitePresentationPlacement(resolved.at(id),resolved.at(owner)))
+                !sameSitePresentationPlacement(resolved.at(id),placement))
                 throw std::invalid_argument("A saved dimension's explicit Site frame conflicts with its measured owner's coordinate basis: "+id);
-            result.emplace(id,resolved.at(owner));
+            result.emplace(id,std::move(placement));
         }
         return result;
     }
@@ -58786,7 +58940,7 @@ private:
         model_ids.assign(unique.begin(),unique.end());
         const auto models = resolve_site_presentations(source,model_ids);
         for (const auto& [id,owner] : explicit_dimension_frames)
-            if (!sameSitePresentationPlacement(models.at(id),models.at(owner)))
+            if (!sameSitePresentationPlacement(models.at(id),siteDimensionPresentation(source,id,models.at(owner))))
                 throw std::invalid_argument("A saved dimension's explicit Site frame conflicts with its measured owner's coordinate basis: "+id);
         const std::vector<SiteAnnotationTarget> annotation_ids(annotation_targets.begin(),annotation_targets.end());
         const auto annotations = resolve_site_annotation_presentations(source,annotation_ids);
@@ -58812,11 +58966,13 @@ private:
             const SiteCanvasPresentationFrames::GeometryKey key{item.id,item.presentation_key};
             auto placement=models.at(geometry_owners.at(key));
             if (embedded_presentations.contains(key)) placement=embedded_frame(item.id,std::move(placement));
+            else placement=siteDimensionPresentation(source,item.id.toStdString(),std::move(placement));
             frames.insertGeometry(item,std::move(placement));
         }
         for (const auto& [id,owner] : owners) {
             auto placement=models.at(owner);
             if (!source.entities().contains(id.toStdString())) placement=embedded_frame(id,std::move(placement));
+            else placement=siteDimensionPresentation(source,id.toStdString(),std::move(placement));
             frames.auxiliary.emplace(id,std::move(placement));
         }
         for (const auto& [id,child] : children) frames.auxiliary.emplace(id,annotations.at(child));
@@ -61616,7 +61772,7 @@ private:
             visualization::NativeModelView::VisibleEntityIds native_visible_ids;
             native_visible_ids.insert(visible_ids.begin(), visible_ids.end());
             m_native_visible_ids = native_visible_ids;
-            m_nativeModelView->setSnapshot(snapshot, native_visible_ids);
+            m_nativeModelView->setSnapshot(snapshot, native_visible_ids, m_metric_units);
             synchronizeNativeSelection();
             m_native_geometry_document = m_document;
             m_native_geometry_revision = snapshot.revision();
@@ -72166,7 +72322,8 @@ public:
                     }
                     const auto dimension_text = [&](const BoundaryDimensionResolution& resolved) {
                         if (resolved.kind == BoundaryDimensionKind::segment_length || resolved.kind == BoundaryDimensionKind::wall_axis_length ||
-                            resolved.kind == BoundaryDimensionKind::corner_window_leg_length)
+                            resolved.kind == BoundaryDimensionKind::corner_window_leg_length ||
+                            resolved.kind == BoundaryDimensionKind::assembly_extent)
                             return format_boundary_length(resolved.segment_length_metres, context.metric_units, ansi);
                         if (resolved.kind == BoundaryDimensionKind::angle)
                             return format_dimension_angle(resolved.angle_radians);
@@ -72181,6 +72338,10 @@ public:
                         if (resolved.kind == BoundaryDimensionKind::segment_length || resolved.kind == BoundaryDimensionKind::wall_axis_length ||
                             resolved.kind == BoundaryDimensionKind::corner_window_leg_length)
                             overlay = dimension_overlay(resolved.segment, dimension.text_position);
+                        else if (resolved.kind == BoundaryDimensionKind::assembly_extent) {
+                            if (const auto segment=assembly_dimension_plan_segment(resolved))
+                                overlay=dimension_overlay(*segment,dimension.text_position);
+                        }
                         else if (resolved.kind == BoundaryDimensionKind::angle)
                             overlay = angle_dimension_overlay(resolve_dimension_geometry_owner(boundary_entity), dimension);
                         if (overlay) {
@@ -72188,7 +72349,8 @@ public:
                                 *overlay, color);
                             line.type = QStringLiteral("dimension_line");
                             line.dimension_end_ticks = resolved.kind == BoundaryDimensionKind::segment_length ||
-                                resolved.kind == BoundaryDimensionKind::wall_axis_length || resolved.kind == BoundaryDimensionKind::corner_window_leg_length;
+                                resolved.kind == BoundaryDimensionKind::wall_axis_length || resolved.kind == BoundaryDimensionKind::corner_window_leg_length ||
+                                resolved.kind == BoundaryDimensionKind::assembly_extent;
                             geometry.push_back(std::move(line));
                         }
                         if (text.isEmpty()) return;

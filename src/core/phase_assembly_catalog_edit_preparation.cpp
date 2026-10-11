@@ -98,7 +98,8 @@ void admit_typed_allocations(RequestBudget& budget, const PhaseAssemblyCatalogEd
     const PhaseAssemblyCatalogEditPresentationAllocation& presentation) {
     const auto& allocation = authoring.allocation;
     if (allocation.roots.size() > 4096 || allocation.membership_entity_ids.size() > 4096 ||
-        presentation.overlay_ids.size() > 4096) reject("typed allocation count exceeds bound");
+        presentation.overlay_ids.size() > 4096 || presentation.dimension_ids.size() > 4096)
+        reject("typed allocation count exceeds bound");
     const auto text = [&](const std::string& value, std::size_t maximum) {
         if (value.size() > maximum) reject("typed allocation identity exceeds bound");
         budget.text(value);
@@ -117,6 +118,9 @@ void admit_typed_allocations(RequestBudget& budget, const PhaseAssemblyCatalogEd
         budget.charge(128); text(registry, 128); text(membership, 128);
     }
     for (const auto& [original, proposed] : presentation.overlay_ids) {
+        budget.charge(128); text(original, 128); text(proposed, 128);
+    }
+    for (const auto& [original, proposed] : presentation.dimension_ids) {
         budget.charge(128); text(original, 128); text(proposed, 128);
     }
 }

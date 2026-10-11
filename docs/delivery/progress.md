@@ -14,7 +14,56 @@ changed source does not acquire runtime acceptance without later qualification.
 
 ## Current delivery state
 
+### October 11 qualified component dimensions and native presentation
+
+The preceding status-only turn made no implementation progress. This
+continuation corrects repeated complete-map measurement admission in the actual
+canvas route: saved dimensions now share one bounded batch and phase scope per
+immutable authoring source. Two source slots support original/proposed previews;
+matching IDs or revision numbers cannot borrow another head's measurements.
+Retargeted/new dialog proposals resolve their actual requested target separately.
+Rejected scenes also retain their admission error instead of restarting the
+same expensive work for every annotation. Retained-state integrity likewise
+resolves at most 1000 targets under one shared ledger.
+
+The current source batch includes exact root/nested-part physical
+width/depth/height, closed dimension version6, reader219/extraction217, context
+creation, authored/world plan presentation, phase replacement dimension carry
+and native DXF graph6 transport. Native 3D now prepares nonselectable physical
+span text/lines/ticks alongside solids, captures imperial/metric units with the
+requested source, and restores previous annotations on publication failure.
+The shell's three native snapshot routes pass the selected units explicitly.
+Actual admitted measurement hosts supply phase dependencies without another
+catalog decode. Independent source review approved the integrated scene and
+native publication scope with no open P1/P2 findings. Corrections batch unique
+host vertical/Site qualification and intersect native annotation visibility
+with both its own ID and its actual component's presentation ID. The earlier
+review found no additional P1/P2 in the resolver, codecs, phase carry and
+exchange scope. Scoped whitespace review passes; this batch is being committed
+and backed up. No source review establishes runtime acceptance.
+
+Lifecycle discovery identified concrete remaining gaps: ordinary component
+Copy/Paste omits associated qualified dimensions, and embedded transform/clone
+does not yet carry their text anchors or copies. These are required authoring
+work. A bounded pure transform/clone carry helper is being implemented in
+separate owned source files for ensuing controller integration, alongside
+nested linked-view targets, independent catalog/host replacement
+coordination and the component-companion editing quarantine. Source additions
+do not complete those workflows. No builds/tests/jobs, launches or packages
+ran; the installed candidate is unchanged and all ten production gates remain
+open. Compilation and actual interaction/history/storage/exchange qualification
+remain unverified.
+
 ### October 11 phase-isolated component definition integration
+
+This batch is now committed and pushed as b26c6efa; the exact remote branch ref
+matches the local commit. The current follow-on source batch implements genuine
+component dimensions: saved version6 targets, complete-map document admission,
+measured width/depth/height and nested-part selection, a component context-menu
+creation dialog, authored/world presentation separation and phase preview.
+Reader219/extraction217 retain the new targets. Native DXF transport and catalog
+replacement dimension carry are being integrated in parallel. Neither the
+follow-on batch nor its runtime workflows are qualified yet.
 
 The shared definition/numeric-copy batch below is committed and pushed as
 07e6de65, with the exact remote branch ref verified. The current source batch

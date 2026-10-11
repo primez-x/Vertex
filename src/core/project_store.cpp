@@ -385,8 +385,13 @@ std::uint32_t required_format_version_internal(const DocumentSnapshot& snapshot,
                     "phase_assembly_catalog_edit_completion","phase_assembly_catalog_edit_intent"}) &&
                 value.at("version")==60 && value.at("kind")=="apply_boundary_constraint_changes" &&
                 value.at("phase_assembly_catalog_edit_completion")==true &&
-                value.at("phase_assembly_catalog_edit_intent").is_object())
+                value.at("phase_assembly_catalog_edit_intent").is_object()) {
                 floor=std::max(floor,218U);
+                const auto& request=value.at("phase_assembly_catalog_edit_intent");
+                if (request.contains("presentation_allocation") && request.at("presentation_allocation").is_object() &&
+                    request.at("presentation_allocation").value("version",nlohmann::json{})==2)
+                    floor=std::max(floor,219U);
+            }
             if (closed_shape({"version","kind","expected_revision","message",
                     "assembly_catalog_edit_completion","assembly_catalog_edit_intent"}) &&
                 value.at("version")==59 && value.at("kind")=="apply_boundary_constraint_changes" &&
@@ -1437,6 +1442,8 @@ std::uint32_t required_format_version_internal(const DocumentSnapshot& snapshot,
                         required = std::max(required, 55U);
                     if (decoded.dimension->kind == BoundaryDimensionKind::corner_window_leg_length)
                         required = std::max(required, 172U);
+                    if (decoded.dimension->kind == BoundaryDimensionKind::assembly_extent)
+                        required = std::max(required, 219U);
                     const auto owner=revision.entities.find(decoded.dimension->boundary_id);
                     if (owner!=revision.entities.end() && owner->second.type=="room_boundary" &&
                         owner->second.extensions.contains("physical_wall_room")) required=std::max(required,50U);
@@ -3280,6 +3287,7 @@ bool verify_sqlite_schema(sqlite3* database, bool allow_recovery = false) {
          sqlite3_column_int(user_version.get(), 0) != 216 &&
          sqlite3_column_int(user_version.get(), 0) != 217 &&
          sqlite3_column_int(user_version.get(), 0) != 218 &&
+         sqlite3_column_int(user_version.get(), 0) != 219 &&
          sqlite3_column_int(user_version.get(), 0) != 207 &&
          sqlite3_column_int(user_version.get(), 0) != 202 &&
          sqlite3_column_int(user_version.get(), 0) != 200 &&
@@ -4005,6 +4013,8 @@ DocumentSnapshot read_snapshot(sqlite3* database, RecoveryLedger* recovery = nul
     // here and authenticate the manifest with its stored version below.
     const auto required_format = required_format_version_internal(snapshot, format_number < 28);
     if (required_format > format_number) {
+        if (required_format>=219)
+            storage_error(StorageErrorCode::unsupported_format,"This project requires reader 219 for qualified component width, depth and height dimensions");
         if (required_format>=218)
             storage_error(StorageErrorCode::unsupported_format,"This project requires reader 218 for phase-isolated component definition editing and presentation carry");
         if (required_format>=217)

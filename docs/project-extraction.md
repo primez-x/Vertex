@@ -1,5 +1,14 @@
 # Portable project extraction
 
+Exchange version217 requires native reader219 for qualified component extent
+dimensions. Dimension version6 carries the actual catalog/root/document-owner,
+part path and physical width/depth/height axis in a closed target. Persisted
+history preserves their identity and presentation; analytical quantities are
+resolved from the full actual source instead of synthetic edges. Deleted and
+undone targets retain the reader requirement. Existing dimension versions and
+older exchange semantics remain unchanged. Extraction and migration execution
+remain unverified.
+
 Exchange version216 requires native reader218 for snapshot-bound private
 component definition editing under command60. Catalog/original-definition
 bindings, actual root allocations, saved-source authority and presentation

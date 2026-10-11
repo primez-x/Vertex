@@ -74,8 +74,11 @@ public:
     using VisibleEntityIds = std::set<std::string, std::less<>>;
     // Schedules immutable geometry preparation. The previous complete scene
     // stays visible; isReady()/exportViewImage reject pending or failed output.
+    // Component dimensions use the captured unit choice, actual world extents,
+    // saved text placement/styles and owner visibility. They are not selectable.
     void setSnapshot(const DocumentSnapshot& snapshot,
-                     std::optional<VisibleEntityIds> visible_ids = std::nullopt);
+                     std::optional<VisibleEntityIds> visible_ids = std::nullopt,
+                     bool metric = false);
     // Exact immutable source of the latest semantic preparation request,
     // including when the native pane is hidden or has not initialized.
     // Preparation readiness does not imply AIS presentation or input authority.

@@ -16,12 +16,15 @@ struct PhaseAssemblyCatalogEditPresentationPlan {
     PhaseAssemblyCatalogEditPlan producer;
     // Sorted exact baseline overlay roster only. Ordinary retargets retain IDs.
     std::vector<std::string> required_overlay_ids;
+    // Sorted exact baseline standalone assembly-extent entity roster.
+    std::vector<std::string> required_dimension_ids;
     // No candidate is produced when these source-bound references need a
     // translation unsupported by the owning typed codec.
     std::vector<PhaseAssemblyCatalogPresentationReferenceGap> unsupported_references;
 };
 struct PhaseAssemblyCatalogEditPresentationAllocation {
     std::map<std::string, std::string, std::less<>> overlay_ids;
+    std::map<std::string, std::string, std::less<>> dimension_ids;
     bool operator==(const PhaseAssemblyCatalogEditPresentationAllocation&) const = default;
 };
 
@@ -33,13 +36,17 @@ struct PhaseAssemblyCatalogEditPresentationAllocation {
 // then patches only admitted typed presentation fields. Baseline rows remain
 // raw exact; ordinary references retain their existing allocation identities.
 // Exact unsupported gaps refuse completion. Fresh IDs include the producer's
-// actual aliases and overlays, for the caller's retained-history lifetime fence.
+// actual aliases, overlays and standalone dimensions, for the caller's retained-
+// history lifetime fence. Qualified source/proposed dimension geometry is
+// validated under complete-map batches before presentation copies are made.
 [[nodiscard]] PhaseAssemblyCatalogEditResult replay_phase_assembly_catalog_edit_presentation_entities(
     const AssemblyDocumentEntities&, const nlohmann::json& catalog_request,
     const PhaseAssemblyCatalogEditAllocation&,
     const PhaseAssemblyCatalogEditPresentationAllocation&);
 
-// Closed, bounded v1 overlay allocation; source replay checks the exact roster.
+// Closed, bounded v2 overlay/dimension allocation; source replay checks both
+// exact rosters. Empty dimension allocations retain historical v1 encoding
+// and its overlays-only meaning.
 [[nodiscard]] nlohmann::json encode_phase_assembly_catalog_edit_presentation_allocation(
     const PhaseAssemblyCatalogEditPresentationAllocation&);
 [[nodiscard]] PhaseAssemblyCatalogEditPresentationAllocation decode_phase_assembly_catalog_edit_presentation_allocation(

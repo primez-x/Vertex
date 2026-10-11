@@ -83,6 +83,11 @@ bool coordinated_corner_source_semantics(const Entity& entity) {
         (entity.type == "sheet_view_model" && properties.contains("model") && properties.at("model").is_object() &&
             properties.at("model").contains("version") && properties.at("model").at("version") == 9);
 }
+bool assembly_dimension_source_semantics(const Entity& entity) {
+    return entity.type == "dimension" && entity.properties.is_object() &&
+        entity.properties.contains("dimension_version") && entity.properties.at("dimension_version") == 6 &&
+        entity.properties.contains("dimension_kind") && entity.properties.at("dimension_kind") == "assembly_extent";
+}
 Entity read_catalog_source(const std::string& id, const Json& record);
 std::vector<std::string> catalog_identity_list(const Json& values);
 AssemblyDocumentEntities merged_catalog_source_graph(const NativeDxfPhysicalSourceGraphs& proofs,
@@ -1961,6 +1966,26 @@ bool annotation_has_inactive_owner(const Entity& entity, const ConstraintPhaseSc
     return false;
 }
 
+bool dimension_has_inactive_target(const BoundaryDimension& dimension, const ConstraintPhaseScope& scope,
+    const AssemblyDocumentEntities& actual) {
+    if (dimension.kind != BoundaryDimensionKind::assembly_extent)
+        return scope.inactive_owner_ids.contains(dimension.boundary_id);
+    const auto& component = dimension.assembly_target->component;
+    if (component.document_entity_id)
+        return scope.inactive_owner_ids.contains(*component.document_entity_id);
+    const AssemblyPhaseRoot root{component.catalog_id, component.instance_id};
+    if (scope.assembly_memberships.inactive_roots.contains(root)) return true;
+    if (!scope.assembly_memberships.owners.contains(root) &&
+        scope.inactive_owner_ids.contains(component.catalog_id)) return true;
+    // The actual qualified row identifies its own placement host. Presentation
+    // aliases are never parsed to recover this identity or its activity.
+    const auto& rows = actual.at(component.catalog_id).properties.at("model").at("instances");
+    for (const auto& row : rows) if (row.at("id") == component.instance_id && row.contains("placement"))
+        return assembly_host_inactive_in_phase(actual, scope.inactive_owner_ids,
+            row.at("placement").at("host_entity_id").get<std::string>());
+    return false;
+}
+
 void report_boundary_semantics_loss(const Entity& entity, std::string_view imported_classification,
                                     std::vector<DxfProjectDiagnostic>& diagnostics) {
     // Detached import IDs are ordinary policy, but analytical curve records
@@ -1983,7 +2008,8 @@ void report_boundary_semantics_loss(const Entity& entity, std::string_view impor
 void export_native_entity(const DocumentSnapshot& document, const Entity& entity,
                           DxfProjectExportResult& result, const ConstraintPhaseScope& scope,
                           bool allow_boundary_native = true,
-                          NativeDxfWallSourceWorkBudget* source_budget = nullptr) {
+                          NativeDxfWallSourceWorkBudget* source_budget = nullptr,
+                          bool assembly_authored_picture = false) {
     if (entity.type == "wall" || entity.type == "opening") {
         export_architectural_entity(document, entity, result, scope, allow_boundary_native);
         return;
@@ -2133,12 +2159,14 @@ void export_native_entity(const DocumentSnapshot& document, const Entity& entity
     }
     if (entity.type == "dimension") {
         try {
+            if (source_budget && assembly_dimension_source_semantics(entity))
+                admit_native_dxf_annotation_source_work(entity, document.entities(), *source_budget);
             const auto decoded = decode_boundary_dimension_entity(entity);
             if (!decoded.supported()) {
                 diagnostic(result.diagnostics, entity.id, entity.type, "dimension_semantics_unsupported");
                 return;
             }
-            if (scope.inactive_owner_ids.contains(decoded.dimension->boundary_id)) {
+            if (dimension_has_inactive_target(*decoded.dimension, scope, document.entities())) {
                 diagnostic(result.diagnostics, entity.id, entity.type, "inactive_design_owner_not_exported");
                 return;
             }
@@ -2160,19 +2188,52 @@ void export_native_entity(const DocumentSnapshot& document, const Entity& entity
                 admit_native_dxf_corner_window_source_work(owner->second, document.entities(), *source_budget);
             const auto resolved = resolve_current_boundary_dimension(*decoded.dimension, document);
             const auto text = entity.properties.value("display_text", std::string{});
-            const auto text_rotation = decoded.dimension->presentation
+            auto text_rotation = decoded.dimension->presentation
                 ? normalized_degrees(decoded.dimension->presentation->rotation_radians) : 0.0;
+            auto text_position = decoded.dimension->text_position;
+            if (resolved.assembly_geometry && !assembly_authored_picture && resolved.assembly_geometry->presentation) {
+                const auto& frame = resolved.assembly_geometry->presentation->forward;
+                const auto point = site_transform_point({text_position.x, text_position.y, 0.0}, frame);
+                text_position = {point.x, point.y};
+                text_rotation = normalized_degrees(radians_from_degrees(text_rotation) + frame.rotation_radians);
+            }
             const auto callout = [&](std::string name, double quantity, std::string_view suffix,
                                      const char* fidelity) {
                 if (text != " ") {
                     name += ": " + dimension_quantity_text(quantity, suffix, text);
                     if (name.size() > DxfExchangeLimits{}.max_string_bytes)
                         throw std::invalid_argument("DXF dimension callout exceeds its transport limit");
-                    result.drawing.labels.push_back({{decoded.dimension->text_position.x,
-                        decoded.dimension->text_position.y}, 0.15, text_rotation, std::move(name), "Dimensions"});
+                    result.drawing.labels.push_back({{text_position.x,
+                        text_position.y}, 0.15, text_rotation, std::move(name), "Dimensions"});
                 }
                 diagnostic(result.diagnostics, entity.id, entity.type, fidelity);
             };
+            if (resolved.kind == BoundaryDimensionKind::assembly_extent) {
+                if (!resolved.assembly_geometry)
+                    throw std::invalid_argument("DXF assembly dimension has no admitted physical geometry");
+                const auto& geometry = *resolved.assembly_geometry;
+                if (geometry.target.axis == AssemblyDimensionAxis::height) {
+                    callout("Height", geometry.span_metres, " m", "dimension_assembly_height_exported_as_quantity_callout");
+                    return;
+                }
+                const auto& start = assembly_authored_picture ? geometry.start_authored_m : geometry.start_world_m;
+                const auto& end = assembly_authored_picture ? geometry.end_authored_m : geometry.end_world_m;
+                const auto represented_span = std::hypot(end.x - start.x, end.y - start.y);
+                if (!std::isfinite(represented_span) || represented_span <= kGeometryTolerance ||
+                    std::abs(represented_span - geometry.span_metres) >
+                        std::max(kGeometryTolerance, geometry.span_metres * 1e-9)) {
+                    // A distant origin may collapse or materially round the
+                    // represented endpoints. Preserve the actual scalar span.
+                    callout(geometry.target.axis == AssemblyDimensionAxis::width ? "Width" : "Depth",
+                        geometry.span_metres, " m", "dimension_assembly_extent_exported_as_quantity_callout");
+                    return;
+                }
+                result.drawing.dimensions.push_back({{start.x, start.y}, {end.x, end.y},
+                    {text_position.x, text_position.y}, {text_position.x, text_position.y},
+                    normalized_degrees(std::atan2(end.y - start.y, end.x - start.x)),
+                    dimension_length_text(geometry.span_metres, text), "Dimensions", true, text_rotation});
+                return;
+            }
             if (resolved.kind == BoundaryDimensionKind::area) {
                 callout("Area", resolved.area(), " m2", "dimension_area_exported_as_quantity_callout");
                 return;
@@ -2997,9 +3058,13 @@ PhasePlans phase_support_plans(const NativeDxfPhaseSourceGraph& graph,
         if (!decoded.supported()) throw std::invalid_argument("V9 support dimension unsupported");
         support_dimensions.emplace(id, *decoded.dimension);
         if (scope.inactive_owner_ids.contains(id) || annotation_has_inactive_owner(owner, scope) ||
-            scope.inactive_owner_ids.contains(decoded.dimension->boundary_id) ||
+            dimension_has_inactive_target(*decoded.dimension, scope, graph.entities) ||
             (decoded.dimension->presentation && !decoded.dimension->presentation->visible)) continue;
-        dimension_frame_ids.insert(decoded.dimension->boundary_id);
+        // Embedded roots already expand their actual host placement; their
+        // catalog's container frame is not a second geometry presentation.
+        if (decoded.dimension->kind != BoundaryDimensionKind::assembly_extent ||
+            decoded.dimension->assembly_target->component.document_entity_id)
+            dimension_frame_ids.insert(decoded.dimension->boundary_id);
         if (owner.properties.contains("presentation_frame")) dimension_frame_ids.insert(id);
     }
     std::map<std::string, SitePresentationPlacement, std::less<>> dimension_presentations;
@@ -3102,27 +3167,33 @@ PhasePlans phase_support_plans(const NativeDxfPhaseSourceGraph& graph,
             // witnesses, drafting ticks and measured text without a new solver.
             const auto& dimension = support_dimensions.at(id);
             if (!scope.inactive_owner_ids.contains(id) && !annotation_has_inactive_owner(owner, scope) &&
-                !scope.inactive_owner_ids.contains(dimension.boundary_id) &&
+                !dimension_has_inactive_target(dimension, scope, graph.entities) &&
                 (!dimension.presentation || dimension.presentation->visible)) {
-                const auto& frame = dimension_presentations.at(dimension.boundary_id);
+                const bool embedded_assembly = dimension.kind == BoundaryDimensionKind::assembly_extent &&
+                    !dimension.assembly_target->component.document_entity_id;
+                const SiteRigidTransform identity_frame{};
+                const auto* frame = embedded_assembly ? nullptr : &dimension_presentations.at(dimension.boundary_id);
                 // Site rendering authors both witnesses and text in the measured
                 // owner's basis. An explicit dimension frame must agree with it;
                 // the dimension's layer cannot introduce a second spatial basis.
                 if (owner.properties.contains("presentation_frame")) {
                     const auto& declared = dimension_presentations.at(id);
-                    if (declared.source_frame != frame.source_frame ||
-                        declared.forward.rotation_radians != frame.forward.rotation_radians ||
-                        declared.forward.translation_m.x != frame.forward.translation_m.x ||
-                        declared.forward.translation_m.y != frame.forward.translation_m.y ||
-                        declared.forward.translation_m.z != frame.forward.translation_m.z)
+                    const auto& expected = frame ? frame->forward : identity_frame;
+                    if ((frame && declared.source_frame != frame->source_frame) ||
+                        declared.forward.rotation_radians != expected.rotation_radians ||
+                        declared.forward.translation_m.x != expected.translation_m.x ||
+                        declared.forward.translation_m.y != expected.translation_m.y ||
+                        declared.forward.translation_m.z != expected.translation_m.z)
                         throw std::invalid_argument("V9 dimension presentation frame conflicts with measured owner: " + id);
                 }
                 if (graph.entities.at(dimension.boundary_id).extensions.contains("physical_wall_room"))
                     admit_native_dxf_phase_physical_room_checks(graph.entities, &budget);
                 DxfProjectExportResult projected;
-                export_native_entity(*snapshot, owner, projected, scope, true, &budget);
+                export_native_entity(*snapshot, owner, projected, scope, true, &budget, true);
                 for (const auto& item : projected.diagnostics)
-                    if (item.code != "dimension_area_exported_as_quantity_callout" && item.code != "dimension_chain_exported_as_total_callout")
+                    if (item.code != "dimension_area_exported_as_quantity_callout" && item.code != "dimension_chain_exported_as_total_callout" &&
+                        item.code != "dimension_assembly_height_exported_as_quantity_callout" &&
+                        item.code != "dimension_assembly_extent_exported_as_quantity_callout")
                         throw std::invalid_argument("V9 support dimension CAD projection unavailable: " + item.code);
                 block.lines = std::move(projected.drawing.lines); block.arcs = std::move(projected.drawing.arcs);
                 block.polylines = std::move(projected.drawing.polylines); block.labels = std::move(projected.drawing.labels);
@@ -3132,7 +3203,7 @@ PhasePlans phase_support_plans(const NativeDxfPhaseSourceGraph& graph,
                 for (const auto& value : projected.drawing.angular_dimensions) append_picture(block, dxf_dimension_plan(value), value.layer);
                 // Quantity resolution and drafting happen locally. Place the
                 // complete picture once, preserving lengths, bulges and text size.
-                place_phase_picture(block, frame.forward, budget);
+                place_phase_picture(block, frame ? frame->forward : identity_frame, budget);
                 result.diagnostics.insert(result.diagnostics.end(), projected.diagnostics.begin(), projected.diagnostics.end());
                 diagnostic(result.diagnostics, id, owner.type, "dimension_cad_picture_native_semantics_retained");
             }
@@ -3505,7 +3576,7 @@ std::set<std::size_t> import_phase_carrier(const DxfDrawing& drawing, bool sourc
     NativeDxfPhaseSourceAssets source_assets;
     const NativeDxfPhaseSourceAssets* actual_assets = &source_assets;
     if (value.is_object() && value.contains("version") &&
-        (value.at("version") == 4 || (value.at("version") == 5 && value.contains("asset_manifest")))) {
+        (value.at("version") == 4 || ((value.at("version") == 5 || value.at("version") == 6) && value.contains("asset_manifest")))) {
         const auto manifest = decode_native_dxf_phase_asset_manifest(value.at("asset_manifest"), &budget.phase_assets);
         if (serialization_assets) {
             // Complete export checks the actual payloads before encoding them;
@@ -3519,7 +3590,7 @@ std::set<std::size_t> import_phase_carrier(const DxfDrawing& drawing, bool sourc
     } else if (asset_carrier.has_assets || (serialization_assets && !serialization_assets->empty()))
         throw std::invalid_argument("Unexpected V9 asset payload carrier");
     const auto graph = decode_native_dxf_phase_source_graph(value, &budget, *actual_assets);
-    if ((graph.registry_ids.empty() && value.at("version") != 5) ||
+    if ((graph.registry_ids.empty() && value.at("version") != 5 && value.at("version") != 6) ||
         bodies.size() != graph.depicted_body_ids.size() || support.size() != graph.support_ids.size())
         throw std::invalid_argument("V9 registry/depicted inventory differs");
     // Legacy and V9 owners have one source identity namespace, including failed
@@ -5845,7 +5916,8 @@ DxfProjectExportResult export_project_dxf(const DocumentSnapshot& document,
     NativeDxfWallSourceWorkBudget wall_source_budget;
     std::set<std::string> phase_owned;
     const bool phase_operation = std::any_of(document.entities().begin(), document.entities().end(), [](const auto& owner) {
-        return owner.second.type == "model_phases" || coordinated_corner_source_semantics(owner.second);
+        return owner.second.type == "model_phases" || coordinated_corner_source_semantics(owner.second) ||
+            assembly_dimension_source_semantics(owner.second);
     });
     if (phase_operation) {
         try {
@@ -5854,7 +5926,7 @@ DxfProjectExportResult export_project_dxf(const DocumentSnapshot& document,
             // inventory. Include unregistered supported bodies/catalogs too,
             // so a legacy proof cannot take ownership of shared source context.
             for (const auto& [id, owner] : document.entities())
-                if (owner.type == "model_phases" || coordinated_corner_source_semantics(owner) ||
+                if (owner.type == "model_phases" || coordinated_corner_source_semantics(owner) || assembly_dimension_source_semantics(owner) ||
                     native_dxf_annotation_source_type(owner.type) || native_dxf_constraint_source_type(owner.type) ||
                     native_dxf_sheet_view_source_type(owner.type) ||
                     (is_model_phase_entity_type(owner.type) && owner.type != "building" && owner.type != "floor"))

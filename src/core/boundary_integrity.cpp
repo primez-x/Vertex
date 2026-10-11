@@ -1606,6 +1606,7 @@ std::optional<std::string> validate_boundary_integrity(
             if (!unsupported) unsupported = "Boundary " + id + ": " + version.diagnostic;
         }
     }
+    std::vector<AssemblyDimensionTarget> assembly_dimension_targets;
     for (const auto& [id, entity] : entities) {
         if (!can_recognize_boundary_dimension_entity_type(entity.type)) continue;
         const auto decoded = decode_boundary_dimension_entity(entity);
@@ -1615,6 +1616,16 @@ std::optional<std::string> validate_boundary_integrity(
         }
         const auto& dimension = *decoded.dimension;
         const auto owner = entities.find(dimension.boundary_id);
+        if (dimension.kind == BoundaryDimensionKind::assembly_extent) {
+            // Qualified roots and part paths need the complete authoritative
+            // catalog/instance map. A carrier-only boundary check cannot prove
+            // their measurement identity or geometry. Inactive retained roots
+            // remain valid stored targets; current display checks activity.
+            if (assembly_dimension_targets.size()>=1000)
+                throw std::invalid_argument("Standalone component dimension inventory exceeds its shared resolution bound");
+            assembly_dimension_targets.push_back(*dimension.assembly_target);
+            continue;
+        }
         if (dimension.kind == BoundaryDimensionKind::corner_window_leg_length) {
             if (owner == entities.end() || owner->second.type != "corner_window")
                 throw std::invalid_argument("Dimension " + id + ": missing or invalid corner-window owner");
@@ -1658,6 +1669,10 @@ std::optional<std::string> validate_boundary_integrity(
             }
         }
     }
+    // One shared complete-map/catalog/expansion ledger per actual retained
+    // state, instead of re-admitting every catalog and root for each callout.
+    if (!assembly_dimension_targets.empty())
+        (void)resolve_assembly_dimensions(entities,assembly_dimension_targets);
     return unsupported;
 }
 

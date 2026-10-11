@@ -9,6 +9,7 @@
 #include "sketch/corner_window.hpp"
 #include "sketch/stair_semantics.hpp"
 #include "sketch/assembly_document_adapter.hpp"
+#include "sketch/boundary_dimension.hpp"
 #include "sketch/constraint_phase_scope.hpp"
 #include "sketch/roof_entity_codec.hpp"
 
@@ -23,9 +24,11 @@
 #include <SelectMgr_EntityOwner.hxx>
 #include <AIS_Shape.hxx>
 #include <AIS_ColoredShape.hxx>
+#include <AIS_TextLabel.hxx>
 #include <BRep_Builder.hxx>
 #include <BRepBndLib.hxx>
 #include <BRepBuilderAPI_Transform.hxx>
+#include <BRepBuilderAPI_MakeEdge.hxx>
 #include <Bnd_Box.hxx>
 #include <Aspect_DisplayConnection.hxx>
 #include <Aspect_Handle.hxx>
@@ -34,6 +37,7 @@
 #include <OpenGl_Window.hxx>
 #include <PrsMgr_PresentationManager.hxx>
 #include <Quantity_Color.hxx>
+#include <Precision.hxx>
 #include <Standard_Failure.hxx>
 #include <TopoDS_Shape.hxx>
 #include <TopoDS_Compound.hxx>
@@ -81,6 +85,7 @@
 #include <limits>
 #include <map>
 #include <memory>
+#include <numeric>
 #include <optional>
 #include <set>
 #include <string>
@@ -197,6 +202,183 @@ occ::handle<AIS_Shape> prepared_presentation(const PreparedNativeSolid& solid) {
     return result;
 }
 
+// Derived display only: physical measurements never round through this text.
+// Keep integer conversions bounded even for admitted distant/large models.
+QString component_dimension_text(double metres, bool metric) {
+    if (!std::isfinite(metres) || metres <= 0.0)
+        throw std::invalid_argument("native component dimension has no physical span");
+    if (metric) {
+        const auto rounded = std::round(metres * 1000.0) / 1000.0;
+        if (!std::isfinite(rounded) || rounded == 0.0)
+            return QStringLiteral("%1 m").arg(metres, 0, 'g', 12);
+        auto number = QString::number(rounded, 'f', 3);
+        while (number.endsWith(QLatin1Char('0'))) number.chop(1);
+        if (number.endsWith(QLatin1Char('.'))) number.chop(1);
+        return (std::abs(metres - rounded) > 1e-10 ? QStringLiteral("≈ ") : QString{}) +
+               number + QStringLiteral(" m");
+    }
+    const auto inches = metres / 0.0254;
+    const auto sixteenths = std::round(inches * 16.0);
+    if (!std::isfinite(sixteenths) || sixteenths > 9e15) {
+        const auto feet = metres / 0.3048;
+        return std::isfinite(feet) ? QStringLiteral("≈ %1 ft").arg(feet, 0, 'g', 12)
+                                  : QStringLiteral("%1 m").arg(metres, 0, 'g', 12);
+    }
+    if (sixteenths == 0.0) return QStringLiteral("%1 in").arg(inches, 0, 'g', 12);
+    const auto ticks = static_cast<qint64>(sixteenths);
+    const auto feet = ticks / 192;
+    const auto whole = (ticks % 192) / 16;
+    const auto numerator = ticks % 16;
+    QString inch_text = whole || !numerator ? QString::number(whole) : QString{};
+    if (numerator) {
+        const auto divisor = std::gcd(numerator, qint64{16});
+        if (!inch_text.isEmpty()) inch_text += QLatin1Char(' ');
+        inch_text += QStringLiteral("%1/%2").arg(numerator / divisor).arg(16 / divisor);
+    }
+    const auto prefix = std::abs(inches * 16.0 - sixteenths) > 1e-7 ? QStringLiteral("≈ ") : QString{};
+    return prefix + (feet > 0 ? QStringLiteral("%1 ft %2 in").arg(feet).arg(inch_text)
+                             : inch_text + QStringLiteral(" in"));
+}
+
+struct ComponentDimensionPresentation {
+    std::vector<occ::handle<AIS_InteractiveObject>> objects;
+    bool visible{};
+};
+
+std::vector<ComponentDimensionPresentation> prepared_component_dimensions(
+    const DocumentSnapshot& source,
+    const std::optional<NativeModelView::VisibleEntityIds>& visible_ids,
+    bool metric, double pixel_ratio) {
+    const auto& actual = source.entities();
+    std::vector<BoundaryDimension> dimensions;
+    std::vector<AssemblyDimensionTarget> targets;
+    // The resolver's complete-map admission precedes every catalog/model decode
+    // below. The lightweight dimension codec carries identities, not geometry.
+    if (actual.size() > 100000)
+        throw std::invalid_argument("native component dimension source exceeds entity bound");
+    for (const auto& [id, entity] : actual) {
+        (void)id;
+        if (!can_recognize_boundary_dimension_entity_type(entity.type)) continue;
+        const auto kind = entity.properties.find("dimension_kind");
+        if (kind == entity.properties.end() || !kind->is_string() || *kind != "assembly_extent") continue;
+        // Inspect without copying an unsupported owner's opaque payload.
+        if (inspect_boundary_dimension_version(entity).format != BoundaryDimensionFormat::supported_v6) continue;
+        auto decoded = decode_boundary_dimension_entity(entity);
+        if (!decoded.dimension) continue; // Future versions remain opaque.
+        if (dimensions.size() == 1000)
+            throw std::invalid_argument("native component dimension count exceeds 1000");
+        targets.push_back(*decoded.dimension->assembly_target);
+        dimensions.push_back(std::move(*decoded.dimension));
+    }
+    if (targets.empty()) return {};
+    const auto measurements = resolve_assembly_dimensions(actual, targets);
+    const auto phase = constraint_phase_scope(actual);
+    const auto embedded_ids = embedded_assembly_presentation_ids(actual);
+    // The complete admitted measurement batch supplies actual retained hosts;
+    // annotations never decode catalogs again to recover those dependencies.
+    std::map<std::string, bool, std::less<>> host_activity;
+    std::set<std::string, std::less<>> unique_hosts;
+    for (const auto& measurement : measurements)
+        if (measurement.placement_host_id) unique_hosts.insert(*measurement.placement_host_id);
+    const std::vector<std::string> hosts(unique_hosts.begin(), unique_hosts.end());
+    if (!hosts.empty()) {
+        (void)resolve_vertical_placements(actual, hosts);
+        (void)resolve_site_presentations(actual, hosts);
+        for (const auto& host : hosts)
+            host_activity.emplace(host, !assembly_host_inactive_in_phase(actual, phase.inactive_owner_ids, host));
+    }
+    std::vector<ComponentDimensionPresentation> result;
+    result.reserve(dimensions.size());
+    for (std::size_t index = 0; index < dimensions.size(); ++index) {
+        const auto& dimension = dimensions[index];
+        const auto& measurement = measurements[index];
+        const auto& component = measurement.target.component;
+        const auto style = dimension.presentation.value_or(BoundaryDimensionPresentation{});
+        const AssemblyPhaseRoot root{component.catalog_id, component.instance_id};
+        const bool declared_row = !component.document_entity_id && phase.assembly_memberships.owners.contains(root);
+        const auto& owner_id = component.document_entity_id ? *component.document_entity_id : component.catalog_id;
+        bool active = !phase.inactive_owner_ids.contains(dimension.id) &&
+            !(!component.document_entity_id && phase.assembly_memberships.inactive_roots.contains(root)) &&
+            (declared_row || !phase.inactive_owner_ids.contains(owner_id));
+        const auto& host_id = measurement.placement_host_id;
+        if (host_id) active = active && host_activity.at(*host_id);
+        const auto render_id = component.document_entity_id ? *component.document_entity_id : embedded_ids.at(root);
+        ComponentDimensionPresentation annotation;
+        annotation.visible = active && style.visible &&
+            (!visible_ids || (visible_ids->contains(dimension.id) && visible_ids->contains(render_id)));
+        // Saved XY belongs to the independent owner's authored frame. Embedded
+        // placement is already world. Width/depth stay at the physical base;
+        // height text occupies the actual measured vertical midpoint.
+        Vec3 text{dimension.text_position.x, dimension.text_position.y, 0.0};
+        double rotation = style.rotation_radians;
+        if (component.document_entity_id && measurement.presentation) {
+            text = site_transform_point(text, measurement.presentation->forward);
+            rotation += measurement.presentation->forward.rotation_radians;
+        }
+        text.z = measurement.target.axis == AssemblyDimensionAxis::height
+            ? measurement.start_world_m.z * 0.5 + measurement.end_world_m.z * 0.5
+            : measurement.start_world_m.z;
+        if (!std::isfinite(text.x) || !std::isfinite(text.y) || !std::isfinite(text.z) || !std::isfinite(rotation))
+            throw std::invalid_argument("native component dimension text position is not representable");
+        Quantity_Color color;
+        if (!Quantity_Color::ColorFromHex(style.color.c_str(), color))
+            throw std::invalid_argument("native component dimension color is invalid");
+        auto label = occ::handle<AIS_TextLabel>(new AIS_TextLabel());
+        const auto text_utf8 = component_dimension_text(measurement.span_metres, metric).toUtf8();
+        label->SetText(TCollection_ExtendedString(text_utf8.constData(), true));
+        label->SetPosition(gp_Pnt(text.x, text.y, text.z));
+        label->SetColor(color);
+        // Camera-facing labels retain their authored angle and practical screen
+        // size: captured millimetres at 96 dpi, adjusted to native pixels.
+        label->SetZoomable(false);
+        label->SetHeight(style.text_height_mm * (96.0 / 25.4) * pixel_ratio);
+        label->SetAngle(rotation);
+        label->SetFontAspect(style.bold ? (style.italic ? Font_FontAspect_BoldItalic : Font_FontAspect_Bold)
+                                       : (style.italic ? Font_FontAspect_Italic : Font_FontAspect_Regular));
+        label->SetHJustification(Graphic3d_HTA_CENTER);
+        label->SetVJustification(Graphic3d_VTA_CENTER);
+        label->SetInfiniteState(true); // Annotation placement must not change solid FitAll bounds.
+        annotation.objects.push_back(label);
+
+        const auto& start = measurement.start_world_m;
+        const auto& end = measurement.end_world_m;
+        const auto represented_span = std::hypot(end.x - start.x, end.y - start.y, end.z - start.z);
+        // Distant origins may collapse or quantize a true physical span. Keep
+        // its actual text, and omit an inaccurate line rather than invent edges.
+        if (std::isfinite(represented_span) && represented_span > Precision::Confusion() &&
+            std::abs(represented_span - measurement.span_metres) <=
+                std::max(Precision::Confusion(), measurement.span_metres * 1e-6)) {
+            TopoDS_Compound lines;
+            BRep_Builder builder;
+            builder.MakeCompound(lines);
+            const auto add_line = [&](AssemblyPoint3 first, AssemblyPoint3 last) {
+                if (!std::isfinite(first.x) || !std::isfinite(first.y) || !std::isfinite(first.z) ||
+                    !std::isfinite(last.x) || !std::isfinite(last.y) || !std::isfinite(last.z)) return;
+                const auto length = std::hypot(last.x - first.x, last.y - first.y, last.z - first.z);
+                if (!std::isfinite(length) || length <= Precision::Confusion()) return;
+                BRepBuilderAPI_MakeEdge edge(gp_Pnt(first.x, first.y, first.z), gp_Pnt(last.x, last.y, last.z));
+                if (!edge.IsDone()) throw std::invalid_argument("native component dimension line could not be made");
+                builder.Add(lines, edge.Shape());
+            };
+            add_line(start, end);
+            const auto& tick_direction = measurement.target.axis == AssemblyDimensionAxis::width
+                ? measurement.depth_direction_world : measurement.width_direction_world;
+            const auto tick = std::min(measurement.span_metres * 0.05, 0.05);
+            for (const auto& point : {start, end}) {
+                add_line({point.x - tick_direction.x * tick, point.y - tick_direction.y * tick, point.z - tick_direction.z * tick},
+                         {point.x + tick_direction.x * tick, point.y + tick_direction.y * tick, point.z + tick_direction.z * tick});
+            }
+            auto line = occ::handle<AIS_Shape>(new AIS_Shape(lines));
+            line->SetColor(color);
+            line->SetDisplayMode(AIS_WireFrame);
+            line->SetInfiniteState(true);
+            annotation.objects.push_back(line);
+        }
+        result.push_back(std::move(annotation));
+    }
+    return result;
+}
+
 }  // namespace
 
 class NativeModelView::Impl {
@@ -220,6 +402,14 @@ public:
     QFrame* selection_rectangle{};
     std::shared_ptr<const DocumentSnapshot> snapshot;
     std::shared_ptr<const DocumentSnapshot> published_snapshot;
+    // Unit context travels with the exact request, including a completed
+    // candidate retained before the native window exists.
+    bool annotation_metric{};
+    bool published_annotation_metric{};
+    std::shared_ptr<const DocumentSnapshot> preparation_source;
+    bool preparation_annotation_metric{};
+    std::shared_ptr<const DocumentSnapshot> prepared_annotation_source;
+    bool prepared_annotation_metric{};
     std::shared_ptr<const DocumentSnapshot> gesture_snapshot;
     std::shared_ptr<const DocumentSnapshot> commit_snapshot;
     // Synchronous callbacks can pump nested pointer or menu events. Each
@@ -268,6 +458,7 @@ public:
     occ::handle<AIS_Shape> roof_transform_proxy;
     occ::handle<WNT_Window> window;
     std::map<std::string, CachedSolid, std::less<>> solids;
+    std::vector<ComponentDimensionPresentation> component_dimensions;
     QStringList selected_entity_ids;
     std::optional<std::string> selected_entity_id;
     std::vector<NativeRoofOpeningTarget> selected_roof_openings;
@@ -552,7 +743,10 @@ public:
         if (!snapshot) return;
         publication_metrics.reset();
         prepared_geometry.reset();
+        prepared_annotation_source.reset();
         geometry_prepared = false;
+        preparation_source = snapshot;
+        preparation_annotation_metric = annotation_metric;
         regenerator.request(*snapshot, visible_ids);
         const QPointer<NativeModelView> owner_guard(owner);
         show_status(QStringLiteral("Preparing 3D geometry…"), false);
@@ -563,9 +757,17 @@ public:
     void collect_prepared_geometry() {
         const QPointer<NativeModelView> owner_guard(owner);
         try {
-            if (auto completed = regenerator.take_completed()) prepared_geometry = std::move(completed);
+            if (auto completed = regenerator.take_completed()) {
+                prepared_geometry = std::move(completed);
+                // Regenerator discards superseded completions by request serial,
+                // even for equal revision/visibility or a unit-only refresh.
+                prepared_annotation_source = preparation_source;
+                prepared_annotation_metric = preparation_annotation_metric;
+            }
             if (!regenerator.is_pending()) preparation_timer->stop();
             if (!prepared_geometry || !snapshot ||
+                prepared_annotation_source != snapshot ||
+                prepared_annotation_metric != annotation_metric ||
                 prepared_geometry->revision != snapshot->revision() ||
                 prepared_geometry->visible_ids != visible_ids) return;
             auto& prepared = prepared_geometry;
@@ -591,11 +793,19 @@ public:
             // actually succeeds. A new source cannot certify that stale scene.
             if (!restore_roof_preview()) { prepared_geometry.reset(); return; }
 
-            // All expensive semantic reconstruction has finished. AIS and its
-            // context remain strictly on this widget's thread. Build candidates
-            // before removing any previous valid presentation.
+            // Worker-owned solid reconstruction has finished. Resolve the
+            // bounded annotation batch from the captured complete source here;
+            // AIS and its context remain strictly on this widget's thread.
+            // Build candidates before removing any previous valid presentation.
             const auto publication_started = std::chrono::steady_clock::now();
             NativeModelView::PublicationMetrics metrics;
+            const auto published_source = prepared_annotation_source;
+            const auto published_metric = prepared_annotation_metric;
+            // This is the exact complete request source, never a synthetic
+            // Document or carrier subset. AIS construction stays on the owner
+            // thread, alongside the candidate solid presentations.
+            auto replacement_dimensions = prepared_component_dimensions(
+                *published_source, visible_ids, published_metric, input_scale());
             std::map<std::string, CachedSolid, std::less<>> replacement;
             for (auto& [id, solid] : prepared->solids) {
                 const auto cached = solids.find(id);
@@ -645,7 +855,10 @@ public:
                 if (next == replacement.end() || next->second.presentation != solid.presentation)
                     metrics.removed += 1 + solid.roof_openings.size();
             }
-            auto published_source = std::make_shared<const DocumentSnapshot>(*snapshot);
+            std::vector<bool> previous_dimension_visibility;
+            for (const auto& annotation : component_dimensions)
+                for (const auto& object : annotation.objects)
+                    previous_dimension_visibility.push_back(context->IsDisplayed(object));
             const bool had_solids = !solids.empty();
             const bool previously_fit = has_fit;
             const bool previously_pending_fit = initial_fit_pending;
@@ -675,6 +888,15 @@ public:
                         }
                     }
                 }
+                for (const auto& annotation : replacement_dimensions) {
+                    if (!annotation.visible) continue;
+                    for (const auto& object : annotation.objects) {
+                        // Explicit -1 prevents default activation at Display;
+                        // Deactivate also protects a driver/context refresh.
+                        context->Display(object, 0, -1, false);
+                        context->Deactivate(object);
+                    }
+                }
                 // All candidates have been displayed successfully before any
                 // obsolete object is detached. Unchanged handles stay registered.
                 for (const auto& [id, solid] : solids) {
@@ -684,6 +906,8 @@ public:
                         for (const auto& child : solid.roof_openings) context->Remove(child.presentation,false);
                     }
                 }
+                for (const auto& annotation : component_dimensions)
+                    for (const auto& object : annotation.objects) context->Remove(object, false);
                 // A changed regional appearance replaces its AIS handle; keep
                 // the semantic selection attached to the new root presentation.
                 restore_selection_highlights(replacement);
@@ -699,11 +923,16 @@ public:
                     initial_fit_pending = false;
                 }
                 viewer->Redraw();
+                if (snapshot != published_source || annotation_metric != published_metric)
+                    throw std::invalid_argument("native scene publication request was superseded");
             } catch (...) {
                 // Keep the authoritative cache until publication and redraw
                 // succeed. Best-effort rollback also restores reused objects
                 // changed before a later context operation failed. A failing
                 // driver must not mask the original publication diagnostic.
+                for (const auto& annotation : replacement_dimensions)
+                    for (const auto& object : annotation.objects)
+                        try { context->Remove(object, false); } catch (...) {}
                 for (const auto& [id, solid] : replacement) {
                     const auto old = solids.find(id);
                     if (old == solids.end() || old->second.presentation != solid.presentation) {
@@ -729,6 +958,18 @@ public:
                         } catch (...) {}
                     }
                 }
+                std::size_t dimension_index = 0;
+                for (const auto& annotation : component_dimensions) {
+                    for (const auto& object : annotation.objects) {
+                        const bool was_visible = previous_dimension_visibility.at(dimension_index++);
+                        try {
+                            if (was_visible) {
+                                context->Display(object, 0, -1, false);
+                                context->Deactivate(object);
+                            } else context->Erase(object, false);
+                        } catch (...) {}
+                    }
+                }
                 has_fit = previously_fit;
                 initial_fit_pending = previously_pending_fit;
                 try {
@@ -739,10 +980,13 @@ public:
                 throw;
             }
             solids.swap(replacement);
-            published_snapshot = std::move(published_source);
+            component_dimensions.swap(replacement_dimensions);
+            published_snapshot = published_source;
+            published_annotation_metric = published_metric;
             roof_restoration_needs_republication=false;
             fit_requested = false;
             prepared_geometry.reset();
+            prepared_annotation_source.reset();
             metrics.elapsed_ms = std::chrono::duration<double, std::milli>(
                 std::chrono::steady_clock::now() - publication_started).count();
             publication_metrics = metrics;
@@ -2187,14 +2431,15 @@ NativeModelView::~NativeModelView() {
 }
 
 void NativeModelView::setSnapshot(const DocumentSnapshot& snapshot,
-                                 std::optional<VisibleEntityIds> visible_ids) {
+                                 std::optional<VisibleEntityIds> visible_ids, bool metric) {
     // Forks may share both identity and revision while holding different content.
-    // Deduplicate only the same immutable head and visibility request, retaining
-    // in-flight work, completed topology, and failures for unchanged refreshes.
+    // Deduplicate only the same immutable head, visibility and annotation units,
+    // retaining in-flight work, topology and failures for unchanged refreshes.
     if (!m_impl->roof_restoration_needs_republication && m_impl->snapshot &&
         m_impl->snapshot->document_id() == snapshot.document_id() &&
         m_impl->snapshot->revision() == snapshot.revision() &&
         m_impl->visible_ids == visible_ids &&
+        m_impl->annotation_metric == metric &&
         (m_impl->snapshot->shares_full_snapshot_with(snapshot) ||
          (same_snapshot_content(*m_impl->snapshot, snapshot) &&
           document_snapshot_digest(*m_impl->snapshot) == document_snapshot_digest(snapshot)))) {
@@ -2207,6 +2452,7 @@ void NativeModelView::setSnapshot(const DocumentSnapshot& snapshot,
     if (!cancellation_guard) return;
     m_impl->detach_manipulator();
     m_impl->visible_ids = std::move(visible_ids);
+    m_impl->annotation_metric = metric;
     m_impl->snapshot = std::move(requested_source);
     const QPointer<NativeModelView> owner_guard(this);
     m_impl->rebuild_snapshot();

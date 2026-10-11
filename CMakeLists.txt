@@ -284,7 +284,7 @@ add_library(sketch_document src/core/document.cpp src/core/document_digest.cpp s
   src/core/annotation_entity_codec.cpp src/core/presentation_transform.cpp src/core/georeferencing_entity_codec.cpp
   src/core/vertical_level_document_adapter.cpp src/core/project_organization.cpp src/core/survey_source_version.cpp
   src/core/physical_wall_room_data.cpp src/core/stair_attachment_integrity.cpp
-  src/core/assembly_document_adapter.cpp src/core/assembly_component_clipboard.cpp
+  src/core/assembly_document_adapter.cpp src/core/assembly_component_clipboard.cpp src/core/assembly_dimension.cpp
   src/core/assembly_catalog_phase_edit.cpp src/core/retained_geometry_work.cpp
   src/core/site_frame.cpp src/core/roof_join_phase_ownership.cpp)
 target_include_directories(sketch_document PUBLIC include)

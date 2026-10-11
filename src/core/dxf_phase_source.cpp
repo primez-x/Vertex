@@ -181,6 +181,14 @@ bool corner_graph_semantics(const Owners& owners) {
             properties.at("model").at("version") == 9;
     });
 }
+bool assembly_dimension_graph_semantics(const Owners& owners) {
+    return std::any_of(owners.begin(),owners.end(),[](const auto& row) {
+        const auto& owner=row.second;
+        return can_recognize_boundary_dimension_entity_type(owner.type) &&
+            owner.properties.value("dimension_version",Json{})==6 &&
+            owner.properties.value("dimension_kind",Json{})=="assembly_extent";
+    });
+}
 const Entity& actual(const Owners& owners, const std::string& id, std::string_view type = {}) {
     const auto found = owners.find(id);
     require(found != owners.end(), "missing source owner " + id);
@@ -904,10 +912,11 @@ Json unchecked_encode(const NativeDxfPhaseSourceGraph& graph, NativeDxfWallSourc
         return native_dxf_sheet_view_source_type(graph.entities.at(id).type);
     });
     const bool corners = corner_graph_semantics(graph.entities);
-    Json value{{"version", corners ? 5 : !graph.assets.empty() ? 4 : graph.support_ids.empty() ? 1 : sheet_companions ? 3 : 2}, {"entities", std::move(entities)}, {"body_ids", graph.body_ids},
+    const bool component_dimensions=assembly_dimension_graph_semantics(graph.entities);
+    Json value{{"version", component_dimensions ? 6 : corners ? 5 : !graph.assets.empty() ? 4 : graph.support_ids.empty() ? 1 : sheet_companions ? 3 : 2}, {"entities", std::move(entities)}, {"body_ids", graph.body_ids},
         {"catalog_ids", graph.catalog_ids}, {"registry_ids", graph.registry_ids}, {"context_ids", graph.context_ids},
         {"enrolled_hierarchy_ids", graph.enrolled_hierarchy_ids}, {"depicted_body_ids", graph.depicted_body_ids}};
-    if (!graph.support_ids.empty() || !graph.assets.empty() || corners) value["support_ids"] = graph.support_ids;
+    if (!graph.support_ids.empty() || !graph.assets.empty() || corners || component_dimensions) value["support_ids"] = graph.support_ids;
     if (!graph.assets.empty()) value["asset_manifest"] = encode_native_dxf_phase_asset_manifest(graph.assets, &budget.phase_assets);
     return value;
 }
@@ -1693,10 +1702,11 @@ NativeDxfPhaseSourceGraph decode_native_dxf_phase_source_graph(const Json& value
             ((value.at("version") == 1 && value.size() == 8 && !value.contains("support_ids")) ||
              ((value.at("version") == 2 || value.at("version") == 3) && value.size() == 9 && value.contains("support_ids")) ||
              (value.at("version") == 4 && value.size() == 10 && value.contains("support_ids") && value.contains("asset_manifest")) ||
-             (value.at("version") == 5 && value.contains("support_ids") &&
+             ((value.at("version") == 5 || value.at("version") == 6) && value.contains("support_ids") &&
                 ((!value.contains("asset_manifest") && value.size() == 9) || (value.contains("asset_manifest") && value.size() == 10)))),
             "unsupported graph schema/version");
         const bool corner_version = value.at("version") == 5;
+        const bool component_version = value.at("version") == 6;
         const bool assets_present = value.contains("asset_manifest");
         if (assets_present) {
             const auto manifest = decode_native_dxf_phase_asset_manifest(value.at("asset_manifest"), &budget.phase_assets);
@@ -1720,15 +1730,17 @@ NativeDxfPhaseSourceGraph decode_native_dxf_phase_source_graph(const Json& value
         };
         result.body_ids = read_ids("body_ids"); result.catalog_ids = read_ids("catalog_ids");
         result.registry_ids = read_ids("registry_ids"); result.context_ids = read_ids("context_ids");
-        require(corner_version == corner_graph_semantics(result.entities), "corner semantics require exactly graph version five");
-        if (value.at("version") == 2 || value.at("version") == 3 || assets_present || corner_version) {
+        require(component_version == assembly_dimension_graph_semantics(result.entities),
+            "component dimension semantics require exactly graph version six");
+        require(component_version || corner_version == corner_graph_semantics(result.entities), "corner semantics require graph version five or component dimension version six");
+        if (value.at("version") == 2 || value.at("version") == 3 || assets_present || corner_version || component_version) {
             result.support_ids = read_ids("support_ids");
-            require(assets_present || corner_version || !result.support_ids.empty(), "support inventory cannot be empty");
+            require(assets_present || corner_version || component_version || !result.support_ids.empty(), "support inventory cannot be empty");
         }
         const bool sheet_companions = std::any_of(result.entities.begin(), result.entities.end(), [](const auto& item) {
             return native_dxf_sheet_view_source_type(item.second.type);
         });
-        require(assets_present || corner_version || (value.at("version") == 3) == sheet_companions, "sheet/view companions require graph version three");
+        require(assets_present || corner_version || component_version || (value.at("version") == 3) == sheet_companions, "sheet/view companions require graph version three");
         result.enrolled_hierarchy_ids = read_ids("enrolled_hierarchy_ids"); result.depicted_body_ids = read_ids("depicted_body_ids");
         asset_pass(external_assets, budget, 1);
         result.assets = external_assets;

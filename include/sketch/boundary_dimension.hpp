@@ -1,6 +1,7 @@
 #pragma once
 
 #include "sketch/boundary_entity.hpp"
+#include "sketch/assembly_dimension.hpp"
 
 #include <cstdint>
 #include <map>
@@ -11,7 +12,7 @@
 
 namespace sketch {
 
-enum class BoundaryDimensionFormat { supported_v1, supported_v2, supported_v3, unsupported_version, supported_v4, supported_v5 };
+enum class BoundaryDimensionFormat { supported_v1, supported_v2, supported_v3, unsupported_version, supported_v4, supported_v5, supported_v6 };
 
 struct BoundaryDimensionVersion {
     BoundaryDimensionFormat format{};
@@ -29,7 +30,9 @@ enum class BoundaryDimensionPlacement { manual, automatic };
 // It does not represent an appraisal exterior-face measurement.
 // Corner-window leg length references its manufactured owner and measures one
 // actual shared host endpoint-to-outer-jamb span from both retained hosts/cuts.
-enum class BoundaryDimensionKind { segment_length, angle, area, wall_axis_length, corner_window_leg_length };
+// Assembly extents reference an actual qualified root/path and measure its
+// physical width, depth or height. They do not invent plan boundary edges.
+enum class BoundaryDimensionKind { segment_length, angle, area, wall_axis_length, corner_window_leg_length, assembly_extent };
 
 [[nodiscard]] std::string_view boundary_dimension_kind_name(BoundaryDimensionKind kind);
 
@@ -49,6 +52,10 @@ struct BoundaryDimensionResolution {
     double angle_radians{};
     double area_square_metres{};
     std::optional<BoundaryDimensionAngleGeometry> angle_geometry;
+    // Present only for assembly_extent. segment is empty for this kind: use
+    // these physical 3D endpoints/frame and precision-preserving offsets for
+    // projection, including height; segment_length_metres is the actual span.
+    std::optional<AssemblyDimensionResolution> assembly_geometry;
 
     [[nodiscard]] double segment_length() const noexcept { return segment_length_metres; }
     [[nodiscard]] double angle() const noexcept { return angle_radians; }
@@ -71,6 +78,9 @@ struct BoundaryDimension {
     // Stable owner identity; v4 wall_axis_length uses the actual physical wall
     // ID here and leaves all segment/vertex/chain fields empty. v5 corner-window
     // leg length uses the actual corner_window owner ID with corner_leg.
+    // v6 assembly_extent uses the actual independent document_entity_id, or
+    // the actual catalog_id for an embedded root. It must match assembly_target
+    // and is a reference carrier, never a fabricated boundary/presentation ID.
     std::string boundary_id;
     std::string segment_id;
     Vec2 text_position;
@@ -87,6 +97,8 @@ struct BoundaryDimension {
     // Only corner_window_leg_length uses this zero-based leg selector. No
     // synthetic boundary edge or owned cut ID is part of its target.
     std::optional<std::uint32_t> corner_leg;
+    // Only assembly_extent uses this closed, qualified measurement identity.
+    std::optional<AssemblyDimensionTarget> assembly_target;
 
     bool operator==(const BoundaryDimension& other) const noexcept {
         return id == other.id && boundary_id == other.boundary_id &&
@@ -95,13 +107,15 @@ struct BoundaryDimension {
                automatic_placement_version == other.automatic_placement_version &&
                presentation == other.presentation && kind == other.kind &&
                vertex_id == other.vertex_id && secondary_segment_id == other.secondary_segment_id &&
-               segment_chain_ids == other.segment_chain_ids && corner_leg == other.corner_leg;
+               segment_chain_ids == other.segment_chain_ids && corner_leg == other.corner_leg &&
+               assembly_target == other.assembly_target;
     }
 
     // Resolves stable analytical targets from identified boundaries or replayed
     // measured strokes, or a physical wall axis for wall_axis_length. Area
     // dimensions require an identified boundary owner. Corner-window legs
-    // require the complete authoritative map or snapshot overload.
+    // and assembly extents require the complete authoritative map or snapshot
+    // overload. Entity-only resolution cannot admit complete assembly catalogs.
     [[nodiscard]] BoundaryDimensionResolution resolve(const Entity& boundary_entity) const;
     [[nodiscard]] BoundaryDimensionResolution resolve(
         const std::map<std::string, Entity, std::less<>>& entities) const;
@@ -111,7 +125,9 @@ struct BoundaryDimension {
 // Unsupported future versions or dimension kinds remain opaque and retain
 // their complete source entity. v4 adds only wall_axis_length and v5 adds only
 // corner_window_leg_length; other kinds at those versions remain opaque.
-// Malformed known v1/v2/v3 and typed v4/v5 data throws
+// v6 adds only assembly_extent with closed target {entity_id, assembly}, where
+// assembly uses the closed AssemblyDimensionTarget codec.
+// Malformed known v1/v2/v3 and typed v4/v5/v6 data throws
 // std::invalid_argument rather than being partially decoded.
 struct BoundaryDimensionDecodeResult {
     std::optional<BoundaryDimension> dimension;
@@ -150,6 +166,8 @@ struct BoundaryDimensionDecodeResult {
 // chains and topology without certifying current physical-room source geometry
 // or returning a quantity. For corner windows this checks only owner structure
 // and the leg selector. Stale physical rooms may remain stored and editable.
+// Assembly extent admission requires the actual map; this Entity-only overload
+// refuses rather than treating a catalog or isolated root as complete evidence.
 void validate_boundary_dimension_target(
     const BoundaryDimension& dimension, const Entity& boundary_entity);
 [[nodiscard]] BoundaryDimensionResolution resolve_boundary_dimension(
@@ -158,6 +176,8 @@ void validate_boundary_dimension_target(
 // physical rooms from current walls and returns net clear area including holes.
 // Corner-window legs qualify the complete retained cohort, including valid
 // inactive alternatives, and use actual host/cut geometry in local coordinates.
+// Assembly extents admit complete actual catalogs and roots and expose physical
+// 3D geometry; retained inactive roots may resolve in these strict overloads.
 // Stale, malformed or unsupported sources throw without changing stored data.
 [[nodiscard]] BoundaryDimensionResolution resolve_boundary_dimension(
     const BoundaryDimension& dimension,
@@ -173,6 +193,8 @@ void validate_boundary_dimension_target(
 // unchanged. Historical command replay retains the strict overloads above.
 // A corner-window leg requires its owner, both hosts and both cuts to be active
 // and undemolished in the saved phase selection.
+// Assembly extents additionally require the exact qualified root and actual
+// placement host (including an opening's wall) active in the saved selection.
 [[nodiscard]] BoundaryDimensionResolution resolve_current_boundary_dimension(
     const BoundaryDimension& dimension,
     const std::map<std::string, Entity, std::less<>>& entities);
