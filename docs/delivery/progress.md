@@ -14,6 +14,42 @@ changed source does not acquire runtime acceptance without later qualification.
 
 ## Current delivery state
 
+### October 10 native mixed plan controls - source integration
+
+The annotation layer/native-restoration batch is committed and pushed as
+6a25bba9; exact local and remote branch references matched. Current uncommitted
+source opts the native viewport into ordinary-plus-skylight horizontal movement,
+Z-axis rotation and uniform scaling through the existing complete-selection
+producer. Controls require the full visible supported roster, including actual
+carried openings and corner hosts; the proxy deduplicates physical presentations.
+Directional scaling and vertical movement remain separate implementation gaps.
+
+The coordinator captures exact ordinary/child rosters, original Site frames,
+source, visibility and input context. It manufactures the sealed read-only
+mixed proposal without Document admission. A released manufactured proposal
+retains original-source authority while room decisions are collected; only the
+completed existing command is prepared and applied. Logical order and primary
+child restoration retire old native input authority until scene publication.
+Historical ordinary-only and child-only routes keep their existing semantics.
+
+Independent integrated source review found a shared scaling-plane defect:
+selected walls retained their effective bases while architectural rows scaled
+their elevations about zero. The corrected producer captures effective wall
+bases in the actual floor/frame, converts Site Z once, and supplies the matching
+source plane to architectural rows. Ambiguous bases and incompatible local
+frames refuse rather than separating connected selected objects. Historical
+recorded requests retain their explicit pivots. Unmatched architectural rows
+retain the legacy zero-plane rule; authoritative floor fallback and full spatial
+scaling remain gaps.
+
+The reviewer approved the corrected bounded source change and confirmed that
+the read-only candidate's modified head reaches native manufacture without
+Document admission or an editable-token workaround. Root reviewed the interfaces
+and integrated source; scoped whitespace checking passed. This batch is not
+compiled or behaviorally qualified. No builds, tests/new tests, probes, native jobs, launches,
+packages or installations have run. The installed app is unchanged and all ten
+production gates remain open.
+
 ### October 10 mixed selection Properties - source integration
 
 The integrated mixed Properties batch is committed and pushed as 4fa4ffec;

@@ -36,7 +36,9 @@ struct NativeRoofOpeningTarget {
 
 // Exact world-space proposal for a typed skylight cohort. The pivot is captured
 // from the displayed fills at press; translation does not include pivot motion
-// caused by rotation or scaling. Hosts retain their authored placements.
+// caused by rotation or scaling. Child-only hosts retain authored placements.
+// The opted-in mixed route captures ordinary IDs separately and uses the same
+// proposal for the complete roster; targets remains the exact typed child list.
 struct NativeRoofOpeningTransform {
     std::vector<NativeRoofOpeningTarget> targets;
     std::array<double, 3> pivot_world_m{};
@@ -93,7 +95,8 @@ public:
     // still count toward multi-selection. The last supplied ID is primary.
     // Highlights cover valid visible semantic presentations only. Whole-owner
     // manipulators require one logical member; child-only cohorts share a pivot.
-    // Mixed ordinary/child selections retain highlights without subset controls.
+    // Mixed ordinary/child controls require explicit shell opt-in and the full
+    // visible, directly transformable roster; they never control a subset.
     // Replaces a typed child selection.
     void setSelectedEntities(const QStringList& entity_ids);
     // Backward-compatible replacement with one ID (empty clears selection).
@@ -124,6 +127,9 @@ public:
     [[nodiscard]] bool roofOpeningTransformPreviewCurrent(std::uint64_t serial) const noexcept;
     // Completion admits a candidate for separate asynchronous native geometry
     // manufacture. It does not publish it as the authoritative scene snapshot.
+    // Mixed completion accepts the shell's sealed read-only drawing candidate;
+    // original gesture authority stays with the editable published source and
+    // both captured rosters must have complete visible candidate geometry.
     [[nodiscard]] bool completeRoofOpeningTransformPreview(
         std::uint64_t serial, const DocumentSnapshot& candidate,
         std::vector<NativeRoofOpeningTarget> remapped_targets,
@@ -135,6 +141,12 @@ public:
     // Child cohorts use X/Y scale handles for world-axis resize about their
     // common pivot; Z keeps uniform scale. Single-child gestures are unchanged.
     void setRoofOpeningDirectionalResizeEnabled(bool enabled);
+    // Opt in only after the shell coordinates one complete ordinary/typed-child
+    // candidate and transaction through the roof-opening callbacks. Defaults
+    // false. Mixed gestures support XY translation, Z rotation and positive
+    // uniform scale via the Z scale handle; directional and Z moves are hidden.
+    // Changing this policy retires any captured gesture before controls rebuild.
+    void setMixedSelectionPlanTransformEnabled(bool enabled);
     // Export the OCCT framebuffer directly. This deliberately does not use
     // QWidget::grab(), which cannot capture the native OCCT child surface.
     // Qt encodes and atomically writes the captured pixels, avoiding the native

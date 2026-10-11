@@ -6,6 +6,7 @@
 #include "sketch/architectural_workflow_contract.hpp"
 #include "sketch/document.hpp"
 #include "sketch/document_wall.hpp"
+#include "sketch/corner_window.hpp"
 #include "sketch/stair_semantics.hpp"
 #include "sketch/assembly_document_adapter.hpp"
 
@@ -21,6 +22,8 @@
 #include <AIS_Shape.hxx>
 #include <AIS_ColoredShape.hxx>
 #include <BRep_Builder.hxx>
+#include <BRepBndLib.hxx>
+#include <BRepBuilderAPI_Transform.hxx>
 #include <Bnd_Box.hxx>
 #include <Aspect_DisplayConnection.hxx>
 #include <Aspect_Handle.hxx>
@@ -277,7 +280,7 @@ public:
         QSize logical_size;
         QSize native_size;
         qreal pixel_ratio{};
-        QStringList selection;
+        QStringList selection; // Exact ordinary roster, including mixed presses.
         std::vector<NativeRoofOpeningTarget> roof_openings;
         // Null means the ordinary family; its primary is selection.back().
         std::optional<NativeRoofOpeningTarget> primary_roof_opening;
@@ -308,6 +311,7 @@ public:
     std::array<double,2> roof_transform_axis_lengths{1.0,1.0};
     std::optional<int> roof_transform_resize_axis;
     bool roof_directional_resize_enabled{};
+    bool mixed_selection_plan_transform_enabled{};
 
     struct WheelScroll {
         SelectionCapture context;
@@ -869,16 +873,21 @@ public:
     }
 
     bool supports_direct_transform(const std::string& id) const {
-        if (!snapshot || !snapshot->is_editable() || id.empty()) return false;
-        const auto found = snapshot->entities().find(id);
-        if (found == snapshot->entities().end()) {
+        return snapshot && supports_direct_transform(id,*snapshot);
+    }
+
+    bool supports_direct_transform(const std::string& id, const DocumentSnapshot& source,
+        bool require_editable_source=true) const {
+        if ((require_editable_source && !source.is_editable()) || id.empty()) return false;
+        const auto found = source.entities().find(id);
+        if (found == source.entities().end()) {
             // Resolve the exact alias generated for this captured source,
             // including escaped collision aliases. Only geometric instances
             // gain direct transform authority; metadata-only entries do not.
             try {
-                const auto embedded = resolve_embedded_assembly_presentation(snapshot->entities(), id);
+                const auto embedded = resolve_embedded_assembly_presentation(source.entities(), id);
                 if (!embedded) return false;
-                const auto& catalog = snapshot->entities().at(embedded->assembly_catalog_id);
+                const auto& catalog = source.entities().at(embedded->assembly_catalog_id);
                 const auto model = AssemblyModel::from_json(catalog.properties.at("model"));
                 return !model.expand(embedded->instance.id).profiles.empty();
             } catch (...) { return false; }
@@ -904,11 +913,16 @@ public:
     }
 
     std::vector<std::string> transform_presentation_ids(const std::string& host_id) const {
+        return snapshot ? transform_presentation_ids(host_id,*snapshot) : std::vector<std::string>{host_id};
+    }
+
+    std::vector<std::string> transform_presentation_ids(
+        const std::string& host_id, const DocumentSnapshot& source) const {
         std::vector<std::string> result{host_id};
-        if (!snapshot || context.IsNull()) return result;
-        const auto host = snapshot->entities().find(host_id);
-        if (host == snapshot->entities().end()) return result;
-        for (const auto& [id, entity] : snapshot->entities()) {
+        if (context.IsNull()) return result;
+        const auto host = source.entities().find(host_id);
+        if (host == source.entities().end()) return result;
+        for (const auto& [id, entity] : source.entities()) {
             bool dependent = false;
             if (host->second.type == "wall" && entity.type == "opening") {
                 std::string wall_id, error;
@@ -924,6 +938,80 @@ public:
             if (dependent && solid != solids.end() && !solid->second.presentation.IsNull() &&
                 context->IsDisplayed(solid->second.presentation)) result.push_back(id);
         }
+        return result;
+    }
+
+    bool mixed_selection() const noexcept {
+        return !selected_entity_ids.isEmpty() && !selected_roof_openings.empty();
+    }
+
+    bool supports_mixed_plan_member(const std::string& id, const DocumentSnapshot& source,
+        const QStringList& ordinary, bool require_editable_source=true) const {
+        if (supports_direct_transform(id,source,require_editable_source)) return true;
+        if (require_editable_source && !source.is_editable()) return false;
+        const auto found=source.entities().find(id);
+        if (found==source.entities().end()) return false;
+        const auto selected_wall=[this,&source,&ordinary,require_editable_source](const std::string& wall_id) {
+            const auto wall=source.entities().find(wall_id);
+            return ordinary.contains(QString::fromStdString(wall_id)) && wall!=source.entities().end() &&
+                wall->second.type=="wall" && supports_direct_transform(wall_id,source,require_editable_source);
+        };
+        if (found->second.type=="opening") {
+            std::string wall_id,error;
+            return read_document_wall_id(found->second,wall_id,error) && selected_wall(wall_id);
+        }
+        if (found->second.type=="corner_window") {
+            try {
+                const auto corner=parse_corner_window(found->second);
+                return selected_wall(corner.wall_ids[0]) && selected_wall(corner.wall_ids[1]);
+            } catch (...) { return false; }
+        }
+        return false;
+    }
+
+    // Require every logical member before collecting any geometry. Presentation
+    // identity deduplication also covers a selected host's explicitly selected
+    // dependent or child without changing either captured semantic roster.
+    std::optional<std::vector<occ::handle<AIS_Shape>>> mixed_transform_presentations() const {
+        if (!mixed_selection_plan_transform_enabled || !mixed_selection() ||
+            !published_snapshot || !published_snapshot->is_editable() || context.IsNull()) return std::nullopt;
+        std::vector<occ::handle<AIS_Shape>> result;
+        const auto append = [this,&result](const occ::handle<AIS_Shape>& presentation) {
+            if (presentation.IsNull() || presentation->Shape().IsNull() ||
+                !context->IsDisplayed(presentation)) return false;
+            if (std::find(result.begin(),result.end(),presentation)==result.end()) result.push_back(presentation);
+            return true;
+        };
+        for (const auto& selected : selected_entity_ids) {
+            const auto id=selected.toStdString();
+            const auto found=solids.find(id);
+            if (!supports_mixed_plan_member(id,*published_snapshot,selected_entity_ids) || found==solids.end() ||
+                !append(found->second.presentation)) return std::nullopt;
+            for (const auto& dependent : transform_presentation_ids(id,*published_snapshot)) {
+                const auto& solid=solids.at(dependent);
+                if (!append(solid.presentation)) return std::nullopt;
+                for (const auto& child : solid.roof_openings)
+                    if (!child.presentation.IsNull() && context->IsDisplayed(child.presentation) &&
+                        !append(child.presentation)) return std::nullopt;
+            }
+        }
+        // Corner assemblies have two ordinary wall hosts. Their displayed
+        // geometry participates in the roster bounds even when only the walls
+        // are explicitly selected; actual edits remain coordinator-owned.
+        for (const auto& [id,entity] : published_snapshot->entities()) {
+            if (entity.type!="corner_window") continue;
+            const auto found=solids.find(id);
+            if (found==solids.end() || found->second.presentation.IsNull() ||
+                !context->IsDisplayed(found->second.presentation)) continue;
+            try {
+                const auto corner=parse_corner_window(entity);
+                if ((selected_entity_ids.contains(QString::fromStdString(corner.wall_ids[0])) ||
+                    selected_entity_ids.contains(QString::fromStdString(corner.wall_ids[1]))) &&
+                    !append(found->second.presentation)) return std::nullopt;
+            } catch (...) { return std::nullopt; }
+        }
+        for (const auto& target : selected_roof_openings)
+            if (!append(roof_opening_presentation(target))) return std::nullopt;
         return result;
     }
 
@@ -949,7 +1037,8 @@ public:
     void attach_manipulator() {
         if (roof_transform_capture) return;
         const bool children = !selected_roof_openings.empty();
-        if ((children && !selected_entity_ids.isEmpty()) ||
+        const bool mixed=mixed_selection();
+        if ((mixed && !mixed_selection_plan_transform_enabled) ||
             (!children && (selected_entity_ids.size() != 1 || !selected_entity_id.has_value() || !supports_direct_transform(*selected_entity_id))) ||
             !native_ready || !geometry_prepared || regenerator.is_pending() || prepared_geometry ||
             !geometry_status.isEmpty() || context.IsNull() || viewer.IsNull()) {
@@ -991,31 +1080,56 @@ public:
         manipulator->SetPart(AIS_MM_Scaling, true);
         if (children) {
             if (!published_snapshot || !published_snapshot->is_editable() ||
-                !owner->onRoofOpeningTransformPreviewRequested || !owner->onRoofOpeningTransformRequested) return;
+                !owner->onRoofOpeningTransformPreviewRequested || !owner->onRoofOpeningTransformRequested ||
+                (mixed && !owner->onRoofOpeningTransformStarted)) return;
             TopoDS_Compound compound;
             BRep_Builder builder;
             builder.MakeCompound(compound);
             Bnd_Box bounds;
-            for (const auto& target : selected_roof_openings) {
-                const auto child = roof_opening_presentation(target);
-                if (child.IsNull() || child->Shape().IsNull()) return;
-                const auto box = child->BoundingBox().Transformed(child->Transformation());
-                if (box.IsVoid() || box.IsOpen()) return;
-                bounds.Add(box);
-                builder.Add(compound,child->Shape());
+            if (mixed) {
+                const auto roster=mixed_transform_presentations();
+                if (!roster || roster->empty()) return;
+                for (const auto& presentation : *roster) {
+                    // AIS bounds are local. Apply the complete displayed
+                    // transformation to each real shape before deriving the
+                    // shared world pivot and OCCT's proxy attachment position.
+                    const auto shape=BRepBuilderAPI_Transform(presentation->Shape(),
+                        presentation->Transformation(),true).Shape();
+                    if (shape.IsNull()) return;
+                    Bnd_Box box;
+                    BRepBndLib::Add(shape,box);
+                    if (box.IsVoid() || box.IsOpen()) return;
+                    bounds.Add(box);
+                    builder.Add(compound,shape);
+                }
+            } else {
+                for (const auto& target : selected_roof_openings) {
+                    const auto child = roof_opening_presentation(target);
+                    if (child.IsNull() || child->Shape().IsNull()) return;
+                    const auto box = child->BoundingBox().Transformed(child->Transformation());
+                    if (box.IsVoid() || box.IsOpen()) return;
+                    bounds.Add(box);
+                    builder.Add(compound,child->Shape());
+                }
             }
             const auto low = bounds.CornerMin(), high = bounds.CornerMax();
+            if (mixed && (!std::isfinite(low.X()) || !std::isfinite(low.Y()) || !std::isfinite(low.Z()) ||
+                !std::isfinite(high.X()) || !std::isfinite(high.Y()) || !std::isfinite(high.Z()))) return;
             roof_transform_pivot = {(low.X()+high.X())*0.5,(low.Y()+high.Y())*0.5,(low.Z()+high.Z())*0.5};
             roof_transform_reference_length = std::max({high.X()-low.X(),high.Y()-low.Y(),high.Z()-low.Z()});
             roof_transform_axis_lengths = {high.X()-low.X(),high.Y()-low.Y()};
             if (!std::isfinite(roof_transform_reference_length) || roof_transform_reference_length <= 1.0e-9) return;
-            if (roof_directional_resize_enabled && selected_roof_openings.size()>1) {
+            if (mixed) {
+                manipulator->SetPart(0,AIS_MM_Scaling,false);
+                manipulator->SetPart(1,AIS_MM_Scaling,false);
+            } else if (roof_directional_resize_enabled && selected_roof_openings.size()>1) {
                 for (int axis=0;axis<2;++axis)
                     manipulator->SetPart(axis,AIS_MM_Scaling,
                         std::isfinite(roof_transform_axis_lengths[axis]) && roof_transform_axis_lengths[axis]>1.0e-9);
             }
             // This undisplayed proxy is the only affine-transformed object.
-            // Actual hosts and fills wait for manufactured candidate geometry.
+            // Actual selected solids, hosts and fills wait for a manufactured
+            // complete candidate; the proxy carries no document authority.
             roof_transform_proxy = new AIS_Shape(compound);
             context->Load(roof_transform_proxy,-1);
             group->Append(roof_transform_proxy);
@@ -1026,7 +1140,7 @@ public:
             }
         }
         manipulator->Attach(group, options);
-        if (children && roof_directional_resize_enabled && selected_roof_openings.size()>1) {
+        if (mixed || (children && roof_directional_resize_enabled && selected_roof_openings.size()>1)) {
             // Explicit world axes avoid inheriting the preceding owner's or
             // preview's manipulator orientation as unreported proposal axes.
             manipulator->SetPosition(gp_Ax2(gp_Pnt(roof_transform_pivot[0],roof_transform_pivot[1],
@@ -1039,15 +1153,27 @@ public:
     }
 
     bool begin_manipulation(const NativeInputPoint point) {
-        if ((!selected_entity_ids.isEmpty() && !selected_roof_openings.empty()) ||
+        const bool mixed=mixed_selection();
+        if ((mixed && (!mixed_selection_plan_transform_enabled || roof_transform_proxy.IsNull() ||
+                !owner->onRoofOpeningTransformStarted || !owner->onRoofOpeningTransformPreviewRequested ||
+                !owner->onRoofOpeningTransformRequested)) ||
             roof_release_pending || manipulator.IsNull() || !manipulator->IsAttached() ||
             (selected_roof_openings.empty() && manipulator_entity_id != selected_entity_id) || context.IsNull() || view.IsNull())
             return false;
         try {
+            // Recheck the entire real displayed cohort before press ownership;
+            // an attached proxy must never authorize a now-hidden subset.
+            if (mixed && !mixed_transform_presentations()) return false;
             context->MoveTo(point.x, point.y, view, false);
             if (!manipulator->HasActiveMode()) return false;
+            if (mixed) {
+                const auto mode=manipulator->ActiveMode();
+                const int axis=manipulator->ActiveAxisIndex();
+                if (!((mode==AIS_MM_Translation && (axis==0 || axis==1)) ||
+                    (mode==AIS_MM_Rotation && axis==2) || (mode==AIS_MM_Scaling && axis==2))) return false;
+            }
             roof_transform_resize_axis.reset();
-            if (roof_directional_resize_enabled && selected_roof_openings.size()>1 &&
+            if (!mixed && roof_directional_resize_enabled && selected_roof_openings.size()>1 &&
                 manipulator->ActiveMode()==AIS_MM_Scaling) {
                 const int axis=manipulator->ActiveAxisIndex();
                 if (axis<0 || axis>2) return false;
@@ -1243,7 +1369,8 @@ public:
 
     bool roof_preview_current(std::uint64_t serial) const {
         return serial != 0 && serial == roof_transform_serial && roof_transform_proposal &&
-            roof_transform_capture && owner->hasFocus() && !QApplication::activeModalWidget() &&
+            roof_transform_capture && (roof_transform_capture->selection.isEmpty() ||
+                mixed_selection_plan_transform_enabled) && owner->hasFocus() && !QApplication::activeModalWidget() &&
             selection_current(*roof_transform_capture);
     }
 
@@ -1303,6 +1430,8 @@ public:
 
     void request_roof_preview(Qt::KeyboardModifiers modifiers) {
         if (!roof_transform_capture || !selection_current(*roof_transform_capture) ||
+            (!roof_transform_capture->selection.isEmpty() &&
+                (!mixed_selection_plan_transform_enabled || roof_transform_resize_axis)) ||
             !owner->hasFocus() || QApplication::activeModalWidget()) {
             owner->cancelInteraction();
             return;
@@ -1391,6 +1520,8 @@ public:
             .arg(proposal.rotation_radians*180.0/pi,0,'f',1)
             .arg(roof_transform_reference_length*proposal.uniform_scale*display_factor,0,'f',3)
             .arg(roof_transform_metric_units ? QStringLiteral("m") : QStringLiteral("in"));
+        if (!roof_transform_capture->selection.isEmpty())
+            roof_transform_feedback.replace(QStringLiteral("Skylights:"),QStringLiteral("Selection:"));
         if (roof_transform_resize_axis) {
             const int axis=*roof_transform_resize_axis;
             // Rectangular facets retain their real angles, so the final cohort
@@ -1454,10 +1585,19 @@ public:
                 return;
             }
             std::vector<std::pair<occ::handle<AIS_Shape>,bool>> next;
-            std::vector<occ::handle<AIS_Shape>> selected_fills;
+            std::vector<occ::handle<AIS_Shape>> selected_presentations;
+            QStringList found_ordinary;
             std::vector<NativeRoofOpeningTarget> found_targets;
             for (const auto& [id,solid] : prepared->solids) {
-                next.emplace_back(prepared_presentation(solid),solid.visible);
+                const auto presentation=prepared_presentation(solid);
+                next.emplace_back(presentation,solid.visible);
+                const auto ordinary_id=QString::fromStdString(id);
+                if (roof_transform_capture->selection.contains(ordinary_id)) {
+                    if (!solid.visible || presentation->Shape().IsNull())
+                        throw std::invalid_argument("candidate ordinary cohort lacks visible native geometry");
+                    found_ordinary.push_back(ordinary_id);
+                    selected_presentations.push_back(presentation);
+                }
                 for (const auto& region : solid.material_regions) {
                     if (!region.roof_opening) continue;
                     if (region.shape.IsNull()) throw std::invalid_argument("candidate skylight topology is absent");
@@ -1469,12 +1609,15 @@ public:
                     next.emplace_back(fill,solid.visible);
                     if (solid.visible) found_targets.push_back(target);
                     if (solid.visible && std::find(roof_candidate_targets.begin(),roof_candidate_targets.end(),target) != roof_candidate_targets.end())
-                        selected_fills.push_back(fill);
+                        selected_presentations.push_back(fill);
                 }
             }
             for (const auto& target : roof_candidate_targets)
                 if (std::find(found_targets.begin(),found_targets.end(),target) == found_targets.end())
                     throw std::invalid_argument("candidate skylight cohort lacks visible native provenance");
+            for (const auto& id : roof_transform_capture->selection)
+                if (!found_ordinary.contains(id))
+                    throw std::invalid_argument("candidate ordinary cohort is incomplete");
             if (!restore_roof_preview()) { owner->cancelInteraction(); return; }
             for (const auto& [id,solid] : solids) {
                 roof_original_visibility.emplace_back(solid.presentation,context->IsDisplayed(solid.presentation));
@@ -1486,7 +1629,7 @@ public:
             for (const auto& [presentation,visible] : next) if (visible) context->Display(presentation,false);
             for (const auto& [presentation,visible] : roof_original_visibility) if (visible) context->Erase(presentation,false);
             context->ClearSelected(false);
-            for (const auto& fill : selected_fills) context->AddOrRemoveSelected(fill,false);
+            for (const auto& presentation : selected_presentations) context->AddOrRemoveSelected(presentation,false);
             viewer->Redraw();
             if (!roof_preview_current(serial)) { owner->cancelInteraction(); return; }
             roof_presented_serial = serial;
@@ -2050,7 +2193,8 @@ void NativeModelView::setSelectedRoofOpenings(std::vector<NativeRoofOpeningTarge
 }
 
 bool NativeModelView::transformControlsVisible() const noexcept {
-    return ((m_impl->selected_entity_ids.isEmpty() && !m_impl->selected_roof_openings.empty() && !m_impl->roof_transform_proxy.IsNull()) ||
+    return (((m_impl->selected_entity_ids.isEmpty() || m_impl->mixed_selection_plan_transform_enabled) &&
+           !m_impl->selected_roof_openings.empty() && !m_impl->roof_transform_proxy.IsNull()) ||
            (m_impl->selected_roof_openings.empty() && m_impl->selected_entity_ids.size() == 1 && m_impl->selected_entity_id.has_value() &&
            m_impl->manipulator_entity_id == m_impl->selected_entity_id)) &&
            !m_impl->manipulator.IsNull() && m_impl->manipulator->IsAttached();
@@ -2065,16 +2209,51 @@ bool NativeModelView::completeRoofOpeningTransformPreview(
     std::vector<NativeRoofOpeningTarget> remapped_targets,
     VisibleEntityIds candidate_visible_ids) {
     if (QThread::currentThread() != thread() || !roofOpeningTransformPreviewCurrent(serial)) return false;
-    if (!candidate.is_editable() || candidate.document_id() != m_impl->roof_transform_capture->source->document_id() ||
+    const bool mixed=!m_impl->roof_transform_capture->selection.isEmpty();
+    if ((!mixed && !candidate.is_editable()) ||
+        candidate.document_id() != m_impl->roof_transform_capture->source->document_id() ||
         remapped_targets.size() != m_impl->roof_transform_proposal->targets.size()) {
         (void)rejectRoofOpeningTransformPreview(serial,QStringLiteral("The skylight candidate source or cohort is invalid."));
         return false;
+    }
+    if (mixed) {
+        const auto& original=*m_impl->roof_transform_capture->source;
+        // These are geometry-manufacture correspondence checks, not a private
+        // Document admission proof. The shell retains/authenticates its sealed
+        // original-source preparation for room review and final command replay.
+        if (!m_impl->mixed_selection_plan_transform_enabled || !original.is_editable() ||
+            candidate.revision()!=original.revision() ||
+            candidate.saved_revision_optional()!=original.saved_revision_optional() ||
+            candidate.named_revisions()!=original.named_revisions() ||
+            candidate.history().size()!=original.history().size() || candidate.assets()!=original.assets() ||
+            remapped_targets!=m_impl->roof_transform_capture->roof_openings) {
+            (void)rejectRoofOpeningTransformPreview(serial,QStringLiteral("The mixed drawing candidate no longer corresponds to its captured source and complete selection."));
+            return false;
+        }
+        for (const auto& [id,asset] : original.assets()) {
+            if (asset.metadata.dump()!=candidate.assets().at(id).metadata.dump()) {
+                (void)rejectRoofOpeningTransformPreview(serial,QStringLiteral("The mixed drawing candidate changed original asset metadata."));
+                return false;
+            }
+        }
     }
     for (std::size_t i=0;i<remapped_targets.size();++i) {
         if (remapped_targets[i].roof_id.isEmpty() || remapped_targets[i].opening_id.isEmpty() ||
             std::find(remapped_targets.begin(),remapped_targets.begin()+static_cast<std::ptrdiff_t>(i),remapped_targets[i]) !=
                 remapped_targets.begin()+static_cast<std::ptrdiff_t>(i)) {
             (void)rejectRoofOpeningTransformPreview(serial,QStringLiteral("The skylight candidate has invalid child identities."));
+            return false;
+        }
+    }
+    // Mixed ordinary IDs/embedded aliases remain exact. Active-baseline
+    // replacement has no native admission here; a complete candidate must
+    // retain every captured ordinary member and its supported semantics. The
+    // shell's sealed read-only mixed drawing proposal can manufacture geometry
+    // here without acquiring the original source's authoring authority.
+    for (const auto& id : m_impl->roof_transform_capture->selection) {
+        if (!candidate_visible_ids.contains(id.toStdString()) ||
+            !m_impl->supports_mixed_plan_member(id.toStdString(),candidate,m_impl->roof_transform_capture->selection,false)) {
+            (void)rejectRoofOpeningTransformPreview(serial,QStringLiteral("The mixed candidate lacks a visible ordinary member or its supported transform geometry."));
             return false;
         }
     }
@@ -2137,6 +2316,16 @@ void NativeModelView::setRoofOpeningDirectionalResizeEnabled(bool enabled) {
     cancelInteraction();
     if (!guard) return;
     m_impl->roof_directional_resize_enabled=enabled;
+    try { m_impl->attach_manipulator(); }
+    catch (...) { m_impl->detach_manipulator(); }
+}
+
+void NativeModelView::setMixedSelectionPlanTransformEnabled(bool enabled) {
+    if (m_impl->mixed_selection_plan_transform_enabled==enabled) return;
+    const QPointer<NativeModelView> guard(this);
+    cancelInteraction();
+    if (!guard) return;
+    m_impl->mixed_selection_plan_transform_enabled=enabled;
     try { m_impl->attach_manipulator(); }
     catch (...) { m_impl->detach_manipulator(); }
 }
@@ -2258,6 +2447,12 @@ std::optional<NativeModelView::TransformControl> NativeModelView::transformContr
         m_impl->context->DetectedOwner());
     if (detected.IsNull() || m_impl->context->DetectedInteractive() != m_impl->manipulator)
         return std::nullopt;
+    if (m_impl->mixed_selection()) {
+        if (!m_impl->mixed_selection_plan_transform_enabled || m_impl->roof_transform_proxy.IsNull()) return std::nullopt;
+        if (!((detected->Mode()==AIS_MM_Translation && (detected->Index()==0 || detected->Index()==1)) ||
+            (detected->Mode()==AIS_MM_Rotation && detected->Index()==2) ||
+            (detected->Mode()==AIS_MM_Scaling && detected->Index()==2))) return std::nullopt;
+    }
     switch (detected->Mode()) {
     case AIS_MM_Translation: return TransformControl::translation;
     case AIS_MM_Rotation: return TransformControl::rotation;
