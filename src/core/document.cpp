@@ -4430,16 +4430,21 @@ static void retain_joint_callout_placement(const std::map<std::string, Entity, s
         if (!can_recognize_boundary_dimension_entity_type(entity.type)) continue;
         const auto decoded = decode_boundary_dimension_entity(entity);
         if (!decoded.supported()) throw std::invalid_argument(decoded.unsupported_reason);
-        const bool rigid_owner = rigid.contains(decoded.dimension->boundary_id);
+        const auto carried_transform = rigid_transform
+            ? joint_rigid_dimension_transform(source, intent, *decoded.dimension) : std::nullopt;
+        const bool rigid_owner = rigid.contains(decoded.dimension->boundary_id) || carried_transform.has_value();
         if (!rigid_owner && !((per_owner || intent.physical_room_dimension_completion) &&
             offsets.dimension_offsets.contains(id))) continue;
         const auto found = candidate.find(id);
         if (found == candidate.end()) throw std::invalid_argument("Joint translation retired a rigid-owner callout");
         if (intent.physical_room_dimension_completion && is_physical_wall_room(source.at(decoded.dimension->boundary_id)))
             (void)resolve_current_boundary_dimension(*decoded.dimension, candidate);
+        if (intent.corner_window_dimension_completion && carried_transform &&
+            decoded.dimension->kind == BoundaryDimensionKind::corner_window_leg_length)
+            (void)resolve_current_boundary_dimension(*decoded.dimension, candidate);
         auto placed = *decoded.dimension;
-        if (rigid_owner && rigid_transform)
-            placed.text_position = transform_point(placed.text_position, offsets.owner_transforms.at(placed.boundary_id));
+        if (carried_transform)
+            placed.text_position = transform_point(placed.text_position, *carried_transform);
         else {
             const auto offset = rigid_owner ? offsets.owner_offsets.at(placed.boundary_id) : offsets.dimension_offsets.at(id);
             placed.text_position = {placed.text_position.x + offset.x, placed.text_position.y + offset.y};
@@ -7078,10 +7083,32 @@ nlohmann::json joint_translation_to_json(const JointTranslationIntent& intent) {
         if (encoded.dump().size() > 1024 * 1024)
             throw std::invalid_argument("Current physical-room joint intent exceeds its proof budget");
     }
+    if (intent.corner_window_dimension_completion) {
+        if (!rigid)
+            throw std::invalid_argument("Corner-window callout completion requires captured rigid operators");
+        encoded["version"] = intent.physical_room_dimension_completion ? 10 : 9;
+        encoded["corner_window_dimension_completion"] = true;
+        if (encoded.dump().size() > 1024 * 1024)
+            throw std::invalid_argument("Corner-window joint intent exceeds its proof budget");
+    }
     return encoded;
 }
 
 JointTranslationIntent joint_translation_from_json(const nlohmann::json& value) {
+    if (value.is_object() && value.contains("version") && value.at("version").is_number_integer() &&
+        (value.at("version") == 9 || value.at("version") == 10)) {
+        const auto marker = value.find("corner_window_dimension_completion");
+        if (marker == value.end() || !marker->is_boolean() || !marker->get<bool>() ||
+            value.dump().size() > 1024 * 1024)
+            throw std::invalid_argument("Corner-window joint intent requires its explicit bounded marker");
+        auto base = value;
+        base.erase("corner_window_dimension_completion");
+        base["version"] = value.at("version") == 10 ? 8 : 4;
+        auto result = joint_translation_from_json(base);
+        result.corner_window_dimension_completion = true;
+        (void)joint_translation_to_json(result);
+        return result;
+    }
     if (value.is_object() && value.contains("version") && value.at("version").is_number_integer() &&
         value.at("version") >= 5 && value.at("version") <= 8) {
         const auto marker = value.find("physical_room_dimension_completion");
@@ -7513,6 +7540,53 @@ JointTranslationOffsets resolve_joint_translation_offsets(
     if (intent.physical_room_dimension_completion && !current_room_callout)
         throw std::invalid_argument("Current physical-room joint intent must select an actual current room callout");
     return result;
+}
+
+std::optional<PlanarTransform> joint_rigid_dimension_transform(
+    const std::map<std::string, Entity, std::less<>>& source,
+    const JointTranslationIntent& intent, const BoundaryDimension& dimension) {
+    if (!intent.per_owner_rigid_completion && intent.owner_transformations.empty()) return std::nullopt;
+    const auto selected = [&](const std::vector<std::string>& ids, const std::string& id) {
+        return std::find(ids.begin(), ids.end(), id) != ids.end();
+    };
+    const auto captured = [&](const std::string& id) -> const PlanarTransform& {
+        const auto found = std::find_if(intent.owner_transformations.begin(), intent.owner_transformations.end(),
+            [&](const auto& row) { return row.owner_id == id; });
+        if (found == intent.owner_transformations.end())
+            throw std::invalid_argument("Rigid callout owner has no captured operator");
+        return found->transform;
+    };
+    if (selected(intent.rigid_boundary_ids, dimension.boundary_id) ||
+        selected(intent.rigid_stroke_ids, dimension.boundary_id) ||
+        selected(intent.partial_wall_ids, dimension.boundary_id))
+        return captured(dimension.boundary_id);
+    if (!intent.corner_window_dimension_completion) return std::nullopt;
+    const auto owner = source.find(dimension.boundary_id);
+    if (owner == source.end() || owner->second.type != "corner_window") return std::nullopt;
+    const auto scope = constraint_phase_scope(source);
+    if (scope.inactive_owner_ids.contains(dimension.boundary_id)) return std::nullopt;
+    const auto corner = parse_corner_window(owner->second);
+    if (!selected(intent.partial_wall_ids, corner.wall_ids[0]) ||
+        !selected(intent.partial_wall_ids, corner.wall_ids[1])) return std::nullopt;
+    if (scope.inactive_owner_ids.contains(corner.wall_ids[0]) ||
+        scope.inactive_owner_ids.contains(corner.wall_ids[1]))
+        throw std::invalid_argument("Rigid corner callout has an inactive captured host");
+    const auto& first = captured(corner.wall_ids[0]);
+    const auto& second = captured(corner.wall_ids[1]);
+    if (!(first == second))
+        throw std::invalid_argument("Rigid corner callout hosts require equal captured operators");
+    (void)resolve_current_boundary_dimension(dimension, source);
+    if (selected(intent.dimension_ids, dimension.id)) {
+        const auto independent = std::find_if(intent.dimension_translations.begin(), intent.dimension_translations.end(),
+            [&](const auto& row) { return row.owner_id == dimension.id; });
+        if (independent == intent.dimension_translations.end())
+            throw std::invalid_argument("Selected corner callout has no captured displacement");
+        const auto after = transform_point(dimension.text_position, first);
+        if (after.x != dimension.text_position.x + independent->offset.x ||
+            after.y != dimension.text_position.y + independent->offset.y)
+            throw std::invalid_argument("Selected corner callout contradicts its captured host operator");
+    }
+    return first;
 }
 
 Entity merge_selection_annotation_entities(const Entity& original, const Entity& geometry, const Entity& ordinary,

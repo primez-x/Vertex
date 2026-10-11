@@ -3727,6 +3727,14 @@
     },
     {
       "category": "source",
+      "path": "include/sketch/selection_geometry_transform.hpp"
+    },
+    {
+      "category": "source",
+      "path": "include/sketch/selection_geometry_review.hpp"
+    },
+    {
+      "category": "source",
       "path": "include/sketch/opening_assembly.hpp"
     },
     {
@@ -5068,6 +5076,14 @@
     {
       "category": "source",
       "path": "src/core/ordinary_selection_edit.cpp"
+    },
+    {
+      "category": "source",
+      "path": "src/core/selection_geometry_transform.cpp"
+    },
+    {
+      "category": "source",
+      "path": "src/core/selection_geometry_review.cpp"
     },
     {
       "category": "source",

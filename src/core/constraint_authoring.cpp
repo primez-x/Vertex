@@ -2279,15 +2279,23 @@ ConstraintAuthoringPreview ConstraintAuthoringBuilder::build(Source snapshot,con
                     if (!decoded.supported()) invalid(decoded.unsupported_reason);
                     if (scope.inactive_owner_ids.contains(decoded.dimension->boundary_id)) continue;
                     const bool rigid_owner=rigid.contains(decoded.dimension->boundary_id);
-                    if (!rigid_owner && !std::binary_search(move.dimension_ids.begin(),move.dimension_ids.end(),id)) continue;
+                    const auto rigid_transform=joint_rigid_dimension_transform(snapshot.entities(),move,*decoded.dimension);
+                    const bool owned_placement=rigid_owner || rigid_transform.has_value();
+                    if (!owned_placement && !std::binary_search(move.dimension_ids.begin(),move.dimension_ids.end(),id)) continue;
                     if (move.physical_room_dimension_completion &&
                         is_physical_wall_room(snapshot.entities().at(decoded.dimension->boundary_id)))
                         (void)resolve_current_boundary_dimension(*decoded.dimension, result.candidate_entities_);
+                    if (move.corner_window_dimension_completion && rigid_transform &&
+                        decoded.dimension->kind==BoundaryDimensionKind::corner_window_leg_length) {
+                        // The shared helper authenticates the actual source
+                        // cuts; resolve again against both final completed hosts.
+                        (void)resolve_current_boundary_dimension(*decoded.dimension,result.candidate_entities_);
+                    }
                     auto placed=*decoded.dimension;
-                    placed.text_position=transform_point(placed.text_position,rigid_owner && move.per_owner_rigid_completion ?
-                        joint_owner_transform(move,placed.boundary_id) : PlanarTransform{{},0,false,false,
+                    placed.text_position=transform_point(placed.text_position,rigid_transform ?
+                        *rigid_transform : PlanarTransform{{},0,false,false,
                             joint_dimension_offset(move,id,placed.boundary_id,rigid_owner)});
-                    if (!rigid_owner) { placed.placement=BoundaryDimensionPlacement::manual; placed.automatic_placement_version.reset(); }
+                    if (!owned_placement) { placed.placement=BoundaryDimensionPlacement::manual; placed.automatic_placement_version.reset(); }
                     result.candidate_entities_.at(id)=encode_boundary_dimension_entity(placed,&entity);
                 }
                 for (const auto& id:move.rigid_boundary_ids) {

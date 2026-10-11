@@ -270,7 +270,8 @@ public:
     // v186 retains explicit managed corner-cut selection without owner promotion.
     // v187 retains source-reconstructed mixed ordinary and roof-child editing.
     // v188 retains paired mixed/ordinary dialect two presentation similarity.
-    static constexpr std::uint32_t format_version = 188;
+    // v189 retains explicit rigid two-host corner-window callout completion.
+    static constexpr std::uint32_t format_version = 189;
     static constexpr std::uint32_t recovery_format_version = 4;
     [[nodiscard]] static std::uint32_t required_format_version(const DocumentSnapshot& snapshot);
     static constexpr std::uint64_t maximum_file_bytes = 4ULL * 1024ULL * 1024ULL * 1024ULL;

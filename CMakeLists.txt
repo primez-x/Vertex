@@ -845,6 +845,8 @@ if(SKETCH_BUILD_ARCHITECTURE OR SKETCH_BUILD_DESKTOP)
   target_sources(sketch_document PRIVATE src/core/constraint_authoring.cpp src/core/phase_constraint_authoring.cpp
     src/core/authored_phase_membership.cpp src/core/mixed_clipboard_command.cpp
     src/core/ordinary_selection_edit.cpp src/core/mixed_selection_edit.cpp
+    src/core/selection_geometry_transform.cpp
+    src/core/selection_geometry_review.cpp
     src/core/phase_coordinated_demolition.cpp
     src/core/phase_wall_replacement.cpp src/core/phase_wall_replacement_authoring.cpp
     src/core/phase_wall_replacement_command.cpp src/core/phase_wall_replacement_request.cpp

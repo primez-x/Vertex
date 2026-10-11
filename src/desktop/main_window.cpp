@@ -145,6 +145,7 @@
 #include "sketch/architectural_footprint_edit.hpp"
 #include "sketch/plan_axis_resize.hpp"
 #include "sketch/presentation_transform.hpp"
+#include "sketch/selection_geometry_transform.hpp"
 #include "sketch/hosted_opening_resize.hpp"
 #include "sketch/hosted_opening_geometry.hpp"
 #include "sketch/document_wall_plan.hpp"
@@ -8884,8 +8885,15 @@ public:
             if (!same_payload(current->second,before->second)) {
                 if (!same_payload(current->second,change.entity)) {
                     const auto* proof=std::get_if<ApplyBoundaryConstraintChanges>(&command);
-                    const bool connected_rigid=proof && proof->joint_translation &&
+                    bool connected_rigid=proof && proof->joint_translation &&
                         (proof->joint_translation->per_owner_rigid_completion || !proof->joint_translation->owner_transformations.empty());
+                    if (proof && (proof->phase_constraint_authoring_completion ||
+                        !proof->phase_constraint_authoring_intent.is_null())) {
+                        const auto phase=decode_phase_constraint_authoring_intent(proof->phase_constraint_authoring_intent);
+                        connected_rigid=phase.intent.joint_translation &&
+                            (phase.intent.joint_translation->per_owner_rigid_completion ||
+                                !phase.intent.joint_translation->owner_transformations.empty());
+                    }
                     if (!connected_rigid || before->second.type!=kAnnotationEntityType ||
                         change.entity.type!=kAnnotationEntityType)
                         throw std::invalid_argument("Selected objects require differing edits of the same dependency: "+change.entity.id);
@@ -9011,6 +9019,24 @@ public:
                 });
             if (geometry) return *geometry;
         }
+        SelectionGeometryTransformRequest request;
+        request.expected_revision=source.revision();
+        request.message="Transform selection and connected geometry";
+        for (const auto& id : root_ids) {
+            const auto owner=id.toStdString();
+            request.roots.push_back({owner,owner_transform ? owner_transform(owner) : transform});
+        }
+        const auto prepared=prepare_selection_geometry_transform(source,request);
+        if (prepared.required_room_reviews().empty()) {
+            auto command=prepared.geometry_command();
+            if (!supplemental_changes.empty())
+                command=mergeSourceDerivedSelectionChanges(source,std::move(command),
+                    ApplyEntityChanges{source.revision(),std::move(supplemental_changes),{},request.message},request.message);
+            return command;
+        }
+        // The existing desktop room dialog retains its captured geometry and
+        // placement protocol until the complete typed review route is wired.
+        // Never publish the new preparation with an undisclosed required review.
         std::vector<Entity> selected_roots;
         for (const auto& id : root_ids) {
             const auto found=source.entities().find(id.toStdString());
@@ -9067,6 +9093,7 @@ public:
         if (connected_rigid || (owner_transform && !wall_ids.empty())) {
             JointTranslationIntent joint;
             joint.per_owner_rigid_completion=true;
+            joint.corner_window_dimension_completion=true;
             for (const auto& id : geometry_ids) {
                 const auto& entity=source.entities().at(id);
                 if (entity.type=="wall") joint.partial_wall_ids.push_back(id);

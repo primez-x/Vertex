@@ -1,5 +1,10 @@
 # Portable project extraction
 
+Exchange version187 requires native reader189 for joint dialect nine/ten,
+retaining explicit two-host corner-window rigid callout completion. Direct,
+nested, retained and undone history keep that floor. Earlier joint dialects
+retain their exact meanings. Runtime and round-trip qualification remain open.
+
 Exchange version186 requires native reader188 for envelope52 with paired mixed
 and ordinary edit dialect two. Every presentation transform explicitly carries
 uniform scale; its anchor and size derive from the actual original source.

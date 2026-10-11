@@ -14,6 +14,45 @@ changed source does not acquire runtime acceptance without later qualification.
 
 ## Current delivery state
 
+### October 10 source-selected geometry and corner callouts - integration
+
+Mixed presentation scaling is committed and pushed as 524926a4, with exact
+local/remote ref verification. A closed source-selected geometry producer now
+derives actual deduction, physical-wall and measured-linework operators and a
+bounded connected dependency graph. It preserves mandatory physical-room review,
+including source-derived room operators and saved dimension placements. An
+unchanged geometry stage can still require callout review directly against the
+original source; it cannot be dismissed as a complete no-op.
+
+The corner-window gap is being closed by explicit joint dialect nine/ten,
+reader189/extraction187. Equal captured operators on both actual selected wall
+hosts carry the existing corner leg callouts while retaining placement metadata.
+Earlier joint dialects keep their meanings. Codec/replay, complete preview and
+source-kit/CMake integration are written. Independent source review found and
+corrected two defects: ordinary boundaries called a physical-source-only API,
+and room selection mistook broad transfer inventory for selected wall authority.
+Room operators/dependencies now derive only actual outer/hole edge source uses;
+physical-source discovery checks its marker. Separate whole-document index
+budgets charge before allocation. Bounded re-review approves these corrections.
+
+A pure reviewed-selection replay helper now authenticates exact required room
+contexts/planes, explicit dispositions, source-derived placements and original
+snapshot fences, then reconstructs sequential typed room transitions and owned
+area callouts. Geometry-invariant selected rooms remain review requirements even
+without dimension entities. Independent source review corrected singleton room
+replay, saved-phase policy, explicit dimension retirement and shared-provider
+cleanup. Surviving callouts retain source-derived offsets; acknowledged removals
+cannot return through annotation merging. Bounded re-review approves the helper.
+The desktop adapter now uses this geometry producer for edits without required
+room review and recognizes nested phase rigid intent when combining selected
+text/furniture with owned area callouts. Independent source review approves that
+correction. Room edits still use the existing reviewed desktop route until the
+complete mixed command adopts the typed geometry/review producer.
+Full desktop routing, complete room-review wrapping, mixed Properties, phase
+replacement and directional/reflection coverage remain required. No builds,
+tests/new tests, probes, native jobs, launches, packages or installations run.
+The installed app is unchanged and all ten production gates remain open.
+
 ### October 10 mixed presentation scaling - source implementation
 
 The reviewed original-source mixed transform core is committed and pushed as

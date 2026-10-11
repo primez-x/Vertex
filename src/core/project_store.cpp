@@ -510,6 +510,12 @@ std::uint32_t required_format_version_internal(const DocumentSnapshot& snapshot,
                 value.contains("fresh") && value.contains("kept_reference_ids") &&
                 value.contains("source_entities_digest") && value.contains("context_plane_selection"))
                 floor=std::max(floor,158U);
+            if (value.is_object() && value.value("corner_window_dimension_completion",nlohmann::json())==true &&
+                (value.value("version",nlohmann::json())==9 || value.value("version",nlohmann::json())==10) &&
+                value.value("per_owner_rigid_completion",nlohmann::json())==true &&
+                value.contains("owner_transformations") && value.contains("partial_wall_ids") &&
+                value.contains("rigid_boundary_ids") && value.contains("rigid_stroke_ids") && value.contains("dimension_ids"))
+                floor=std::max(floor,189U);
             if (value.is_object() && value.value("physical_room_dimension_completion",nlohmann::json())==true &&
                 value.contains("version") && value.at("version").is_number_integer() &&
                 value.at("version")>=5 && value.at("version")<=8 &&
@@ -569,9 +575,9 @@ std::uint32_t required_format_version_internal(const DocumentSnapshot& snapshot,
     };
     for (const auto& revision : snapshot.history()) {
         if (revision.phase_entity_import) required=std::max(required,160U);
-        if (required<188 && revision.boundary_geometry_edit)
+        if (required<189 && revision.boundary_geometry_edit)
             required=std::max(required,typed_edit_reader_floor(encode_boundary_geometry_edit(*revision.boundary_geometry_edit)));
-        if (required<188 && revision.boundary_constraint_changes)
+        if (required<189 && revision.boundary_constraint_changes)
             required=std::max(required,typed_edit_reader_floor(command_to_json(Command{*revision.boundary_constraint_changes})));
         if (required<122 && revision.boundary_geometry_edit)
             required=std::max(required,quantity_reader_floor(encode_boundary_geometry_edit(*revision.boundary_geometry_edit)));
@@ -988,6 +994,8 @@ std::uint32_t required_format_version_internal(const DocumentSnapshot& snapshot,
                 required=std::max(required,74U);
             if (command.joint_translation && command.joint_translation->physical_room_dimension_completion)
                 required=std::max(required,157U);
+            if (command.joint_translation && command.joint_translation->corner_window_dimension_completion)
+                required=std::max(required,189U);
             if(command.room_review_completion || !command.room_review_intent.is_null()) required=std::max(required,49U);
             if(command.dimension_placement_completion || !command.dimension_placement_moves.empty()) required=std::max(required,41U);
             if(command.wall_split) required=std::max(required,
@@ -2981,6 +2989,7 @@ bool verify_sqlite_schema(sqlite3* database, bool allow_recovery = false) {
          sqlite3_column_int(user_version.get(), 0) != 186 &&
          sqlite3_column_int(user_version.get(), 0) != 187 &&
          sqlite3_column_int(user_version.get(), 0) != 188 &&
+         sqlite3_column_int(user_version.get(), 0) != 189 &&
          sqlite3_column_int(user_version.get(), 0) != 174 &&
          sqlite3_column_int(user_version.get(), 0) != 169 &&
          sqlite3_column_int(user_version.get(), 0) != 163 &&
@@ -3703,6 +3712,8 @@ DocumentSnapshot read_snapshot(sqlite3* database, RecoveryLedger* recovery = nul
     // here and authenticate the manifest with its stored version below.
     const auto required_format = required_format_version_internal(snapshot, format_number < 28);
     if (required_format > format_number) {
+        if (required_format>=189)
+            storage_error(StorageErrorCode::unsupported_format,"This project requires reader 189 for rigid corner-window callout completion and retained history");
         if (required_format>=188)
             storage_error(StorageErrorCode::unsupported_format,"This project requires reader 188 for mixed presentation scaling and retained history");
         if (required_format>=187)

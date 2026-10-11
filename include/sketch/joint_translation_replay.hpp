@@ -4,6 +4,8 @@
 
 namespace sketch {
 
+struct BoundaryDimension;
+
 struct JointTranslationOffsets {
     std::map<std::string, Vec2, std::less<>> owner_offsets;
     std::map<std::string, Vec2, std::less<>> dimension_offsets;
@@ -17,6 +19,13 @@ struct JointTranslationOffsets {
 [[nodiscard]] JointTranslationOffsets resolve_joint_translation_offsets(
     const std::map<std::string, Entity, std::less<>>& source,
     const JointTranslationIntent& intent);
+
+// Original-source rigid callout authority. Corner callouts require the new
+// explicit marker and equal operators on both actual selected wall hosts.
+// No incidental corner owner or rendered cut grants a selected operator.
+[[nodiscard]] std::optional<PlanarTransform> joint_rigid_dimension_transform(
+    const std::map<std::string, Entity, std::less<>>& source,
+    const JointTranslationIntent& intent, const BoundaryDimension& dimension);
 
 // Strict semantic codec; no placeholder geometry command grants authority.
 [[nodiscard]] nlohmann::json encode_joint_translation_intent(const JointTranslationIntent& intent);

@@ -341,6 +341,10 @@ struct JointTranslationIntent {
     // admission from the captured authoritative inventory. Historical/default
     // intents retain entity-only dimension semantics.
     bool physical_room_dimension_completion{};
+    // Nested nine/ten explicitly carry a corner window's saved leg callouts
+    // when both actual wall hosts have the same captured rigid operator.
+    // Historical one-through-eight intents retain their original placement.
+    bool corner_window_dimension_completion{};
 };
 
 // One observation of an existing owner's supported field. This carries no

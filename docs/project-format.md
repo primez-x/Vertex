@@ -1,4 +1,40 @@
-# Vertex project formats v1 through v188
+# Vertex project formats v1 through v189
+
+## Carried corner-window rigid callouts (v189, source integration)
+
+Joint intent nine adds `corner_window_dimension_completion:true` to the exact
+rigid version-four shape. Ten adds that marker to the exact version-eight shape,
+including its existing explicit physical-room dimension marker. Both require
+captured rigid operators; they cannot downgrade to a translation dialect. The
+marker is a capability and does not require a corner in every selection.
+
+A corner leg dimension follows only when both actual source wall hosts belong
+to the selected wall roster and have exactly equal captured operators. Its
+current source and final two-host geometry must resolve. Its original text
+position receives that full operator once; automatic/manual placement, styles,
+presentation and opaque fields are retained. An independently selected callout
+must agree with this host-derived displacement. A corner owner or rendered cut
+cannot itself confer wall-transform authority. Versions one through eight keep
+their existing behavior.
+
+Reader189/extraction187 are required through direct, nested, retained and undone
+history. The source-selected geometry producer derives deduction, physical-wall
+and measured-linework consequences from the original snapshot, and exposes
+affected physical rooms as mandatory explicit review inputs. Unchanged geometry
+can still require owned room-callout review against that same original source.
+This preparation is not a published edit or a desktop/runtime acceptance claim.
+
+The reviewed-selection replay helper accepts only this closed geometry request
+and canonical typed room review intents. Review contexts/planes must cover the
+derived requirements exactly; retained dispositions and dimension placements
+cannot be omitted or supplied as new placement authority. Every review binds
+the original full snapshot/save state and the exact preceding derived entity
+map. Sequential room reconstruction retains its typed topology transitions;
+selected room area callouts complete from original carriers around the final
+explicitly reviewed geometry. The enclosing authoring command must still reserve
+fresh identities against retained history and admit the complete final document.
+The whole-document dependency index has a separate 64 MiB accounting and one
+million directed-edge ceiling; the selected dependency closure remains 4096.
 
 ## Mixed presentation uniform scaling (v188, source integration in progress)
 
