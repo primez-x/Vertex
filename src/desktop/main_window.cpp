@@ -110,6 +110,7 @@
 #include "sketch/desktop/building_object_dialog.hpp"
 #include "sketch/desktop/assembly_authoring_dialog.hpp"
 #include "sketch/assembly_document_adapter.hpp"
+#include "sketch/assembly_catalog_phase_edit.hpp"
 #include "sketch/assembly_component_clipboard.hpp"
 #include "sketch/assembly_geometry.hpp"
 #include "sketch/desktop/constraint_dialog.hpp"
@@ -18674,18 +18675,24 @@ public:
             const auto draft = dialog.candidate();
             if (!draft || !modalContextUnchanged(context) || !assemblyDraftSourceUnchanged(source, workspace)) return false;
             if (original && draft->replacement == *original) { clearError(); return true; }
-            ApplyEntityChanges command;
+            Command command;
             if (original) {
-                command = independent_assembly_type_update_command(source, catalog_id, draft->replacement, source.revision());
+                ApplyBoundaryConstraintChanges definitions;
+                definitions.expected_revision=source.revision();
+                definitions.message="Update assembly type";
+                definitions.assembly_catalog_edit_intent=prepare_assembly_catalog_phase_edit_request(
+                    source.entities(),{{catalog_id,{draft->replacement},{}}});
+                definitions.assembly_catalog_edit_completion=true;
+                command=std::move(definitions);
             } else {
                 auto types = model.types(); types.push_back(draft->replacement);
                 auto catalog = catalog_source;
                 catalog.properties["model"] = retain_assembly_catalog_dialect(catalog_source.properties.at("model"),
                     AssemblyModel::create(model.materials(), std::move(types), model.instances()).to_json());
-                command = {source.revision(), {EntityChange::upsert(std::move(catalog))}, {}, "Create reusable assembly type"};
+                command = ApplyEntityChanges{source.revision(), {EntityChange::upsert(std::move(catalog))}, {}, "Create reusable assembly type"};
             }
             (void)Document::preview_command(source, command);
-            applyAuthoredCommand(Command{command}); clearError(); refresh();
+            applyAuthoredCommand(command); clearError(); refresh();
             return true;
         } catch (const std::exception& error) {
             setError(QStringLiteral("Assembly type: %1").arg(QString::fromUtf8(error.what())));

@@ -14,6 +14,54 @@ changed source does not acquire runtime acceptance without later qualification.
 
 ## Current delivery state
 
+### October 11 shared catalog/type phase preservation
+
+The component clipboard batch below is committed and pushed as 12965826, with
+the exact remote branch ref verified. Source-only work now addresses shared
+catalog/type mutation: the type editor calls a raw catalog upsert, so a changed
+definition can change declared baseline or inactive roots' expansions while
+their raw rows and required companions remain unchanged. The blanket component
+editing quarantine currently prevents execution; it must not be removed without
+this source preservation and real phase-isolated editing integration.
+
+The pure assembly_catalog_phase_edit foundation is implemented and linked in
+the base Document target. It inspects every actual qualified/independent root,
+transitive type/material effects (including appearance, names and quantities),
+actual saved choices and physical hosts. Protected/inactive impacts stay explicit
+for private-catalog/proposed-root authoring. Ordinary replay preserves reached
+definitions and expansions; unrelated raw rows, dialects and envelopes remain
+exact. Equal typed edits restore their original raw rows.
+
+Existing type editing now uses exclusive source-bound command59; its actual
+source reconstruction is retained in Document history. Reader217/extraction215
+recognize this command, including retained/undone history after reader216.
+The old type-update adapter derives the same admitted ordinary consequences.
+A separate current-authoring comparison protects baseline/inactive raw roots,
+carrier bindings, reached definitions and expansions against other raw shared
+catalog/instance writers. Historical raw-command replay keeps its old meaning.
+Numeric copy now derives temporary poses without pretending to publish changed
+source catalogs; public movement and final fresh-object copy retain their own
+Document validation. Independent integrated source review approved the frozen
+batch with no open P1/P2 findings. A transform codec was moved out of the early
+closed request validator: it now checks framing only, while semantic decoding
+follows complete source/candidate catalog admission. This remains source-only
+approval; compilation/runtime and full replacement are not established.
+
+Actual phase-isolated editing is being implemented separately in
+phase_assembly_catalog_edit. Changed active consumers gain private catalogs;
+baseline consumers gain actual proposed replacements and membership enrollment.
+Inactive consumers retain originals. A separate
+phase_assembly_catalog_edit_presentation producer owns ordinary reference
+retargeting and baseline presentation carry. These files are not yet integrated
+or publishable. Root still owns snapshot/history/asset fences, final allocation,
+controller/command/history integration and source-kit linkage. Cross-registry
+host/carry limitations must remain explicit; a safe ordinary refusal does not
+complete the replacement workflow.
+
+No tests/builds/jobs or quarantine changes are authorized. The installed
+application is unchanged; compilation/runtime remain unverified and all ten
+production gates remain open.
+
 ### October 11 component clipboard source capture
 
 The ordinary wall/component retirement batch is committed and pushed as

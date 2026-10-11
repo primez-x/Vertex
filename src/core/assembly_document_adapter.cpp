@@ -2,6 +2,7 @@
 #include "sketch/annotation_entity_codec.hpp"
 #include "sketch/architectural_document_adapter.hpp"
 #include "sketch/assembly_phase_membership_transport.hpp"
+#include "sketch/assembly_catalog_phase_edit.hpp"
 #include "sketch/slab_semantics.hpp"
 #include "sketch/wall_semantics.hpp"
 #include <algorithm>
@@ -1280,12 +1281,12 @@ ApplyEntityChanges assembly_catalog_update_command(const DocumentSnapshot& sourc
 ApplyEntityChanges independent_assembly_type_update_command(const DocumentSnapshot& source,
     const std::string& catalog_id, AssemblyType replacement, Revision expected_revision) {
     revision(source, expected_revision);
-    const auto found = source.entities().find(catalog_id);
-    require(found != source.entities().end(), "assembly catalog update target is missing");
-    Entity entity = found->second;
-    entity.properties["model"] = retain_assembly_catalog_dialect(found->second.properties.at("model"),
-        catalog(entity).with_type(std::move(replacement)).to_json());
-    return upsert(source, std::move(entity), expected_revision, "Update assembly type");
+    const auto request=prepare_assembly_catalog_phase_edit_request(source.entities(),
+        {{catalog_id,{std::move(replacement)},{}}});
+    const auto candidate=replay_assembly_catalog_phase_edit_entities(source.entities(),request);
+    if (candidate.at(catalog_id)==source.entities().at(catalog_id))
+        return {expected_revision,{}, {},"Update assembly type"};
+    return upsert(source,candidate.at(catalog_id),expected_revision,"Update assembly type");
 }
 ApplyEntityChanges independent_assembly_type_remove_command(const DocumentSnapshot& source,
     const std::string& catalog_id, const std::string& type_id, Revision expected_revision) {
@@ -1297,12 +1298,18 @@ ApplyEntityChanges independent_assembly_type_remove_command(const DocumentSnapsh
         catalog(entity).without_type(type_id).to_json());
     return upsert(source,std::move(entity),expected_revision,"Remove assembly type");
 }
-ApplyEntityChanges embedded_assembly_group_transform_command(const DocumentSnapshot& source,
+namespace {
+// Prepare exact raw catalog consequences without treating detached poses as a
+// publication of changes to the existing catalog or its phase memberships.
+ApplyEntityChanges prepare_embedded_assembly_group_transform(const DocumentSnapshot& source,
     std::span<const EmbeddedAssemblyGroupTarget> targets,
     const ArchitecturalGroupTransform& transform, Revision expected_revision) {
     revision(source, expected_revision);
     require(!targets.empty() && targets.size() <= maximum_architectural_group_targets,
         "an embedded assembly group requires between 1 and 1000 roots");
+    // Admit every original catalog and root before decoding selected models.
+    // Identity gestures must pass the same source budgets and descriptors.
+    validate_document_assembly_instances(source.entities());
     const auto finite_point = [](const auto& point) {
         return std::isfinite(point.x) && std::isfinite(point.y) && std::isfinite(point.z);
     };
@@ -1332,9 +1339,6 @@ ApplyEntityChanges embedded_assembly_group_transform_command(const DocumentSnaps
                 "embedded assembly copy identity already exists");
         }
     }
-    // Includes all embedded and independent roots, not just selected profiles.
-    // Identity gestures must pass the same source budgets and descriptors.
-    validate_document_assembly_instances(source.entities());
     struct Root {
         std::size_t raw_index;
         AssemblyTransform pose;
@@ -1439,10 +1443,24 @@ ApplyEntityChanges embedded_assembly_group_transform_command(const DocumentSnaps
     }
     ApplyEntityChanges command{expected_revision, {}, {},
         copies.empty() ? "Transform embedded assembly group" : "Copy/transform embedded assembly group"};
+    // Validate the complete proposed catalog graph, including unaffected roots
+    // and independent instances that depend on a changed catalog.
+    if (!changed.empty()) {
+        auto candidate = source.entities();
+        for (const auto& [id, entity] : changed) candidate.insert_or_assign(id, entity);
+        validate_document_assembly_instances(candidate);
+    }
     for (auto& [id, entity] : changed) {
         (void)id;
         command.entity_changes.push_back(EntityChange::upsert(std::move(entity)));
     }
+    return command;
+}
+} // namespace
+ApplyEntityChanges embedded_assembly_group_transform_command(const DocumentSnapshot& source,
+    std::span<const EmbeddedAssemblyGroupTarget> targets,
+    const ArchitecturalGroupTransform& transform, Revision expected_revision) {
+    auto command = prepare_embedded_assembly_group_transform(source, targets, transform, expected_revision);
     if (command.entity_changes.empty()) (void)Document::fork(source);
     else (void)Document::preview_command(source, command);
     return command;
@@ -1463,9 +1481,9 @@ ApplyEntityChanges embedded_assembly_group_copy_command(const DocumentSnapshot& 
             "embedded assembly copy document identity already exists");
         moving.push_back({target.catalog_id, target.instance_id, std::nullopt, target.transform});
     }
-    // Derive exact poses through the same qualified per-root command. Its
-    // existing-catalog upserts are detached input only, never published here.
-    const auto movement = embedded_assembly_group_transform_command(source, moving, transform, expected_revision);
+    // Derive exact poses through pure catalog preparation. Existing-catalog
+    // consequences are detached input; only fresh independent copies publish.
+    const auto movement = prepare_embedded_assembly_group_transform(source, moving, transform, expected_revision);
     std::map<std::string, const Entity*, std::less<>> moved_catalogs;
     for (const auto& change : movement.entity_changes) {
         require(change.kind == EntityChangeKind::upsert && change.entity.type == "assembly_model" &&

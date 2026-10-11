@@ -10,6 +10,7 @@
 #include "sketch/corner_window_edit.hpp"
 #include "sketch/assembly_model.hpp"
 #include "sketch/assembly_document_adapter.hpp"
+#include "sketch/assembly_catalog_phase_edit.hpp"
 #include "sketch/site_frame.hpp"
 #include "sketch/model_phases.hpp"
 #include "sketch/assembly_phase_membership.hpp"
@@ -2659,6 +2660,10 @@ static bool has_mixed_clipboard_placement(const ApplyBoundaryConstraintChanges& 
     return command.clipboard_placement_completion || !command.clipboard_placement_intent.is_null();
 }
 
+static bool has_assembly_catalog_edit(const ApplyBoundaryConstraintChanges& command) {
+    return command.assembly_catalog_edit_completion || !command.assembly_catalog_edit_intent.is_null();
+}
+
 static bool has_phase_constraint_authoring(const ApplyBoundaryConstraintChanges& command) {
     return command.phase_constraint_authoring_completion || !command.phase_constraint_authoring_intent.is_null();
 }
@@ -2838,7 +2843,7 @@ static void validate_phase_room_review_mode(const ApplyBoundaryConstraintChanges
         throw std::invalid_argument("Phase room review cannot borrow another edit or asset authority");
 }
 
-static bool has_source_authoring_sibling_changes(const ApplyBoundaryConstraintChanges& command) {
+static bool has_non_catalog_source_authoring_sibling_changes(const ApplyBoundaryConstraintChanges& command) {
     return !command.boundary_edits.empty() || !command.wall_edits.empty() || !command.entity_changes.empty() ||
         !command.physical_entity_changes.empty() || !command.exterior_source_edits.empty() ||
         !command.supplemental_entity_changes.empty() || !command.supplemental_asset_changes.empty() ||
@@ -2854,6 +2859,18 @@ static bool has_source_authoring_sibling_changes(const ApplyBoundaryConstraintCh
         command.curve_construction_completion || has_disto_measurement_completion(command) ||
         has_wall_group_scale(command) || has_phase_selection_removal(command) ||
         has_ordinary_selection_removal(command) || has_mixed_selection_removal(command) || has_mixed_selection_edit(command);
+}
+
+static bool has_source_authoring_sibling_changes(const ApplyBoundaryConstraintChanges& command) {
+    return has_assembly_catalog_edit(command) || has_non_catalog_source_authoring_sibling_changes(command);
+}
+
+static void validate_assembly_catalog_edit_mode(const ApplyBoundaryConstraintChanges& command) {
+    if (!command.assembly_catalog_edit_completion || command.assembly_catalog_edit_intent.is_null() ||
+        has_non_catalog_source_authoring_sibling_changes(command) || has_phase_constraint_authoring(command) ||
+        has_independent_drawing_removal(command) || has_mixed_clipboard_placement(command))
+        throw std::invalid_argument("Assembly definition editing requires its exclusive actual-source request");
+    (void)validate_assembly_catalog_phase_edit_request(command.assembly_catalog_edit_intent);
 }
 
 static void validate_phase_constraint_authoring_mode(const ApplyBoundaryConstraintChanges& command) {
@@ -4633,6 +4650,8 @@ void validate_retained_authoring_fresh_identities(
 static void validate_current_baseline_physical_preservation(
     const std::map<std::string,Entity,std::less<>>& source,
     const std::map<std::string,Entity,std::less<>>& candidate) {
+    try { validate_current_assembly_catalog_phase_preservation(source,candidate); }
+    catch (const std::exception& error) { document_error(DocumentErrorCode::invalid_entity,error.what()); }
     for (const auto& [registry_id,registry]:source) {
         (void)registry_id;
         if (registry.type!="model_phases") continue;
@@ -4914,6 +4933,15 @@ void validate_completed_constraint_change(const std::map<std::string, Entity, st
         // reconstruction; partial wall authority cannot validate their union.
         try { validate_independent_drawing_removal_mode(command); (void)command_to_json(Command{command}); }
         catch (const DocumentError&) { throw; }
+        catch (const std::exception& error) { document_error(DocumentErrorCode::constraint_violation,error.what()); }
+        return;
+    }
+    if (has_assembly_catalog_edit(command)) {
+        try {
+            validate_assembly_catalog_edit_mode(command);
+            if (entity_map_digest(replay_assembly_catalog_phase_edit_entities(before,command.assembly_catalog_edit_intent))!=entity_map_digest(after))
+                throw std::invalid_argument("Assembly definition changes differ from actual-source reconstruction");
+        } catch (const DocumentError&) { throw; }
         catch (const std::exception& error) { document_error(DocumentErrorCode::constraint_violation,error.what()); }
         return;
     }
@@ -6660,6 +6688,16 @@ std::map<std::string, Entity, std::less<>> completed_boundary_constraint_entitie
     const ApplyBoundaryConstraintChanges& command, bool retained_replay = false,
     bool active_phase_constraints = false,
     const std::map<std::string,Entity,std::less<>>* original_dimension_source = nullptr) {
+    if (has_assembly_catalog_edit(command)) {
+        try {
+            validate_assembly_catalog_edit_mode(command);
+            auto result=replay_assembly_catalog_phase_edit_entities(source,command.assembly_catalog_edit_intent);
+            validate_boundary_identity_transition(history,source,result);
+            (void)validate_state(result,source_assets,active_phase_constraints);
+            return result;
+        } catch (const DocumentError&) { throw; }
+        catch (const std::exception& error) { document_error(DocumentErrorCode::invalid_entity,error.what()); }
+    }
     if (has_mixed_selection_edit(command))
         document_error(DocumentErrorCode::invalid_entity,"Mixed selection edit requires complete snapshot-aware replay");
     if (has_mixed_clipboard_placement(command)) {
@@ -8760,6 +8798,17 @@ nlohmann::json command_to_json(const Command& command) {
             }
             return encoded;
         } else if constexpr (std::is_same_v<T, ApplyBoundaryConstraintChanges>) {
+            if (has_assembly_catalog_edit(typed)) {
+                try {
+                    validate_assembly_catalog_edit_mode(typed);
+                    validate_action(typed.message);
+                    return nlohmann::json{{"version",59},{"kind","apply_boundary_constraint_changes"},
+                        {"expected_revision",typed.expected_revision},{"message",typed.message},
+                        {"assembly_catalog_edit_completion",true},
+                        {"assembly_catalog_edit_intent",typed.assembly_catalog_edit_intent}};
+                } catch (const DocumentError&) { throw; }
+                catch (const std::exception& error) { document_error(DocumentErrorCode::invalid_entity,error.what()); }
+            }
             if (has_mixed_selection_edit(typed)) {
                 try {
                     validate_mixed_selection_edit_mode(typed);
@@ -9300,7 +9349,7 @@ Command command_from_json(const nlohmann::json& value,
     try {
         if (!value.is_object() || !value.contains("version") || !value.contains("kind") ||
             !value.at("version").is_number_integer() ||
-            (value.at("version")<1 || value.at("version")>58) ||
+            (value.at("version")<1 || value.at("version")>59) ||
             !value.at("kind").is_string()) {
             document_error(DocumentErrorCode::invalid_entity, "serialized command envelope is invalid");
         }
@@ -9421,6 +9470,21 @@ Command command_from_json(const nlohmann::json& value,
             return result;
         }
         if (kind == "apply_boundary_constraint_changes") {
+            if (value.at("version")==59) {
+                command_exact_fields(value,{"version","kind","expected_revision","message",
+                    "assembly_catalog_edit_completion","assembly_catalog_edit_intent"},
+                    DocumentErrorCode::invalid_entity,"serialized assembly definition edit");
+                if (!value.at("assembly_catalog_edit_completion").is_boolean() ||
+                    !value.at("assembly_catalog_edit_completion").get<bool>())
+                    throw std::invalid_argument("Assembly definition edit completion is required");
+                ApplyBoundaryConstraintChanges result;
+                result.expected_revision=command_revision(value.at("expected_revision"),"Assembly definition edit revision");
+                result.message=command_string(value.at("message"),"Assembly definition edit message",1024);
+                result.assembly_catalog_edit_intent=validate_assembly_catalog_phase_edit_request(value.at("assembly_catalog_edit_intent"));
+                result.assembly_catalog_edit_completion=true;
+                validate_assembly_catalog_edit_mode(result);
+                return result;
+            }
             if (value.at("version")==52) {
                 command_exact_fields(value,{"version","kind","expected_revision","message",
                     "mixed_selection_edit_completion","mixed_selection_edit_intent"},
@@ -10686,7 +10750,10 @@ Revision Document::apply(const Command& command) {
                 next.action = typed_command.message.empty()
                     ? "Apply boundary constraints" : typed_command.message;
                 validate_action(next.action);
-                if (has_mixed_selection_edit(typed_command)) {
+                if (has_assembly_catalog_edit(typed_command)) {
+                    (void)command_to_json(Command{typed_command});
+                    next_active_policy=source_active_policy;
+                } else if (has_mixed_selection_edit(typed_command)) {
                     (void)command_to_json(Command{typed_command});
 #ifdef VERTEX_HAS_CONSTRAINT_AUTHORING
                     next_active_policy=source_active_policy || mixed_selection_edit_source_phase_policy(

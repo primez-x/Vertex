@@ -1,4 +1,20 @@
-# Vertex project formats v1 through v216
+# Vertex project formats v1 through v217
+
+Reader217 retains shared component type/material definition edits under exclusive
+command59. Its six fields are version, kind, expected revision, message,
+`assembly_catalog_edit_completion` (literal true), and
+`assembly_catalog_edit_intent`. The closed intent has version1, the complete
+source entity-map digest, and sorted catalog edits. Each catalog binds its exact
+source envelope digest and the original existing definition rows before typed
+replacements are applied. It cannot add/remove roots or definitions, mutate
+phase membership, borrow payload/asset/geometry lanes, or allocate identities.
+Replay reconstructs every embedded and independent root from the actual source.
+Changed protected or inactive expansions and reached definitions refuse shared
+mutation; those cases require a distinct phase-isolated replacement producer.
+Unrelated raw rows, schema dialects, envelopes and entities remain unchanged.
+Retained and undone history raises the reader floor, including events after
+reader216. Historical ordinary catalog edits keep their previous meaning.
+Compilation, runtime and migration qualification remain unverified.
 
 Reader216 retains component clipboard placement intent2 under command58.
 The intent has the historical ten fields plus `detached_components`. Each

@@ -1,5 +1,12 @@
 # Portable project extraction
 
+Exchange version215 requires native reader217 for source-bound component
+definition edits under command59. Exact original catalog/definition bindings and
+complete source-map digest travel in retained and undone command history. The
+ordinary edit preserves protected/inactive roots' reached definitions and
+expansions; phase-isolated replacements have separate authority. Historical raw
+catalog command semantics remain unchanged. No extraction round trip is claimed.
+
 Exchange version214 requires native reader216 for component clipboard
 placement intent2 and command58. It retains exact passive source records and
 their fresh destination owner mappings. Capture preserves the actual source

@@ -3247,6 +3247,10 @@
     },
     {
       "category": "source",
+      "path": "include/sketch/assembly_catalog_phase_edit.hpp"
+    },
+    {
+      "category": "source",
       "path": "include/sketch/assembly_component_clipboard.hpp"
     },
     {
@@ -4780,6 +4784,10 @@
     {
       "category": "source",
       "path": "src/core/area_subtraction.cpp"
+    },
+    {
+      "category": "source",
+      "path": "src/core/assembly_catalog_phase_edit.cpp"
     },
     {
       "category": "source",

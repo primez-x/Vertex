@@ -526,6 +526,11 @@ struct ApplyBoundaryConstraintChanges {
     // raw payloads nor an intermediate candidate can lend this authority.
     nlohmann::json mixed_selection_edit_intent=nullptr;
     bool mixed_selection_edit_completion{};
+    // Envelope fifty-nine replays existing type/material definition edits from
+    // the complete actual source. Protected and inactive consumers must retain
+    // their expansion and reached definitions; replacement is a separate lane.
+    nlohmann::json assembly_catalog_edit_intent=nullptr;
+    bool assembly_catalog_edit_completion{};
 };
 
 using Command = std::variant<ApplyEntityChanges, ImportPhaseEntities, NameRevision, TranslateBoundary,

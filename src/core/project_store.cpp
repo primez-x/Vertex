@@ -381,6 +381,12 @@ std::uint32_t required_format_version_internal(const DocumentSnapshot& snapshot,
                 if (!value.is_object() || value.size()!=fields.size()) return false;
                 return std::all_of(fields.begin(),fields.end(),[&](const char* field) { return value.contains(field); });
             };
+            if (closed_shape({"version","kind","expected_revision","message",
+                    "assembly_catalog_edit_completion","assembly_catalog_edit_intent"}) &&
+                value.at("version")==59 && value.at("kind")=="apply_boundary_constraint_changes" &&
+                value.at("assembly_catalog_edit_completion")==true &&
+                value.at("assembly_catalog_edit_intent").is_object())
+                floor=std::max(floor,217U);
             if (closed_shape({"version","expected_revision","source_snapshot_digest","source_authoring_digest",
                     "source_entities_digest","source_saved_revision","roof_authoring","additions",
                     "selected_registry_id","message","detached_components"}) && value.at("version")==2 &&
@@ -777,9 +783,9 @@ std::uint32_t required_format_version_internal(const DocumentSnapshot& snapshot,
     };
     for (const auto& revision : snapshot.history()) {
         if (revision.phase_entity_import) required=std::max(required,160U);
-        if (required<216 && revision.boundary_geometry_edit)
+        if (required<217 && revision.boundary_geometry_edit)
             required=std::max(required,typed_edit_reader_floor(encode_boundary_geometry_edit(*revision.boundary_geometry_edit)));
-        if (required<216 && revision.boundary_constraint_changes)
+        if (required<217 && revision.boundary_constraint_changes)
             required=std::max(required,typed_edit_reader_floor(command_to_json(Command{*revision.boundary_constraint_changes})));
         if (required<122 && revision.boundary_geometry_edit)
             required=std::max(required,quantity_reader_floor(encode_boundary_geometry_edit(*revision.boundary_geometry_edit)));
@@ -3266,6 +3272,7 @@ bool verify_sqlite_schema(sqlite3* database, bool allow_recovery = false) {
          sqlite3_column_int(user_version.get(), 0) != 214 &&
          sqlite3_column_int(user_version.get(), 0) != 215 &&
          sqlite3_column_int(user_version.get(), 0) != 216 &&
+         sqlite3_column_int(user_version.get(), 0) != 217 &&
          sqlite3_column_int(user_version.get(), 0) != 207 &&
          sqlite3_column_int(user_version.get(), 0) != 202 &&
          sqlite3_column_int(user_version.get(), 0) != 200 &&
@@ -3991,6 +3998,8 @@ DocumentSnapshot read_snapshot(sqlite3* database, RecoveryLedger* recovery = nul
     // here and authenticate the manifest with its stored version below.
     const auto required_format = required_format_version_internal(snapshot, format_number < 28);
     if (required_format > format_number) {
+        if (required_format>=217)
+            storage_error(StorageErrorCode::unsupported_format,"This project requires reader 217 for source-bound shared component type and material editing");
         if (required_format>=216)
             storage_error(StorageErrorCode::unsupported_format,"This project requires reader 216 for component clipboard source provenance and destination identity mappings");
         if (required_format>=215)
