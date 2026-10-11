@@ -324,12 +324,76 @@ const nlohmann::json& entity_model(const Entity& entity, const std::string& map_
         entity.properties.at("model").is_object(), "assembly phase actual entity requires a model object");
     return entity.properties.at("model");
 }
+using Entities = std::map<std::string, Entity, std::less<>>;
+using CatalogInstances = std::map<std::string, std::set<std::string, std::less<>>, std::less<>>;
+
+void admit_complete_map(const Entities& entities, JsonBudget& comparison_budget) {
+    // Complete documents use the retained-source capacity, independently of
+    // the smaller catalog-resolution ledger. Each map keeps its own capacity;
+    // the comparison is bounded by exactly three such maps, not one catalog.
+    JsonBudget budget{0, 0, 64 * 1024 * 1024, 2'000'000};
+    charge(budget.values, budget.value_limit, 1);
+    for (const auto& [id, entity] : entities) {
+        charge(budget.values, budget.value_limit, 6);
+        charge(budget.bytes, budget.byte_limit, 192);
+        string_bytes(budget, id);
+        string_bytes(budget, entity.id);
+        string_bytes(budget, entity.type);
+        for (const auto* field : {&entity.properties, &entity.extensions}) {
+            JsonBudget local;
+            admit_json(*field, local);
+            charge(budget.bytes, budget.byte_limit, local.bytes);
+            charge(budget.values, budget.value_limit, local.values);
+        }
+        document_id(id);
+        require(entity.id == id && !entity.type.empty(),
+            "assembly phase complete map entity identity/type mismatch");
+        require(entity.properties.is_object() && entity.extensions.is_object(),
+            "assembly phase complete map entity fields must be objects");
+    }
+    charge(comparison_budget.bytes, comparison_budget.byte_limit, budget.bytes);
+    charge(comparison_budget.values, comparison_budget.value_limit, budget.values);
+}
+bool exact_json(const nlohmann::json& left, const nlohmann::json& right) {
+    if (left.type() != right.type() || left.size() != right.size()) return false;
+    if (left.is_object()) {
+        auto first = left.begin();
+        auto second = right.begin();
+        for (; first != left.end(); ++first, ++second)
+            if (first.key() != second.key() || !exact_json(first.value(), second.value())) return false;
+        return true;
+    }
+    if (left.is_array()) {
+        for (std::size_t i = 0; i < left.size(); ++i)
+            if (!exact_json(left.at(i), right.at(i))) return false;
+        return true;
+    }
+    return left == right && (!left.is_number_float() ||
+        std::signbit(left.get<double>()) == std::signbit(right.get<double>()));
+}
+bool exact_companion(const Entity& left, const Entity& right) {
+    return left.id == right.id && left.type == right.type && left.required == right.required &&
+        exact_json(left.properties, right.properties) && exact_json(left.extensions, right.extensions);
+}
+const std::set<std::string, std::less<>>& catalog_instances(const Entities& entities,
+    const std::string& id, ResolveBudget& budget, CatalogInstances& catalogs) {
+    const auto cached = catalogs.find(id);
+    if (cached != catalogs.end()) return cached->second;
+    const auto actual = entities.find(id);
+    require(actual != entities.end(), "assembly phase catalog is missing");
+    const auto& model = entity_model(actual->second, actual->first, "assembly_model");
+    budget.admit(model);
+    admit_catalog_work(model, budget);
+    const auto decoded = AssemblyModel::from_json(model);
+    std::set<std::string, std::less<>> instances;
+    for (const auto& row : decoded.instances()) instances.insert(row.id);
+    return catalogs.emplace(id, std::move(instances)).first->second;
+}
 AssemblyPhaseMembershipScope resolve(const std::map<std::string, Entity, std::less<>>& entities,
-    const std::optional<std::string>& comparison_registry, const std::optional<std::string>& alternative) {
+    const std::optional<std::string>& comparison_registry, const std::optional<std::string>& alternative,
+    ResolveBudget& budget, CatalogInstances& catalogs) {
     try {
-        ResolveBudget budget;
         std::map<std::string, ModelPhases, std::less<>> registries;
-        std::map<std::string, std::set<std::string, std::less<>>, std::less<>> catalogs;
         const auto registry = [&](const std::string& id) -> const ModelPhases& {
             const auto cached = registries.find(id);
             if (cached != registries.end()) return cached->second;
@@ -357,19 +421,8 @@ AssemblyPhaseMembershipScope resolve(const std::map<std::string, Entity, std::le
             for (const auto& root : membership.roots()) {
                 require(result.owners.emplace(root, AssemblyPhaseMembershipOwner{id, membership.registry_id()}).second,
                     "qualified assembly phase root belongs to multiple companions");
-                auto catalog = catalogs.find(root.first);
-                if (catalog == catalogs.end()) {
-                    const auto actual = entities.find(root.first);
-                    require(actual != entities.end(), "assembly phase catalog is missing");
-                    const auto& model = entity_model(actual->second, actual->first, "assembly_model");
-                    budget.admit(model);
-                    admit_catalog_work(model, budget);
-                    const auto decoded = AssemblyModel::from_json(model);
-                    std::set<std::string, std::less<>> instances;
-                    for (const auto& row : decoded.instances()) instances.insert(row.id);
-                    catalog = catalogs.emplace(root.first, std::move(instances)).first;
-                }
-                require(catalog->second.contains(root.second), "assembly phase root references a missing actual catalog instance");
+                require(catalog_instances(entities, root.first, budget, catalogs).contains(root.second),
+                    "assembly phase root references a missing actual catalog instance");
                 const auto phase = states.find(root);
                 if (phase != states.end()) result.states.emplace(root, phase->second);
                 if (phase == states.end() || phase->second == ModelPhase::demolished) result.inactive_roots.insert(root);
@@ -379,6 +432,12 @@ AssemblyPhaseMembershipScope resolve(const std::map<std::string, Entity, std::le
     } catch (const nlohmann::json::exception& error) {
         throw std::invalid_argument(std::string("invalid assembly phase actual map: ") + error.what());
     }
+}
+AssemblyPhaseMembershipScope resolve(const Entities& entities,
+    const std::optional<std::string>& comparison_registry, const std::optional<std::string>& alternative) {
+    ResolveBudget budget;
+    CatalogInstances catalogs;
+    return resolve(entities, comparison_registry, alternative, budget, catalogs);
 }
 } // namespace
 
@@ -499,6 +558,72 @@ AssemblyPhaseMembershipScope resolve_assembly_phase_memberships(
     const std::map<std::string, Entity, std::less<>>& entities,
     std::string_view registry_id, const std::optional<std::string>& alternative) {
     return resolve(entities, std::string(registry_id), alternative);
+}
+void validate_assembly_phase_membership_transition(const Entities& source, const Entities& candidate,
+    const Entities& admitted_component_source) {
+    try {
+        // Reserve every envelope and JSON field across all three complete maps
+        // before any semantic decoder, retained comparison or derived allocation.
+        JsonBudget input_budget{0, 0, 3 * 64 * 1024 * 1024, 3 * 2'000'000};
+        admit_complete_map(source, input_budget);
+        admit_complete_map(candidate, input_budget);
+        admit_complete_map(admitted_component_source, input_budget);
+
+        // Preserve each map's existing component-resolution limits. The three
+        // maps bound aggregate work to three resolution ledgers; unrelated
+        // document fields do not consume catalog-validation capacity. Retain
+        // each map's validated rosters to avoid decoding them twice.
+        ResolveBudget source_budget, candidate_budget, admitted_budget;
+        CatalogInstances source_catalogs, candidate_catalogs, admitted_catalogs;
+        const auto source_scope = resolve(source, std::nullopt, std::nullopt,
+            source_budget, source_catalogs);
+        const auto admitted_scope = resolve(admitted_component_source, std::nullopt, std::nullopt,
+            admitted_budget, admitted_catalogs);
+        (void)resolve(candidate, std::nullopt, std::nullopt, candidate_budget, candidate_catalogs);
+
+        for (const auto& [id, entity] : candidate) {
+            if (entity.type != assembly_phase_membership_entity_type) continue;
+            const auto admitted = admitted_component_source.find(id);
+            require(admitted != admitted_component_source.end() && exact_companion(entity, admitted->second),
+                "assembly phase companion differs from admitted component source");
+        }
+        for (const auto& [id, entity] : admitted_component_source) {
+            if (entity.type != assembly_phase_membership_entity_type) continue;
+            const auto actual = candidate.find(id);
+            require(actual != candidate.end() && exact_companion(entity, actual->second),
+                "assembly phase admitted companion is missing or changed");
+        }
+
+        std::set<std::string, std::less<>> qualified_catalogs;
+        for (const auto& [root, owner] : source_scope.owners) {
+            (void)owner;
+            qualified_catalogs.insert(root.first);
+        }
+        for (const auto& [root, owner] : admitted_scope.owners) {
+            (void)owner;
+            qualified_catalogs.insert(root.first);
+        }
+        for (const auto& id : qualified_catalogs) {
+            const auto admitted = admitted_component_source.find(id);
+            const auto actual = candidate.find(id);
+            if (admitted == admitted_component_source.end()) {
+                require(actual == candidate.end(), "assembly phase removed catalog remains in candidate");
+                continue;
+            }
+            require(actual != candidate.end(), "assembly phase admitted catalog is missing from candidate");
+            // A source-qualified catalog remains protected after its last
+            // companion is removed. Validate any such uncached actual catalog
+            // before reading its complete row roster; geometry is not compared.
+            const auto& expected_rows = catalog_instances(admitted_component_source, id,
+                admitted_budget, admitted_catalogs);
+            const auto& candidate_rows = catalog_instances(candidate, id,
+                candidate_budget, candidate_catalogs);
+            require(candidate_rows == expected_rows,
+                "assembly phase catalog instance roster differs from admitted component source");
+        }
+    } catch (const nlohmann::json::exception& error) {
+        throw std::invalid_argument(std::string("invalid assembly phase membership transition: ") + error.what());
+    }
 }
 
 } // namespace sketch

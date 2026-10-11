@@ -84,4 +84,16 @@ struct AssemblyPhaseMembershipScope {
     const std::map<std::string, Entity, std::less<>>& entities,
     std::string_view registry_id, const std::optional<std::string>& alternative);
 
+// Pure complete-map comparison; this grants no command or publication privilege.
+// The internal caller supplies an independently actual-source-replayed component
+// view captured before raw supplements. Use source when no typed component
+// producer applies; a raw candidate is never its own admission authority.
+// Companions must match that view exactly, including retained JSON representation.
+// Catalogs qualified by source or admitted companions must retain that view's
+// complete local row ID roster; separately admitted geometry may differ.
+void validate_assembly_phase_membership_transition(
+    const std::map<std::string, Entity, std::less<>>& source,
+    const std::map<std::string, Entity, std::less<>>& candidate,
+    const std::map<std::string, Entity, std::less<>>& admitted_component_source);
+
 } // namespace sketch

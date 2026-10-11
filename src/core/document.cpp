@@ -4944,46 +4944,33 @@ void validate_retained_authoring_fresh_identities(
 #endif
 }
 
-// Raw entity changes and phase imports carry no source-derived component-row
-// enrollment authority. Keep this current-write admission outside historical
-// replay so old records retain their original semantics. Typed transport and
-// replacement producers must supply their own independently derived transitions.
-static void validate_current_unsealed_component_membership_preservation(
-    const std::map<std::string,Entity,std::less<>>& source,
-    const std::map<std::string,Entity,std::less<>>& candidate) {
-    std::set<std::string,std::less<>> qualified_catalogs;
-    for (const auto& [id,entity]:source) {
-        if (entity.type!=assembly_phase_membership_entity_type) continue;
-        const auto after=candidate.find(id);
-        if (after==candidate.end() || !exact_entity_payload(entity,after->second))
-            document_error(DocumentErrorCode::invalid_entity,
-                "Component membership changes require a source-derived authoring command: "+id);
-        const auto membership=AssemblyPhaseMembership::from_json(entity.properties.at("model"));
-        for (const auto& root:membership.roots()) qualified_catalogs.insert(root.first);
-    }
-    for (const auto& [id,entity]:candidate) {
-        if (entity.type!=assembly_phase_membership_entity_type) continue;
-        const auto original=source.find(id);
-        if (original==source.end() || original->second.type!=assembly_phase_membership_entity_type)
-            document_error(DocumentErrorCode::invalid_entity,
-                "Component membership creation requires explicit source-derived allocation: "+id);
-    }
-    // Preserving the companion alone is insufficient: a legacy writer could
-    // append an undeclared row to its shared catalog and revive carrier-based
-    // visibility. Compare actual local identities, never presentation aliases.
-    for (const auto& catalog_id:qualified_catalogs) {
-        const auto after=candidate.find(catalog_id);
-        if (after==candidate.end() || after->second.type!="assembly_model")
-            document_error(DocumentErrorCode::invalid_entity,
-                "Qualified component catalogs require typed retirement: "+catalog_id);
-        std::set<std::string,std::less<>> original_rows;
-        for (const auto& row:source.at(catalog_id).properties.at("model").at("instances"))
-            original_rows.insert(row.at("id").get<std::string>());
-        for (const auto& row:after->second.properties.at("model").at("instances"))
-            if (!original_rows.contains(row.at("id").get_ref<const std::string&>()))
-                document_error(DocumentErrorCode::invalid_entity,
-                    "Qualified component copies require a source-derived enrollment command: "+catalog_id);
-    }
+using ComponentMembershipEntities=std::map<std::string,Entity,std::less<>>;
+using ComponentMembershipAdmission=std::optional<ComponentMembershipEntities>;
+static bool has_component_membership(const ComponentMembershipEntities& entities) {
+    return std::any_of(entities.begin(),entities.end(),[](const auto& row) {
+        return row.second.type==assembly_phase_membership_entity_type;
+    });
+}
+// Private provenance channel: call only after an exclusive actual-source typed
+// producer or exact source-derived deletion validator. Never capture generic
+// boundary results, submitted entity changes, or wrapper suffix payloads.
+static void retain_current_component_membership_admission(
+    const ComponentMembershipEntities& source,const ComponentMembershipEntities& derived,
+    ComponentMembershipAdmission* admission) {
+    if (admission && (has_component_membership(source) || has_component_membership(derived)))
+        *admission=derived;
+}
+// Every current writer defaults to preserving the original companion/row view.
+// Independently reconstructed typed transitions replace that view privately;
+// the final candidate itself never supplies its publication authority. Kept
+// outside chronological replay to retain historical command semantics.
+static void validate_current_component_membership_transition(
+    const ComponentMembershipEntities& source,const ComponentMembershipEntities& candidate,
+    const ComponentMembershipAdmission& admission) {
+    if (!has_component_membership(source) && !has_component_membership(candidate) &&
+        (!admission || !has_component_membership(*admission))) return;
+    try { validate_assembly_phase_membership_transition(source,candidate,admission ? *admission : source); }
+    catch (const std::exception& error) { document_error(DocumentErrorCode::invalid_entity,error.what()); }
 }
 
 // Current authoring cannot silently rewrite a baseline architectural object while an
@@ -7063,7 +7050,8 @@ std::map<std::string, Entity, std::less<>> completed_boundary_constraint_entitie
     const std::map<std::string, Asset, std::less<>>& source_assets,
     const ApplyBoundaryConstraintChanges& command, bool retained_replay = false,
     bool active_phase_constraints = false,
-    const std::map<std::string,Entity,std::less<>>* original_dimension_source = nullptr) {
+    const std::map<std::string,Entity,std::less<>>* original_dimension_source = nullptr,
+    ComponentMembershipAdmission* membership_admission = nullptr) {
     if (has_qualified_embedded_assembly_copy(command))
         document_error(DocumentErrorCode::invalid_entity,"Qualified embedded copying requires complete snapshot-aware replay");
     if (has_phase_assembly_catalog_edit(command))
@@ -7087,6 +7075,7 @@ std::map<std::string, Entity, std::less<>> completed_boundary_constraint_entitie
             auto result=replay_mixed_clipboard_placement(source,command.clipboard_placement_intent);
             validate_boundary_identity_transition(history,source,result);
             (void)validate_state(result,source_assets,active_phase_constraints || mixed_clipboard_placement_active_phase_policy(command.clipboard_placement_intent));
+            retain_current_component_membership_admission(source,result,membership_admission);
             return result;
 #else
             throw std::invalid_argument("Combined clipboard placement requires the production authoring engine.");
@@ -7135,7 +7124,7 @@ std::map<std::string, Entity, std::less<>> completed_boundary_constraint_entitie
                 }
             const auto original=without_independent_drawing_removal(command);
             const auto stage=completed_boundary_constraint_entities(history,source,source_assets,
-                original,retained_replay,active_policy,original_dimension_source);
+                original,retained_replay,active_policy,original_dimension_source,membership_admission);
             validate_completed_constraint_change(source,stage,original,retained_replay);
             auto result=replay_drawing_selection_removal_after_review(source,stage,intent,active_policy);
             if (has_phase_constraint_authoring(original)) {
@@ -7166,6 +7155,7 @@ std::map<std::string, Entity, std::less<>> completed_boundary_constraint_entitie
             validate_phase_constraint_composed_originals(source,result,command);
             validate_boundary_identity_transition(history,source,result);
             (void)validate_state(result,source_assets,true);
+            retain_current_component_membership_admission(source,result,membership_admission);
             return result;
 #else
             throw std::invalid_argument("Active design authoring requires the production constraint engine");
@@ -7181,6 +7171,7 @@ std::map<std::string, Entity, std::less<>> completed_boundary_constraint_entitie
             const auto replay=replay_physical_wall_phase_room_review(source,command.phase_room_review_intent,active_policy);
             validate_boundary_identity_transition(history,source,replay.entities);
             (void)validate_state(replay.entities,source_assets,active_policy);
+            retain_current_component_membership_admission(source,replay.entities,membership_admission);
             return replay.entities;
 #else
             throw std::invalid_argument("Phase room review requires the production physical-wall engine");
@@ -7205,7 +7196,7 @@ std::map<std::string, Entity, std::less<>> completed_boundary_constraint_entitie
                         !intent.intent.joint_translation->owner_transformations.empty());
             }
 #endif
-            auto result = completed_boundary_constraint_entities(history, source, source_assets, geometry, retained_replay,active_policy,original_dimension_source);
+            auto result = completed_boundary_constraint_entities(history, source, source_assets, geometry, retained_replay,active_policy,original_dimension_source,membership_admission);
             const auto geometry_assets = boundary_constraint_assets(source_assets, geometry);
             (void)validate_state(result, geometry_assets,active_policy);
             validate_completed_constraint_change(source, result, geometry, retained_replay);
@@ -7245,7 +7236,7 @@ std::map<std::string, Entity, std::less<>> completed_boundary_constraint_entitie
     if (has_disto_measurement_completion(command)) {
         try {
             (void)command_to_json(Command{command});
-            auto result = completed_boundary_constraint_entities(history, source, source_assets, without_disto_measurement(command), retained_replay,active_policy,original_dimension_source);
+            auto result = completed_boundary_constraint_entities(history, source, source_assets, without_disto_measurement(command), retained_replay,active_policy,original_dimension_source,membership_admission);
             attach_disto_measurement(source, result, *command.disto_measurement,
                 disto_completed_owner_id(without_disto_measurement(command),*command.disto_measurement));
             if (!phase_constraint_authoring_proofs(command).empty()) {
@@ -7282,7 +7273,7 @@ std::map<std::string, Entity, std::less<>> completed_boundary_constraint_entitie
                             validate_physical_wall_room_profile_review_source(source,inner_source,inner);
                         }
                     }
-                    reviewed_source=completed_boundary_constraint_entities(history,source,source_assets,*constrained,retained_replay,active_policy,original_dimension_source);
+                    reviewed_source=completed_boundary_constraint_entities(history,source,source_assets,*constrained,retained_replay,active_policy,original_dimension_source,membership_admission);
                     validate_completed_constraint_change(source,reviewed_source,*constrained,retained_replay);
                     validate_physical_room_source_transition(source,reviewed_source,nullptr,constrained,active_policy);
                     if (boundary_constraint_assets(source_assets,*constrained)!=source_assets)
@@ -7305,6 +7296,8 @@ std::map<std::string, Entity, std::less<>> completed_boundary_constraint_entitie
                 }
                 if (deletion) validate_physical_wall_room_deletion_review_source(source,reviewed_source,geometry,
                     command.room_review_geometry_proof,active_policy);
+                if (deletion)
+                    retain_current_component_membership_admission(source,reviewed_source,membership_admission);
                 (void)validate_state(reviewed_source,source_assets,active_policy);
                 std::set<std::string> changed_walls,reviewed_rooms;
                 for (const auto& [id,entity] : source) {
@@ -11117,6 +11110,7 @@ Revision Document::apply(const Command& command) {
             next.undo_stack = current.undo_stack;
             next.undo_stack.push_back(head_revision_);
             std::optional<std::string> next_unsupported_constraints;
+            ComponentMembershipAdmission membership_admission;
             auto next_identity_history = boundary_identity_history_;
 
             using CommandType = std::decay_t<decltype(typed_command)>;
@@ -11296,6 +11290,7 @@ Revision Document::apply(const Command& command) {
                         const auto prepared=replay_qualified_embedded_assembly_copy_preparation(
                             snapshot(),typed_command.qualified_embedded_assembly_copy_intent);
                         next.entities=prepared.preview_entities();
+                        retain_current_component_membership_admission(current.entities,next.entities,&membership_admission);
                         // Pure retained replay understands companion enrollment,
                         // but current publication must not create a read-only
                         // head that strands Undo while other writers are gated.
@@ -11314,6 +11309,7 @@ Revision Document::apply(const Command& command) {
                         const auto prepared=replay_phase_assembly_catalog_edit_preparation(
                             snapshot(),typed_command.phase_assembly_catalog_edit_intent);
                         next.entities=prepared.preview_entities();
+                        retain_current_component_membership_admission(current.entities,next.entities,&membership_admission);
                         // Until every component writer carries the required
                         // companion authority, a newly qualified result would
                         // make the project read-only and even strand Undo.
@@ -11346,6 +11342,7 @@ Revision Document::apply(const Command& command) {
                         validate_active_design_preserved_dependents(current.entities,next.entities,
                             phase_constraint_authoring_preserves_registries(typed_command) && reviews.empty() && phase_reviews.empty() && !retires_dependencies,
                             !reviews.empty() || !phase_reviews.empty() || retires_dependencies);
+                        retain_current_component_membership_admission(current.entities,next.entities,&membership_admission);
                     } catch (const DocumentError&) { throw; }
                     catch (const std::exception& error) { document_error(DocumentErrorCode::invalid_entity,error.what()); }
 #else
@@ -11353,7 +11350,10 @@ Revision Document::apply(const Command& command) {
 #endif
                 } else if (has_phase_selection_removal(typed_command)) {
 #ifdef VERTEX_HAS_CONSTRAINT_AUTHORING
-                    try { next.entities=checked_phase_selection_removal_replay(snapshot(),typed_command.phase_selection_removal_intent); }
+                    try {
+                        next.entities=checked_phase_selection_removal_replay(snapshot(),typed_command.phase_selection_removal_intent);
+                        retain_current_component_membership_admission(current.entities,next.entities,&membership_admission);
+                    }
                     catch (const DocumentError&) { throw; }
                     catch (const std::exception& error) { document_error(DocumentErrorCode::invalid_entity,error.what()); }
 #else
@@ -11361,7 +11361,10 @@ Revision Document::apply(const Command& command) {
 #endif
                 } else if (has_ordinary_selection_removal(typed_command)) {
 #ifdef VERTEX_HAS_CONSTRAINT_AUTHORING
-                    try { next.entities=replay_completed_ordinary_selection_removal(snapshot(),typed_command.ordinary_selection_removal_intent); }
+                    try {
+                        next.entities=replay_completed_ordinary_selection_removal(snapshot(),typed_command.ordinary_selection_removal_intent);
+                        retain_current_component_membership_admission(current.entities,next.entities,&membership_admission);
+                    }
                     catch (const DocumentError&) { throw; }
                     catch (const std::exception& error) { document_error(DocumentErrorCode::invalid_entity,error.what()); }
 #else
@@ -11373,6 +11376,7 @@ Revision Document::apply(const Command& command) {
                         const auto captured=snapshot();
                         next.entities=replay_mixed_selection_removal(captured,typed_command.mixed_selection_removal_intent);
                         validate_phase_mixed_removal_dependents(captured,next.entities,typed_command.mixed_selection_removal_intent);
+                        retain_current_component_membership_admission(current.entities,next.entities,&membership_admission);
                     }
                     catch (const DocumentError&) { throw; }
                     catch (const std::exception& error) { document_error(DocumentErrorCode::invalid_entity,error.what()); }
@@ -11381,7 +11385,7 @@ Revision Document::apply(const Command& command) {
 #endif
                 } else {
                     next.entities = completed_boundary_constraint_entities(boundary_identity_history_, current.entities, current.assets,
-                        typed_command,false,source_active_policy,dimension_source);
+                        typed_command,false,source_active_policy,dimension_source,&membership_admission);
                     next.assets = boundary_constraint_assets(current.assets, typed_command);
                 }
                 next_unsupported_constraints = validate_state(next.entities, next.assets,next_active_policy, &receipt_cache);
@@ -11453,9 +11457,7 @@ Revision Document::apply(const Command& command) {
                 next.name = typed_command.name;
             }
 
-            if constexpr (std::is_same_v<CommandType,ApplyEntityChanges> ||
-                          std::is_same_v<CommandType,ImportPhaseEntities>)
-                validate_current_unsealed_component_membership_preservation(current.entities,next.entities);
+            validate_current_component_membership_transition(current.entities,next.entities,membership_admission);
             validate_current_baseline_physical_preservation(current.entities,next.entities);
             // Source-bound rooms cannot borrow an ordinary metadata edit to
             // detach their holes or their physical-wall evidence. Deletion is

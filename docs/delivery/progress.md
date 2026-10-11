@@ -14,6 +14,45 @@ changed source does not acquire runtime acceptance without later qualification.
 
 ## Current delivery state
 
+### October 11 universal current component-membership admission
+
+Current Document publication now admits component membership on every command
+path. Ordinary writers preserve the original complete companion envelopes and
+qualified catalog row identities. Typed copy, replacement, clipboard and
+selection-removal producers supply a private independently reconstructed view;
+exact source-derived wall-deletion review supplies its validated deletion view.
+Selection, room, drawing and DISTO wrappers carry that view before applying
+their suffixes. Generic boundary results, raw payloads and throwaway profile
+checks cannot supply their own membership authority. Chronological replay keeps
+its existing behavior.
+
+The pure comparison admits all three complete raw maps before semantic decoding,
+bounds each map's resolution work, compares retained JSON representation exactly,
+and validates actual catalog/registry references and unique row ownership. It
+protects a formerly qualified catalog after its last companion is removed.
+Geometry continues through the existing independent geometry/dependency checks.
+
+The companion read-only latch, current copy/catalog publication refusals and
+embedded Properties refusal remain. Before unlocking those workflows, legitimate
+producer-internal raw previews must use independently reconstructed typed
+admission and the controller must publish the complete composition. This batch
+is source infrastructure; restricted component editing is still a required gap.
+Profile/edge dimensions and the broader production gaps remain required.
+
+Source-only execution continues: no builds, tests, scripts, probes, native jobs,
+launches, packages or installations. The installed application is unchanged;
+compilation, runtime behavior and user acceptance remain unverified. All ten
+production gates remain open. Independent source review found a capacity
+restriction caused by charging complete documents and repeated maps against one
+catalog-resolution ledger. The correction separates complete-document admission
+at retained-source capacity from each map's existing component-resolution
+ledger. It keeps per-field limits and an explicit bounded three-map comparison.
+Independent correction review confirms the proved capacity defect is resolved
+by manual accounting, with no further concrete issue in that bounded follow-up.
+Root reviewed current versus historical admission, typed capture provenance and
+wrapper propagation; scoped diff checks pass. These source checks confer no
+production acceptance.
+
 ### October 11 explicit component-copy allocation continuation
 
 The preceding status turn changed no source. This continuation implements the
