@@ -2879,10 +2879,10 @@ std::optional<MixedSelectionPropertyEditPreparation> reconstruct_component_prope
     if (!base) return std::nullopt;
     const auto& wire=base->intent();
     const auto version=wire.at("version").get<int>();
-    if (version<5 || version>13 || !wire.at("room_reviews").empty() ||
+    if (!((version>=5 && version<=13) || version==21) || !wire.at("room_reviews").empty() ||
         (wire.contains("phase_room_reviews") && !wire.at("phase_room_reviews").empty()) ||
         (wire.contains("assembly_request") && !wire.at("assembly_request").is_null()))
-        invalid("Component Properties base must be an unreviewed historical noncomponent contribution");
+        invalid("Component Properties base must be an unreviewed admitted noncomponent contribution");
     return replay_mixed_selection_property_edit_preparation(source,wire);
 }
 
@@ -3135,7 +3135,7 @@ CoordinatedComponentPropertyComposition compose_coordinated_component_property_d
     const auto replayed=replay_phase_assembly_instance_property_edit_preparation(source,components.request());
     const auto& wire=base.intent();
     const auto version=wire.at("version").get<int>();
-    if (!((version>=5 && version<=13) || version==15) || !wire.at("room_reviews").empty() ||
+    if (!((version>=5 && version<=13) || version==15 || version==21) || !wire.at("room_reviews").empty() ||
         (wire.contains("phase_room_reviews") && !wire.at("phase_room_reviews").empty()) ||
         (wire.contains("assembly_request") && !wire.at("assembly_request").is_null()))
         invalid("Coordinated component Properties requires an unreviewed noncomponent base");

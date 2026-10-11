@@ -1,4 +1,23 @@
-# Vertex project formats v1 through v229
+# Vertex project formats v1 through v230
+
+Reader230 retains explicit stair-component dimension copies through Properties.
+Phase Properties request6 has request5's exact source-fenced fields plus
+`complete_stair_component_dimensions:true`. Its `complete_wall_hosted_instances`
+field is an explicit Boolean retaining independent wall permission. Scalar
+authority remains null or the existing scalar1 through5 grammar. Every allocation
+row adds `dimension_identities`, an exact source-to-fresh identity object, empty
+outside stair cohorts. Its required inventory derives from complete original
+source after explicit dependency decisions; no copied entity payload is supplied.
+
+Mixed Properties21 has Properties15's exact fields and requires phase request6.
+Component wrappers22 and23 have the corresponding historical16/17 fields plus
+literal `complete_stair_component_dimensions:true`; their nonnull base is
+Properties21 and their component request is respectively1/2. Existing movement
+dialects18/19/20 and historical Properties wrappers retain their exact meanings.
+Current and undone allocation identities, computed aliases and phase/room review
+destinations remain reserved. Current, nested and undone proofs require
+reader230/extraction228 even when the new dimension inventory is empty. Source
+integration does not establish runtime or production acceptance.
 
 Reader229 retains stair replacement child7, an exact four-key wrapper:
 `version:7`, `authoring:<canonical historical child1..6>`,

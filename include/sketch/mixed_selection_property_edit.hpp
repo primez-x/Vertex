@@ -75,7 +75,7 @@ public:
     [[nodiscard]] const std::map<std::string, std::string, std::less<>>& original_to_proposed() const noexcept;
     using ComponentIdentityMap = std::map<AssemblyInstancePropertyEditTarget, AssemblyInstancePropertyEditTarget>;
     [[nodiscard]] const ComponentIdentityMap& component_original_to_proposed() const noexcept;
-    // Dialect sixteen's independently reconstructed allocation inventory;
+    // Coordinated component dialects' independently reconstructed allocation inventory;
     // historical dialects leave these detached coordination inventories empty.
     [[nodiscard]] const std::vector<std::string>& reserved_component_identity_ids() const noexcept;
     [[nodiscard]] const std::vector<std::string>& elided_component_identity_ids() const noexcept;
@@ -175,6 +175,9 @@ private:
 // Dialect eleven replaces ordinary_request with mandatory phase_request v1/v2.
 // This overload emits twelve for phase request v3, thirteen for v4 and the
 // detached fifteen only for explicit complete_wall_hosted_instances v5;
+// twenty-one has exactly fifteen's fields and requires phase request v6, with
+// explicit complete_stair_component_dimensions:true. Its wall authority still
+// follows phase_request.complete_wall_hosted_instances, which may be false.
 // ordinary overloads also emit thirteen for explicit hosted slab carry.
 // Assembly request is nullable; stair review stays solely inside phase_request.
 // phase_room_reviews contains ordered {phase_authoring_index,wall_replacement}
@@ -187,7 +190,8 @@ private:
     std::span<const AssemblyInstancePropertyEditIntent>,
     const std::vector<PhaseSelectionPropertyIdentityAllocation>&,
     const std::vector<PhaseStairReplacementDependencyDisposition>&,
-    bool complete_wall_hosted_instances = false);
+    bool complete_wall_hosted_instances = false,
+    bool complete_stair_component_dimensions = false);
 // Closed dialect fourteen: version, the five complete source fences,
 // component_request (sealed v1), base_intent (null or historical five-through-
 // thirteen without a nonnull assembly_request), room_reviews,
@@ -208,6 +212,10 @@ private:
 // fences/message and no nested component dialect. Combined qualified selection
 // and wire budgets remain identical to fourteen. The sealed detached result
 // retains all original component allocation reservations, including elided IDs.
+// Dialect twenty-two has exactly sixteen's fields plus literal
+// complete_stair_component_dimensions:true and requires an actual nonnull
+// base twenty-one. Component request one and host coordination are unchanged;
+// fourteen/sixteen cannot accept base twenty-one or any component dialect.
 [[nodiscard]] MixedSelectionPropertyEditPreparation prepare_coordinated_component_property_edit(
     const DocumentSnapshot&, const PhaseAssemblyInstancePropertyEditAuthoring&,
     const MixedSelectionPropertyEditPreparation& base, std::string_view message);
@@ -218,6 +226,11 @@ private:
 // A null base is a component-only edit; otherwise the same sealed noncomponent
 // base5..13/15 is composed with host carry. Historical fourteen/sixteen retain
 // component request one and their original base contracts.
+// Dialect twenty-three has exactly seventeen's fields plus literal
+// complete_stair_component_dimensions:true, requires an actual nonnull base
+// twenty-one and component request two, and retains the same host/presentation
+// coordination. Seventeen cannot accept base twenty-one. No component dialect
+// may be used as a base. Producers choose twenty-two/twenty-three only for base twenty-one.
 [[nodiscard]] MixedSelectionPropertyEditPreparation prepare_component_presentation_property_edit(
     const DocumentSnapshot&, const PhaseAssemblyInstancePropertyEditAuthoring&,
     const MixedSelectionPropertyEditPreparation* base, std::string_view message);

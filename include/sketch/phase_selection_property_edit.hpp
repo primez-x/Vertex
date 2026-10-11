@@ -28,6 +28,7 @@ struct PhaseSelectionPropertyIdentityAllocation {
     PhaseStairReplacementChildIdentityMap child_identities;
     PhaseStairReplacementHostedInstanceIdentityMap hosted_instance_identities;
     PhaseStairReplacementOverlayIdentityMap overlay_identities;
+    PhaseStairReplacementIdentityMap dimension_identities;
 };
 
 struct PhaseSelectionPropertyEditRequest {
@@ -37,6 +38,7 @@ struct PhaseSelectionPropertyEditRequest {
     std::string message;
     std::optional<RoofOpeningGroupProperties> roof_opening_properties;
     bool complete_wall_hosted_instances{false};
+    bool complete_stair_component_dimensions{false};
 };
 
 struct PhaseSelectionPropertyReplacementInventory {
@@ -74,7 +76,7 @@ private:
     friend PhaseSelectionPropertyEditInspection inspect_phase_selection_property_edit(
         const DocumentSnapshot&, const SelectionPropertyEditRequest&,
         const std::vector<PhaseStairReplacementDependencyDisposition>&,
-        const std::optional<RoofOpeningGroupProperties>&, bool);
+        const std::optional<RoofOpeningGroupProperties>&, bool, bool);
 };
 
 // Sealed complete physical contribution. The captured source is never replaced
@@ -99,7 +101,7 @@ public:
     // Exact validated per-cohort mappings retain qualified catalog copies even
     // when several families copy different rows of one source catalog.
     [[nodiscard]] const std::vector<PhaseSelectionPropertyIdentityAllocation>& validated_identity_allocations() const noexcept;
-    // Unambiguous physical-owner and owned-child map. Catalog destinations use
+    // Unambiguous physical-owner, owned-child and copied-dimension map. Catalog destinations use
     // the qualified per-cohort inventory above rather than one guessed target.
     [[nodiscard]] const std::map<std::string, std::string, std::less<>>& original_to_proposed() const noexcept;
     [[nodiscard]] const PhaseStairReplacementChildIdentityMap& stair_child_original_to_proposed() const noexcept;
@@ -133,7 +135,8 @@ private:
     const DocumentSnapshot&, const SelectionPropertyEditRequest&,
     const std::vector<PhaseStairReplacementDependencyDisposition>& reviewed_stair_dispositions = {},
     const std::optional<RoofOpeningGroupProperties>& roof_opening_properties = std::nullopt,
-    bool complete_wall_hosted_instances = false);
+    bool complete_wall_hosted_instances = false,
+    bool complete_stair_component_dimensions = false);
 // Closed v1: version, scalar_request (existing closed v1/v2/v3), allocations,
 // stair_dependency_dispositions, message. Allocation rows have exactly lane,
 // registry_id, alternative_id, identities, child_identities,
@@ -158,6 +161,12 @@ private:
 // inventory. Wall leaf V11 wraps the same scalar/vertical historical body.
 // Historical V1..V4 reject qualified wall-hosted allocations. This detached
 // contribution requires an explicit enclosing receipt before publication.
+// V6 has V5's exact source-fenced fields plus
+// complete_stair_component_dimensions:true. complete_wall_hosted_instances is
+// an explicit Boolean retaining its own permission, and scalar authority has
+// the same null/V1..V5 grammar as V5. Each allocation also has the exact object
+// dimension_identities, empty outside stairs. Its source-to-fresh dimension
+// inventory derives only from the original source and selects stair child V7.
 [[nodiscard]] nlohmann::json encode_phase_selection_property_edit_request(
     const DocumentSnapshot&, const PhaseSelectionPropertyEditRequest&);
 [[nodiscard]] nlohmann::json validate_phase_selection_property_edit_request(const nlohmann::json&);

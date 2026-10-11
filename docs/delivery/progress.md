@@ -14,6 +14,33 @@ changed source does not acquire runtime acceptance without later qualification.
 
 ## Current delivery state
 
+### October 11 stair dimension Properties integration
+
+The core dimension-copy batch is committed and pushed as c8dfee40; the exact
+remote branch matched local HEAD. Current source work connects protected stair
+Properties replacements to that producer. The controller discovers the complete
+original-source dimension inventory after dependency decisions and reserves
+fresh dimension identities alongside physical, child, hosted and overlay copies.
+Request6 retains independent explicit wall permission and adds explicit stair
+dimension permission; historical requests1 through5 retain their authority.
+Properties21 and component wrappers22/23 retain this new request separately from
+existing mixed movement18/19/20. Shared component composition admits the actual
+new unreviewed base; Document current/undone identity reservation and Site
+selection targeting retain the resulting dimensions. Reader230/extraction228
+cover the new request and receipts, including empty dimension inventories.
+
+Independent integrated source review found no proved actionable P1/P2 in this
+scope; root review covers the source-derived inventory, legacy movement routing,
+current/undone reservations, component composition and Site caller integration.
+Scoped whitespace review passes; Git records the source backup identity. No
+builds/tests/jobs, launches, packages or installations ran. Compilation and
+actual Properties/Undo/save/reopen behavior remain unverified, and the installed
+candidate remains unchanged. Standalone stair transforms and coordinated
+replacement producers still need their separate dimension-copy integration;
+protected wall replacement copies and linked-view/profile lifecycles remain
+implementation work. All ten production gates stay open and the full plan is
+active.
+
 ### October 11 stair replacement component dimension copy infrastructure
 
 The coordinated demolition batch is committed and pushed as f8aab865; its exact
