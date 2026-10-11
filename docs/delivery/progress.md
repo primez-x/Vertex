@@ -14,6 +14,47 @@ changed source does not acquire runtime acceptance without later qualification.
 
 ## Current delivery state
 
+### October 11 component mirrors and current transform gap inventory
+
+The component canvas transform batch is committed and pushed as
+3fd2f7684b78d8bd780db4941ebe0921d68b35ab; exact remote ref verification passed.
+The preceding status-only turn made no authoritative source progress. This
+continuation resumes the actual mirror patch and directional transform gaps.
+
+The nonclone independent-component mirror change uses the complete
+Properties pose producer rather than the older ordinary transform transaction.
+It composes the existing canonical architectural reflection operator with the
+actual root pose, including reflection parity, and derives replacement selection
+from the actual source and candidate. Independent source review approved the
+bounded change with no concrete P1/P2 findings. Root reviewed source guards,
+baseline replacement and complete dimension/presentation carry; scoped diff
+checks passed. Clone/group mirrors and separate plan-flip routes are unchanged
+and remain separately unqualified.
+
+Current-source discovery found existing mixed Properties and aggregate clipboard
+producers. Historical descriptions below that call those entire workflows
+missing are dated inventories, not evidence that the current producers should
+be rebuilt. Their complete lifecycle acceptance remains unverified. The concrete
+mixed-selection implementation gap found in this pass is directional scaling of
+ordinary owners together with selected skylight children: the child producer
+already supports directional operators, while the combined controller/ordinary
+contract does not yet carry them. The existing invariant-child proof also uses
+only a rigid operator; a directional dialect must authenticate the exact axis
+operator rather than dropping its factors. Existing dimension transform carry
+is similarity-based, not general anisotropic point authority.
+
+Independent component numeric Width/Depth edits already resize own profiles
+through Properties. Canvas side grips remain missing. Unequal resizing of a
+circular profile requires exact ellipse-capable authoritative geometry; the
+current boundary model represents only lines and circular arcs. Existing
+anonymous/identified topology and reference-remapping contracts must remain
+explicit in any new authoring path. Disabling curves is not completion of that
+required geometry work.
+
+No builds, tests, scripts, probes, native jobs, launches, packages or installations
+ran. The installed application is unchanged. Source review is not runtime or
+user acceptance; all ten production gates and external prerequisites remain open.
+
 ### October 11 component canvas transform continuation
 
 Reference text labels are committed and pushed as

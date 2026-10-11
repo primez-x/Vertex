@@ -330,6 +330,16 @@ polling timeout does not permit restarting it.
     resizing requires a real supported geometry contract. New
     semantic forms and references require versioned format migration coverage.
 
+Current October 11 source reconciliation: mixed Properties and aggregate mixed
+clipboard producers exist and require full lifecycle qualification; dated
+inventories above are not authority to restart those implementations. The
+confirmed mixed transform gap is directional scaling across ordinary owners and
+typed skylight children. Independent component numeric own-profile resizing
+exists; canvas side grips and exact unequal resizing of circular profiles remain
+required implementation work. The reviewed nonclone independent mirror correction
+reuses complete Properties pose replacement/carry; clone/group mirror routes
+remain separately unqualified.
+
 All retained interactions/preparations bind an actual captured snapshot.
 One authoritative model feeds calculations, views, schedules, print and export.
 Apply reviewed results through typed atomic commands with cancellation/history;

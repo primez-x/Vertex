@@ -8652,6 +8652,14 @@ public:
         const ArchitecturalGroupTransform transform{{0.0,0.0,0.0},
             {gesture.x,gesture.y,gesture.z},gesture.rotation_z_radians,gesture.scale,
             flip_horizontal,flip_vertical};
+        if (!clone && original.type=="assembly_instance") {
+            const auto command=independentComponentModelTransformCommand(source,original,gesture,
+                flip_horizontal,flip_vertical);
+            const auto candidate=Document::preview_command(source,command);
+            const auto redirect=admittedAlternativeSelectionRedirect(source,candidate,command);
+            const auto mapped=redirect.find(original.id);
+            return {command,mapped==redirect.end() ? original.id : mapped->second};
+        }
         if (clone && structuralObject(original)) {
             StructuralCloneIdentityMap identities;
             IndependentModelCopyCapture capture;
@@ -26455,12 +26463,24 @@ public:
     }
 
     static Command independentComponentModelTransformCommand(const DocumentSnapshot& source,
-        const Entity& entity, const ArchitecturalTransform& movement) {
+        const Entity& entity, const ArchitecturalTransform& movement,
+        bool flip_horizontal=false, bool flip_vertical=false) {
+        const auto actual=source.entities().find(entity.id);
+        if (entity.type!="assembly_instance" || actual==source.entities().end() || actual->second!=entity ||
+            actual->second.properties.dump()!=entity.properties.dump() ||
+            actual->second.extensions.dump()!=entity.extensions.dump())
+            throw std::invalid_argument("The independent component transform source changed.");
         const auto current=decode_document_assembly_instance(entity).instance.root_transform.value();
         // Native/numerical transforms are uniform XYZ operators;
         // unlike a plan corner, they may change elevation/height.
-        const AssemblyTransform operation{{movement.x,movement.y,movement.z},
-            movement.rotation_z_radians,movement.scale,false,1.0};
+        // Reuse the architectural group's world-origin scale/rotation, then
+        // axis reflection, then XYZ offset. Its canonical operator preserves
+        // exact paired-flip half turns and identity without moving a pivot.
+        const auto operation=flip_horizontal || flip_vertical
+            ? architectural_group_assembly_transform({{}, {movement.x,movement.y,movement.z},
+                movement.rotation_z_radians,movement.scale,flip_horizontal,flip_vertical})
+            : AssemblyTransform{{movement.x,movement.y,movement.z},
+                movement.rotation_z_radians,movement.scale,false,1.0};
         const auto final=compose_assembly_transform(operation,current);
         if (final==current)
             return ApplyEntityChanges{source.revision(),{}, {},"Transform independent component"};
@@ -26469,6 +26489,7 @@ public:
         pose.x_metres=final.translation_m.x;pose.y_metres=final.translation_m.y;
         pose.z_metres=final.translation_m.z;pose.rotation_radians=final.rotation_radians;
         pose.scale=final.scale;pose.vertical_scale=final.vertical_scale;
+        pose.mirrored_y=final.mirrored_y;
         return independentComponentPoseTransformCommand(source,entity,pose,
             "Transform independent component in 3D");
     }
