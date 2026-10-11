@@ -531,6 +531,10 @@ struct ApplyBoundaryConstraintChanges {
     // their expansion and reached definitions; replacement is a separate lane.
     nlohmann::json assembly_catalog_edit_intent=nullptr;
     bool assembly_catalog_edit_completion{};
+    // Envelope sixty reconstructs actual private-catalog/proposed-root edits,
+    // typed reference carry and fresh lifetime identities from one snapshot.
+    nlohmann::json phase_assembly_catalog_edit_intent=nullptr;
+    bool phase_assembly_catalog_edit_completion{};
 };
 
 using Command = std::variant<ApplyEntityChanges, ImportPhaseEntities, NameRevision, TranslateBoundary,

@@ -111,6 +111,7 @@
 #include "sketch/desktop/assembly_authoring_dialog.hpp"
 #include "sketch/assembly_document_adapter.hpp"
 #include "sketch/assembly_catalog_phase_edit.hpp"
+#include "sketch/phase_assembly_catalog_edit_preparation.hpp"
 #include "sketch/assembly_component_clipboard.hpp"
 #include "sketch/assembly_geometry.hpp"
 #include "sketch/desktop/constraint_dialog.hpp"
@@ -18676,13 +18677,78 @@ public:
             if (!draft || !modalContextUnchanged(context) || !assemblyDraftSourceUnchanged(source, workspace)) return false;
             if (original && draft->replacement == *original) { clearError(); return true; }
             Command command;
+            std::map<std::string,std::string,std::less<>> selection_redirects;
+            auto selection=ordinarySelectionIDs();
+            auto selection_order=m_selected_semantic_order;
+            auto selected_children=m_selected_roof_openings;
+            auto primary_child=m_selected_primary_roof_opening;
             if (original) {
                 ApplyBoundaryConstraintChanges definitions;
                 definitions.expected_revision=source.revision();
                 definitions.message="Update assembly type";
-                definitions.assembly_catalog_edit_intent=prepare_assembly_catalog_phase_edit_request(
+                const auto request=prepare_assembly_catalog_phase_edit_request(
                     source.entities(),{{catalog_id,{draft->replacement},{}}});
-                definitions.assembly_catalog_edit_completion=true;
+                if (inspect_assembly_catalog_phase_edit(source.entities(),request).ordinary_replay_safe) {
+                    definitions.assembly_catalog_edit_intent=request;
+                    definitions.assembly_catalog_edit_completion=true;
+                } else {
+                    const auto plan=inspect_phase_assembly_catalog_edit_presentation_plan(source.entities(),request);
+                    if (!plan.unsupported_references.empty()) {
+                        std::string reasons;
+                        for (const auto& gap:plan.unsupported_references) {
+                            if (!reasons.empty()) reasons+='\n';
+                            reasons+=gap.entity_id+gap.field+": "+gap.reason;
+                        }
+                        throw std::invalid_argument(reasons);
+                    }
+                    // Reserve complete retained source/receipt names before
+                    // allocating any root, companion or presentation identity.
+                    auto occupied=retainedSlabIdentityNames(source,true);
+                    const auto fresh=[&](const char* kind) {
+                        auto id=new_id(kind);
+                        while (!occupied.insert(id).second) id=new_id(kind);
+                        return id;
+                    };
+                    PhaseAssemblyCatalogEditAuthoring authoring;
+                    authoring.catalog_request=request;
+                    for (const auto& root:plan.producer.isolation_roots) {
+                        PhaseAssemblyCatalogRootIdentity identities;
+                        identities.private_catalog_id=fresh("component-catalog");
+                        if (root.root.document_entity_id) {
+                            if (root.baseline_replacement) {
+                                identities.replacement_entity_id=fresh("proposed-component");
+                                identities.replacement_instance_id=identities.replacement_entity_id;
+                            }
+                        } else {
+                            auto row=fresh("component-instance");
+                            auto alias=identities.private_catalog_id+":instance:"+row;
+                            while (!occupied.insert(alias).second) {
+                                row=fresh("component-instance");
+                                alias=identities.private_catalog_id+":instance:"+row;
+                            }
+                            identities.replacement_instance_id=std::move(row);
+                        }
+                        authoring.allocation.roots.emplace(root.root,std::move(identities));
+                    }
+                    for (const auto& registry:plan.producer.required_membership_registry_ids)
+                        authoring.allocation.membership_entity_ids.emplace(registry,fresh("component-phases"));
+                    PhaseAssemblyCatalogEditPresentationAllocation presentation;
+                    for (const auto& overlay:plan.required_overlay_ids)
+                        presentation.overlay_ids.emplace(overlay,fresh("component-overlay"));
+                    const auto prepared=prepare_phase_assembly_catalog_edit(source,authoring,presentation,definitions.message);
+                    definitions.phase_assembly_catalog_edit_intent=prepared.request();
+                    definitions.phase_assembly_catalog_edit_completion=true;
+                    const auto original_aliases=embedded_assembly_presentation_ids(source.entities());
+                    const auto final_aliases=embedded_assembly_presentation_ids(prepared.preview_entities());
+                    for (const auto& [before,after]:prepared.result().original_to_proposed) {
+                        if (before.document_entity_id && after.document_entity_id)
+                            selection_redirects.emplace(*before.document_entity_id,*after.document_entity_id);
+                        else if (!before.document_entity_id && !after.document_entity_id)
+                            selection_redirects.emplace(original_aliases.at({before.catalog_id,before.instance_id}),
+                                final_aliases.at({after.catalog_id,after.instance_id}));
+                        else throw std::invalid_argument("The component definition edit changed its selection family.");
+                    }
+                }
                 command=std::move(definitions);
             } else {
                 auto types = model.types(); types.push_back(draft->replacement);
@@ -18692,7 +18758,27 @@ public:
                 command = ApplyEntityChanges{source.revision(), {EntityChange::upsert(std::move(catalog))}, {}, "Create reusable assembly type"};
             }
             (void)Document::preview_command(source, command);
-            applyAuthoredCommand(command); clearError(); refresh();
+            if (!modalContextUnchanged(context) || !assemblyDraftSourceUnchanged(source,workspace)) return false;
+            if (!applyAuthoredCommand(command)) return false;
+            refresh();
+            if (!selection_redirects.empty()) {
+                const auto redirect=[&](const QString& id) {
+                    const auto found=selection_redirects.find(id.toStdString());
+                    return found==selection_redirects.end() ? id : QString::fromStdString(found->second);
+                };
+                for (auto& id:selection) id=redirect(id);
+                const auto published=std::make_shared<DocumentSnapshot>(authoringSnapshot());
+                for (auto& child:selected_children) child.source_revision=published->revision();
+                for (auto& member:selection_order) {
+                    if (member.child) member.child->source_revision=published->revision();
+                    else member.ordinary_id=redirect(member.ordinary_id);
+                }
+                if (primary_child) primary_child->source_revision=published->revision();
+                const bool native=m_workspace==Workspace::architectural && m_nativeModelView && m_nativeModelView->isVisible();
+                (void)adoptSemanticSelection(published,std::move(selection),std::move(selected_children),native,
+                    primary_child,false,std::move(selection_order),native);
+            }
+            clearError();
             return true;
         } catch (const std::exception& error) {
             setError(QStringLiteral("Assembly type: %1").arg(QString::fromUtf8(error.what())));

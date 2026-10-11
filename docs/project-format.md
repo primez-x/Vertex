@@ -1,4 +1,33 @@
-# Vertex project formats v1 through v217
+# Vertex project formats v1 through v218
+
+Reader218 retains phase-isolated component definition editing under exclusive
+command60. The six command fields are version, kind, expected revision, message,
+`phase_assembly_catalog_edit_completion` (literal true), and
+`phase_assembly_catalog_edit_intent`. The closed version-one intent binds the
+source revision, snapshot/authoring/entity-map digests, nullable saved revision,
+typed catalog/root allocation, presentation allocation, and command message.
+No raw candidate entities or sibling geometry/asset authority are accepted.
+
+Actual changed active roots receive private catalogs. Protected baseline roots
+receive proposed replacements in their actual saved alternatives; inactive roots
+and original baseline rows retain their definitions and analytical expansions.
+Every requested definition is accounted for as unchanged, safely global,
+actually reached by private consumers, or unapplied. Any changed unapplied
+definition rejects the complete operation. Unused safely global definitions
+remain real edits even when other definitions require private replacements.
+Ordinary presentation references retarget; baseline view/appearance/overlay and
+annotation rows are retained while associated proposed presentation is copied.
+Fresh allocations and actual aliases remain reserved across retained/undone
+history. Replay authenticates the complete chronological source prefix and
+reconstructs the complete result before publication. Source-prefix admission
+uses prior lifetime ledgers, avoiding recursive restoration of already admitted
+ancestry. Historical commands, including command59, keep their prior meaning.
+Reader-floor scanning includes nested, retained and undone command60 events,
+including events following reader217. Component-companion editing restrictions
+are unchanged. Cross-registry host replacement and currently unsupported
+associated-reference families remain required implementation gaps; this command
+does not certify their completion. Compilation, runtime, Undo/save/reopen and
+migration qualification remain unverified.
 
 Reader217 retains shared component type/material definition edits under exclusive
 command59. Its six fields are version, kind, expected revision, message,

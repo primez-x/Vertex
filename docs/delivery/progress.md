@@ -14,6 +14,77 @@ changed source does not acquire runtime acceptance without later qualification.
 
 ## Current delivery state
 
+### October 11 phase-isolated component definition integration
+
+The shared definition/numeric-copy batch below is committed and pushed as
+07e6de65, with the exact remote branch ref verified. The current source batch
+integrates real private-definition and proposed-component editing rather than
+stopping at an ordinary shared-edit refusal. The pure producer inventories every
+actual affected active root and all requested definitions, preserves baseline
+and inactive originals, and admits safe global residuals alongside required
+private catalogs. An unapplied changed definition rejects the whole operation;
+merely copying unused definitions into a private catalog is not an effect.
+
+The presentation producer retargets ordinary component references and copies
+baseline view/appearance/overlay and annotation presentation while retaining
+originals. Exact unsupported reference families remain explicit. Snapshot
+preparation binds the actual history, assets, saved state, editability and
+retained fresh identities before deriving a result. It depends only on the core;
+it does not introduce a Document/exchange library cycle or fabricate a candidate
+Document. Its history-work limits now reserve the actual retained inventory
+and source-bound preceding prefixes rather than multiplying every ordinary
+history event by the entire history again. Review found another concrete P2:
+opaque JSON arrays were charged invented quadratic graph work, rejecting even
+a one-record project with 2049 null metadata values. Raw traversal now charges
+linear work; actual catalog graph admission remains separate after the complete
+raw walk. Messages match the command's strict 1-1024-byte UTF-8 contract, and
+complete typed allocations are admitted before either owning encoder.
+The same correction now covers typed ID vectors. A shared core helper separately
+reserves actual boundary, hole and retained operation topology, including real
+source-prefix replay, after complete raw admission. DXF uses that helper with
+its existing limits and factors. Schema ownership prevents opaque catalog
+metadata from being treated as a measured boundary's wall provenance.
+
+Root has integrated exclusive command60, live publication, chronological source
+prefix replay, source-derived phase policy and retained receipt reservations.
+Prefix replay seals prior admitted boundary/stair ledgers before the preparation
+fork, avoiding recursive history admission. The type editor chooses ordinary
+command59 when safe and otherwise prepares command60 with exact root/companion/
+overlay allocation and selected-component remapping. Reader218/extraction216
+retain the command through nested and undone history, including events following
+reader217. Conditional source linkage and source-kit entries include all six new
+producer/presentation/preparation files. Independent integrated source review
+approved this batch with no open P1/P2 findings in its frozen scope; separately
+delegated component-dimension changes were excluded. Compilation and runtime
+remain unqualified. The batch is being committed and backed up.
+Review corrections also preserve mixed component/skylight selection without
+adding the parent roof to the ordinary selection, and avoid charging ordinary
+command59 for a complete snapshot-prefix digest it does not perform. Live
+command60 refuses before publication when its new required component companion
+would otherwise make the project read-only and strand Undo. This refusal is an
+unfinished component-alternative workflow, not production completion; the pure
+producer and retained replay remain integrated for the ensuing lifecycle work.
+
+Standalone component measurements have a new source-only resolver foundation
+for exact qualified roots and nested parts, width/depth/height, analytical curve
+extrema, rotation/reflection/scaling and independent Site placement. Persistent
+dimension targets are being implemented separately; canvas creation/display,
+history integrity, carry/removal and exchange integration remain unfinished.
+
+Required remaining gaps include coordinated baseline replacements across
+independent catalog/host registries, proposed components on protected baseline
+hosts, genuine standalone component-associated dimensions and unsupported
+affected callout/opaque references. The component-companion editing quarantine
+is unchanged until the remaining writers support its full lifecycle. The
+general legacy catalog clipboard context, nested/profile editing, joint-only
+patches and deformed/cross-Site carry also remain required source work.
+
+No builds/tests/native jobs, launches, packages or installations ran. The
+installed app is unchanged; compilation, runtime, Undo/save/reopen, migrations
+and extraction remain unverified. All ten production gates remain open. The
+previous status-only turn made no implementation progress; this continuation
+has written actual command, controller, history and format integration.
+
 ### October 11 shared catalog/type phase preservation
 
 The component clipboard batch below is committed and pushed as 12965826, with

@@ -13,6 +13,7 @@
 #include "sketch/boundary_dimension.hpp"
 #include "sketch/site_frame.hpp"
 #include "sketch/measurement_linework.hpp"
+#include "sketch/retained_geometry_work.hpp"
 #ifdef SKETCH_PHYSICAL_ROOMS
 #include "sketch/physical_wall_room.hpp"
 #endif
@@ -607,94 +608,19 @@ private:
 // property metadata are already charged linearly by raw(), never quadratically.
 void reserve_typed_replay(const Json& value, NativeDxfWallSourceWorkBudget& budget,
     bool root_geometry_array = false, std::size_t copies = 8) {
-    std::size_t edges = 0, passes = 1, growth = 0;
-    const auto count_edges = [&](const Json& rows) {
-        require(rows.is_array() && rows.size() <= 16'384, "typed topology row limit");
-        edges = std::max(edges, rows.size()); work(budget, rows.size());
-    };
-    const auto visit = [&](const auto& self, const Json& item, std::size_t depth) -> void {
-        require(depth <= native_dxf_phase_source_depth_limit, "typed replay depth limit");
-        work(budget, 1);
-        if (!item.is_object()) return;
-        const auto kind = item.find("kind");
-        if (kind != item.end() && *kind == "insert_vertex")
-            charge(growth, 1, 16'384, "typed replay topology growth limit");
-        for (const auto* slot : {"segments", "boundary", "edges", "replacement_segments"}) {
-            const auto rows = item.find(slot);
-            if (rows != item.end() && rows->is_array()) count_edges(*rows);
-        }
-        for (const auto* slot : {"operations", "transforms", "edits"}) {
-            const auto rows = item.find(slot); if (rows == item.end()) continue;
-            require(rows->is_array(), "typed replay operation inventory shape");
-            charge(passes, rows->size(), native_dxf_phase_source_node_limit, "typed replay operation limit");
-            for (const auto& row : *rows) self(self, row, depth + 1);
-        }
-        for (const auto* slot : {"value", "edit", "replacement_authoring", "source_boundary_authoring",
-            "source_boundary", "source_lineage", "outer"}) {
-            const auto nested = item.find(slot);
-            if (nested == item.end()) continue;
-            if (nested->is_array()) for (const auto& row : *nested) self(self, row, depth + 1);
-            else self(self, *nested, depth + 1);
-        }
-        const auto holes = item.find("holes");
-        if (holes != item.end() && holes->is_array()) for (const auto& hole : *holes) {
-            if (hole.is_array()) count_edges(hole); else self(self, hole, depth + 1);
-        }
-    };
-    if (root_geometry_array && value.is_array()) count_edges(value); else visit(visit, value, 0);
-    // Insert/edit operations can grow the topology beyond its captured origin.
-    // Each typed operation adds at most one edge unless a retained replacement
-    // array above already declares a larger shape.
-    require(passes <= 16'384 && edges <= 16'384 - growth, "typed replay topology growth limit");
-    const auto maximum_edges = edges + growth;
-    require(!maximum_edges || maximum_edges <= native_dxf_phase_source_work_limit / maximum_edges, "typed replay topology work limit");
-    product_work(budget, maximum_edges * maximum_edges, passes * copies);
+    try {
+        reserve_retained_geometry_replay_work(value,
+            [&](std::size_t a, std::size_t b) { product_work(budget, a, b); },
+            root_geometry_array, copies,
+            {native_dxf_phase_source_depth_limit, native_dxf_phase_source_node_limit});
+    } catch (const RetainedGeometryWorkError& error) { refuse(error.what()); }
 }
 void reserve_intrinsic_owner(const Entity& owner, NativeDxfWallSourceWorkBudget& budget) {
-    if (can_recognize_boundary_entity_type(owner.type)) {
-        std::size_t total_edges = 0;
-        for (const auto* slot : {"segments", "boundary"}) if (owner.properties.contains(slot))
-            if (owner.properties.at(slot).is_array()) {
-                total_edges = std::max(total_edges, owner.properties.at(slot).size());
-                reserve_typed_replay(owner.properties.at(slot), budget, true);
-            }
-        if (owner.properties.contains("holes")) {
-            require(owner.properties.at("holes").is_array(), "intrinsic boundary hole inventory shape");
-            for (const auto& hole : owner.properties.at("holes")) {
-                require(hole.is_array(), "intrinsic boundary hole shape");
-                charge(total_edges, hole.size(), 16'384, "intrinsic boundary aggregate edge limit");
-                reserve_typed_replay(hole, budget, true);
-            }
-            product_work(budget, total_edges, total_edges * 16);
-        }
-        for (const auto* slot : {"boundary_geometry_derivation", "boundary_identity_history"})
-            if (owner.extensions.contains(slot)) reserve_typed_replay(owner.extensions.at(slot), budget);
-        if (owner.properties.contains("boundary_authoring")) reserve_typed_replay(owner.properties.at("boundary_authoring"), budget);
-    }
-    if (owner.type == "measurement_linework") reserve_typed_replay(owner.properties.at("model"), budget);
-    if (owner.extensions.contains("physical_wall_room")) {
-        const auto& descriptor = owner.extensions.at("physical_wall_room");
-        reserve_typed_replay(descriptor, budget);
-        const auto& holes = descriptor.at("holes");
-        require(holes.is_array(), "intrinsic physical room hole inventory shape");
-        std::size_t edges = owner.properties.contains("segments") ? owner.properties.at("segments").size() : 0;
-        for (const auto& hole : holes) {
-            require(hole.is_array(), "intrinsic physical room hole shape");
-            charge(edges, hole.size(), 16'384, "intrinsic physical room aggregate edge limit");
-        }
-        product_work(budget, edges, edges * 16);
-    }
-    if (owner.properties.contains("wall_measurement_source")) {
-        const auto& source = owner.properties.at("wall_measurement_source");
-        const auto& walls = source.at("walls");
-        require(walls.is_array() && walls.size() <= 2048, "intrinsic wall measurement source inventory limit");
-        const auto translations = source.find("translations");
-        const auto passes = translations == source.end() ? 1 : translations->size() + 2;
-        require(translations == source.end() || (translations->is_array() && translations->size() <= 4096), "intrinsic wall translation replay limit");
-        product_work(budget, walls.size() * walls.size(), passes * 16);
-    }
-    if (owner.type == "wall") for (const auto* slot : {"wall_split_archive", "wall_merge_archive"})
-        if (owner.extensions.contains(slot)) reserve_typed_replay(owner.extensions.at(slot), budget);
+    try {
+        reserve_retained_geometry_owner_work(owner,
+            [&](std::size_t a, std::size_t b) { product_work(budget, a, b); }, 8,
+            {native_dxf_phase_source_depth_limit, native_dxf_phase_source_node_limit});
+    } catch (const RetainedGeometryWorkError& error) { refuse(error.what()); }
 }
 Phases phase_inventory(const Owners& owners) {
     Phases result;
@@ -1510,12 +1436,23 @@ struct HistoryAdmission {
         optional(value.wall_split); optional(value.wall_merge); optional(value.rigid_group_transform); optional(value.joint_translation);
         optional(value.disto_measurement); read(value.room_review_intent); read(value.room_review_geometry_proof);
         read(value.phase_room_review_intent); read(value.phase_constraint_authoring_intent); read(value.independent_drawing_removal_intent);
+        read(value.phase_selection_removal_intent); read(value.ordinary_selection_removal_intent);
+        read(value.mixed_selection_removal_intent); read(value.mixed_selection_edit_intent);
+        read(value.clipboard_placement_intent); read(value.assembly_catalog_edit_intent);
+        read(value.phase_assembly_catalog_edit_intent);
         // These understood proof envelopes can retain region topology and
         // ordered geometry operations. Their opaque metadata stays linear.
         reserve_typed_replay(value.room_review_intent, budget);
         reserve_typed_replay(value.room_review_geometry_proof, budget);
         reserve_typed_replay(value.phase_room_review_intent, budget);
         reserve_typed_replay(value.phase_constraint_authoring_intent, budget);
+        reserve_typed_replay(value.phase_selection_removal_intent, budget);
+        reserve_typed_replay(value.ordinary_selection_removal_intent, budget);
+        reserve_typed_replay(value.mixed_selection_removal_intent, budget);
+        reserve_typed_replay(value.mixed_selection_edit_intent, budget);
+        reserve_typed_replay(value.clipboard_placement_intent, budget);
+        reserve_typed_replay(value.assembly_catalog_edit_intent, budget);
+        reserve_typed_replay(value.phase_assembly_catalog_edit_intent, budget);
     }
 };
 void admit_destination_owners(const Owners& owners, NativeDxfWallSourceWorkBudget& budget,
@@ -2000,7 +1937,13 @@ void admit_native_dxf_phase_destination_snapshot(const DocumentSnapshot& destina
                 const auto& command = *record.boundary_constraint_changes;
                 if (command.room_review_completion || command.phase_room_review_completion ||
                     command.phase_constraint_authoring_completion || command.room_review_geometry_completion ||
-                    !command.phase_constraint_authoring_intent.is_null()) {
+                    !command.phase_constraint_authoring_intent.is_null() ||
+                    command.phase_selection_removal_completion || !command.phase_selection_removal_intent.is_null() ||
+                    command.ordinary_selection_removal_completion || !command.ordinary_selection_removal_intent.is_null() ||
+                    command.mixed_selection_removal_completion || !command.mixed_selection_removal_intent.is_null() ||
+                    command.mixed_selection_edit_completion || !command.mixed_selection_edit_intent.is_null() ||
+                    command.clipboard_placement_completion || !command.clipboard_placement_intent.is_null() ||
+                    command.phase_assembly_catalog_edit_completion || !command.phase_assembly_catalog_edit_intent.is_null()) {
                     // Restore's source-bound review reserializes/hashes the
                     // actual prefix for both authoring and snapshot digests.
                     // Two replay passes cover fork/preview; asset hex expansion

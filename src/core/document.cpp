@@ -60,6 +60,7 @@
 #include "sketch/mixed_selection_edit.hpp"
 #include "sketch/phase_constraint_authoring.hpp"
 #include "sketch/phase_selection_property_edit.hpp"
+#include "sketch/phase_assembly_catalog_edit_preparation.hpp"
 #include "sketch/phase_coordinated_demolition.hpp"
 #include "sketch/phase_opening_demolition.hpp"
 #include "sketch/phase_roof_replacement.hpp"
@@ -2664,6 +2665,10 @@ static bool has_assembly_catalog_edit(const ApplyBoundaryConstraintChanges& comm
     return command.assembly_catalog_edit_completion || !command.assembly_catalog_edit_intent.is_null();
 }
 
+static bool has_phase_assembly_catalog_edit(const ApplyBoundaryConstraintChanges& command) {
+    return command.phase_assembly_catalog_edit_completion || !command.phase_assembly_catalog_edit_intent.is_null();
+}
+
 static bool has_phase_constraint_authoring(const ApplyBoundaryConstraintChanges& command) {
     return command.phase_constraint_authoring_completion || !command.phase_constraint_authoring_intent.is_null();
 }
@@ -2843,7 +2848,8 @@ static void validate_phase_room_review_mode(const ApplyBoundaryConstraintChanges
         throw std::invalid_argument("Phase room review cannot borrow another edit or asset authority");
 }
 
-static bool has_non_catalog_source_authoring_sibling_changes(const ApplyBoundaryConstraintChanges& command) {
+static bool has_non_catalog_source_authoring_sibling_changes(const ApplyBoundaryConstraintChanges& command,
+    bool include_phase_catalog=true) {
     return !command.boundary_edits.empty() || !command.wall_edits.empty() || !command.entity_changes.empty() ||
         !command.physical_entity_changes.empty() || !command.exterior_source_edits.empty() ||
         !command.supplemental_entity_changes.empty() || !command.supplemental_asset_changes.empty() ||
@@ -2858,7 +2864,8 @@ static bool has_non_catalog_source_authoring_sibling_changes(const ApplyBoundary
         has_phase_room_review_completion(command) || command.wall_dimension_completion ||
         command.curve_construction_completion || has_disto_measurement_completion(command) ||
         has_wall_group_scale(command) || has_phase_selection_removal(command) ||
-        has_ordinary_selection_removal(command) || has_mixed_selection_removal(command) || has_mixed_selection_edit(command);
+        has_ordinary_selection_removal(command) || has_mixed_selection_removal(command) || has_mixed_selection_edit(command) ||
+        (include_phase_catalog && has_phase_assembly_catalog_edit(command));
 }
 
 static bool has_source_authoring_sibling_changes(const ApplyBoundaryConstraintChanges& command) {
@@ -2872,6 +2879,34 @@ static void validate_assembly_catalog_edit_mode(const ApplyBoundaryConstraintCha
         throw std::invalid_argument("Assembly definition editing requires its exclusive actual-source request");
     (void)validate_assembly_catalog_phase_edit_request(command.assembly_catalog_edit_intent);
 }
+
+static void validate_phase_assembly_catalog_edit_mode(const ApplyBoundaryConstraintChanges& command) {
+    if (!command.phase_assembly_catalog_edit_completion || command.phase_assembly_catalog_edit_intent.is_null() ||
+        has_non_catalog_source_authoring_sibling_changes(command,false) || has_assembly_catalog_edit(command) ||
+        has_phase_constraint_authoring(command) || has_independent_drawing_removal(command) || has_mixed_clipboard_placement(command))
+        throw std::invalid_argument("Phase-isolated assembly editing requires its exclusive captured-source request");
+#ifdef VERTEX_HAS_CONSTRAINT_AUTHORING
+    const auto request=validate_phase_assembly_catalog_edit_request(command.phase_assembly_catalog_edit_intent);
+    if (request.at("expected_revision")!=command.expected_revision || request.at("message")!=command.message)
+        throw std::invalid_argument("Phase-isolated assembly editing changed its command identity");
+#else
+    throw std::invalid_argument("Phase-isolated assembly editing requires the production authoring engine");
+#endif
+}
+
+#ifdef VERTEX_HAS_CONSTRAINT_AUTHORING
+static bool phase_assembly_catalog_edit_source_phase_policy(const ApplyBoundaryConstraintChanges& command,
+    const std::map<std::string,Entity,std::less<>>& source) {
+    validate_phase_assembly_catalog_edit_mode(command);
+    const auto authoring=decode_phase_assembly_catalog_edit_authoring(
+        command.phase_assembly_catalog_edit_intent.at("authoring"));
+    const auto plan=inspect_phase_assembly_catalog_edit_plan(source,authoring.catalog_request);
+    // Policy follows actual saved cohorts, never an allocated ID or a
+    // caller's claim that a catalog belongs to an active alternative.
+    return std::any_of(plan.isolation_roots.begin(),plan.isolation_roots.end(),
+        [](const auto& root) { return root.registry_id.has_value(); });
+}
+#endif
 
 static void validate_phase_constraint_authoring_mode(const ApplyBoundaryConstraintChanges& command) {
     if (!command.phase_constraint_authoring_completion || command.phase_constraint_authoring_intent.is_null())
@@ -3603,7 +3638,13 @@ static std::vector<bool> active_constraint_history_policies(const std::vector<Re
             if (record.boundary_constraint_changes) {
                 try {
                     const auto& command=*record.boundary_constraint_changes;
-                    if (has_mixed_clipboard_placement(command)) {
+                    if (has_phase_assembly_catalog_edit(command)) {
+                        validate_phase_assembly_catalog_edit_mode(command);
+#ifdef VERTEX_HAS_CONSTRAINT_AUTHORING
+                        result[index]=result[index] || phase_assembly_catalog_edit_source_phase_policy(
+                            command,history[index-1].entities);
+#endif
+                    } else if (has_mixed_clipboard_placement(command)) {
                         validate_mixed_clipboard_placement_mode(command);
 #ifdef VERTEX_HAS_CONSTRAINT_AUTHORING
                         result[index]=result[index] || mixed_clipboard_placement_active_phase_policy(command.clipboard_placement_intent);
@@ -3763,6 +3804,7 @@ struct PhaseConstraintLifetimeProofs {
     std::vector<nlohmann::json> phase_room_proofs;
     std::vector<nlohmann::json> room_proofs;
     std::vector<nlohmann::json> mixed_properties_proofs;
+    std::vector<nlohmann::json> component_catalog_proofs;
     std::vector<WallSplitIntent> wall_split_proofs;
     std::set<std::string,std::less<>> ordinary_roof_destinations;
 };
@@ -3791,7 +3833,9 @@ static PhaseConstraintLifetimeProofs phase_constraint_lifetime_proofs(const Appl
         if (proof.contains("room_review_additional_intents"))
             for (const auto& room:proof.at("room_review_additional_intents")) result.room_proofs.push_back(room);
         if (proof.contains("wall_split")) result.wall_split_proofs.push_back(decode_wall_split(proof.at("wall_split")));
-        if (version==52) {
+        if (version==60) result.component_catalog_proofs.push_back(
+            validate_phase_assembly_catalog_edit_request(proof.at("phase_assembly_catalog_edit_intent")));
+        else if (version==52) {
             const auto& mixed=proof.at("mixed_selection_edit_intent");
             if (mixed.at("version")==11 || mixed.at("version")==12 || mixed.at("version")==13 || mixed.at("version")==15 || mixed.at("version")==16 || mixed.at("version")==17)
                 result.mixed_properties_proofs.push_back(validate_mixed_selection_edit_intent(mixed));
@@ -3974,6 +4018,23 @@ static void validate_retained_authoring_receipt_identities(
         // identity in the recorded semantic operation. Undo cannot release it.
         const auto historical_proofs=record.boundary_constraint_changes
             ? phase_constraint_lifetime_proofs(*record.boundary_constraint_changes) : PhaseConstraintLifetimeProofs{};
+        for (const auto& request:historical_proofs.component_catalog_proofs) {
+            const auto authoring=decode_phase_assembly_catalog_edit_authoring(request.at("authoring"));
+            for (const auto& [root,identities]:authoring.allocation.roots) {
+                require_unused_id(root.catalog_id);require_unused_id(root.instance_id);
+                if (root.document_entity_id) require_unused_id(*root.document_entity_id);
+                require_unused_id(identities.private_catalog_id);
+                if (identities.replacement_entity_id) require_unused_id(*identities.replacement_entity_id);
+                if (identities.replacement_instance_id) require_unused_id(*identities.replacement_instance_id);
+            }
+            for (const auto& [registry,membership]:authoring.allocation.membership_entity_ids) {
+                require_unused_id(registry);require_unused_id(membership);
+            }
+            const auto presentation=decode_phase_assembly_catalog_edit_presentation_allocation(request.at("presentation_allocation"));
+            for (const auto& [original,copy]:presentation.overlay_ids) {
+                require_unused_id(original);require_unused_id(copy);
+            }
+        }
 #ifdef VERTEX_HAS_PHYSICAL_ROOM_REVIEW
         for (const auto& encoded:historical_proofs.phase_room_proofs)
             for (const auto& id:phase_room_review_destinations(encoded))
@@ -4903,6 +4964,14 @@ static std::map<std::string, Entity, std::less<>> replay_retained_wall_merge(
 void validate_completed_constraint_change(const std::map<std::string, Entity, std::less<>>& before,
     const std::map<std::string, Entity, std::less<>>& after,
     const ApplyBoundaryConstraintChanges& command, bool retained_replay = false) {
+    if (has_phase_assembly_catalog_edit(command)) {
+        // Only the snapshot-aware live/chronological replay below admits the
+        // captured history, assets, save state and retained fresh identities.
+        // An entity-map-only check cannot stand in for that publication proof.
+        try { validate_phase_assembly_catalog_edit_mode(command); }
+        catch (const std::exception& error) { document_error(DocumentErrorCode::constraint_violation,error.what()); }
+        return;
+    }
     if (has_mixed_selection_edit(command)) {
         // Only live/retained full-snapshot replay supplies the two independently
         // admitted leaves. Entity-map-only validation grants no replay authority.
@@ -6688,6 +6757,8 @@ std::map<std::string, Entity, std::less<>> completed_boundary_constraint_entitie
     const ApplyBoundaryConstraintChanges& command, bool retained_replay = false,
     bool active_phase_constraints = false,
     const std::map<std::string,Entity,std::less<>>* original_dimension_source = nullptr) {
+    if (has_phase_assembly_catalog_edit(command))
+        document_error(DocumentErrorCode::invalid_entity,"Phase-isolated assembly editing requires complete snapshot-aware replay");
     if (has_assembly_catalog_edit(command)) {
         try {
             validate_assembly_catalog_edit_mode(command);
@@ -8798,6 +8869,17 @@ nlohmann::json command_to_json(const Command& command) {
             }
             return encoded;
         } else if constexpr (std::is_same_v<T, ApplyBoundaryConstraintChanges>) {
+            if (has_phase_assembly_catalog_edit(typed)) {
+                try {
+                    validate_phase_assembly_catalog_edit_mode(typed);
+                    validate_action(typed.message);
+                    return nlohmann::json{{"version",60},{"kind","apply_boundary_constraint_changes"},
+                        {"expected_revision",typed.expected_revision},{"message",typed.message},
+                        {"phase_assembly_catalog_edit_completion",true},
+                        {"phase_assembly_catalog_edit_intent",typed.phase_assembly_catalog_edit_intent}};
+                } catch (const DocumentError&) { throw; }
+                catch (const std::exception& error) { document_error(DocumentErrorCode::invalid_entity,error.what()); }
+            }
             if (has_assembly_catalog_edit(typed)) {
                 try {
                     validate_assembly_catalog_edit_mode(typed);
@@ -9349,7 +9431,7 @@ Command command_from_json(const nlohmann::json& value,
     try {
         if (!value.is_object() || !value.contains("version") || !value.contains("kind") ||
             !value.at("version").is_number_integer() ||
-            (value.at("version")<1 || value.at("version")>59) ||
+            (value.at("version")<1 || value.at("version")>60) ||
             !value.at("kind").is_string()) {
             document_error(DocumentErrorCode::invalid_entity, "serialized command envelope is invalid");
         }
@@ -9470,6 +9552,25 @@ Command command_from_json(const nlohmann::json& value,
             return result;
         }
         if (kind == "apply_boundary_constraint_changes") {
+            if (value.at("version")==60) {
+                command_exact_fields(value,{"version","kind","expected_revision","message",
+                    "phase_assembly_catalog_edit_completion","phase_assembly_catalog_edit_intent"},
+                    DocumentErrorCode::invalid_entity,"serialized phase-isolated assembly edit");
+                if (!value.at("phase_assembly_catalog_edit_completion").is_boolean() ||
+                    !value.at("phase_assembly_catalog_edit_completion").get<bool>())
+                    throw std::invalid_argument("Phase-isolated assembly edit completion is required");
+                ApplyBoundaryConstraintChanges result;
+                result.expected_revision=command_revision(value.at("expected_revision"),"Phase-isolated assembly edit revision");
+                result.message=command_string(value.at("message"),"Phase-isolated assembly edit message",1024);
+#ifdef VERTEX_HAS_CONSTRAINT_AUTHORING
+                result.phase_assembly_catalog_edit_intent=validate_phase_assembly_catalog_edit_request(value.at("phase_assembly_catalog_edit_intent"));
+#else
+                throw std::invalid_argument("Phase-isolated assembly editing requires the production authoring engine");
+#endif
+                result.phase_assembly_catalog_edit_completion=true;
+                validate_phase_assembly_catalog_edit_mode(result);
+                return result;
+            }
             if (value.at("version")==59) {
                 command_exact_fields(value,{"version","kind","expected_revision","message",
                     "assembly_catalog_edit_completion","assembly_catalog_edit_intent"},
@@ -10750,7 +10851,15 @@ Revision Document::apply(const Command& command) {
                 next.action = typed_command.message.empty()
                     ? "Apply boundary constraints" : typed_command.message;
                 validate_action(next.action);
-                if (has_assembly_catalog_edit(typed_command)) {
+                if (has_phase_assembly_catalog_edit(typed_command)) {
+                    (void)command_to_json(Command{typed_command});
+#ifdef VERTEX_HAS_CONSTRAINT_AUTHORING
+                    next_active_policy=source_active_policy || phase_assembly_catalog_edit_source_phase_policy(
+                        typed_command,current.entities);
+#else
+                    document_error(DocumentErrorCode::invalid_entity,"Phase-isolated assembly editing requires the production authoring engine");
+#endif
+                } else if (has_assembly_catalog_edit(typed_command)) {
                     (void)command_to_json(Command{typed_command});
                     next_active_policy=source_active_policy;
                 } else if (has_mixed_selection_edit(typed_command)) {
@@ -10826,7 +10935,27 @@ Revision Document::apply(const Command& command) {
 #ifdef VERTEX_HAS_PHYSICAL_ROOM_REVIEW
                 dimension_source=room_dimension_original_source(history_,history_.size(),current.entities,typed_command);
 #endif
-                if (has_mixed_selection_edit(typed_command)) {
+                if (has_phase_assembly_catalog_edit(typed_command)) {
+#ifdef VERTEX_HAS_CONSTRAINT_AUTHORING
+                    try {
+                        const auto prepared=replay_phase_assembly_catalog_edit_preparation(
+                            snapshot(),typed_command.phase_assembly_catalog_edit_intent);
+                        next.entities=prepared.preview_entities();
+                        // Until every component writer carries the required
+                        // companion authority, a newly qualified result would
+                        // make the project read-only and even strand Undo.
+                        // Refuse before publishing; retained/pure replay keeps
+                        // its exact semantics for migration and integration.
+                        if (std::any_of(next.entities.begin(),next.entities.end(),[](const auto& row) {
+                                return row.second.type==assembly_phase_membership_entity_type;
+                            }))
+                            throw std::invalid_argument("This component edit requires qualified alternatives that are not yet editable; the project was not changed");
+                    } catch (const DocumentError&) { throw; }
+                    catch (const std::exception& error) { document_error(DocumentErrorCode::invalid_entity,error.what()); }
+#else
+                    document_error(DocumentErrorCode::invalid_entity,"Phase-isolated assembly editing requires the production authoring engine");
+#endif
+                } else if (has_mixed_selection_edit(typed_command)) {
 #ifdef VERTEX_HAS_CONSTRAINT_AUTHORING
                     try {
                         const auto reviews=mixed_selection_edit_room_reviews(typed_command.mixed_selection_edit_intent);
@@ -11132,7 +11261,8 @@ Document Document::restore(DocumentSnapshot snapshot) {
         // current record's stair initialization and later reservations are not
         // authority for replaying its source prefix.
         const bool mixed_edit_prefix = record.boundary_constraint_changes &&
-            has_mixed_selection_edit(*record.boundary_constraint_changes);
+            (has_mixed_selection_edit(*record.boundary_constraint_changes) ||
+                has_phase_assembly_catalog_edit(*record.boundary_constraint_changes));
         const auto prior_boundary_history = mixed_edit_prefix ?
             std::make_unique<BoundaryIdentityHistory>(identity_history) : nullptr;
         const auto prior_stair_history = mixed_edit_prefix ?
@@ -11218,6 +11348,7 @@ Document Document::restore(DocumentSnapshot snapshot) {
             has_ordinary_selection_removal(*record.boundary_constraint_changes) ||
             has_mixed_selection_removal(*record.boundary_constraint_changes) ||
             has_mixed_selection_edit(*record.boundary_constraint_changes) ||
+            has_phase_assembly_catalog_edit(*record.boundary_constraint_changes) ||
             has_wall_group_scale(*record.boundary_constraint_changes)))
             validate_completed_constraint_change(previous.entities, record.entities, *record.boundary_constraint_changes, true);
         else validate_constraint_change(previous.entities, record.entities,
@@ -11441,7 +11572,35 @@ Document Document::restore(DocumentSnapshot snapshot) {
 #ifdef VERTEX_HAS_PHYSICAL_ROOM_REVIEW
                     dimension_source=room_dimension_original_source(snapshot.history(),index,previous.entities,proof);
 #endif
-                    if (has_mixed_selection_edit(proof)) {
+                    if (has_phase_assembly_catalog_edit(proof)) {
+                        (void)command_to_json(Command{proof});
+#ifdef VERTEX_HAS_CONSTRAINT_AUTHORING
+                        auto prefix=snapshot;
+                        prefix.history_=std::make_shared<const std::vector<RevisionRecord>>(
+                            snapshot.history().begin(),snapshot.history().begin()+index);
+                        prefix.revision_=previous.revision;
+                        const auto& saved=proof.phase_assembly_catalog_edit_intent.at("source_saved_revision");
+                        prefix.saved_revision_=saved.is_null() ? std::nullopt :
+                            std::optional<Revision>{command_revision(saved,"Phase-isolated assembly edit source save revision")};
+                        if (prefix.saved_revision_ && *prefix.saved_revision_>prefix.revision_)
+                            throw std::invalid_argument("Phase-isolated assembly edit captured save revision is outside its source prefix");
+                        prefix.named_revisions_=expected_names;
+                        prefix.editable_=true;
+                        prefix.read_only_reason_.clear();
+                        if (prefix.uses_active_phase_constraints()!=active_policies.at(index-1))
+                            throw std::invalid_argument("Phase-isolated assembly edit source policy differs from admitted ancestry");
+                        // This prefix has already been admitted chronologically.
+                        // Seal its prior ledgers so preparation's real-source
+                        // fork cannot recursively restore the same ancestry.
+                        seal_snapshot_admission(prefix,*prior_boundary_history,*prior_stair_history,
+                            prior_unsupported_history);
+                        const auto prepared=replay_phase_assembly_catalog_edit_preparation(
+                            prefix,proof.phase_assembly_catalog_edit_intent);
+                        expected.entities=prepared.preview_entities();
+#else
+                        throw std::invalid_argument("Phase-isolated assembly editing requires the production authoring engine");
+#endif
+                    } else if (has_mixed_selection_edit(proof)) {
                         (void)command_to_json(Command{proof});
 #ifdef VERTEX_HAS_CONSTRAINT_AUTHORING
                         // Replay against the admitted source prefix, never the
@@ -11566,7 +11725,7 @@ Document Document::restore(DocumentSnapshot snapshot) {
                     if (has_phase_selection_removal(proof) || has_ordinary_selection_removal(proof) || has_mixed_selection_removal(proof) || !phase_constraint_authoring_proofs(proof).empty() || !mixed_clipboard_placement_proofs(proof).empty() || has_complete_wall_join_deletion_proof(proof))
                         validate_phase_constraint_fresh_lifetime(previous.entities,expected.entities,snapshot.history(),index,proof);
 #endif
-                    if (!has_phase_selection_removal(proof) && !has_ordinary_selection_removal(proof) && !has_mixed_selection_removal(proof) && !has_mixed_selection_edit(proof))
+                    if (!has_phase_selection_removal(proof) && !has_ordinary_selection_removal(proof) && !has_mixed_selection_removal(proof) && !has_mixed_selection_edit(proof) && !has_phase_assembly_catalog_edit(proof))
                         expected.assets = boundary_constraint_assets(previous.assets, proof);
                     validate_boundary_identity_transition(identity_history, proof.wall_split ?
                         wall_split_validation_source(previous.entities,expected.entities,*proof.wall_split) :

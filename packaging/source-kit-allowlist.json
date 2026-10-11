@@ -3783,6 +3783,18 @@
     },
     {
       "category": "source",
+      "path": "include/sketch/phase_assembly_catalog_edit.hpp"
+    },
+    {
+      "category": "source",
+      "path": "include/sketch/phase_assembly_catalog_edit_preparation.hpp"
+    },
+    {
+      "category": "source",
+      "path": "include/sketch/phase_assembly_catalog_edit_presentation.hpp"
+    },
+    {
+      "category": "source",
       "path": "include/sketch/phase_assembly_instance_property_edit.hpp"
     },
     {
@@ -4072,6 +4084,10 @@
     {
       "category": "source",
       "path": "include/sketch/retained_authoring_identities.hpp"
+    },
+    {
+      "category": "source",
+      "path": "include/sketch/retained_geometry_work.hpp"
     },
     {
       "category": "source",
@@ -5179,6 +5195,18 @@
     },
     {
       "category": "source",
+      "path": "src/core/phase_assembly_catalog_edit.cpp"
+    },
+    {
+      "category": "source",
+      "path": "src/core/phase_assembly_catalog_edit_preparation.cpp"
+    },
+    {
+      "category": "source",
+      "path": "src/core/phase_assembly_catalog_edit_presentation.cpp"
+    },
+    {
+      "category": "source",
       "path": "src/core/phase_assembly_instance_property_edit.cpp"
     },
     {
@@ -5452,6 +5480,10 @@
     {
       "category": "source",
       "path": "src/core/reference_grid.cpp"
+    },
+    {
+      "category": "source",
+      "path": "src/core/retained_geometry_work.cpp"
     },
     {
       "category": "source",

@@ -1,5 +1,17 @@
 # Portable project extraction
 
+Exchange version216 requires native reader218 for snapshot-bound private
+component definition editing under command60. Catalog/original-definition
+bindings, actual root allocations, saved-source authority and presentation
+allocations travel in retained and undone history. Replay derives private
+active definitions and actual proposed replacements while retaining inactive
+and baseline originals. Every requested changed definition must have an actual
+effect; an unsupported remainder rejects the whole operation. Baseline
+presentation copies and ordinary retargets use their typed owning codecs.
+Current, nested and undone events raise the required reader floor, including
+history after reader217. Historical command59 and raw catalog meanings remain
+unchanged. Compilation, migration and extraction round trips remain unverified.
+
 Exchange version215 requires native reader217 for source-bound component
 definition edits under command59. Exact original catalog/definition bindings and
 complete source-map digest travel in retained and undone command history. The
