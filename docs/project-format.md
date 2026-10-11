@@ -1,4 +1,26 @@
-# Vertex project formats v1 through v232
+# Vertex project formats v1 through v233
+
+Reader233 retains coordinated wall component dimensions. Phase37 requires
+coordinated inner8: `version:8`, `authoring:<canonical body5>`,
+`complete_hosted_component_dimensions:true`, and
+`complete_wall_component_dimensions:true`. Its only optional field is
+`complete_stair_component_dimensions:true`, present exactly when the actual
+stair replacement uses child8. No literal-false flags or nested wrappers are
+admitted. The body must include an actual wall phase36/edit2/leaf12 child;
+wall scalar, profile, rehost, family and stack authority is excluded here.
+Historical coordinated1 through7 and phase31/34 retain their meanings.
+
+Wall dimension destinations participate in the complete cross-family fresh
+inventory; original baseline dimensions remain exact across the combined
+candidate. Wall leaf12 completes its wall/opening dimension contribution while
+the existing coordinated ordinary-host contribution completes other families
+once against the final candidate. Current mixed wall/physical transforms derive
+the wall dimension roster from original source and select inner8 separately
+from historical inner6/7. The new wall/stair flags have explicitly scoped
+current and retained-history identity reservations. Current, nested and undone
+proofs require reader233/extraction231, including empty dimension inventories.
+Properties allocation remains a separate follow-on. Source implementation does
+not establish compilation, runtime behavior or production acceptance.
 
 Reader232 retains wall replacement component dimensions. Wall leaf12 has
 exactly four fields: `version:12`, `authoring:<canonical leaf11>`,

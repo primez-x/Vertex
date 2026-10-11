@@ -14,6 +14,48 @@ changed source does not acquire runtime acceptance without later qualification.
 
 ## Current delivery state
 
+### October 11 coordinated wall component dimension integration
+
+The standalone wall dimension batch is committed and pushed as 8fff7930; its
+exact remote branch matched local HEAD. Current source work adds coordinated
+inner8/phase37 around canonical body5 and an actual wall phase36/edit2/leaf12
+child. Hosted and wall dimension flags are literal true; the stair flag is
+present exactly with an actual child8. Historical coordinated1 through7 and
+phase31/34 retain their authority. Wall copied dimension destinations join the
+cross-family fresh roster, and original baseline dimensions remain exact.
+The final ordinary-host dimension contribution remains separate from wall
+leaf12's wall/opening contribution and runs once for other families.
+
+The current mixed wall/physical controller derives and allocates the actual
+wall dimension inventory, reserves retained-history aliases and selects inner8
+from its actual wall child. Document reserves the new proof tokens only for
+their actual wall/stair authority. Reader233/extraction231 cover current,
+nested and undone inner8 proofs, including empty dimension inventories.
+Independent integrated source review found no proved introduced P1/P2 in the
+grammar, full-candidate composition, controller, lifetime or reader/extraction
+mapping. Root review confirms the original preservation roster, actual-source
+fresh allocation, historical authority and separate final family contributions.
+Scoped whitespace inspection passes; Git records the source backup. Compilation
+and runtime behavior remain unverified. No builds/tests/jobs, launches, packages or
+installations ran, and the installed candidate remains unchanged. All ten
+production gates remain open; the complete approved plan remains active.
+
+Properties wall dimension allocation and receipts are next. Preserve request6
+and receipts21/22/23, which carry stair permission separately from wall hosted
+permission. A new explicit wall dimension contract must derive and allocate
+the actual required_dimension_ids after dependency decisions and use wall
+leaf12/phase36. Component wrappers, current/undone fresh reservations and reader
+detection must retain the actual new receipt; do not widen historical requests.
+The unused inspected version tuple is request7, mixed Properties24 and component
+wrappers25/26; existing movement18/19/20 remain separate. Core ownership can split
+phase_selection_property_edit.hpp/.cpp from mixed_selection_property_edit.hpp/.cpp.
+Root integrates compose_phase_property_selection_edit_candidates, Document
+request6/7 lifetime checks, mixed_selection_edit predicates and main_window's
+initial/final inventory, separate dimension allocation and elevation producer.
+New wall completion requires hosted completion; stair permission stays explicit.
+Other family copies, component profiles/paths and linked views, broader
+drawing/appraisal/exchange/assistance and full qualification remain unfinished.
+
 ### October 11 wall replacement component dimension integration
 
 The stair transform/coordinated batch is committed and pushed as 4268e0ce;

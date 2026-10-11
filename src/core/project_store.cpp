@@ -382,6 +382,62 @@ std::uint32_t required_format_version_internal(const DocumentSnapshot& snapshot,
                 if (!value.is_object() || value.size()!=fields.size()) return false;
                 return std::all_of(fields.begin(),fields.end(),[&](const char* field) { return value.contains(field); });
             };
+            const auto typed_shape=[](const nlohmann::json& child, int version,
+                std::initializer_list<const char*> fields) {
+                return child.is_object() && child.size()==fields.size() &&
+                    std::all_of(fields.begin(),fields.end(),[&](const char* field) { return child.contains(field); }) &&
+                    child.at("version").is_number_integer() && child.at("version")==version;
+            };
+            const auto literal_true=[](const nlohmann::json& child,const char* field) {
+                return child.contains(field) && child.at(field).is_boolean() && child.at(field)==true;
+            };
+            const bool coordinated_wall_dimensions=closed_shape({"version","authoring",
+                "complete_hosted_component_dimensions","complete_wall_component_dimensions"}) ||
+                closed_shape({"version","authoring","complete_hosted_component_dimensions",
+                    "complete_wall_component_dimensions","complete_stair_component_dimensions"});
+            if (coordinated_wall_dimensions && value.at("version").is_number_integer() && value.at("version")==8 &&
+                literal_true(value,"complete_hosted_component_dimensions") &&
+                literal_true(value,"complete_wall_component_dimensions")) {
+                const auto& body=value.at("authoring");
+                if (typed_shape(body,5,{"version","wall_authoring","roof_replacement","slab_replacement",
+                        "structural_replacement","stair_replacement","ordinary_roof_edits","ordinary_slab_geometry",
+                        "ordinary_structural_edits","ordinary_stair_transforms"}) &&
+                    body.at("ordinary_roof_edits").is_array() && body.at("ordinary_slab_geometry").is_array() &&
+                    body.at("ordinary_structural_edits").is_array() && body.at("ordinary_stair_transforms").is_array()) {
+                    const auto& wall=body.at("wall_authoring");
+                    const auto& stair=body.at("stair_replacement");
+                    const bool stair_dimensions=typed_shape(stair,8,{"version","authoring",
+                        "complete_ordinary_component_dimensions"}) && literal_true(stair,"complete_ordinary_component_dimensions") &&
+                        typed_shape(stair.at("authoring"),7,{"version","authoring","complete_component_dimensions",
+                            "dimension_identities"}) && literal_true(stair.at("authoring"),"complete_component_dimensions") &&
+                        stair.at("authoring").at("dimension_identities").is_object() &&
+                        stair.at("authoring").at("authoring").is_object() &&
+                        stair.at("authoring").at("authoring").contains("version") &&
+                        stair.at("authoring").at("authoring").at("version").is_number_integer() &&
+                        stair.at("authoring").at("authoring").at("version")>=1 &&
+                        stair.at("authoring").at("authoring").at("version")<=6;
+                    const bool stair_flag_matches=value.contains("complete_stair_component_dimensions") ?
+                        literal_true(value,"complete_stair_component_dimensions") && stair_dimensions : !stair_dimensions;
+                    if (stair_flag_matches && typed_shape(wall,36,{"version","wall_edit_version","expected_revision",
+                            "source_snapshot_digest","source_authoring_digest","source_entities_digest","source_saved_revision",
+                            "phase_selections","intent","wall_replacement"}) &&
+                        wall.at("phase_selections").is_array() && wall.at("source_snapshot_digest").is_string() &&
+                        wall.at("intent").is_object() && wall.at("wall_edit_version").is_number_integer() &&
+                        wall.at("wall_edit_version")==2) {
+                        const auto& leaf=wall.at("wall_replacement");
+                        if (typed_shape(leaf,12,{"version","authoring","complete_component_dimensions","dimension_identities"}) &&
+                            literal_true(leaf,"complete_component_dimensions") && leaf.at("dimension_identities").is_object()) {
+                            const auto& hosted=leaf.at("authoring");
+                            if (typed_shape(hosted,11,{"version","authoring","complete_hosted_instances","hosted_instance_identities"}) &&
+                                literal_true(hosted,"complete_hosted_instances") && hosted.at("hosted_instance_identities").is_array() &&
+                                hosted.at("authoring").is_object() && hosted.at("authoring").contains("version") &&
+                                hosted.at("authoring").at("version").is_number_integer() &&
+                                hosted.at("authoring").at("version")>=1 && hosted.at("authoring").at("version")<=10)
+                                floor=std::max(floor,233U);
+                        }
+                    }
+                }
+            }
             if (closed_shape({"version","authoring","complete_component_dimensions","dimension_identities"}) &&
                 value.at("version").is_number_integer() && value.at("version")==12 &&
                 value.at("complete_component_dimensions").is_boolean() && value.at("complete_component_dimensions")==true &&
@@ -1022,9 +1078,9 @@ std::uint32_t required_format_version_internal(const DocumentSnapshot& snapshot,
     };
     for (const auto& revision : snapshot.history()) {
         if (revision.phase_entity_import) required=std::max(required,160U);
-        if (required<232 && revision.boundary_geometry_edit)
+        if (required<233 && revision.boundary_geometry_edit)
             required=std::max(required,typed_edit_reader_floor(encode_boundary_geometry_edit(*revision.boundary_geometry_edit)));
-        if (required<232 && revision.boundary_constraint_changes)
+        if (required<233 && revision.boundary_constraint_changes)
             required=std::max(required,typed_edit_reader_floor(command_to_json(Command{*revision.boundary_constraint_changes})));
         if (required<122 && revision.boundary_geometry_edit)
             required=std::max(required,quantity_reader_floor(encode_boundary_geometry_edit(*revision.boundary_geometry_edit)));
@@ -3544,6 +3600,7 @@ bool verify_sqlite_schema(sqlite3* database, bool allow_recovery = false) {
          sqlite3_column_int(user_version.get(), 0) != 230 &&
          sqlite3_column_int(user_version.get(), 0) != 231 &&
          sqlite3_column_int(user_version.get(), 0) != 232 &&
+         sqlite3_column_int(user_version.get(), 0) != 233 &&
          sqlite3_column_int(user_version.get(), 0) != 207 &&
          sqlite3_column_int(user_version.get(), 0) != 202 &&
          sqlite3_column_int(user_version.get(), 0) != 200 &&
@@ -4269,6 +4326,8 @@ DocumentSnapshot read_snapshot(sqlite3* database, RecoveryLedger* recovery = nul
     // here and authenticate the manifest with its stored version below.
     const auto required_format = required_format_version_internal(snapshot, format_number < 28);
     if (required_format > format_number) {
+        if (required_format>=233)
+            storage_error(StorageErrorCode::unsupported_format,"This project requires reader 233 for coordinated wall component dimension copies");
         if (required_format>=232)
             storage_error(StorageErrorCode::unsupported_format,"This project requires reader 232 for wall component dimension copies");
         if (required_format>=231)

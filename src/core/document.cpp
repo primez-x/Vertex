@@ -4288,6 +4288,7 @@ static void validate_phase_constraint_fresh_lifetime(const std::map<std::string,
     bool complete_wall_component_dimension_copies=false;
     bool complete_stair_ordinary_dimension_carry=false;
     bool complete_coordinated_stair_dimension_copies=false;
+    bool complete_coordinated_wall_dimension_copies=false;
     for (const auto& [id,entity] : candidate) {
         (void)entity;
         if (!source.contains(id)) fresh.insert(id);
@@ -4381,7 +4382,12 @@ static void validate_phase_constraint_fresh_lifetime(const std::map<std::string,
             complete_envelope_reservation=true;
             roof_mixed_asset_reservation=true;
             complete_coordinated_stair_dimension_copies=complete_coordinated_stair_dimension_copies ||
-                root_intent.coordinated_replacements.at("version")==7;
+                root_intent.coordinated_replacements.at("version")==7 ||
+                (root_intent.coordinated_replacements.at("version")==8 &&
+                    root_intent.coordinated_replacements.contains("complete_stair_component_dimensions") &&
+                    root_intent.coordinated_replacements.at("complete_stair_component_dimensions")==true);
+            complete_coordinated_wall_dimension_copies=complete_coordinated_wall_dimension_copies ||
+                root_intent.coordinated_replacements.at("version")==8;
             std::vector<RoofEditIntent> ordinary_roof_edits;
             for (const auto& row : phase_constraint_coordinated_authoring_body(root_intent.coordinated_replacements).at("ordinary_roof_edits"))
                 ordinary_roof_edits.push_back(decode_roof_edit_intent(row));
@@ -4662,6 +4668,8 @@ static void validate_phase_constraint_fresh_lifetime(const std::map<std::string,
                 throw std::invalid_argument("A proposed wall destination borrows a dimension copy proof field: "+std::string(token));
     if (complete_coordinated_stair_dimension_copies && fresh.contains("complete_stair_component_dimensions"))
         throw std::invalid_argument("A coordinated stair destination borrows its dimension copy proof field");
+    if (complete_coordinated_wall_dimension_copies && fresh.contains("complete_wall_component_dimensions"))
+        throw std::invalid_argument("A coordinated wall destination borrows its dimension copy proof field");
     if (complete_stair_ordinary_dimension_carry && fresh.contains("complete_ordinary_component_dimensions"))
         throw std::invalid_argument("A proposed stair destination borrows its ordinary dimension carry proof field");
     if (phase_drawing_enclosure) {

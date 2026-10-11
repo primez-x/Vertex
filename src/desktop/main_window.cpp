@@ -50042,11 +50042,18 @@ private:
     }
 
     static json withHostedDimensionAuthoring(json authoring) {
+        bool wall_dimensions=false;
+        if (authoring.contains("wall_authoring") && !authoring.at("wall_authoring").is_null()) {
+            const auto wall=decode_phase_constraint_authoring_intent(authoring.at("wall_authoring"));
+            wall_dimensions=!wall.wall_replacement.is_null() &&
+                decode_phase_wall_replacement_authoring(wall.wall_replacement).complete_component_dimensions;
+        }
         const bool stair_dimensions=authoring.contains("stair_replacement") &&
             !authoring.at("stair_replacement").is_null() &&
             decode_phase_stair_replacement_authoring(authoring.at("stair_replacement")).complete_component_dimensions;
-        json result={{"version",stair_dimensions ? 7 : 6},{"authoring",std::move(authoring)},
+        json result={{"version",wall_dimensions ? 8 : stair_dimensions ? 7 : 6},{"authoring",std::move(authoring)},
             {"complete_hosted_component_dimensions",true}};
+        if (wall_dimensions) result["complete_wall_component_dimensions"]=true;
         if (stair_dimensions) result["complete_stair_component_dimensions"]=true;
         return result;
     }
@@ -51729,12 +51736,12 @@ private:
         wall_semantic.wall_geometry_move = std::move(wall_move);
         wall_semantic.message = message;
         auto wall_intent = make_phase_constraint_authoring_intent(source, wall_semantic);
-        auto occupied = retainedSlabIdentityNames(source, has_structural || has_stairs);
+        auto occupied = retainedSlabIdentityNames(source, true);
         auto wall_proposal = prepare_phase_wall_canvas_proposal(source, wall_semantic, [&](std::string_view) {
             auto proposed = new_id("proposed");
             while (!occupied.insert(proposed).second) proposed = new_id("proposed");
             return proposed;
-        }, true, true, true);
+        }, true, true, true, true);
         if (wall_proposal) wall_intent = std::move(wall_proposal->intent);
         const auto* physical_phase = std::get_if<ApplyBoundaryConstraintChanges>(&physical_command);
         if (!wall_proposal && (!physical_phase || !physical_phase->phase_constraint_authoring_completion)) {
