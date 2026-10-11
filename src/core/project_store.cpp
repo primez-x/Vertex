@@ -482,6 +482,16 @@ std::uint32_t required_format_version_internal(const DocumentSnapshot& snapshot,
             if (closed_shape({"version","ordinary","ordinary_command","members","child_command",
                     "source_snapshot_digest","source_authoring_digest","source_entities_digest",
                     "source_saved_revision","stage_snapshot_digest","stage_authoring_digest"}) &&
+                value.at("version")==14)
+                floor=std::max(floor,221U);
+            if (closed_shape({"version","architectural","drawing","allow_manufactured_opening_hosts",
+                    "complete_component_phase_memberships","complete_roof_component_phase_memberships",
+                    "complete_component_dimensions"}) && value.at("version")==4 &&
+                value.at("complete_component_dimensions")==true)
+                floor=std::max(floor,221U);
+            if (closed_shape({"version","ordinary","ordinary_command","members","child_command",
+                    "source_snapshot_digest","source_authoring_digest","source_entities_digest",
+                    "source_saved_revision","stage_snapshot_digest","stage_authoring_digest"}) &&
                 (value.at("version")==11 || value.at("version")==12 || value.at("version")==13))
                 floor=std::max(floor,211U);
             if (closed_shape({"version","architectural","drawing","allow_manufactured_opening_hosts",
@@ -796,9 +806,9 @@ std::uint32_t required_format_version_internal(const DocumentSnapshot& snapshot,
     };
     for (const auto& revision : snapshot.history()) {
         if (revision.phase_entity_import) required=std::max(required,160U);
-        if (required<220 && revision.boundary_geometry_edit)
+        if (required<221 && revision.boundary_geometry_edit)
             required=std::max(required,typed_edit_reader_floor(encode_boundary_geometry_edit(*revision.boundary_geometry_edit)));
-        if (required<220 && revision.boundary_constraint_changes)
+        if (required<221 && revision.boundary_constraint_changes)
             required=std::max(required,typed_edit_reader_floor(command_to_json(Command{*revision.boundary_constraint_changes})));
         if (required<122 && revision.boundary_geometry_edit)
             required=std::max(required,quantity_reader_floor(encode_boundary_geometry_edit(*revision.boundary_geometry_edit)));
@@ -3294,6 +3304,7 @@ bool verify_sqlite_schema(sqlite3* database, bool allow_recovery = false) {
          sqlite3_column_int(user_version.get(), 0) != 218 &&
          sqlite3_column_int(user_version.get(), 0) != 219 &&
          sqlite3_column_int(user_version.get(), 0) != 220 &&
+         sqlite3_column_int(user_version.get(), 0) != 221 &&
          sqlite3_column_int(user_version.get(), 0) != 207 &&
          sqlite3_column_int(user_version.get(), 0) != 202 &&
          sqlite3_column_int(user_version.get(), 0) != 200 &&
@@ -4019,6 +4030,8 @@ DocumentSnapshot read_snapshot(sqlite3* database, RecoveryLedger* recovery = nul
     // here and authenticate the manifest with its stored version below.
     const auto required_format = required_format_version_internal(snapshot, format_number < 28);
     if (required_format > format_number) {
+        if (required_format>=221)
+            storage_error(StorageErrorCode::unsupported_format,"This project requires reader 221 for qualified embedded component dimension retirement");
         if (required_format>=220)
             storage_error(StorageErrorCode::unsupported_format,"This project requires reader 220 for component dimensions carried by mixed selection transforms");
         if (required_format>=219)

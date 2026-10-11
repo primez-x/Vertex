@@ -324,7 +324,8 @@ public:
     // replacements and associated presentation under exclusive command60.
     // v219 retains qualified root/part width, depth and height dimensions.
     // v220 retains mixed transform dialect18/ordinary5 component dimension carry.
-    static constexpr std::uint32_t format_version = 220;
+    // v221 retains architectural/drawing removal4 and mixed removal14 extent retirement.
+    static constexpr std::uint32_t format_version = 221;
     static constexpr std::uint32_t recovery_format_version = 4;
     [[nodiscard]] static std::uint32_t required_format_version(const DocumentSnapshot& snapshot);
     static constexpr std::uint64_t maximum_file_bytes = 4ULL * 1024ULL * 1024ULL * 1024ULL;

@@ -1,5 +1,12 @@
 # Portable project extraction
 
+Exchange version219 requires native reader221 for architectural/drawing removal4
+and mixed removal14. Actual embedded catalog/instance identities authorize exact
+supported extent-dimension retirement; component phase permissions remain
+separate explicit flags. Original-source proofs and nested/undone history retain
+the new requirement. Older deletion dialects retain their original consequences.
+No extraction or migration execution is claimed.
+
 Exchange version218 requires native reader220 for mixed transform intent18 and
 ordinary selection request5. Original-source geometry/room decisions, exact
 invariant skylight proofs and existing qualified component dimension carry are

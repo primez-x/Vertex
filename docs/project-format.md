@@ -1,4 +1,22 @@
-# Vertex project formats v1 through v220
+# Vertex project formats v1 through v221
+
+Reader221 retains architectural/drawing removal4 and mixed removal14. The
+ordinary codec has explicit boolean component/roof membership flags plus literal
+`complete_component_dimensions:true`. Its architectural lane is component-only:
+actual catalog/instance keys select embedded rows and derive their exact supported
+extent dimensions, including nested part targets. One source geometry batch
+qualifies the associated spans before atomic retirement. Required, inactive,
+protected baseline, foreign-registry and affected opaque references refuse.
+Unselected instances and their dimensions retain their exact source state.
+
+Mixed removal14 composes that new ordinary authority with independently admitted
+skylight removal; historical mixed1/9/10 reject the new capability. Existing
+component membership permissions are explicit and are not inferred from dimension
+retirement. Nested/undone typed proofs require reader221/extraction219 after
+current dimensions disappear. Direct ordinary raw entity-difference commands
+retain their existing storage meaning. Physical host/cohort and protected phase
+demolition routes still need their own dimension retirement integration.
+Compilation, runtime/history, migration and extraction remain unverified.
 
 Reader220 retains mixed transform intent18 under command52, paired with ordinary
 selection request5. Both inherit the exact closed geometry, room-review,

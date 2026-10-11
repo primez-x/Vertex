@@ -11,6 +11,9 @@ struct ArchitecturalSelectionRemovalIntent {
     // Actual catalog/instance keys; presentation aliases carry no authority.
     std::vector<std::pair<std::string, std::string>> components;
     RoofRemovalAdditionalIdentities roof_additional_identities;
+    // Separate saved authority for exact qualified embedded extent dimensions.
+    // Historical/default intents retain their original deletion consequences.
+    bool complete_component_dimensions = false;
 };
 
 // Closed actual-selection producer. Roof and primitive/component lanes each

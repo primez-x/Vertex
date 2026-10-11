@@ -31993,8 +31993,9 @@ public:
         const std::set<std::string,std::less<>> typed_roots(physical_roots.begin(),physical_roots.end());
         auto candidate=[&] {
             if (physical_roots.empty() && components.empty()) return snapshot.entities();
-            const auto intent=captureArchitecturalSelectionRemoval(snapshot,std::move(physical_roots),components,
+            auto intent=captureArchitecturalSelectionRemoval(snapshot,std::move(physical_roots),components,
                 false,hasComponentPhaseMemberships(snapshot));
+            intent.complete_component_dimensions = intent.object_ids.empty() && !intent.components.empty();
             if (prepared_intent) *prepared_intent=intent;
             const bool complete_memberships=componentMembershipRemovalMode(snapshot,intent);
             const bool complete_roof_memberships=componentMembershipRoofRemovalMode(snapshot,intent);

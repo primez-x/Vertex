@@ -10,6 +10,8 @@ namespace sketch {
 // skylight's roof must never enter object_ids merely because it is the host.
 // Wall/opening/room-review and saved-alternative demolition use their own
 // complete proofs; this intent supplies the ordinary architectural/drawing lane.
+// Closed v4 records complete_component_dimensions with explicit membership flags
+// for a component-only architectural lane; older versions retain their meaning.
 struct ArchitecturalDrawingRemovalIntent {
     ArchitecturalSelectionRemovalIntent architectural;
     DrawingSelectionRemovalIntent drawing;

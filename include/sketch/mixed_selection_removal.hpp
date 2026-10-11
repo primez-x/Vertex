@@ -8,6 +8,10 @@
 
 namespace sketch {
 
+// Mixed removal14 pairs architectural/drawing removal4 with exact qualified
+// component dimension retirement. Historical mixed1/9/10 refuse that capability;
+// its independently admitted ordinary and skylight stages remain unchanged.
+
 // Dialect five retains independently reconstructed coordinated corner owners,
 // their physical/phase consequences, and explicit ordinary/drawing selections.
 // Dialect six alone enables version-two corner catalog-host completion.

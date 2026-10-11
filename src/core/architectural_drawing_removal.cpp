@@ -72,6 +72,9 @@ void bounded(const ArchitecturalDrawingRemovalIntent& intent) {
     if (intent.complete_roof_component_phase_memberships &&
         (!intent.complete_component_phase_memberships || architectural.object_ids.empty()))
         reject("roof membership retirement requires complete component retirement and actual selected owners");
+    if (architectural.complete_component_dimensions &&
+        (!architectural.object_ids.empty() || architectural.components.empty()))
+        reject("qualified component dimension retirement requires an explicit component-only architectural lane");
     if (architectural.roof_additional_identities.size()>destination_limit) reject("roof destination owner budget exceeded");
     std::set<std::string,std::less<>> fresh;
     for (const auto& [owner,ids]:architectural.roof_additional_identities) {
@@ -86,6 +89,8 @@ void bounded(const ArchitecturalDrawingRemovalIntent& intent) {
     if (intent.complete_component_phase_memberships && fresh.contains("complete_component_phase_memberships"))
         reject("roof destination borrows an intent field token");
     if (intent.complete_roof_component_phase_memberships && fresh.contains("complete_roof_component_phase_memberships"))
+        reject("roof destination borrows an intent field token");
+    if (architectural.complete_component_dimensions && fresh.contains("complete_component_dimensions"))
         reject("roof destination borrows an intent field token");
     for (const auto& [owner,ids]:architectural.roof_additional_identities) {
         (void)ids;
@@ -109,7 +114,8 @@ Json encode_architectural_drawing_removal_intent(const ArchitecturalDrawingRemov
     Json components=Json::array();
     for (const auto& [catalog,local]:intent.architectural.components)
         components.push_back({{"catalog_id",catalog},{"instance_id",local}});
-    Json value={{"version",intent.complete_roof_component_phase_memberships ? 3 :
+    Json value={{"version",intent.architectural.complete_component_dimensions ? 4 :
+        intent.complete_roof_component_phase_memberships ? 3 :
         intent.complete_component_phase_memberships ? 2 : 1},
         {"architectural",{{"object_ids",intent.architectural.object_ids},{"components",std::move(components)},
             {"roof_additional_identities",intent.architectural.roof_additional_identities}}},
@@ -117,6 +123,11 @@ Json encode_architectural_drawing_removal_intent(const ArchitecturalDrawingRemov
         {"allow_manufactured_opening_hosts",intent.allow_manufactured_opening_hosts}};
     if (intent.complete_component_phase_memberships) value["complete_component_phase_memberships"]=true;
     if (intent.complete_roof_component_phase_memberships) value["complete_roof_component_phase_memberships"]=true;
+    if (intent.architectural.complete_component_dimensions) {
+        value["complete_component_dimensions"] = true;
+        value["complete_component_phase_memberships"] = intent.complete_component_phase_memberships;
+        value["complete_roof_component_phase_memberships"] = intent.complete_roof_component_phase_memberships;
+    }
     if (value.dump().size()>byte_limit) reject("intent exceeds one MiB");
     return value;
 }
@@ -127,10 +138,23 @@ ArchitecturalDrawingRemovalIntent decode_architectural_drawing_removal_intent(co
         wire_budget(value,nodes,bytes);
         if (value.dump().size()>byte_limit) reject("intent exceeds one MiB");
         if (!value.is_object() || !value.contains("version") || !value.at("version").is_number_integer() ||
-            (value.at("version")!=1 && value.at("version")!=2 && value.at("version")!=3)) reject("intent version is invalid");
-        const bool complete_roof_memberships=value.at("version")==3;
-        const bool complete_memberships=value.at("version")==2 || complete_roof_memberships;
-        if (complete_roof_memberships) {
+            (value.at("version")!=1 && value.at("version")!=2 && value.at("version")!=3 &&
+                value.at("version")!=4)) reject("intent version is invalid");
+        const bool complete_dimensions = value.at("version") == 4;
+        bool complete_roof_memberships=value.at("version")==3;
+        bool complete_memberships=value.at("version")==2 || complete_roof_memberships;
+        if (complete_dimensions) {
+            fields(value,{"version","architectural","drawing","allow_manufactured_opening_hosts",
+                "complete_component_phase_memberships","complete_roof_component_phase_memberships",
+                "complete_component_dimensions"});
+            if (!value.at("complete_component_dimensions").is_boolean() ||
+                !value.at("complete_component_dimensions").get<bool>() ||
+                !value.at("complete_component_phase_memberships").is_boolean() ||
+                !value.at("complete_roof_component_phase_memberships").is_boolean())
+                reject("v4 requires literal dimension retirement and explicit membership flags");
+            complete_memberships = value.at("complete_component_phase_memberships").get<bool>();
+            complete_roof_memberships = value.at("complete_roof_component_phase_memberships").get<bool>();
+        } else if (complete_roof_memberships) {
             fields(value,{"version","architectural","drawing","allow_manufactured_opening_hosts",
                 "complete_component_phase_memberships","complete_roof_component_phase_memberships"});
             if (!value.at("complete_roof_component_phase_memberships").is_boolean() ||
@@ -155,6 +179,7 @@ ArchitecturalDrawingRemovalIntent decode_architectural_drawing_removal_intent(co
             components.size()>selection_limit-objects.size() || !destinations.is_object() ||
             destinations.size()>destination_limit) reject("intent inventories are invalid");
         ArchitecturalDrawingRemovalIntent result;
+        result.architectural.complete_component_dimensions=complete_dimensions;
         result.complete_component_phase_memberships=complete_memberships;
         result.complete_roof_component_phase_memberships=complete_roof_memberships;
         for (const auto& id:objects) {

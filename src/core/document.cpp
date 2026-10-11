@@ -4233,7 +4233,8 @@ static void validate_phase_constraint_fresh_lifetime(const std::map<std::string,
     const auto lifetime_proofs=phase_constraint_lifetime_proofs(command);
     const auto mixed_dialect=has_mixed_selection_removal(command)
         ? validate_mixed_selection_removal_intent(command.mixed_selection_removal_intent).at("version").get<int>() : 0;
-    const bool phase_completion=has_phase_selection_removal(command) || mixed_dialect==4 || mixed_dialect==5 || mixed_dialect==6 || mixed_dialect==7 || mixed_dialect==8 || mixed_dialect==9 || mixed_dialect==10 || mixed_dialect==11 || mixed_dialect==12 || mixed_dialect==13;
+    const bool phase_completion=has_phase_selection_removal(command) || mixed_dialect==4 || mixed_dialect==5 || mixed_dialect==6 || mixed_dialect==7 || mixed_dialect==8 || mixed_dialect==9 || mixed_dialect==10 || mixed_dialect==11 || mixed_dialect==12 || mixed_dialect==13 ||
+        (mixed_dialect==14 && command.mixed_selection_removal_intent.at("ordinary").at("complete_component_phase_memberships")==true);
     const auto current_phase_proofs=phase_completion ? lifetime_proofs.phase_proofs : phase_constraint_authoring_proofs(command);
     const bool phase_drawing_enclosure=phase_completion ||
         (has_independent_drawing_removal(command) && has_phase_constraint_authoring(command));

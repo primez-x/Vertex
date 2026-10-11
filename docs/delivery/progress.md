@@ -14,6 +14,34 @@ changed source does not acquire runtime acceptance without later qualification.
 
 ## Current delivery state
 
+### October 11 qualified embedded component dimension retirement
+
+The mixed transform batch is committed and pushed as 9af3e26a, with the exact
+remote ref matching local HEAD. Current source work adds separate explicit
+component-dimension retirement authority. The current component-only architectural
+Delete/Cut lane opts in; the shared source producer qualifies exact actual
+catalog/instance targets in one bounded geometry batch before removing their
+dimensions with the admitted rows. Other instances in the catalog remain exact.
+Required/inactive/protected baseline dimensions, foreign registries and affected
+opaque references refuse; phase cleanup includes actual retired dimension IDs.
+
+Architectural/drawing removal4 and mixed removal14 retain that authority with
+explicit membership flags; historical deletion dialects preserve their meanings.
+Reader221/extraction219 carry nested and undone proofs. Independent review found a surviving independent extent
+dimension could falsely match a retired embedded catalog/local tuple. The source
+correction qualifies its distinct document owner in the same bounded geometry
+batch, requires both retained envelopes exact, and masks only its validated
+closed target during the tuple-reference check; extra properties/extensions keep
+their refusal policy. Focused correction review approved the integrated source
+with no remaining proved P1/P2 finding. Root scoped whitespace review passes;
+the batch is being committed and backed up.
+This does not complete host-driven transform carry,
+physical-host/mixed-owner/phase dimension retirement, linked-view targets or
+protected replacement lifecycles. No builds/tests/jobs, launches, packages or
+installations ran; compilation, actual Delete/Cut/clipboard interaction,
+cancellation, Undo/redo, storage/migration and production acceptance are unverified.
+All ten production gates remain open and the installed candidate is unchanged.
+
 ### October 11 mixed selection component dimension carry
 
 The embedded move/copy batch is committed and pushed as 213453ea, with the exact

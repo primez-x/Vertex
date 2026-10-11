@@ -2,6 +2,7 @@
 
 #include "sketch/annotation_entity_codec.hpp"
 #include "sketch/assembly_document_adapter.hpp"
+#include "sketch/assembly_dimension_transform.hpp"
 #include "sketch/assembly_geometry.hpp"
 #include "sketch/assembly_phase_membership_transport.hpp"
 #include "sketch/boundary_dimension.hpp"
@@ -932,7 +933,8 @@ Entities derive(const Entities& source, const std::vector<std::string>& selectio
     bool complete_corner_window_removal = false,
     bool complete_corner_catalog_hosts = false,
     bool complete_component_phase_memberships = false,
-    const std::optional<std::pair<std::string, std::string>>& required_component_phase_choice = std::nullopt) {
+    const std::optional<std::pair<std::string, std::string>>& required_component_phase_choice = std::nullopt,
+    bool complete_component_dimensions = false) {
     if (required_component_phase_choice && !complete_component_phase_memberships)
         reject("required component phase choice needs complete component memberships");
     if (complete_corner_catalog_hosts && !complete_corner_window_removal)
@@ -1220,6 +1222,52 @@ Entities derive(const Entities& source, const std::vector<std::string>& selectio
     for (const auto& key : explicit_keys) if (!instances.contains(key)) reject("selected qualified actual component row is missing: " + key.first + "/" + key.second);
     const auto costs = physical_bounds(source, geometry_owners, allow_manufactured_opening_hosts);
     Ids dimension_ids;
+    Ids component_dimension_ids;
+    Ids retained_component_dimension_ids;
+    if (complete_component_dimensions && !instances.empty()) {
+        std::vector<AssemblyDimensionTarget> targets;
+        std::vector<std::string> associated_ids;
+        for (const auto& [id, entity] : source) {
+            if (!can_recognize_boundary_dimension_entity_type(entity.type)) continue;
+            const auto target = field(entity.properties, "target");
+            const auto assembly = target ? field(*target, "assembly") : nullptr;
+            const auto catalog = assembly ? field(*assembly, "catalog_id") : nullptr;
+            const auto instance = assembly ? field(*assembly, "instance_id") : nullptr;
+            if (!catalog || !catalog->is_string() || !instance || !instance->is_string() ||
+                !instances.contains({catalog->get<std::string>(), instance->get<std::string>()})) continue;
+            // The borrowed tuple supplies discovery only. Full closed codecs
+            // refuse affected future/malformed targets before granting removal.
+            const auto decoded = decode_boundary_dimension_entity(entity);
+            if (!decoded.supported() || decoded.version != 6 ||
+                decoded.dimension->kind != BoundaryDimensionKind::assembly_extent ||
+                !decoded.dimension->assembly_target)
+                reject("affected component dimension requires a supported extent target: " + id);
+            if (targets.size() >= selection_limit) reject("associated component dimension budget exceeded");
+            targets.push_back(*decoded.dimension->assembly_target);
+            if (decoded.dimension->assembly_target->component.document_entity_id) {
+                // The document owner distinguishes this surviving independent
+                // root from a retired embedded row using the same local tuple.
+                // Qualification shares the source batch; this supplies no edit
+                // or opaque-reference permission to the retained annotation.
+                retained_component_dimension_ids.insert(id);
+                continue;
+            }
+            if (entity.required) reject("associative dimension owner is required: " + id);
+            removable(phase, id);
+            const auto member = phase.owners.find(id);
+            if (member != phase.owners.end() && selected_registry && member->second != *selected_registry)
+                reject("attached component dimension belongs to a foreign registry: " + id);
+            associated_ids.push_back(id);
+        }
+        if (!targets.empty()) {
+            // One complete actual-source admission qualifies every nested path
+            // and physical span before any associated dimension is retired.
+            (void)resolve_assembly_dimensions(source, targets);
+            validate_ordinary_assembly_dimension_changes(source, associated_ids);
+            component_dimension_ids.insert(associated_ids.begin(), associated_ids.end());
+            dimension_ids.insert(associated_ids.begin(), associated_ids.end());
+        }
+    }
     for (const auto& [id, entity] : source) if (can_recognize_boundary_dimension_entity_type(entity.type) &&
         (touches(entity.properties, names) || touches(entity.extensions, names))) {
         const auto decoded = decode_boundary_dimension_entity(entity);
@@ -1272,7 +1320,17 @@ Entities derive(const Entities& source, const std::vector<std::string>& selectio
         auto phase_retired = retired; phase_retired.insert(dimension_ids.begin(), dimension_ids.end());
         retire_phases(result, source, phase, phase_retired);
         demolish_corners(result, phase, corners);
+    } else if (complete_component_dimensions) {
+        auto phase_retired = retired;
+        phase_retired.insert(component_dimension_ids.begin(), component_dimension_ids.end());
+        retire_phases(result, source, phase, phase_retired);
     } else retire_phases(result, source, phase, retired);
+    for (const auto& id : component_dimension_ids) {
+        auto scratch = source.at(id); scratch.properties.erase("target");
+        if (touches(scratch.properties, names) || touches(scratch.extensions, names) ||
+            qualified_instance_reference(scratch.properties, instances) || qualified_instance_reference(scratch.extensions, instances))
+            reject("attached component dimension has opaque retired references: " + id);
+    }
     if (complete_component_phase_memberships) {
         for (const auto& id : retired) result.erase(id);
         for (const auto& id : dimension_ids) result.erase(id);
@@ -1302,7 +1360,8 @@ Entities derive(const Entities& source, const std::vector<std::string>& selectio
     // never appended to the global physical/presentation retirement namespace.
     OverlayChildren overlays;
     for (const auto& [id, original] : source) {
-        if (retired.contains(id) || (!touches(original.properties, names) && !touches(original.extensions, names))) continue;
+        if (retired.contains(id) || component_dimension_ids.contains(id) ||
+            (!touches(original.properties, names) && !touches(original.extensions, names))) continue;
         const auto scratch = complete_corner_window_removal ? corner_consequence_remainder(original, complete_component_phase_memberships) :
             global_reference_remainder(original,false, complete_component_phase_memberships);
         if (touches(scratch.properties, names) || touches(scratch.extensions, names))
@@ -1363,7 +1422,26 @@ Entities derive(const Entities& source, const std::vector<std::string>& selectio
     }
     validate_completed_architectural_retirement_references(result,names, complete_component_phase_memberships);
     for (const auto& [id, entity] : result) {
-        if (qualified_instance_reference(entity.properties, instances) || qualified_instance_reference(entity.extensions, instances))
+        const auto* reference_properties = &entity.properties;
+        Json retained_properties;
+        if (retained_component_dimension_ids.contains(id)) {
+            const auto& original = source.at(id);
+            if (entity != original || entity.properties.dump() != original.properties.dump() ||
+                entity.extensions.dump() != original.extensions.dump())
+                reject("surviving independent component dimension changed: " + id);
+            const auto decoded = decode_boundary_dimension_entity(original);
+            const auto& owner_id = *decoded.dimension->assembly_target->component.document_entity_id;
+            const auto owner = result.find(owner_id);
+            const auto before_owner = source.find(owner_id);
+            if (owner == result.end() || before_owner == source.end() || owner->second != before_owner->second ||
+                owner->second.properties.dump() != before_owner->second.properties.dump() ||
+                owner->second.extensions.dump() != before_owner->second.extensions.dump())
+                reject("surviving independent dimension owner changed: " + id);
+            retained_properties = entity.properties;
+            retained_properties.erase("target");
+            reference_properties = &retained_properties;
+        }
+        if (qualified_instance_reference(*reference_properties, instances) || qualified_instance_reference(entity.extensions, instances))
             reject("retained owner/component reference requires qualified retirement codec: " + id);
         if (qualified_overlay_reference(entity.properties, id, overlays) || qualified_overlay_reference(entity.extensions, id, overlays))
             reject("retained qualified overlay reference has no retirement codec: " + id);
@@ -1578,11 +1656,12 @@ std::map<std::string, Entity, std::less<>> replay_architectural_object_removal(
     bool allow_manufactured_opening_hosts, std::size_t reserved_native_work, bool complete_hosted_catalog_consequences,
     bool complete_proposed_opening_catalog_consequences, bool complete_corner_window_removal,
     bool complete_corner_catalog_hosts, bool complete_component_phase_memberships,
-    const std::optional<std::pair<std::string, std::string>>& required_component_phase_choice) {
+    const std::optional<std::pair<std::string, std::string>>& required_component_phase_choice,
+    bool complete_component_dimensions) {
     try { return derive(actual, selected_object_ids, explicit_components, allow_manufactured_opening_hosts,
         reserved_native_work, false, complete_hosted_catalog_consequences, complete_proposed_opening_catalog_consequences,
         complete_corner_window_removal, complete_corner_catalog_hosts, complete_component_phase_memberships,
-        required_component_phase_choice); }
+        required_component_phase_choice, complete_component_dimensions); }
     catch (const Json::exception& error) { reject(std::string("malformed actual source: ") + error.what()); }
     catch (const Standard_Failure& error) {
         const auto* message = error.GetMessageString();
@@ -1595,10 +1674,12 @@ void preflight_architectural_object_removal(const Entities& actual,
     std::size_t reserved_native_work, bool complete_hosted_catalog_consequences,
     bool complete_proposed_opening_catalog_consequences, bool complete_corner_window_removal,
     bool complete_corner_catalog_hosts, bool complete_component_phase_memberships,
-    const std::optional<std::pair<std::string, std::string>>& required_component_phase_choice) {
+    const std::optional<std::pair<std::string, std::string>>& required_component_phase_choice,
+    bool complete_component_dimensions) {
     try { (void)derive(actual, selected_object_ids, explicit_components, true, reserved_native_work, true,
         complete_hosted_catalog_consequences, complete_proposed_opening_catalog_consequences, complete_corner_window_removal,
-        complete_corner_catalog_hosts, complete_component_phase_memberships, required_component_phase_choice); }
+        complete_corner_catalog_hosts, complete_component_phase_memberships, required_component_phase_choice,
+        complete_component_dimensions); }
     catch (const Json::exception& error) { reject(std::string("malformed actual source: ") + error.what()); }
 }
 std::vector<std::pair<std::string, std::string>> complete_proposed_opening_catalog_consequence_keys(
