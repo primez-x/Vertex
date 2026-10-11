@@ -64,6 +64,16 @@ namespace sketch {
 [[nodiscard]] std::map<std::string, Entity, std::less<>> replay_ordinary_selection_edit_candidate(
     const DocumentSnapshot& source, const nlohmann::json& request);
 
+// Pre-review derivation only: validates the complete v4 request with an empty
+// geometry.room_reviews roster, but independently admits only its nongeometry
+// producers against the original source. Geometry is neither replayed nor
+// approved by this helper. Geometry-only selections return the exact admitted
+// original map; they never manufacture an invalid zero-target request.
+// The map conveys no geometry, room-review or publication authority.
+[[nodiscard]] std::map<std::string, Entity, std::less<>>
+replay_ordinary_selection_edit_nongeometry_preparation(
+    const DocumentSnapshot& source, const nlohmann::json& request);
+
 // Validates the closed request and returns v3/v4's canonical room review intents in
 // their declared replay order, or an empty vector for v1/v2 or null geometry.
 [[nodiscard]] std::vector<nlohmann::json> ordinary_selection_edit_room_reviews(

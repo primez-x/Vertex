@@ -14,6 +14,40 @@ changed source does not acquire runtime acceptance without later qualification.
 
 ## Current delivery state
 
+### October 10 mixed plan gesture preparation and routing - source implementation
+
+The sealed original-source mixed preparation now derives complete physical,
+annotation, reference and roof-child proposals before room decisions. Its
+copied drawing snapshot is explicitly read-only, retains original history and
+save metadata, and carries no admission certificate. Completion authenticates
+the unchanged full source and replays every required room decision. Independent
+source review approves this separation; existing wire dialects remain unchanged.
+
+The controller and canvas now connect complete mixed plan body movement and
+common-pivot rotation through background proposals, captured ordinary IDs and
+typed child mouths, exact release serials and one final publication. Both
+selection rosters, order and primary are restored. Numeric Transform shares
+the same preparation, including the architectural toolbar entry point.
+The canvas uses a visible common frame without promoting incidental roof hosts
+to ordinary selected objects. Resizing is still disabled for this mixed route.
+
+Independent review found that regenerating a generic scene discarded saved-view
+crop, restrictions and appearance. The correction captures the actual retained
+presentations and eligible physical inputs, reuses the established view-aware
+geometry projection, and extracts its source-derived replacement alias adapter.
+Selected annotation/reference values merge into captured presentations; a whole
+generic floor scene is not substituted during dragging. Floor tracing scope is
+retained. Independent source re-review approves the correction, including
+explicit empty clipped presentations and withheld room labels. Full snapshot
+sharing avoids repeated history serialization while retaining save/state fences.
+Root reviewed the integrated source; source whitespace is clean. No build, test, probe, native job,
+launch, package or installation has run; runtime behavior remains unverified.
+
+Remaining mixed work includes direct Site/native gestures, complete Properties,
+geometry and directional scaling, broader reflections and ordinary alternative
+replacement. The installed candidate remains unchanged and all ten production
+gates are open. This batch does not establish production or usability acceptance.
+
 ### October 10 complete mixed numeric Transform - source integration
 
 The room-dialog adapter is committed and pushed as 7ecb4037 with exact

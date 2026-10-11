@@ -1,7 +1,9 @@
 #pragma once
 
 #include "sketch/document.hpp"
+#include "sketch/selection_geometry_transform.hpp"
 
+#include <optional>
 #include <string_view>
 #include <vector>
 
@@ -16,6 +18,49 @@ public:
     MixedSelectionEditReplayScope(const MixedSelectionEditReplayScope&) = delete;
     MixedSelectionEditReplayScope& operator=(const MixedSelectionEditReplayScope&) = delete;
 };
+
+// Sealed original-source gesture preparation. The drawing snapshot contains all
+// independently derived physical/nongeometry/roof consequences, with retained
+// rooms still awaiting the typed geometry review. It is read-only, has no
+// Document admission token, and is never a command or publication authority.
+class MixedSelectionEditPreparation final {
+public:
+    [[nodiscard]] const nlohmann::json& intent() const noexcept;
+    [[nodiscard]] const std::optional<SelectionGeometryTransformPreparation>&
+    geometry_preparation() const noexcept;
+    [[nodiscard]] const DocumentSnapshot& preview_snapshot() const noexcept;
+    [[nodiscard]] const std::string& source_snapshot_digest() const noexcept;
+
+private:
+    MixedSelectionEditPreparation(const DocumentSnapshot& source, nlohmann::json intent,
+        std::optional<SelectionGeometryTransformPreparation> geometry,
+        std::map<std::string, Entity, std::less<>> drawing_entities);
+
+    nlohmann::json intent_;
+    std::optional<SelectionGeometryTransformPreparation> geometry_;
+    DocumentSnapshot preview_;
+    std::string source_digest_;
+
+    friend MixedSelectionEditPreparation prepare_mixed_selection_edit(
+        const DocumentSnapshot&, const nlohmann::json&, const nlohmann::json&,
+        const nlohmann::json&, std::string_view, const nlohmann::json&);
+};
+
+// Accepts only ordinary/mixed dialect four, with geometry.room_reviews empty.
+// Every leaf and the geometry preparation derive the same original snapshot;
+// old room state in the drawing preview does not discharge review requirements.
+[[nodiscard]] MixedSelectionEditPreparation prepare_mixed_selection_edit(
+    const DocumentSnapshot& source, const nlohmann::json& ordinary_request,
+    const nlohmann::json& roof_authoring, const nlohmann::json& roof_members,
+    std::string_view message, const nlohmann::json& roof_identity_requests = nlohmann::json::array());
+
+// Rechecks the full original source, including save state, and replays every
+// mandatory room decision through the complete historical mixed replay. Returns
+// the canonical completed intent for existing envelope52 admission; this does
+// not publish a command or give the drawing snapshot authoring authority.
+[[nodiscard]] nlohmann::json complete_mixed_selection_edit(
+    const DocumentSnapshot& source, const MixedSelectionEditPreparation& prepared,
+    const std::vector<nlohmann::json>& room_reviews);
 
 // Versions one/two/three compose explicit ordinary selections with actual typed
 // skylight children. Both complete leaves replay the original full snapshot.

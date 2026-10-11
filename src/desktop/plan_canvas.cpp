@@ -2283,8 +2283,10 @@ void PlanCanvas::renderSceneWithTransform(QPainter& painter, const QRectF& viewp
         }
         if (!m_selected_roof_openings.empty()) {
             drawRoofOpeningControls(painter,viewport);
-            if (hasMixedSemanticSelection() && m_selection_controls_visible)
+            if (hasMixedSemanticSelection() && m_selection_controls_visible) {
+                drawSelectionFrame(painter,viewport,annotation_footprints);
                 drawSelectionCaption(painter,viewport,background);
+            }
         } else if (m_selection_controls_visible) {
             drawSelectionFrame(painter, viewport, annotation_footprints);
             drawVertexHandles(painter, viewport);
@@ -2689,6 +2691,7 @@ void PlanCanvas::setEntitiesMovePreviewRequested(
 }
 
 void PlanCanvas::captureOpeningMove(QPointF point) {
+    if (mixedRigidSelectionEnabled()) return;
     if (m_move_ids.size() != 1) return;
     ensureRetainedSelection();
     for (const auto index : m_selected_entity_indices) {
@@ -2730,6 +2733,7 @@ void PlanCanvas::captureOpeningMove(QPointF point) {
 }
 
 void PlanCanvas::updateEntitiesMovePreview(QPointF point, Qt::KeyboardModifiers modifiers) {
+    if (!m_mixed_selection_capture.empty() && !mixedSelectionCaptureCurrent()) { resetGesture(); return; }
     m_move_preview_pointer = point;
     m_move_preview_fine = modifiers.testFlag(Qt::ShiftModifier) || !m_snap_enabled || m_raw_point_input;
     std::optional<Vec2> delta;
@@ -2787,11 +2791,12 @@ void PlanCanvas::updateEntitiesMovePreview(QPointF point, Qt::KeyboardModifiers 
     m_move_entities_preview.clear();
     m_move_entities_preview_index.clear();
     m_move_labels_preview.clear(); m_move_references_preview.clear();
+    m_move_child_controls_preview.clear();
     m_move_preview_pending = false;
-    m_move_preview_exact = m_opening_move_active;
+    m_move_preview_exact = m_opening_move_active || !m_mixed_selection_capture.empty();
     m_move_preview_valid = false;
     m_move_preview_request_in_progress = false;
-    if (!delta || (m_opening_move_active && !m_entities_move_preview_requested)) {
+    if (!delta || (m_move_preview_exact && !m_entities_move_preview_requested)) {
         setCursor(Qt::ForbiddenCursor);
         return;
     }
@@ -2816,6 +2821,7 @@ void PlanCanvas::updateEntitiesMovePreview(QPointF point, Qt::KeyboardModifiers 
 }
 
 bool PlanCanvas::markEntitiesMovePreviewPending(std::uint64_t serial) {
+    if (!m_mixed_selection_capture.empty() && !mixedSelectionCaptureCurrent()) { resetGesture(); return false; }
     if (serial != m_move_preview_serial || !m_move_preview_request_in_progress ||
         m_left_gesture != LeftGesture::object_move || !m_move_preview_delta) return false;
     m_move_preview_exact = true;
@@ -2824,19 +2830,23 @@ bool PlanCanvas::markEntitiesMovePreviewPending(std::uint64_t serial) {
     m_move_entities_preview.clear();
     m_move_entities_preview_index.clear();
     m_move_labels_preview.clear(); m_move_references_preview.clear();
+    m_move_child_controls_preview.clear();
     return true;
 }
 
 bool PlanCanvas::completeEntitiesMovePreview(std::uint64_t serial,
-    std::optional<std::vector<CanvasEntity>> result, std::vector<CanvasLabel> labels, std::vector<CanvasReference> references) {
+    std::optional<std::vector<CanvasEntity>> result, std::vector<CanvasLabel> labels, std::vector<CanvasReference> references,
+    std::optional<std::vector<CanvasRoofOpeningControls>> child_controls) {
     if (!m_move_preview_pending) return false;
-    return applyEntitiesMovePreview(serial, std::move(result), std::move(labels), std::move(references));
+    return applyEntitiesMovePreview(serial, std::move(result), std::move(labels), std::move(references), std::move(child_controls));
 }
 
 bool PlanCanvas::applyEntitiesMovePreview(std::uint64_t serial,
-    std::optional<std::vector<CanvasEntity>> result, std::vector<CanvasLabel> labels, std::vector<CanvasReference> references) {
+    std::optional<std::vector<CanvasEntity>> result, std::vector<CanvasLabel> labels, std::vector<CanvasReference> references,
+    std::optional<std::vector<CanvasRoofOpeningControls>> child_controls) {
     if (serial != m_move_preview_serial || m_left_gesture != LeftGesture::object_move ||
         !m_move_preview_delta) return false;
+    if (!m_mixed_selection_capture.empty() && !mixedSelectionCaptureCurrent()) { resetGesture(); return false; }
     // Completion inside a synchronous callback owns admission over its return.
     m_move_preview_request_in_progress = false;
     m_move_preview_pending = false;
@@ -2865,9 +2875,14 @@ bool PlanCanvas::applyEntitiesMovePreview(std::uint64_t serial,
         for (const auto& reference : m_move_references_preview.empty() ? m_references : m_move_references_preview)
             if (reference.selected) admitted_ids.insert(reference.id);
     m_move_preview_valid = result && valid_reference_previews(m_move_references_preview, m_references) &&
+        (m_mixed_selection_capture.empty() || validMixedChildPreview(child_controls)) &&
+        (m_mixed_selection_capture.empty() || validMixedOrdinaryPreview(
+            m_move_entities_preview,m_move_labels_preview,m_move_references_preview)) &&
         unambiguous_entity_presentations(m_move_entities_preview, m_entities) &&
         std::all_of(m_move_ids.begin(), m_move_ids.end(),
             [&](const auto& id) { return admitted_ids.contains(id); });
+    m_move_child_controls_preview = m_move_preview_valid && !m_mixed_selection_capture.empty()
+        ? std::move(*child_controls) : std::vector<CanvasRoofOpeningControls>{};
     if (!m_move_preview_valid) {
         m_move_entities_preview.clear();
         m_move_entities_preview_index.clear();
@@ -2888,6 +2903,7 @@ bool PlanCanvas::applyEntitiesMovePreview(std::uint64_t serial,
     if (m_move_release_pending) {
         QTimer::singleShot(0,this,[this,serial] {
             if (serial != m_move_preview_serial || !m_move_release_pending || !m_move_preview_delta) return;
+            if (!m_mixed_selection_capture.empty() && !mixedSelectionCaptureCurrent()) { resetGesture(); return; }
             const auto ids=m_move_ids;
             const auto delta=*m_move_preview_delta;
             const auto accepted=m_move_preview_valid;
@@ -3175,7 +3191,7 @@ bool PlanCanvas::eventFilter(QObject* watched, QEvent* event) {
         resetTouchInput();
     } else if (event->type() == QEvent::ApplicationStateChange && watched == qApp &&
                QApplication::applicationState() != Qt::ApplicationActive &&
-               (m_roof_opening_capture || !m_roof_opening_group_capture.empty() ||
+               (m_roof_opening_capture || !m_roof_opening_group_capture.empty() || !m_mixed_selection_capture.empty() ||
                 m_component_placement_preview || m_component_placement_preview_pending)) {
         // A released preview still owns typed authority without a mouse grab.
         // Application deactivation must retire it even before window/focus events.
@@ -3194,7 +3210,8 @@ bool PlanCanvas::event(QEvent* event) {
     case QEvent::StyleChange:
     case QEvent::ScreenChangeInternal:
     case QEvent::DevicePixelRatioChange:
-        if (m_generated_label_move_identity || m_roof_opening_capture || !m_roof_opening_group_capture.empty()) resetGesture();
+        if (m_generated_label_move_identity || m_roof_opening_capture || !m_roof_opening_group_capture.empty() ||
+            !m_mixed_selection_capture.empty()) resetGesture();
         if (event->type() == QEvent::ScreenChangeInternal ||
             event->type() == QEvent::DevicePixelRatioChange) ++m_navigation_generation;
         // System metrics can change while serialized QFont values remain equal.
@@ -3501,7 +3518,25 @@ void PlanCanvas::pointerPress(QPointF position, Qt::MouseButton button,
         m_pan_view_start = m_view_center;
         return;
     }
-    if (selectionInteractionEnabled()) {
+    const bool mixed_handle = mixedRigidSelectionEnabled() && selectionInteractionEnabled() &&
+        selectionHandleAt(position,QRectF(rect())) != SelectionHandle::none;
+    if (mixedRigidSelectionEnabled() && selectionInteractionEnabled() && !mixed_handle &&
+        selectionFrameContains(position,QRectF(rect())) && m_entities_move_started &&
+        m_entities_move_preview_requested && m_entities_move_requested) {
+        m_left_gesture=LeftGesture::object_move;
+        m_move_ids=m_selected_ids;
+        if (!captureMixedSelection()) { resetGesture(); return; }
+        if (const auto child=roofOpeningAt(position); child && roofOpeningSelected(child->target))
+            m_pressed_roof_opening=child->target;
+        const QPointer<PlanCanvas> guard(this);
+        const auto serial=m_move_preview_serial;
+        const auto callback=m_entities_move_started;
+        try { callback(m_move_ids); }
+        catch (...) { if (guard) resetGesture(); return; }
+        if (!guard || serial!=m_move_preview_serial || !mixedSelectionCaptureCurrent()) return;
+        return;
+    }
+    if (selectionInteractionEnabled() && !mixed_handle) {
         const auto group_grip=roofOpeningGroupHandleAt(position);
         const auto group_frame=selectedRoofOpeningGroupFrame();
         if (!m_pressed_generated_label && group_frame &&
@@ -3578,7 +3613,7 @@ void PlanCanvas::pointerPress(QPointF position, Qt::MouseButton button,
             return;
         }
     }
-    if (selectionInteractionEnabled() && !m_wall_preview && m_boundary_preview.empty() &&
+    if (!mixed_handle && selectionInteractionEnabled() && !m_wall_preview && m_boundary_preview.empty() &&
         m_area_class_caption.isEmpty()) {
         const auto identity = m_pressed_generated_label;
         const auto label = identity ? labelPresentation(*identity) : std::nullopt;
@@ -3671,7 +3706,7 @@ void PlanCanvas::pointerPress(QPointF position, Qt::MouseButton button,
     const auto handle = selectionInteractionEnabled()
         ? selectionHandleAt(position, QRectF(rect())) : SelectionHandle::none;
     if (handle != SelectionHandle::none) {
-        m_move_ids = selectedIds();
+        m_move_ids = mixedRigidSelectionEnabled() ? m_selected_ids : selectedIds();
         m_transform_frame_start = selectionFrame(QRectF(rect()));
         if (!m_transform_frame_start) { resetGesture(); return; }
         m_transform_center = m_transform_frame_start->center();
@@ -3708,7 +3743,7 @@ void PlanCanvas::pointerPress(QPointF position, Qt::MouseButton button,
             m_left_gesture == LeftGesture::selection_axis_resize) {
             m_transform_source_id = m_move_ids.size() == 1 ? m_move_ids.front() : QString{};
             m_transform_pivot = toModel(m_transform_center, rect());
-            if (m_move_ids.size() > 1) {
+            if (m_move_ids.size() > 1 || mixedRigidSelectionEnabled()) {
                 // Retain exact presentation identities and the original group
                 // frame before a provider can refresh the source or nest events.
                 m_transform_group_ids = m_move_ids;
@@ -3717,6 +3752,7 @@ void PlanCanvas::pointerPress(QPointF position, Qt::MouseButton button,
                 if (!axes) { resetGesture(); return; }
                 m_transform_pivot = axes->center;
                 m_transform_preview_exact = true;
+                if (mixedRigidSelectionEnabled() && !captureMixedSelection()) { resetGesture(); return; }
                 const QPointer<PlanCanvas> guard(this);
                 const auto serial = m_transform_preview_serial;
                 const auto callback = m_entities_transform_started;
@@ -3724,6 +3760,7 @@ void PlanCanvas::pointerPress(QPointF position, Qt::MouseButton button,
                 catch (...) { if (guard) resetGesture(); return; }
                 if (!guard || serial != m_transform_preview_serial ||
                     m_transform_group_ids.isEmpty()) return;
+                if (!m_mixed_selection_capture.empty() && !mixedSelectionCaptureCurrent()) { resetGesture(); return; }
             } else if (!m_transform_source_id.isEmpty() && m_entity_transform_started)
                 m_entity_transform_started(m_transform_source_id);
         }
@@ -3754,6 +3791,7 @@ void PlanCanvas::pointerPress(QPointF position, Qt::MouseButton button,
 }
 
 void PlanCanvas::pointerMove(QPointF position, Qt::KeyboardModifiers modifiers) {
+    if (!m_mixed_selection_capture.empty() && !mixedSelectionCaptureCurrent()) { resetGesture(); return; }
     updatePlacementModifiers(modifiers);
     m_pending_dimension_space_tap.reset();
     if (m_overview_dragging) {
@@ -4194,6 +4232,7 @@ void PlanCanvas::pointerRelease(QPointF position, Qt::MouseButton button,
             m_pan_view_start.x==m_view_center.x && m_pan_view_start.y==m_view_center.y;
         // Hosted body moves commit the final constrained midpoint displacement;
         // recomputing a free XY drag would lose the captured absolute station.
+        if (!m_mixed_selection_capture.empty() && !mixedSelectionCaptureCurrent()) { resetGesture(); return; }
         const auto delta = gesture == LeftGesture::object_move
             ? m_move_preview_delta.value_or(Vec2{}) : dragDelta(position);
         if (gesture==LeftGesture::object_move && dragging && m_move_preview_pending) {
@@ -4495,6 +4534,11 @@ void PlanCanvas::resetGesture() {
     m_clear_selection_on_click = false;
     m_overlap_selection = false;
     m_move_ids.clear();
+    m_mixed_selection_capture.clear();
+    m_mixed_selection_ids.clear();
+    m_mixed_selection_labels.clear();
+    m_move_child_controls_preview.clear();
+    m_transform_child_controls_preview.clear();
     m_move_preview_delta.reset();
     ++m_move_preview_serial;
     m_move_entities_preview.clear();
@@ -4751,6 +4795,11 @@ QRectF PlanCanvas::labelLayoutBounds(const CanvasLabel& label, double pixels_per
 
 std::optional<QPointF> PlanCanvas::selectionRotationHandlePosition() const {
     const QRectF viewport(rect());
+    if (mixedRigidSelectionEnabled()) {
+        if (!m_selection_controls_visible || !mixedRotationEnabled() || !selectionFrame(viewport)) return std::nullopt;
+        return selectionControlTransform(viewport).map(selectionRotationPoint(
+            viewport,selectionAnnotationFootprints(viewport,font())));
+    }
     if (!m_selection_controls_visible || !m_selection_rotate_enabled ||
         (selectedIds().size() > 1 && !m_wall_group_rotation_enabled) ||
         (selectedIds().size()!=1 && !wallGroupRotationAxes()) ||
@@ -4841,9 +4890,11 @@ std::optional<QRectF> PlanCanvas::computeSelectionBounds(const QRectF& viewport)
 }
 
 std::optional<QRectF> PlanCanvas::selectionFrame(const QRectF& viewport) const {
-    // A child-only cohort owns its specialized controls. A mixed cohort has
-    // no common transform implementation yet; do not expose a subset frame.
-    if (!m_selected_roof_openings.empty()) return std::nullopt;
+    // Child-only cohorts retain specialized controls. A mixed frame is complete
+    // only when every ordinary member and actual child mouth is available.
+    if (!m_selected_roof_openings.empty())
+        return mixedRigidSelectionEnabled() && mixedSelectionAxes()
+            ? computeSelectionFrame(viewport) : std::nullopt;
     if (hasInteractivePresentation()) return computeSelectionFrame(viewport);
     const auto key = retainedSelectionKey(viewport);
     if (m_selection_frame_cache.key != key) {
@@ -4926,6 +4977,7 @@ const CanvasReference& PlanCanvas::interactiveReference(const CanvasReference& r
 }
 
 std::optional<CanvasSelectionFrame> PlanCanvas::selectionAxes() const {
+    if (mixedRigidSelectionEnabled()) return mixedSelectionAxes();
     if (hasInteractivePresentation()) return computeSelectionAxes();
     // Oriented axes are in model space. Panning does not change them.
     const auto key = retainedSelectionKey({}, true);
@@ -5609,6 +5661,14 @@ QPointF PlanCanvas::selectionRotationPoint(
 
 PlanCanvas::SelectionHandle PlanCanvas::selectionHandleAt(
     QPointF point, const QRectF& viewport) const {
+    if (mixedRigidSelectionEnabled()) {
+        if (!mixedRotationEnabled() || !selectionFrame(viewport)) return SelectionHandle::none;
+        const auto transform=selectionControlTransform(viewport);
+        const auto footprints=selectionAnnotationFootprints(viewport,font());
+        const auto handle=transform.map(selectionRotationPoint(viewport,footprints));
+        return QRectF(handle.x()-12,handle.y()-12,24,24).contains(point)
+            ? SelectionHandle::rotate : SelectionHandle::none;
+    }
     if (!m_selected_roof_openings.empty() || selectedOpening()) return SelectionHandle::none;
     const bool group = selectedIds().size() > 1;
     if (selectedIds().size() != 1 && !wallGroupRotationAxes()) return SelectionHandle::none;
@@ -5803,7 +5863,8 @@ bool valid_roof_opening_frame(const CanvasRoofOpeningFrame& frame) {
 }
 
 void PlanCanvas::setRoofOpeningControls(std::vector<CanvasRoofOpeningControls> controls) {
-    if (m_roof_opening_capture || m_pressed_roof_opening || !m_roof_opening_group_capture.empty()) resetGesture();
+    if (m_roof_opening_capture || m_pressed_roof_opening || !m_roof_opening_group_capture.empty() ||
+        !m_mixed_selection_capture.empty()) resetGesture();
     ++m_roof_opening_preview_serial;
     ++m_roof_opening_controls_generation;
     std::erase_if(controls, [](const auto& control) {
@@ -5822,6 +5883,198 @@ void PlanCanvas::setRoofOpeningControls(std::vector<CanvasRoofOpeningControls> c
     // Control absence is a projection restriction, not logical retirement.
     if (m_last_mouse_position) updatePointerCursor(*m_last_mouse_position);
     update();
+}
+
+void PlanCanvas::setMixedSelectionRigidTransformEnabled(bool enabled) {
+    if (m_mixed_selection_rigid_transform_enabled==enabled) return;
+    if (!m_mixed_selection_capture.empty()) resetGesture();
+    m_mixed_selection_rigid_transform_enabled=enabled;
+    invalidateRetainedSelection();
+    if (m_last_mouse_position) updatePointerCursor(*m_last_mouse_position);
+    update();
+}
+
+bool PlanCanvas::mixedRotationEnabled() const {
+    return mixedRigidSelectionEnabled() && m_selection_rotate_enabled &&
+        m_entities_transform_started && m_entities_transform_preview_requested && m_entities_transform_requested;
+}
+
+bool PlanCanvas::captureMixedSelection() {
+    if (!mixedRigidSelectionEnabled() || !mixedSelectionAxes()) return false;
+    m_mixed_selection_capture.clear();
+    for (const auto& target:m_selected_roof_openings) {
+        const auto found=std::find_if(m_roof_opening_controls.begin(),m_roof_opening_controls.end(),
+            [&](const auto& control) { return control.target==target; });
+        if (found==m_roof_opening_controls.end()) { m_mixed_selection_capture.clear(); return false; }
+        m_mixed_selection_capture.push_back(*found);
+    }
+    m_mixed_selection_ids=m_selected_ids;
+    m_mixed_selection_labels=m_selected_generated_labels;
+    m_mixed_controls_generation=m_roof_opening_controls_generation;
+    m_mixed_navigation_generation=m_navigation_generation;
+    m_mixed_view_center=m_view_center;
+    m_mixed_view_scale=m_scale;
+    m_mixed_view_size=size();
+    m_mixed_view_dpr=devicePixelRatioF();
+    return true;
+}
+
+bool PlanCanvas::mixedSelectionCaptureCurrent() const {
+    if (!mixedRigidSelectionEnabled() || m_mixed_selection_capture.empty() ||
+        !selectionInteractionEnabled() || m_point_placement_requested ||
+        m_mixed_selection_ids!=m_selected_ids || m_mixed_selection_ids.size()!=selectedIds().size() ||
+        !std::all_of(m_mixed_selection_ids.begin(),m_mixed_selection_ids.end(),
+            [&](const auto& id) { return selectedIds().contains(id); }) ||
+        m_mixed_selection_labels!=m_selected_generated_labels ||
+        m_mixed_selection_capture.size()!=m_selected_roof_openings.size() ||
+        m_mixed_controls_generation!=m_roof_opening_controls_generation ||
+        m_mixed_navigation_generation!=m_navigation_generation ||
+        m_mixed_view_center.x!=m_view_center.x || m_mixed_view_center.y!=m_view_center.y ||
+        m_mixed_view_scale!=m_scale || m_mixed_view_size!=size() || m_mixed_view_dpr!=devicePixelRatioF()) return false;
+    for (std::size_t i=0;i<m_mixed_selection_capture.size();++i)
+        if (m_mixed_selection_capture[i].target!=m_selected_roof_openings[i]) return false;
+    return true;
+}
+
+bool PlanCanvas::validMixedChildPreview(
+    const std::optional<std::vector<CanvasRoofOpeningControls>>& controls) const {
+    if (!mixedSelectionCaptureCurrent() || !controls || controls->size()!=m_mixed_selection_capture.size()) return false;
+    for (std::size_t i=0;i<controls->size();++i)
+        if ((*controls)[i].target!=m_mixed_selection_capture[i].target ||
+            (*controls)[i].presentation_owner_id!=m_mixed_selection_capture[i].presentation_owner_id ||
+            !valid_roof_opening_frame((*controls)[i].frame)) return false;
+    return true;
+}
+
+bool PlanCanvas::validMixedOrdinaryPreview(const std::vector<CanvasEntity>& entities,
+    const std::vector<CanvasLabel>& labels,const std::vector<CanvasReference>& references) const {
+    const auto valid_boundary=[](const Boundary& boundary) {
+        try {
+            for (const auto& segment:boundary) {
+                if (!std::isfinite(segment.sweep_radians)) return false;
+                const auto bounds=segment_bounds(segment);
+                if (!std::isfinite(bounds.minimum.x) || !std::isfinite(bounds.minimum.y) ||
+                    !std::isfinite(bounds.maximum.x) || !std::isfinite(bounds.maximum.y)) return false;
+            }
+            return true;
+        } catch (const std::exception&) { return false; }
+    };
+    for (const auto& identity:selectedEntityPresentations()) {
+        const CanvasEntity* matched=nullptr;
+        for (const auto& entity:entities)
+            if (entity.id==identity.id && entity.presentation_key==identity.presentation_key) {
+                if (matched || entity.type!=identity.type || !valid_boundary(entity.segments) ||
+                    !valid_boundary(entity.hit_segments) ||
+                    (entity.stroke_segments && !valid_boundary(*entity.stroke_segments)) ||
+                    std::any_of(entity.holes.begin(),entity.holes.end(),[&](const auto& hole) { return !valid_boundary(hole); })) return false;
+                matched=&entity;
+            }
+        // An exact captured presentation may become fully clipped in its
+        // saved view. Its explicit empty override suppresses the source ink;
+        // the complete source-bound provider still owns the physical proposal.
+        if (!matched) return false;
+    }
+    for (const auto& source:m_labels) {
+        if (!source.selected || !drawable_label(source)) continue;
+        if (std::count_if(labels.begin(),labels.end(),[&](const auto& label) {
+            // Empty text is the existing explicit override for a withheld
+            // stale room callout. Keep its exact presentation identity instead
+            // of retaining the old measurement or rejecting the whole proposal.
+            return label_presentation_key(label)==label_presentation_key(source) &&
+                (drawable_label(label) || label.text.isEmpty()) && std::isfinite(label.scale) && label.scale>0.0 &&
+                std::isfinite(label.position.x) && std::isfinite(label.position.y) && std::isfinite(label.rotation_radians);
+        })!=1) return false;
+    }
+    for (const auto& source:m_references) {
+        if (!source.selected) continue;
+        if (std::count_if(references.begin(),references.end(),[&](const auto& reference) {
+            return reference.id==source.id;
+        })!=1) return false;
+    }
+    return true;
+}
+
+std::optional<CanvasSelectionFrame> PlanCanvas::mixedSelectionAxes() const {
+    if (!mixedRigidSelectionEnabled() || !std::isfinite(m_scale) || m_scale<=0.0) return std::nullopt;
+    ensureRetainedSelection();
+    const auto angle=m_transform_group_frame && m_transform_preview_valid
+        ? m_transform_group_frame->rotation_radians+m_transform_rotation_preview : 0.0;
+    const auto c=std::cos(angle), s=std::sin(angle);
+    const auto local=[&](Vec2 point) { return Vec2{c*point.x+s*point.y,-s*point.x+c*point.y}; };
+    std::optional<Bounds2> bounds;
+    bool valid=true;
+    QSet<QString> covered;
+    const auto include=[&](Vec2 point) {
+        if (!std::isfinite(point.x) || !std::isfinite(point.y)) { valid=false; return; }
+        point=local(point);
+        if (!bounds) bounds=Bounds2{point,point};
+        else {
+            bounds->minimum.x=std::min(bounds->minimum.x,point.x);
+            bounds->minimum.y=std::min(bounds->minimum.y,point.y);
+            bounds->maximum.x=std::max(bounds->maximum.x,point.x);
+            bounds->maximum.y=std::max(bounds->maximum.y,point.y);
+        }
+    };
+    const auto include_polygon=[&](const QPolygonF& polygon) {
+        for (const auto& point:polygon) include(toModel(point,rect()));
+    };
+    for (const auto index:m_selected_entity_indices) {
+        const auto& entity=interactiveEntity(m_entities[index]);
+        if (!m_selected_ids.contains(entity.id)) continue;
+        for (const auto& segment:entity.segments) {
+            try {
+                const auto extent=segment_bounds(Segment{local(segment.start),local(segment.end),segment.sweep_radians});
+                // Extrema are already in frame-local coordinates.
+                const auto world=[&](Vec2 point) { return Vec2{c*point.x-s*point.y,s*point.x+c*point.y}; };
+                include(world(extent.minimum)); include(world(extent.maximum));
+                covered.insert(entity.id);
+            } catch (const std::exception&) { valid=false; }
+        }
+        if (const auto frame=entitySelectionAxes(entity); frame && (entity.svg_symbol || entity.resize_frame)) {
+            const auto fc=std::cos(frame->rotation_radians), fs=std::sin(frame->rotation_radians);
+            for (const auto signs:{Vec2{-1,-1},Vec2{1,-1},Vec2{1,1},Vec2{-1,1}}) {
+                const auto x=signs.x*frame->width_metres*.5,y=signs.y*frame->depth_metres*.5;
+                include({frame->center.x+fc*x-fs*y,frame->center.y+fs*x+fc*y});
+            }
+            covered.insert(entity.id);
+        }
+    }
+    for (const auto& label:positionedLabels(font(),this,m_scale,logicalDpiY(),false)) {
+        if (!label.selected || !drawable_label(label)) continue;
+        const auto layout=label_layout(label,font(),this,m_scale,logicalDpiY());
+        include_polygon(label_transform(label,toScreen(label.position,rect())).map(QPolygonF(layout.bounds)));
+        if (m_selected_ids.contains(label.id)) covered.insert(label.id);
+    }
+    for (const auto& retained:m_references) {
+        const auto& reference=interactiveReference(retained);
+        if (!reference.selected || !m_selected_ids.contains(reference.id)) continue;
+        const auto unit=reference.metres_per_source_unit*reference.scale;
+        if (!reference.visible || reference.image.isNull() || !std::isfinite(unit) || unit<=0 ||
+            !std::isfinite(reference.rotation_degrees)) { valid=false; continue; }
+        const auto radians=reference.rotation_degrees*pi/180;
+        const auto rc=std::cos(radians),rs=std::sin(radians);
+        for (const auto signs:{Vec2{-1,-1},Vec2{1,-1},Vec2{1,1},Vec2{-1,1}}) {
+            const auto x=signs.x*reference.image.width()*unit*.5,y=signs.y*reference.image.height()*unit*.5;
+            include({reference.position.x+rc*x-rs*y,reference.position.y+rs*x+rc*y});
+        }
+        covered.insert(reference.id);
+    }
+    const auto& controls=m_move_preview_valid && !m_move_child_controls_preview.empty()
+        ? m_move_child_controls_preview : m_transform_preview_valid && !m_transform_child_controls_preview.empty()
+        ? m_transform_child_controls_preview : m_roof_opening_controls;
+    for (const auto& target:m_selected_roof_openings) {
+        const auto found=std::find_if(controls.begin(),controls.end(),[&](const auto& control) { return control.target==target; });
+        if (found==controls.end() || !valid_roof_opening_frame(found->frame)) return std::nullopt;
+        include_polygon(roofOpeningFramePolygon(found->frame,rect()));
+    }
+    if (!valid || !bounds || !std::all_of(m_selected_ids.begin(),m_selected_ids.end(),
+        [&](const auto& id) { return covered.contains(id); })) return std::nullopt;
+    const Vec2 midpoint{(bounds->minimum.x+bounds->maximum.x)*.5,(bounds->minimum.y+bounds->maximum.y)*.5};
+    const CanvasSelectionFrame frame{{c*midpoint.x-s*midpoint.y,s*midpoint.x+c*midpoint.y},angle,
+        bounds->maximum.x-bounds->minimum.x,bounds->maximum.y-bounds->minimum.y};
+    if (!std::isfinite(frame.center.x) || !std::isfinite(frame.center.y) ||
+        !std::isfinite(frame.width_metres) || !std::isfinite(frame.depth_metres)) return std::nullopt;
+    return frame;
 }
 
 void PlanCanvas::setSelectedRoofOpenings(std::vector<CanvasRoofOpeningTarget> targets) {
@@ -6475,7 +6728,9 @@ void PlanCanvas::drawRoofOpeningControls(QPainter& painter, const QRectF& viewpo
     painter.setClipRect(viewport,Qt::IntersectClip);
     painter.setRenderHint(QPainter::Antialiasing,true);
     painter.setBrush(Qt::NoBrush);
-    const auto& controls=m_roof_opening_group_valid
+    const auto& controls=m_move_preview_valid && !m_move_child_controls_preview.empty()
+        ? m_move_child_controls_preview : m_transform_preview_valid && !m_transform_child_controls_preview.empty()
+        ? m_transform_child_controls_preview : m_roof_opening_group_valid
         ? m_roof_opening_group_preview_controls : m_roof_opening_controls;
     for (const auto& control:controls) {
         if (!roofOpeningSelected(control.target)) continue;
@@ -7254,10 +7509,12 @@ void PlanCanvas::drawSelectionFrame(QPainter& painter, const QRectF& viewport,
     if (!annotation_mask.isEmpty())
         visible_frame = visible_frame.subtracted(annotation_mask);
 
-    const bool singleton = selectedIds().size() == 1;
+    const bool mixed=mixedRigidSelectionEnabled();
+    const bool singleton = !mixed && selectedIds().size() == 1;
     const bool group_controls = !singleton && wallGroupRotationAxes().has_value();
-    const bool resize = m_selection_resize_enabled && (singleton || (group_controls && m_wall_group_scale_enabled));
-    const bool rotate = m_selection_rotate_enabled && (singleton || (group_controls && m_wall_group_rotation_enabled));
+    const bool resize = !mixed && m_selection_resize_enabled && (singleton || (group_controls && m_wall_group_scale_enabled));
+    const bool rotate = mixed ? mixedRotationEnabled() :
+        m_selection_rotate_enabled && (singleton || (group_controls && m_wall_group_rotation_enabled));
     const bool controls = !selectedOpening() &&
         (resize || rotate || (singleton && m_selection_axis_resize_enabled));
     painter.save();
@@ -9444,6 +9701,16 @@ void PlanCanvas::updatePointerCursor(QPointF point) {
     } else if (m_space_pan_armed && m_gesture_button == Qt::NoButton) {
         setCursor(Qt::OpenHandCursor);
     } else if (selectionInteractionEnabled() && m_gesture_button == Qt::NoButton) {
+        if (mixedRigidSelectionEnabled()) {
+            if (selectionHandleAt(point,QRectF(rect()))==SelectionHandle::rotate) {
+                setCursor(Qt::CrossCursor); return;
+            }
+            if (selectionFrameContains(point,QRectF(rect()))) {
+                setCursor(m_entities_move_started && m_entities_move_preview_requested && m_entities_move_requested
+                    ? Qt::SizeAllCursor : Qt::OpenHandCursor);
+                return;
+            }
+        }
         if (const auto grip=roofOpeningGroupHandleAt(point)) {
             const auto frame=selectedRoofOpeningGroupFrame();
             setCursor(roof_opening_rotation_handle(*grip) ? Qt::CrossCursor :
@@ -9558,6 +9825,8 @@ void PlanCanvas::setWallGroupScaleEnabled(bool enabled) {
 std::optional<Vec2> PlanCanvas::wallGroupRotationPivot() const {
     if (!m_transform_group_ids.isEmpty() && m_transform_group_frame)
         return m_transform_pivot;
+    if (mixedRotationEnabled())
+        if (const auto frame=mixedSelectionAxes()) return frame->center;
     if (const auto frame = wallGroupRotationAxes()) return frame->center;
     return std::nullopt;
 }
@@ -9593,10 +9862,12 @@ void PlanCanvas::setEntityTransformPreviewRequested(
 }
 
 void PlanCanvas::updateEntityTransformPreview() {
+    if (!m_mixed_selection_capture.empty() && !mixedSelectionCaptureCurrent()) { resetGesture(); return; }
     const auto serial = ++m_transform_preview_serial;
     m_transform_entities_preview.clear();
     m_transform_entities_preview_index.clear();
     m_transform_labels_preview.clear(); m_transform_references_preview.clear();
+    m_transform_child_controls_preview.clear();
     const bool group = !m_transform_group_ids.isEmpty();
     m_transform_preview_exact = group;
     m_transform_preview_valid = false;
@@ -9608,6 +9879,7 @@ void PlanCanvas::updateEntityTransformPreview() {
                                      : m_entity_transform_preview_requested;
     const auto group_callback = m_entities_transform_preview_requested;
     const bool group_transform_enabled =
+        (!m_mixed_selection_capture.empty() && mixedRotationEnabled() && m_left_gesture==LeftGesture::selection_rotate) ||
         (m_wall_group_rotation_enabled && m_left_gesture == LeftGesture::selection_rotate) ||
         (m_wall_group_scale_enabled && m_left_gesture == LeftGesture::selection_resize);
     if (group ? (!group_callback || !group_transform_enabled)
@@ -9645,6 +9917,7 @@ void PlanCanvas::updateEntityTransformPreview() {
 }
 
 bool PlanCanvas::markEntityTransformPreviewPending(std::uint64_t serial) {
+    if (!m_mixed_selection_capture.empty() && !mixedSelectionCaptureCurrent()) { resetGesture(); return false; }
     if (serial != m_transform_preview_serial || !m_transform_preview_request_in_progress ||
         !m_transform_frame_start || (m_transform_source_id.isEmpty() && m_transform_group_ids.isEmpty()) ||
         (m_left_gesture != LeftGesture::selection_resize &&
@@ -9656,24 +9929,42 @@ bool PlanCanvas::markEntityTransformPreviewPending(std::uint64_t serial) {
 }
 
 bool PlanCanvas::completeEntityTransformPreview(std::uint64_t serial,
-    std::optional<std::vector<CanvasEntity>> result, std::vector<CanvasLabel> labels, std::vector<CanvasReference> references) {
+    std::optional<std::vector<CanvasEntity>> result, std::vector<CanvasLabel> labels, std::vector<CanvasReference> references,
+    std::optional<std::vector<CanvasRoofOpeningControls>> child_controls) {
     if (!m_transform_preview_pending) return false;
-    return applyEntityTransformPreview(serial, std::move(result), std::move(labels), std::move(references));
+    return applyEntityTransformPreview(serial, std::move(result), std::move(labels), std::move(references), std::move(child_controls));
 }
 
 bool PlanCanvas::applyEntityTransformPreview(std::uint64_t serial,
-    std::optional<std::vector<CanvasEntity>> result, std::vector<CanvasLabel> labels, std::vector<CanvasReference> references) {
+    std::optional<std::vector<CanvasEntity>> result, std::vector<CanvasLabel> labels, std::vector<CanvasReference> references,
+    std::optional<std::vector<CanvasRoofOpeningControls>> child_controls) {
     if (serial != m_transform_preview_serial || !m_transform_frame_start ||
         (m_transform_source_id.isEmpty() && m_transform_group_ids.isEmpty()) ||
         (m_left_gesture != LeftGesture::selection_resize &&
          m_left_gesture != LeftGesture::selection_rotate &&
          m_left_gesture != LeftGesture::selection_axis_resize)) return false;
+    if (!m_mixed_selection_capture.empty() && !mixedSelectionCaptureCurrent()) { resetGesture(); return false; }
     m_transform_preview_pending = false;
     m_transform_preview_exact = true;
     m_transform_preview_completed = true;
     const bool group = !m_transform_group_ids.isEmpty();
     bool covered = false;
-    if (result && group) {
+    const bool mixed=!m_mixed_selection_capture.empty();
+    if (result && mixed) {
+        covered=mixedRotationEnabled() && m_left_gesture==LeftGesture::selection_rotate &&
+            m_transform_scale_preview==1.0 && std::isfinite(m_transform_rotation_preview) &&
+            std::isfinite(m_transform_pivot.x) && std::isfinite(m_transform_pivot.y) &&
+            m_transform_group_ids==m_selected_ids &&
+            m_transform_group_presentations==selectedEntityPresentations() && validMixedChildPreview(child_controls);
+        for (const auto& identity:m_transform_group_presentations)
+            if (!std::any_of(result->begin(),result->end(),[&](const auto& entity) {
+                return entity.id==identity.id && entity.presentation_key==identity.presentation_key && entity.type==identity.type;
+            })) covered=false;
+        for (const auto& id:m_transform_group_ids)
+            if (!std::any_of(result->begin(),result->end(),[&](const auto& entity) { return entity.id==id; }) &&
+                !std::any_of(labels.begin(),labels.end(),[&](const auto& label) { return label.id==id; }) &&
+                !std::any_of(references.begin(),references.end(),[&](const auto& reference) { return reference.id==id; })) covered=false;
+    } else if (result && group) {
         covered = ((m_wall_group_rotation_enabled && m_left_gesture == LeftGesture::selection_rotate &&
                     m_transform_scale_preview == 1.0) ||
                    (m_wall_group_scale_enabled && m_left_gesture == LeftGesture::selection_resize &&
@@ -9719,7 +10010,10 @@ bool PlanCanvas::applyEntityTransformPreview(std::uint64_t serial,
             std::any_of(references.begin(), references.end(), [&](const auto& reference) { return reference.id == m_transform_source_id; });
     }
     m_transform_preview_valid = result && covered && valid_reference_previews(references, m_references) &&
+        (!mixed || validMixedOrdinaryPreview(*result,labels,references)) &&
         unambiguous_entity_presentations(*result, m_entities);
+    m_transform_child_controls_preview=m_transform_preview_valid && mixed
+        ? std::move(*child_controls) : std::vector<CanvasRoofOpeningControls>{};
     m_transform_references_preview = m_transform_preview_valid ? std::move(references) : std::vector<CanvasReference>{};
     if (!m_transform_references_preview.empty()) {
         QSet<QString> selected_references;
@@ -9771,6 +10065,7 @@ bool PlanCanvas::applyEntityTransformPreview(std::uint64_t serial,
 void PlanCanvas::finishEntityTransformPreview(std::uint64_t serial) {
     if (serial != m_transform_preview_serial || !m_transform_frame_start ||
         m_transform_preview_pending || !m_transform_preview_exact) return;
+    if (!m_mixed_selection_capture.empty() && !mixedSelectionCaptureCurrent()) { resetGesture(); return; }
     const auto id = m_transform_source_id;
     const auto group_ids = m_transform_group_ids;
     const auto pivot = m_transform_pivot;
@@ -9790,7 +10085,8 @@ void PlanCanvas::finishEntityTransformPreview(std::uint64_t serial) {
     const QPointer<PlanCanvas> guard(this);
     if (accepted && !group_ids.isEmpty()) {
         const auto callback = m_entities_transform_requested;
-        const bool enabled = (m_wall_group_rotation_enabled && gesture == LeftGesture::selection_rotate) ||
+        const bool enabled = (!m_mixed_selection_capture.empty() && mixedRotationEnabled() && gesture==LeftGesture::selection_rotate) ||
+            (m_wall_group_rotation_enabled && gesture == LeftGesture::selection_rotate) ||
             (m_wall_group_scale_enabled && gesture == LeftGesture::selection_resize);
         try {
             if (callback && enabled) (void)callback(group_ids, scale, radians, pivot);

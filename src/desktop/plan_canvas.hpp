@@ -613,7 +613,8 @@ public:
     // Actual painted control, including rotation and annotation avoidance.
     [[nodiscard]] std::optional<QPointF> selectionRotationHandlePosition() const;
     void setSelectionControlsVisible(bool visible) {
-        if (!visible && (m_generated_label_move_identity || !m_roof_opening_group_capture.empty())) resetGesture();
+        if (!visible && (m_generated_label_move_identity || !m_roof_opening_group_capture.empty() ||
+            !m_mixed_selection_capture.empty())) resetGesture();
         m_selection_controls_visible = visible;
         update();
     }
@@ -680,7 +681,8 @@ public:
     }
     bool markEntitiesMovePreviewPending(std::uint64_t serial);
     bool completeEntitiesMovePreview(std::uint64_t serial,
-        std::optional<std::vector<CanvasEntity>> result, std::vector<CanvasLabel> labels = {}, std::vector<CanvasReference> references = {});
+        std::optional<std::vector<CanvasEntity>> result, std::vector<CanvasLabel> labels = {}, std::vector<CanvasReference> references = {},
+        std::optional<std::vector<CanvasRoofOpeningControls>> child_controls = std::nullopt);
     // Commits a single-selection transform after the interactive preview.
     // Scale is relative and uniform; rotation is a relative radian delta.
     void setEntityTransformRequested(std::function<bool(QString, double, double)> callback);
@@ -690,6 +692,10 @@ public:
     // affine geometry fallback or canvas-owned document mutation.
     void setWallGroupRotationEnabled(bool enabled);
     void setWallGroupScaleEnabled(bool enabled);
+    // Opt-in rigid ordinary/typed-child cohorts. Exact completion must include
+    // every child mouth with its original captured target and presentation owner.
+    // This capability never enables uniform or directional resizing.
+    void setMixedSelectionRigidTransformEnabled(bool enabled);
     // Immutable canvas-world pivot is available before the start callback;
     // outside a gesture this is the eligible retained group's frame center.
     [[nodiscard]] std::optional<Vec2> wallGroupRotationPivot() const;
@@ -718,7 +724,8 @@ public:
     [[nodiscard]] std::vector<CanvasEntity> entityTransformPreview() const { return m_transform_entities_preview; }
     bool markEntityTransformPreviewPending(std::uint64_t serial);
     bool completeEntityTransformPreview(std::uint64_t serial,
-        std::optional<std::vector<CanvasEntity>> result, std::vector<CanvasLabel> labels = {}, std::vector<CanvasReference> references = {});
+        std::optional<std::vector<CanvasEntity>> result, std::vector<CanvasLabel> labels = {}, std::vector<CanvasReference> references = {},
+        std::optional<std::vector<CanvasRoofOpeningControls>> child_controls = std::nullopt);
     // Local-axis scales around the model-space midpoint of the opposite edge.
     // Capability gating belongs to the document; rejected previews restore.
     void setEntityAxisResizeRequested(
@@ -1044,12 +1051,14 @@ private:
         const EntityPresentationIndex& index);
     [[nodiscard]] const CanvasReference& interactiveReference(const CanvasReference& reference) const;
     bool applyEntitiesMovePreview(std::uint64_t serial,
-        std::optional<std::vector<CanvasEntity>> result, std::vector<CanvasLabel> labels = {}, std::vector<CanvasReference> references = {});
+        std::optional<std::vector<CanvasEntity>> result, std::vector<CanvasLabel> labels = {}, std::vector<CanvasReference> references = {},
+        std::optional<std::vector<CanvasRoofOpeningControls>> child_controls = std::nullopt);
     void captureOpeningMove(QPointF point);
     void updateEntitiesMovePreview(QPointF point, Qt::KeyboardModifiers modifiers);
     void updateEntityTransformPreview();
     bool applyEntityTransformPreview(std::uint64_t serial,
-        std::optional<std::vector<CanvasEntity>> result, std::vector<CanvasLabel> labels = {}, std::vector<CanvasReference> references = {});
+        std::optional<std::vector<CanvasEntity>> result, std::vector<CanvasLabel> labels = {}, std::vector<CanvasReference> references = {},
+        std::optional<std::vector<CanvasRoofOpeningControls>> child_controls = std::nullopt);
     void finishEntityTransformPreview(std::uint64_t serial);
     void finishBoundaryVertexPreview(std::uint64_t serial);
     void updateOpeningWidthPreview(QPointF point, Qt::KeyboardModifiers modifiers);
@@ -1059,6 +1068,17 @@ private:
     [[nodiscard]] bool hasMixedSemanticSelection() const noexcept {
         return !m_selected_ids.isEmpty() && !m_selected_roof_openings.empty();
     }
+    [[nodiscard]] bool mixedRigidSelectionEnabled() const noexcept {
+        return m_mixed_selection_rigid_transform_enabled && hasMixedSemanticSelection();
+    }
+    [[nodiscard]] std::optional<CanvasSelectionFrame> mixedSelectionAxes() const;
+    bool captureMixedSelection();
+    [[nodiscard]] bool mixedSelectionCaptureCurrent() const;
+    [[nodiscard]] bool validMixedChildPreview(
+        const std::optional<std::vector<CanvasRoofOpeningControls>>& controls) const;
+    [[nodiscard]] bool validMixedOrdinaryPreview(const std::vector<CanvasEntity>& entities,
+        const std::vector<CanvasLabel>& labels, const std::vector<CanvasReference>& references) const;
+    [[nodiscard]] bool mixedRotationEnabled() const;
     [[nodiscard]] const CanvasRoofOpeningControls* selectedRoofOpeningControls() const;
     [[nodiscard]] std::optional<CanvasRoofOpeningControls> roofOpeningAt(QPointF point) const;
     [[nodiscard]] std::vector<CanvasRoofOpeningTarget> roofOpeningTargetsAt(QPointF point) const;
@@ -1415,6 +1435,18 @@ private:
     std::uint64_t m_overlap_navigation_generation{};
     CanvasSelectionFilter m_selection_filter{CanvasSelectionFilter::all};
     QStringList m_move_ids;
+    bool m_mixed_selection_rigid_transform_enabled{};
+    std::vector<CanvasRoofOpeningControls> m_mixed_selection_capture;
+    std::vector<CanvasRoofOpeningControls> m_move_child_controls_preview;
+    std::vector<CanvasRoofOpeningControls> m_transform_child_controls_preview;
+    QStringList m_mixed_selection_ids;
+    std::vector<CanvasLabelPresentationIdentity> m_mixed_selection_labels;
+    std::uint64_t m_mixed_controls_generation{};
+    std::uint64_t m_mixed_navigation_generation{};
+    Vec2 m_mixed_view_center{};
+    double m_mixed_view_scale{};
+    QSize m_mixed_view_size;
+    qreal m_mixed_view_dpr{};
     std::optional<Vec2> m_move_preview_delta;
     std::vector<CanvasEntity> m_move_entities_preview;
     // Owned preview replacements rebuild exact presentation lookup. Positions

@@ -395,9 +395,8 @@ std::optional<Revision> mixed_selection_edit_source_saved_revision(const Json& v
     return value.at("source_saved_revision").is_null() ? std::nullopt :
         std::optional<Revision>{revision(value.at("source_saved_revision"))};
 }
-Entities replay_mixed_selection_edit(const DocumentSnapshot& source, const Json& value) {
-    MixedSelectionEditReplayScope scope;
-    validate(value);
+namespace {
+std::string authenticate_source(const DocumentSnapshot& source, const Json& value) {
     if (source.history().empty() || source.history().size() > ProjectStore::maximum_revision_count ||
         source.revision() >= source.history().size() ||
         source.history()[source.revision()].revision != source.revision() ||
@@ -409,9 +408,13 @@ Entities replay_mixed_selection_edit(const DocumentSnapshot& source, const Json&
     if (!source.is_editable() || source.revision() != revision(value.at("expected_revision")) || source.saved_revision_optional() != saved ||
         source_digest != value.at("source_snapshot_digest") || document_authoring_source_digest_v2(source) != value.at("source_authoring_digest") ||
         entity_map_digest(source.entities()) != value.at("source_entities_digest")) reject("captured full source authority changed");
-    const auto key = std::pair{source_digest, value.dump()};
-    if (const auto found = replay_memo->results.find(key); found != replay_memo->results.end()) return found->second;
-    Replaying replaying(key);
+    return source_digest;
+}
+
+// Internal mode is available only to the sealed preparation factory. Historical
+// full replay always passes null and therefore always performs mandatory review.
+Entities derive_mixed_selection_edit(const DocumentSnapshot& source, const Json& value,
+    std::optional<SelectionGeometryTransformPreparation>* unreviewed_geometry) {
     const bool identity_dialect = value.at("version") == 4;
     const auto selected = members(value.at("roof_opening_members"),value.at("version") == 3 || identity_dialect,identity_dialect);
     for (const auto& member : selected) (void)child_row(source.entities(), member.key);
@@ -452,18 +455,18 @@ Entities replay_mixed_selection_edit(const DocumentSnapshot& source, const Json&
         ordinary_request.at("references").empty();
     auto ordinary_stage = source;
     Entities ordinary_entities=source.entities();
-    if (!ordinary_empty) {
-        if (ordinary_request.at("version") == 4) {
-            // Keep explicit text-baseline authority inside the closed candidate
-            // producer. Geometry review composes below from the same source.
-            ordinary_request["geometry"]=nullptr;
-            ordinary_entities=replay_ordinary_selection_edit_candidate(source,ordinary_request);
-        } else {
-            const auto ordinary = replay_ordinary_selection_edit(source, ordinary_request);
-            if (ordinary.expected_revision != source.revision() || !ordinary.asset_changes.empty()) reject("ordinary leaf changed revision or assets");
-            ordinary_stage = Document::preview_command(source, Command{ordinary});
-            ordinary_entities=ordinary_stage.entities();
-        }
+    if (ordinary_request.at("version") == 4) {
+        // Retain the complete request, including explicit geometry roots and
+        // text-baseline authority. This helper derives only original-source
+        // nongeometry leaves; the typed geometry path below still owns review.
+        if (!ordinary_request.at("geometry").is_null())
+            ordinary_request["geometry"]["room_reviews"] = Json::array();
+        ordinary_entities = replay_ordinary_selection_edit_nongeometry_preparation(source, ordinary_request);
+    } else if (!ordinary_empty) {
+        const auto ordinary = replay_ordinary_selection_edit(source, ordinary_request);
+        if (ordinary.expected_revision != source.revision() || !ordinary.asset_changes.empty()) reject("ordinary leaf changed revision or assets");
+        ordinary_stage = Document::preview_command(source, Command{ordinary});
+        ordinary_entities=ordinary_stage.entities();
     }
     metadata(source, ordinary_stage);
     // The closed architectural producer above owns rigid reflection and uniform
@@ -489,10 +492,20 @@ Entities replay_mixed_selection_edit(const DocumentSnapshot& source, const Json&
     Entities result;
     if (reviewed_geometry) {
         const auto& geometry = value.at("ordinary_request").at("geometry");
-        const auto reviewed = replay_selection_geometry_review(source,
-            decode_selection_geometry_transform_request(geometry.at("request")),
-            ordinary_selection_edit_room_reviews(value.at("ordinary_request")));
-        result = compose_reviewed_geometry_selection_edit_candidates(source.entities(), reviewed, leaves);
+        const auto request = decode_selection_geometry_transform_request(geometry.at("request"));
+        if (unreviewed_geometry) {
+            // The typed geometry stage intentionally retains old rooms. It is
+            // a drawing/review input only, never a fabricated reviewed result.
+            auto prepared = prepare_selection_geometry_transform(source, request);
+            metadata(source, prepared.geometry_snapshot());
+            leaves.insert(leaves.begin(), prepared.geometry_snapshot().entities());
+            result = compose_mixed_selection_edit_candidates(source.entities(), leaves);
+            *unreviewed_geometry = std::move(prepared);
+        } else {
+            const auto reviewed = replay_selection_geometry_review(source, request,
+                ordinary_selection_edit_room_reviews(value.at("ordinary_request")));
+            result = compose_reviewed_geometry_selection_edit_candidates(source.entities(), reviewed, leaves);
+        }
     } else {
         result = compose_mixed_selection_edit_candidates(source.entities(), leaves);
         preserve_wall_lane(source.entities(), result);
@@ -511,10 +524,10 @@ Entities replay_mixed_selection_edit(const DocumentSnapshot& source, const Json&
     }
     // Document owns complete final geometry, phase policy and retained-history
     // identity validation, followed by the only live publication.
-    remember(key, result);
     return result;
 }
-Json make_mixed_selection_edit_intent(const DocumentSnapshot& source, const Json& ordinary_request,
+
+Json mixed_intent(const DocumentSnapshot& source, const Json& ordinary_request,
     const Json& roof_authoring, const Json& roof_members, std::string_view text, const Json& roof_identity_requests) {
     // Account borrowed inputs together before constructing the compound JSON.
     Budget budget; budget.node(0); budget.add(1024);
@@ -534,6 +547,88 @@ Json make_mixed_selection_edit_intent(const DocumentSnapshot& source, const Json
         {"ordinary_request", ordinary_request}, {"roof_authoring", roof_authoring},
         {"roof_opening_members", roof_members}, {"message", std::string(text)}};
     if (!roof_identity_requests.is_null()) value["roof_identity_requests"] = roof_identity_requests;
+    validate(value);
+    return value;
+}
+} // namespace
+
+Entities replay_mixed_selection_edit(const DocumentSnapshot& source, const Json& value) {
+    MixedSelectionEditReplayScope scope;
+    validate(value);
+    const auto key = std::pair{authenticate_source(source, value), value.dump()};
+    if (const auto found = replay_memo->results.find(key); found != replay_memo->results.end()) return found->second;
+    Replaying replaying(key);
+    auto result = derive_mixed_selection_edit(source, value, nullptr);
+    remember(key, result);
+    return result;
+}
+
+Json make_mixed_selection_edit_intent(const DocumentSnapshot& source, const Json& ordinary_request,
+    const Json& roof_authoring, const Json& roof_members, std::string_view text, const Json& roof_identity_requests) {
+    auto value = mixed_intent(source, ordinary_request, roof_authoring, roof_members, text, roof_identity_requests);
+    (void)replay_mixed_selection_edit(source, value);
+    return value;
+}
+
+MixedSelectionEditPreparation::MixedSelectionEditPreparation(const DocumentSnapshot& source, Json intent,
+    std::optional<SelectionGeometryTransformPreparation> geometry, Entities drawing_entities)
+    : intent_(std::move(intent)), geometry_(std::move(geometry)), preview_(source),
+      source_digest_(intent_.at("source_snapshot_digest").get<std::string>()) {
+    // Preserve every original record and metadata field. Replacing this copy's
+    // captured head is permitted only inside this sealed source-derived token;
+    // it cannot change the live source or retain its private admission authority.
+    auto history = std::make_shared<std::vector<RevisionRecord>>(source.history());
+    history->at(source.revision()).entities = std::move(drawing_entities);
+    preview_.history_ = std::move(history);
+    preview_.editable_ = false;
+    preview_.read_only_reason_ = "Mixed selection drawing preview; geometry review and final admission pending";
+    preview_.admission_.reset();
+}
+
+const Json& MixedSelectionEditPreparation::intent() const noexcept { return intent_; }
+const std::optional<SelectionGeometryTransformPreparation>&
+MixedSelectionEditPreparation::geometry_preparation() const noexcept { return geometry_; }
+const DocumentSnapshot& MixedSelectionEditPreparation::preview_snapshot() const noexcept { return preview_; }
+const std::string& MixedSelectionEditPreparation::source_snapshot_digest() const noexcept { return source_digest_; }
+
+MixedSelectionEditPreparation prepare_mixed_selection_edit(const DocumentSnapshot& source,
+    const Json& ordinary_request, const Json& roof_authoring, const Json& roof_members,
+    std::string_view text, const Json& roof_identity_requests) {
+    const auto ordinary = validate_ordinary_selection_edit_request(ordinary_request);
+    if (ordinary.at("version") != 4 || roof_identity_requests.is_null() ||
+        (!ordinary.at("geometry").is_null() && !ordinary.at("geometry").at("room_reviews").empty()))
+        reject("preparation requires an unreviewed version-four request and explicit identity roster");
+    if (ordinary.at("message").get_ref<const std::string&>() != text)
+        reject("preparation message must match its ordinary and geometry request");
+    auto value = mixed_intent(source, ordinary, roof_authoring, roof_members, text, roof_identity_requests);
+    (void)authenticate_source(source, value);
+    MixedSelectionEditReplayScope scope;
+    std::optional<SelectionGeometryTransformPreparation> geometry;
+    auto drawing_entities = derive_mixed_selection_edit(source, value, &geometry);
+    return {source, std::move(value), std::move(geometry), std::move(drawing_entities)};
+}
+
+Json complete_mixed_selection_edit(const DocumentSnapshot& source,
+    const MixedSelectionEditPreparation& prepared, const std::vector<Json>& room_reviews) {
+    // The token has no setters or caller raw-map constructor. Authenticate the
+    // complete source before accepting any decision, including save metadata.
+    (void)authenticate_source(source, prepared.intent());
+    if (room_reviews.size() > 32) reject("geometry room reviews exceed thirty-two intents");
+    // Account borrowed reviews together with the captured intent before copying
+    // them into its closed envelope. Its existing empty array already accounts
+    // for delimiters; this conservative addition includes the review commas.
+    Budget budget;
+    budget.json(prepared.intent(), 0);
+    budget.add(room_reviews.size());
+    for (const auto& review : room_reviews) budget.json(review, 4);
+    auto value = prepared.intent();
+    auto& geometry = value.at("ordinary_request").at("geometry");
+    if (geometry.is_null()) {
+        if (!room_reviews.empty()) reject("room decisions require selected geometry authority");
+    } else geometry["room_reviews"] = room_reviews;
+    // Full replay independently rederives geometry, exact callout placements,
+    // all mandatory sequential decisions and the final invariant-child guard.
+    // It also checks the aggregate wire/complexity budget with reviews included.
     (void)replay_mixed_selection_edit(source, value);
     return value;
 }

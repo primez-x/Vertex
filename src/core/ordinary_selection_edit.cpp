@@ -473,6 +473,38 @@ ApplyEntityChanges replay_ordinary_selection_edit(const DocumentSnapshot& source
     return replay_ordinary_producers(source, canonical);
 }
 
+Entities replay_ordinary_selection_edit_nongeometry_preparation(
+    const DocumentSnapshot& source, const Json& request) {
+    const auto canonical = validate_ordinary_selection_edit_request(request);
+    if (canonical.at("version") != 4 || (!canonical.at("geometry").is_null() &&
+        !canonical.at("geometry").at("room_reviews").empty()))
+        reject("nongeometry preparation requires an unreviewed version-four request");
+    const auto expected = revision(canonical.at("expected_revision"));
+    if (source.revision() != expected)
+        throw DocumentError(DocumentErrorCode::stale_revision, "The ordinary selection edit source changed.");
+    if (!source.is_editable())
+        throw DocumentError(DocumentErrorCode::read_only, "The ordinary selection edit source is read-only.");
+    const bool has_targets = !canonical.at("architectural").empty() || !canonical.at("embedded").empty() ||
+        !canonical.at("annotations").empty() || !canonical.at("references").empty();
+    // A no-op preview still authenticates the actual retained source through
+    // Document admission. Keep the complete validated geometry-only request;
+    // stripping its geometry would create a forbidden zero-target dialect.
+    const auto command = has_targets ? replay_ordinary_producers(source, canonical) :
+        ApplyEntityChanges{expected, {}, {}, text(canonical, "message")};
+    const auto admitted = Document::preview_command(source, Command{command});
+    unchanged_assets(source, admitted);
+    if (!has_targets) {
+        if (admitted.entities().size() != source.entities().size())
+            reject("identity admission changed the original owners");
+        for (const auto& [id, before] : source.entities()) {
+            const auto after = admitted.entities().find(id);
+            if (after == admitted.entities().end() || !exact(before, after->second))
+                reject("identity admission changed the original raw result");
+        }
+    }
+    return admitted.entities();
+}
+
 std::vector<Json> ordinary_selection_edit_room_reviews(const Json& request) {
     const auto canonical = validate_ordinary_selection_edit_request(request);
     if ((canonical.at("version") != 3 && canonical.at("version") != 4) || canonical.at("geometry").is_null()) return {};
