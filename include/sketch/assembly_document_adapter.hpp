@@ -252,9 +252,11 @@ struct EmbeddedAssemblyGroupTarget {
 // presentation identities are reserved through current and undone history and
 // typed allocations. Exact existing companions enroll declared copies in their
 // saved baseline or active proposed partition; unlisted copies remain unlisted.
-// Fresh associated dimensions join that actual row registry, or an unambiguous
-// legacy carrier/host registry, in its saved baseline/proposed partition. Source
-// dimensions registered in incompatible cohorts refuse; originals remain exact.
+// Fresh associated dimensions join the actual declared row registry in its
+// saved baseline/proposed partition. Unlisted rows with any actual carrier/host
+// phase ownership require explicit companion allocation and currently refuse,
+// even without dimensions. Phase-free unlisted copies retain no inferred role.
+// Source dimensions in incompatible cohorts refuse; originals remain exact.
 // Returns the complete actual candidate map after model/membership admission.
 // Creates no Document, command publication, or phase-choice authority.
 [[nodiscard]] AssemblyDocumentEntities prepare_qualified_embedded_assembly_copy_entities(

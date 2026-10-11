@@ -10,6 +10,9 @@ and offset, Z rotation, positive uniform scale, both reflection flags, the exact
 source-to-fresh copied-dimension map and message. Actual source replay derives
 geometry and phase enrollment and reserves identities across current and undone
 history. Raw preview entities and opaque JSON grant no copy authority.
+Unlisted source rows with actual catalog/host phase ownership still require a
+separate explicit companion-allocation lane; command67/request1 refuse them,
+including rows without dimensions. Phase-free unlisted copies infer no role.
 
 Only actual canonical commands in recognized retained command slots supply this
 floor; historical wrappers retain their original permissions and refuse command67.

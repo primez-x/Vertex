@@ -24,8 +24,11 @@ from the complete source. An active baseline copy is proposed in the actual
 saved alternative without demolishing or modifying its original. Unlisted roots
 remain unlisted. Moved hosted copies use their actual world transform while
 original host ancestry remains active and raw-exact. Existing companions retain
-their raw partitions and source ordering; fresh dimensions join the actual row
-registry, or an unambiguous legacy cohort, after component enrollment.
+their raw partitions and source ordering; fresh dimensions join the actual
+declared row registry after component enrollment. Unlisted rows with actual
+carrier/host phase ownership require explicit destination companion allocation.
+That allocation lane remains unfinished; these copies refuse before geometry,
+including dimensionless rows, rather than inheriting the wrong design state.
 
 Exclusive command 67 carries copy request 1. Current and chronological replay
 authenticate snapshot, authoring history, entities and saved state before deriving
@@ -43,8 +46,14 @@ Profile/edge dimensions and the broader production gaps below remain required.
 Conflicting or ambiguous dimension cohorts, cross-catalog local copies and
 unsupported source dialect promotion are explicit gaps, not completed workflows.
 
-Independent integrated source review found no proved introduced P1/P2 in this
-batch. Root reviewed the interfaces, exclusive command dispatch, actual-source
+The initial independent integrated source review found no proved introduced
+P1/P2. Root's subsequent source trace found that an unlisted legacy-phase copy
+could inherit the wrong catalog/host state while its copied dimensions were
+proposed. Independent review confirmed that P2, including dimensionless copies.
+The correction refuses every unlisted source with registered carrier or actual
+host ancestry before geometry; declared rows retain independent membership.
+Correction review found no remaining proved introduced P1/P2 in that amendment.
+Root reviewed the interfaces, exclusive command dispatch, actual-source
 history replay, original-row preservation, dimension enrollment and reader-floor
 integration; scoped diff checks pass. This source evidence does not establish
 compilation or runtime behavior. No builds, tests, new tests, scripts, probes,

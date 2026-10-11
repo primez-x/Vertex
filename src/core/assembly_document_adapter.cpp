@@ -1496,7 +1496,7 @@ struct EmbeddedAssemblySourceActivity {
     }
 
     bool admit_root(const EmbeddedAssemblyGroupTarget& target, const AssemblyInstance& instance,
-        bool mutation) const {
+        bool mutation, bool require_copy_membership = false) const {
         const AssemblyPhaseRoot root{target.catalog_id, target.instance_id};
         const auto declared = rows.owners.find(root);
         if (declared == rows.owners.end()) admit_owner(target.catalog_id, mutation);
@@ -1558,6 +1558,10 @@ struct EmbeddedAssemblySourceActivity {
             }
         };
         if (instance.placement) host(host, instance.placement->host_entity_id);
+        if (require_copy_membership && declared == rows.owners.end())
+            require(!owners.contains(target.catalog_id) &&
+                std::none_of(reached.begin(), reached.end(), [&](const std::string& id) { return owners.contains(id); }),
+                "Unlisted component copies with design-phase ownership require explicit companion allocation; the project was not changed");
         return declared != rows.owners.end();
     }
 };
@@ -1628,7 +1632,8 @@ ApplyEntityChanges prepare_embedded_assembly_group_transform(const DocumentSnaps
         require(instance != model.instances().end(),
             "embedded assembly group instance is missing from its catalog");
         const bool declared = activity.admit_root(target, *instance,
-            preparation == EmbeddedAssemblyPreparation::ordinary && !target.copy_instance_id);
+            preparation == EmbeddedAssemblyPreparation::ordinary && !target.copy_instance_id,
+            preparation == EmbeddedAssemblyPreparation::qualified_embedded_copies);
         if (target.copy_instance_id) {
             // This raw command has no sealed companion-enrollment intent. A
             // declared source cannot silently create an unlisted destination.
@@ -1975,7 +1980,6 @@ AssemblyDocumentEntities prepare_qualified_embedded_assembly_copy_entities(const
     // after that exact transport may fresh dimensions join the copied root's
     // independently established source cohort; original roles never change.
     std::map<AssemblyPhaseRoot, std::optional<std::string>> dimension_cohorts;
-    std::map<std::string, AssemblyModel, std::less<>> source_models;
     std::map<std::string, std::set<std::string, std::less<>>, std::less<>> registry_dimensions;
     for (const auto& [old_id, component] : dimensions) {
         const AssemblyPhaseRoot root{component.catalog_id, component.instance_id};
@@ -1983,41 +1987,9 @@ AssemblyDocumentEntities prepare_qualified_embedded_assembly_copy_entities(const
             const auto declared = activity.rows.owners.find(root);
             std::optional<std::string> registry_id;
             if (declared != activity.rows.owners.end()) registry_id = declared->second.registry_id;
-            else {
-                // Legacy rows have no independent partition. Only a single
-                // actual registry across the carrier and every placement
-                // ancestor establishes a dimension enrollment cohort.
-                std::set<std::string, std::less<>> registries, reached;
-                const auto owner = [&](const std::string& id) {
-                    const auto found = activity.owners.find(id);
-                    if (found != activity.owners.end()) registries.insert(found->second);
-                };
-                owner(root.first);
-                if (!source_models.contains(root.first))
-                    source_models.emplace(root.first, catalog(source.entities().at(root.first)));
-                const auto& instances = source_models.at(root.first).instances();
-                const auto instance = std::find_if(instances.begin(), instances.end(),
-                    [&](const auto& value) { return value.id == root.second; });
-                require(instance != instances.end(), "qualified embedded assembly dimension source row is missing");
-                const auto host = [&](const auto& self, const std::string& id) -> void {
-                    if (!reached.insert(id).second) return;
-                    require(reached.size() <= 10000,
-                        "qualified embedded assembly dimension host ancestry exceeds bound");
-                    owner(id);
-                    const auto& entity = source.entities().at(id);
-                    if (entity.type == "opening") {
-                        self(self, entity.properties.at("wall_id").get<std::string>());
-                        if (entity.properties.contains("corner_window_id"))
-                            self(self, entity.properties.at("corner_window_id").get<std::string>());
-                    } else if (entity.type == "corner_window") {
-                        const auto corner = parse_corner_window(entity);
-                        for (const auto& cut : corner.opening_ids) self(self, cut);
-                        for (const auto& wall : corner.wall_ids) self(self, wall);
-                    }
-                };
-                if (instance->placement) host(host, instance->placement->host_entity_id);
-                if (registries.size() == 1) registry_id = *registries.begin();
-            }
+            // Phase-free unlisted rows retain no inferred partition. The
+            // geometry source read already refuses unlisted legacy cohorts:
+            // their destination needs an explicitly allocated companion.
             dimension_cohorts.emplace(root, std::move(registry_id));
         }
         const auto& registry_id = dimension_cohorts.at(root);
