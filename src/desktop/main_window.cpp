@@ -53980,6 +53980,7 @@ private:
             };
             m_nativeModelView->setRoofOpeningDirectionalResizeEnabled(true);
             m_nativeModelView->setMixedSelectionPlanTransformEnabled(true);
+            m_nativeModelView->setOrdinarySelectionPlanTransformEnabled(true);
             m_nativeModelView->onRoofOpeningTransformCanceled=[this] { cancelNativeRoofOpeningPreview(); };
             m_nativeModelView->setEntityTranslationRequestedCallback(
                 [this](QString id, double x, double y, double z) {
@@ -67994,7 +67995,7 @@ private:
         try {
             if (!capture || capture!=m_native_roof_opening_capture || !capture->view ||
                 capture->view!=m_nativeModelView || !capture->view->isVisible() || m_refreshing ||
-                !m_roof_opening_native_selection || !capture->source || !capture->authority ||
+                (!capture->targets.empty() && !m_roof_opening_native_selection) || !capture->source || !capture->authority ||
                 !sourceEditAuthorityCurrent(*capture->authority) || hasPendingPlacementEdit()) return false;
             const auto displayed=capture->view->publishedSnapshot();
             if (!displayed || fullSnapshotDigest(*displayed)!=fullSnapshotDigest(*capture->source) ||
@@ -68018,10 +68019,11 @@ private:
     void captureNativeRoofOpeningGesture(std::vector<visualization::NativeRoofOpeningTarget> targets) {
         cancelNativeRoofOpeningPreview();
         const auto source=m_nativeModelView->gestureSourceSnapshot();
-        if (!source || !admitNativeSceneInput(false) || targets.empty() ||
-            !m_roof_opening_native_selection || targets.size()!=m_selected_roof_openings.size() ||
+        if (!source || !admitNativeSceneInput(false) ||
+            (targets.empty() ? ordinarySelectionIDs().size()<2 : !m_roof_opening_native_selection) ||
+            targets.size()!=m_selected_roof_openings.size() ||
             fullSnapshotDigest(*source)!=fullSnapshotDigest(authoringSnapshot()))
-            throw std::invalid_argument("Select the current skylights before using their 3D controls.");
+            throw std::invalid_argument("Select the current object group or skylights before using their 3D controls.");
         for (std::size_t index=0;index<targets.size();++index) {
             const auto& selected=m_selected_roof_openings[index];
             if (targets[index].roof_id!=selected.roof_id || targets[index].opening_id!=selected.opening_id)
@@ -68109,7 +68111,7 @@ private:
                         !std::isfinite(gesture.uniform_scale) || gesture.uniform_scale<=0.0 ||
                         gesture.axis_scale!=std::array<double,2>{1.0,1.0} ||
                         !std::isfinite(gesture.axis_rotation_radians))
-                        throw std::invalid_argument("Mixed 3D controls support horizontal movement, Z-axis rotation and positive uniform plan scaling.");
+                        throw std::invalid_argument("Group 3D controls support horizontal movement, Z-axis rotation and positive uniform plan scaling.");
                     std::vector<CanvasRoofOpeningTarget> children;
                     for (const auto& target:capture.targets)
                         children.push_back({target.roof_id,target.opening_id,capture.source->revision()});
@@ -68209,7 +68211,7 @@ private:
             const auto source=m_nativeModelView->gestureSourceSnapshot();
             if (!ready || !nativeRoofOpeningRequestCurrent(*ready) || ready->serial!=serial ||
                 ready->gesture!=gesture || !source || fullSnapshotDigest(*source)!=fullSnapshotDigest(*ready->capture->source))
-                throw std::invalid_argument("The exact 3D skylight preview is no longer current. Begin the gesture again.");
+                throw std::invalid_argument("The exact 3D selection preview is no longer current. Begin the gesture again.");
             if (ready->result->mixed_preparation) {
                 const auto capture=ready->capture;
                 const auto preparation=ready->result->mixed_preparation;
@@ -69384,7 +69386,7 @@ public:
         const std::map<QString,SitePresentationPlacement>& ordinary_site_frames,
         const SiteCanvasPresentationFrames& source_frames,
         const std::map<QString,SiteAnnotationTarget>& annotation_targets,const std::string& message,double scale=1.0) {
-        if (!source || ordinary.isEmpty() || children.empty() || ordinary.size()+children.size()>1000)
+        if (!source || ordinary.isEmpty() || ordinary.size()+children.size()>1000)
             throw std::invalid_argument("Select a supported group of at most 1000 objects and skylights.");
         if (!std::isfinite(scale) || scale<=0.0) throw std::invalid_argument("Enter a positive finite scale factor.");
         json request={{"version",4},{"expected_revision",source->revision()},{"transaction_id",new_id("mixed-transform")},

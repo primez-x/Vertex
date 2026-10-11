@@ -280,7 +280,7 @@ public:
         QSize logical_size;
         QSize native_size;
         qreal pixel_ratio{};
-        QStringList selection; // Exact ordinary roster, including mixed presses.
+        QStringList selection; // Exact ordinary roster, including coordinated presses.
         std::vector<NativeRoofOpeningTarget> roof_openings;
         // Null means the ordinary family; its primary is selection.back().
         std::optional<NativeRoofOpeningTarget> primary_roof_opening;
@@ -312,6 +312,7 @@ public:
     std::optional<int> roof_transform_resize_axis;
     bool roof_directional_resize_enabled{};
     bool mixed_selection_plan_transform_enabled{};
+    bool ordinary_selection_plan_transform_enabled{};
 
     struct WheelScroll {
         SelectionCapture context;
@@ -945,7 +946,23 @@ public:
         return !selected_entity_ids.isEmpty() && !selected_roof_openings.empty();
     }
 
-    bool supports_mixed_plan_member(const std::string& id, const DocumentSnapshot& source,
+    bool coordinated_plan_selection() const noexcept {
+        return mixed_selection() || (ordinary_selection_plan_transform_enabled &&
+            selected_roof_openings.empty() && selected_entity_ids.size() >= 2);
+    }
+
+    bool coordinated_plan_transform_enabled() const noexcept {
+        return mixed_selection() ? mixed_selection_plan_transform_enabled :
+            ordinary_selection_plan_transform_enabled && selected_roof_openings.empty() &&
+                selected_entity_ids.size() >= 2;
+    }
+
+    bool coordinated_plan_callbacks_available() const noexcept {
+        return owner->onRoofOpeningTransformStarted && owner->onRoofOpeningTransformPreviewRequested &&
+            owner->onRoofOpeningTransformRequested;
+    }
+
+    bool supports_coordinated_plan_member(const std::string& id, const DocumentSnapshot& source,
         const QStringList& ordinary, bool require_editable_source=true) const {
         if (supports_direct_transform(id,source,require_editable_source)) return true;
         if (require_editable_source && !source.is_editable()) return false;
@@ -972,8 +989,8 @@ public:
     // Require every logical member before collecting any geometry. Presentation
     // identity deduplication also covers a selected host's explicitly selected
     // dependent or child without changing either captured semantic roster.
-    std::optional<std::vector<occ::handle<AIS_Shape>>> mixed_transform_presentations() const {
-        if (!mixed_selection_plan_transform_enabled || !mixed_selection() ||
+    std::optional<std::vector<occ::handle<AIS_Shape>>> coordinated_transform_presentations() const {
+        if (!coordinated_plan_transform_enabled() ||
             !published_snapshot || !published_snapshot->is_editable() || context.IsNull()) return std::nullopt;
         std::vector<occ::handle<AIS_Shape>> result;
         const auto append = [this,&result](const occ::handle<AIS_Shape>& presentation) {
@@ -985,7 +1002,7 @@ public:
         for (const auto& selected : selected_entity_ids) {
             const auto id=selected.toStdString();
             const auto found=solids.find(id);
-            if (!supports_mixed_plan_member(id,*published_snapshot,selected_entity_ids) || found==solids.end() ||
+            if (!supports_coordinated_plan_member(id,*published_snapshot,selected_entity_ids) || found==solids.end() ||
                 !append(found->second.presentation)) return std::nullopt;
             for (const auto& dependent : transform_presentation_ids(id,*published_snapshot)) {
                 const auto& solid=solids.at(dependent);
@@ -1037,21 +1054,22 @@ public:
     void attach_manipulator() {
         if (roof_transform_capture) return;
         const bool children = !selected_roof_openings.empty();
-        const bool mixed=mixed_selection();
-        if ((mixed && !mixed_selection_plan_transform_enabled) ||
-            (!children && (selected_entity_ids.size() != 1 || !selected_entity_id.has_value() || !supports_direct_transform(*selected_entity_id))) ||
+        const bool coordinated=coordinated_plan_selection();
+        const bool cohort=children || coordinated;
+        if ((coordinated && (!coordinated_plan_transform_enabled() || !coordinated_plan_callbacks_available())) ||
+            (!cohort && (selected_entity_ids.size() != 1 || !selected_entity_id.has_value() || !supports_direct_transform(*selected_entity_id))) ||
             !native_ready || !geometry_prepared || regenerator.is_pending() || prepared_geometry ||
             !geometry_status.isEmpty() || context.IsNull() || viewer.IsNull()) {
             detach_manipulator();
             return;
         }
-        const auto found = children ? solids.end() : solids.find(*selected_entity_id);
-        if (!children && (found == solids.end() || found->second.presentation.IsNull() ||
+        const auto found = cohort ? solids.end() : solids.find(*selected_entity_id);
+        if (!cohort && (found == solids.end() || found->second.presentation.IsNull() ||
             !context->IsDisplayed(found->second.presentation))) {
             detach_manipulator();
             return;
         }
-        if (!children && manipulator_entity_id == selected_entity_id && !manipulator.IsNull() &&
+        if (!cohort && manipulator_entity_id == selected_entity_id && !manipulator.IsNull() &&
             manipulator->IsAttached()) return;
 
         detach_manipulator();
@@ -1074,20 +1092,20 @@ public:
         options.SetAdjustPosition(true).SetAdjustSize(false).SetEnableModes(true);
         auto group = occ::handle<NCollection_HSequence<occ::handle<AIS_InteractiveObject>>>(
             new NCollection_HSequence<occ::handle<AIS_InteractiveObject>>());
-        manipulator->SetPart(2, AIS_MM_Translation, !children);
+        manipulator->SetPart(2, AIS_MM_Translation, !cohort);
         // Restore the ordinary/single-child scaler handles when switching away
         // from a cohort whose projected extent disabled a directional axis.
         manipulator->SetPart(AIS_MM_Scaling, true);
-        if (children) {
+        if (cohort) {
             if (!published_snapshot || !published_snapshot->is_editable() ||
                 !owner->onRoofOpeningTransformPreviewRequested || !owner->onRoofOpeningTransformRequested ||
-                (mixed && !owner->onRoofOpeningTransformStarted)) return;
+                (coordinated && !owner->onRoofOpeningTransformStarted)) return;
             TopoDS_Compound compound;
             BRep_Builder builder;
             builder.MakeCompound(compound);
             Bnd_Box bounds;
-            if (mixed) {
-                const auto roster=mixed_transform_presentations();
+            if (coordinated) {
+                const auto roster=coordinated_transform_presentations();
                 if (!roster || roster->empty()) return;
                 for (const auto& presentation : *roster) {
                     // AIS bounds are local. Apply the complete displayed
@@ -1113,13 +1131,13 @@ public:
                 }
             }
             const auto low = bounds.CornerMin(), high = bounds.CornerMax();
-            if (mixed && (!std::isfinite(low.X()) || !std::isfinite(low.Y()) || !std::isfinite(low.Z()) ||
+            if (coordinated && (!std::isfinite(low.X()) || !std::isfinite(low.Y()) || !std::isfinite(low.Z()) ||
                 !std::isfinite(high.X()) || !std::isfinite(high.Y()) || !std::isfinite(high.Z()))) return;
             roof_transform_pivot = {(low.X()+high.X())*0.5,(low.Y()+high.Y())*0.5,(low.Z()+high.Z())*0.5};
             roof_transform_reference_length = std::max({high.X()-low.X(),high.Y()-low.Y(),high.Z()-low.Z()});
             roof_transform_axis_lengths = {high.X()-low.X(),high.Y()-low.Y()};
             if (!std::isfinite(roof_transform_reference_length) || roof_transform_reference_length <= 1.0e-9) return;
-            if (mixed) {
+            if (coordinated) {
                 manipulator->SetPart(0,AIS_MM_Scaling,false);
                 manipulator->SetPart(1,AIS_MM_Scaling,false);
             } else if (roof_directional_resize_enabled && selected_roof_openings.size()>1) {
@@ -1140,40 +1158,39 @@ public:
             }
         }
         manipulator->Attach(group, options);
-        if (mixed || (children && roof_directional_resize_enabled && selected_roof_openings.size()>1)) {
+        if (coordinated || (children && roof_directional_resize_enabled && selected_roof_openings.size()>1)) {
             // Explicit world axes avoid inheriting the preceding owner's or
             // preview's manipulator orientation as unreported proposal axes.
             manipulator->SetPosition(gp_Ax2(gp_Pnt(roof_transform_pivot[0],roof_transform_pivot[1],
                 roof_transform_pivot[2]),gp_Dir(0,0,1),gp_Dir(1,0,0)));
         }
-        if (children) context->Display(manipulator,false);
-        if (!children) manipulator_entity_id = selected_entity_id;
+        if (cohort) context->Display(manipulator,false);
+        if (!cohort) manipulator_entity_id = selected_entity_id;
         restore_selection_highlights();
         viewer->Redraw();
     }
 
     bool begin_manipulation(const NativeInputPoint point) {
-        const bool mixed=mixed_selection();
-        if ((mixed && (!mixed_selection_plan_transform_enabled || roof_transform_proxy.IsNull() ||
-                !owner->onRoofOpeningTransformStarted || !owner->onRoofOpeningTransformPreviewRequested ||
-                !owner->onRoofOpeningTransformRequested)) ||
+        const bool coordinated=coordinated_plan_selection();
+        if ((coordinated && (!coordinated_plan_transform_enabled() || roof_transform_proxy.IsNull() ||
+                !coordinated_plan_callbacks_available())) ||
             roof_release_pending || manipulator.IsNull() || !manipulator->IsAttached() ||
-            (selected_roof_openings.empty() && manipulator_entity_id != selected_entity_id) || context.IsNull() || view.IsNull())
+            (!coordinated && selected_roof_openings.empty() && manipulator_entity_id != selected_entity_id) || context.IsNull() || view.IsNull())
             return false;
         try {
             // Recheck the entire real displayed cohort before press ownership;
             // an attached proxy must never authorize a now-hidden subset.
-            if (mixed && !mixed_transform_presentations()) return false;
+            if (coordinated && !coordinated_transform_presentations()) return false;
             context->MoveTo(point.x, point.y, view, false);
             if (!manipulator->HasActiveMode()) return false;
-            if (mixed) {
+            if (coordinated) {
                 const auto mode=manipulator->ActiveMode();
                 const int axis=manipulator->ActiveAxisIndex();
                 if (!((mode==AIS_MM_Translation && (axis==0 || axis==1)) ||
                     (mode==AIS_MM_Rotation && axis==2) || (mode==AIS_MM_Scaling && axis==2))) return false;
             }
             roof_transform_resize_axis.reset();
-            if (!mixed && roof_directional_resize_enabled && selected_roof_openings.size()>1 &&
+            if (!coordinated && roof_directional_resize_enabled && selected_roof_openings.size()>1 &&
                 manipulator->ActiveMode()==AIS_MM_Scaling) {
                 const int axis=manipulator->ActiveAxisIndex();
                 if (axis<0 || axis>2) return false;
@@ -1370,7 +1387,8 @@ public:
     bool roof_preview_current(std::uint64_t serial) const {
         return serial != 0 && serial == roof_transform_serial && roof_transform_proposal &&
             roof_transform_capture && (roof_transform_capture->selection.isEmpty() ||
-                mixed_selection_plan_transform_enabled) && owner->hasFocus() && !QApplication::activeModalWidget() &&
+                (coordinated_plan_transform_enabled() && coordinated_plan_callbacks_available())) &&
+            owner->hasFocus() && !QApplication::activeModalWidget() &&
             selection_current(*roof_transform_capture);
     }
 
@@ -1431,7 +1449,7 @@ public:
     void request_roof_preview(Qt::KeyboardModifiers modifiers) {
         if (!roof_transform_capture || !selection_current(*roof_transform_capture) ||
             (!roof_transform_capture->selection.isEmpty() &&
-                (!mixed_selection_plan_transform_enabled || roof_transform_resize_axis)) ||
+                (!coordinated_plan_transform_enabled() || !coordinated_plan_callbacks_available() || roof_transform_resize_axis)) ||
             !owner->hasFocus() || QApplication::activeModalWidget()) {
             owner->cancelInteraction();
             return;
@@ -1548,6 +1566,7 @@ public:
         const auto proposal = *roof_transform_proposal;
         const auto serial = roof_transform_serial;
         const auto source = roof_transform_capture->source;
+        const bool coordinated=!roof_transform_capture->selection.isEmpty();
         const QPointer<NativeModelView> guard(owner);
         CommitSourceScope source_scope(owner);
         commit_snapshot = source;
@@ -1562,7 +1581,8 @@ public:
         roof_committing = false;
         owner->cancelInteraction();
         if (!guard) return;
-        if (!accepted) show_input_error(QStringLiteral("Skylight transform was refused. Start again."));
+        if (!accepted) show_input_error(coordinated ? QStringLiteral("Selection transform was refused. Start again.") :
+            QStringLiteral("Skylight transform was refused. Start again."));
     }
 
     void collect_roof_preview() noexcept {
@@ -2193,10 +2213,12 @@ void NativeModelView::setSelectedRoofOpenings(std::vector<NativeRoofOpeningTarge
 }
 
 bool NativeModelView::transformControlsVisible() const noexcept {
-    return (((m_impl->selected_entity_ids.isEmpty() || m_impl->mixed_selection_plan_transform_enabled) &&
-           !m_impl->selected_roof_openings.empty() && !m_impl->roof_transform_proxy.IsNull()) ||
-           (m_impl->selected_roof_openings.empty() && m_impl->selected_entity_ids.size() == 1 && m_impl->selected_entity_id.has_value() &&
-           m_impl->manipulator_entity_id == m_impl->selected_entity_id)) &&
+    const bool child_only=m_impl->selected_entity_ids.isEmpty() && !m_impl->selected_roof_openings.empty();
+    const bool coordinated=m_impl->coordinated_plan_selection() && m_impl->coordinated_plan_transform_enabled() &&
+        m_impl->coordinated_plan_callbacks_available();
+    const bool ordinary_single=m_impl->selected_roof_openings.empty() && m_impl->selected_entity_ids.size() == 1 &&
+        m_impl->selected_entity_id.has_value() && m_impl->manipulator_entity_id == m_impl->selected_entity_id;
+    return (((child_only || coordinated) && !m_impl->roof_transform_proxy.IsNull()) || ordinary_single) &&
            !m_impl->manipulator.IsNull() && m_impl->manipulator->IsAttached();
 }
 
@@ -2209,30 +2231,30 @@ bool NativeModelView::completeRoofOpeningTransformPreview(
     std::vector<NativeRoofOpeningTarget> remapped_targets,
     VisibleEntityIds candidate_visible_ids) {
     if (QThread::currentThread() != thread() || !roofOpeningTransformPreviewCurrent(serial)) return false;
-    const bool mixed=!m_impl->roof_transform_capture->selection.isEmpty();
-    if ((!mixed && !candidate.is_editable()) ||
+    const bool coordinated=!m_impl->roof_transform_capture->selection.isEmpty();
+    if ((!coordinated && !candidate.is_editable()) ||
         candidate.document_id() != m_impl->roof_transform_capture->source->document_id() ||
         remapped_targets.size() != m_impl->roof_transform_proposal->targets.size()) {
         (void)rejectRoofOpeningTransformPreview(serial,QStringLiteral("The skylight candidate source or cohort is invalid."));
         return false;
     }
-    if (mixed) {
+    if (coordinated) {
         const auto& original=*m_impl->roof_transform_capture->source;
         // These are geometry-manufacture correspondence checks, not a private
         // Document admission proof. The shell retains/authenticates its sealed
         // original-source preparation for room review and final command replay.
-        if (!m_impl->mixed_selection_plan_transform_enabled || !original.is_editable() ||
+        if (!m_impl->coordinated_plan_transform_enabled() || !original.is_editable() ||
             candidate.revision()!=original.revision() ||
             candidate.saved_revision_optional()!=original.saved_revision_optional() ||
             candidate.named_revisions()!=original.named_revisions() ||
             candidate.history().size()!=original.history().size() || candidate.assets()!=original.assets() ||
             remapped_targets!=m_impl->roof_transform_capture->roof_openings) {
-            (void)rejectRoofOpeningTransformPreview(serial,QStringLiteral("The mixed drawing candidate no longer corresponds to its captured source and complete selection."));
+            (void)rejectRoofOpeningTransformPreview(serial,QStringLiteral("The selection drawing candidate no longer corresponds to its captured source and complete selection."));
             return false;
         }
         for (const auto& [id,asset] : original.assets()) {
             if (asset.metadata.dump()!=candidate.assets().at(id).metadata.dump()) {
-                (void)rejectRoofOpeningTransformPreview(serial,QStringLiteral("The mixed drawing candidate changed original asset metadata."));
+                (void)rejectRoofOpeningTransformPreview(serial,QStringLiteral("The selection drawing candidate changed original asset metadata."));
                 return false;
             }
         }
@@ -2245,15 +2267,15 @@ bool NativeModelView::completeRoofOpeningTransformPreview(
             return false;
         }
     }
-    // Mixed ordinary IDs/embedded aliases remain exact. Active-baseline
+    // Coordinated ordinary IDs/embedded aliases remain exact. Active-baseline
     // replacement has no native admission here; a complete candidate must
     // retain every captured ordinary member and its supported semantics. The
-    // shell's sealed read-only mixed drawing proposal can manufacture geometry
+    // shell's sealed read-only drawing proposal can manufacture geometry
     // here without acquiring the original source's authoring authority.
     for (const auto& id : m_impl->roof_transform_capture->selection) {
         if (!candidate_visible_ids.contains(id.toStdString()) ||
-            !m_impl->supports_mixed_plan_member(id.toStdString(),candidate,m_impl->roof_transform_capture->selection,false)) {
-            (void)rejectRoofOpeningTransformPreview(serial,QStringLiteral("The mixed candidate lacks a visible ordinary member or its supported transform geometry."));
+            !m_impl->supports_coordinated_plan_member(id.toStdString(),candidate,m_impl->roof_transform_capture->selection,false)) {
+            (void)rejectRoofOpeningTransformPreview(serial,QStringLiteral("The selection candidate lacks a visible ordinary member or its supported transform geometry."));
             return false;
         }
     }
@@ -2326,6 +2348,16 @@ void NativeModelView::setMixedSelectionPlanTransformEnabled(bool enabled) {
     cancelInteraction();
     if (!guard) return;
     m_impl->mixed_selection_plan_transform_enabled=enabled;
+    try { m_impl->attach_manipulator(); }
+    catch (...) { m_impl->detach_manipulator(); }
+}
+
+void NativeModelView::setOrdinarySelectionPlanTransformEnabled(bool enabled) {
+    if (m_impl->ordinary_selection_plan_transform_enabled==enabled) return;
+    const QPointer<NativeModelView> guard(this);
+    cancelInteraction();
+    if (!guard) return;
+    m_impl->ordinary_selection_plan_transform_enabled=enabled;
     try { m_impl->attach_manipulator(); }
     catch (...) { m_impl->detach_manipulator(); }
 }
@@ -2447,8 +2479,9 @@ std::optional<NativeModelView::TransformControl> NativeModelView::transformContr
         m_impl->context->DetectedOwner());
     if (detected.IsNull() || m_impl->context->DetectedInteractive() != m_impl->manipulator)
         return std::nullopt;
-    if (m_impl->mixed_selection()) {
-        if (!m_impl->mixed_selection_plan_transform_enabled || m_impl->roof_transform_proxy.IsNull()) return std::nullopt;
+    if (m_impl->coordinated_plan_selection()) {
+        if (!m_impl->coordinated_plan_transform_enabled() || !m_impl->coordinated_plan_callbacks_available() ||
+            m_impl->roof_transform_proxy.IsNull()) return std::nullopt;
         if (!((detected->Mode()==AIS_MM_Translation && (detected->Index()==0 || detected->Index()==1)) ||
             (detected->Mode()==AIS_MM_Rotation && detected->Index()==2) ||
             (detected->Mode()==AIS_MM_Scaling && detected->Index()==2))) return std::nullopt;
@@ -3172,8 +3205,8 @@ void NativeModelView::pointerPress(QSinglePointEvent* event) {
         const bool manipulating = !isMoveActive() && m_impl->begin_manipulation(point);
         if (!owner_guard) { event->accept(); return; }
         if (manipulating) {
-            const bool children = !m_impl->selected_roof_openings.empty();
-            if (children) {
+            const bool cohort = !m_impl->selected_roof_openings.empty() || m_impl->coordinated_plan_selection();
+            if (cohort) {
                 m_impl->roof_transform_capture = m_impl->capture_selection();
                 // Capture the world length magnet once; camera changes retire
                 // the gesture rather than changing its quantization mid-drag.
@@ -3184,8 +3217,8 @@ void NativeModelView::pointerPress(QSinglePointEvent* event) {
                 const auto step = std::lower_bound(steps.begin(),steps.end(),desired);
                 m_impl->roof_transform_length_step = step == steps.end() ? steps.back() : *step;
             }
-            if (!capture_transform(children ? QString() : QString::fromStdString(*m_impl->manipulator_entity_id)) ||
-                !owner_guard || (children && (!m_impl->roof_transform_capture ||
+            if (!capture_transform(cohort ? QString() : QString::fromStdString(*m_impl->manipulator_entity_id)) ||
+                !owner_guard || (cohort && (!m_impl->roof_transform_capture ||
                     !m_impl->selection_current(*m_impl->roof_transform_capture)))) {
                 if (owner_guard) cancelInteraction();
                 event->accept();

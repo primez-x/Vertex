@@ -14,6 +14,34 @@ changed source does not acquire runtime acceptance without later qualification.
 
 ## Current delivery state
 
+### October 10 ordinary 3D group controls - source integration
+
+Floor scaling planes and contextual Text/Reference fields are committed and
+pushed as 97a9f3a7; exact local and remote branch references matched. Current
+source connects ordinary-only native cohorts of at least two objects to the
+existing complete-selection producer. Its historical dialect four already
+admits an empty typed roof-child roster. The shell keeps single-object and
+child-only routes separate, while the ordinary group uses one original-source
+preparation, mandatory room decisions and atomic command52 completion.
+
+The viewport receives a separate default-false ordinary-group opt-in. Its
+complete visible roster and carried dependents must supply actual geometry;
+the undisplayed proxy grants no authoring authority. Group proposals support
+horizontal translation, Z rotation and uniform scaling. Vertical translation
+and directional resizing remain required implementation work. Source/camera/
+focus, complete selection, visibility and exact manufactured release retain
+their captured fences. Independent source review approved the integrated route,
+including empty-child admission, exact manufactured release, mandatory room
+review and deferred selection restoration. Native click/marquee selection is
+owned by the shell; synchronization on success/rollback and changed-roster
+gesture retirement retain correspondence between the two captured rosters.
+No new persisted-wire meaning or extra ordinary-target proposal field was
+needed. Root reviewed the interfaces and scoped whitespace checking passed.
+
+No builds, tests/new tests, scripts/probes, native jobs, launches, packages or
+installations have run. The installed app is unchanged and all ten production
+gates remain open.
+
 ### October 10 floor scaling planes and contextual fields - source integration
 
 Native mixed plan controls are committed and pushed as 71fb3932; exact local
