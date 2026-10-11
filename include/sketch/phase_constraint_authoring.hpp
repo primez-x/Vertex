@@ -227,6 +227,25 @@ resolve_phase_assembly_with_mixed_property_correspondence(
     const PhaseAssemblyInstancePropertyEditPreparation& assemblies,
     const MixedSelectionPropertyEditPreparation* base);
 
+// Detached dependency composition. Reconstruct both sealed contributions from
+// the same original snapshot, keep an actual base-carried root as the survivor,
+// and apply component operations in that root's final parent frame. Entities,
+// correspondence and losing allocations are derived together. All component
+// allocations, including elided copies/aliases, remain receipt reservations.
+// This is not historical Properties14 authority, Document publication, or a
+// persisted dialect. The base must be unreviewed five-through-thirteen/fifteen
+// with no assembly lane; final room decisions remain the enclosing command's job.
+struct CoordinatedComponentPropertyComposition {
+    std::map<std::string,Entity,std::less<>> entities;
+    std::map<AssemblyInstancePropertyEditTarget,AssemblyInstancePropertyEditTarget> original_to_proposed;
+    std::vector<std::string> reserved_component_identity_ids;
+    std::vector<std::string> elided_component_identity_ids;
+};
+[[nodiscard]] CoordinatedComponentPropertyComposition compose_coordinated_component_property_dependencies(
+    const DocumentSnapshot& actual,
+    const PhaseAssemblyInstancePropertyEditPreparation& assemblies,
+    const MixedSelectionPropertyEditPreparation& base);
+
 // Reconstruct bounded scalar replacement leaves against the full original
 // snapshot before composing ordinary contributions. Pending wall room review
 // remains a detached stage. Only independently replayed explicit stair

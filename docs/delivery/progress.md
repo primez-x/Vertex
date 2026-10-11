@@ -14,6 +14,52 @@ changed source does not acquire runtime acceptance without later qualification.
 
 ## Current delivery state
 
+### October 11 detached component-and-host dependency composition
+
+The preceding qualified wall preview/mixed Properties batch is committed and
+pushed as f0187c9f. Current source adds a separate detached dependency composer
+on the original snapshot plus sealed component and unreviewed noncomponent
+Properties5..13/15 preparations. Historical Properties14 retains its existing
+meaning. The composer derives entities, selected correspondence and reserved/
+elided component identities together; it is not a Document publication token.
+
+Actual base-carried roots survive when both contributions allocate a copy.
+Only the exact component-allocated losing owner/private catalog is elided.
+Typed registry and membership proposal substitution preserves original
+baseline/demolished entries, deduplicates surviving proposals and retains
+required legacy-unlisted companions. Ordinary declared-proposed row edits
+also reroute to their actual carried destination rather than modifying the
+retained original. Complete component fresh tokens and both replayed graphs'
+owned/alias inventories are checked before elision; losing allocations remain
+in the returned reservation inventory. Base-owned presentation copies survive.
+
+The internal mathematical carry helper reinspects original declared slots and
+stable paths, checks exact selected root/path correspondence and raw/typed
+carry compatibility, and applies supplied operations onto carried rows.
+Explicit SET equal to the original source value still resets a changed carried
+pose; unsupplied components retain the actual carried value. Raw unchanged
+metadata/definitions/materials/row representations remain intact. Final
+activity, constraints, Site and native host/opening geometry use a fresh host
+cache, including same-ID independently edited hosts. Fixed per-stage expansion
+ledgers accumulate across selected roots; catalog transfer admission remains
+cumulative. Borrowed maps in this internal helper supply no authoring authority.
+
+This seam is not yet connected to a new persisted mixed Properties command,
+Document/history publication, desktop producer or selected-path restoration.
+Component-only reference carry, remaining mutation/clipboard/shared-type
+consumers, complete joint-only patch admission, arbitrary deformed/cross-Site
+world-profile carry and companion-project quarantine remain implementation
+gaps. Existing source component preparation must independently admit its patch
+on the original host; a patch valid only after a host change needs distinct
+joint source admission. Source-only steering remains binding: no builds,
+tests, probes, launches, packages or installations. The installed candidate
+is unchanged, compilation/runtime behavior is unverified and all ten
+production gates remain open. Independent integrated source review approved
+this bounded change with no confirmed P1/P2 finding. Root reviewed the closed
+interfaces, catalog promotion rules, source-only integration and reservation
+accounting; named whitespace checks passed. This does not accept a production
+gate or certify runtime behavior.
+
 ### October 11 coordinated qualified wall and building edits
 
 The preceding standalone wall-copy batch is committed and pushed as 20998d2c.

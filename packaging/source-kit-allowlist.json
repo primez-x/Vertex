@@ -4779,6 +4779,10 @@
     },
     {
       "category": "source",
+      "path": "src/core/assembly_instance_property_carry.hpp"
+    },
+    {
+      "category": "source",
       "path": "src/core/assembly_instance_property_edit.cpp"
     },
     {

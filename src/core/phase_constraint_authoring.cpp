@@ -37,6 +37,7 @@
 #include "sketch/phase_assembly_instance_property_edit.hpp"
 #include "sketch/mixed_selection_property_edit.hpp"
 #include "sketch/wall_measurement.hpp"
+#include "assembly_instance_property_carry.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -2195,6 +2196,46 @@ Entity merge_component_membership_rows(const Entity& original, const std::vector
     return result;
 }
 
+void validate_mixed_edit_fresh_destinations(const Entities& actual,
+    const std::vector<Entities>& candidates,bool first_lane_cannot_allocate=false) {
+    const auto original_owners=mixed_edit_identity_owners(actual);
+    const auto original_aliases=embedded_assembly_presentation_ids(actual);
+    std::set<std::string,std::less<>> source_aliases;
+    for (const auto& [key,alias]:original_aliases) { (void)key; source_aliases.insert(alias); }
+    std::set<std::string,std::less<>> fresh;
+    std::set<std::pair<std::string,std::string>> fresh_instances;
+    for (const auto& candidate:candidates) {
+        coordinated_map_budget(candidate);
+        std::set<std::string,std::less<>> lane_fresh;
+        for (const auto& [token,owners]:mixed_edit_identity_owners(candidate)) {
+            const auto found=original_owners.find(token);
+            if (found!=original_owners.end()) {
+                for (const auto& owner:owners) if (!found->second.contains(owner))
+                    invalid("Mixed edit reuses an actual owned identity for a different owner");
+                continue;
+            }
+            if (first_lane_cannot_allocate && &candidate==&candidates.front())
+                invalid("Reviewed stair replay introduced a fresh owned identity");
+            if (owners.size()!=1 || source_aliases.contains(token))
+                invalid("Mixed edit fresh identity is ambiguous or reuses an actual render alias");
+            lane_fresh.insert(token);
+        }
+        for (const auto& [binding,alias]:embedded_assembly_presentation_ids(candidate)) {
+            if (original_aliases.contains(binding)) continue;
+            if (!fresh_instances.insert(binding).second)
+                invalid("Mixed edit fresh qualified catalog instance destinations overlap between leaves");
+            if (fresh_instances.size()+fresh.size()>4096) invalid("Mixed edit fresh identity budget exceeded");
+            if (source_aliases.contains(alias) || original_owners.contains(alias) || lane_fresh.contains(alias))
+                invalid("Mixed edit fresh render alias collides with an owned identity");
+            lane_fresh.insert(alias);
+        }
+        for (const auto& token:lane_fresh) {
+            if (!fresh.insert(token).second) invalid("Mixed edit fresh destinations overlap between leaves");
+            if (fresh.size()+fresh_instances.size()>4096) invalid("Mixed edit fresh identity budget exceeded");
+        }
+    }
+}
+
 Entities compose_mixed_selection_edit_candidates_impl(const Entities& actual,
     const std::vector<Entities>& independently_admitted_candidates,
     const std::set<std::string,std::less<>>* retired_rooms=nullptr,
@@ -2208,7 +2249,6 @@ Entities compose_mixed_selection_edit_candidates_impl(const Entities& actual,
         (phase_properties ? 2u : stair_review ? 6u : 5u))
         invalid("Mixed edit composition requires one to five independently admitted actual-source candidates");
     for (const auto& candidate:independently_admitted_candidates) coordinated_map_budget(candidate);
-    const auto original_owners=mixed_edit_identity_owners(actual);
     const auto original_aliases=embedded_assembly_presentation_ids(actual);
     std::set<std::string,std::less<>> reviewed_erased;
     std::set<std::pair<std::string,std::string>> reviewed_retired_bindings;
@@ -2239,39 +2279,7 @@ Entities compose_mixed_selection_edit_candidates_impl(const Entities& actual,
             if (!original_aliases.contains(binding)) invalid("Reviewed stair introduced a fresh qualified catalog row");
         }
     }
-    std::set<std::string,std::less<>> source_aliases;
-    for (const auto& [key,alias]:original_aliases) { (void)key; source_aliases.insert(alias); }
-    std::set<std::string,std::less<>> fresh;
-    std::set<std::pair<std::string,std::string>> fresh_instances;
-    for (const auto& candidate:independently_admitted_candidates) {
-        std::set<std::string,std::less<>> lane_fresh;
-        for (const auto& [token,owners]:mixed_edit_identity_owners(candidate)) {
-            const auto found=original_owners.find(token);
-            if (found!=original_owners.end()) {
-                for (const auto& owner:owners) if (!found->second.contains(owner))
-                    invalid("Mixed edit reuses an actual owned identity for a different owner");
-                continue;
-            }
-            if (stair_review && &candidate==&independently_admitted_candidates.front())
-                invalid("Reviewed stair replay introduced a fresh owned identity");
-            if (owners.size()!=1 || source_aliases.contains(token))
-                invalid("Mixed edit fresh identity is ambiguous or reuses an actual render alias");
-            lane_fresh.insert(token);
-        }
-        for (const auto& [binding,alias]:embedded_assembly_presentation_ids(candidate)) {
-            if (original_aliases.contains(binding)) continue;
-            if (!fresh_instances.insert(binding).second)
-                invalid("Mixed edit fresh qualified catalog instance destinations overlap between leaves");
-            if (fresh_instances.size()+fresh.size()>4096) invalid("Mixed edit fresh identity budget exceeded");
-            if (source_aliases.contains(alias) || original_owners.contains(alias) || lane_fresh.contains(alias))
-                invalid("Mixed edit fresh render alias collides with an owned identity");
-            lane_fresh.insert(alias);
-        }
-        for (const auto& token:lane_fresh) {
-            if (!fresh.insert(token).second) invalid("Mixed edit fresh destinations overlap between leaves");
-            if (fresh.size()+fresh_instances.size()>4096) invalid("Mixed edit fresh identity budget exceeded");
-        }
-    }
+    validate_mixed_edit_fresh_destinations(actual,independently_admitted_candidates,stair_review!=nullptr);
     std::set<std::string,std::less<>> retained_baselines;
     for (const auto& [key,entity]:actual) if (entity.type=="model_phases") {
         (void)key;
@@ -2772,6 +2780,207 @@ Entities compose_phase_assembly_with_mixed_property_selection_edit_candidates(co
     }
     std::sort(retained.begin(),retained.end(),[](const auto& left,const auto& right) { return left.target<right.target; });
     (void)replay_phase_assembly_instance_property_edits(result,retained,{});
+    return result;
+}
+
+namespace {
+using ComponentTarget=AssemblyInstancePropertyEditTarget;
+ComponentTarget component_root(ComponentTarget target) { target.part_path.clear(); return target; }
+
+Json& mutable_component_row(Entities& entities,const ComponentTarget& target) {
+    if (target.document_entity_id) return entities.at(*target.document_entity_id).properties.at("instance");
+    auto& rows=entities.at(target.catalog_id).properties.at("model").at("instances");
+    const auto row=std::find_if(rows.begin(),rows.end(),[&](const auto& value) { return value.at("id")==target.instance_id; });
+    if (row==rows.end()) invalid("Coordinated component Properties lost its exact carried row");
+    return *row;
+}
+
+template<class T> std::vector<T> substitute_component_proposals(const std::vector<T>& rows,
+    const std::map<T,T>& substitutions) {
+    std::vector<T> result;
+    for (const auto& row:rows) {
+        const auto found=substitutions.find(row);
+        const auto& destination=found==substitutions.end() ? row : found->second;
+        if (std::find(result.begin(),result.end(),destination)==result.end()) result.push_back(destination);
+    }
+    return result;
+}
+
+void substitute_component_memberships(Entities& components,
+    const std::map<AssemblyPhaseRoot,AssemblyPhaseRoot>& embedded,
+    const std::map<std::string,std::string>& independent) {
+    for (auto& [id,entity]:components) {
+        (void)id;
+        if (entity.type==assembly_phase_membership_entity_type) {
+            const auto saved=AssemblyPhaseMembership::from_json(entity.properties.at("model"));
+            for (const auto& root:saved.baseline_roots()) if (embedded.contains(root))
+                invalid("Coordinated component substitution cannot change a baseline root");
+            auto alternatives=saved.alternatives();
+            for (auto& alternative:alternatives) {
+                for (const auto& root:alternative.demolished_roots) if (embedded.contains(root))
+                    invalid("Coordinated component substitution cannot change a demolished source root");
+                alternative.proposed_roots=substitute_component_proposals(alternative.proposed_roots,embedded);
+            }
+            const auto replacement=AssemblyPhaseMembership::create(saved.registry_id(),
+                substitute_component_proposals(saved.roots(),embedded),saved.baseline_roots(),std::move(alternatives));
+            entity.properties.at("model")=retain_assembly_phase_membership_source(entity.properties.at("model"),replacement);
+        } else if (entity.type=="model_phases") {
+            const auto saved=ModelPhases::from_json(entity.properties.at("model"));
+            for (const auto& owner:saved.baseline_ids()) if (independent.contains(owner))
+                invalid("Coordinated component substitution cannot change a baseline owner");
+            auto alternatives=saved.alternatives();
+            for (auto& alternative:alternatives) {
+                for (const auto& owner:alternative.demolished_ids) if (independent.contains(owner))
+                    invalid("Coordinated component substitution cannot change a demolished source owner");
+                alternative.proposed_ids=substitute_component_proposals(alternative.proposed_ids,independent);
+            }
+            const auto replacement=ModelPhases::create(substitute_component_proposals(saved.entity_ids(),independent),
+                saved.baseline_ids(),std::move(alternatives),saved.active_alternative());
+            entity.properties.at("model")=retain_model_phase_source(entity.properties.at("model"),replacement);
+        }
+    }
+}
+} // namespace
+
+CoordinatedComponentPropertyComposition compose_coordinated_component_property_dependencies(
+    const DocumentSnapshot& source,const PhaseAssemblyInstancePropertyEditPreparation& components,
+    const MixedSelectionPropertyEditPreparation& base) {
+    const auto replayed=replay_phase_assembly_instance_property_edit_preparation(source,components.request());
+    const auto& wire=base.intent();
+    const auto version=wire.at("version").get<int>();
+    if (!((version>=5 && version<=13) || version==15) || !wire.at("room_reviews").empty() ||
+        (wire.contains("phase_room_reviews") && !wire.at("phase_room_reviews").empty()) ||
+        (wire.contains("assembly_request") && !wire.at("assembly_request").is_null()))
+        invalid("Coordinated component Properties requires an unreviewed noncomponent base");
+    const auto historical=replay_mixed_selection_property_edit_preparation(source,wire);
+    const auto& actual=source.entities();
+    const auto& carried=historical.preview_snapshot().entities();
+    coordinated_map_budget(actual);
+    // Check complete independently replayed allocations BEFORE eliding a copy.
+    // An elided destination cannot hide an allocation/alias collision.
+    validate_phase_assembly_instance_property_edit_fresh_identities(carried,replayed.result().fresh_identity_ids);
+    validate_mixed_edit_fresh_destinations(actual,{carried,replayed.preview_entities()});
+    auto normalized=replayed.preview_entities();
+    const auto authoring=decode_phase_assembly_instance_property_edit_authoring(replayed.request().at("authoring"));
+    CoordinatedComponentPropertyComposition result;
+    result.original_to_proposed=replayed.result().original_to_proposed;
+    result.reserved_component_identity_ids=replayed.result().fresh_identity_ids;
+    std::map<ComponentTarget,ComponentTarget> carried_roots;
+    std::map<AssemblyPhaseRoot,AssemblyPhaseRoot> embedded_substitutions;
+    std::map<std::string,std::string> independent_substitutions;
+    for (const auto& [original,component_destination]:replayed.result().original_to_proposed) {
+        const auto root=component_root(original);
+        if (carried_roots.contains(root)) continue;
+        auto base_destination=root;
+        if (root.document_entity_id) {
+            const auto copied=historical.original_to_proposed().find(*root.document_entity_id);
+            if (copied!=historical.original_to_proposed().end() && copied->second!=*root.document_entity_id) {
+                const auto owner=decode_document_assembly_instance(carried.at(copied->second));
+                base_destination={owner.assembly_catalog_id,owner.instance.id,copied->second,{}};
+            }
+        } else {
+            const auto copied=historical.hosted_binding_original_to_proposed().find({root.catalog_id,root.instance_id});
+            if (copied!=historical.hosted_binding_original_to_proposed().end()) {
+                base_destination.catalog_id=copied->second.first;
+                base_destination.instance_id=copied->second.second;
+            }
+        }
+        const auto& original_row=qualified_component_row(actual,root);
+        const auto& base_row=qualified_component_row(carried,base_destination);
+        bool coedit=base_destination!=root || !exact_json(original_row,base_row);
+        if (original_row.contains("placement") && original_row.at("placement").is_object()) {
+            const auto host=original_row.at("placement").at("host_entity_id").get<std::string>();
+            const auto final_host=carried.find(host);
+            coedit=coedit || final_host==carried.end() || !exact(actual.at(host),final_host->second);
+        }
+        if (!coedit) continue;
+        const auto component_root_destination=component_root(component_destination);
+        const auto survivor=base_destination!=root ? base_destination : component_root_destination;
+        carried_roots.emplace(root,survivor);
+        // Ordinary/proposed edits on a source row move to the actual carried
+        // destination too. They have no allocation to substitute.
+        if (component_root_destination==root)
+            mutable_component_row(normalized,root)=original_row;
+        else if (component_root_destination==survivor) {
+            // A same-ID host edit leaves a component-only private proposal as
+            // the survivor. Begin with the base's actual unpatched carried row.
+            auto row=base_row; row["id"]=survivor.instance_id;
+            mutable_component_row(normalized,survivor)=std::move(row);
+        } else {
+            const auto allocation=authoring.allocation.roots.find(root);
+            if (allocation==authoring.allocation.roots.end())
+                invalid("Coordinated component elision lacks its exact original allocation");
+            if (component_root_destination.document_entity_id) {
+                const auto& owner=*component_root_destination.document_entity_id;
+                if (actual.contains(owner) || !allocation->second.proposed_entity_id ||
+                    *allocation->second.proposed_entity_id!=owner || !survivor.document_entity_id)
+                    invalid("Coordinated component owner elision is not a proved fresh proposal");
+                independent_substitutions.emplace(owner,*survivor.document_entity_id);
+                normalized.erase(owner);
+            } else {
+                const auto& catalog=component_root_destination.catalog_id;
+                if (actual.contains(catalog) || !allocation->second.proposed_catalog_id ||
+                    *allocation->second.proposed_catalog_id!=catalog ||
+                    normalized.at(catalog).properties.at("model").at("instances").size()!=1)
+                    invalid("Coordinated component catalog elision is not an exact private proposal");
+                embedded_substitutions.emplace(AssemblyPhaseRoot{catalog,component_root_destination.instance_id},
+                    AssemblyPhaseRoot{survivor.catalog_id,survivor.instance_id});
+                normalized.erase(catalog);
+            }
+        }
+    }
+    substitute_component_memberships(normalized,embedded_substitutions,independent_substitutions);
+    std::vector<AssemblyInstancePropertyEditIntent> carried_intents;
+    std::map<ComponentTarget,ComponentTarget> selected_carried;
+    for (const auto& intent:authoring.intents) {
+        const auto found=carried_roots.find(component_root(intent.target));
+        if (found==carried_roots.end()) continue;
+        auto destination=found->second; destination.part_path=intent.target.part_path;
+        result.original_to_proposed.at(intent.target)=destination;
+        selected_carried.emplace(intent.target,destination);
+        carried_intents.push_back(intent);
+    }
+    PhasePropertyCompositionRetirements retirements;
+    for (const auto& [id,entity]:actual) { (void)entity; if (!carried.contains(id)) retirements.erased.insert(id); }
+    const auto carried_aliases=embedded_assembly_presentation_ids(carried);
+    for (const auto& [binding,alias]:embedded_assembly_presentation_ids(actual)) {
+        const auto retained=carried_aliases.find(binding);
+        if (retained==carried_aliases.end()) retirements.bindings.insert(binding);
+        else if (retained->second!=alias) invalid("Coordinated component base changed a surviving source alias");
+    }
+    std::set<std::string,std::less<>> promoted;
+    auto rows=component_property_row_admission(actual,normalized,promoted);
+    for (const auto& [root,survivor]:carried_roots) if (!root.document_entity_id && root==survivor &&
+        !exact_json(qualified_component_row(actual,root),qualified_component_row(carried,root))) {
+        rows.changed_rows.insert_or_assign(AssemblyPhaseRoot{root.catalog_id,root.instance_id},
+            qualified_component_row(carried,root));
+        rows.catalogs.insert(root.catalog_id);
+    }
+    result.entities=compose_mixed_selection_edit_candidates_impl(actual,{carried,normalized},
+        nullptr,nullptr,nullptr,&promoted,&retirements,&rows);
+    if (!carried_intents.empty()) result.entities=detail::calculate_carried_assembly_instance_property_entities(
+        actual,carried_intents,result.entities,selected_carried);
+    std::vector<AssemblyInstancePropertyEditIntent> final_targets;
+    for (const auto& [original,destination]:result.original_to_proposed) {
+        (void)original;
+        AssemblyInstancePropertyEditIntent intent; intent.target=destination;
+        final_targets.push_back(std::move(intent));
+    }
+    std::sort(final_targets.begin(),final_targets.end(),[](const auto& left,const auto& right) { return left.target<right.target; });
+    (void)replay_phase_assembly_instance_property_edits(result.entities,final_targets,{});
+    const auto final_owners=mixed_edit_identity_owners(result.entities);
+    std::set<std::string,std::less<>> final_aliases;
+    for (const auto& [binding,alias]:embedded_assembly_presentation_ids(result.entities)) { (void)binding; final_aliases.insert(alias); }
+    std::set<std::string,std::less<>> final_instance_ids;
+    for (const auto& [id,entity]:result.entities) {
+        (void)id;
+        if (entity.type=="assembly_model") for (const auto& row:entity.properties.at("model").at("instances"))
+            final_instance_ids.insert(row.at("id").get<std::string>());
+        else if (entity.type=="assembly_instance") final_instance_ids.insert(entity.properties.at("instance").at("id").get<std::string>());
+    }
+    for (const auto& id:result.reserved_component_identity_ids)
+        if (!final_owners.contains(id) && !final_aliases.contains(id) && !final_instance_ids.contains(id))
+            result.elided_component_identity_ids.push_back(id);
     return result;
 }
 

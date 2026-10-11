@@ -2,6 +2,7 @@
 #include "sketch/phase_assembly_instance_property_edit.hpp"
 #include "sketch/assembly_phase_membership.hpp"
 #include "sketch/phase_constraint_authoring.hpp"
+#include "assembly_instance_property_carry.hpp"
 
 #include "sketch/assembly_geometry.hpp"
 #include "sketch/building_entity.hpp"
@@ -855,6 +856,220 @@ void patch_root(AssemblyDocumentEntities& result, const AssemblyDocumentEntities
     }
 }
 } // namespace
+
+namespace {
+Target root_target(Target target) {
+    target.part_path.clear();
+    return target;
+}
+const Json& actual_instance_row(const AssemblyDocumentEntities& actual, const Target& target) {
+    if (target.document_entity_id) {
+        const auto owner = actual.find(*target.document_entity_id);
+        if (owner == actual.end() || owner->second.type != "assembly_instance")
+            reject("carried independent owner is missing");
+        return owner->second.properties.at("instance");
+    }
+    const auto catalog = actual.find(target.catalog_id);
+    if (catalog == actual.end() || catalog->second.type != "assembly_model") reject("carried catalog is missing");
+    const auto& rows = catalog->second.properties.at("model").at("instances");
+    const auto row = std::find_if(rows.begin(), rows.end(),
+        [&](const Json& value) { return value.at("id") == target.instance_id; });
+    if (row == rows.end()) reject("carried embedded row is missing");
+    return *row;
+}
+AssemblyInstance actual_carried_instance(const AssemblyDocumentEntities& actual, const Target& target,
+    const AssemblyModel& model) {
+    if (target.document_entity_id) {
+        const auto value = decode_document_assembly_instance(actual.at(*target.document_entity_id));
+        if (value.assembly_catalog_id != target.catalog_id || value.instance.id != target.instance_id)
+            reject("carried qualified owner does not match actual catalog and row");
+        return value.instance;
+    }
+    const auto row = std::find_if(model.instances().begin(), model.instances().end(),
+        [&](const auto& value) { return value.id == target.instance_id; });
+    if (row == model.instances().end()) reject("carried actual embedded instance is missing");
+    return *row;
+}
+// The known envelope promotions add only absent empty collections. They do
+// not authorize canonicalizing definitions, quantities, part poses or metadata.
+void remove_empty_type_promotion(const Json& before, Json& after) {
+    for (const auto* key : {"profiles", "parts"})
+        if (!before.contains(key) && after.contains(key) && after.at(key).is_array() && after.at(key).empty())
+            after.erase(key);
+}
+void require_carry_catalog(const Entity& before, const Entity& carried) {
+    const auto& saved = before.properties.at("model");
+    const auto& model = carried.properties.at("model");
+    // Decoding separately admits each actual supported dialect. A carry may
+    // retain its dialect or promote it; it may never silently downgrade it.
+    const auto schema_rank = [](const Json& schema) {
+        for (int version = 1; version <= 7; ++version)
+            if (schema == "sketch.assemblies.v" + std::to_string(version)) return version;
+        reject("unsupported carried catalog dialect");
+    };
+    if (schema_rank(model.at("schema")) < schema_rank(saved.at("schema")))
+        reject("carried catalog downgraded its saved dialect");
+    const auto& types = model.at("types");
+    const auto& saved_types = saved.at("types");
+    if (types.size() != saved_types.size()) reject("carry changed catalog definitions");
+    for (std::size_t i = 0; i < types.size(); ++i) {
+        auto normalized = types[i];
+        remove_empty_type_promotion(saved_types[i], normalized);
+        if (normalized.dump() != saved_types[i].dump()) reject("carry changed raw catalog definitions");
+    }
+    if (model.at("materials").dump() != saved.at("materials").dump()) reject("carry changed raw catalog materials");
+    // The caller derives the complete carried roster. Only this root's actual
+    // selected row is checked below; other carried rows must survive untouched.
+    // Compare borrowed fields without copying either complete instance roster.
+    if (before.type != carried.type || before.required != carried.required ||
+        before.extensions.dump() != carried.extensions.dump() || before.properties.size() != carried.properties.size())
+        reject("carry changed raw catalog metadata");
+    for (const auto& [key, value] : before.properties.items()) {
+        if (key == "model") continue;
+        const auto found = carried.properties.find(key);
+        if (found == carried.properties.end() || value.dump() != found->dump()) reject("carry changed raw catalog metadata");
+    }
+}
+void require_carry_instance(const AssemblyDocumentEntities& original, const Target& source,
+    const AssemblyInstance& before, const AssemblyDocumentEntities& carried, const Target& destination,
+    const AssemblyInstance& after) {
+    auto normalized = after;
+    normalized.id = before.id;
+    normalized.root_transform = before.root_transform;
+    if (before.placement.has_value() != after.placement.has_value()) reject("carry changed root placement kind");
+    normalized.placement = before.placement;
+    if (normalized != before) reject("carry competes with type, overrides or nested part edits");
+    const auto& raw_before = actual_instance_row(original, source);
+    auto raw_after = actual_instance_row(carried, destination);
+    raw_after["id"] = raw_before.at("id");
+    if (raw_before.contains("schema")) {
+        if (raw_after.at("schema") != raw_before.at("schema") &&
+            !(raw_before.at("schema") == "sketch.assembly-instance.v1" &&
+                raw_after.at("schema") == "sketch.assembly-instance.v2"))
+            reject("carry changed independent instance dialect");
+        raw_after["schema"] = raw_before.at("schema");
+    }
+    if (raw_before.contains("root_transform")) raw_after["root_transform"] = raw_before.at("root_transform");
+    else raw_after.erase("root_transform");
+    if (before.placement) raw_after["placement"] = raw_before.at("placement");
+    if (!raw_before.contains("nested_overrides") && raw_after.contains("nested_overrides") &&
+        raw_after.at("nested_overrides").is_array() && raw_after.at("nested_overrides").empty())
+        raw_after.erase("nested_overrides");
+    if (raw_after.dump() != raw_before.dump()) reject("carry changed raw non-pose instance fields");
+    if (source.document_entity_id) {
+        const auto& owner = original.at(*source.document_entity_id);
+        auto carried_owner = carried.at(*destination.document_entity_id);
+        carried_owner.id = owner.id;
+        carried_owner.properties["assembly_catalog_id"] = owner.properties.at("assembly_catalog_id");
+        carried_owner.properties["instance"] = owner.properties.at("instance");
+        if (!exact(owner, carried_owner)) reject("carry changed independent owner metadata");
+    }
+}
+} // namespace
+
+AssemblyDocumentEntities detail::calculate_carried_assembly_instance_property_entities(
+    const AssemblyDocumentEntities& original, std::span<const Intent> intents,
+    const AssemblyDocumentEntities& derived_carried, const std::map<Target, Target>& selected_destinations) {
+    // This is a mathematical seam, deliberately separate from sealed authoring
+    // replay. Raw carried maps never authenticate a source or grant publication.
+    (void)encode_intents(intents);
+    if (selected_destinations.size() != intents.size()) reject("carry map differs from exact selected roster");
+    Budget target_budget;
+    std::map<Target, Target> roots;
+    std::set<Target> destinations;
+    for (const auto& intent : intents) {
+        const auto found = selected_destinations.find(intent.target);
+        if (found == selected_destinations.end()) reject("carry map omits an original selected target");
+        const auto& destination = found->second;
+        Intent bounded; bounded.target = destination;
+        preflight_intent(bounded, target_budget);
+        (void)encode_assembly_instance_property_edit_intent(bounded);
+        if (destination.part_path != intent.target.part_path ||
+            destination.document_entity_id.has_value() != intent.target.document_entity_id.has_value())
+            reject("carry map changes exact part paths or root kind");
+        const auto [row, inserted] = roots.emplace(root_target(intent.target), root_target(destination));
+        if (!inserted && row->second != root_target(destination)) reject("carry map splits one actual root");
+        if (inserted && !destinations.insert(row->second).second) reject("carry map roots are not injective");
+        if (destination.document_entity_id && *destination.document_entity_id != destination.instance_id)
+            reject("carried independent owner and root identities differ");
+    }
+    AssemblyCatalogTransferBudget catalog_budget;
+    const auto admit_catalogs = [&](const AssemblyDocumentEntities& entities) {
+        for (const auto& [id, entity] : entities) {
+            if (id != entity.id) reject("carry map and actual owner identity differ");
+            if (entity.type == "assembly_model") admit_existing_assembly_catalog_work(entity, catalog_budget);
+        }
+    };
+    // Charge both complete graphs cumulatively before decoding, dumping raw
+    // envelopes or copying the carried map. No per-catalog budget reset.
+    admit_catalogs(original);
+    admit_catalogs(derived_carried);
+    PropertyEditSourceInspection source(original, intents, true);
+    validate_document_assembly_instances(derived_carried);
+    std::map<std::string, AssemblyModel, std::less<>> carried_models;
+    std::set<std::pair<std::string, std::string>> checked_catalogs;
+    // Fixed bounded passes each accumulate across every selected root, as the
+    // source inspector does. Repeated validation must not multiply authored
+    // quantities or consume one graph's node allowance several times.
+    AssemblyExpansionBudget carried_before_budget, authority_budget, carried_after_budget, final_budget;
+    std::map<Target, InspectedRoot> expected;
+    auto result = derived_carried;
+    for (const auto& [key, rows] : source.grouped) {
+        (void)key;
+        auto root = source.inspect(rows); // Original slot/path/operation authority.
+        const auto& destination = roots.at(root.target);
+        const auto catalog = derived_carried.find(destination.catalog_id);
+        if (catalog == derived_carried.end() || catalog->second.type != "assembly_model") reject("actual carried catalog is missing");
+        if (!carried_models.contains(destination.catalog_id)) carried_models.emplace(destination.catalog_id,
+            AssemblyModel::from_json(catalog->second.properties.at("model")));
+        const auto& model = carried_models.at(destination.catalog_id);
+        const auto carried = actual_carried_instance(derived_carried, destination, model);
+        if (checked_catalogs.emplace(root.target.catalog_id, destination.catalog_id).second)
+            require_carry_catalog(original.at(root.target.catalog_id), catalog->second);
+        require_carry_instance(original, root.target, root.original, derived_carried, destination, carried);
+        const auto before = model.expand(carried, carried_before_budget);
+        // Part and declared-slot authority stays at the actual original source.
+        const auto authority = source.models.at(root.target.catalog_id).expand(root.original, authority_budget);
+        if (before.nodes.size() != authority.nodes.size()) reject("carry changed exact expansion paths");
+        for (std::size_t i = 0; i < before.nodes.size(); ++i)
+            if (before.nodes[i].part_path != authority.nodes[i].part_path || before.nodes[i].type_id != authority.nodes[i].type_id)
+                reject("carry changed exact expansion paths or types");
+        // Replay supplied operations, including source-equal explicit SETs,
+        // onto the carried pose. Never translate original->changed deltas.
+        auto changed = change_instance(carried, authority, source.models.at(root.target.catalog_id), rows);
+        auto expansion = model.expand(changed, carried_after_budget);
+        InspectedRoot carried_root{destination, carried, changed, std::move(expansion)};
+        if (changed != carried) patch_root(result, derived_carried, carried_root, destination);
+        expected.emplace(destination, std::move(carried_root));
+    }
+    // Final whole-graph admission uses current saved activity/constraints/Site
+    // and current owner/host geometry. A fresh cache is essential even when a
+    // host kept its ID but the independent host preparation changed its shape.
+    admit_catalogs(result);
+    validate_document_assembly_instances(result);
+    validate_document_site_frames(result);
+    if (const auto diagnostic = validate_active_phase_constraint_integrity(result)) throw std::invalid_argument(*diagnostic);
+    const auto final_scope = constraint_phase_scope(result);
+    std::map<std::string, AssemblyModel, std::less<>> final_models;
+    std::map<std::string, TopoDS_Shape, std::less<>> final_host_cache;
+    std::size_t final_opening_work{};
+    for (const auto& [destination, root] : expected) {
+        if (!final_models.contains(destination.catalog_id)) final_models.emplace(destination.catalog_id,
+            AssemblyModel::from_json(result.at(destination.catalog_id).properties.at("model")));
+        const auto& model = final_models.at(destination.catalog_id);
+        auto actual = actual_carried_instance(result, destination, model);
+        auto intended = root.changed;
+        const auto sort_paths = [](auto& instance) {
+            std::sort(instance.nested_overrides.begin(), instance.nested_overrides.end(),
+                [](const auto& a, const auto& b) { return a.part_path < b.part_path; });
+        };
+        sort_paths(actual); sort_paths(intended);
+        if (actual != intended) reject("final carried row differs from supplied original operations");
+        require_active_dependencies(result, destination, actual, final_scope, true);
+        admit_geometry(result, destination, model.expand(actual, final_budget), final_opening_work, final_host_cache);
+    }
+    return result;
+}
 
 PhaseAssemblyInstancePropertyEditPlan inspect_phase_assembly_instance_property_edit_plan(
     const AssemblyDocumentEntities& original, std::span<const Intent> intents) {
