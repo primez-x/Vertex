@@ -108,9 +108,10 @@ PhaseAssemblyInstancePropertyEditAuthoring decode_authoring(const Json& value) {
     // cannot force an unbounded dump or reach source model decoding.
     (void)value.dump();
     if (!value.is_object() || !value.contains("version") || !value.at("version").is_number_integer() ||
-        (value.at("version") != 1 && value.at("version") != 2 && value.at("version") != 3 && value.at("version") != 4 && value.at("version") != 5)) reject("unsupported authoring version");
+        (value.at("version") != 1 && value.at("version") != 2 && value.at("version") != 3 && value.at("version") != 4 && value.at("version") != 5 && value.at("version") != 6)) reject("unsupported authoring version");
+    const bool initialize_topology = value.at("version") == 6;
     const bool topology_geometry = value.at("version") == 5;
-    const bool geometry = value.at("version") == 3 || topology_geometry;
+    const bool geometry = value.at("version") == 3 || topology_geometry || initialize_topology;
     const bool complete_dimensions = value.at("version") == 4;
     const bool dimensions = geometry || complete_dimensions;
     const bool carry = value.at("version") != 1;
@@ -124,7 +125,7 @@ PhaseAssemblyInstancePropertyEditAuthoring decode_authoring(const Json& value) {
             "presentation_overlay_identities", "dimension_identities"});
         else fields(value, {"version", "intents", "allocation", "carry_presentation_references", "presentation_overlay_identities"});
         if (!value.at("carry_presentation_references").is_boolean() || value.at("carry_presentation_references") != true)
-            reject("v2/v3/v4/v5 require literal presentation carry");
+            reject("v2/v3/v4/v5/v6 require literal presentation carry");
     } else fields(value, {"version", "intents", "allocation"});
     const auto& intents = value.at("intents");
     if (!intents.is_array() || intents.empty() || intents.size() > count_limit) reject("invalid intent count");
@@ -152,10 +153,15 @@ PhaseAssemblyInstancePropertyEditAuthoring decode_authoring(const Json& value) {
     result.carry_presentation_references = carry;
     result.complete_component_dimensions = complete_dimensions;
     bool has_topology_geometry = false;
+    bool has_initial_topology = false;
     for (const auto& row : intents) {
         auto intent = decode_assembly_instance_property_edit_intent(row);
+        if (row.at("version") == 4) {
+            if (!initialize_topology) reject("historical authoring cannot carry initial profile topology authority");
+            has_initial_topology = true;
+        }
         if (row.at("version") == 3) {
-            if (!topology_geometry) reject("historical authoring cannot carry topology-preserving geometry authority");
+            if (!topology_geometry && !initialize_topology) reject("historical authoring cannot carry topology-preserving geometry authority");
             has_topology_geometry = true;
         }
         if (!geometry && intent.profile_geometry.operation != AssemblyInstancePropertyPatchOperation::unchanged)
@@ -163,8 +169,9 @@ PhaseAssemblyInstancePropertyEditAuthoring decode_authoring(const Json& value) {
         if (!result.intents.empty() && !(result.intents.back().target < intent.target)) reject("intent targets must be sorted unique");
         result.intents.push_back(std::move(intent));
     }
-    if (geometry && !has_geometry_intent(result)) reject("v3/v5 require a geometry intent");
+    if (geometry && !has_geometry_intent(result)) reject("v3/v5/v6 require a geometry intent");
     if (topology_geometry && !has_topology_geometry) reject("v5 requires a topology-preserving geometry intent");
+    if (initialize_topology && !has_initial_topology) reject("v6 requires an initial profile topology intent");
     const auto& allocation = value.at("allocation");
     fields(allocation, {"roots", "membership_entity_ids"});
     const auto& roots = allocation.at("roots");
@@ -241,7 +248,7 @@ PhaseAssemblyInstancePropertyEditAuthoring decode_request(const Json& value) {
     WireBudget{}.visit(value);
     fields(value, {"version", "expected_revision", "source_snapshot_digest", "source_authoring_digest",
         "source_entities_digest", "source_saved_revision", "authoring"});
-    if (!value.at("version").is_number_integer() || (value.at("version") != 1 && value.at("version") != 2 && value.at("version") != 3 && value.at("version") != 4 && value.at("version") != 5))
+    if (!value.at("version").is_number_integer() || (value.at("version") != 1 && value.at("version") != 2 && value.at("version") != 3 && value.at("version") != 4 && value.at("version") != 5 && value.at("version") != 6))
         reject("unsupported request version");
     (void)revision(value.at("expected_revision"));
     for (const auto* name : {"source_snapshot_digest", "source_authoring_digest", "source_entities_digest"}) digest(value.at(name));
@@ -713,7 +720,7 @@ Json encode_phase_assembly_instance_property_edit_authoring(const PhaseAssemblyI
     if (geometry && authoring.complete_component_dimensions) reject("v4 component dimension completion excludes profile geometry");
     if (dimensions && !authoring.carry_presentation_references) reject("dimension authoring requires literal presentation carry");
     if ((!dimensions && !authoring.dimension_identities.empty()) || authoring.dimension_identities.size() > count_limit)
-        reject("dimension identities require geometry v3/v5 or explicit v4 and at most 1000 copies");
+        reject("dimension identities require geometry v3/v5/v6 or explicit v4 and at most 1000 copies");
     if (!authoring.carry_presentation_references && !authoring.presentation_overlay_identities.empty())
         reject("historical v1 cannot allocate presentation overlays");
     if (authoring.carry_presentation_references) {
@@ -728,9 +735,11 @@ Json encode_phase_assembly_instance_property_edit_authoring(const PhaseAssemblyI
     Json intents = Json::array(), roots = Json::array(), memberships = Json::array(), overlays = Json::array();
     WireBudget budget;
     bool topology_geometry = false;
+    bool initialize_topology = false;
     for (const auto& intent : authoring.intents) {
         auto wire = encode_assembly_instance_property_edit_intent(intent);
         topology_geometry = topology_geometry || wire.at("version") == 3;
+        initialize_topology = initialize_topology || wire.at("version") == 4;
         budget.visit(wire); intents.push_back(std::move(wire));
     }
     for (const auto& [root, ids] : authoring.allocation.roots) {
@@ -752,7 +761,7 @@ Json encode_phase_assembly_instance_property_edit_authoring(const PhaseAssemblyI
         Json wire{{"original_overlay_id", original}, {"proposed_overlay_id", proposed}};
         budget.visit(wire); overlays.push_back(std::move(wire));
     }
-    Json result{{"version", topology_geometry ? 5 : authoring.complete_component_dimensions ? 4 : geometry ? 3 : authoring.carry_presentation_references ? 2 : 1}, {"intents", std::move(intents)},
+    Json result{{"version", initialize_topology ? 6 : topology_geometry ? 5 : authoring.complete_component_dimensions ? 4 : geometry ? 3 : authoring.carry_presentation_references ? 2 : 1}, {"intents", std::move(intents)},
         {"allocation", {{"roots", std::move(roots)}, {"membership_entity_ids", std::move(memberships)}}}};
     if (authoring.carry_presentation_references) {
         result["carry_presentation_references"] = true;

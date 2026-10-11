@@ -355,7 +355,8 @@ public:
     // v250 retains explicitly identified component profile topology.
     // v251 retains explicit topology-preserving component edit dialects.
     // v252 retains placed own-profile edge/vertex component dimensions.
-    static constexpr std::uint32_t format_version = 252;
+    // v253 retains exact-source initial component profile identity assignment.
+    static constexpr std::uint32_t format_version = 253;
     static constexpr std::uint32_t recovery_format_version = 4;
     [[nodiscard]] static std::uint32_t required_format_version(const DocumentSnapshot& snapshot);
     static constexpr std::uint64_t maximum_file_bytes = 4ULL * 1024ULL * 1024ULL * 1024ULL;

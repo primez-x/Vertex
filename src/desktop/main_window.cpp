@@ -51347,7 +51347,7 @@ private:
                     validate_mixed_clipboard_placement_intent(encoded.at("clipboard_placement_intent")) :
                     validate_mixed_selection_edit_intent(encoded.at("mixed_selection_edit_intent"));
                 const auto dialect=intent.at("version").get<int>();
-                if (version==52 && ((dialect>=5 && dialect<=13) || (dialect>=15 && dialect<=17) || (dialect>=21 && dialect<=29) || dialect==32 || dialect==33 || dialect==34)) {
+                if (version==52 && ((dialect>=5 && dialect<=13) || (dialect>=15 && dialect<=17) || (dialect>=21 && dialect<=29) || dialect==32 || dialect==33 || dialect==34 || dialect==35)) {
                     // Properties dialects have no transform roof_authoring.
                     // Active-baseline redirects require independently replayed
                     // source authority rather than extracting supplied maps.
@@ -60408,11 +60408,11 @@ private:
                     mixed_edit=true;
                     const auto intent=validate_mixed_selection_edit_intent(value.mixed_selection_edit_intent);
                     const auto properties_dialect=intent.at("version").get<int>();
-                    if ((properties_dialect>=5 && properties_dialect<=13) || (properties_dialect>=15 && properties_dialect<=17) || (properties_dialect>=21 && properties_dialect<=29) || properties_dialect==32 || properties_dialect==33 || properties_dialect==34) {
+                    if ((properties_dialect>=5 && properties_dialect<=13) || (properties_dialect>=15 && properties_dialect<=17) || (properties_dialect>=21 && properties_dialect<=29) || properties_dialect==32 || properties_dialect==33 || properties_dialect==34 || properties_dialect==35) {
                         // Properties has its own typed lanes, including a null
                         // physical lane for annotation-only edits. Gesture
                         // ordinary_request codecs cannot decode this roster.
-                        const bool component_properties=properties_dialect==16 || properties_dialect==17 || properties_dialect==22 || properties_dialect==23 || properties_dialect==25 || properties_dialect==26 || properties_dialect==28 || properties_dialect==29 || properties_dialect==32 || properties_dialect==33 || properties_dialect==34;
+                        const bool component_properties=properties_dialect==16 || properties_dialect==17 || properties_dialect==22 || properties_dialect==23 || properties_dialect==25 || properties_dialect==26 || properties_dialect==28 || properties_dialect==29 || properties_dialect==32 || properties_dialect==33 || properties_dialect==34 || properties_dialect==35;
                         const auto& selection_properties=component_properties ? intent.at("base_intent") : intent;
                         const bool phased=!selection_properties.is_null() &&
                             (selection_properties.at("version")==11 || selection_properties.at("version")==12 || selection_properties.at("version")==13 || selection_properties.at("version")==15 || selection_properties.at("version")==21 || selection_properties.at("version")==24 || selection_properties.at("version")==27);
@@ -60463,7 +60463,7 @@ private:
                     }
                     // Qualified children never promote their compatibility host
                     // IDs into ordinary presented-object selection authority.
-                    const auto& roof_selection=(intent.at("version")==16 || intent.at("version")==17 || intent.at("version")==22 || intent.at("version")==23 || intent.at("version")==25 || intent.at("version")==26 || intent.at("version")==28 || intent.at("version")==29 || intent.at("version")==32 || intent.at("version")==33 || intent.at("version")==34)
+                    const auto& roof_selection=(intent.at("version")==16 || intent.at("version")==17 || intent.at("version")==22 || intent.at("version")==23 || intent.at("version")==25 || intent.at("version")==26 || intent.at("version")==28 || intent.at("version")==29 || intent.at("version")==32 || intent.at("version")==33 || intent.at("version")==34 || intent.at("version")==35)
                         ? intent.at("base_intent") : intent;
                     if (!roof_selection.is_null()) for (const auto& child:roof_selection.at("roof_opening_members"))
                         targets.insert(child.at("opening_id").template get<std::string>());

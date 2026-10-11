@@ -3357,16 +3357,16 @@ static bool mixed_properties_dialect(const nlohmann::json& intent) {
     const auto version=intent.at("version").get<int>();
     // Transform30 remains outside Properties: its actual roof phase38 is
     // traversed by the same source, registry and lifetime proof walks as20.
-    return (version>=5 && version<=13) || (version>=15 && version<=17) || (version>=21 && version<=29) || version==32 || version==33 || version==34;
+    return (version>=5 && version<=13) || (version>=15 && version<=17) || (version>=21 && version<=29) || version==32 || version==33 || version==34 || version==35;
 }
 static bool mixed_phase_properties_dialect(const nlohmann::json& intent) {
     const auto version=intent.at("version").get<int>();
-    return (version>=11 && version<=13) || (version>=15 && version<=17) || (version>=21 && version<=29) || version==32 || version==33 || version==34;
+    return (version>=11 && version<=13) || (version>=15 && version<=17) || (version>=21 && version<=29) || version==32 || version==33 || version==34 || version==35;
 }
 static bool mixed_component_properties_dialect(const nlohmann::json& intent) {
     const auto version=intent.at("version").get<int>();
     return version==16 || version==17 || version==22 || version==23 || version==25 || version==26 ||
-        version==28 || version==29 || version==32 || version==33 || version==34;
+        version==28 || version==29 || version==32 || version==33 || version==34 || version==35;
 }
 
 static std::vector<nlohmann::json> phase_constraint_authoring_proofs(const ApplyBoundaryConstraintChanges& command) {
@@ -6168,10 +6168,12 @@ static void validate_mixed_properties_replacement_lifetime(const nlohmann::json&
                 "complete_structural_component_dimensions"})
             if (fresh.contains(token))
                 throw std::invalid_argument("A Properties destination borrows its family dimension proof field: "+std::string(token));
-    if (mixed.at("version")==32 || mixed.at("version")==34)
+    if (mixed.at("version")==32 || mixed.at("version")==34 || mixed.at("version")==35)
         for (const auto* token:{"complete_instance_profile_geometry","profile_geometry","profile_overrides","dimension_identities"})
             if (fresh.contains(token))
                 throw std::invalid_argument("A component geometry destination borrows its Properties proof field: "+std::string(token));
+    if(mixed.at("version")==35 && fresh.contains("initialize_profile_topology"))
+        throw std::invalid_argument("A component identity destination borrows its Properties proof field: initialize_profile_topology");
     if (mixed.at("version")==33)
         for (const auto* token:{"complete_component_dimensions","dimension_identities"})
             if (fresh.contains(token))

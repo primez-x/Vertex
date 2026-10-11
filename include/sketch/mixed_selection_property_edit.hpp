@@ -260,6 +260,12 @@ private:
 // It inherits the complete geometry dimension/presentation carry, optional sealed
 // base roster, host coordination and final room review contract. Thirty-two and
 // thirty-three retain their historical component request three/four authority.
+// Closed dialect thirty-five retains thirty-four's exact fields and requires
+// component request six with at least one initial-topology leaf intent four.
+// It retains the same source-derived dimension/presentation carry, optional
+// sealed base, host coordination and final room review. Producers prefer it
+// whenever initial topology is authored; historical wrappers retain their
+// exact component request authority and reject initial topology.
 //
 // Closed dialect seventeen retains Properties16's source/reservation fields plus
 // carry_component_presentation:true. It requires component request two, whose

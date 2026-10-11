@@ -11,10 +11,12 @@
 #include <QLineEdit>
 #include <QPushButton>
 #include <QScrollArea>
+#include <QStandardItemModel>
 #include <QStackedWidget>
 #include <QStringList>
 #include <QTabWidget>
 #include <QTableWidget>
+#include <QUuid>
 #include <QVBoxLayout>
 
 #include <algorithm>
@@ -111,7 +113,9 @@ struct ProfileCollection {
     std::size_t source_index{};
     QWidget* widget{};
     QTableWidget* table{};
-    QPushButton *add{}, *remove{};
+    QPushButton *add{}, *remove{}, *enable_dimensions{};
+    QLabel* topology_note{};
+    bool initialize_profile_topology{false};
     std::vector<ProfileRow> profiles;
     // Retain removed identities for the entire dialog lifetime, including IDs
     // in the shared type hidden by an existing instance override.
@@ -129,6 +133,50 @@ struct Page {
     QStackedWidget* profile_stack{};
     std::vector<std::unique_ptr<ProfileCollection>> profile_collections;
 };
+
+bool identified(const std::vector<AssemblyProfile>& profiles) {
+    return std::any_of(profiles.begin(), profiles.end(), [](const auto& profile) { return profile.topology.has_value(); });
+}
+
+void initialize_topology(AssemblyProfile& profile, const std::vector<AssemblyProfile>& type_profiles) {
+    if (profile.topology) return;
+    std::set<std::string> issued;
+    // An anonymous own override may shadow identified type geometry. Never
+    // borrow those actual same-profile identities, even on a UUID collision.
+    const auto inherited = std::find_if(type_profiles.begin(), type_profiles.end(),
+        [&](const auto& value) { return value.id == profile.id; });
+    if (inherited != type_profiles.end() && inherited->topology) {
+        const auto reserve = [&](const AssemblyProfileRingIdentity& ring) {
+            issued.insert(ring.ring_id);
+            issued.insert(ring.segment_ids.begin(), ring.segment_ids.end());
+            issued.insert(ring.vertex_ids.begin(), ring.vertex_ids.end());
+        };
+        reserve(inherited->topology->outer);
+        for (const auto& hole : inherited->topology->holes) reserve(hole);
+    }
+    const auto fresh = [&] {
+        std::string id;
+        do { id = QUuid::createUuid().toString(QUuid::WithoutBraces).toStdString(); } while (!issued.insert(id).second);
+        return id;
+    };
+    const auto ring = [&](const Boundary& boundary) {
+        AssemblyProfileRingIdentity result;
+        result.ring_id = fresh();
+        result.segment_ids.reserve(boundary.size());
+        result.vertex_ids.reserve(boundary.size());
+        for (std::size_t i = 0; i < boundary.size(); ++i) {
+            result.segment_ids.push_back(fresh());
+            result.vertex_ids.push_back(fresh());
+        }
+        return result;
+    };
+    AssemblyProfileTopology result;
+    result.outer = ring(profile.outer);
+    result.holes.reserve(profile.holes.size());
+    for (const auto& hole : profile.holes) result.holes.push_back(ring(hole));
+    profile.topology = std::move(result);
+    validate_assembly_profile_topology(profile);
+}
 
 struct ProfileBounds {
     Vec2 minimum, maximum;
@@ -446,8 +494,9 @@ public:
             (length_unit == Unit::metre ? " m" : " ft");
     }
     QString profile_summary(const AssemblyProfile& profile) const {
-        return QString("%1 outline edges; %2 cutouts").arg(static_cast<qulonglong>(profile.outer.size()))
-            .arg(static_cast<qulonglong>(profile.holes.size()));
+        return QString("%1 outline edges; %2 cutouts%3").arg(static_cast<qulonglong>(profile.outer.size()))
+            .arg(static_cast<qulonglong>(profile.holes.size()))
+            .arg(profile.topology ? "; edge dimensions enabled" : "");
     }
     std::vector<AssemblyProfile> profile_draft(const ProfileCollection& collection) const {
         std::vector<AssemblyProfile> result;
@@ -470,7 +519,74 @@ public:
         }
         return result;
     }
-    void append_profile(ProfileCollection& collection, const Source& selected, AssemblyProfile profile) {
+    QString topology_initialization_refusal(const Page& page, const ProfileCollection& collection) const {
+        const auto& actual = *page.sources[collection.source_index].profiles;
+        if (collection.initialize_profile_topology) return "Apply these edge identities, then reopen Properties to edit profiles.";
+        if (std::none_of(actual.begin(), actual.end(), [](const auto& profile) { return !profile.topology; }))
+            return actual.empty() ? "This component has no own profiles to enable." : "Edge dimensions are already enabled for all own profiles.";
+        if (std::any_of(page.dimensions.begin(), page.dimensions.end(), supplied))
+            return "Apply or clear dimension changes before enabling edge dimensions.";
+        try {
+            if (profile_draft(collection) != actual)
+                return "Apply profile changes first, then reopen Properties to enable edge dimensions on that geometry.";
+        } catch (const std::exception&) {
+            return "Correct or clear profile values before enabling edge dimensions.";
+        }
+        return {};
+    }
+    void update_geometry_controls(Page& page) {
+        const bool pending = std::any_of(page.profile_collections.begin(), page.profile_collections.end(),
+            [](const auto& collection) { return collection && collection->initialize_profile_topology; });
+        const bool retained = std::any_of(page.sources.begin(), page.sources.end(),
+            [](const auto& selected) { return identified(*selected.profiles); });
+        const bool clear_needs_review = std::any_of(page.sources.begin(), page.sources.end(),
+            [](const auto& selected) { return identified(*selected.profiles) || identified(selected.type->profiles); });
+        page.geometry_operation->setEnabled(!pending);
+        if (auto* model = qobject_cast<QStandardItemModel*>(page.geometry_operation->model())) {
+            if (auto* item = model->item(2)) {
+                item->setEnabled(!clear_needs_review);
+                item->setToolTip(clear_needs_review ?
+                    "Returning identified profiles to type geometry requires reviewed edge mapping or removal." : QString{});
+            }
+        }
+        const bool enabled = operation(page.geometry_operation) == Operation::set;
+        for (std::size_t i = 0; i < page.dimensions.size(); ++i)
+            page.dimensions[i]->setEnabled(enabled && !pending && (i == 2 || !retained));
+        page.profile_stack->setEnabled(enabled);
+        for (auto& collection : page.profile_collections) {
+            if (!collection) continue;
+            const bool frozen = collection->initialize_profile_topology;
+            const bool mapped = identified(*page.sources[collection->source_index].profiles);
+            collection->add->setEnabled(!frozen && !mapped && collection->profiles.size() < maximum_profiles);
+            collection->remove->setEnabled(!frozen && !mapped && collection->table->currentRow() >= 0 &&
+                !collection->table->selectedItems().empty());
+            for (auto& row : collection->profiles) {
+                row.edit->setEnabled(!frozen && !mapped);
+                row.elevation->setEnabled(!frozen);
+                row.height->setEnabled(!frozen);
+                row.material_slot->setEnabled(!frozen);
+            }
+            const auto refusal = topology_initialization_refusal(page, *collection);
+            collection->enable_dimensions->setEnabled(refusal.isEmpty());
+            collection->enable_dimensions->setToolTip(refusal.isEmpty() ?
+                "Assign fresh edge and vertex identities to this component's unchanged own profiles. Apply, then add edge dimensions." : refusal);
+            auto note = refusal;
+            if (frozen)
+                note = "Edge identities are ready. Apply and reopen Properties before changing geometry, extrusion or profile material slots.";
+            else if (mapped)
+                note += (note.isEmpty() ? QString{} : "\n") +
+                    QString("Outline, cutout, profile roster, width/depth and type-geometry changes require reviewed edge mapping or removal. "
+                            "Local elevation, height and material slots remain editable.");
+            else if (note.isEmpty())
+                note = "Enable edge dimensions assigns identities to the captured own profiles without changing their geometry. Apply before editing them.";
+            if (!frozen && !mapped && retained)
+                note += "\nWidth/depth changes are unavailable because another selected component has edge identities; reviewed edge mapping is required.";
+            if (!frozen && pending)
+                note += "\nApply the pending edge identities on this page before changing its common dimensions or geometry operation.";
+            collection->topology_note->setText(note);
+        }
+    }
+    void append_profile(ProfileCollection& collection, const Source& selected, AssemblyProfile profile, Page& page) {
         require(collection.profiles.size() < maximum_profiles, "This node already has 4096 own profiles.");
         auto* table = collection.table;
         const auto row_index = table->rowCount();
@@ -517,8 +633,11 @@ public:
         collection.reserved_ids.insert(profile_id);
         collection.profiles.push_back(std::move(row));
         QObject::connect(collection.profiles.back().edit, &QPushButton::clicked, owner,
-            [this, collection_ptr = &collection, profile_id] {
+            [this, collection_ptr = &collection, page_ptr = &page, profile_id] {
                 try {
+                    require(!collection_ptr->initialize_profile_topology &&
+                        !identified(*page_ptr->sources[collection_ptr->source_index].profiles),
+                        "Apply pending identities first. Editing identified outlines requires reviewed edge mapping or removal.");
                     const auto found = std::find_if(collection_ptr->profiles.begin(), collection_ptr->profiles.end(),
                         [&](const auto& value) { return value.draft.id == profile_id; });
                     require(found != collection_ptr->profiles.end(), "The selected profile is no longer in this draft.");
@@ -530,10 +649,15 @@ public:
                         found->draft.outer = std::move(accepted->outer);
                         found->draft.holes = std::move(accepted->holes);
                         found->summary->setText(profile_summary(found->draft));
+                        update_geometry_controls(*page_ptr);
                         error->clear(); error->hide();
                     }
                 } catch (const std::exception& failure) { error->setText(q(failure.what())); error->show(); }
             });
+        const auto refresh = [this, page_ptr = &page] { update_geometry_controls(*page_ptr); };
+        QObject::connect(collection.profiles.back().elevation, &QLineEdit::textChanged, owner, refresh);
+        QObject::connect(collection.profiles.back().height, &QLineEdit::textChanged, owner, refresh);
+        QObject::connect(collection.profiles.back().material_slot, &QComboBox::currentIndexChanged, owner, refresh);
         table->resizeRowToContents(row_index);
         collection.add->setEnabled(collection.profiles.size() < maximum_profiles);
     }
@@ -571,18 +695,49 @@ public:
             collection->remove->setToolTip("Remove only this profile from the local draft. Normal Properties preview and review "
                 "recalculate extent dimensions; no dimensions are discarded. Removing the last solid is refused.");
             collection->remove->setEnabled(false);
-            actions->addWidget(collection->add); actions->addWidget(collection->remove); actions->addStretch();
+            collection->enable_dimensions = new QPushButton("Enable edge dimensions", collection->widget);
+            collection->enable_dimensions->setObjectName("assemblyProfileEnableEdgeDimensions");
+            collection->enable_dimensions->setAccessibleName("Enable edge dimensions for this component's own profiles");
+            actions->addWidget(collection->add); actions->addWidget(collection->remove);
+            actions->addWidget(collection->enable_dimensions); actions->addStretch();
             layout->addLayout(actions);
+            collection->topology_note = new QLabel(collection->widget);
+            collection->topology_note->setObjectName("assemblyProfileTopologyNote");
+            collection->topology_note->setWordWrap(true);
+            layout->addWidget(collection->topology_note);
             for (const auto& profile : selected.type->profiles) collection->reserved_ids.insert(profile.id);
             collection->profiles.reserve(selected.profiles->size());
-            for (const auto& profile : *selected.profiles) append_profile(*collection, selected, profile);
+            for (const auto& profile : *selected.profiles) append_profile(*collection, selected, profile, page);
             auto* collection_ptr = collection.get();
-            QObject::connect(table, &QTableWidget::itemSelectionChanged, owner, [collection_ptr] {
-                collection_ptr->remove->setEnabled(collection_ptr->table->currentRow() >= 0 &&
-                    !collection_ptr->table->selectedItems().empty());
+            QObject::connect(table, &QTableWidget::itemSelectionChanged, owner, [this, page_ptr = &page] {
+                update_geometry_controls(*page_ptr);
+            });
+            QObject::connect(collection->enable_dimensions, &QPushButton::clicked, owner, [this, page_ptr = &page, collection_ptr] {
+                try {
+                    const auto refusal = topology_initialization_refusal(*page_ptr, *collection_ptr);
+                    require(refusal.isEmpty(), refusal.toStdString());
+                    // Identity assignment is only for these exact captured own
+                    // profiles, never positions in an edited or resized draft.
+                    const auto& selected = page_ptr->sources[collection_ptr->source_index];
+                    auto initialized = *selected.profiles;
+                    for (auto& profile : initialized) initialize_topology(profile, selected.type->profiles);
+                    (void)validate_assembly_profiles(initialized);
+                    require(initialized.size() == collection_ptr->profiles.size(), "The captured own-profile roster changed.");
+                    for (std::size_t i = 0; i < initialized.size(); ++i) {
+                        collection_ptr->profiles[i].draft = std::move(initialized[i]);
+                        collection_ptr->profiles[i].summary->setText(profile_summary(collection_ptr->profiles[i].draft));
+                    }
+                    collection_ptr->initialize_profile_topology = true;
+                    page_ptr->geometry_operation->setCurrentIndex(page_ptr->geometry_operation->findData(static_cast<int>(Operation::set)));
+                    update_geometry_controls(*page_ptr);
+                    error->clear(); error->hide();
+                } catch (const std::exception& failure) { error->setText(q(failure.what())); error->show(); }
             });
             QObject::connect(collection->add, &QPushButton::clicked, owner, [this, page_ptr = &page, collection_ptr] {
                 try {
+                    require(!collection_ptr->initialize_profile_topology &&
+                        !identified(*page_ptr->sources[collection_ptr->source_index].profiles),
+                        "Apply pending identities first. Adding identified profiles requires reviewed edge mapping or removal.");
                     require(collection_ptr->profiles.size() < maximum_profiles, "This node already has 4096 own profiles.");
                     AssemblyProfile draft;
                     do { draft.id = make_stable_id(); } while (collection_ptr->reserved_ids.contains(draft.id));
@@ -591,22 +746,24 @@ public:
                     if (auto accepted = edit_assembly_profile_geometry(owner, draft, length_unit == Unit::metre)) {
                         require(accepted->id == draft.id && accepted->material_slot == draft.material_slot,
                             "The outline editor changed the new profile identity or material slot.");
-                        append_profile(*collection_ptr, page_ptr->sources[collection_ptr->source_index], std::move(*accepted));
+                        append_profile(*collection_ptr, page_ptr->sources[collection_ptr->source_index], std::move(*accepted), *page_ptr);
                         collection_ptr->table->setCurrentCell(collection_ptr->table->rowCount() - 1, 0);
+                        update_geometry_controls(*page_ptr);
                         error->clear(); error->hide();
                     }
                 } catch (const std::exception& failure) { error->setText(q(failure.what())); error->show(); }
             });
-            QObject::connect(collection->remove, &QPushButton::clicked, owner, [this, collection_ptr] {
+            QObject::connect(collection->remove, &QPushButton::clicked, owner, [this, page_ptr = &page, collection_ptr] {
                 try {
+                    require(!collection_ptr->initialize_profile_topology &&
+                        !identified(*page_ptr->sources[collection_ptr->source_index].profiles),
+                        "Apply pending identities first. Removing identified profiles requires reviewed edge mapping or removal.");
                     const auto row = collection_ptr->table->currentRow();
                     require(row >= 0 && static_cast<std::size_t>(row) < collection_ptr->profiles.size() &&
                         !collection_ptr->table->selectedItems().empty(), "Select an own profile to remove.");
                     collection_ptr->profiles.erase(collection_ptr->profiles.begin() + row);
                     collection_ptr->table->removeRow(row);
-                    collection_ptr->add->setEnabled(collection_ptr->profiles.size() < maximum_profiles);
-                    collection_ptr->remove->setEnabled(collection_ptr->table->currentRow() >= 0 &&
-                        !collection_ptr->table->selectedItems().empty());
+                    update_geometry_controls(*page_ptr);
                     error->clear(); error->hide();
                 } catch (const std::exception& failure) { error->setText(q(failure.what())); error->show(); }
             });
@@ -614,6 +771,7 @@ public:
             page.profile_collections[index] = std::move(collection);
         }
         page.profile_stack->setCurrentWidget(page.profile_collections[index]->widget);
+        update_geometry_controls(page);
     }
     void build_geometry(Page& page, QTabWidget* tabs) {
         auto* form = tab(tabs, "Geometry");
@@ -650,6 +808,7 @@ public:
                 "\nCircular arcs require width and depth to scale equally. Height includes elevation gaps between profiles. "
                 "Dimensions resize the complete profile draft after any detailed edits.");
             page.dimensions[i] = input;
+            QObject::connect(input, &QLineEdit::textChanged, owner, [this, page_ptr = &page] { update_geometry_controls(*page_ptr); });
             form->addRow(labels[i], input);
         }
         auto* local_note = new QLabel("Own profiles belong to the chosen component; nested parts retain their own geometry. "
@@ -693,12 +852,9 @@ public:
             });
         }
         show_profile_collection(page, 0);
-        page.profile_stack->setEnabled(false);
         form->addRow(page.profile_stack);
-        QObject::connect(page.geometry_operation, &QComboBox::currentIndexChanged, owner, [page_ptr = &page](int) {
-            const bool enabled = operation(page_ptr->geometry_operation) == Operation::set;
-            for (auto* input : page_ptr->dimensions) input->setEnabled(enabled);
-            page_ptr->profile_stack->setEnabled(enabled);
+        QObject::connect(page.geometry_operation, &QComboBox::currentIndexChanged, owner, [this, page_ptr = &page](int) {
+            update_geometry_controls(*page_ptr);
         });
     }
     void build(Page& page) {
@@ -930,11 +1086,24 @@ public:
                 require(std::isfinite(xy * vertical) && xy * vertical > 0, "The resulting Z scale overflows or underflows.");
             }
             intent.profile_geometry.operation = geometry_operation;
+            const auto* collection = page.profile_collections[index].get();
+            if (collection && collection->initialize_profile_topology)
+                require(geometry_operation == Operation::set, "Apply pending edge identities with Set geometry before making other geometry changes.");
             if (geometry_operation == Operation::set) {
                 // Dimensions are applied only after all pages' pose patches have
                 // been collected. Each cohort member keeps its actual profiles.
-                intent.profile_geometry.value = page.profile_collections[index] ?
-                    profile_draft(*page.profile_collections[index]) : *selected.profiles;
+                intent.profile_geometry.value = collection ? profile_draft(*collection) : *selected.profiles;
+                if (collection && collection->initialize_profile_topology) {
+                    const auto& proposed = *intent.profile_geometry.value;
+                    require(proposed.size() == selected.profiles->size(), "Pending edge identities must retain the captured own-profile roster.");
+                    for (std::size_t i = 0; i < proposed.size(); ++i) {
+                        auto expected = (*selected.profiles)[i];
+                        if (!expected.topology) expected.topology = collection->profiles[i].draft.topology;
+                        require(expected.topology.has_value() && proposed[i] == expected,
+                            "Apply pending edge identities before changing profile geometry, extrusion or material slots.");
+                    }
+                    intent.initialize_profile_topology = true;
+                }
             }
             result.push_back(std::move(intent));
         }
@@ -969,7 +1138,10 @@ public:
                 auto& profiles = *intent.profile_geometry.value;
                 try {
                     const auto& requested = dimensions.at(target);
-                    if (std::any_of(requested.begin(), requested.end(), [](const auto& value) { return value.has_value(); }))
+                    const bool resize = std::any_of(requested.begin(), requested.end(), [](const auto& value) { return value.has_value(); });
+                    require(!intent.initialize_profile_topology || !resize,
+                        "Apply pending edge identities before resizing geometry.");
+                    if (resize)
                         resize_profiles(profiles, final_geometry_frame(target, result), requested);
                     (void)validate_assembly_profiles(profiles);
                 } catch (const std::exception& failure) {

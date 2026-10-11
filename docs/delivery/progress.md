@@ -14,6 +14,43 @@ changed source does not acquire runtime acceptance without later qualification.
 
 ## Current delivery state
 
+### October 11 initial component profile identity authoring
+
+The preceding identified-dimension/mixed-deletion batch is committed and pushed
+as 5a854c79c2feeccf047b040bfff2ddd33e146a1c; exact remote ref verification passed.
+The current continuation makes initial topology assignment operative rather than
+requiring users to supply identified profiles externally.
+
+Explicit property intent/request4 adds literal initialize_profile_topology.
+It assigns identity only to exact actual anonymous own-profile geometry, retaining
+the complete profile roster, XY/arc/hole geometry, scalar/material values and
+existing identified topology. At least one real anonymous conversion is required.
+Independent profile-local identity namespaces cannot borrow same-ID inherited
+type topology. Existing raw source fields and row order stay exact while the
+new version/topology fields are added. Ordinary property/pose patches retain
+their existing source and phase admission. Historical leaf1–3 do not gain this
+authority. Phase authoring/request6 and mixed Properties35 retain explicit
+geometry/presentation/dimension allocations and source-bound atomic publication;
+historical phase1–5 refuse leaf4. Reader253/extraction251 covers direct/nested
+retained authoring. Root integrated Document/controller/store/docs; bounded
+workers returned the leaf, wrapper and Properties panel paths.
+
+Properties wiring is integrated. Independent integrated source review approved
+the bounded continuation with no proved P1/P2 findings. Root reviewed source
+preservation, explicit dialect admission, UI draft guards, controller/history
+dispatch and reader floors; scoped diff checks pass. The panel's
+action generates fresh identities on captured unchanged own profiles, freezes
+incompatible draft geometry/scalar edits and carries the explicit flag until
+Apply. Reviewed topology correspondence/removal on redraw, cutouts, profile
+retirement and clear-to-type remain the next required implementation. Initial
+identity assignment is not full topology-edit lifecycle completion.
+
+Source-only steering remains binding. No builds, tests, new tests, scripts,
+probes, native jobs, launches, packages or installations ran. The installed
+application remains unchanged; compilation, interaction, Undo/reopen and user
+acceptance are unverified. The full broad production packages and external
+prerequisites remain in the approved plan; all ten production gates stay open.
+
 ### October 11 identified component dimension integration
 
 The preceding complete drawing-context batch is committed and pushed as

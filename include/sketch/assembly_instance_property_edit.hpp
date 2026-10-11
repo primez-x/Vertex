@@ -59,17 +59,28 @@ struct AssemblyInstancePropertyEditIntent {
     // override from the resolved type. Identified redraw/clear requires a
     // separate reviewed mapping/removal workflow and currently refuses.
     AssemblyInstancePropertyPatch<std::vector<AssemblyProfile>> profile_geometry;
+    // Explicit initial identity authoring only: Set must retain the complete
+    // actual own-source roster and every geometry/scalar/material field, keep
+    // existing topology unchanged and identify at least one anonymous profile.
+    // New ring/segment/vertex identities are profile-local; the actual same-ID
+    // shared type's topology is reserved even when an anonymous override hides it.
+    // This does not authorize redraw, additions, removals or clear-to-type.
+    bool initialize_profile_topology{false};
 };
 
-// Closed canonical v1/v2/v3 codec. V2 adds anonymous profile_geometry and is
+// Closed canonical v1/v2/v3/v4 codec. V2 adds anonymous profile_geometry and is
 // emitted for a non-unchanged anonymous profile operation. V3 requires Set
 // containing identified profiles and explicit topology-preserving authority;
-// source replay checks the exact selected node's own geometry. V1 rejects the
-// geometry field; historical V2 rejects identified profiles. All operations
-// are explicit; set carries a value and unchanged/clear carry null. Pose fields are always present
-// (unsupplied components are null). Values are finite, scales positive, counts
+// source replay checks the exact selected node's own geometry. V4 requires the
+// literal initialize_profile_topology:true field and identified Set; actual
+// source replay admits only initial identity authoring as specified above.
+// Historical dialects reject that field and cannot acquire V4 authority. V1
+// rejects the geometry field; historical V2 rejects identified profiles. All
+// operations are explicit; set carries a value and unchanged/clear carry null.
+// Pose fields are always present (unsupplied components are null). Values are
+// finite, scales positive, counts
 // integral/nonnegative; property strings <=4096 bytes and local keys <=1024.
-// No shared type/host/context/identity/child creation or deletion authority.
+// No shared type/host/context/root or child identity creation/deletion authority.
 [[nodiscard]] nlohmann::json encode_assembly_instance_property_edit_intent(
     const AssemblyInstancePropertyEditIntent&);
 [[nodiscard]] AssemblyInstancePropertyEditIntent decode_assembly_instance_property_edit_intent(
@@ -131,8 +142,10 @@ private:
         const DocumentSnapshot&, const nlohmann::json&);
 };
 [[nodiscard]] nlohmann::json validate_assembly_instance_property_edit_request(const nlohmann::json&);
-// Request v3 is manufactured only when an intent v3 is present. Requests v1/v2
-// retain historical authority and reject intent v3. Every request dialect uses
+// Request v4 requires at least one intent v4 and permits compatible intents
+// v1/v2/v3. Request v3 is manufactured only when an intent v3 is present and no
+// intent v4 is present. Requests v1/v2 retain historical authority and reject
+// intent v3; requests v1/v2/v3 reject intent v4. Every request dialect uses
 // the same complete source snapshot, authoring, entity and save-state fences.
 [[nodiscard]] AssemblyInstancePropertyEditPreparation prepare_assembly_instance_property_edit(
     const DocumentSnapshot&, std::span<const AssemblyInstancePropertyEditIntent>);

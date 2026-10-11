@@ -54,13 +54,13 @@ struct PhaseAssemblyInstancePropertyEditResult {
 [[nodiscard]] PhaseAssemblyInstancePropertyEditPlan inspect_phase_assembly_instance_property_edit_plan(
     const AssemblyDocumentEntities&, std::span<const AssemblyInstancePropertyEditIntent>);
 // Actual replacement roots only: independent owners or their exact embedded
-// presentation aliases, plus actual dimension copies in geometry v3/v5 or opt-in
+// presentation aliases, plus actual dimension copies in geometry v3/v5/v6 or opt-in
 // dimension-complete v4. Historical calls preserve the geometry-only inventory.
 // Ordinary and unchanged targets never allocate overlays.
 [[nodiscard]] std::vector<std::string> inspect_phase_assembly_instance_property_presentation_overlay_ids(
     const AssemblyDocumentEntities&, std::span<const AssemblyInstancePropertyEditIntent>,
     bool complete_component_dimensions = false);
-// Geometry v3/v5 and opt-in v4 allocation inventory. Actual replacement roots only;
+// Geometry v3/v5/v6 and opt-in v4 allocation inventory. Actual replacement roots only;
 // ordinary roots share its 1000-association admission but allocate no copies.
 // Values retain the complete supported v6/v7 nested component target. Malformed,
 // unsupported or nonmeasurable affected associations refuse. Inactive copies
@@ -81,7 +81,7 @@ struct PhaseAssemblyInstancePropertyEditAuthoring {
     bool carry_presentation_references{false};
     // Actual original overlay ID -> fresh copy ID; exact sorted affected roster.
     std::map<std::string, std::string, std::less<>> presentation_overlay_identities;
-    // Geometry v3/v5 or explicit v4: exact actual source dimension -> fresh copy identity.
+    // Geometry v3/v5/v6 or explicit v4: exact actual source dimension -> fresh copy identity.
     // Required wire object even when empty; ordinary dimensions stay in place.
     std::map<std::string, std::string, std::less<>> dimension_identities;
     // Opt-in nongeometry v4 completes every affected supported v6/v7 association,
@@ -96,8 +96,13 @@ struct PhaseAssemblyInstancePropertyEditAuthoring {
 // V5 uses v3's closed fields and complete carry contract, requiring at least one
 // topology-preserving intent v3. V1..4 reject that new intent authority; typed
 // encoding chooses v5 when any leaf intent requires topology preservation.
+// V6 uses v5's exact closed fields and carry contract, requiring at least one
+// initial-topology leaf intent v4 and admitting compatible leaf v1..4. V1..5
+// reject initial-topology authority. Typed encoding prefers v6 when any leaf
+// initializes topology, otherwise v5 when any leaf preserves topology.
 // The leaf derives and checks the selected node's complete own profile roster;
-// this wrapper never assigns or rewrites profile, ring, vertex or edge identities.
+// initial topology requires exact actual anonymous geometry and scalars; the
+// wrapper never assigns or rewrites profile, ring, vertex or edge identities.
 // No dialect accepts a caller-authored target/candidate map or geometry-anchor
 // correspondence.
 [[nodiscard]] nlohmann::json encode_phase_assembly_instance_property_edit_authoring(

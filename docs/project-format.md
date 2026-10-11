@@ -1,4 +1,25 @@
-# Vertex project formats v1 through v252
+# Vertex project formats v1 through v253
+
+Reader253 adds explicit initial component profile topology authoring under
+property intent/request4, phase authoring/request6 and mixed Properties35.
+Intent4 adds literal `initialize_profile_topology:true` to the geometry Set
+contract. Its candidate must retain the actual selected node's complete own
+profile roster, XY segments/sweeps, hole order, elevation, extrusion height and
+material slots. Existing identified profiles retain their exact topology; at
+least one actual anonymous profile acquires explicit identities. This is initial
+assignment to unchanged source geometry, not inferred redraw correspondence.
+The profile-local ring, segment and vertex namespaces remain separate. An
+anonymous override cannot borrow identities from same-ID identified type data.
+Raw source geometry/scalars/order are retained while version/topology are added.
+
+Phase6 retains the closed geometry/presentation/dimension allocation contract,
+requires an initial-assignment leaf and admits compatible leaf1–4. Historical
+phase1–5 refuse leaf4. Mixed35 requires exact phase request6 and complete
+source/phase/publication fences. Retained direct/nested payloads require reader253
+and native extraction251. Properties exposes the action on unchanged actual
+anonymous profiles; pending assignment freezes incompatible profile geometry
+edits until the atomic apply. Reviewed redraw/removal remains a separate gap.
+Compilation, runtime and Undo/reopen qualification remain outstanding.
 
 Reader252 adds placed `assembly_profile` dimensions under dimension wire7.
 Their closed target contains `entity_id` and `assembly`; the carrier is the

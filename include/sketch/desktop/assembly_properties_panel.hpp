@@ -29,6 +29,11 @@ public:
     // profile IDs are fresh across current, type and removed dialog profiles.
     // Keep and Use type geometry ignore those drafts. Dependency completion
     // and refusal of last-solid removal remain the enclosing workflow's job.
+    // Enable edge dimensions initializes only unchanged anonymous own-source
+    // profiles. That pending Set freezes profile edits and dimensions until
+    // applied; its explicit initialization flag survives intent collection.
+    // Existing edge identities permit local extrusion/material-slot edits;
+    // redraw, roster, XY resize and clear-to-type await reviewed mapping.
     [[nodiscard]] std::vector<AssemblyInstancePropertyEditIntent> intents() const;
     [[nodiscard]] QString lastError() const;
 
