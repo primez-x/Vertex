@@ -14,6 +14,35 @@ changed source does not acquire runtime acceptance without later qualification.
 
 ## Current delivery state
 
+### October 11 coordinated demolition prerequisites
+
+The baseline component demolition and retained selection batch is committed
+and pushed as 2fbcd232. The next required workflow is one coordinated deletion
+of baseline components and physical/ordinary roots, retaining both typed
+demolition additions and actual row-retirement pruning. Its separate hosted
+semantic opening producer now has an explicit default-false pure replay
+membership option requiring complete hosted-catalog consequences. It admits
+all source/candidate catalogs cumulatively before decoding, stages actual
+opening/row/dependent/presentation retirement, then applies typed companion
+pruning. Inactive/foreign declared roots refuse, active-alternative baseline
+rows remain protected, and only exact helper-derived pruning bypasses the
+required-companion guard. Opaque carrier metadata remains inspected. Existing
+raw prepare calls, replay consumers and command dialects retain their historical
+authority; none enables this new option yet.
+
+The historical coordinated-demolition public codec now refuses a separately
+supplied component_demolition sibling instead of ignoring that new field.
+This does not add mixed demolition authority. The complete coordinated intent,
+source-derived same-choice composition, selection/history/controller consumers
+and reader/extraction support remain required next implementation work.
+Required-companion quarantine and all ten open production gates remain.
+No builds, tests, scripts, probes, native jobs, launches, packages or
+installations ran; the installed app is unchanged. Independent source review
+approved this bounded prerequisite with no confirmed P1/P2 findings. Root
+reviewed source admission, actual row retirement, exact companion pruning,
+opaque references, historical defaults and the new sibling refusal. Named
+whitespace checks pass; compilation and runtime are unverified.
+
 ### October 11 baseline component demolition
 
 The preceding corner/component deletion batch is committed and pushed as

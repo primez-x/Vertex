@@ -5,6 +5,7 @@
 #include "sketch/architectural_document_adapter.hpp"
 #include "sketch/assembly_document_adapter.hpp"
 #include "sketch/assembly_geometry.hpp"
+#include "sketch/assembly_phase_membership_transport.hpp"
 #include "sketch/boundary_dimension.hpp"
 #include "sketch/constraint_integrity.hpp"
 #include "sketch/constraint_phase_scope.hpp"
@@ -407,8 +408,16 @@ void mask_retained_output_views(Json& state, const Ids& retained_views) {
 }
 // Validate on complete envelopes first. Mask only declarations, never incoming
 // document references. Unknown bytes that mention a retired owner still refuse.
-Entity reference_remainder(Entity entity, const Ids& retained_views) {
+Entity reference_remainder(Entity entity, const Ids& retained_views,
+    bool complete_component_phase_memberships = false) {
     auto& p = entity.properties;
+    if (complete_component_phase_memberships && entity.type == assembly_phase_membership_entity_type) {
+        // Only the admitted typed model has qualified retirement semantics.
+        // Adjacent opaque carrier properties and extensions remain inspected.
+        (void)AssemblyPhaseMembership::from_json(p.at("model"));
+        p.erase("model");
+        return entity;
+    }
     if (entity.type == "assembly_model" && p.contains("model") && supported_catalog(p.at("model"))) {
         (void)AssemblyModel::from_json(p.at("model")); mask_catalog_locals(p.at("model"));
     } else if (entity.type == "model_phases") {
@@ -474,7 +483,8 @@ Entity reference_remainder(Entity entity, const Ids& retained_views) {
 // Before retiring a whole presentation row, retain its opaque data in a scan
 // copy and mask only admitted reference slots. Deleting a known binding must
 // not silently delete an unsupported second reference embedded in that row.
-Entity cleanup_remainder(Entity entity, const Keys& instances, const Ids& names, const Ids& retained_views) {
+Entity cleanup_remainder(Entity entity, const Keys& instances, const Ids& names, const Ids& retained_views,
+    bool complete_component_phase_memberships = false) {
     if (entity.type == kSheetViewEntityType) {
         (void)decode_sheet_view_entity(entity);
         for (auto& view : entity.properties.at("model").at("views")) {
@@ -516,7 +526,7 @@ Entity cleanup_remainder(Entity entity, const Keys& instances, const Ids& names,
         mask_catalog_locals(entity.properties.at("model"));
         return entity;
     }
-    return reference_remainder(std::move(entity), retained_views);
+    return reference_remainder(std::move(entity), retained_views, complete_component_phase_memberships);
 }
 bool bound_overlay(const Json& row, const Ids& names) {
     const auto object = field(row, "object_id"), binding = field(row, "dimension_binding");
@@ -558,8 +568,13 @@ void retire_presentations(Entities& candidate, const Ids& names, Overlays& overl
 }
 // Qualified rows and local overlays have independent namespaces. A local ID
 // must never accidentally acquire global retirement authority.
-void refuse_qualified_references(const Entity& entity, const Keys& instances, const Ids& locals, const Overlays& overlays) {
-    for (const auto* root : {&entity.properties, &entity.extensions}) {
+void refuse_qualified_references(const Entity& entity, const Keys& instances, const Ids& locals, const Overlays& overlays,
+    bool complete_component_phase_memberships = false) {
+    std::optional<Entity> membership_remainder;
+    if (complete_component_phase_memberships && entity.type == assembly_phase_membership_entity_type)
+        membership_remainder = reference_remainder(entity, {}, true);
+    const auto& inspected = membership_remainder ? *membership_remainder : entity;
+    for (const auto* root : {&inspected.properties, &inspected.extensions}) {
         std::vector<const Json*> pending{root};
         while (!pending.empty()) {
             const auto* value = pending.back(); pending.pop_back();
@@ -620,10 +635,23 @@ struct OpeningRemoval {
 template<class ConstraintPolicy>
 std::optional<OpeningRemoval> derive(const Entities& actual,
     const std::vector<std::string>& selection, ConstraintPolicy active_phase_constraints,
-    bool complete_hosted_catalog_consequences = false) {
+    bool complete_hosted_catalog_consequences = false,
+    bool complete_component_phase_memberships = false) {
+    if (complete_component_phase_memberships && !complete_hosted_catalog_consequences)
+        reject("component membership completion requires complete hosted catalog consequences");
     if (!has_selected_opening(actual, selection)) return std::nullopt;
     if (selection.size() > selection_limit) reject("opening selection budget exceeded");
     bounds(actual);
+    AssemblyCatalogTransferBudget component_membership_catalog_budget;
+    if (complete_component_phase_memberships) {
+        // Reserve every source catalog before phase/membership resolution,
+        // catalog decoding, candidate copies or physical admission.
+        for (const auto& [id, entity] : actual) {
+            (void)id;
+            if (entity.type == "assembly_model")
+                admit_existing_assembly_catalog_work(entity, component_membership_catalog_budget);
+        }
+    }
     const auto source_output_views = output_view_ids(actual);
     const auto phase = phases(actual); const auto organization = organize_project(actual);
     Ids retired, hosts;
@@ -695,6 +723,22 @@ std::optional<OpeningRemoval> derive(const Entities& actual,
         const auto& model = catalogs.at(id); Ids locals;
         for (const auto& row : model.instances()) if (row.placement && retired.contains(row.placement->host_entity_id)) {
             if (instances.size() >= closure_limit) reject("opening-hosted catalog closure budget exceeded");
+            if (complete_component_phase_memberships) {
+                const auto member = phase.scope.assembly_memberships.owners.find({id, row.id});
+                if (member != phase.scope.assembly_memberships.owners.end()) {
+                    if (phase.scope.assembly_memberships.inactive_roots.contains({id, row.id}))
+                        reject("opening-hosted component belongs to a retained inactive design: " + id + "/" + row.id);
+                    const auto opening_owner = phase.owners.find(row.placement->host_entity_id);
+                    const auto catalog_owner = phase.owners.find(id);
+                    std::string wall_id, error;
+                    if (!read_document_wall_id(actual.at(row.placement->host_entity_id), wall_id, error)) reject(error);
+                    const auto wall_owner = phase.owners.find(wall_id);
+                    if ((opening_owner != phase.owners.end() && opening_owner->second != member->second.registry_id) ||
+                        (catalog_owner != phase.owners.end() && catalog_owner->second != member->second.registry_id) ||
+                        (wall_owner != phase.owners.end() && wall_owner->second != member->second.registry_id))
+                        reject("opening-hosted component has foreign declared phase ownership: " + id + "/" + row.id);
+                }
+            }
             const bool retained_carrier = retained_baseline_catalog_row(actual, phase, entity,
                 row.placement->host_entity_id, complete_hosted_catalog_consequences);
             if (retained_carrier) retained_baseline_catalogs.insert(id);
@@ -746,10 +790,12 @@ std::optional<OpeningRemoval> derive(const Entities& actual,
         filter(candidate.at(id).properties.at("model").at("instances"), [&](const Json& row) {
             return !locals.contains(row.at("id").get<std::string>());
         });
-        (void)AssemblyModel::from_json(candidate.at(id).properties.at("model"));
-        const auto remainder = reference_remainder(candidate.at(id), source_output_views);
-        if (touches(remainder.properties, locals) || touches(remainder.extensions, locals))
-            reject("retained catalog metadata has unsupported retired local-instance reference: " + id);
+        if (!complete_component_phase_memberships) {
+            (void)AssemblyModel::from_json(candidate.at(id).properties.at("model"));
+            const auto remainder = reference_remainder(candidate.at(id), source_output_views);
+            if (touches(remainder.properties, locals) || touches(remainder.extensions, locals))
+                reject("retained catalog metadata has unsupported retired local-instance reference: " + id);
+        }
     }
     // Known dependents form a bounded closure. Unsupported affected records
     // remain in the candidate and are refused by the final reference scan.
@@ -787,24 +833,56 @@ std::optional<OpeningRemoval> derive(const Entities& actual,
     if (retained_output_views != source_output_views) reject("removal changes retained decoded output-view identities");
     for (const auto& [id, entity] : actual) {
         if (retired.contains(id)) continue;
-        refuse_qualified_references(entity, instances, retired_locals, {});
+        refuse_qualified_references(entity, instances, retired_locals, {}, complete_component_phase_memberships);
         if (!touches(entity.properties, names) && !touches(entity.extensions, names)) continue;
-        const auto remainder = cleanup_remainder(entity, instances, names, retained_output_views);
+        const auto remainder = cleanup_remainder(entity, instances, names, retained_output_views,
+            complete_component_phase_memberships);
         if (touches(remainder.properties, names) || touches(remainder.extensions, names))
             reject("affected " + entity.type + " " + id + " has an unsupported reference outside known cleanup fields");
     }
     for (const auto& id : retired) candidate.erase(id);
     retire_phases(candidate, actual, phase, retired);
     Overlays overlays; retire_presentations(candidate, names, overlays);
+    Entities pruned_companions;
+    if (complete_component_phase_memberships) {
+        bounds(candidate);
+        // Share the source ledger with the complete actual retirement candidate
+        // before the pruning helper or final validation decodes its catalogs.
+        for (const auto& [id, entity] : candidate) {
+            (void)id;
+            if (entity.type == "assembly_model")
+                admit_existing_assembly_catalog_work(entity, component_membership_catalog_budget);
+        }
+        candidate = prune_removed_assembly_phase_memberships(actual, candidate);
+        for (const auto& [id, entity] : actual) {
+            if (entity.type == assembly_phase_membership_entity_type) {
+                const auto after = candidate.find(id);
+                if (after == candidate.end()) reject("opening retirement erased an actual membership companion: " + id);
+                auto expected = entity;
+                expected.properties.at("model") = after->second.properties.at("model");
+                if (!exact(expected, after->second))
+                    reject("opening retirement changed a membership carrier beyond typed pruning: " + id);
+                pruned_companions.emplace(id, after->second);
+            } else if (entity.type == "assembly_model") {
+                Ids locals;
+                for (auto key = instances.lower_bound({id, ""}); key != instances.end() && key->first == id; ++key)
+                    locals.insert(key->second);
+                if (locals.empty()) continue;
+                const auto remainder = reference_remainder(candidate.at(id), source_output_views);
+                if (touches(remainder.properties, locals) || touches(remainder.extensions, locals))
+                    reject("retained catalog metadata has unsupported retired local-instance reference: " + id);
+            }
+        }
+    }
     const auto final_output_views = output_view_ids(candidate);
     if (final_output_views != retained_output_views) reject("presentation retirement changes retained decoded output-view identities");
     for (const auto& [id, entity] : candidate) {
         if (touches(entity.properties, names) || touches(entity.extensions, names)) {
-            const auto remainder = reference_remainder(entity, final_output_views);
+            const auto remainder = reference_remainder(entity, final_output_views, complete_component_phase_memberships);
             if (touches(remainder.properties, names) || touches(remainder.extensions, names))
                 reject("retained " + entity.type + " " + id + " has an unsupported reference to a retired opening/dependent");
         }
-        refuse_qualified_references(entity, instances, retired_locals, overlays);
+        refuse_qualified_references(entity, instances, retired_locals, overlays, complete_component_phase_memberships);
     }
     bounds(candidate);
     const auto remaining_aliases = embedded_assembly_presentation_ids(candidate);
@@ -818,6 +896,12 @@ std::optional<OpeningRemoval> derive(const Entities& actual,
     for (const auto& [id, entity] : actual) {
         const auto after = candidate.find(id);
         if (after != candidate.end() && exact(entity, after->second)) continue;
+        if (complete_component_phase_memberships && entity.type == assembly_phase_membership_entity_type) {
+            const auto expected = pruned_companions.find(id);
+            if (after == candidate.end() || expected == pruned_companions.end() || !exact(expected->second, after->second))
+                reject("opening retirement changed its proved typed membership pruning: " + id);
+            continue;
+        }
         if (retained_baseline_catalogs.contains(id)) {
             if (after == candidate.end()) reject("complete opening consequence erased its retained catalog: " + id);
             auto expected = entity;
@@ -884,10 +968,10 @@ std::optional<ApplyEntityChanges> derive_snapshot(const DocumentSnapshot& source
 std::optional<std::map<std::string, Entity, std::less<>>> replay_hosted_opening_removal(
     const std::map<std::string, Entity, std::less<>>& actual,
     const std::vector<std::string>& selected_opening_ids, bool active_phase_constraints,
-    bool complete_hosted_catalog_consequences) {
+    bool complete_hosted_catalog_consequences, bool complete_component_phase_memberships) {
     try {
         auto removal = derive(actual, selected_opening_ids, [active_phase_constraints] { return active_phase_constraints; },
-            complete_hosted_catalog_consequences);
+            complete_hosted_catalog_consequences, complete_component_phase_memberships);
         if (!removal) return std::nullopt;
         return std::move(removal->entities);
     }

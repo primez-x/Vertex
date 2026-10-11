@@ -16,12 +16,17 @@ namespace sketch {
 // The complete-operation opt-in permits only actual selected proposed-opening
 // row consequences in a retained baseline catalog of the same saved choice;
 // the carrier and its definitions remain exact. Historical callers default off.
+// Component membership completion additionally requires complete hosted catalog
+// consequences. It prunes only typed memberships of actually retired rows from
+// existing raw companions; retained baseline and other-choice rows stay protected.
+// This replay-only option grants no raw command or baseline demolition authority.
 [[nodiscard]] std::optional<std::map<std::string, Entity, std::less<>>>
 replay_hosted_opening_removal(
     const std::map<std::string, Entity, std::less<>>& actual,
     const std::vector<std::string>& selected_opening_ids,
     bool active_phase_constraints,
-    bool complete_hosted_catalog_consequences = false);
+    bool complete_hosted_catalog_consequences = false,
+    bool complete_component_phase_memberships = false);
 
 // Pure, bounded physical retirement of actual semantic opening entities from
 // the full captured source. Empty/non-opening selections return nullopt; a
