@@ -1,6 +1,8 @@
 #include "sketch/phase_wall_replacement.hpp"
 
 #include "sketch/annotation_entity_codec.hpp"
+#include "sketch/assembly_model.hpp"
+#include "sketch/assembly_phase_membership.hpp"
 #include "sketch/boundary_dimension.hpp"
 #include "sketch/boundary_integrity.hpp"
 #include "sketch/boundary_receipt.hpp"
@@ -284,6 +286,12 @@ Entity opaque_remainder(const Entity& entity, bool complete_presentations = fals
         for (auto& row : archive.at("receipts")) row.erase("layer_id");
     }
     auto& p = remainder.properties;
+    if (entity.type == assembly_phase_membership_entity_type) {
+        // Only the admitted closed qualified binding model is consumed.
+        // Opaque properties and extension siblings remain source-exact.
+        (void)AssemblyPhaseMembership::from_json(p.at("model"));
+        p.erase("model");
+    }
     const auto consumed = [](const std::string&, bool) { return std::string{}; };
     if (entity.type == "measurement_linework") visit_stroke_copy(remainder, consumed);
     if (entity.type == "wall" && p.contains("layers"))
@@ -851,6 +859,44 @@ PhaseWallReplacementPlan inspect_phase_wall_replacement_plan(
                 auto retained = entity; retained.properties.erase("model");
                 if (touches(retained.properties, affected) || touches(retained.extensions, affected))
                     diagnostic(plan, id, "phase registry has an affected opaque dependency outside its typed model");
+                continue;
+            }
+            if (entity.type == assembly_phase_membership_entity_type) {
+                const auto remainder = opaque_remainder(entity);
+                if (touches(remainder.properties, affected) || touches(remainder.extensions, affected))
+                    diagnostic(plan, id, "assembly phase companion has an affected opaque dependency outside its closed model");
+                continue;
+            }
+            if (entity.type == "assembly_model" &&
+                (touches(entity.properties, affected) || touches(entity.extensions, affected))) {
+                try {
+                    const auto catalog = AssemblyModel::from_json(entity.properties.at("model"));
+                    auto remainder = entity;
+                    Ids inactive_rows;
+                    for (const auto& instance : catalog.instances()) {
+                        if (!instance.placement || !owners.contains(instance.placement->host_entity_id)) continue;
+                        const AssemblyPhaseRoot root{id, instance.id};
+                        if (scope.assembly_memberships.owners.contains(root) &&
+                            scope.assembly_memberships.inactive_roots.contains(root)) {
+                            inactive_rows.insert(instance.id);
+                            continue;
+                        }
+                        // This historical plan has no catalog-qualified row
+                        // allocation or materialization authority. Retaining
+                        // the refusal prevents silently activating a host copy.
+                        diagnostic(plan, id, "active hosted assembly row requires qualified wall/opening catalog and local-instance allocation with typed copy replay: " + instance.id);
+                    }
+                    // Inactive declarations stay in their original catalog;
+                    // exclude only their exact typed host slots from dependency
+                    // discovery. Unlisted rows retain the legacy refusal.
+                    for (auto& row : remainder.properties.at("model").at("instances"))
+                        if (inactive_rows.contains(row.at("id").get<std::string>()))
+                            row.at("placement").erase("host_entity_id");
+                    if (touches(remainder.properties, affected) || touches(remainder.extensions, affected))
+                        diagnostic(plan, id, "affected dependent has no safe typed replacement codec; original remains preserved");
+                } catch (const std::exception& error) {
+                    diagnostic(plan, id, "affected hosted catalog requires supported typed source admission: " + std::string(error.what()));
+                }
                 continue;
             }
             if (entity.type == "constraint") {

@@ -7,6 +7,7 @@
 #include "sketch/selection_property_edit.hpp"
 #include "sketch/stair_property_review.hpp"
 #include "sketch/phase_selection_property_edit.hpp"
+#include "sketch/phase_assembly_instance_property_edit.hpp"
 
 #include <optional>
 #include <span>
@@ -41,6 +42,10 @@ namespace sketch {
 // carry. Wall elevation remains optional; any affected walls retain twelve's
 // mandatory source/destination room-plane review. Historical dialects five
 // through twelve reject the new slab carry authority.
+// Dialect fourteen composes a sealed actual-source component alternative
+// contribution with an optional independently replayed historical five-through-
+// thirteen intent. Its component request is the sole assembly Properties lane;
+// final room decisions belong to the complete composed stage.
 // Each lane reads the same
 // complete immutable original snapshot. No supplied entity map, transform,
 // or caller-derived selected-object identity map is accepted. Historical
@@ -57,6 +62,8 @@ public:
     [[nodiscard]] const std::vector<SelectionGeometryRoomReviewRequirement>& required_room_reviews() const noexcept;
     [[nodiscard]] const std::map<std::string, std::string, std::less<>>& selected_original_to_proposed() const noexcept;
     [[nodiscard]] const std::map<std::string, std::string, std::less<>>& original_to_proposed() const noexcept;
+    using ComponentIdentityMap = std::map<AssemblyInstancePropertyEditTarget, AssemblyInstancePropertyEditTarget>;
+    [[nodiscard]] const ComponentIdentityMap& component_original_to_proposed() const noexcept;
     [[nodiscard]] const PhaseStairReplacementChildIdentityMap& stair_child_original_to_proposed() const noexcept;
     using HostedBindingMap = std::map<std::pair<std::string, std::string>, std::pair<std::string, std::string>>;
     [[nodiscard]] const HostedBindingMap& hosted_binding_original_to_proposed() const noexcept;
@@ -70,12 +77,18 @@ private:
         std::map<std::string, Entity, std::less<>>,
         std::vector<SelectionGeometryRoomReviewRequirement>,
         std::optional<PhaseSelectionPropertyEditPreparation> = std::nullopt,
-        std::vector<PhysicalWallRoomPhaseReviewInventory> = {});
+        std::vector<PhysicalWallRoomPhaseReviewInventory> = {},
+        std::optional<PhaseAssemblyInstancePropertyEditPreparation> = std::nullopt,
+        ComponentIdentityMap = {});
     nlohmann::json intent_;
     DocumentSnapshot preview_;
     std::string source_digest_;
     std::vector<SelectionGeometryRoomReviewRequirement> room_reviews_;
     std::optional<PhaseSelectionPropertyEditPreparation> phase_;
+    std::optional<PhaseAssemblyInstancePropertyEditPreparation> component_;
+    ComponentIdentityMap component_identity_map_;
+    std::map<std::string, std::string, std::less<>> selected_identity_map_;
+    std::map<std::string, std::string, std::less<>> identity_map_;
     HostedBindingMap hosted_bindings_;
     std::map<std::pair<std::string, std::string>, RoofOpeningGroupMember> roof_children_;
     std::vector<PhysicalWallRoomPhaseReviewInventory> phase_room_reviews_;
@@ -154,6 +167,16 @@ private:
     std::span<const AssemblyInstancePropertyEditIntent>,
     const std::vector<PhaseSelectionPropertyIdentityAllocation>&,
     const std::vector<PhaseStairReplacementDependencyDisposition>&);
+// Closed dialect fourteen: version, the five complete source fences,
+// component_request (sealed v1), base_intent (null or historical five-through-
+// thirteen without a nonnull assembly_request), room_reviews,
+// phase_room_reviews, message. The nonempty component roster and historical
+// roster share a 1000-unique-qualified-target bound. The base retains its exact
+// original source fences and message, with empty room decisions; no nested
+// fourteen, fabricated snapshot or supplied candidate is admitted.
+[[nodiscard]] MixedSelectionPropertyEditPreparation prepare_mixed_selection_property_edit(
+    const DocumentSnapshot&, const PhaseAssemblyInstancePropertyEditAuthoring&,
+    const MixedSelectionPropertyEditPreparation* base, std::string_view message);
 // Preparation accepts only empty room_reviews. A copied read-only snapshot
 // retains complete history/save/assets/opaque state and has no admission token.
 [[nodiscard]] MixedSelectionPropertyEditPreparation replay_mixed_selection_property_edit_preparation(

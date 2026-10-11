@@ -2,6 +2,7 @@
 
 #include "sketch/annotation_entity_codec.hpp"
 #include "sketch/assembly_model.hpp"
+#include "sketch/assembly_phase_membership_transport.hpp"
 #include "sketch/building_entity.hpp"
 #include "sketch/constraint_phase_scope.hpp"
 #include "sketch/model_phases.hpp"
@@ -209,6 +210,11 @@ Entity opaque_remainder(Entity entity) {
         for (auto& alternative : model.at("alternatives")) {
             alternative.erase("demolished_ids"); alternative.erase("proposed_ids");
         }
+    } else if (entity.type == assembly_phase_membership_entity_type) {
+        // Only the closed qualified binding model is understood. Envelope
+        // siblings retain their ordinary opaque dependency admission.
+        (void)AssemblyPhaseMembership::from_json(p.at("model"));
+        p.erase("model");
     } else if (entity.type == kSheetViewEntityType) {
         (void)decode_sheet_view_entity(entity);
         for (auto& view : p.at("model").at("views")) {
@@ -366,6 +372,9 @@ PhaseStructuralReplacementPlan inspect_phase_structural_replacement_plan(
         if (std::adjacent_find(plan.seed_object_ids.begin(), plan.seed_object_ids.end()) != plan.seed_object_ids.end())
             reject("structural seeds must be unique");
         const Ids owners(plan.seed_object_ids.begin(), plan.seed_object_ids.end());
+        const bool has_companions = std::any_of(actual.begin(), actual.end(),
+            [](const auto& item) { return item.second.type == assembly_phase_membership_entity_type; });
+        const auto assembly_memberships = has_companions ? resolve_assembly_phase_memberships(actual) : AssemblyPhaseMembershipScope{};
         for (const auto& id : owners) {
             identity(id);
             const auto member = scope.owner_registry.find(id);
@@ -408,7 +417,8 @@ PhaseStructuralReplacementPlan inspect_phase_structural_replacement_plan(
                 } else if (!complete_hosted && entity.type == "assembly_model") {
                     const auto catalog = AssemblyModel::from_json(entity.properties.at("model"));
                     for (const auto& instance : catalog.instances())
-                        if (instance.placement && owners.contains(instance.placement->host_entity_id))
+                        if (instance.placement && owners.contains(instance.placement->host_entity_id) &&
+                            !assembly_memberships.inactive_roots.contains({id, instance.id}))
                             diagnostic(plan, id, "hosted assembly instance requires qualified catalog/instance copy and placement replay: " + instance.id);
                 }
             } catch (const std::exception& error) {
@@ -423,8 +433,25 @@ PhaseStructuralReplacementPlan inspect_phase_structural_replacement_plan(
         Ids affected = presentation_owners; affected.insert(children.begin(), children.end());
         for (const auto& [id, entity] : actual) {
             try {
-                const auto remainder = complete_hosted && catalogs.contains(id)
+                // A catalog whose affected rows are all explicitly inactive
+                // needs no allocation. Consume only its exact typed host slots;
+                // an unlisted row keeps the historical copy/refusal rules.
+                auto remainder = complete_hosted && catalogs.contains(id)
                     ? structural_hosted_catalog_opaque_remainder(entity) : opaque_remainder(entity);
+                if (has_companions && entity.type == "assembly_model" && !catalogs.contains(id) &&
+                    (touches(remainder.properties, affected) || touches(remainder.extensions, affected))) {
+                    const auto catalog = AssemblyModel::from_json(entity.properties.at("model"));
+                    Ids inactive_rows;
+                    for (const auto& instance : catalog.instances()) {
+                        if (!instance.placement || !owners.contains(instance.placement->host_entity_id)) continue;
+                        const AssemblyPhaseRoot root{id, instance.id};
+                        if (assembly_memberships.owners.contains(root) &&
+                            assembly_memberships.inactive_roots.contains(root)) inactive_rows.insert(instance.id);
+                    }
+                    for (auto& row : remainder.properties.at("model").at("instances"))
+                        if (inactive_rows.contains(row.at("id").get<std::string>()))
+                            row.at("placement").erase("host_entity_id");
+                }
                 if (touches(remainder.properties, affected) || touches(remainder.extensions, affected))
                     diagnostic(plan, id, "affected reference has no qualified structural replacement codec; original remains preserved");
             } catch (const std::exception& error) {
@@ -758,6 +785,23 @@ PhaseStructuralReplacementEntities replay_phase_structural_replacement_authoring
         }
         if (ModelPhases::from_json(raw).to_json() != final_model.to_json()) reject("retained registry differs from typed additive update");
         candidate.at(plan.registry_id).properties.at("model") = std::move(raw);
+        const bool has_companions = std::any_of(actual.begin(), actual.end(),
+            [](const auto& item) { return item.second.type == assembly_phase_membership_entity_type; });
+        const auto membership_scope = has_companions ? resolve_assembly_phase_memberships(actual) : AssemblyPhaseMembershipScope{};
+        const bool transport_memberships = std::any_of(expected_instances.begin(), expected_instances.end(),
+            [&](const auto& root) { return membership_scope.owners.contains(root); });
+        if (transport_memberships) {
+            AssemblyPhaseCopiedRoots copied_roots;
+            // The independently inspected sealed roster and authored exact
+            // identities are copy authority; render aliases never participate.
+            for (const auto& root : expected_instances)
+                copied_roots.emplace(root, AssemblyPhaseRoot{catalog_ids.at(root.first),
+                    authoring.hosted_instance_identities.at(root)});
+            if (copied_roots.size() != expected_instances.size())
+                reject("membership transport requires the complete actual hosted roster");
+            candidate = transport_assembly_phase_memberships_for_host_copies(actual, candidate,
+                copied_roots, host_ids, plan.registry_id, plan.alternative_id);
+        }
         auto presentation_ids = authoring.identities;
         Ids presentation_owners = seeds;
         for (const auto& [original, proposed] : hosted_copy.original_to_proposed_presentation) {

@@ -3,6 +3,7 @@
 #include "sketch/annotation_entity_codec.hpp"
 #include "sketch/assembly_document_adapter.hpp"
 #include "sketch/assembly_geometry.hpp"
+#include "sketch/assembly_phase_membership_transport.hpp"
 #include "sketch/building_entity.hpp"
 #include "sketch/constraint_phase_scope.hpp"
 #include "sketch/model_phases.hpp"
@@ -361,6 +362,9 @@ Entity remainder(Entity entity) {
             row.erase("id");
             if (row.contains("placement")) row.at("placement").erase("host_entity_id");
         }
+    } else if (entity.type == assembly_phase_membership_entity_type) {
+        (void)AssemblyPhaseMembership::from_json(p.at("model"));
+        p.erase("model"); // Qualified bindings only; envelope siblings stay opaque.
     } else if (entity.type == "model_phases") {
         (void)ModelPhases::from_json(p.at("model"));
         auto& model = p.at("model"); model.erase("entity_ids"); model.erase("baseline_ids");
@@ -1116,10 +1120,15 @@ Derivation derive(const Entities& actual, const std::vector<Intent>& edits,
             const auto catalog = AssemblyModel::from_json(raw);
             bool included = false;
             for (const auto& row : catalog.instances()) if (row.placement && result.copied_owners.contains(row.placement->host_entity_id)) {
+                const AssemblyPhaseRoot root{id, row.id};
+                if (active.assembly_memberships.owners.contains(root) &&
+                    (active.assembly_memberships.inactive_roots.contains(root) ||
+                        assembly_host_inactive_in_phase(actual, active.inactive_owner_ids, row.placement->host_entity_id))) continue;
+                if (active.inactive_owner_ids.contains(id) && !active.assembly_memberships.owners.contains(root))
+                    reject("actual selected hosted catalog is inactive: " + id);
                 selected.emplace(id, row.id); included = true;
             }
             if (!included) continue; // Opaque-only references are refused below.
-            if (active.inactive_owner_ids.contains(id)) reject("actual selected hosted catalog is inactive: " + id);
             context(actual, organization, entity);
             result.catalogs.insert(id);
         }
@@ -2024,8 +2033,26 @@ Entities replay_phase_stair_replacement_authoring(const Entities& actual, const 
             }
             candidate.at(id) = std::move(composed);
         }
+        const bool has_companions = std::any_of(actual.begin(), actual.end(),
+            [](const auto& item) { return item.second.type == assembly_phase_membership_entity_type; });
+        const auto membership_scope = has_companions ? resolve_assembly_phase_memberships(actual) : AssemblyPhaseMembershipScope{};
+        const bool transport_memberships = std::any_of(hosted.begin(), hosted.end(),
+            [&](const auto& root) { return membership_scope.owners.contains(root); });
+        AssemblyPhaseCopiedRoots copied_roots;
+        AssemblyPhaseCopiedHosts copied_hosts;
         for (const auto& id : derived.catalogs) {
             auto copy = actual.at(id); copy.id = authoring.identities.at(id);
+            if (transport_memberships) {
+                const auto original = AssemblyModel::from_json(actual.at(id).properties.at("model"));
+                for (const auto& instance : original.instances()) {
+                    const PhaseStairReplacementHostedInstanceKey key{id, instance.id};
+                    if (!hosted.contains(key)) continue;
+                    if (!instance.placement || !derived.copied_owners.contains(instance.placement->host_entity_id))
+                        reject("copied membership row lost its actual baseline stair or railing host");
+                    copied_roots.emplace(key, AssemblyPhaseRoot{authoring.identities.at(id), authoring.hosted_instance_identities.at(key)});
+                    copied_hosts.emplace(instance.placement->host_entity_id, authoring.identities.at(instance.placement->host_entity_id));
+                }
+            }
             if (transformed) copy.properties.at("model").at("schema") = derived.physical.at(id).properties.at("model").at("schema");
             auto& copied_rows = copy.properties.at("model").at("instances"); const auto retained = copied_rows; copied_rows = Json::array();
             for (auto row : retained) {
@@ -2062,6 +2089,15 @@ Entities replay_phase_stair_replacement_authoring(const Entities& actual, const 
             }
         if (ModelPhases::from_json(raw).to_json() != final_phases.to_json()) reject("raw append differs from validated phase update");
         candidate.at(plan.registry_id).properties.at("model") = std::move(raw);
+        Entities transported_companions;
+        if (transport_memberships) {
+            if (copied_roots.size() != hosted.size()) reject("membership transport requires the complete actual hosted roster");
+            candidate = transport_assembly_phase_memberships_for_host_copies(actual, candidate,
+                copied_roots, copied_hosts, plan.registry_id, plan.alternative_id);
+            for (const auto& [id, entity] : candidate)
+                if (entity.type == assembly_phase_membership_entity_type && !exact(entity, actual.at(id)))
+                    transported_companions.emplace(id, entity);
+        }
         // Complete candidate/source envelopes precede any new alias codec or
         // saved-view native derivation. Typed physical/host admission precedes
         // native silhouette construction used only for presentation placement.
@@ -2159,6 +2195,10 @@ Entities replay_phase_stair_replacement_authoring(const Entities& actual, const 
         for (const auto& id : derived.catalogs) if (!transformed && !exact(candidate.at(id), actual.at(id))) reject("actual catalog source changed");
         ordinary.insert(plan.retained_rehost_object_ids.begin(), plan.retained_rehost_object_ids.end());
         for (const auto& [id, entity] : actual) {
+            if (const auto transported = transported_companions.find(id); transported != transported_companions.end()) {
+                if (!exact(candidate.at(id), transported->second)) reject("replacement changed its admitted membership transport");
+                continue;
+            }
             const bool changed_catalog = transformed && std::any_of(changed_original_hosted.begin(), changed_original_hosted.end(),
                 [&](const auto& key) { return key.first == id; });
             if (id == plan.registry_id || ordinary.contains(id) || changed_catalog || entity.type == kSheetViewEntityType || entity.type == kAnnotationEntityType) continue;

@@ -8,6 +8,7 @@
 #include "sketch/boundary_dimension.hpp"
 #include "sketch/constraint_phase_scope.hpp"
 #include "sketch/model_phases.hpp"
+#include "sketch/assembly_phase_membership.hpp"
 #include "sketch/phase_roof_transform.hpp"
 #include "sketch/phase_roof_resize.hpp"
 #include "sketch/project_organization.hpp"
@@ -154,6 +155,9 @@ Entity opaque_remainder(Entity entity, bool include_hosted_instances = false) {
             if (row.contains("placement")) row.at("placement").erase("host_entity_id");
     } else if (entity.type == "roof_join") {
         (void)parse_roof_join(p, entity.id); p.erase("roof_ids");
+    } else if (entity.type == assembly_phase_membership_entity_type) {
+        (void)AssemblyPhaseMembership::from_json(p.at("model"));
+        p.erase("model"); // Qualified bindings only; envelope siblings remain opaque.
     } else if (entity.type == "model_phases") {
         (void)ModelPhases::from_json(p.at("model")); p.erase("model");
     } else if (can_recognize_boundary_dimension_entity_type(entity.type)) {

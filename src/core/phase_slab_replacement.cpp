@@ -3,6 +3,7 @@
 #include "sketch/annotation_entity_codec.hpp"
 #include "sketch/assembly_document_adapter.hpp"
 #include "sketch/assembly_model.hpp"
+#include "sketch/assembly_phase_membership_transport.hpp"
 #include "sketch/constraint_phase_scope.hpp"
 #include "sketch/document_solid.hpp"
 #include "sketch/model_phases.hpp"
@@ -218,6 +219,11 @@ Entity opaque_remainder(Entity entity) {
             if (row.contains("placement")) row.at("placement").erase("host_entity_id");
     } else if (entity.type == "model_phases") {
         (void)ModelPhases::from_json(p.at("model"));
+        p.erase("model");
+    } else if (entity.type == assembly_phase_membership_entity_type) {
+        // The admitted companion owns only its closed qualified binding model.
+        // Envelope siblings remain opaque to replacement discovery.
+        (void)AssemblyPhaseMembership::from_json(p.at("model"));
         p.erase("model");
     } else if (entity.type == kSheetViewEntityType) {
         (void)decode_sheet_view_entity(entity);
@@ -554,6 +560,13 @@ PhaseSlabReplacementResult replay_phase_slab_replacement(
         }
         admit_slabs(physical, seeds);
         PhaseSlabReplacementResult result{source, identities, {}, hosted_instance_identities};
+        const bool has_companions = std::any_of(source.begin(), source.end(),
+            [](const auto& item) { return item.second.type == assembly_phase_membership_entity_type; });
+        const auto membership_scope = has_companions ? resolve_assembly_phase_memberships(source) : AssemblyPhaseMembershipScope{};
+        const bool transport_memberships = std::any_of(expected_instances.begin(), expected_instances.end(),
+            [&](const auto& root) { return membership_scope.owners.contains(root); });
+        AssemblyPhaseCopiedRoots copied_roots;
+        AssemblyPhaseCopiedHosts copied_hosts;
         for (const auto& id : ordinary_targets) result.entities.at(id) = physical.at(id);
         if (ordinary) for (const auto& [id,entity]:*ordinary)
             if (entity.type=="assembly_model" && !exact(entity,source.at(id))) result.entities.at(id)=entity;
@@ -585,6 +598,13 @@ PhaseSlabReplacementResult replay_phase_slab_replacement(
                 const auto catalog = AssemblyModel::from_json(source.at(id).properties.at("model"));
                 for (const auto& instance : catalog.instances()) {
                     if (!instance.placement || !expected_instances.contains({id, instance.id})) continue;
+                    if (transport_memberships) {
+                        const auto& host = instance.placement->host_entity_id;
+                        if (!seeds.contains(host)) reject("copied membership row lost its actual baseline slab host");
+                        copied_roots.emplace(AssemblyPhaseRoot{id, instance.id},
+                            AssemblyPhaseRoot{identities.at(id), hosted_instance_identities.at({id, instance.id})});
+                        copied_hosts.emplace(host, identities.at(host));
+                    }
                     const auto intent = std::find_if(geometry.begin(), geometry.end(), [&](const auto& edit) {
                         return edit.slab_id == instance.placement->host_entity_id;
                     });
@@ -649,6 +669,11 @@ PhaseSlabReplacementResult replay_phase_slab_replacement(
         if (ModelPhases::from_json(raw).to_json() != final_model.to_json())
             reject("retained registry reconstruction differs from typed update");
         result.entities.at(plan.registry_id).properties.at("model") = std::move(raw);
+        if (transport_memberships) {
+            if (copied_roots.size() != expected_instances.size()) reject("membership transport requires the complete actual hosted roster");
+            result.entities = transport_assembly_phase_memberships_for_host_copies(source, result.entities,
+                copied_roots, copied_hosts, plan.registry_id, plan.alternative_id);
+        }
         complete_presentation(result.entities, source, seeds, identities);
         Ids copies;
         for (const auto& id : seeds) copies.insert(identities.at(id));

@@ -270,8 +270,99 @@ void validate_vertical_members(const Json& value, const Json& scalar) {
             reject("scalar Properties requires context/plane review without dimension movement authority");
     }
 }
+bool phase_room_dialect(const Json& value) {
+    return value.at("version") == 11 || value.at("version") == 12 ||
+        value.at("version") == 13 || value.at("version") == 14;
+}
+MemberKey component_key(const AssemblyInstancePropertyEditTarget& target) {
+    MemberKey key{"assembly", target.catalog_id, target.instance_id, target.document_entity_id.value_or("")};
+    key.insert(key.end(), target.part_path.begin(), target.part_path.end());
+    return key;
+}
+// Read the already validated historical roster without changing its dialect or
+// translating its authority into a synthetic ordinary request.
+void historical_selected_members(const Json& value, std::set<MemberKey>& selected) {
+    const auto select = [&](MemberKey key) {
+        if (!selected.insert(std::move(key)).second || selected.size() > 1000)
+            reject("duplicate or over-budget selected member");
+    };
+    const auto& scalar = phase_room_dialect(value) ? value.at("phase_request").at("scalar_request") : value.at("ordinary_request");
+    if (!scalar.is_null()) for (const auto& row : scalar.at("selected"))
+        select({"entity", identity(row.at("entity_id")), ""});
+    const auto& presentation = value.at("presentation_request");
+    if (!presentation.is_null()) for (const auto& row : presentation.at("selected")) {
+        if (row.at("family") == "reference") select({"entity", identity(row.at("entity_id")), ""});
+        else select({row.at("family").get<std::string>(), identity(row.at("owner_id")), identity(row.at("child_id"))});
+    }
+    if ((value.at("version") == 9 || value.at("version") == 10) && !value.at("stair_review_request").is_null())
+        for (const auto& row : value.at("stair_review_request").at("profiles"))
+            select({"entity", identity(row.at("object_id")), ""});
+    for (const auto& row : value.at("roof_opening_members"))
+        select({"skylight", identity(row.at("roof_id")), identity(row.at("opening_id"))});
+}
 void validate(const Json& value) {
     Budget budget; budget.visit(value);
+    if (value.is_object() && value.contains("version") && value.at("version") == 14) {
+        fields(value, {"version", "expected_revision", "source_snapshot_digest", "source_authoring_digest",
+            "source_entities_digest", "source_saved_revision", "component_request", "base_intent",
+            "room_reviews", "phase_room_reviews", "message"});
+        if (!value.at("version").is_number_integer()) reject("Properties dialect must be an integer");
+        const auto component = validate_phase_assembly_instance_property_edit_request(value.at("component_request"));
+        const auto fence = [&](const Json& lane) {
+            for (const auto* key : {"expected_revision", "source_snapshot_digest", "source_authoring_digest", "source_entities_digest", "source_saved_revision"})
+                if (lane.at(key).dump() != value.at(key).dump()) reject("leaf source fences differ from complete original source");
+        };
+        fence(component);
+        if (!value.at("message").is_string() || value.at("message").get_ref<const std::string&>().size() > 1024 ||
+            value.at("message").get_ref<const std::string&>().find('\0') != std::string::npos) reject("invalid message");
+        const auto& base = value.at("base_intent");
+        std::set<MemberKey> selected;
+        if (!base.is_null()) {
+            if (!base.is_object() || !base.contains("version") || !base.at("version").is_number_integer() ||
+                base.at("version") < 5 || base.at("version") > 13)
+                reject("component base must retain an explicit historical Properties dialect");
+            if (base.contains("assembly_request") && !base.at("assembly_request").is_null())
+                reject("component request is the sole assembly Properties authority");
+            validate(base);
+            fence(base);
+            if (base.at("message").dump() != value.at("message").dump() || !base.at("room_reviews").empty() ||
+                (base.contains("phase_room_reviews") && !base.at("phase_room_reviews").empty()))
+                reject("component base must retain the same message and no completed room decisions");
+            historical_selected_members(base, selected);
+        }
+        const auto authoring = decode_phase_assembly_instance_property_edit_authoring(component.at("authoring"));
+        if (authoring.intents.empty()) reject("component Properties requires a nonempty selected roster");
+        for (const auto& intent : authoring.intents)
+            if (!selected.insert(component_key(intent.target)).second || selected.size() > 1000)
+                reject("duplicate or over-budget selected member");
+        const auto& reviews = value.at("room_reviews");
+        if (!reviews.is_array() || reviews.size() > 32) reject("room review group budget exceeded");
+        for (const auto& row : reviews) {
+            const auto review = decode_physical_wall_room_review_intent(row);
+            if (encode_physical_wall_room_review_intent(review).dump() != row.dump()) reject("room review must be canonical");
+            if (!review.context_plane_selection || !review.selected_wall_id.empty() ||
+                !review.selected_dimension_placements.empty() || review.selected_dimension_source)
+                reject("scalar Properties requires context/plane review without dimension movement authority");
+        }
+        const auto& phase_reviews = value.at("phase_room_reviews");
+        if (!phase_reviews.is_array() || phase_reviews.size() > 1000) reject("phase room review budget exceeded");
+        if ((base.is_null() || !phase_room_dialect(base)) && !phase_reviews.empty())
+            reject("component base has no phase room completion authority");
+        std::optional<std::size_t> previous;
+        for (const auto& row : phase_reviews) {
+            fields(row, {"phase_authoring_index", "wall_replacement"});
+            const auto index = revision(row.at("phase_authoring_index"));
+            if (index >= 1000 || (previous && index <= *previous)) reject("phase room reviews must be an ordered unique leaf roster");
+            previous = static_cast<std::size_t>(index);
+            const auto leaf = decode_phase_wall_replacement_authoring(row.at("wall_replacement"));
+            if (base.at("version") == 11 && leaf.complete_vertical_profiles)
+                reject("historical Properties has no elevation room completion authority");
+            if (encode_phase_wall_replacement_authoring(leaf).dump() != row.at("wall_replacement").dump() || leaf.room_review_intent.is_null())
+                reject("phase room completion requires canonical explicit decisions");
+        }
+        if (value.dump().size() > byte_limit) reject("wire byte budget exceeded");
+        return;
+    }
     if (value.is_object() && value.contains("version") && (value.at("version") == 11 || value.at("version") == 12 || value.at("version") == 13)) {
         const bool slab_carry = value.at("version") == 13;
         const bool vertical = value.at("version") == 12 || slab_carry;
@@ -473,9 +564,87 @@ void protect_source(const Entities& original, const Entities& candidate, bool be
         if (!original.contains(id)) reject("Properties cannot add identities");
     }
 }
+void require_assembly_targets_present(const Entities& candidate,
+    const std::vector<AssemblyInstancePropertyEditTarget>& targets, bool final_physical_check,
+    bool qualified_phase_policy = false) {
+    const auto owner = [&](const std::string& id) -> const Entity& {
+        const auto found = candidate.find(id);
+        if (found == candidate.end() || found->second.id != id) reject("reviewed retirement removed a selected assembly owner");
+        return found->second;
+    };
+    using RootKey = std::tuple<std::string, std::string, std::optional<std::string>>;
+    std::map<RootKey, std::vector<std::vector<std::string>>> selected_roots;
+    std::vector<AssemblyInstancePropertyEditIntent> physical_checks;
+    for (const auto& target : targets) {
+        selected_roots[{target.catalog_id, target.instance_id, target.document_entity_id}].push_back(target.part_path);
+        AssemblyInstancePropertyEditIntent retained;
+        retained.target = target;
+        physical_checks.push_back(std::move(retained));
+    }
+    std::map<std::string, AssemblyModel, std::less<>> models;
+    AssemblyExpansionBudget budget;
+    for (const auto& [key, paths] : selected_roots) {
+        const auto& [catalog_id, instance_id, entity_id] = key;
+        const auto& catalog = owner(catalog_id);
+        if (catalog.type != "assembly_model") reject("selected assembly catalog changed its source role");
+        if (!models.contains(catalog_id)) models.emplace(catalog_id, AssemblyModel::from_json(catalog.properties.at("model")));
+        const auto& model = models.at(catalog_id);
+        AssemblyInstance instance;
+        if (entity_id) {
+            const auto& root = owner(*entity_id);
+            if (root.type != "assembly_instance") reject("selected independent assembly changed its source role");
+            const auto actual = decode_document_assembly_instance(root);
+            if (actual.assembly_catalog_id != catalog_id || actual.instance.id != instance_id)
+                reject("selected independent assembly lost its exact qualified source identity");
+            instance = actual.instance;
+        } else {
+            const auto found = std::find_if(model.instances().begin(), model.instances().end(), [&](const auto& row) { return row.id == instance_id; });
+            if (found == model.instances().end()) reject("selected embedded assembly row disappeared");
+            instance = *found;
+        }
+        if (instance.placement) {
+            const auto& host = owner(instance.placement->host_entity_id);
+            if (!is_complete_assembly_catalog_host_type(host.type)) reject("selected assembly lost its actual host role");
+        }
+        const auto expansion = model.expand(instance, budget);
+        for (const auto& path : paths)
+            if (std::count_if(expansion.nodes.begin(), expansion.nodes.end(), [&](const auto& node) { return node.part_path == path; }) != 1)
+                reject("selected assembly lost its exact expanded part path");
+    }
+    // Recheck the actual combined physical graph through invariant typed
+    // targets. This gives no candidate or replacement authoring authority.
+    if (final_physical_check) {
+        if (qualified_phase_policy) {
+            // Fresh catalog/owner/host-copy identities need not preserve the
+            // lexical order of the captured source target roster.
+            std::sort(physical_checks.begin(), physical_checks.end(), [](const auto& left, const auto& right) {
+                return left.target < right.target;
+            });
+            (void)replay_phase_assembly_instance_property_edits(candidate, physical_checks, {});
+        }
+        else (void)replay_assembly_instance_property_entities(candidate, physical_checks);
+    }
+}
 void require_selected_members_present(const Json& value, const Entities& candidate,
     const Ids& retired_reviewed_rails = {}, const PhaseSelectionPropertyEditPreparation* phase = nullptr,
-    bool final_physical_check = true) {
+    bool final_physical_check = true, const MixedSelectionPropertyEditPreparation::ComponentIdentityMap* component_mapping = nullptr) {
+    if (value.at("version") == 14) {
+        if (!component_mapping) reject("component selected targets require their independently reconstructed mapping");
+        const auto& base = value.at("base_intent");
+        if (!base.is_null()) require_selected_members_present(base, candidate, retired_reviewed_rails, phase, final_physical_check);
+        const auto authoring = decode_phase_assembly_instance_property_edit_authoring(value.at("component_request").at("authoring"));
+        const auto& mapping = *component_mapping;
+        if (mapping.size() != authoring.intents.size()) reject("component mapping must exactly cover every selected target");
+        std::vector<AssemblyInstancePropertyEditTarget> targets;
+        for (const auto& intent : authoring.intents) {
+            const auto found = mapping.find(intent.target);
+            if (found == mapping.end() || found->second.part_path != intent.target.part_path)
+                reject("component selected target lost its exact reconstructed part path");
+            targets.push_back(found->second);
+        }
+        require_assembly_targets_present(candidate, targets, final_physical_check, true);
+        return;
+    }
     const auto owner = [&](const std::string& id) -> const Entity& {
         const auto found = candidate.find(id);
         if (found == candidate.end() || found->second.id != id) reject("reviewed retirement removed a selected owner");
@@ -520,9 +689,7 @@ void require_selected_members_present(const Json& value, const Entities& candida
             }) != 1) reject("reviewed retirement removed a selected skylight child");
     }
     if ((value.at("version") == 10 || value.at("version") == 11 || value.at("version") == 12 || value.at("version") == 13) && !value.at("assembly_request").is_null()) {
-        using RootKey = std::tuple<std::string, std::string, std::optional<std::string>>;
-        std::map<RootKey, std::vector<std::vector<std::string>>> selected_roots;
-        std::vector<AssemblyInstancePropertyEditIntent> physical_checks;
+        std::vector<AssemblyInstancePropertyEditTarget> targets;
         for (const auto& row : value.at("assembly_request").at("intents")) {
             auto target = decode_assembly_instance_property_edit_intent(row).target;
             if (phase) {
@@ -542,50 +709,13 @@ void require_selected_members_present(const Json& value, const Entities& candida
                     if (found != phase->original_to_proposed().end()) target.document_entity_id = found->second;
                 }
             }
-            selected_roots[{target.catalog_id, target.instance_id, target.document_entity_id}].push_back(target.part_path);
-            AssemblyInstancePropertyEditIntent retained;
-            retained.target = std::move(target);
-            physical_checks.push_back(std::move(retained));
-        }
-        std::map<std::string, AssemblyModel, std::less<>> models;
-        AssemblyExpansionBudget budget;
-        for (const auto& [key, paths] : selected_roots) {
-            const auto& [catalog_id, instance_id, entity_id] = key;
-            const auto& catalog = owner(catalog_id);
-            if (catalog.type != "assembly_model") reject("selected assembly catalog changed its source role");
-            if (!models.contains(catalog_id)) models.emplace(catalog_id, AssemblyModel::from_json(catalog.properties.at("model")));
-            const auto& model = models.at(catalog_id);
-            AssemblyInstance instance;
-            if (entity_id) {
-                const auto& root = owner(*entity_id);
-                if (root.type != "assembly_instance") reject("selected independent assembly changed its source role");
-                const auto actual = decode_document_assembly_instance(root);
-                if (actual.assembly_catalog_id != catalog_id || actual.instance.id != instance_id)
-                    reject("selected independent assembly lost its exact qualified source identity");
-                instance = actual.instance;
-            } else {
-                const auto found = std::find_if(model.instances().begin(), model.instances().end(),
-                    [&](const auto& row) { return row.id == instance_id; });
-                if (found == model.instances().end()) reject("selected embedded assembly row disappeared");
-                instance = *found;
-            }
-            // A retained hosted row cannot survive by referencing a rail which
-            // another lane explicitly retired. Its actual source owner survives.
-            if (instance.placement) {
-                const auto& host = owner(instance.placement->host_entity_id);
-                if (!is_complete_assembly_catalog_host_type(host.type)) reject("selected assembly lost its actual host role");
-            }
-            const auto expansion = model.expand(instance, budget);
-            for (const auto& path : paths)
-                if (std::count_if(expansion.nodes.begin(), expansion.nodes.end(), [&](const auto& node) {
-                        return node.part_path == path;
-                    }) != 1) reject("selected assembly lost its exact expanded part path");
+            targets.push_back(std::move(target));
         }
         // Original-source leaves cannot certify a host body changed by another
         // lane. Admit the complete composed physical cohort through no-op
         // intents, including actual host copies and retained members. This
         // discards the return map and grants no candidate authoring authority.
-        if (final_physical_check) (void)replay_assembly_instance_property_entities(candidate, physical_checks);
+        require_assembly_targets_present(candidate, targets, final_physical_check);
     }
 }
 std::vector<SelectionGeometryRoomReviewRequirement> requirements(const DocumentSnapshot& source,
@@ -654,6 +784,8 @@ struct Stage {
     Ids retired_reviewed_rails;
     std::optional<PhaseSelectionPropertyEditPreparation> phase;
     std::vector<PhysicalWallRoomPhaseReviewInventory> phase_reviews;
+    std::optional<PhaseAssemblyInstancePropertyEditPreparation> component;
+    MixedSelectionPropertyEditPreparation::ComponentIdentityMap component_mapping;
 };
 Stage derive_phase(const DocumentSnapshot& source, const Json& value) {
     auto phase = replay_phase_selection_property_edit_preparation(source, value.at("phase_request"));
@@ -730,6 +862,47 @@ Stage derive(const DocumentSnapshot& source, const Json& value) {
     validate(value); authenticate(source, value);
     const auto& original = source.entities();
     if (const auto error = validate_active_phase_constraint_integrity(original)) throw std::invalid_argument(*error);
+    if (value.at("version") == 14) {
+        auto component = replay_phase_assembly_instance_property_edit_preparation(source, value.at("component_request"));
+        const auto& base = value.at("base_intent");
+        Stage stage;
+        std::optional<MixedSelectionPropertyEditPreparation> prepared_base;
+        if (!base.is_null()) {
+            // Both retain the historical full-source replay. The Stage owns
+            // its exact review/removal metadata; the sealed preparation is the
+            // composer's separately authenticated contribution.
+            stage = derive(source, base);
+            prepared_base = replay_mixed_selection_property_edit_preparation(source, base);
+        }
+        stage.entities = compose_phase_assembly_with_mixed_property_selection_edit_candidates(
+            source, component, prepared_base ? &*prepared_base : nullptr);
+        stage.component_mapping = resolve_phase_assembly_with_mixed_property_correspondence(
+            source, component, prepared_base ? &*prepared_base : nullptr);
+        stage.component = std::move(component);
+        require_selected_members_present(value, stage.entities, stage.retired_reviewed_rails,
+            stage.phase ? &*stage.phase : nullptr, false, &stage.component_mapping);
+        if (stage.phase) {
+            // The final inventories inspect the actual composed stage while
+            // retaining the base's exact leaf order and identity metadata.
+            stage.phase_reviews.clear();
+            for (const auto& wire : stage.phase->phase_authorings()) {
+                const auto intent = decode_phase_constraint_authoring_intent(wire);
+                if (!intent.wall_replacement.is_null()) {
+                    const auto preview = inspect_phase_wall_replacement_rooms_on_composed_stage(source, intent, stage.entities);
+                    if (preview.needs_room_review) stage.phase_reviews.push_back(preview.room_inventory);
+                }
+            }
+            std::erase_if(stage.reviews, [&](const auto& review) {
+                return std::any_of(stage.phase_reviews.begin(), stage.phase_reviews.end(), [&](const auto& inventory) {
+                    return std::any_of(inventory.intent.planes.begin(), inventory.intent.planes.end(), [&](const auto& plane) {
+                        return plane.context == review.context && std::abs(plane.effective_elevation_m - review.effective_elevation_m) <=
+                            default_geometry_tolerance_metres;
+                    });
+                });
+            });
+        }
+        return stage;
+    }
     if (value.at("version") == 11 || value.at("version") == 12 || value.at("version") == 13) return derive_phase(source, value);
     const auto scope = constraint_phase_scope(original);
     std::vector<Entities> leaves;
@@ -834,10 +1007,15 @@ Json validate_mixed_selection_property_edit_intent(const Json& value) {
 MixedSelectionPropertyEditPreparation::MixedSelectionPropertyEditPreparation(const DocumentSnapshot& source, Json intent,
     Entities entities, std::vector<SelectionGeometryRoomReviewRequirement> reviews,
     std::optional<PhaseSelectionPropertyEditPreparation> phase,
-    std::vector<PhysicalWallRoomPhaseReviewInventory> phase_reviews)
+    std::vector<PhysicalWallRoomPhaseReviewInventory> phase_reviews,
+    std::optional<PhaseAssemblyInstancePropertyEditPreparation> component, ComponentIdentityMap component_mapping)
     : intent_(std::move(intent)), preview_(source), source_digest_(intent_.at("source_snapshot_digest").get<std::string>()),
-      room_reviews_(std::move(reviews)), phase_(std::move(phase)), phase_room_reviews_(std::move(phase_reviews)) {
+      room_reviews_(std::move(reviews)), phase_(std::move(phase)), component_(std::move(component)),
+      component_identity_map_(std::move(component_mapping)),
+      phase_room_reviews_(std::move(phase_reviews)) {
     if (phase_) {
+        selected_identity_map_ = phase_->selected_original_to_proposed();
+        identity_map_ = phase_->original_to_proposed();
         for (std::size_t index = 0; index < phase_->phase_authorings().size(); ++index) {
             const auto intent = decode_phase_constraint_authoring_intent(phase_->phase_authorings()[index]);
             if (intent.wall_replacement.is_null()) continue;
@@ -857,6 +1035,21 @@ MixedSelectionPropertyEditPreparation::MixedSelectionPropertyEditPreparation(con
             }
         roof_children_ = phase_->selected_roof_opening_original_to_proposed();
     }
+    if (component_) for (const auto& [original, proposed] : component_identity_map_) {
+        if (original.document_entity_id) {
+            if (!proposed.document_entity_id) reject("independent component lost its reconstructed document destination");
+            for (auto* map : {&selected_identity_map_, &identity_map_}) {
+                const auto [found, inserted] = map->emplace(*original.document_entity_id, *proposed.document_entity_id);
+                if (!inserted && found->second != *proposed.document_entity_id) reject("selected component has ambiguous document destinations");
+            }
+        }
+        if (!original.document_entity_id) {
+            const std::pair source_binding{original.catalog_id, original.instance_id};
+            const std::pair destination{proposed.catalog_id, proposed.instance_id};
+            const auto [found, inserted] = hosted_bindings_.emplace(source_binding, destination);
+            if (!inserted && found->second != destination) reject("selected component has ambiguous qualified destinations");
+        }
+    }
     auto history = std::make_shared<std::vector<RevisionRecord>>(source.history());
     history->at(source.revision()).entities = std::move(entities);
     preview_.history_ = std::move(history);
@@ -869,12 +1062,13 @@ const DocumentSnapshot& MixedSelectionPropertyEditPreparation::preview_snapshot(
 const std::string& MixedSelectionPropertyEditPreparation::source_snapshot_digest() const noexcept { return source_digest_; }
 const std::vector<SelectionGeometryRoomReviewRequirement>& MixedSelectionPropertyEditPreparation::required_room_reviews() const noexcept { return room_reviews_; }
 const std::map<std::string, std::string, std::less<>>& MixedSelectionPropertyEditPreparation::selected_original_to_proposed() const noexcept {
-    static const std::map<std::string, std::string, std::less<>> empty;
-    return phase_ ? phase_->selected_original_to_proposed() : empty;
+    return selected_identity_map_;
 }
 const std::map<std::string, std::string, std::less<>>& MixedSelectionPropertyEditPreparation::original_to_proposed() const noexcept {
-    static const std::map<std::string, std::string, std::less<>> empty;
-    return phase_ ? phase_->original_to_proposed() : empty;
+    return identity_map_;
+}
+const MixedSelectionPropertyEditPreparation::ComponentIdentityMap& MixedSelectionPropertyEditPreparation::component_original_to_proposed() const noexcept {
+    return component_identity_map_;
 }
 const PhaseStairReplacementChildIdentityMap& MixedSelectionPropertyEditPreparation::stair_child_original_to_proposed() const noexcept {
     static const PhaseStairReplacementChildIdentityMap empty;
@@ -1032,12 +1226,28 @@ MixedSelectionPropertyEditPreparation prepare_mixed_selection_property_edit(cons
     value["message"] = std::string(message);
     return replay_mixed_selection_property_edit_preparation(source, value);
 }
+MixedSelectionPropertyEditPreparation prepare_mixed_selection_property_edit(const DocumentSnapshot& source,
+    const PhaseAssemblyInstancePropertyEditAuthoring& authoring,
+    const MixedSelectionPropertyEditPreparation* base, std::string_view message) {
+    if (message.size() > 1024 || message.find('\0') != std::string_view::npos) reject("invalid message");
+    const auto component = prepare_phase_assembly_instance_property_edit(source, authoring);
+    if (base) require_mixed_selection_property_edit_source_current(source, *base);
+    auto value = source_fields(source);
+    value["version"] = 14;
+    value["component_request"] = component.request();
+    value["base_intent"] = base ? base->intent() : Json(nullptr);
+    value["room_reviews"] = Json::array();
+    value["phase_room_reviews"] = Json::array();
+    value["message"] = std::string(message);
+    return replay_mixed_selection_property_edit_preparation(source, value);
+}
 MixedSelectionPropertyEditPreparation replay_mixed_selection_property_edit_preparation(const DocumentSnapshot& source, const Json& value) {
     (void)validate_mixed_selection_property_edit_intent(value);
-    if (!value.at("room_reviews").empty() || ((value.at("version") == 11 || value.at("version") == 12 || value.at("version") == 13) && !value.at("phase_room_reviews").empty()))
+    if (!value.at("room_reviews").empty() || (phase_room_dialect(value) && !value.at("phase_room_reviews").empty()))
         reject("preparation cannot accept completed room decisions");
     auto stage = derive(source, value);
-    return {source, value, std::move(stage.entities), std::move(stage.reviews), std::move(stage.phase), std::move(stage.phase_reviews)};
+    return {source, value, std::move(stage.entities), std::move(stage.reviews), std::move(stage.phase), std::move(stage.phase_reviews),
+        std::move(stage.component), std::move(stage.component_mapping)};
 }
 void require_mixed_selection_property_edit_source_current(const DocumentSnapshot& source,
     const MixedSelectionPropertyEditPreparation& prepared) {
@@ -1054,8 +1264,30 @@ void protect_phase_source(const Entities& original, const Entities& candidate) {
             if (found == candidate.end() || !exact(entity, found->second)) reject("phase Properties changed a retained original physical owner");
         }
 }
+void protect_component_review_stage(const Entities& original, const Entities& reconstructed,
+    const Entities& candidate, const MixedSelectionPropertyEditPreparation::ComponentIdentityMap& mapping) {
+    const auto scope = constraint_phase_scope(original);
+    Ids protected_ids = retained_baselines(original);
+    protected_ids.insert(scope.inactive_owner_ids.begin(), scope.inactive_owner_ids.end());
+    for (const auto& [source, destination] : mapping) {
+        protected_ids.insert(source.catalog_id);
+        protected_ids.insert(destination.catalog_id);
+        if (source.document_entity_id) protected_ids.insert(*source.document_entity_id);
+        if (destination.document_entity_id) protected_ids.insert(*destination.document_entity_id);
+    }
+    // Component catalog edits and fresh destinations are already authorized by
+    // actual-source replay. Room decisions cannot rewrite that reconstructed
+    // authority or change unrelated protected owners.
+    for (const auto& id : protected_ids) {
+        const auto expected = reconstructed.find(id), actual = candidate.find(id);
+        if ((expected == reconstructed.end()) != (actual == candidate.end()) ||
+            (expected != reconstructed.end() && !exact(expected->second, actual->second)))
+            reject("room completion changed a reconstructed component or protected owner");
+    }
+}
 void review_phase_stage(const DocumentSnapshot& source, const Json& value, Stage& stage, bool complete) {
     if (!stage.phase) return;
+    const std::optional<Entities> component_stage = stage.component ? std::optional<Entities>{stage.entities} : std::nullopt;
     const auto& rows = value.at("phase_room_reviews");
     Ids pending;
     for (const auto& preview : stage.phase->wall_previews())
@@ -1084,10 +1316,13 @@ void review_phase_stage(const DocumentSnapshot& source, const Json& value, Stage
         for (const auto& [id, entity] : preview.replacement.deferred_room_constraints) { (void)entity; pending.erase(id); }
     }
     if (consumed != rows.size()) reject("phase room decisions must follow the exact required leaf prefix");
-    protect_phase_source(source.entities(), stage.entities);
-    require_selected_members_present(value, stage.entities, stage.retired_reviewed_rails, &*stage.phase, false);
+    if (component_stage) protect_component_review_stage(source.entities(), *component_stage, stage.entities, stage.component_mapping);
+    else protect_phase_source(source.entities(), stage.entities);
+    require_selected_members_present(value, stage.entities, stage.retired_reviewed_rails, &*stage.phase, false,
+        stage.component ? &stage.component_mapping : nullptr);
 }
 ReplayedPhysicalWallRoomReview review_stage(const DocumentSnapshot& source, const Json& value, Stage stage, bool complete) {
+    const std::optional<Entities> component_stage = stage.component ? std::optional<Entities>{stage.entities} : std::nullopt;
     review_phase_stage(source, value, stage, true);
     const auto& reviews = value.at("room_reviews");
     if (reviews.size() > stage.reviews.size() || (complete && reviews.size() != stage.reviews.size()))
@@ -1127,12 +1362,14 @@ ReplayedPhysicalWallRoomReview review_stage(const DocumentSnapshot& source, cons
     // Pure room replay checks each actual preceding entity-map digest and
     // rederives correspondences/transitions. The source metadata above never
     // substitutes a caller-reviewed map for that proof.
-    if (stage.phase) protect_phase_source(source.entities(), result.entities);
+    if (component_stage) protect_component_review_stage(source.entities(), *component_stage, result.entities, stage.component_mapping);
+    else if (stage.phase) protect_phase_source(source.entities(), result.entities);
     else protect_source(source.entities(), result.entities, false, stage.reviewed_erased);
     if (value.at("version") == 9 || value.at("version") == 10)
         require_selected_members_present(value, result.entities, stage.retired_reviewed_rails);
-    if (stage.phase) {
-        require_selected_members_present(value, result.entities, stage.retired_reviewed_rails, &*stage.phase, complete);
+    if (stage.phase || stage.component) {
+        require_selected_members_present(value, result.entities, stage.retired_reviewed_rails,
+            stage.phase ? &*stage.phase : nullptr, complete, stage.component ? &stage.component_mapping : nullptr);
         for (const auto& [id, entity] : result.entities)
             if (!source.entities().contains(id) && is_physical_wall_room(entity) &&
                 std::find(result.created_room_ids.begin(), result.created_room_ids.end(), id) == result.created_room_ids.end())
@@ -1161,7 +1398,7 @@ DocumentSnapshot preview_mixed_selection_property_room_stage(const DocumentSnaps
     if (reviews.size() > 32) reject("room review prefix budget exceeded");
     auto value = prepared.intent();
     value["room_reviews"] = reviews;
-    if (value.at("version") == 11 || value.at("version") == 12 || value.at("version") == 13) value["phase_room_reviews"] = phase_reviews;
+    if (phase_room_dialect(value)) value["phase_room_reviews"] = phase_reviews;
     else if (!phase_reviews.empty()) reject("historical Properties has no phase room completion authority");
     auto stage = derive(source, value);
     auto requirements = stage.reviews;
@@ -1173,12 +1410,13 @@ DocumentSnapshot preview_mixed_selection_property_room_stage(const DocumentSnaps
 DocumentSnapshot preview_mixed_selection_property_phase_room_stage(const DocumentSnapshot& source,
     const MixedSelectionPropertyEditPreparation& prepared, const std::vector<Json>& reviews) {
     require_mixed_selection_property_edit_source_current(source, prepared);
-    if (prepared.intent().at("version") != 11 && prepared.intent().at("version") != 12 && prepared.intent().at("version") != 13) reject("phase room stage requires an explicit phase Properties dialect");
+    if (!phase_room_dialect(prepared.intent())) reject("phase room stage requires an explicit phase Properties dialect");
     auto value = prepared.intent(); value["phase_room_reviews"] = reviews;
     auto stage = derive(source, value);
     review_phase_stage(source, value, stage, false);
     const MixedSelectionPropertyEditPreparation preview(source, std::move(value), std::move(stage.entities),
-        std::move(stage.reviews), std::move(stage.phase), std::move(stage.phase_reviews));
+        std::move(stage.reviews), std::move(stage.phase), std::move(stage.phase_reviews),
+        std::move(stage.component), std::move(stage.component_mapping));
     return preview.preview_snapshot();
 }
 Json complete_mixed_selection_property_edit(const DocumentSnapshot& source,
@@ -1192,14 +1430,14 @@ Json complete_mixed_selection_property_edit(const DocumentSnapshot& source,
     if (reviews.size() > 32) reject("room review group budget exceeded");
     auto value = prepared.intent();
     value["room_reviews"] = reviews;
-    if (value.at("version") == 11 || value.at("version") == 12 || value.at("version") == 13) value["phase_room_reviews"] = phase_reviews;
+    if (phase_room_dialect(value)) value["phase_room_reviews"] = phase_reviews;
     else if (!phase_reviews.empty()) reject("historical Properties has no phase room completion authority");
     (void)replay_mixed_selection_property_edit(source, value);
     return validate_mixed_selection_property_edit_intent(value);
 }
 bool mixed_selection_property_edit_has_geometry(const Json& value) {
     validate(value);
-    return value.at("version") == 9 || value.at("version") == 10 || value.at("version") == 11 || value.at("version") == 12 || value.at("version") == 13 ||
+    return value.at("version") == 9 || value.at("version") == 10 || phase_room_dialect(value) ||
         !value.at("ordinary_request").is_null() || !value.at("skylight_properties").is_null();
 }
 bool mixed_selection_property_edit_active_phase_policy(const Json& value) {
@@ -1213,12 +1451,14 @@ std::vector<Json> mixed_selection_property_edit_room_reviews(const Json& value) 
 std::vector<Json> mixed_selection_property_edit_phase_room_reviews(const Json& value) {
     validate(value);
     std::vector<Json> result;
-    if (value.at("version") == 11 || value.at("version") == 12 || value.at("version") == 13) for (const auto& row : value.at("phase_room_reviews"))
+    if (phase_room_dialect(value)) for (const auto& row : value.at("phase_room_reviews"))
         result.push_back(decode_phase_wall_replacement_authoring(row.at("wall_replacement")).room_review_intent);
     return result;
 }
 bool mixed_selection_property_edit_retires_dependencies(const Json& value) {
     validate(value);
+    if (value.at("version") == 14) return !value.at("base_intent").is_null() &&
+        mixed_selection_property_edit_retires_dependencies(value.at("base_intent"));
     if (value.at("version") == 11 || value.at("version") == 12 || value.at("version") == 13) return std::any_of(
         value.at("phase_request").at("stair_dependency_dispositions").begin(),
         value.at("phase_request").at("stair_dependency_dispositions").end(), [](const auto& choice) { return choice.at("action") == "retire"; });
@@ -1231,6 +1471,8 @@ bool mixed_selection_property_edit_retires_dependencies(const Json& value) {
 }
 bool mixed_selection_property_edit_has_phase_replacements(const Json& value) {
     validate(value);
+    if (value.at("version") == 14) return !value.at("component_request").at("authoring").at("allocation").at("roots").empty() ||
+        (!value.at("base_intent").is_null() && mixed_selection_property_edit_has_phase_replacements(value.at("base_intent")));
     return (value.at("version") == 11 || value.at("version") == 12 || value.at("version") == 13) && !value.at("phase_request").at("allocations").empty();
 }
 std::optional<Revision> mixed_selection_property_edit_source_saved_revision(const Json& value) {

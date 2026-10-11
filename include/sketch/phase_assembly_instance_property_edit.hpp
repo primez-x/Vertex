@@ -45,9 +45,12 @@ struct PhaseAssemblyInstancePropertyEditResult {
 
 // Reinspect grouped typed intents on the complete actual source, admitting both
 // expansions/geometry, actual activity, constraints, hosts and Site frames.
-// Declared row membership takes priority over legacy catalog membership.
+// Declared proposed rows retain their own authority. Undeclared embedded rows
+// inherit protection from their actual catalog or placement host; replacement
+// copies the selected component only, retaining the unchanged actual host.
 // Multiple independent registry/alternative cohorts compose; genuine overlap
-// refuses. A protected host alone does not require component replacement.
+// or conflicting actual catalog/host registry coupling refuses explicitly,
+// including active proposed dependencies that a new companion cannot encode.
 [[nodiscard]] PhaseAssemblyInstancePropertyEditPlan inspect_phase_assembly_instance_property_edit_plan(
     const AssemblyDocumentEntities&, std::span<const AssemblyInstancePropertyEditIntent>);
 [[nodiscard]] PhaseAssemblyInstancePropertyEditResult replay_phase_assembly_instance_property_edits(

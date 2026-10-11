@@ -6,6 +6,7 @@
 #include "sketch/building_entity.hpp"
 #include "sketch/constraint_phase_scope.hpp"
 #include "sketch/model_phases.hpp"
+#include "sketch/assembly_phase_membership.hpp"
 #include "sketch/project_organization.hpp"
 #include "sketch/sheet_view_entity_codec.hpp"
 #include "sketch/stair_attachment_integrity.hpp"
@@ -242,6 +243,9 @@ Entity remainder(Entity entity) {
         for (auto& row : p.at("model").at("instances")) {
             row.erase("id"); if (row.contains("placement")) row.at("placement").erase("host_entity_id");
         }
+    } else if (entity.type == assembly_phase_membership_entity_type) {
+        (void)AssemblyPhaseMembership::from_json(p.at("model"));
+        p.erase("model"); // Qualified bindings only; envelope siblings remain opaque.
     } else if (entity.type == "model_phases") {
         (void)ModelPhases::from_json(p.at("model"));
         auto& model = p.at("model"); model.erase("entity_ids"); model.erase("baseline_ids");

@@ -34,6 +34,7 @@
 #include "sketch/stair_property_review.hpp"
 #include "sketch/assembly_instance_property_edit.hpp"
 #include "sketch/phase_assembly_instance_property_edit.hpp"
+#include "sketch/mixed_selection_property_edit.hpp"
 #include "sketch/wall_measurement.hpp"
 
 #include <algorithm>
@@ -2093,6 +2094,63 @@ struct AssemblyPropertyRowAdmission {
     std::set<std::string, std::less<>> catalogs;
 };
 
+Entity merge_component_membership_rows(const Entity& original, const std::vector<const Entity*>& changes) {
+    const auto saved=AssemblyPhaseMembership::from_json(original.properties.at("model"));
+    std::vector<AssemblyPhaseMembership> lanes;
+    for (const auto* change:changes) {
+        auto envelope=*change;
+        envelope.properties.at("model")=original.properties.at("model");
+        if (!exact(original,envelope)) invalid("Component membership composition changed its retained carrier");
+        auto lane=AssemblyPhaseMembership::from_json(change->properties.at("model"));
+        if (lane.registry_id()!=saved.registry_id()) invalid("Component membership composition changed its actual registry");
+        lanes.push_back(std::move(lane));
+    }
+    // A source row omitted by an independently admitted retirement stays
+    // omitted; fresh rows contributed by disjoint replays append once. The
+    // immutable codec rejects conflicting baseline/proposal partitions.
+    const auto combine=[](const std::vector<AssemblyPhaseRoot>& before,
+        const std::vector<std::vector<AssemblyPhaseRoot>>& contributions) {
+        std::set<AssemblyPhaseRoot> result(before.begin(),before.end());
+        const std::set<AssemblyPhaseRoot> source(before.begin(),before.end());
+        for (const auto& rows:contributions) {
+            const std::set<AssemblyPhaseRoot> present(rows.begin(),rows.end());
+            for (const auto& row:before) if (!present.contains(row)) result.erase(row);
+            for (const auto& row:rows) if (!source.contains(row)) result.insert(row);
+        }
+        return std::vector<AssemblyPhaseRoot>(result.begin(),result.end());
+    };
+    std::vector<std::vector<AssemblyPhaseRoot>> roots,baselines;
+    std::set<std::string,std::less<>> alternative_ids;
+    for (const auto& alternative:saved.alternatives()) alternative_ids.insert(alternative.alternative_id);
+    for (const auto& lane:lanes) {
+        roots.push_back(lane.roots()); baselines.push_back(lane.baseline_roots());
+        for (const auto& alternative:lane.alternatives()) alternative_ids.insert(alternative.alternative_id);
+    }
+    std::vector<AssemblyPhaseAlternative> alternatives;
+    for (const auto& id:alternative_ids) {
+        const auto find=[&](const AssemblyPhaseMembership& membership) -> const AssemblyPhaseAlternative* {
+            const auto row=std::find_if(membership.alternatives().begin(),membership.alternatives().end(),
+                [&](const auto& value) { return value.alternative_id==id; });
+            return row==membership.alternatives().end() ? nullptr : &*row;
+        };
+        const auto* before=find(saved);
+        std::vector<std::vector<AssemblyPhaseRoot>> demolished,proposed;
+        for (const auto& lane:lanes) {
+            const auto* row=find(lane);
+            if (before && !row) invalid("Component membership composition removed a source alternative");
+            demolished.push_back(row ? row->demolished_roots : std::vector<AssemblyPhaseRoot>{});
+            proposed.push_back(row ? row->proposed_roots : std::vector<AssemblyPhaseRoot>{});
+        }
+        alternatives.push_back({id,combine(before ? before->demolished_roots : std::vector<AssemblyPhaseRoot>{},demolished),
+            combine(before ? before->proposed_roots : std::vector<AssemblyPhaseRoot>{},proposed)});
+    }
+    const auto merged=AssemblyPhaseMembership::create(saved.registry_id(),combine(saved.roots(),roots),
+        combine(saved.baseline_roots(),baselines),std::move(alternatives));
+    auto result=original;
+    result.properties.at("model")=retain_assembly_phase_membership_source(original.properties.at("model"),merged);
+    return result;
+}
+
 Entities compose_mixed_selection_edit_candidates_impl(const Entities& actual,
     const std::vector<Entities>& independently_admitted_candidates,
     const std::set<std::string,std::less<>>* retired_rooms=nullptr,
@@ -2245,6 +2303,8 @@ Entities compose_mixed_selection_edit_candidates_impl(const Entities& actual,
         }
         else if (original.type=="model_phases")
             result.at(key)=merge_source_row_container(original,changes,removed_annotation_targets!=nullptr,false,true);
+        else if (original.type==assembly_phase_membership_entity_type && phase_properties && assembly_row_edits)
+            result.at(key)=merge_component_membership_rows(original,changes);
         else if (original.type==kSheetViewEntityType)
             result.at(key)=removed_annotation_targets
                 ? merge_demolition_row_container(original,changes,false,true,true)
@@ -2542,6 +2602,128 @@ Entities compose_phase_assembly_property_selection_edit_candidates(const Documen
         (void)before;
         AssemblyInstancePropertyEditIntent intent;
         intent.target=after;
+        retained.push_back(std::move(intent));
+    }
+    std::sort(retained.begin(),retained.end(),[](const auto& left,const auto& right) { return left.target<right.target; });
+    (void)replay_phase_assembly_instance_property_edits(result,retained,{});
+    return result;
+}
+
+namespace {
+std::optional<MixedSelectionPropertyEditPreparation> reconstruct_component_properties_base(
+    const DocumentSnapshot& source,const MixedSelectionPropertyEditPreparation* base) {
+    if (!base) return std::nullopt;
+    const auto& wire=base->intent();
+    const auto version=wire.at("version").get<int>();
+    if (version<5 || version>13 || !wire.at("room_reviews").empty() ||
+        (wire.contains("phase_room_reviews") && !wire.at("phase_room_reviews").empty()) ||
+        (wire.contains("assembly_request") && !wire.at("assembly_request").is_null()))
+        invalid("Component Properties base must be an unreviewed historical noncomponent contribution");
+    return replay_mixed_selection_property_edit_preparation(source,wire);
+}
+
+const Json& qualified_component_row(const Entities& entities,const AssemblyInstancePropertyEditTarget& target) {
+    if (target.document_entity_id) return entities.at(*target.document_entity_id).properties.at("instance");
+    const auto& rows=entities.at(target.catalog_id).properties.at("model").at("instances");
+    const auto row=std::find_if(rows.begin(),rows.end(),[&](const auto& value) { return value.at("id")==target.instance_id; });
+    if (row==rows.end()) invalid("Component Properties lost an actual qualified row");
+    return *row;
+}
+
+std::map<AssemblyInstancePropertyEditTarget,AssemblyInstancePropertyEditTarget> component_properties_correspondence(
+    const DocumentSnapshot& source,const PhaseAssemblyInstancePropertyEditPreparation& components,
+    const MixedSelectionPropertyEditPreparation* base) {
+    auto result=components.result().original_to_proposed;
+    if (!base) return result;
+    for (auto& [original,destination]:result) {
+        if (original.document_entity_id) {
+            const auto copied=base->original_to_proposed().find(*original.document_entity_id);
+            if (copied==base->original_to_proposed().end() || copied->second==*original.document_entity_id) continue;
+            if (destination!=original || !exact_json(qualified_component_row(source.entities(),original),
+                    qualified_component_row(components.preview_entities(),destination)))
+                invalid("Editing a component with its replaced owner requires coordinated component dependency carry");
+            const auto actual=decode_document_assembly_instance(base->preview_snapshot().entities().at(copied->second));
+            destination.catalog_id=actual.assembly_catalog_id;
+            destination.instance_id=actual.instance.id;
+            destination.document_entity_id=copied->second;
+        } else {
+            const auto copied=base->hosted_binding_original_to_proposed().find({original.catalog_id,original.instance_id});
+            if (copied==base->hosted_binding_original_to_proposed().end() ||
+                copied->second==AssemblyPhaseRoot{original.catalog_id,original.instance_id}) continue;
+            if (destination!=original || !exact_json(qualified_component_row(source.entities(),original),
+                    qualified_component_row(components.preview_entities(),destination)))
+                invalid("Editing a component with its replaced host requires coordinated component dependency carry");
+            destination.catalog_id=copied->second.first;
+            destination.instance_id=copied->second.second;
+        }
+    }
+    return result;
+}
+
+AssemblyPropertyRowAdmission component_property_row_admission(const Entities& original,const Entities& admitted,
+    std::set<std::string,std::less<>>& promoted) {
+    AssemblyPropertyRowAdmission result;
+    for (const auto& [id,entity]:original) if (entity.type=="assembly_model") {
+        const auto& before=entity.properties.at("model");
+        const auto& after=admitted.at(id).properties.at("model");
+        if ((before.at("schema")=="sketch.assemblies.v1" || before.at("schema")=="sketch.assemblies.v2") &&
+            after.at("schema")=="sketch.assemblies.v7") promoted.insert(id);
+        std::map<std::string,const Json*,std::less<>> rows;
+        for (const auto& row:after.at("instances"))
+            if (!rows.emplace(row.at("id").get<std::string>(),&row).second)
+                invalid("Component Properties replay has duplicate qualified rows");
+        for (const auto& before_row:before.at("instances")) {
+            const auto instance=before_row.at("id").get<std::string>();
+            const auto found=rows.find(instance);
+            if (found==rows.end()) invalid("Component Properties replay removed an original catalog row");
+            if (!exact_json(before_row,*found->second)) {
+                result.changed_rows.emplace(AssemblyPhaseRoot{id,instance},*found->second);
+                result.catalogs.insert(id);
+            }
+        }
+    }
+    return result;
+}
+} // namespace
+
+std::map<AssemblyInstancePropertyEditTarget,AssemblyInstancePropertyEditTarget>
+resolve_phase_assembly_with_mixed_property_correspondence(const DocumentSnapshot& source,
+    const PhaseAssemblyInstancePropertyEditPreparation& components,const MixedSelectionPropertyEditPreparation* base) {
+    const auto replayed=replay_phase_assembly_instance_property_edit_preparation(source,components.request());
+    const auto reconstructed=reconstruct_component_properties_base(source,base);
+    return component_properties_correspondence(source,replayed,reconstructed ? &*reconstructed : nullptr);
+}
+
+Entities compose_phase_assembly_with_mixed_property_selection_edit_candidates(const DocumentSnapshot& source,
+    const PhaseAssemblyInstancePropertyEditPreparation& components,const MixedSelectionPropertyEditPreparation* base) {
+    const auto replayed=replay_phase_assembly_instance_property_edit_preparation(source,components.request());
+    const auto reconstructed=reconstruct_component_properties_base(source,base);
+    if (!reconstructed) return compose_phase_assembly_property_selection_edit_candidates(source,replayed,{});
+    const auto correspondence=component_properties_correspondence(source,replayed,&*reconstructed);
+    const auto& actual=source.entities();
+    const auto& historical=reconstructed->preview_snapshot().entities();
+    PhasePropertyCompositionRetirements retirements;
+    for (const auto& [id,entity]:actual) {
+        (void)entity;
+        if (!historical.contains(id)) retirements.erased.insert(id);
+    }
+    const auto aliases=embedded_assembly_presentation_ids(historical);
+    for (const auto& [binding,alias]:embedded_assembly_presentation_ids(actual)) {
+        const auto retained=aliases.find(binding);
+        if (retained==aliases.end()) retirements.bindings.insert(binding);
+        else if (retained->second!=alias) invalid("Component Properties base changed a surviving source alias");
+    }
+    std::set<std::string,std::less<>> promoted;
+    const auto rows=component_property_row_admission(actual,replayed.preview_entities(),promoted);
+    auto result=compose_mixed_selection_edit_candidates_impl(actual,{historical,replayed.preview_entities()},
+        nullptr,nullptr,nullptr,&promoted,&retirements,&rows);
+    // Neither captured preparation can certify geometry altered by the other.
+    // Invariant selected paths re-admit actual destinations against the final
+    // complete physical graph without allocating or publishing any identity.
+    std::vector<AssemblyInstancePropertyEditIntent> retained;
+    for (const auto& [original,destination]:correspondence) {
+        (void)original;
+        AssemblyInstancePropertyEditIntent intent; intent.target=destination;
         retained.push_back(std::move(intent));
     }
     std::sort(retained.begin(),retained.end(),[](const auto& left,const auto& right) { return left.target<right.target; });

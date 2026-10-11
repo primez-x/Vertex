@@ -585,15 +585,21 @@ void require_active_dependencies(const AssemblyDocumentEntities& actual, const T
 struct ProtectedBaselines {
     std::set<std::string, std::less<>> owner_ids;
     std::map<std::string, std::vector<std::string>, std::less<>> registry_ids;
+    std::map<std::string, std::vector<std::string>, std::less<>> registered_registry_ids;
     std::vector<std::string> registries_for(const std::string& owner_id) const {
         const auto found = registry_ids.find(owner_id);
         return found == registry_ids.end() ? std::vector<std::string>{} : found->second;
+    }
+    std::vector<std::string> registered_registries_for(const std::string& owner_id) const {
+        const auto found = registered_registry_ids.find(owner_id);
+        return found == registered_registry_ids.end() ? std::vector<std::string>{} : found->second;
     }
 };
 ProtectedBaselines protected_baselines(const AssemblyDocumentEntities& actual) {
     ProtectedBaselines result;
     for (const auto& [id, entity] : actual) if (entity.type == "model_phases") {
         const auto model = ModelPhases::from_json(entity.properties.at("model"));
+        for (const auto& owner_id : model.entity_ids()) result.registered_registry_ids[owner_id].push_back(id);
         if (model.active_alternative()) for (const auto& owner_id : model.baseline_ids()) {
             result.owner_ids.insert(owner_id);
             result.registry_ids[owner_id].push_back(id);
@@ -737,7 +743,24 @@ std::vector<AssemblyInstancePropertyEditImpact> inspect_assembly_instance_proper
 }
 
 namespace {
-std::optional<std::string> replacement_registry(const PropertyEditSourceInspection& source, const Target& root) {
+std::optional<std::string> replacement_registry(const PropertyEditSourceInspection& source, const InspectedRoot& inspected) {
+    const auto& root = inspected.target;
+    const auto hosts = inspected.original.placement ?
+        source.baselines.registries_for(inspected.original.placement->host_entity_id) : std::vector<std::string>{};
+    const auto require_replacement_cohort = [&](const std::string& registry_id) {
+        // Enrollment must not erase a legacy dependency on another registry's
+        // choice, including a catalog/host currently admitted as proposed.
+        const auto catalogs = source.baselines.registered_registries_for(root.catalog_id);
+        if (catalogs.size() > 1) reject("selected catalog has overlapping actual phase registries");
+        if (!catalogs.empty() && catalogs.front() != registry_id)
+            reject("selected catalog and replacement root require different actual phase registries");
+        if (inspected.original.placement) {
+            const auto registered_hosts = source.baselines.registered_registries_for(inspected.original.placement->host_entity_id);
+            if (registered_hosts.size() > 1) reject("selected placement host has overlapping actual phase registries");
+            if (!registered_hosts.empty() && registered_hosts.front() != registry_id)
+                reject("selected placement host and replacement root require different actual phase registries");
+        }
+    };
     if (!root.document_entity_id) {
         const AssemblyPhaseRoot qualified{root.catalog_id, root.instance_id};
         const auto owner = source.scope.assembly_memberships.owners.find(qualified);
@@ -746,14 +769,33 @@ std::optional<std::string> replacement_registry(const PropertyEditSourceInspecti
             const auto registry = ModelPhases::from_json(source.original.at(registry_id).properties.at("model"));
             const auto membership = AssemblyPhaseMembership::from_json(
                 source.original.at(owner->second.membership_entity_id).properties.at("model"));
-            if (registry.active_alternative() && std::find(membership.baseline_roots().begin(),
-                membership.baseline_roots().end(), qualified) != membership.baseline_roots().end()) return registry_id;
+            // An explicit proposed row retains its own authority even on a
+            // protected host; legacy catalog/host classification cannot turn it
+            // into a second baseline. A declared baseline cannot be replaced
+            // across independent host choices by this single-registry producer.
+            if (std::find(membership.baseline_roots().begin(), membership.baseline_roots().end(), qualified) ==
+                membership.baseline_roots().end()) return std::nullopt;
+            if (hosts.size() > 1) reject("selected placement host has overlapping active baseline registries");
+            if (!hosts.empty() && hosts.front() != registry_id)
+                reject("declared baseline root and protected placement host require different replacement registries");
+            if (registry.active_alternative()) {
+                require_replacement_cohort(registry_id);
+                return registry_id;
+            }
             return std::nullopt;
         }
     }
     const auto owners = source.baselines.registries_for(root.document_entity_id ? *root.document_entity_id : root.catalog_id);
     if (owners.size() > 1) reject("selected root has overlapping active baseline registries");
-    return owners.empty() ? std::nullopt : std::optional<std::string>{owners.front()};
+    if (hosts.size() > 1) reject("selected placement host has overlapping active baseline registries");
+    if (!owners.empty() && !hosts.empty() && owners.front() != hosts.front())
+        reject("selected root and protected placement host require different replacement registries");
+    // The actual unchanged host supplies phase authority, not copy authority.
+    // Only the selected row is enrolled/demolished and privately replaced.
+    const auto registry_id = !owners.empty() ? std::optional<std::string>{owners.front()} :
+        (hosts.empty() ? std::nullopt : std::optional<std::string>{hosts.front()});
+    if (registry_id) require_replacement_cohort(*registry_id);
+    return registry_id;
 }
 PhaseAssemblyInstancePropertyEditPlan phase_plan(PropertyEditSourceInspection& source) {
     PhaseAssemblyInstancePropertyEditPlan result;
@@ -763,7 +805,7 @@ PhaseAssemblyInstancePropertyEditPlan phase_plan(PropertyEditSourceInspection& s
         const auto root = source.inspect(rows);
         source.admit_final_geometry(root);
         if (root.changed == root.original) { result.unchanged_roots.push_back(root.target); continue; }
-        const auto registry_id = replacement_registry(source, root.target);
+        const auto registry_id = replacement_registry(source, root);
         if (!registry_id) { result.ordinary_roots.push_back(root.target); continue; }
         const auto registry = ModelPhases::from_json(source.original.at(*registry_id).properties.at("model"));
         PhaseAssemblyInstanceReplacementRoot replacement{root.target, *registry_id, *registry.active_alternative(), std::nullopt};

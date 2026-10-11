@@ -8,6 +8,7 @@
 #include "sketch/constraint_phase_scope.hpp"
 #include "sketch/document_solid.hpp"
 #include "sketch/model_phases.hpp"
+#include "sketch/assembly_phase_membership.hpp"
 #include "sketch/phase_slab_profile_edit.hpp"
 #include "sketch/project_organization.hpp"
 #include "sketch/sheet_view_entity_codec.hpp"
@@ -196,6 +197,9 @@ Entity opaque_remainder(Entity entity) {
         (void)AssemblyModel::from_json(p.at("model"));
         for (auto& row : p.at("model").at("instances"))
             if (row.contains("placement")) row.at("placement").erase("host_entity_id");
+    } else if (entity.type == assembly_phase_membership_entity_type) {
+        (void)AssemblyPhaseMembership::from_json(p.at("model"));
+        p.erase("model"); // Qualified bindings only; envelope siblings remain opaque.
     } else if (entity.type == "model_phases") {
         // The phase model is a closed codec. Envelope siblings remain opaque.
         (void)ModelPhases::from_json(p.at("model")); p.erase("model");

@@ -3255,7 +3255,19 @@
     },
     {
       "category": "source",
+      "path": "include/sketch/assembly_instance_property_edit.hpp"
+    },
+    {
+      "category": "source",
       "path": "include/sketch/assembly_model.hpp"
+    },
+    {
+      "category": "source",
+      "path": "include/sketch/assembly_phase_membership.hpp"
+    },
+    {
+      "category": "source",
+      "path": "include/sketch/assembly_phase_membership_transport.hpp"
     },
     {
       "category": "source",
@@ -3687,6 +3699,10 @@
     },
     {
       "category": "source",
+      "path": "include/sketch/mixed_selection_property_edit.hpp"
+    },
+    {
+      "category": "source",
       "path": "include/sketch/mixed_wall_opening_removal.hpp"
     },
     {
@@ -3752,6 +3768,10 @@
     {
       "category": "source",
       "path": "include/sketch/performance_workload.hpp"
+    },
+    {
+      "category": "source",
+      "path": "include/sketch/phase_assembly_instance_property_edit.hpp"
     },
     {
       "category": "source",
@@ -4755,7 +4775,19 @@
     },
     {
       "category": "source",
+      "path": "src/core/assembly_instance_property_edit.cpp"
+    },
+    {
+      "category": "source",
       "path": "src/core/assembly_model.cpp"
+    },
+    {
+      "category": "source",
+      "path": "src/core/assembly_phase_membership.cpp"
+    },
+    {
+      "category": "source",
+      "path": "src/core/assembly_phase_membership_transport.cpp"
     },
     {
       "category": "source",
@@ -5043,6 +5075,10 @@
     },
     {
       "category": "source",
+      "path": "src/core/mixed_selection_property_edit.cpp"
+    },
+    {
+      "category": "source",
       "path": "src/core/mixed_wall_opening_removal.cpp"
     },
     {
@@ -5108,6 +5144,10 @@
     {
       "category": "source",
       "path": "src/core/performance_workload_main.cpp"
+    },
+    {
+      "category": "source",
+      "path": "src/core/phase_assembly_instance_property_edit.cpp"
     },
     {
       "category": "source",

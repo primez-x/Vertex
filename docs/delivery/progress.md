@@ -14,6 +14,81 @@ changed source does not acquire runtime acceptance without later qualification.
 
 ## Current delivery state
 
+### October 11 detached component Properties and host membership transport
+
+The preceding component replacement/filtering batch is committed and pushed as
+5ed26e23. Current source adds a closed detached mixed Properties dialect14:
+nonempty sealed component authoring plus a nullable unreviewed historical
+Properties5..13 base with no assembly lane. Both independently replay the same
+complete original snapshot, source/save fences and exact qualified selected
+roster. Room completion retains the base's actual review/retirement metadata.
+The typed composer derives the base's exact source-owner/qualified-row erasure
+closure, merges closed membership partitions, preserves original aliases and
+re-admits selected destination geometry. Unchanged selected components follow
+the actual copied host binding and retain nested part paths. Final destination
+no-op checks sort by destination identity; fresh allocations need not preserve
+source lexical order. Historical v1 admission remains unchanged.
+
+New component replacement classification now includes the actual protected
+placement host. An unregistered catalog on a baseline host cannot silently
+change its retained row in place. Component-only replacement keeps the actual
+host unchanged. Conflicting actual registered catalog/host choices refuse
+explicitly; declared proposed-row authority and exact no-ops stay intact.
+
+The source-only membership helper transports the complete typed copied-root
+and host roster after actual registry staging in slab, roof, stair and structural
+replacement. Baseline source rows gain demolition; active proposed source rows
+retain their partition; fresh destinations become proposed. Unlisted legacy
+rows gain no inferred membership. Source rows/companions and exact mapped hosts
+are validated; different registry coupling remains an implementation gap.
+Stair dependency retirement prunes actual absent proposed roots before final
+scope admission, while baseline roots remain protected even if a candidate
+removes their entire active registry. Clone/replacement opaque scans consume
+only the admitted closed companion model and retain envelope siblings.
+Required transport source is included in CMake. Ten component/mixed-Properties
+source paths omitted from the source-kit allowlist are now explicitly enrolled;
+this does not regenerate or qualify a source kit.
+
+Wall discovery establishes a concrete required implementation gap: current
+wall replacement has only flat entity/child allocations and no qualified
+catalog/instance materialization authority. Inactive rows and closed companion
+references now participate correctly in dependency discovery, but active hosted
+wall/opening copies remain refused. This is groundwork, not completed wall
+membership transport. Add the qualified plan/authoring/allocation and typed
+copy replay across phase_wall_replacement.hpp, phase_wall_replacement_command,
+phase_wall_canvas_proposal, phase_selection_property_edit and the coordinated
+composer; preserve original catalogs, rows, aliases and actual opening hosts.
+
+Next implementation also requires shared historical receipt-only identity
+reservation: extract the existing typed phase lifetime receipt walk and clone
+source reservations from Document, include actual mixed Properties11..13
+allocation receipts, then add new14 through its own typed codec. Preparation
+reserves all retained/undone history; Document replay uses its actual preceding
+record prefix. Entity/asset collisions alone do not cover deliberately elided
+relationship or child allocations. Do not manufacture commands to reuse a
+validator. Finish component/physical same-host carry and duplicate-row elision,
+annotations/references, clipboard/removal/shared-type consequences, Document
+lifetime/history/publication and selected-path restoration. Reader204/extraction202
+are needed only when new14 becomes actual retained command authority.
+
+Dialect14 is intentionally not yet admitted by mixed_selection_edit publication
+dispatch and no UI routes to it. Companion-bearing projects retain read-only
+quarantine until mutation consumers are complete; do not publish a first edit
+that strands the project read-only. Changed components together with replaced
+hosts still require dependency carry. These remain required gaps, not scope
+exclusions or completed user workflows.
+
+Independent bounded source review identified and accepted the active-baseline
+registry-removal and destination-order corrections. It approved the detached
+Properties, helper, slab/roof/stair and clone/retirement integration with no
+remaining confirmed P1/P2 in that reviewed scope. Root separately reviewed
+structural transport and wall groundwork, restricting inactive-only catalog
+decoding to affected companion-bearing sources. Source inspection and scoped
+diff whitespace checks are the available evidence. No builds, tests, scripts,
+probes, native jobs, launches, packages or installations ran. Compilation,
+interaction, Undo/save/reopen and final acceptance remain unverified. The
+installed candidate is unchanged; all ten production gates remain open.
+
 ### October 10 component replacement producer and hosted-copy activity
 
 The preceding qualified-membership foundation is committed and pushed as

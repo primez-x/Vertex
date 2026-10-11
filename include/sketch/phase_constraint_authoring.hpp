@@ -1,6 +1,7 @@
 #pragma once
 
 #include "sketch/constraint_authoring.hpp"
+#include "sketch/assembly_instance_property_edit.hpp"
 
 #include <vector>
 #include <set>
@@ -12,6 +13,7 @@ struct ReplayedPhysicalWallRoomReview;
 class StairPropertyReviewPreparation;
 class AssemblyInstancePropertyEditPreparation;
 class PhaseAssemblyInstancePropertyEditPreparation;
+class MixedSelectionPropertyEditPreparation;
 
 // Collision fence for newly declared global identities against one retained
 // state, including known owned topology/children and render aliases. References
@@ -205,6 +207,25 @@ struct PhaseConstraintAuthoringIntent {
     const PhaseAssemblyInstancePropertyEditPreparation& assemblies,
     const std::vector<std::map<std::string,Entity,std::less<>>>& independently_admitted_ordinary_candidates,
     const StairPropertyReviewPreparation* stair_review = nullptr);
+
+// Both contributions are independently reconstructed from the complete
+// original snapshot. The historical base must have empty review decisions and
+// no assembly lane. Only its exact replay-derived retirement closure may erase
+// source owners/rows. This grants no Document publication authority.
+[[nodiscard]] std::map<std::string,Entity,std::less<>> compose_phase_assembly_with_mixed_property_selection_edit_candidates(
+    const DocumentSnapshot& actual,
+    const PhaseAssemblyInstancePropertyEditPreparation& assemblies,
+    const MixedSelectionPropertyEditPreparation* base);
+
+// Selected unchanged components follow the historical base's authenticated
+// copied host bindings, retaining their exact nested part paths. Editing the
+// component and replacing that same host requires explicit dependency carry;
+// this helper cannot silently discard either contribution or duplicate it.
+[[nodiscard]] std::map<AssemblyInstancePropertyEditTarget,AssemblyInstancePropertyEditTarget>
+resolve_phase_assembly_with_mixed_property_correspondence(
+    const DocumentSnapshot& actual,
+    const PhaseAssemblyInstancePropertyEditPreparation& assemblies,
+    const MixedSelectionPropertyEditPreparation* base);
 
 // Reconstruct bounded scalar replacement leaves against the full original
 // snapshot before composing ordinary contributions. Pending wall room review

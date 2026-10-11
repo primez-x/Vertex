@@ -3,6 +3,7 @@
 #include "sketch/annotation_entity_codec.hpp"
 #include "sketch/assembly_document_adapter.hpp"
 #include "sketch/assembly_geometry.hpp"
+#include "sketch/assembly_phase_membership_transport.hpp"
 #include "sketch/building_entity.hpp"
 #include "sketch/constraint_phase_scope.hpp"
 #include "sketch/model_phases.hpp"
@@ -362,6 +363,9 @@ Entity reference_remainder(Entity entity) {
                     row.at("placement").erase("host_entity_id");
             }
         }
+    } else if (entity.type == assembly_phase_membership_entity_type) {
+        (void)AssemblyPhaseMembership::from_json(p.at("model"));
+        p.erase("model"); // Closed qualified bindings; envelope siblings remain opaque.
     } else if (entity.type == "model_phases") {
         (void)ModelPhases::from_json(p.at("model"));
         auto& model = p.at("model"); model.erase("entity_ids"); model.erase("baseline_ids");
@@ -516,6 +520,10 @@ Derivation derive(const Entities& source, const StairDemolitionRetirementIntent&
     Ids overlays;
     retire_presentations(result, source, names, overlays);
     for (const auto& id : result.rails) result.retired.erase(id);
+    if (std::any_of(source.begin(), source.end(), [](const auto& row) {
+            return row.second.type == assembly_phase_membership_entity_type;
+        }))
+        result.retired = prune_removed_assembly_phase_memberships(source, result.retired);
     const auto remaining_aliases = embedded_assembly_presentation_ids(result.retired);
     for (const auto& [key, alias] : aliases) if (!result.instances.contains(key)) {
         const auto remaining = remaining_aliases.find(key);
@@ -525,10 +533,12 @@ Derivation derive(const Entities& source, const StairDemolitionRetirementIntent&
     // Exact retired overlay child references are unsupported too; do not strand
     // an external/local binding after removing its source-bound overlay.
     names.insert(overlays.begin(), overlays.end());
-    for (const auto& [id, entity] : result.retired)
-        if (touches(entity.properties, names) || touches(entity.extensions, names) ||
-            touches_qualified_instance(entity.properties, result.instances) || touches_qualified_instance(entity.extensions, result.instances))
+    for (const auto& [id, entity] : result.retired) {
+        const auto scratch = entity.type == assembly_phase_membership_entity_type ? reference_remainder(entity) : entity;
+        if (touches(scratch.properties, names) || touches(scratch.extensions, names) ||
+            touches_qualified_instance(scratch.properties, result.instances) || touches_qualified_instance(scratch.extensions, result.instances))
             diagnostic(result.plan, id, "retained reference to retired owner/component/overlay requires an explicit qualified codec");
+    }
     validate_stair_attachment_state(result.retired);
     const auto before = constraint_phase_scope(source), after = constraint_phase_scope(result.retired);
     if (before.inactive_owner_ids != after.inactive_owner_ids)

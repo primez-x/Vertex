@@ -4,6 +4,7 @@
 #include "sketch/architecture.hpp"
 #include "sketch/assembly_document_adapter.hpp"
 #include "sketch/assembly_model.hpp"
+#include "sketch/assembly_phase_membership_transport.hpp"
 #include "sketch/constraint_phase_scope.hpp"
 #include "sketch/model_phases.hpp"
 #include "sketch/phase_roof_demolition.hpp"
@@ -127,6 +128,10 @@ Entity opaque_remainder(Entity entity, bool include_hosted_instances = false) {
             if (row.contains("placement")) row.at("placement").erase("host_entity_id");
     } else if (entity.type == "roof_join") p.erase("roof_ids");
     else if (entity.type == "model_phases") p.erase("model");
+    else if (entity.type == assembly_phase_membership_entity_type) {
+        (void)AssemblyPhaseMembership::from_json(p.at("model"));
+        p.erase("model"); // Qualified bindings only; envelope siblings stay opaque.
+    }
     else if (entity.type == kSheetViewEntityType) {
         (void)decode_sheet_view_entity(entity);
         for (auto& view : p.at("model").at("views")) {
@@ -579,6 +584,13 @@ PhaseRoofReplacementResult replay_phase_roof_replacement(
         }
         admit_roofs_and_joins(physical, roofs, joins);
         PhaseRoofReplacementResult result{source, identities, {}, hosted_instance_identities};
+        const bool has_companions = std::any_of(source.begin(), source.end(),
+            [](const auto& item) { return item.second.type == assembly_phase_membership_entity_type; });
+        const auto membership_scope = has_companions ? resolve_assembly_phase_memberships(source) : AssemblyPhaseMembershipScope{};
+        const bool transport_memberships = std::any_of(expected_instances.begin(), expected_instances.end(),
+            [&](const auto& root) { return membership_scope.owners.contains(root); });
+        AssemblyPhaseCopiedRoots copied_roots;
+        AssemblyPhaseCopiedHosts copied_hosts;
         // Only admitted ordinary roof owners change in place. Baseline roofs and
         // original joins retain their exact envelopes; native join bodies are
         // independently derived from the final typed member geometry below.
@@ -635,6 +647,17 @@ PhaseRoofReplacementResult replay_phase_roof_replacement(
                         Json{{"version", 1}, {"registry_id", plan.registry_id}};
                 (void)parse_roof_join(copy.properties, copy.id);
             } else if (include_hosted_instances && copy.type == "assembly_model") {
+                if (transport_memberships) {
+                    const auto original = AssemblyModel::from_json(source.at(id).properties.at("model"));
+                    for (const auto& instance : original.instances()) {
+                        const PhaseRoofReplacementHostedInstanceKey key{id, instance.id};
+                        if (!expected_instances.contains(key)) continue;
+                        if (!instance.placement || !roofs.contains(instance.placement->host_entity_id))
+                            reject("copied membership row lost its actual baseline roof host");
+                        copied_roots.emplace(key, AssemblyPhaseRoot{identities.at(id), hosted_instance_identities.at(key)});
+                        copied_hosts.emplace(instance.placement->host_entity_id, identities.at(instance.placement->host_entity_id));
+                    }
+                }
                 // Actual physical replay supplies any coordinated placement
                 // delta. Keep complete definitions and raw selected rows.
                 const auto retained = copy.properties.at("model").at("instances");
@@ -672,6 +695,11 @@ PhaseRoofReplacementResult replay_phase_roof_replacement(
             }
         if (ModelPhases::from_json(raw).to_json() != final_model.to_json()) reject("retained registry reconstruction differs from typed update");
         result.entities.at(plan.registry_id).properties.at("model") = std::move(raw);
+        if (transport_memberships) {
+            if (copied_roots.size() != expected_instances.size()) reject("membership transport requires the complete actual hosted roster");
+            result.entities = transport_assembly_phase_memberships_for_host_copies(source, result.entities,
+                copied_roots, copied_hosts, plan.registry_id, plan.alternative_id);
+        }
         Ids owners(plan.required_entity_ids.begin(), plan.required_entity_ids.end());
         auto presentation_identities = identities;
         if (!expected_instances.empty()) {
