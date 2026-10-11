@@ -50581,6 +50581,7 @@ private:
                     before.extensions.dump()!=after.extensions.dump())
                     ordinary.entity_changes.push_back(EntityChange::upsert(after));
             }
+            appendOrdinaryHostedDimensions(source,candidate,ordinary);
             return augmentAuthoredCommandForRegistry(ordinary, source);
         }
         const auto plan=inspect_phase_stair_replacement_plan(source.entities(), edits,

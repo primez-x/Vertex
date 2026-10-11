@@ -14,6 +14,22 @@ changed source does not acquire runtime acceptance without later qualification.
 
 ## Current delivery state
 
+### October 11 ordinary compound stair dimensions
+
+The direct/coordinated host dimension batch is committed and pushed as 9e471074;
+the exact remote branch ref matches local HEAD. Current ordinary compound stair
+edits now use the same complete-candidate hosted dimension contribution as stair
+transforms before registry augmentation. Explicit dependency dispositions and
+protected replacement branches retain their separate authority. This path only
+admits surviving qualified roots with preserved host bindings; host/rail/component
+retirement and replacement dimension copies remain required separate work.
+Root source review confirms the independently replayed candidate and existing
+ordinary dimension policy are used; scoped whitespace review passes. No builds,
+tests, jobs, launches, packages or installations ran. Runtime behavior is
+unverified, the installed candidate is unchanged, and all ten production gates
+remain open. Next dimension work includes retained typed direct roof edits,
+host/cohort/phase retirement, protected replacements and linked views.
+
 ### October 11 direct and coordinated ordinary host dimensions
 
 The direct stair controller batch is committed and pushed as 9bc16ffc, with its
