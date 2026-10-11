@@ -14,6 +14,31 @@ changed source does not acquire runtime acceptance without later qualification.
 
 ## Current delivery state
 
+### October 11 stair replacement component dimension copy infrastructure
+
+The coordinated demolition batch is committed and pushed as f8aab865; its exact
+remote branch ref matched local HEAD. Current source work adds an explicit stair
+replacement dimension-copy contract. Closed child7 wraps the historical child1
+through child6 and supplies only source-to-fresh dimension identities. Original
+qualified embedded extent targets derive the required roster; a single clone
+contribution binds copied dimensions to actual proposed catalog/instance roots.
+Original dimensions, independent owners and other alternatives remain exact.
+New copies join the proposed phase registry. Outer phase33, Document lifetime
+reservation and reader229/extraction227 retain the new proof, including undone
+history. Historical coordinated wrappers still reject the new permission.
+
+This is core/API infrastructure in progress, not an enabled end-user workflow.
+Application allocation, standalone controller activation, a new explicit
+coordinated replacement contract and Properties request/receipt integration
+remain required. Protected wall replacement dimension copies are a separate
+follow-on. Independent integrated source review found no proved actionable P1/P2
+in this bounded slice. Root review preserves the distinction between this core
+contract and the still-unconnected application workflows; scoped whitespace
+review passes. Git records the source backup identity. Compilation, runtime,
+Undo/Redo, save/reopen and extraction execution remain unverified.
+No builds/tests/jobs, launches, packages or installations ran; the installed
+candidate remains unchanged and all ten production gates remain open.
+
 ### October 11 coordinated phase component dimension retirement
 
 The wall/mixed wall-opening batch is committed and pushed as f10dfe6f; the exact

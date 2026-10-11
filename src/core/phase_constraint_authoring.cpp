@@ -465,7 +465,8 @@ CoordinatedReplacements coordinated(const Json& value,const PhaseConstraintAutho
     if (stairs && !value.at("stair_replacement").is_null()) {
         const auto& leaf=value.at("stair_replacement");
         result.stair=decode_phase_stair_replacement_authoring(leaf);
-        if (result.stair->complete_scalar_dependencies || encode_phase_stair_replacement_authoring(*result.stair).dump()!=leaf.dump())
+        if (result.stair->complete_scalar_dependencies || result.stair->complete_component_dimensions ||
+            encode_phase_stair_replacement_authoring(*result.stair).dump()!=leaf.dump())
             invalid("Coordinated stair replacement requires canonical typed authority");
     }
     std::set<std::string,std::less<>> roof_targets, slab_targets;
@@ -1517,7 +1518,8 @@ nlohmann::json encode_phase_constraint_authoring_intent(const PhaseConstraintAut
     }
     if (!value.stair_replacement.is_null()) {
         const auto replacement=decode_phase_stair_replacement_authoring(value.stair_replacement);
-        if (replacement.complete_scalar_dependencies) result["version"]=25;
+        if (replacement.complete_component_dimensions) result["version"]=33;
+        else if (replacement.complete_scalar_dependencies) result["version"]=25;
         if (encode_phase_stair_replacement_authoring(replacement).dump()!=value.stair_replacement.dump())
             invalid("Stair replacement decisions are not canonical");
         ConstraintAuthoringIntent empty;
@@ -1596,7 +1598,8 @@ PhaseConstraintAuthoringIntent decode_phase_constraint_authoring_intent(const Js
     const bool structural=scalar_structural || (value.is_object() && value.contains("version") && value.at("version")==9);
     const bool stair_demolition=value.is_object() && value.contains("version") && value.at("version")==11;
     const bool scalar_stairs=value.is_object() && value.contains("version") && value.at("version")==25;
-    const bool stair_replacement=scalar_stairs || (value.is_object() && value.contains("version") && value.at("version")==12);
+    const bool stair_dimensions=value.is_object() && value.contains("version") && value.at("version")==33;
+    const bool stair_replacement=stair_dimensions || scalar_stairs || (value.is_object() && value.contains("version") && value.at("version")==12);
     const bool stair_retirement=value.is_object() && value.contains("version") && value.at("version")==13;
     const bool coordinated_demolition=value.is_object() && value.contains("version") && value.at("version")==15;
     const bool wall_demolition=value.is_object() && value.contains("version") && value.at("version")==16;
@@ -1642,7 +1645,7 @@ PhaseConstraintAuthoringIntent decode_phase_constraint_authoring_intent(const Js
         "source_entities_digest","source_saved_revision","phase_selections","intent","ordinary_roof_edits"});
     else keys(value,{"version","expected_revision","source_snapshot_digest","source_authoring_digest",
         "source_entities_digest","source_saved_revision","phase_selections","intent"});
-    if (!value.at("version").is_number_integer() || (value.at("version")!=1 && value.at("version")!=2 && value.at("version")!=3 && value.at("version")!=4 && value.at("version")!=5 && value.at("version")!=6 && value.at("version")!=7 && value.at("version")!=8 && value.at("version")!=9 && value.at("version")!=10 && value.at("version")!=11 && value.at("version")!=12 && value.at("version")!=13 && value.at("version")!=14 && value.at("version")!=15 && value.at("version")!=16 && value.at("version")!=17 && value.at("version")!=18 && value.at("version")!=19 && value.at("version")!=20 && value.at("version")!=21 && value.at("version")!=22 && value.at("version")!=23 && value.at("version")!=24 && value.at("version")!=25 && value.at("version")!=26 && value.at("version")!=27 && value.at("version")!=28 && value.at("version")!=29 && value.at("version")!=30 && value.at("version")!=31 && value.at("version")!=32) ||
+    if (!value.at("version").is_number_integer() || value.at("version")<1 || value.at("version")>33 ||
         !value.at("expected_revision").is_number_unsigned()) invalid("Phase constraint proof version or revision is invalid");
     if (!value.at("source_saved_revision").is_null() && !value.at("source_saved_revision").is_number_unsigned())
         invalid("Phase constraint saved revision is invalid");
@@ -1714,8 +1717,9 @@ PhaseConstraintAuthoringIntent decode_phase_constraint_authoring_intent(const Js
         result.stair_replacement=value.at("stair_replacement");
         if (result.stair_replacement.is_null()) invalid("Version twelve requires stair replacement decisions");
         const auto leaf=decode_phase_stair_replacement_authoring(result.stair_replacement);
-        if (leaf.complete_scalar_dependencies!=scalar_stairs)
-            invalid("Stair scalar dependency authority requires its matching outer version");
+        if (leaf.complete_component_dimensions!=stair_dimensions ||
+            (!stair_dimensions && leaf.complete_scalar_dependencies!=scalar_stairs))
+            invalid("Stair dimension/scalar authority requires its matching outer version");
     }
     if (stair_retirement) {
         result.stair_demolition_retirement=value.at("stair_demolition_retirement");
@@ -3371,8 +3375,10 @@ Entities compose_phase_property_selection_edit_candidates(const DocumentSnapshot
             if (leaf.demolition) invalid("Phase Properties cannot borrow roof demolition authority");
             registry=leaf.registry_id;alternative=leaf.alternative_id;
             replay=replay_phase_constraint_authoring(actual,wire);
-        } else if (version==25) {
+        } else if (version==25 || version==33) {
             const auto leaf=decode_phase_stair_replacement_authoring(intent.stair_replacement);
+            if (!leaf.complete_scalar_dependencies)
+                invalid("Phase Properties requires complete scalar stair dependency authority");
             registry=leaf.registry_id;alternative=leaf.alternative_id;
             for (const auto& decision:leaf.dependency_dispositions)
                 if (decision.action==PhaseStairReplacementDependencyAction::retire && !retired_rails.insert(decision.rail_id).second)
@@ -3381,7 +3387,7 @@ Entities compose_phase_property_selection_edit_candidates(const DocumentSnapshot
         } else invalid("Phase Properties contribution has unsupported replacement authority");
         // Historical scalar and vertical scalar dialects are the same family.
         // Different wire versions cannot split overlapping wall authority.
-        if (!groups.emplace(version==26 || qualified_scalar_wall ? 23 : version==27 ? 5 : version,registry,alternative).second)
+        if (!groups.emplace(version==26 || qualified_scalar_wall ? 23 : version==27 ? 5 : version==33 ? 25 : version,registry,alternative).second)
             invalid("Phase Properties repeats a family/registry/alternative contribution");
         collect(replay);merge(replay);
     }

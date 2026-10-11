@@ -388,6 +388,13 @@ std::uint32_t required_format_version_internal(const DocumentSnapshot& snapshot,
                 value.at("clipboard_placement_completion")==true && value.at("clipboard_placement_intent").is_object() &&
                 value.at("clipboard_placement_intent").value("version",nlohmann::json())==3)
                 floor=std::max(floor,224U);
+            if (closed_shape({"version","authoring","complete_component_dimensions","dimension_identities"}) &&
+                value.at("version").is_number_integer() && value.at("version")==7 &&
+                value.at("complete_component_dimensions").is_boolean() && value.at("complete_component_dimensions")==true &&
+                value.at("dimension_identities").is_object() && value.at("authoring").is_object() &&
+                value.at("authoring").contains("version") && value.at("authoring").at("version").is_number_integer() &&
+                value.at("authoring").at("version")>=1 && value.at("authoring").at("version")<=6)
+                floor=std::max(floor,229U);
             if (closed_shape({"version","expected_revision","source_snapshot_digest","source_authoring_digest",
                     "source_entities_digest","source_saved_revision","phase_selections","intent","ordinary_roof_edits",
                     "complete_ordinary_roof_component_dimensions"}) && value.at("version").is_number_integer() &&
@@ -949,9 +956,9 @@ std::uint32_t required_format_version_internal(const DocumentSnapshot& snapshot,
     };
     for (const auto& revision : snapshot.history()) {
         if (revision.phase_entity_import) required=std::max(required,160U);
-        if (required<228 && revision.boundary_geometry_edit)
+        if (required<229 && revision.boundary_geometry_edit)
             required=std::max(required,typed_edit_reader_floor(encode_boundary_geometry_edit(*revision.boundary_geometry_edit)));
-        if (required<228 && revision.boundary_constraint_changes)
+        if (required<229 && revision.boundary_constraint_changes)
             required=std::max(required,typed_edit_reader_floor(command_to_json(Command{*revision.boundary_constraint_changes})));
         if (required<122 && revision.boundary_geometry_edit)
             required=std::max(required,quantity_reader_floor(encode_boundary_geometry_edit(*revision.boundary_geometry_edit)));
@@ -1677,6 +1684,8 @@ std::uint32_t required_format_version_internal(const DocumentSnapshot& snapshot,
                             required = std::max(required, 30U);
                         if (found != revision.entities.end() && found->second.type == "terrain_surface")
                             required = std::max(required, 84U);
+                        if (found != revision.entities.end() && found->second.type == "dimension")
+                            required = std::max(required, 229U);
                     }
             }
             if(entity.type=="constraint" && entity.properties.contains("entity_ids") && entity.properties.at("entity_ids").is_array())
@@ -3465,6 +3474,7 @@ bool verify_sqlite_schema(sqlite3* database, bool allow_recovery = false) {
          sqlite3_column_int(user_version.get(), 0) != 226 &&
          sqlite3_column_int(user_version.get(), 0) != 227 &&
          sqlite3_column_int(user_version.get(), 0) != 228 &&
+         sqlite3_column_int(user_version.get(), 0) != 229 &&
          sqlite3_column_int(user_version.get(), 0) != 207 &&
          sqlite3_column_int(user_version.get(), 0) != 202 &&
          sqlite3_column_int(user_version.get(), 0) != 200 &&
@@ -4190,6 +4200,8 @@ DocumentSnapshot read_snapshot(sqlite3* database, RecoveryLedger* recovery = nul
     // here and authenticate the manifest with its stored version below.
     const auto required_format = required_format_version_internal(snapshot, format_number < 28);
     if (required_format > format_number) {
+        if (required_format>=229)
+            storage_error(StorageErrorCode::unsupported_format,"This project requires reader 229 for stair component dimension copies and dimensional phase members");
         if (required_format>=228)
             storage_error(StorageErrorCode::unsupported_format,"This project requires reader 228 for phase demolition component dimensions");
         if (required_format>=227)

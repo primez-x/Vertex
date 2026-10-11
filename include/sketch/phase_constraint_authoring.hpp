@@ -95,6 +95,8 @@ struct PhaseConstraintAuthoringIntent {
     // Dialect twelve: typed stair/railing profile replacement in the actual
     // saved alternative. Baseline owners stay exact; attached baseline rails
     // and hosted parts receive copies, while proposed rails retain identity.
+    // Dialect thirty-three alone admits child7 component dimension copies;
+    // its historical child body retains existing scalar/dependency authority.
     nlohmann::json stair_replacement=nullptr;
     // Dialect thirteen: retire actual active proposed rail dependents before
     // demolishing their retained baseline stair. No arbitrary erase authority.

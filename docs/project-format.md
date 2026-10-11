@@ -1,4 +1,22 @@
-# Vertex project formats v1 through v228
+# Vertex project formats v1 through v229
+
+Reader229 retains stair replacement child7, an exact four-key wrapper:
+`version:7`, `authoring:<canonical historical child1..6>`,
+`complete_component_dimensions:true`, and `dimension_identities:<object>`.
+The last field maps exact source dimension entity identities to fresh document
+identities; it supplies no copied geometry or target authority. Wrappers cannot
+nest. Outer phase-authoring33 is required; historical phase12/25 and historical
+coordinated replacement envelopes cannot acquire this permission.
+
+Replay discovers supported embedded assembly extents against complete original
+source catalog/instance tuples, preserving independent dimensions and original
+baseline owners. One source-derived clone contribution binds fresh dimensions
+to proposed component roots. Those dimensions join the active alternative's
+proposed registry as entity type `dimension`. Document lifetime reservation
+includes their fresh identities through retained and undone history. Current,
+nested and undone proofs and registered dimension members require
+reader229/extraction227. This storage/core contract does not certify application
+editing integration or runtime behavior.
 
 Reader228 retains coordinated demolition inner9 and wall demolition inner7
 under unchanged outer phase authoring15/16 and command34. Each new inner proof

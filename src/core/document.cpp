@@ -4147,6 +4147,7 @@ static void validate_retained_authoring_receipt_identities(
                     require_unused(stair.child_identities);
                     require_unused(stair.hosted_instance_identities);
                     require_unused(stair.overlay_identities);
+                    require_unused(stair.dimension_identities);
                 }
             }
         for (const auto& mixed:historical_proofs.mixed_properties_proofs) {
@@ -4263,6 +4264,7 @@ static void validate_phase_constraint_fresh_lifetime(const std::map<std::string,
     bool complete_hosted_demolition=false;
     bool complete_opening_demolition=false;
     bool complete_component_dimension_demolition=false;
+    bool complete_stair_component_dimension_copies=false;
     for (const auto& [id,entity] : candidate) {
         (void)entity;
         if (!source.contains(id)) fresh.insert(id);
@@ -4396,6 +4398,15 @@ static void validate_phase_constraint_fresh_lifetime(const std::map<std::string,
             reserve_nested(replacement.child_identities);
             reserve_nested(replacement.hosted_instance_identities);
             reserve_nested(replacement.overlay_identities);
+            complete_stair_component_dimension_copies=complete_stair_component_dimension_copies || replacement.complete_component_dimensions;
+            for (const auto& [original,id]:replacement.dimension_identities) {
+                (void)original;
+                // Unlike stair-local children, dimensions are persisted owners
+                // already discovered in the candidate's fresh entity set.
+                if (!nested_fresh.insert(id).second)
+                    throw std::invalid_argument("A proposed stair dimension overlaps another declared identity: "+id);
+                fresh.insert(id);
+            }
             for (const auto& [original,id]:replacement.hosted_instance_identities)
                 proposed_hosted_instances.emplace(replacement.identities.at(original.first),id);
         }
@@ -4604,6 +4615,10 @@ static void validate_phase_constraint_fresh_lifetime(const std::map<std::string,
         throw std::invalid_argument("A fresh architectural demolition destination borrows the ordinary opening proof field");
     if (complete_component_dimension_demolition && fresh.contains("complete_component_dimensions"))
         throw std::invalid_argument("A fresh architectural demolition destination borrows the component dimension proof field");
+    if (complete_stair_component_dimension_copies)
+        for (const auto* token:{"authoring","complete_component_dimensions","dimension_identities"})
+            if (fresh.contains(token))
+                throw std::invalid_argument("A proposed stair destination borrows a dimension copy proof field: "+std::string(token));
     if (phase_drawing_enclosure) {
         // The complete new enclosure reserves every resulting or declared
         // destination against both stage vocabularies, even for older phase

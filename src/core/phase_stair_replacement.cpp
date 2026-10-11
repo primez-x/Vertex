@@ -2,8 +2,10 @@
 
 #include "sketch/annotation_entity_codec.hpp"
 #include "sketch/assembly_document_adapter.hpp"
+#include "sketch/assembly_dimension_transform.hpp"
 #include "sketch/assembly_geometry.hpp"
 #include "sketch/assembly_phase_membership_transport.hpp"
+#include "sketch/boundary_dimension.hpp"
 #include "sketch/building_entity.hpp"
 #include "sketch/constraint_phase_scope.hpp"
 #include "sketch/model_phases.hpp"
@@ -39,6 +41,7 @@ using Ids = std::set<std::string, std::less<>>;
 constexpr std::size_t entity_limit = 65536, identity_limit = 4096;
 constexpr std::size_t proof_limit = 1024 * 1024, geometry_limit = 100000;
 constexpr std::size_t source_nodes = 4 * 1024 * 1024, source_bytes = 64 * 1024 * 1024;
+constexpr std::size_t dimension_limit = 1000;
 
 [[noreturn]] void reject(const std::string& reason) {
     throw std::invalid_argument("Phase stair replacement: " + reason);
@@ -177,6 +180,66 @@ Memberships memberships(const Entities& actual) {
 }
 bool baseline(const ModelPhases& model, const std::string& id) {
     return std::binary_search(model.baseline_ids().begin(), model.baseline_ids().end(), id);
+}
+PhaseStairReplacementAuthoring historical_authoring(const PhaseStairReplacementAuthoring& authoring) {
+    // Bound the new inventory before copying the DTO merely to remove its
+    // authority. Historical inventories retain their own encoder admission.
+    if (authoring.dimension_identities.size() > dimension_limit) reject("dimension identity budget exceeded");
+    auto result = authoring;
+    result.complete_component_dimensions = false;
+    result.dimension_identities.clear();
+    return result;
+}
+// Admit the complete original raw source and all catalog work before historical
+// derivation or target decoding. A shortened dependency source is never used
+// for this admission or for the associated-dimension roster.
+void admit_component_dimension_source(const Entities& actual) {
+    (void)source_budget(actual);
+    AssemblyCatalogTransferBudget budget;
+    for (const auto& [id, entity] : actual) {
+        (void)id;
+        if (entity.type == "assembly_model") admit_existing_assembly_catalog_work(entity, budget);
+    }
+}
+using ComponentDimensionRoots = std::map<std::string, PhaseStairReplacementHostedInstanceKey, std::less<>>;
+ComponentDimensionRoots component_dimension_roster(const Entities& actual, PhaseStairReplacementPlan& plan,
+    bool inspect_paths = true) {
+    const std::set<PhaseStairReplacementHostedInstanceKey> roots(
+        plan.required_hosted_instance_ids.begin(), plan.required_hosted_instance_ids.end());
+    ComponentDimensionRoots result;
+    std::vector<AssemblyDimensionTarget> targets;
+    for (const auto& [id, entity] : actual) {
+        if (!can_recognize_boundary_dimension_entity_type(entity.type)) continue;
+        const auto target = field(entity.properties, "target");
+        const auto assembly = target ? field(*target, "assembly") : nullptr;
+        const auto catalog = assembly ? field(*assembly, "catalog_id") : nullptr;
+        const auto instance = assembly ? field(*assembly, "instance_id") : nullptr;
+        if (!catalog || !catalog->is_string() || !instance || !instance->is_string()) continue;
+        const PhaseStairReplacementHostedInstanceKey key{catalog->get<std::string>(), instance->get<std::string>()};
+        if (!roots.contains(key)) continue;
+        // Independent owners can share this catalog/local tuple. Only explicit
+        // null identifies the embedded form; the carrier boundary is no root.
+        const auto document = field(*assembly, "document_entity_id");
+        if (document && !document->is_null()) continue;
+        const auto decoded = decode_boundary_dimension_entity(entity);
+        if (!document || !decoded.supported() || decoded.version != 6 ||
+            decoded.dimension->kind != BoundaryDimensionKind::assembly_extent || !decoded.dimension->assembly_target ||
+            decoded.dimension->assembly_target->component.document_entity_id)
+            reject("affected embedded component dimension requires a supported v6 extent: " + id);
+        if (result.size() >= dimension_limit) reject("associated embedded dimension budget exceeded");
+        result.emplace(id, key);
+        targets.push_back(*decoded.dimension->assembly_target);
+    }
+    // Dialog planning admits original paths. Replay delegates both complete
+    // source/candidate path and frame batches to the atomic carry exactly once.
+    if (inspect_paths && !targets.empty()) (void)resolve_assembly_dimensions(actual, targets);
+    plan.required_dimension_ids.clear();
+    for (const auto& [id, key] : result) { (void)key; plan.required_dimension_ids.push_back(id); }
+    const auto existing = plan.required_entity_ids.size() + plan.required_child_ids.size() +
+        plan.required_hosted_instance_ids.size() + plan.required_overlay_ids.size();
+    if (existing > identity_limit || result.size() > identity_limit - existing)
+        reject("combined replacement/dimension identity budget exceeded");
+    return result;
 }
 void static_pose(const Entity& before, const Entity& after) {
     for (const auto* name : {"base_position_m", "orientation_rad", "vertical_placement"}) {
@@ -1631,6 +1694,13 @@ std::vector<StairCompoundEditIntent> capture_phase_stair_replacement_compound_ed
 PhaseStairReplacementPlan inspect_phase_stair_replacement_plan(const Entities& actual,
     const PhaseStairReplacementAuthoring& authoring) {
     try {
+        if (authoring.complete_component_dimensions) {
+            admit_component_dimension_source(actual);
+            auto result = inspect_phase_stair_replacement_plan(actual, historical_authoring(authoring));
+            if (result.ready()) (void)component_dimension_roster(actual, result);
+            return result;
+        }
+        if (!authoring.dimension_identities.empty()) reject("dimension identities require child v7 authority");
         if (authoring.complete_scalar_dependencies || !authoring.dependency_dispositions.empty() || !authoring.dependency_rail_ids.empty()) {
             const auto prepared = prepare_dependencies(actual, authoring);
             return inspect_phase_stair_replacement_plan(prepared.source, prepared.effective);
@@ -1701,6 +1771,35 @@ PhaseStairReplacementPlan inspect_phase_stair_replacement_plan(const Entities& a
 }
 
 Json encode_phase_stair_replacement_authoring(const PhaseStairReplacementAuthoring& authoring) {
+    if (authoring.complete_component_dimensions) {
+        // The historical encoder retains every existing lane/version/default.
+        auto body = encode_phase_stair_replacement_authoring(historical_authoring(authoring));
+        const auto existing = authoring.identities.size() + authoring.child_identities.size() +
+            authoring.hosted_instance_identities.size() + authoring.overlay_identities.size();
+        if (authoring.dimension_identities.size() > dimension_limit || existing > identity_limit ||
+            authoring.dimension_identities.size() > identity_limit - existing)
+            reject("combined replacement/dimension identity budget exceeded");
+        Ids destinations;
+        const auto reserve = [&](const auto& mapping) {
+            for (const auto& [source, destination] : mapping) {
+                (void)source;
+                if (!destinations.insert(destination).second) reject("fresh destinations overlap across qualified mappings");
+            }
+        };
+        reserve(authoring.identities); reserve(authoring.child_identities);
+        reserve(authoring.hosted_instance_identities); reserve(authoring.overlay_identities);
+        Json dimensions = Json::object();
+        for (const auto& [source, destination] : authoring.dimension_identities) {
+            identity(source); identity(destination);
+            if (source == destination || !destinations.insert(destination).second)
+                reject("dimension destination is not globally fresh");
+            dimensions[source] = destination;
+        }
+        Json result{{"version", 7}, {"authoring", std::move(body)},
+            {"complete_component_dimensions", true}, {"dimension_identities", std::move(dimensions)}};
+        proof_budget(result); return result;
+    }
+    if (!authoring.dimension_identities.empty()) reject("dimension identities require child v7 authority");
     identity(authoring.registry_id); identity(authoring.alternative_id);
     const bool transformed = !authoring.transforms.empty();
     const bool compound = !authoring.compound_edits.empty();
@@ -1807,6 +1906,23 @@ Json encode_phase_stair_replacement_authoring(const PhaseStairReplacementAuthori
 PhaseStairReplacementAuthoring decode_phase_stair_replacement_authoring(const Json& value) {
     try {
         proof_budget(value);
+        if (value.is_object() && value.contains("version") && value.at("version").is_number_integer() && value.at("version") == 7) {
+            keys(value, {"version", "authoring", "complete_component_dimensions", "dimension_identities"});
+            if (!value.at("complete_component_dimensions").is_boolean() || value.at("complete_component_dimensions") != true ||
+                !value.at("dimension_identities").is_object() || value.at("dimension_identities").size() > dimension_limit)
+                reject("v7 requires true component authority and a bounded dimension identity object");
+            const auto& body = value.at("authoring");
+            if (!body.is_object() || !body.contains("version") || !body.at("version").is_number_integer() ||
+                body.at("version") < 1 || body.at("version") > 6)
+                reject("v7 requires a canonical historical child v1..6 body");
+            auto result = decode_phase_stair_replacement_authoring(body);
+            result.complete_component_dimensions = true;
+            for (const auto& [source, destination] : value.at("dimension_identities").items()) {
+                identity(source); result.dimension_identities.emplace(source, identity(destination));
+            }
+            if (encode_phase_stair_replacement_authoring(result) != value) reject("v7 authoring is not canonical");
+            return result;
+        }
         if (!value.is_object() || !value.contains("version") || !value.at("version").is_number_integer() ||
             (value.at("version") != 1 && value.at("version") != 2 && value.at("version") != 3 && value.at("version") != 4 && value.at("version") != 5 && value.at("version") != 6)) reject("unsupported authoring version");
         const bool complete_scalar = value.at("version") == 6;
@@ -1884,6 +2000,83 @@ PhaseStairReplacementAuthoring decode_phase_stair_replacement_authoring(const Js
 Entities replay_phase_stair_replacement_authoring(const Entities& actual, const PhaseStairReplacementAuthoring& authoring) {
     try {
         const auto proof = encode_phase_stair_replacement_authoring(authoring);
+        if (authoring.complete_component_dimensions) {
+            admit_component_dimension_source(actual);
+            const auto body = historical_authoring(authoring);
+            auto plan = inspect_phase_stair_replacement_plan(actual, body);
+            if (!plan.ready()) reject(plan.diagnostics.front().entity_id + ": " + plan.diagnostics.front().reason);
+            const auto dimensions = component_dimension_roster(actual, plan, false);
+            if (authoring.dimension_identities.size() != dimensions.size())
+                reject("requires the exact original-source embedded dimension mapping inventory");
+            auto occupied = source_budget(actual);
+            for (const auto& [key, alias] : embedded_assembly_presentation_ids(actual)) { (void)key; occupied.text(alias); }
+            Strings declared; declared.read(encode_phase_stair_replacement_authoring(body));
+            for (const auto& [source, destination] : authoring.dimension_identities) {
+                if (!dimensions.contains(source)) reject("unrequested embedded dimension mapping");
+                if (occupied.values.contains(destination) || declared.values.contains(destination))
+                    reject("fresh dimension collides with original source, aliases or declared body vocabulary: " + destination);
+            }
+            // Existing typed physical/catalog, retirement and presentation
+            // authority constructs the complete body first. Dimension carry
+            // then measures original-to-proposed frames once in one batch.
+            auto candidate = replay_phase_stair_replacement_authoring(actual, body);
+            auto candidate_names = source_budget(candidate);
+            for (const auto& [key, alias] : embedded_assembly_presentation_ids(candidate)) { (void)key; candidate_names.text(alias); }
+            std::map<PhaseStairReplacementHostedInstanceKey, std::size_t> requests_by_root;
+            std::vector<AssemblyDimensionTransformRequest> requests;
+            for (const auto& [source, key] : dimensions) {
+                const auto& destination = authoring.dimension_identities.at(source);
+                if (candidate_names.values.contains(destination)) reject("fresh dimension collides with complete body or computed alias: " + destination);
+                if (!candidate.contains(source) || !exact(candidate.at(source), actual.at(source)))
+                    reject("body changed an original component dimension: " + source);
+                const auto [request, inserted] = requests_by_root.emplace(key, requests.size());
+                if (inserted) {
+                    if (requests.size() >= dimension_limit) reject("dimension clone request budget exceeded");
+                    requests.push_back({{key.first, key.second, std::nullopt, {}},
+                        {authoring.identities.at(key.first), authoring.hosted_instance_identities.at(key), std::nullopt, {}},
+                        AssemblyDimensionTransformMode::clone, {}});
+                }
+                requests.at(request->second).fresh_dimension_ids.emplace(source, destination);
+            }
+            const auto copies = requests.empty() ? std::vector<Entity>{} :
+                carry_assembly_dimension_transform_entities(actual, candidate, requests);
+            if (copies.size() != dimensions.size()) reject("dimension clone contribution differs from exact source roster");
+            Ids copied_ids;
+            for (const auto& [source, destination] : authoring.dimension_identities) { (void)source; copied_ids.insert(destination); }
+            for (const auto& copy : copies)
+                if (!copied_ids.contains(copy.id) || !candidate.emplace(copy.id, copy).second)
+                    reject("dimension clone contribution has an undeclared or colliding owner");
+
+            // Append to the ACTUAL saved active registry, retaining every raw
+            // body field and source dimension membership. Typed proof precedes
+            // publication of the additional proposed owners.
+            const auto& registry = candidate.at(plan.registry_id);
+            const auto phases = ModelPhases::from_json(registry.properties.at("model"));
+            if (phases.active_alternative() != std::optional<std::string>{plan.alternative_id})
+                reject("component dimension copy lost the actual saved active alternative");
+            auto model_ids = phases.entity_ids(); auto alternatives = phases.alternatives();
+            const auto target = std::find_if(alternatives.begin(), alternatives.end(),
+                [&](const auto& row) { return row.id == plan.alternative_id; });
+            if (target == alternatives.end()) reject("component dimension copy lost its active registry choice");
+            auto raw = registry.properties.at("model");
+            for (const auto& id : copied_ids) { model_ids.push_back(id); target->proposed_ids.push_back(id); raw.at("entity_ids").push_back(id); }
+            for (auto& row : raw.at("alternatives")) if (row.at("id") == plan.alternative_id)
+                for (const auto& id : copied_ids) row.at("proposed_ids").push_back(id);
+            const auto final_phases = ModelPhases::create(model_ids, phases.baseline_ids(), alternatives, phases.active_alternative());
+            if (ModelPhases::from_json(raw).to_json() != final_phases.to_json())
+                reject("raw dimension append differs from validated phase update");
+            candidate.at(plan.registry_id).properties.at("model") = std::move(raw);
+            (void)source_budget(candidate);
+            (void)memberships(candidate);
+            (void)constraint_phase_scope(candidate);
+            for (const auto& [source, key] : dimensions) {
+                (void)key;
+                if (!exact(candidate.at(source), actual.at(source))) reject("component copy changed a protected source dimension");
+            }
+            for (const auto& copy : copies)
+                if (!exact(candidate.at(copy.id), copy)) reject("component copy changed its admitted dimension contribution");
+            return candidate;
+        }
         if (authoring.complete_scalar_dependencies || !authoring.dependency_dispositions.empty()) {
             // Reserve against the ORIGINAL complete source, including retired
             // rows/aliases. Retirement is actual-source authority, never a way

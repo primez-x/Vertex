@@ -104,6 +104,8 @@ struct PhaseStairReplacementPlan {
     // discovery selects additive retained-topology staging (closed child v4).
     std::vector<std::string> preserved_inactive_rail_ids;
     std::vector<PhaseStairReplacementDiagnostic> diagnostics;
+    // Child v7 only: exact ascending original-source embedded extent owners.
+    std::vector<std::string> required_dimension_ids;
     [[nodiscard]] bool ready() const noexcept;
     bool operator==(const PhaseStairReplacementPlan&) const = default;
 };
@@ -158,6 +160,10 @@ struct PhaseStairReplacementAuthoring {
     // attachment roles and merge explicit rehosts into retained-bound edits.
     // The dependency arrays remain explicit even when no rail is affected.
     bool complete_scalar_dependencies{};
+    // Separate child v7 authority; historical scalar/dependency meanings stay
+    // in the canonical v1..6 body. IDs are allocated by the enclosing Document.
+    bool complete_component_dimensions{false};
+    PhaseStairReplacementIdentityMap dimension_identities;
 };
 
 [[nodiscard]] PhaseStairReplacementPlan inspect_phase_stair_replacement_plan(
@@ -184,6 +190,10 @@ struct PhaseStairReplacementAuthoring {
 // Its exact dependency witness may be empty; final typed rail dimensions own
 // attachment fit, while immutable actual host roles and explicit choices retain
 // dependency authority. Versions 1..5 preserve their historical interpretation.
+// Closed v7 wraps exactly {version:7, authoring:<canonical v1..6>,
+// complete_component_dimensions:true, dimension_identities:<object>}.
+// The original-source embedded dimension roster is discovered independently;
+// its exact source-to-fresh mapping supplies identities, never clone authority.
 [[nodiscard]] nlohmann::json encode_phase_stair_replacement_authoring(
     const PhaseStairReplacementAuthoring& authoring);
 [[nodiscard]] PhaseStairReplacementAuthoring decode_phase_stair_replacement_authoring(
