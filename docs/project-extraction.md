@@ -1,5 +1,22 @@
 # Portable project extraction
 
+Exchange version213 requires native reader215 for ordinary wall/component
+membership retirement. Geometry proof54 (walls), 55 (mixed walls) and 56
+(walls/openings) retain complete catalog/membership markers and an actual-source
+nullable saved-choice pair. Actual catalog, placement and inherited host
+ownership constrain the pair even for undeclared rows. Actual existing baseline
+row retirement can use null only when its registry has no alternatives and the
+row has no alternative usage; a supplied choice cannot replace that null state.
+Retained active baseline
+carriers are permitted, foreign or inactive physical carriers are not.
+Command57/completed intent2 retains the whole new
+proof even when no room review or independent drawing rows are needed. Matching
+room-review commands54/55/56 and mixed3 wrappers keep that authority through
+current, retained and undone history. Qualified wide local IDs are explicit
+only in mixed55/56; historical proofs remain unchanged. Extraction does not
+infer authority from a raw erase inventory or merely from an entity reader
+floor. Compilation, migration and extraction round trips remain unverified.
+
 Exchange version212 requires native reader214 for complete wall/component phase
 deletion with room review. Wall inner6 has fourteen fields: the historical inner5
 inventory plus nullable `component_authoring` and literal

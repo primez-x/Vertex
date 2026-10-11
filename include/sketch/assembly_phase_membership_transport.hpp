@@ -11,7 +11,10 @@ using AssemblyPhaseCopiedHosts = std::map<std::string, std::string, std::less<>>
 
 // Read-only admission of a complete source-derived physical retirement set.
 // Actual declared rows must be sole proposed members of the requested saved
-// active choice. Unlisted rows retain legacy behavior; no membership is inferred.
+// active choice. Every reached catalog, placement host and inherited opening/
+// corner host must be active and cannot belong to a foreign physical registry,
+// including unlisted rows. Retained active baseline carriers remain permitted.
+// Unlisted rows remain unlisted; no membership is inferred.
 // The full raw source and catalog work are bounded before model resolution.
 void validate_assembly_phase_retirement_roots(
     const AssemblyPhaseTransportEntities& actual,

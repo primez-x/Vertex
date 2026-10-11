@@ -1,6 +1,7 @@
 #include "sketch/mixed_wall_removal.hpp"
 
 #include "sketch/assembly_document_adapter.hpp"
+#include "sketch/assembly_phase_membership_transport.hpp"
 #include "sketch/constraint_phase_scope.hpp"
 #include "sketch/corner_window.hpp"
 #include "sketch/document_wall.hpp"
@@ -15,6 +16,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cctype>
 #include <set>
 #include <stdexcept>
 
@@ -39,6 +41,31 @@ void identity(const std::string& value) {
         return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
             (c >= '0' && c <= '9') || c == '-' || c == '_' || c == '.' || c == ':';
     })) reject("identity requires 1..128 supported ASCII characters");
+}
+void local_identity(const std::string& value) {
+    if (value.empty() || value.size() > 4096 || value.find('\0') != std::string::npos ||
+        std::all_of(value.begin(), value.end(), [](unsigned char c) { return std::isspace(c); }))
+        reject("catalog local identity requires 1..4096 nonblank non-NUL bytes");
+}
+Json choice_json(const std::optional<std::pair<std::string, std::string>>& choice) {
+    if (!choice) return nullptr;
+    identity(choice->first); local_identity(choice->second);
+    return Json::array({choice->first, choice->second});
+}
+std::optional<std::pair<std::string, std::string>> choice_from_json(const Json& value) {
+    if (value.is_null()) return std::nullopt;
+    if (!value.is_array() || value.size() != 2 || !value[0].is_string() || !value[1].is_string())
+        reject("component phase choice requires null or an exact string pair");
+    const auto result = std::pair{value[0].get<std::string>(), value[1].get<std::string>()};
+    (void)choice_json(result);
+    return result;
+}
+void catalog_admission(const Entities& actual, AssemblyCatalogTransferBudget& budget, std::size_t passes=1) {
+    for (std::size_t pass=0; pass<passes; ++pass)
+        for (const auto& [id, entity] : actual) {
+            (void)id;
+            if (entity.type == "assembly_model") admit_existing_assembly_catalog_work(entity, budget);
+        }
 }
 void fields(const Json& value, std::initializer_list<const char*> names) {
     if (!value.is_object() || value.size() != names.size()) reject("unsupported proof/intent fields");
@@ -77,7 +104,7 @@ void sorted_ids(const std::vector<std::string>& ids) {
     for (const auto& id : ids) identity(id);
 }
 PhysicalWallJoinRemovalAdditionalIdentities destinations(const MixedWallRemovalIntent& intent,
-    bool reserve_opening_hosted_marker=false, bool reserve_corner_marker=false) {
+    bool reserve_opening_hosted_marker=false, bool reserve_corner_marker=false, bool reserve_membership_markers=false) {
     PhysicalWallJoinRemovalAdditionalIdentities result;
     Ids fresh;
     for (const auto* mapping : {&intent.wall_additional_identities, &intent.other.roof_additional_identities}) {
@@ -96,6 +123,9 @@ PhysicalWallJoinRemovalAdditionalIdentities destinations(const MixedWallRemovalI
                     reject("destination borrows the opening-hosted mixed-proof token");
                 if (reserve_corner_marker && row == "complete_corner_window_consequences")
                     reject("destination borrows the corner-completion mixed-proof token");
+                if (reserve_membership_markers && (row == "complete_hosted_catalog_consequences" ||
+                    row == "complete_component_phase_memberships" || row == "component_phase_choice"))
+                    reject("destination borrows a component-completion mixed-proof token");
                 if (!fresh.insert(row).second) reject("fresh wall/roof destinations overlap");
             }
         }
@@ -106,9 +136,11 @@ PhysicalWallJoinRemovalAdditionalIdentities destinations(const MixedWallRemovalI
     }
     for (const auto& id : intent.wall_ids) if (fresh.contains(id)) reject("destination borrows a selected wall");
     for (const auto& id : intent.other.object_ids) if (fresh.contains(id)) reject("destination borrows a selected owner");
+    if (reserve_membership_markers) for (const auto& [catalog, local] : intent.other.components)
+        if (fresh.contains(catalog) || fresh.contains(local)) reject("destination borrows a qualified component token");
     return result;
 }
-void intent_bound(const MixedWallRemovalIntent& intent) {
+void intent_bound(const MixedWallRemovalIntent& intent, bool wide_local_ids=false) {
     if (intent.wall_ids.empty() || intent.wall_ids.size() > 128 ||
         intent.other.object_ids.size() > root_limit - intent.wall_ids.size() ||
         intent.other.components.size() > root_limit - intent.wall_ids.size() - intent.other.object_ids.size() ||
@@ -120,16 +152,18 @@ void intent_bound(const MixedWallRemovalIntent& intent) {
     if (!std::is_sorted(intent.other.components.begin(), intent.other.components.end()) ||
         std::adjacent_find(intent.other.components.begin(), intent.other.components.end()) != intent.other.components.end())
         reject("qualified components must be sorted and unique");
-    for (const auto& [catalog, local] : intent.other.components) { identity(catalog); identity(local); }
+    for (const auto& [catalog, local] : intent.other.components) {
+        identity(catalog); if (wide_local_ids) local_identity(local); else identity(local);
+    }
     (void)destinations(intent);
 }
-Json intent_json(const MixedWallRemovalIntent& intent) {
-    intent_bound(intent);
+Json intent_json(const MixedWallRemovalIntent& intent, bool wide_local_ids=false) {
+    intent_bound(intent, wide_local_ids);
     return {{"wall_ids", intent.wall_ids}, {"wall_additional_identities", intent.wall_additional_identities},
         {"other_object_ids", intent.other.object_ids}, {"components", intent.other.components},
         {"roof_additional_identities", intent.other.roof_additional_identities}};
 }
-MixedWallRemovalIntent intent_from_json(const Json& value) {
+MixedWallRemovalIntent intent_from_json(const Json& value, bool wide_local_ids=false) {
     fields(value, {"wall_ids", "wall_additional_identities", "other_object_ids", "components", "roof_additional_identities"});
     if (!value.at("wall_ids").is_array() || !value.at("other_object_ids").is_array() || !value.at("components").is_array() ||
         !value.at("wall_additional_identities").is_object() || !value.at("roof_additional_identities").is_object())
@@ -143,7 +177,7 @@ MixedWallRemovalIntent intent_from_json(const Json& value) {
     result.other.object_ids = value.at("other_object_ids").get<std::vector<std::string>>();
     result.other.components = value.at("components").get<std::vector<std::pair<std::string, std::string>>>();
     result.other.roof_additional_identities = value.at("roof_additional_identities").get<RoofRemovalAdditionalIdentities>();
-    if (intent_json(result).dump() != value.dump()) reject("intent is not canonical");
+    if (intent_json(result, wide_local_ids).dump() != value.dump()) reject("intent is not canonical");
     return result;
 }
 bool physical(const Entity& entity) {
@@ -472,13 +506,24 @@ void raw_bound(const ApplyEntityChanges& command) {
     json_bound(command_to_json(Command{command}));
 }
 Json envelope(const MixedWallRemovalIntent& intent, const ApplyEntityChanges& command,
-    bool complete_opening_hosted_removal=false, bool complete_corner_window_consequences=false) {
+    bool complete_opening_hosted_removal=false, bool complete_corner_window_consequences=false,
+    bool complete_component_phase_memberships=false,
+    const std::optional<std::pair<std::string, std::string>>& component_phase_choice=std::nullopt) {
+    if (component_phase_choice && !complete_component_phase_memberships)
+        reject("component phase choice requires membership completion");
+    if (complete_component_phase_memberships && (!complete_opening_hosted_removal || !complete_corner_window_consequences))
+        reject("membership completion requires opening-hosted and corner completion");
     if (complete_corner_window_consequences) complete_opening_hosted_removal = true;
-    if (complete_opening_hosted_removal) (void)destinations(intent, true, complete_corner_window_consequences);
-    Json result{{"version", complete_corner_window_consequences ? 49 : complete_opening_hosted_removal ? 39 : 37}, {"kind", "mixed_wall_deletion"}, {"expected_revision", command.expected_revision},
-        {"message", command.message}, {"intent", intent_json(intent)}, {"proof", command_to_json(Command{command})}};
+    if (complete_opening_hosted_removal) (void)destinations(intent, true, complete_corner_window_consequences, complete_component_phase_memberships);
+    Json result{{"version", complete_component_phase_memberships ? 55 : complete_corner_window_consequences ? 49 : complete_opening_hosted_removal ? 39 : 37}, {"kind", "mixed_wall_deletion"}, {"expected_revision", command.expected_revision},
+        {"message", command.message}, {"intent", intent_json(intent, complete_component_phase_memberships)}, {"proof", command_to_json(Command{command})}};
     if (complete_opening_hosted_removal) result["complete_opening_hosted_removal"] = true;
     if (complete_corner_window_consequences) result["complete_corner_window_consequences"] = true;
+    if (complete_component_phase_memberships) {
+        result["complete_hosted_catalog_consequences"] = true;
+        result["complete_component_phase_memberships"] = true;
+        result["component_phase_choice"] = choice_json(component_phase_choice);
+    }
     json_bound(result);
     return result;
 }
@@ -518,11 +563,121 @@ void validate_mixed_wall_removal_source_admission(const Entities& actual,bool in
     }
 }
 
+void validate_mixed_wall_removal_component_catalog_source_admission(const Entities& actual) {
+    Budget raw; source_bound(actual, raw);
+    AssemblyCatalogTransferBudget catalogs;
+    catalog_admission(actual, catalogs, source_passes);
+}
+
+std::optional<std::pair<std::string, std::string>> derive_mixed_wall_removal_component_phase_choice(
+    const Entities& actual, const std::vector<std::string>& wall_ids, const std::vector<std::string>& opening_ids,
+    const ArchitecturalSelectionRemovalIntent& other,
+    const std::optional<std::pair<std::string, std::string>>& required_component_phase_choice) try {
+    if (wall_ids.empty() || wall_ids.size() > 128 || opening_ids.size() > root_limit - wall_ids.size() ||
+        other.object_ids.size() > root_limit - wall_ids.size() - opening_ids.size() ||
+        other.components.size() > root_limit - wall_ids.size() - opening_ids.size() - other.object_ids.size())
+        reject("component choice requires bounded actual mixed roots");
+    Ids selected;
+    for (const auto* ids : {&wall_ids, &opening_ids, &other.object_ids}) {
+        sorted_ids(*ids);
+        for (const auto& id : *ids) if (!selected.insert(id).second) reject("component choice root lanes overlap");
+    }
+    if (!std::is_sorted(other.components.begin(), other.components.end()) ||
+        std::adjacent_find(other.components.begin(), other.components.end()) != other.components.end())
+        reject("component choice qualified roots must be sorted and unique");
+    for (const auto& [catalog, local] : other.components) { identity(catalog); local_identity(local); }
+    (void)choice_json(required_component_phase_choice);
+    validate_mixed_wall_removal_component_catalog_source_admission(actual);
+    Ids retired(wall_ids.begin(), wall_ids.end());
+    for (const auto& id : wall_ids) {
+        const auto found = actual.find(id);
+        if (found == actual.end() || found->second.type != "wall" || found->second.required)
+            reject("component choice requires actual active nonrequired walls");
+    }
+    for (const auto& id : opening_ids) {
+        const auto found = actual.find(id);
+        if (found == actual.end() || found->second.type != "opening") reject("component choice requires actual semantic opening roots");
+    }
+    for (const auto& id : other.object_ids) {
+        const auto found = actual.find(id);
+        if (found == actual.end() || (!(physical(found->second) && found->second.type != "wall") &&
+            corner_owner(actual, found->second).empty())) reject("component choice requires actual non-wall architectural roots");
+    }
+    retired.insert(opening_ids.begin(), opening_ids.end());
+    retired.insert(other.object_ids.begin(), other.object_ids.end());
+    // Actual wall openings and complete owner/two-cut corner aggregates are
+    // closure evidence, including a bare managed cut selected as a root.
+    for (const auto& [id, entity] : actual) if (entity.type == "opening" || entity.type == "door" || entity.type == "window") {
+        std::string host, error;
+        if (!read_document_wall_id(entity, host, error)) reject(error);
+        if (retired.contains(host)) retired.insert(id);
+    }
+    for (const auto& [id, entity] : actual) if (entity.type == "corner_window") {
+        const auto corner = parse_corner_window(entity);
+        if (retired.contains(id) || std::any_of(corner.wall_ids.begin(), corner.wall_ids.end(),
+            [&](const auto& host) { return retired.contains(host); }) ||
+            std::any_of(corner.opening_ids.begin(), corner.opening_ids.end(),
+                [&](const auto& cut) { return retired.contains(cut); })) {
+            retired.insert(id); retired.insert(corner.opening_ids.begin(), corner.opening_ids.end());
+        }
+    }
+    for (const auto& [id, entity] : actual) if (entity.type == "railing") {
+        bool reached = false;
+        for (const auto* key : {"host", "landing_host"}) {
+            const auto binding = entity.properties.find(key);
+            if (binding == entity.properties.end() || !binding->is_object()) continue;
+            const auto stair = binding->find("stair_id");
+            reached = reached || (stair != binding->end() && stair->is_string() &&
+                retired.contains(stair->get_ref<const std::string&>()));
+        }
+        // Retained future/opaque railings do not lend topology authority.
+        // An actual reached host binding must pass its complete typed reader.
+        if (!reached) continue;
+        const auto rail = decode_railing_properties(id, entity.properties);
+        const auto host = rail.host ? rail.host->stair_id : rail.landing_host ? rail.landing_host->stair_id : std::string{};
+        if (!host.empty() && retired.contains(host)) retired.insert(id);
+    }
+    if (retired.size() > fresh_limit) reject("physical retirement closure budget exceeded");
+    std::set<AssemblyPhaseRoot> roots(other.components.begin(), other.components.end());
+    for (const auto& [id, entity] : actual) if (entity.type == "assembly_model") {
+        const auto model = AssemblyModel::from_json(entity.properties.at("model"));
+        for (const auto& row : model.instances()) {
+            if (row.placement && retired.contains(row.placement->host_entity_id)) {
+                if (roots.size() >= fresh_limit && !roots.contains({id, row.id})) reject("component retirement closure budget exceeded");
+                roots.emplace(id, row.id);
+            }
+        }
+    }
+    const auto choice = derive_physical_retirement_component_phase_choice(actual,
+        std::vector<std::string>(retired.begin(), retired.end()), std::vector<AssemblyPhaseRoot>(roots.begin(), roots.end()));
+    if (required_component_phase_choice && required_component_phase_choice != choice)
+        reject("supplied component choice differs from actual selected retirement closure");
+    return choice;
+} catch (const Json::exception& error) {
+    reject(std::string("malformed original-source component closure: ") + error.what());
+}
+
+std::optional<std::pair<std::string, std::string>> derive_mixed_wall_removal_component_phase_choice(
+    const Entities& actual, const MixedWallRemovalIntent& intent,
+    const std::optional<std::pair<std::string, std::string>>& required_component_phase_choice) {
+    intent_bound(intent, true); json_bound(intent_json(intent, true));
+    return derive_mixed_wall_removal_component_phase_choice(actual, intent.wall_ids, {}, intent.other,
+        required_component_phase_choice);
+}
+
 Entities replay_mixed_wall_removal(const Entities& actual, const MixedWallRemovalIntent& intent,
-    bool complete_opening_hosted_removal, bool complete_corner_window_consequences) {
+    bool complete_opening_hosted_removal, bool complete_corner_window_consequences,
+    bool complete_component_phase_memberships,
+    const std::optional<std::pair<std::string, std::string>>& required_component_phase_choice) {
     try {
-        intent_bound(intent); json_bound(intent_json(intent));
+        if (required_component_phase_choice && !complete_component_phase_memberships)
+            reject("component phase choice requires membership completion");
+        if (complete_component_phase_memberships && (!complete_opening_hosted_removal || !complete_corner_window_consequences))
+            reject("membership completion requires opening-hosted and corner completion");
+        intent_bound(intent, complete_component_phase_memberships); json_bound(intent_json(intent, complete_component_phase_memberships));
         Budget budget; source_bound(actual, budget);
+        AssemblyCatalogTransferBudget catalog_budget;
+        if (complete_component_phase_memberships) catalog_admission(actual, catalog_budget, source_passes);
         for (const auto& id : intent.wall_ids) {
             const auto found = actual.find(id);
             if (found == actual.end() || found->second.type != "wall") reject("wall selection requires actual physical owners: " + id);
@@ -537,25 +692,30 @@ Entities replay_mixed_wall_removal(const Entities& actual, const MixedWallRemova
             selected_roof = selected_roof || found->second.type == "roof";
         }
         if (!selected_roof && !intent.other.roof_additional_identities.empty()) reject("roof destinations lack a selected roof");
-        const auto fresh = destinations(intent);
+        const auto fresh = complete_component_phase_memberships ? destinations(intent, true, true, true) : destinations(intent);
         validate_physical_wall_join_removal_identity_lifetime(actual, {}, 0, fresh);
         // All cumulative native and expansion consequences are analytically
         // reserved before wall, join, roof inspection or component factories.
+        const auto component_phase_choice = complete_component_phase_memberships ?
+            derive_mixed_wall_removal_component_phase_choice(actual, intent.wall_ids, {}, intent.other, required_component_phase_choice) :
+            std::optional<std::pair<std::string, std::string>>{};
         analytical_work(actual, budget, complete_opening_hosted_removal || complete_corner_window_consequences,
             complete_corner_window_consequences);
         // Completion-only proof names must be reserved before either native
         // leaf. Sources that qualify for historical v37 retain its name domain.
         if (complete_corner_window_consequences ||
             (complete_opening_hosted_removal && needs_opening_hosted_lane(actual, intent)))
-            (void)destinations(intent, true, complete_corner_window_consequences);
+            (void)destinations(intent, true, complete_corner_window_consequences, complete_component_phase_memberships);
         const auto original_aliases = embedded_assembly_presentation_ids(actual);
         for (const auto& key : intent.other.components)
             if (!original_aliases.contains(key)) reject("selected qualified component is missing from actual source");
         auto wall = complete_corner_window_consequences ?
-            replay_complete_physical_walls_deletion(actual, intent.wall_ids, intent.wall_additional_identities, true, true, true) :
+            replay_complete_physical_walls_deletion(actual, intent.wall_ids, intent.wall_additional_identities, true, true, true,
+                complete_component_phase_memberships, component_phase_choice) :
             complete_opening_hosted_removal ?
             replay_complete_physical_walls_deletion(actual, intent.wall_ids, intent.wall_additional_identities, true) :
             replay_complete_physical_walls_deletion(actual, intent.wall_ids, intent.wall_additional_identities);
+        if (complete_component_phase_memberships) catalog_admission(wall, catalog_budget);
         const auto wall_aliases = embedded_assembly_presentation_ids(wall);
         auto other = intent.other;
         if (complete_corner_window_consequences) {
@@ -575,12 +735,17 @@ Entities replay_mixed_wall_removal(const Entities& actual, const MixedWallRemova
             return original_aliases.contains(key) && !wall_aliases.contains(key);
         });
         std::vector<Entities> candidates; candidates.push_back(std::move(wall));
-        if (!other.object_ids.empty() || !other.components.empty())
-            candidates.push_back(complete_corner_window_consequences ?
-                replay_architectural_selection_removal(actual, other, true, true, true, true, true) :
+        if (!other.object_ids.empty() || !other.components.empty()) {
+            auto remaining = complete_corner_window_consequences ?
+                replay_architectural_selection_removal(actual, other, true, true, true, true, true,
+                    complete_component_phase_memberships, complete_component_phase_memberships && selected_roof,
+                    complete_component_phase_memberships, component_phase_choice) :
                 complete_opening_hosted_removal ?
                 replay_architectural_selection_removal(actual, other, true) :
-                replay_architectural_selection_removal(actual, other));
+                replay_architectural_selection_removal(actual, other);
+            if (complete_component_phase_memberships) catalog_admission(remaining, catalog_budget);
+            candidates.push_back(std::move(remaining));
+        }
         else if (!other.roof_additional_identities.empty()) reject("roof destinations lack a selected roof");
         auto expected_aliases = original_aliases;
         const auto before_scope = constraint_phase_scope(actual);
@@ -597,7 +762,8 @@ Entities replay_mixed_wall_removal(const Entities& actual, const MixedWallRemova
         }
         auto result = candidates.size() == 1 ? std::move(candidates.front()) :
             compose_ordinary_architectural_removal_candidates(actual, candidates,
-                complete_corner_window_consequences, complete_corner_window_consequences);
+                complete_corner_window_consequences, complete_corner_window_consequences, complete_component_phase_memberships);
+        if (complete_component_phase_memberships) catalog_admission(result, catalog_budget);
         if (embedded_assembly_presentation_ids(result) != expected_aliases) reject("composition changed surviving aliases");
         if (constraint_phase_scope(result).inactive_owner_ids != expected_inactive) reject("composition changed protected inactive ownership");
         if (complete_corner_window_consequences) validate_corner_window_state(result);
@@ -614,17 +780,22 @@ Entities replay_mixed_wall_removal(const Entities& actual, const MixedWallRemova
 }
 
 ApplyEntityChanges prepare_mixed_wall_removal(const DocumentSnapshot& source, const MixedWallRemovalIntent& intent,
-    const std::string& message, bool complete_opening_hosted_removal, bool complete_corner_window_consequences) {
+    const std::string& message, bool complete_opening_hosted_removal, bool complete_corner_window_consequences,
+    bool complete_component_phase_memberships,
+    const std::optional<std::pair<std::string, std::string>>& required_component_phase_choice) {
     if (message.empty() || message.size() > 4096) reject("message requires 1..4096 bytes");
-    intent_bound(intent); snapshot_bound(source, intent);
+    intent_bound(intent, complete_component_phase_memberships); snapshot_bound(source, intent);
     auto result = raw_changes(source.entities(), replay_mixed_wall_removal(source.entities(), intent,
-        complete_opening_hosted_removal, complete_corner_window_consequences), source.revision(), message);
+        complete_opening_hosted_removal, complete_corner_window_consequences, complete_component_phase_memberships,
+        required_component_phase_choice), source.revision(), message);
     // Check bounded canonical retention syntax without repeating native replay.
     // The public encoder independently qualifies the exact preferred authority.
     const bool opening_hosted_proof = complete_corner_window_consequences ||
         (complete_opening_hosted_removal && needs_opening_hosted_lane(source.entities(), intent));
     (void)decode_mixed_wall_deletion_review_proof(envelope(intent, result, opening_hosted_proof,
-        complete_corner_window_consequences));
+        complete_corner_window_consequences, complete_component_phase_memberships,
+        complete_component_phase_memberships ? derive_mixed_wall_removal_component_phase_choice(source.entities(), intent.wall_ids,
+            {}, intent.other, required_component_phase_choice) : std::optional<std::pair<std::string, std::string>>{}));
     return result;
 }
 
@@ -632,11 +803,22 @@ DecodedMixedWallDeletionReviewProof decode_mixed_wall_deletion_review_proof(cons
     try {
         json_bound(proof);
         if (!proof.is_object() || !proof.contains("version") || !proof.at("version").is_number_integer() ||
-            (proof.at("version") != 37 && proof.at("version") != 39 && proof.at("version") != 49))
-            reject("requires explicit version37/39/49 mixed-wall proof");
-        const bool complete_corner_window_consequences = proof.at("version") == 49;
+            (proof.at("version") != 37 && proof.at("version") != 39 && proof.at("version") != 49 && proof.at("version") != 55))
+            reject("requires explicit version37/39/49/55 mixed-wall proof");
+        const bool complete_component_phase_memberships = proof.at("version") == 55;
+        const bool complete_corner_window_consequences = proof.at("version") == 49 || complete_component_phase_memberships;
         const bool complete_opening_hosted_removal = proof.at("version") == 39 || complete_corner_window_consequences;
-        if (complete_corner_window_consequences) {
+        std::optional<std::pair<std::string, std::string>> component_phase_choice;
+        if (complete_component_phase_memberships) {
+            fields(proof, {"version", "kind", "expected_revision", "message", "intent", "proof",
+                "complete_opening_hosted_removal", "complete_corner_window_consequences",
+                "complete_hosted_catalog_consequences", "complete_component_phase_memberships", "component_phase_choice"});
+            for (const auto* marker : {"complete_opening_hosted_removal", "complete_corner_window_consequences",
+                "complete_hosted_catalog_consequences", "complete_component_phase_memberships"})
+                if (!proof.at(marker).is_boolean() || proof.at(marker) != true)
+                    reject("version55 requires literal true catalog, membership, corner and opening-hosted completion");
+            component_phase_choice = choice_from_json(proof.at("component_phase_choice"));
+        } else if (complete_corner_window_consequences) {
             fields(proof, {"version", "kind", "expected_revision", "message", "intent", "proof",
                 "complete_opening_hosted_removal", "complete_corner_window_consequences"});
             if (!proof.at("complete_corner_window_consequences").is_boolean() ||
@@ -649,7 +831,7 @@ DecodedMixedWallDeletionReviewProof decode_mixed_wall_deletion_review_proof(cons
                 reject("version39 requires literal true opening-hosted completion");
         } else fields(proof, {"version", "kind", "expected_revision", "message", "intent", "proof"});
         if (proof.at("kind") != "mixed_wall_deletion") reject("requires explicit mixed-wall proof kind");
-        auto intent = intent_from_json(proof.at("intent"));
+        auto intent = intent_from_json(proof.at("intent"), complete_component_phase_memberships);
         const auto& child = proof.at("proof");
         fields(child, {"version", "kind", "expected_revision", "message", "entity_changes", "asset_changes"});
         if (!child.at("version").is_number_integer() || child.at("version") != 1 || child.at("kind") != "apply_entity_changes" ||
@@ -677,20 +859,38 @@ DecodedMixedWallDeletionReviewProof decode_mixed_wall_deletion_review_proof(cons
             actual_wall_joins.insert(change.entity.id);
         }
         if (actual_wall_joins != declared_wall_joins) reject("declared fresh wall join is missing from child");
-        if (envelope(intent, *raw, complete_opening_hosted_removal, complete_corner_window_consequences).dump() != proof.dump())
+        if (complete_component_phase_memberships) {
+            Ids declared, supplied;
+            for (const auto& [owner, rows] : destinations(intent, true, true, true)) {
+                (void)owner; declared.insert(rows.begin(), rows.end());
+            }
+            for (const auto& change : raw->entity_changes) {
+                const auto& id = change.kind == EntityChangeKind::erase ? change.entity_id : change.entity.id;
+                if (!declared.contains(id)) continue;
+                if (change.kind != EntityChangeKind::upsert) reject("declared fresh destination requires an upsert");
+                supplied.insert(id);
+            }
+            if (supplied != declared) reject("declared fresh wall/roof destination is missing from child");
+        }
+        if (envelope(intent, *raw, complete_opening_hosted_removal, complete_corner_window_consequences,
+            complete_component_phase_memberships, component_phase_choice).dump() != proof.dump())
             reject("proof is not canonical or differs from raw child");
-        return {*raw, std::move(intent), complete_opening_hosted_removal, complete_corner_window_consequences};
+        return {*raw, std::move(intent), complete_opening_hosted_removal, complete_corner_window_consequences,
+            complete_component_phase_memberships, component_phase_choice};
     } catch (const Json::exception& error) { reject(std::string("malformed proof: ") + error.what()); }
 }
 
 Json encode_mixed_wall_deletion_review_proof(const DocumentSnapshot& source, const MixedWallRemovalIntent& intent,
-    const Command& command, bool complete_opening_hosted_removal, bool complete_corner_window_consequences) {
+    const Command& command, bool complete_opening_hosted_removal, bool complete_corner_window_consequences,
+    bool complete_component_phase_memberships,
+    const std::optional<std::pair<std::string, std::string>>& required_component_phase_choice) {
     const auto* raw = std::get_if<ApplyEntityChanges>(&command);
     if (!raw || raw->expected_revision != source.revision()) reject("command lacks captured raw revision authority");
     raw_bound(*raw);
-    intent_bound(intent); snapshot_bound(source, intent);
+    intent_bound(intent, complete_component_phase_memberships); snapshot_bound(source, intent);
     const auto expected = raw_changes(source.entities(), replay_mixed_wall_removal(source.entities(), intent,
-        complete_opening_hosted_removal, complete_corner_window_consequences), source.revision(), raw->message);
+        complete_opening_hosted_removal, complete_corner_window_consequences, complete_component_phase_memberships,
+        required_component_phase_choice), source.revision(), raw->message);
     if (command_to_json(Command{expected}).dump() != command_to_json(command).dump()) reject("whole raw command differs from independent actual-source replay");
     bool opening_hosted_proof = complete_opening_hosted_removal;
     if (complete_opening_hosted_removal && !complete_corner_window_consequences && !needs_opening_hosted_lane(source.entities(), intent)) {
@@ -698,7 +898,10 @@ Json encode_mixed_wall_deletion_review_proof(const DocumentSnapshot& source, con
             source.revision(), raw->message);
         if (command_to_json(Command{legacy}).dump() == command_to_json(command).dump()) opening_hosted_proof = false;
     }
-    const auto result = envelope(intent, expected, opening_hosted_proof, complete_corner_window_consequences);
+    const auto result = envelope(intent, expected, opening_hosted_proof, complete_corner_window_consequences,
+        complete_component_phase_memberships, complete_component_phase_memberships ?
+            derive_mixed_wall_removal_component_phase_choice(source.entities(), intent.wall_ids, {}, intent.other,
+                required_component_phase_choice) : std::optional<std::pair<std::string, std::string>>{});
     (void)decode_mixed_wall_deletion_review_proof(result);
     return result;
 }
@@ -710,8 +913,11 @@ void validate_mixed_wall_deletion_review_source(const Entities& actual, const En
     raw_bound(*raw);
     const auto decoded = decode_mixed_wall_deletion_review_proof(retained_proof);
     if (command_to_json(Command{decoded.command}).dump() != command_to_json(command).dump()) reject("retained proof differs from whole raw command");
+    if (decoded.complete_component_phase_memberships && decoded.component_phase_choice !=
+        derive_mixed_wall_removal_component_phase_choice(actual, decoded.intent.wall_ids, {}, decoded.intent.other,
+            decoded.component_phase_choice)) reject("retained component choice differs from actual selected physical choice");
     const auto replayed = replay_mixed_wall_removal(actual, decoded.intent, decoded.complete_opening_hosted_removal,
-        decoded.complete_corner_window_consequences);
+        decoded.complete_corner_window_consequences, decoded.complete_component_phase_memberships, decoded.component_phase_choice);
     const auto expected = raw_changes(actual, replayed, decoded.command.expected_revision, decoded.command.message);
     if (command_to_json(Command{expected}).dump() != command_to_json(command).dump()) reject("raw command differs from independently replayed source consequences");
     if (!exact_entities(candidate, replayed)) reject("whole candidate differs from independent source replay");

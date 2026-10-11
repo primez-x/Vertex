@@ -1,4 +1,39 @@
-# Vertex project formats v1 through v214
+# Vertex project formats v1 through v215
+
+Reader215 retains complete ordinary/proposed wall deletion with component
+membership retirement. The closed geometry proofs are physical wall54,
+mixed wall55 and mixed wall/opening56. Each adds literal
+`complete_hosted_catalog_consequences:true`,
+`complete_component_phase_memberships:true` and nullable `component_phase_choice`
+to its preceding complete-corner inventory. The choice is an exact two-string
+pair derived from actual selected physical ownership, reached catalog/host
+ownership and declared rows;
+it is never caller-supplied phase authority. Every completion marker is true.
+Each leaf sees the original complete source; with a saved choice, retired
+declared rows must be sole active proposals in that choice. A null choice can
+retire declared rows only in an actual registry with no alternatives: each row
+must be an active existing baseline member with no alternative usage. A supplied
+choice cannot replace this actual null state. All reached catalog carriers and
+placement hosts, including undeclared rows and inherited opening/corner hosts,
+must be active and cannot belong to a foreign physical registry. Retained
+same-registry baseline carriers are permitted. Required companions change only to
+independently proved typed pruning. Baseline rows in an active alternative,
+inactive rows, other alternatives,
+opaque metadata and surviving catalog definitions/aliases remain protected.
+Historical proof versions preserve their original authority and local-ID grammar.
+Only mixed55/56 admit wider bounded catalog-local identities.
+
+Command57 retains completed ordinary intent2, including a no-room/no-drawing
+deletion. The inner intent has the historical seven fields plus literal
+`complete_wall_component_phase_memberships:true`; its selection binds only
+wall54/55/56. Its raw or reviewed base is independently reconstructed against
+the full original snapshot before any optional drawing consequences compose.
+Historical command46/intent1 still requires selected drawing rows. Room-review
+commands54/55/56 retain their matching complete geometry proof. Mixed3 can bind
+these exact new bases and command57; its selected roof children never promote
+their hosts. Reader215 scans current, nested, wrapped, retained and undone
+history, including histories after reader214 events. Portable extraction uses
+version213. Compilation and runtime round trips remain unqualified.
 
 Reader214 retains wall demolition inner6 under unchanged phase authoring16 and
 outer command34. Its exact fourteen fields are `version`, `wall_demolition`,

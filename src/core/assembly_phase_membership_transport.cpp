@@ -2,6 +2,7 @@
 
 #include "sketch/assembly_document_adapter.hpp"
 #include "sketch/constraint_phase_scope.hpp"
+#include "sketch/corner_window.hpp"
 
 #include <algorithm>
 #include <cctype>
@@ -186,6 +187,66 @@ void inherited_host(const Entities& entities, const Phases& phases,
     require(owner == phases.owners.end() || owner->second == registry,
         "assembly phase transport cannot encode cross-registry inherited host coupling");
 }
+void retirement_physical_owner(const Entities& entities, const Phases& phases,
+    const std::string& id, std::string_view registry) {
+    require(entities.contains(id), "assembly phase retirement requires an actual physical owner");
+    require(!phases.inactive.contains(id), "assembly phase retirement reached an inactive physical owner");
+    const auto owner = phases.owners.find(id);
+    require(owner == phases.owners.end() || owner->second == registry,
+        "assembly phase retirement reached a foreign physical registry");
+}
+void retirement_opening_wall(const Entities& entities, const Phases& phases,
+    const Entity& opening, std::string_view registry) {
+    require(opening.type == "opening" && opening.properties.is_object() &&
+        opening.properties.contains("wall_id") && opening.properties.at("wall_id").is_string(),
+        "assembly phase retirement opening placement has no actual wall");
+    const auto& wall_id = opening.properties.at("wall_id").get_ref<const std::string&>();
+    const auto wall = entities.find(wall_id);
+    require(wall != entities.end() && wall->second.type == "wall",
+        "assembly phase retirement opening placement references a missing actual wall");
+    retirement_physical_owner(entities, phases, wall_id, registry);
+}
+void retirement_corner_host(const Entities& entities, const Phases& phases,
+    const std::string& id, std::string_view registry) {
+    retirement_physical_owner(entities, phases, id, registry);
+    const auto corner = parse_corner_window(entities.at(id));
+    for (std::size_t leg = 0; leg < corner.opening_ids.size(); ++leg) {
+        const auto cut = entities.find(corner.opening_ids[leg]);
+        require(cut != entities.end() && cut->second.type == "opening" &&
+            cut->second.properties.is_object() &&
+            cut->second.properties.contains("corner_window_id") &&
+            cut->second.properties.at("corner_window_id") == id &&
+            cut->second.properties.contains("corner_leg") &&
+            cut->second.properties.at("corner_leg").is_number_integer() &&
+            cut->second.properties.at("corner_leg") == leg &&
+            cut->second.properties.contains("wall_id") &&
+            cut->second.properties.at("wall_id") == corner.wall_ids[leg],
+            "assembly phase retirement corner placement has inconsistent actual cuts");
+        retirement_physical_owner(entities, phases, cut->first, registry);
+        retirement_opening_wall(entities, phases, cut->second, registry);
+    }
+}
+void retirement_placement_host(const Entities& entities, const Phases& phases,
+    const std::string& id, std::string_view registry) {
+    const auto host = entities.find(id);
+    require(host != entities.end() && (is_complete_assembly_catalog_host_type(host->second.type) ||
+        host->second.type == "corner_window"),
+        "assembly phase retirement placement requires an actual supported host");
+    retirement_physical_owner(entities, phases, id, registry);
+    if (host->second.type == "corner_window") {
+        retirement_corner_host(entities, phases, id, registry);
+    } else if (host->second.type == "opening") {
+        retirement_opening_wall(entities, phases, host->second, registry);
+        const auto backlink = host->second.properties.find("corner_window_id");
+        if (backlink == host->second.properties.end()) return;
+        require(backlink->is_string(), "assembly phase retirement corner cut has no actual owner identity");
+        const auto& corner_id = backlink->get_ref<const std::string&>();
+        retirement_corner_host(entities, phases, corner_id, registry);
+        const auto corner = parse_corner_window(entities.at(corner_id));
+        require(std::find(corner.opening_ids.begin(), corner.opening_ids.end(), id) != corner.opening_ids.end(),
+            "assembly phase retirement corner cut is absent from its actual owner");
+    }
+}
 } // namespace
 
 void validate_assembly_phase_retirement_roots(const Entities& actual,
@@ -218,7 +279,14 @@ void validate_assembly_phase_retirement_roots(const Entities& actual,
         const auto actual_catalogs = catalogs(actual, reached_catalogs);
         std::map<std::string, AssemblyPhaseMembership, std::less<>> companions;
         for (const auto& root : retired_roots) {
-            (void)instance(actual_catalogs, root);
+            const auto& row = instance(actual_catalogs, root);
+            // Unlisted legacy rows have no companion partition to validate,
+            // but their actual physical carriers cannot borrow this choice.
+            // Retained active baseline carriers are permitted; they are not
+            // themselves physical retirement roots.
+            retirement_physical_owner(actual, phases, root.first, registry_id);
+            if (row.placement)
+                retirement_placement_host(actual, phases, row.placement->host_entity_id, registry_id);
             const auto owner = scope.owners.find(root);
             if (owner == scope.owners.end()) continue;
             require(owner->second.registry_id == registry_id,

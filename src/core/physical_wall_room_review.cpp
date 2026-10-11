@@ -676,18 +676,28 @@ void reserve_corner_wall_proof_names(const PhysicalWallJoinRemovalAdditionalIden
                 invalid("fresh join destination borrows the corner consequence proof field");
     }
 }
+void reserve_component_wall_proof_names(const PhysicalWallJoinRemovalAdditionalIdentities& additional) {
+    reserve_corner_wall_proof_names(additional);
+    for (const auto& [owner,rows]:additional) {
+        (void)owner;
+        for (const auto& destination:rows)
+            if (destination=="complete_hosted_catalog_consequences" || destination=="complete_component_phase_memberships" ||
+                destination=="component_phase_choice") invalid("fresh join destination borrows a component proof field");
+    }
+}
 std::vector<EntityChange> complete_physical_wall_deletion_changes(const Entities& source,const std::vector<std::string>& wall_ids,
     bool complete_join_removal=false,const PhysicalWallJoinRemovalAdditionalIdentities& additional_join_identities={},
     bool complete_opening_hosted_removal=false,bool complete_hosted_catalog_consequences=false,
     bool complete_corner_window_consequences=false,bool complete_component_phase_memberships=false,
-    const std::optional<std::pair<std::string,std::string>>& required_component_phase_choice=std::nullopt) {
+    const std::optional<std::pair<std::string,std::string>>& supplied_component_phase_choice=std::nullopt) {
     require_wall_component_membership_options(complete_opening_hosted_removal,complete_hosted_catalog_consequences,
-        complete_component_phase_memberships,required_component_phase_choice);
+        complete_component_phase_memberships,supplied_component_phase_choice);
     if (complete_opening_hosted_removal && !complete_join_removal)
         invalid("opening-hosted completion requires hosted and join completion");
     if (complete_corner_window_consequences && !complete_join_removal)
         invalid("corner consequences require hosted and join completion");
     if (complete_corner_window_consequences) reserve_corner_wall_proof_names(additional_join_identities);
+    if (complete_component_phase_memberships) reserve_component_wall_proof_names(additional_join_identities);
     if (!complete_join_removal && !additional_join_identities.empty()) invalid("fresh join identities require join completion");
     bound_complete_wall_deletion_source(source);
     AssemblyCatalogTransferBudget component_catalog_budget;
@@ -695,6 +705,9 @@ std::vector<EntityChange> complete_physical_wall_deletion_changes(const Entities
         admit_wall_component_catalogs(source,component_catalog_budget);
         (void)resolve_assembly_phase_memberships(source);
     }
+    const auto required_component_phase_choice=complete_component_phase_memberships ?
+        derive_physical_walls_deletion_component_phase_choice(source,wall_ids,supplied_component_phase_choice) :
+        supplied_component_phase_choice;
     if (wall_ids.empty() || wall_ids.size()>128) invalid("deletion requires one to 128 physical walls");
     const auto scope=constraint_phase_scope(source);
     const auto organization=organize_project(source);
@@ -2110,7 +2123,11 @@ Json room_review_geometry_proof(const DocumentSnapshot& source,const Command& ge
             if (std::get<ApplyEntityChanges>(decoded).expected_revision!=source.revision() ||
                 command_to_json(decoded).dump()!=command_to_json(geometry_command).dump())
                 invalid("explicit wall deletion proof differs from the captured raw geometry command");
-            const auto admitted=encode_physical_wall_deletion_review_proof(source,geometry_command);
+            const bool components=retained_geometry_proof.at("version")==54;
+            const auto choice=components && !retained_geometry_proof.at("component_phase_choice").is_null() ?
+                std::optional{retained_geometry_proof.at("component_phase_choice").get<std::pair<std::string,std::string>>()} :
+                std::optional<std::pair<std::string,std::string>>{};
+            const auto admitted=encode_physical_wall_deletion_review_proof(source,geometry_command,components,choice);
             if (admitted.dump()!=retained_geometry_proof.dump())
                 invalid("explicit wall deletion proof differs from complete captured-source admission");
             return retained_geometry_proof;
@@ -2122,7 +2139,7 @@ Json room_review_geometry_proof(const DocumentSnapshot& source,const Command& ge
                 command_to_json(Command{decoded.command}).dump()!=command_to_json(geometry_command).dump())
                 invalid("explicit mixed wall/opening proof differs from the captured raw geometry command");
             const auto admitted=encode_mixed_wall_opening_deletion_review_proof(source,decoded.intent,geometry_command,
-                decoded.complete_corner_window_consequences);
+                decoded.complete_corner_window_consequences,decoded.complete_component_phase_memberships,decoded.component_phase_choice);
             if (admitted.dump()!=retained_geometry_proof.dump())
                 invalid("explicit mixed wall/opening proof differs from complete captured-source admission");
             return retained_geometry_proof;
@@ -2132,7 +2149,8 @@ Json room_review_geometry_proof(const DocumentSnapshot& source,const Command& ge
             command_to_json(Command{decoded.command}).dump()!=command_to_json(geometry_command).dump())
             invalid("explicit mixed wall proof differs from the captured raw geometry command");
         const auto admitted=encode_mixed_wall_deletion_review_proof(source,decoded.intent,geometry_command,
-            decoded.complete_opening_hosted_removal,decoded.complete_corner_window_consequences);
+            decoded.complete_opening_hosted_removal,decoded.complete_corner_window_consequences,
+            decoded.complete_component_phase_memberships,decoded.component_phase_choice);
         if (admitted.dump()!=retained_geometry_proof.dump())
             invalid("explicit mixed wall proof differs from complete captured-source admission");
         return retained_geometry_proof;
@@ -2528,15 +2546,18 @@ namespace {
 void bound_wall_deletion_join_inference(const Entities& source,const std::vector<std::string>& wall_ids,
     bool complete_opening_hosted_removal=false,bool complete_hosted_catalog_consequences=false,
     bool complete_corner_window_consequences=false,bool complete_component_phase_memberships=false,
-    const std::optional<std::pair<std::string,std::string>>& required_component_phase_choice=std::nullopt) {
+    const std::optional<std::pair<std::string,std::string>>& supplied_component_phase_choice=std::nullopt) {
     require_wall_component_membership_options(complete_opening_hosted_removal,complete_hosted_catalog_consequences,
-        complete_component_phase_memberships,required_component_phase_choice);
+        complete_component_phase_memberships,supplied_component_phase_choice);
     bound_complete_wall_deletion_source(source);
     AssemblyCatalogTransferBudget component_catalog_budget;
     if (complete_component_phase_memberships) {
         admit_wall_component_catalogs(source,component_catalog_budget);
         (void)resolve_assembly_phase_memberships(source);
     }
+    const auto required_component_phase_choice=complete_component_phase_memberships ?
+        derive_physical_walls_deletion_component_phase_choice(source,wall_ids,supplied_component_phase_choice) :
+        supplied_component_phase_choice;
     const std::set<std::string> roots(wall_ids.begin(),wall_ids.end());
     const auto corner_owners=complete_corner_window_consequences ? affected_wall_corner_owners(source,roots) :
         std::vector<std::string>{};
@@ -2656,13 +2677,20 @@ PhysicalWallJoinRemovalAdditionalIdentities decode_wall_deletion_join_identities
 }
 PhysicalWallJoinRemovalAdditionalIdentities infer_wall_deletion_join_identities(
     const Entities& source,const std::vector<std::string>& wall_ids,const ApplyEntityChanges& ordinary,
-    bool complete_opening_hosted_removal=false,bool complete_corner_window_consequences=false) {
+    bool complete_opening_hosted_removal=false,bool complete_corner_window_consequences=false,
+    bool complete_component_phase_memberships=false,
+    const std::optional<std::pair<std::string,std::string>>& required_component_phase_choice=std::nullopt) {
     if (complete_corner_window_consequences)
         for (const auto& change:ordinary.entity_changes)
             if (change.kind==EntityChangeKind::upsert && !source.contains(change.entity.id) &&
                 change.entity.id=="complete_corner_window_consequences")
                 invalid("fresh join destination borrows the corner consequence proof field");
-    bound_wall_deletion_join_inference(source,wall_ids,complete_opening_hosted_removal,false,complete_corner_window_consequences);
+    if (complete_component_phase_memberships) for (const auto& change:ordinary.entity_changes)
+        if (change.kind==EntityChangeKind::upsert && !source.contains(change.entity.id) &&
+            (change.entity.id=="complete_hosted_catalog_consequences" || change.entity.id=="complete_component_phase_memberships" ||
+                change.entity.id=="component_phase_choice")) invalid("fresh join destination borrows a component proof field");
+    bound_wall_deletion_join_inference(source,wall_ids,complete_opening_hosted_removal,complete_component_phase_memberships,
+        complete_corner_window_consequences,complete_component_phase_memberships,required_component_phase_choice);
     const auto plan=inspect_physical_wall_join_removal(source,wall_ids);
     if (!plan.ready()) for (const auto& diagnostic:plan.diagnostics) if (diagnostic.blocking) invalid(diagnostic.reason);
     if (plan.source_join_ids.empty() && !complete_opening_hosted_removal && !complete_corner_window_consequences)
@@ -2735,6 +2763,204 @@ void require_retired_wall_corner_closure(const Entities& source,const Entities& 
 }
 } // namespace
 
+std::optional<std::pair<std::string,std::string>> derive_physical_retirement_component_phase_choice(
+    const Entities& actual,const std::vector<std::string>& physical_roots,
+    const std::vector<std::pair<std::string,std::string>>& component_roots,
+    const std::optional<std::pair<std::string,std::string>>& required_component_phase_choice) try {
+    bound_complete_wall_deletion_source(actual);
+    AssemblyCatalogTransferBudget catalog_budget;
+    admit_wall_component_catalogs(actual,catalog_budget);
+    if (physical_roots.size()>4096 || component_roots.size()>4096)
+        invalid("component phase retirement closure budget exceeded");
+    ids(physical_roots);
+    const std::set<std::string> deleted(physical_roots.begin(),physical_roots.end());
+    const auto phase=constraint_phase_scope(actual);
+    std::map<std::string,std::string,std::less<>> owners;
+    for (const auto& registry:phase.registries)
+        for (const auto& owner:registry.registered_entity_ids)
+            if (!owners.emplace(owner,registry.registry_id).second) invalid("overlapping actual retirement phase ownership");
+    std::optional<std::pair<std::string,std::string>> choice;
+    std::optional<std::string> reached_registry;
+    const auto merge_registry=[&](const std::string& registry,bool requires_choice) {
+        if (reached_registry && *reached_registry!=registry)
+            invalid("actual retirement closure spans foreign phase registries");
+        reached_registry=registry;
+        const auto saved=ModelPhases::from_json(actual.at(registry).properties.at("model"));
+        if (!saved.active_alternative()) {
+            if (requires_choice && !saved.alternatives().empty())
+                invalid("declared retirement row requires an actual saved alternative");
+            return;
+        }
+        const auto reached=std::pair{registry,*saved.active_alternative()};
+        if (choice && *choice!=reached) invalid("actual retirement closure spans foreign saved choices");
+        choice=reached;
+    };
+    std::set<std::string> reached(physical_roots.begin(),physical_roots.end());
+    std::set<AssemblyPhaseRoot> unique;
+    std::map<std::string,AssemblyModel,std::less<>> catalogs;
+    std::map<std::string,AssemblyPhaseMembership,std::less<>> ordinary_memberships;
+    for (const auto& root:component_roots) {
+        id(root.first);
+        if (!unique.insert(root).second) invalid("component retirement requires unique actual qualified roots");
+        const auto catalog=actual.find(root.first);
+        if (catalog==actual.end() || catalog->second.type!="assembly_model")
+            invalid("component retirement requires its actual catalog carrier");
+        if (!catalogs.contains(root.first)) catalogs.emplace(root.first,AssemblyModel::from_json(catalog->second.properties.at("model")));
+        const auto& rows=catalogs.at(root.first).instances();
+        const auto row=std::find_if(rows.begin(),rows.end(),[&](const auto& value){return value.id==root.second;});
+        if (row==rows.end()) invalid("component retirement requires an actual qualified catalog row");
+        reached.insert(root.first);
+        if (row->placement) {
+            const auto host=actual.find(row->placement->host_entity_id);
+            if (host==actual.end() || (!is_complete_assembly_catalog_host_type(host->second.type) && host->second.type!="corner_window"))
+                invalid("component retirement placement lacks an actual physical host");
+            reached.insert(host->first);
+        }
+        const auto owner=phase.assembly_memberships.owners.find(root);
+        if (owner!=phase.assembly_memberships.owners.end()) {
+            merge_registry(owner->second.registry_id,true);
+            const auto saved=ModelPhases::from_json(actual.at(owner->second.registry_id).properties.at("model"));
+            if (!saved.active_alternative()) {
+                // A genuinely ordinary registry has no alternative partition
+                // to borrow. Its actual baseline rows can retire by exact pruning.
+                const auto& companion=owner->second.membership_entity_id;
+                if (!ordinary_memberships.contains(companion))
+                    ordinary_memberships.emplace(companion,AssemblyPhaseMembership::from_json(
+                        actual.at(companion).properties.at("model")));
+                const auto& membership=ordinary_memberships.at(companion);
+                const auto state=phase.assembly_memberships.states.find(root);
+                if (!saved.alternatives().empty() || membership.registry_id()!=owner->second.registry_id ||
+                    std::find(membership.baseline_roots().begin(),membership.baseline_roots().end(),root)==membership.baseline_roots().end() ||
+                    state==phase.assembly_memberships.states.end() || state->second!=ModelPhase::existing ||
+                    phase.assembly_memberships.inactive_roots.contains(root))
+                    invalid("ordinary component retirement requires its actual active baseline membership");
+                for (const auto& alternative:membership.alternatives())
+                    if (std::find(alternative.proposed_roots.begin(),alternative.proposed_roots.end(),root)!=alternative.proposed_roots.end() ||
+                        std::find(alternative.demolished_roots.begin(),alternative.demolished_roots.end(),root)!=alternative.demolished_roots.end())
+                        invalid("ordinary component retirement cannot have alternative usage");
+            }
+        }
+    }
+    // Resolve inherited and aggregate ownership from actual source identities.
+    // These hosts can remain baseline; they do not become physical deletion roots.
+    std::vector<std::string> pending(reached.begin(),reached.end());
+    const auto reach=[&](const std::string& owner) {
+        id(owner);
+        if (reached.insert(owner).second) {
+            if (reached.size()>16384) invalid("component retirement reached-owner budget exceeded");
+            pending.push_back(owner);
+        }
+    };
+    for (std::size_t index=0;index<pending.size();++index) {
+        const auto owner_id=pending[index];
+        const auto found=actual.find(owner_id);
+        if (found==actual.end() || found->second.id!=owner_id) invalid("component retirement reached owner is absent from actual source");
+        const auto& entity=found->second;
+        if (phase.inactive_owner_ids.contains(owner_id)) invalid("component retirement reached owner belongs to an inactive design");
+        const auto owner=owners.find(owner_id);
+        if (owner!=owners.end()) {
+            merge_registry(owner->second,false);
+            const auto saved=ModelPhases::from_json(actual.at(owner->second).properties.at("model"));
+            if (deleted.contains(owner_id) && !saved.alternatives().empty()) {
+                if (!saved.active_alternative()) invalid("retired physical owner lacks an actual saved alternative");
+                const auto contains=[&](const auto& values){return std::find(values.begin(),values.end(),owner_id)!=values.end();};
+                if (contains(saved.baseline_ids())) invalid("physical retirement cannot delete a shared baseline owner");
+                std::size_t proposals{};
+                for (const auto& alternative:saved.alternatives()) {
+                    if (contains(alternative.demolished_ids)) invalid("retired physical owner has protected demolition usage");
+                    if (!contains(alternative.proposed_ids)) continue;
+                    if (alternative.id!=*saved.active_alternative()) invalid("retired physical owner has foreign proposal usage");
+                    ++proposals;
+                }
+                if (proposals!=1) invalid("retired physical owner requires sole actual proposal usage");
+            }
+        }
+        if (entity.type=="opening" || entity.type=="door" || entity.type=="window") {
+            std::string host,error;
+            if (!read_document_wall_id(entity,host,error)) invalid(error);
+            const auto wall=actual.find(host);
+            if (wall==actual.end() || wall->second.type!="wall") invalid("component retirement inherited host lacks an actual wall");
+            reach(host);
+            if (entity.type=="opening" && entity.properties.contains("corner_window_id")) {
+                const auto corner_id=entity.properties.at("corner_window_id").get<std::string>();
+                const auto corner_entity=actual.find(corner_id);
+                if (corner_entity==actual.end() || corner_entity->second.type!="corner_window") invalid("component retirement cut lacks its actual corner owner");
+                const auto corner=parse_corner_window(corner_entity->second);
+                if (std::find(corner.opening_ids.begin(),corner.opening_ids.end(),owner_id)==corner.opening_ids.end())
+                    invalid("component retirement cut is not owned by its actual corner");
+                reach(corner_id);
+            } else if (entity.type=="opening" && entity.properties.contains("corner_leg")) {
+                invalid("component retirement cut index lacks its actual corner owner");
+            }
+        } else if (entity.type=="corner_window") {
+            const auto corner=parse_corner_window(entity);
+            for (std::size_t leg=0;leg<corner.opening_ids.size();++leg) {
+                const auto cut=actual.find(corner.opening_ids[leg]);
+                const auto wall=actual.find(corner.wall_ids[leg]);
+                if (wall==actual.end() || wall->second.type!="wall" || cut==actual.end() || cut->second.type!="opening" ||
+                    !cut->second.properties.contains("corner_window_id") || cut->second.properties.at("corner_window_id")!=owner_id ||
+                    !cut->second.properties.contains("corner_leg") || !cut->second.properties.at("corner_leg").is_number_integer() ||
+                    cut->second.properties.at("corner_leg")!=leg || !cut->second.properties.contains("wall_id") ||
+                    cut->second.properties.at("wall_id")!=corner.wall_ids[leg])
+                    invalid("component retirement corner lacks its exact actual cuts and wall hosts");
+                reach(corner.opening_ids[leg]);reach(corner.wall_ids[leg]);
+            }
+        }
+    }
+    if (required_component_phase_choice) {
+        if ((reached_registry && !choice) || (choice && required_component_phase_choice!=choice) ||
+            (reached_registry && *reached_registry!=required_component_phase_choice->first))
+            invalid("component phase choice differs from the actual reached retirement owners");
+        choice=required_component_phase_choice;
+    }
+    if (choice) validate_assembly_phase_retirement_roots(actual,component_roots,choice->first,choice->second);
+    return choice;
+} catch (const Json::exception& error) {
+    invalid(std::string("malformed actual component retirement authority: ")+error.what());
+}
+
+std::optional<std::pair<std::string,std::string>> derive_physical_walls_deletion_component_phase_choice(
+    const Entities& actual,const std::vector<std::string>& wall_ids,
+    const std::optional<std::pair<std::string,std::string>>& required_component_phase_choice) {
+    // Raw source and all catalogs are admitted before phase/model resolution.
+    // The closure uses only actual physical hosts, never supplied child rows.
+    bound_complete_wall_deletion_source(actual);
+    AssemblyCatalogTransferBudget catalog_budget;
+    admit_wall_component_catalogs(actual,catalog_budget);
+    if (wall_ids.empty() || wall_ids.size()>128) invalid("component phase choice requires bounded actual wall roots");
+    auto sorted=wall_ids;std::sort(sorted.begin(),sorted.end());ids(sorted);
+    const std::set<std::string> roots(sorted.begin(),sorted.end());
+    std::set<std::string> retired=roots;
+    for (const auto& wall:roots) {
+        const auto found=actual.find(wall);
+        if (found==actual.end() || found->second.type!="wall" || found->second.required)
+            invalid("component phase choice requires actual active nonrequired walls");
+    }
+    for (const auto& [owner,entity]:actual) {
+        if (entity.type=="opening" || entity.type=="door" || entity.type=="window") {
+            std::string host,error;
+            if (!read_document_wall_id(entity,host,error)) invalid(error);
+            if (roots.contains(host)) retired.insert(owner);
+        } else if (entity.type=="corner_window") {
+            const auto corner=parse_corner_window(entity);
+            if (std::any_of(corner.wall_ids.begin(),corner.wall_ids.end(),[&](const auto& wall){return roots.contains(wall);})) {
+                retired.insert(owner);retired.insert(corner.opening_ids.begin(),corner.opening_ids.end());
+            }
+        }
+        if (retired.size()>4096) invalid("component wall retirement physical closure budget exceeded");
+    }
+    std::vector<AssemblyPhaseRoot> rows;
+    for (const auto& [catalog,entity]:actual) if (entity.type=="assembly_model") {
+        const auto model=AssemblyModel::from_json(entity.properties.at("model"));
+        for (const auto& row:model.instances()) if (row.placement && retired.contains(row.placement->host_entity_id)) {
+            if (rows.size()>=4096) invalid("component wall retirement row closure budget exceeded");
+            rows.emplace_back(catalog,row.id);
+        }
+    }
+    return derive_physical_retirement_component_phase_choice(actual,
+        std::vector<std::string>(retired.begin(),retired.end()),rows,required_component_phase_choice);
+}
+
 void preflight_physical_walls_deletion_join_inference(const Entities& actual,const std::vector<std::string>& wall_ids,
     bool complete_opening_hosted_removal,bool complete_hosted_catalog_consequences,bool complete_corner_window_consequences,
     bool complete_component_phase_memberships,
@@ -2748,11 +2974,15 @@ void preflight_physical_walls_deletion_join_inference(const Entities& actual,con
 }
 
 Command decode_physical_wall_deletion_review_proof(const Json& proof) {
-    const bool corners=proof.is_object() && proof.contains("version") && proof.at("version")==48;
+    const bool components=proof.is_object() && proof.contains("version") && proof.at("version")==54;
+    const bool corners=components || (proof.is_object() && proof.contains("version") && proof.at("version")==48);
     const bool opening_hosts=corners || (proof.is_object() && proof.contains("version") && proof.at("version")==38);
     const bool joins=opening_hosts || (proof.is_object() && proof.contains("version") && proof.at("version")==36);
     const bool complete=joins || (proof.is_object() && proof.contains("version") && proof.at("version")==35);
-    if (corners) keys(proof,{"version","kind","expected_revision","message","wall_ids","proof","complete_hosted_removal",
+    if (components) keys(proof,{"version","kind","expected_revision","message","wall_ids","proof","complete_hosted_removal",
+        "complete_join_removal","additional_join_identities","complete_opening_hosted_removal","complete_corner_window_consequences",
+        "complete_hosted_catalog_consequences","complete_component_phase_memberships","component_phase_choice"});
+    else if (corners) keys(proof,{"version","kind","expected_revision","message","wall_ids","proof","complete_hosted_removal",
         "complete_join_removal","additional_join_identities","complete_opening_hosted_removal","complete_corner_window_consequences"});
     else if (opening_hosts) keys(proof,{"version","kind","expected_revision","message","wall_ids","proof","complete_hosted_removal",
         "complete_join_removal","additional_join_identities","complete_opening_hosted_removal"});
@@ -2761,14 +2991,27 @@ Command decode_physical_wall_deletion_review_proof(const Json& proof) {
     else if (complete) keys(proof,{"version","kind","expected_revision","message","wall_ids","proof","complete_hosted_removal"});
     else keys(proof,{"version","kind","expected_revision","message","wall_ids","proof"});
     if (proof.dump().size()>1024*1024 || !proof.at("version").is_number_integer() ||
-        proof.at("version")!=(corners ? 48 : opening_hosts ? 38 : joins ? 36 : complete ? 35 : 31) || proof.at("kind")!="physical_wall_deletion" ||
+        proof.at("version")!=(components ? 54 : corners ? 48 : opening_hosts ? 38 : joins ? 36 : complete ? 35 : 31) || proof.at("kind")!="physical_wall_deletion" ||
         (complete && (!proof.at("complete_hosted_removal").is_boolean() || proof.at("complete_hosted_removal")!=true)) ||
         (joins && (!proof.at("complete_join_removal").is_boolean() || proof.at("complete_join_removal")!=true)) ||
         (opening_hosts && (!proof.at("complete_opening_hosted_removal").is_boolean() ||
-            (!corners && proof.at("complete_opening_hosted_removal")!=true))) ||
+            ((!corners || components) && proof.at("complete_opening_hosted_removal")!=true))) ||
         (corners && (!proof.at("complete_corner_window_consequences").is_boolean() || proof.at("complete_corner_window_consequences")!=true)) ||
         !proof.at("wall_ids").is_array() || proof.at("wall_ids").size()<(complete ? 1u : 2u) || proof.at("wall_ids").size()>128)
         invalid("unsupported grouped wall deletion proof");
+    if (components) {
+        for (const auto* field:{"complete_hosted_catalog_consequences","complete_component_phase_memberships"})
+            if (!proof.at(field).is_boolean() || proof.at(field)!=true) invalid("component deletion requires literal complete markers");
+        const auto& choice=proof.at("component_phase_choice");
+        if (!choice.is_null()) {
+            if (!choice.is_array() || choice.size()!=2 || !choice.at(0).is_string() || !choice.at(1).is_string())
+                invalid("component deletion choice requires an exact two-string pair or null");
+            id(choice.at(0).get<std::string>());
+            const auto& alternative=choice.at(1).get_ref<const std::string&>();
+            if (alternative.empty() || alternative.size()>4096 || alternative.find_first_not_of(" \t\r\n\f\v")==std::string::npos)
+                invalid("component deletion requires a bounded nonblank alternative");
+        }
+    }
     const auto wall_ids=proof.at("wall_ids").get<std::vector<std::string>>();
     ids(wall_ids);
     if (!std::is_sorted(wall_ids.begin(),wall_ids.end())) invalid("grouped wall identities must be sorted");
@@ -2783,6 +3026,7 @@ Command decode_physical_wall_deletion_review_proof(const Json& proof) {
     const auto additional=joins ? decode_wall_deletion_join_identities(proof.at("additional_join_identities")) :
         PhysicalWallJoinRemovalAdditionalIdentities{};
     if (corners) reserve_corner_wall_proof_names(additional);
+    if (components) reserve_component_wall_proof_names(additional);
     std::set<std::string> erased,changed,declared_fresh,upserted_fresh;
     for (const auto& [owner,rows]:additional) { (void)owner;declared_fresh.insert(rows.begin(),rows.end()); }
     for (const auto& change:ordinary.entity_changes) {
@@ -2801,18 +3045,26 @@ Command decode_physical_wall_deletion_review_proof(const Json& proof) {
     if (joins && upserted_fresh!=declared_fresh) invalid("declared fresh join is missing from the raw child");
     for (const auto& wall_id:wall_ids)
         if (!erased.contains(wall_id)) invalid("declared physical wall is not erased by the grouped child");
-    Json canonical{{"version",corners ? 48 : opening_hosts ? 38 : joins ? 36 : complete ? 35 : 31},{"kind","physical_wall_deletion"},
+    Json canonical{{"version",components ? 54 : corners ? 48 : opening_hosts ? 38 : joins ? 36 : complete ? 35 : 31},{"kind","physical_wall_deletion"},
         {"expected_revision",ordinary.expected_revision},{"message",ordinary.message},
         {"wall_ids",wall_ids},{"proof",command_to_json(command)}};
     if (complete) canonical["complete_hosted_removal"]=true;
     if (joins) { canonical["complete_join_removal"]=true;canonical["additional_join_identities"]=additional; }
     if (opening_hosts) canonical["complete_opening_hosted_removal"]=corners ? proof.at("complete_opening_hosted_removal") : Json(true);
     if (corners) canonical["complete_corner_window_consequences"]=true;
+    if (components) {
+        canonical["complete_hosted_catalog_consequences"]=true;canonical["complete_component_phase_memberships"]=true;
+        canonical["component_phase_choice"]=proof.at("component_phase_choice");
+    }
     if (canonical.dump()!=proof.dump()) invalid("grouped wall deletion proof is not canonical or differs from its child");
     return command;
 }
 
-Json encode_physical_wall_deletion_review_proof(const DocumentSnapshot& source,const Command& command) {
+Json encode_physical_wall_deletion_review_proof(const DocumentSnapshot& source,const Command& command,
+    bool complete_component_phase_memberships,
+    const std::optional<std::pair<std::string,std::string>>& required_component_phase_choice) {
+    if (required_component_phase_choice && !complete_component_phase_memberships)
+        invalid("required component phase choice needs explicit component deletion authority");
     if (!is_physical_wall_room_deletion_review_command(command)) invalid("unsupported direct wall deletion command");
     const auto& ordinary=std::get<ApplyEntityChanges>(command);
     std::vector<std::string> wall_ids;
@@ -2829,6 +3081,24 @@ Json encode_physical_wall_deletion_review_proof(const DocumentSnapshot& source,c
         if (change.kind==EntityChangeKind::upsert && change.entity.type=="wall_join" && !source.entities().contains(change.entity.id))
             fresh_joins.push_back(change.entity.id);
     validate_physical_wall_join_removal_identity_lifetime(source,fresh_joins);
+    if (complete_component_phase_memberships) {
+        const auto choice=derive_physical_walls_deletion_component_phase_choice(source.entities(),wall_ids);
+        if (required_component_phase_choice && required_component_phase_choice!=choice)
+            invalid("version54 choice differs from the actual selected retirement closure");
+        const auto additional=infer_wall_deletion_join_identities(source.entities(),wall_ids,ordinary,true,true,true,choice);
+        validate_physical_wall_join_removal_identity_lifetime(source,additional);
+        const ApplyEntityChanges expected{ordinary.expected_revision,
+            complete_physical_wall_deletion_changes(source.entities(),wall_ids,true,additional,true,true,true,true,choice),{},ordinary.message};
+        if (command_to_json(Command{expected}).dump()!=raw_proof.dump())
+            invalid("component-complete wall deletion differs from the whole original-source command");
+        Json proof{{"version",54},{"kind","physical_wall_deletion"},{"expected_revision",ordinary.expected_revision},
+            {"message",ordinary.message},{"wall_ids",wall_ids},{"proof",raw_proof},{"complete_hosted_removal",true},
+            {"complete_join_removal",true},{"additional_join_identities",additional},{"complete_opening_hosted_removal",true},
+            {"complete_corner_window_consequences",true},{"complete_hosted_catalog_consequences",true},
+            {"complete_component_phase_memberships",true},{"component_phase_choice",choice ? Json(*choice) : Json(nullptr)}};
+        (void)decode_physical_wall_deletion_review_proof(proof);
+        return proof;
+    }
     auto supplied_candidate=source.entities();
     for (const auto& change:ordinary.entity_changes) {
         if (change.kind==EntityChangeKind::erase) supplied_candidate.erase(change.entity_id);
@@ -2927,33 +3197,45 @@ void validate_physical_wall_room_deletion_review_source(const Entities& source,c
     bool complete_join_removal=false;
     bool complete_opening_hosted_removal=false;
     bool complete_corner_window_consequences=false;
+    bool complete_component_phase_memberships=false;
+    std::optional<std::pair<std::string,std::string>> required_component_phase_choice;
     PhysicalWallJoinRemovalAdditionalIdentities additional;
     if (!retained_proof.is_null() && retained_proof.is_object() && retained_proof.value("kind",std::string{})=="physical_wall_deletion") {
         const auto decoded=decode_physical_wall_deletion_review_proof(retained_proof);
         if (command_to_json(decoded).dump()!=raw_proof.dump() ||
             retained_proof.at("wall_ids").get<std::vector<std::string>>()!=wall_ids)
             invalid("grouped deletion proof differs from the exact original wall erasures");
-        complete_corner_window_consequences=retained_proof.at("version")==48;
+        complete_component_phase_memberships=retained_proof.at("version")==54;
+        complete_corner_window_consequences=complete_component_phase_memberships || retained_proof.at("version")==48;
         complete_opening_hosted_removal=complete_corner_window_consequences ?
             retained_proof.at("complete_opening_hosted_removal").get<bool>() : retained_proof.at("version")==38;
         complete_join_removal=complete_corner_window_consequences || complete_opening_hosted_removal || retained_proof.at("version")==36;
         complete_hosted_removal=complete_join_removal || retained_proof.at("version")==35;
         if (complete_join_removal) additional=decode_wall_deletion_join_identities(retained_proof.at("additional_join_identities"));
+        if (complete_component_phase_memberships) {
+            const auto choice=retained_proof.at("component_phase_choice").is_null() ?
+                std::optional<std::pair<std::string,std::string>>{} :
+                std::optional{retained_proof.at("component_phase_choice").get<std::pair<std::string,std::string>>()};
+            required_component_phase_choice=derive_physical_walls_deletion_component_phase_choice(source,wall_ids);
+            if (required_component_phase_choice!=choice)
+                invalid("version54 choice differs from actual selected wall ownership");
+        }
     } else {
         if (wall_ids.size()!=1) invalid("one wall deletion review cannot remove several physical walls");
         if (!retained_proof.is_null() && retained_proof.dump()!=raw_proof.dump())
             invalid("single wall deletion retained proof differs from its raw child");
     }
-    if (complete_opening_hosted_removal && !retired_opening_hosted_rows(source,candidate,wall_ids))
+    if (complete_opening_hosted_removal && !complete_component_phase_memberships && !retired_opening_hosted_rows(source,candidate,wall_ids))
         invalid("version38 requires actual retired qualified rows hosted on removed semantic openings");
-    if (complete_corner_window_consequences) {
+    if (complete_corner_window_consequences && !complete_component_phase_memberships) {
         require_retired_wall_corner_closure(source,candidate,wall_ids);
         if (complete_opening_hosted_removal!=retired_opening_hosted_rows(source,candidate,wall_ids))
             invalid("version48 opening-host authority must equal the actual qualified row consequences");
     }
     const ApplyEntityChanges expected{ordinary.expected_revision,
         complete_hosted_removal ? complete_physical_wall_deletion_changes(source,wall_ids,complete_join_removal,additional,
-            complete_opening_hosted_removal,false,complete_corner_window_consequences) : physical_wall_deletion_changes(source,wall_ids),
+            complete_opening_hosted_removal,complete_component_phase_memberships,complete_corner_window_consequences,
+            complete_component_phase_memberships,required_component_phase_choice) : physical_wall_deletion_changes(source,wall_ids),
         {},ordinary.message};
     if (complete_join_removal && !complete_opening_hosted_removal && !complete_corner_window_consequences && std::none_of(expected.entity_changes.begin(),expected.entity_changes.end(),[&](const auto& change) {
         if (change.kind==EntityChangeKind::upsert) return change.entity.type=="wall_join";
@@ -2967,9 +3249,9 @@ void validate_physical_wall_room_deletion_review_source(const Entities& source,c
         if (change.kind==EntityChangeKind::erase) replayed.erase(change.entity_id);
         else replayed.insert_or_assign(change.entity.id,change.entity);
     }
-    if (complete_opening_hosted_removal && !retired_opening_hosted_rows(source,replayed,wall_ids))
+    if (complete_opening_hosted_removal && !complete_component_phase_memberships && !retired_opening_hosted_rows(source,replayed,wall_ids))
         invalid("version38 requires actual retired qualified rows hosted on removed semantic openings");
-    if (complete_corner_window_consequences) require_retired_wall_corner_closure(source,replayed,wall_ids);
+    if (complete_corner_window_consequences && !complete_component_phase_memberships) require_retired_wall_corner_closure(source,replayed,wall_ids);
     if (!exact_entities(candidate,replayed)) invalid("wall deletion candidate differs from its original source consequences");
 }
 
@@ -2999,8 +3281,16 @@ ApplyEntityChanges prepare_physical_wall_deletion(const DocumentSnapshot& source
 
 ApplyEntityChanges prepare_physical_walls_deletion(const DocumentSnapshot& source,const std::vector<std::string>& wall_ids,bool complete_hosted_removal,
     bool complete_join_removal,const PhysicalWallJoinRemovalAdditionalIdentities& additional_join_identities,
-    bool complete_opening_hosted_removal,bool complete_corner_window_consequences) {
+    bool complete_opening_hosted_removal,bool complete_corner_window_consequences,bool complete_component_phase_memberships,
+    const std::optional<std::pair<std::string,std::string>>& required_component_phase_choice) {
     if (!source.is_editable()) invalid("captured document is read-only");
+    if (required_component_phase_choice && !complete_component_phase_memberships)
+        invalid("required component choice needs explicit component completion");
+    if (complete_component_phase_memberships) {
+        if (!complete_hosted_removal || !complete_join_removal)
+            invalid("component completion requires complete hosted and join removal");
+        complete_opening_hosted_removal=true;complete_corner_window_consequences=true;
+    }
     if (complete_join_removal && !complete_hosted_removal) invalid("join completion requires complete hosted removal");
     if (complete_opening_hosted_removal && (!complete_hosted_removal || !complete_join_removal))
         invalid("opening-hosted completion requires hosted and join completion");
@@ -3011,11 +3301,17 @@ ApplyEntityChanges prepare_physical_walls_deletion(const DocumentSnapshot& sourc
     if (complete_join_removal)
         validate_physical_wall_join_removal_identity_lifetime(source,additional_join_identities);
     auto roots=wall_ids;std::sort(roots.begin(),roots.end());
+    const auto choice=complete_component_phase_memberships ?
+        derive_physical_walls_deletion_component_phase_choice(source.entities(),roots) : required_component_phase_choice;
+    if (complete_component_phase_memberships && required_component_phase_choice && required_component_phase_choice!=choice)
+        invalid("version54 choice differs from the actual selected retirement closure");
     ApplyEntityChanges command{source.revision(),
         complete_hosted_removal ? complete_physical_wall_deletion_changes(source.entities(),roots,complete_join_removal,
-            additional_join_identities,complete_opening_hosted_removal,false,complete_corner_window_consequences) : physical_wall_deletion_changes(source.entities(),roots),{},
+            additional_join_identities,complete_opening_hosted_removal,complete_component_phase_memberships,complete_corner_window_consequences,
+            complete_component_phase_memberships,choice) : physical_wall_deletion_changes(source.entities(),roots),{},
         roots.size()==1 ? "Delete wall and attached objects" : "Delete walls and attached objects"};
-    const auto proof=encode_physical_wall_deletion_review_proof(source,Command{command});
+    const auto proof=encode_physical_wall_deletion_review_proof(source,Command{command},complete_component_phase_memberships,
+        choice);
     const auto candidate=Document::preview_command(source,Command{command});
     validate_physical_wall_room_deletion_review_source(source.entities(),candidate.entities(),Command{command},proof,
         source.uses_active_phase_constraints());

@@ -8,6 +8,7 @@
 #include "sketch/phase_roof_replacement.hpp"
 #include "sketch/phase_removal_selection.hpp"
 #include "sketch/phase_wall_demolition_authoring.hpp"
+#include "sketch/physical_wall_room_review.hpp"
 #include "sketch/roof_entity_codec.hpp"
 
 #include <algorithm>
@@ -278,7 +279,7 @@ Command closed_ordinary_deletion_command(const Json& value) {
     if (value.at("kind")!="apply_boundary_constraint_changes" ||
         (version!=27 && version!=30 && version!=31 && version!=35 && version!=36 && version!=37 &&
             version!=38 && version!=39 && version!=40 && version!=41 && version!=46 &&
-            version!=48 && version!=49 && version!=50))
+            version!=48 && version!=49 && version!=50 && version!=54 && version!=55 && version!=56 && version!=57))
         reject("ordinary deletion requires a raw command or closed wall-deletion room review");
     const auto command=command_from_json(value);
     if (command_to_json(command).dump()!=value.dump()) reject("ordinary deletion command is not canonical");
@@ -389,7 +390,7 @@ Json validate_mixed_selection_removal_intent(const Json& value) {
             count=authority.architectural.object_ids.size()+authority.architectural.components.size()+
                 authority.drawing.owner_ids.size()+authority.drawing.annotations.size();
             (void)closed_ordinary_deletion_command(value.at("ordinary_command"));
-            if (value.at("ordinary_command").at("version")==46) {
+            if (value.at("ordinary_command").at("version")==46 || value.at("ordinary_command").at("version")==57) {
                 const auto completed=validate_completed_ordinary_selection_removal_intent(
                     value.at("ordinary_command").at("ordinary_selection_removal_intent"));
                 if (completed.at("selection").dump()!=value.at("ordinary").dump())
@@ -504,6 +505,22 @@ Entities replay_mixed_selection_removal(const DocumentSnapshot& source,const Jso
         source.named_revisions().size()>4096 ||
         (source.saved_revision_optional() && *source.saved_revision_optional()>=source.history().size()))
         reject("captured source history/metadata inventory is invalid");
+    if (value.at("version")==3) {
+        const auto ordinary=decode_ordinary_selection_removal_intent(value.at("ordinary"));
+        const auto& proof=ordinary.wall_geometry_proof;
+        if (proof.is_object() &&
+            ((proof.value("kind",Json())=="physical_wall_deletion" && proof.value("version",Json())==54) ||
+             (proof.value("kind",Json())=="mixed_wall_deletion" && proof.value("version",Json())==55) ||
+             (proof.value("kind",Json())=="mixed_wall_opening_deletion" && proof.value("version",Json())==56))) {
+            // The closed ordinary decoder owns this context. Full raw/catalog
+            // admission precedes snapshot digests and any child roof decoding.
+            const auto& raw_choice=proof.at("component_phase_choice");
+            const auto choice=raw_choice.is_null() ? std::optional<std::pair<std::string,std::string>>{} :
+                std::optional{raw_choice.get<std::pair<std::string,std::string>>()};
+            if (derive_physical_walls_deletion_component_phase_choice(source.entities(),ordinary.wall_ids,choice)!=choice)
+                reject("ordinary wall membership choice differs from actual source");
+        }
+    }
     const auto source_digest=document_snapshot_digest(source);
     if (!source.is_editable() || source.saved_revision_optional()!=mixed_selection_removal_source_saved_revision(value) ||
         source_digest!=value.at("source_snapshot_digest") ||
@@ -618,7 +635,23 @@ DocumentSnapshot prepare_mixed_selection_removal_stage(const DocumentSnapshot& s
 std::vector<RoofOpeningGroupMember> mixed_selection_removal_remaining_children(const DocumentSnapshot& source,
     const OrdinarySelectionRemovalIntent& ordinary,const std::vector<RoofOpeningGroupMember>& members) {
     const auto authority=ordinary_selection_removal_authority(ordinary);
-    return mixed_selection_removal_remaining_children(source,authority.architectural,members);
+    const auto& proof=ordinary.wall_geometry_proof;
+    const bool component_memberships=proof.is_object() &&
+        ((proof.value("kind",Json())=="physical_wall_deletion" && proof.value("version",Json())==54) ||
+         (proof.value("kind",Json())=="mixed_wall_deletion" && proof.value("version",Json())==55) ||
+         (proof.value("kind",Json())=="mixed_wall_opening_deletion" && proof.value("version",Json())==56));
+    if (!component_memberships)
+        return mixed_selection_removal_remaining_children(source,authority.architectural,members);
+    const auto& raw_choice=proof.at("component_phase_choice");
+    const auto choice=raw_choice.is_null() ? std::optional<std::pair<std::string,std::string>>{} :
+        std::optional{raw_choice.get<std::pair<std::string,std::string>>()};
+    if (derive_physical_walls_deletion_component_phase_choice(source.entities(),ordinary.wall_ids,choice)!=choice)
+        reject("ordinary wall membership choice differs from actual source");
+    // Qualified component rows have already passed the closed new proof codec
+    // and aggregate authority checks. Only explicitly selected physical roofs
+    // can dominate a roof child; components do not grant roof ownership.
+    auto roofs=authority.architectural;roofs.components.clear();
+    return mixed_selection_removal_remaining_children(source,roofs,members);
 }
 Json make_mixed_selection_removal_intent(const DocumentSnapshot& source,const OrdinarySelectionRemovalIntent& ordinary,
     const Command& ordinary_command,const std::vector<RoofOpeningGroupMember>& members,const std::optional<Command>& child_command) {

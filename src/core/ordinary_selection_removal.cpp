@@ -68,7 +68,7 @@ bool has_other(const ArchitecturalSelectionRemovalIntent& intent) {
 bool has_drawing(const DrawingSelectionRemovalIntent& intent) {
     return !intent.owner_ids.empty() || !intent.annotations.empty();
 }
-void aggregate(const ArchitecturalDrawingRemovalIntent& intent) {
+void aggregate(const ArchitecturalDrawingRemovalIntent& intent,bool closed_component_memberships=false) {
     std::size_t count=0;
     for (const auto size:{intent.architectural.object_ids.size(),intent.architectural.components.size(),
             intent.drawing.owner_ids.size(),intent.drawing.annotations.size()}) {
@@ -78,7 +78,12 @@ void aggregate(const ArchitecturalDrawingRemovalIntent& intent) {
     if (!count) reject("selection is empty");
     // The old codec checks cross-lane ownership, fresh roof slots and canonical
     // qualified component/drawing order without interpreting physical roots.
-    (void)encode_architectural_drawing_removal_intent(intent);
+    if (closed_component_memberships) {
+        // The closed new wall codec already admitted every qualified pair.
+        // Retain actual aggregate counts and all other structural/drawing checks.
+        auto structural=intent;structural.architectural.components.clear();
+        (void)encode_architectural_drawing_removal_intent(structural);
+    } else (void)encode_architectural_drawing_removal_intent(intent);
 }
 void add_roots(ArchitecturalSelectionRemovalIntent& intent,const std::vector<std::string>& roots) {
     intent.object_ids.insert(intent.object_ids.end(),roots.begin(),roots.end());
@@ -103,6 +108,7 @@ struct WallAuthority {
     std::vector<std::string> wall_ids;
     PhysicalWallJoinRemovalAdditionalIdentities destinations;
     bool opening_hosts{};
+    bool component_memberships{};
 };
 void merge_destinations(PhysicalWallJoinRemovalAdditionalIdentities& target,
     const PhysicalWallJoinRemovalAdditionalIdentities& additional) {
@@ -121,23 +127,26 @@ WallAuthority wall_authority(const Json& proof,const std::vector<std::string>& c
     WallAuthority result;
     const auto& kind=proof.at("kind");
     const auto& version=proof.at("version");
-    if (kind=="physical_wall_deletion" && (version==31 || version==35 || version==36 || version==38 || version==48)) {
+    if (kind=="physical_wall_deletion" && (version==31 || version==35 || version==36 || version==38 || version==48 || version==54)) {
         result.command=decode_physical_wall_deletion_review_proof(proof);
         // Read only after the closed public decoder has admitted the inventory.
         result.wall_ids=proof.at("wall_ids").get<std::vector<std::string>>();
-        if (version==36 || version==38 || version==48)
+        if (version==36 || version==38 || version==48 || version==54)
             result.destinations=proof.at("additional_join_identities").get<PhysicalWallJoinRemovalAdditionalIdentities>();
-        result.opening_hosts=version==38 || (version==48 && proof.at("complete_opening_hosted_removal")==true);
-    } else if (kind=="mixed_wall_deletion" && (version==37 || version==39 || version==49)) {
+        result.opening_hosts=version==38 || ((version==48 || version==54) && proof.at("complete_opening_hosted_removal")==true);
+        result.component_memberships=version==54;
+    } else if (kind=="mixed_wall_deletion" && (version==37 || version==39 || version==49 || version==55)) {
         const auto decoded=decode_mixed_wall_deletion_review_proof(proof);
         result.command=Command{decoded.command};result.wall_ids=decoded.intent.wall_ids;
         result.architectural=decoded.intent.other;result.destinations=decoded.intent.wall_additional_identities;
         result.opening_hosts=decoded.complete_opening_hosted_removal;
-    } else if (kind=="mixed_wall_opening_deletion" && (version==40 || version==50)) {
+        result.component_memberships=version==55;
+    } else if (kind=="mixed_wall_opening_deletion" && (version==40 || version==50 || version==56)) {
         const auto decoded=decode_mixed_wall_opening_deletion_review_proof(proof);
         result.command=Command{decoded.command};result.wall_ids=decoded.intent.wall_ids;
         result.architectural=decoded.intent.other;add_roots(result.architectural,decoded.intent.opening_ids);
         result.destinations=decoded.intent.wall_additional_identities;result.opening_hosts=true;
+        result.component_memberships=version==56;
     } else if (kind=="apply_entity_changes" && version==1) {
         if (claimed_walls.size()!=1) reject("legacy raw deletion requires exactly one explicitly claimed wall");
         result.command=closed_raw(proof);result.wall_ids=claimed_walls;
@@ -151,6 +160,7 @@ WallAuthority wall_authority(const Json& proof,const std::vector<std::string>& c
 ArchitecturalDrawingRemovalIntent authority(const OrdinarySelectionRemovalIntent& intent) {
     if (intent.openings.has_value()==!intent.wall_geometry_proof.is_null()) reject("requires exactly one ordinary deletion mode");
     ArchitecturalDrawingRemovalIntent result;result.drawing=intent.drawing;
+    bool component_memberships=false;
     if (intent.openings) {
         if (!intent.wall_ids.empty()) reject("hosted opening mode cannot claim walls");
         const auto& opening=*intent.openings;canonical_ids(opening.opening_ids);
@@ -161,8 +171,19 @@ ArchitecturalDrawingRemovalIntent authority(const OrdinarySelectionRemovalIntent
     } else {
         const auto wall=wall_authority(intent.wall_geometry_proof,intent.wall_ids);
         result.architectural=wall.architectural;result.allow_manufactured_opening_hosts=wall.opening_hosts;
+        component_memberships=wall.component_memberships;
     }
-    aggregate(result);return result;
+    aggregate(result,component_memberships);return result;
+}
+void admit_component_membership_source(const Entities& actual,const OrdinarySelectionRemovalIntent& intent) {
+    if (intent.openings) return;
+    const auto wall=wall_authority(intent.wall_geometry_proof,intent.wall_ids);
+    if (!wall.component_memberships) return;
+    const auto& value=intent.wall_geometry_proof.at("component_phase_choice");
+    const auto choice=value.is_null() ? std::optional<std::pair<std::string,std::string>>{} :
+        std::optional{value.get<std::pair<std::string,std::string>>()};
+    if (derive_physical_walls_deletion_component_phase_choice(actual,wall.wall_ids,choice)!=choice)
+        reject("component phase choice differs from the complete actual wall source");
 }
 bool exact_entity(const Entity& a,const Entity& b) {
     return a==b && a.properties.dump()==b.properties.dump() && a.extensions.dump()==b.extensions.dump();
@@ -206,7 +227,7 @@ void actual_wall_roots(const Entities& actual,const Entities& candidate,const st
 bool room_deletion_version(const Json& version) {
     return version.is_number_integer() && (version==27 || version==30 || version==31 || version==35 ||
         version==36 || version==37 || version==38 || version==39 || version==40 ||
-        version==48 || version==49 || version==50);
+        version==48 || version==49 || version==50 || version==54 || version==55 || version==56);
 }
 Command closed_base(const Json& wire) {
     bounded_wire(wire);
@@ -320,9 +341,11 @@ DocumentSnapshot prepare_ordinary_selection_removal_stage(const DocumentSnapshot
     if (command_to_json(canonical).dump()!=wire.dump() ||
         std::visit([&](const auto& command){return command.expected_revision!=source.revision();},canonical))
         reject("original command does not retain canonical actual source revision authority");
+    admit_component_membership_source(source.entities(),intent);
     const bool active=source.uses_active_phase_constraints();
     Entities expected;
-    const bool completed=wire.at("kind")=="apply_boundary_constraint_changes" && wire.at("version")==46;
+    const bool completed=wire.at("kind")=="apply_boundary_constraint_changes" &&
+        (wire.at("version")==46 || wire.at("version")==57);
     if (completed) {
         const auto& typed=std::get<ApplyBoundaryConstraintChanges>(canonical);
         const auto retained=validate_completed_ordinary_selection_removal_intent(typed.ordinary_selection_removal_intent);
@@ -407,12 +430,23 @@ DocumentSnapshot prepare_ordinary_selection_removal_stage(const DocumentSnapshot
 
 Json validate_completed_ordinary_selection_removal_intent(const Json& value) try {
     bounded_wire(value);
-    fields(value,{"version","selection","base_command","source_snapshot_digest","source_authoring_digest",
-        "source_entities_digest","source_saved_revision"});
-    if (!value.at("version").is_number_integer() || value.at("version")!=1)
+    if (!value.is_object() || !value.contains("version") || !value.at("version").is_number_integer() ||
+        (value.at("version")!=1 && value.at("version")!=2))
         reject("unsupported completed intent version");
+    const bool memberships=value.at("version")==2;
+    if (memberships) {
+        fields(value,{"version","selection","base_command","source_snapshot_digest","source_authoring_digest",
+            "source_entities_digest","source_saved_revision","complete_wall_component_phase_memberships"});
+        if (!value.at("complete_wall_component_phase_memberships").is_boolean() ||
+            value.at("complete_wall_component_phase_memberships")!=true)
+            reject("completed wall component memberships require a literal completion marker");
+    } else fields(value,{"version","selection","base_command","source_snapshot_digest","source_authoring_digest",
+        "source_entities_digest","source_saved_revision"});
     const auto selection=decode_ordinary_selection_removal_intent(value.at("selection"));
-    if (!has_drawing(selection.drawing)) reject("completed deletion requires explicit selected drawing owners/rows");
+    if (memberships) {
+        if (selection.openings || !wall_authority(selection.wall_geometry_proof,selection.wall_ids).component_memberships)
+            reject("completed wall component memberships require an exact new wall deletion proof");
+    } else if (!has_drawing(selection.drawing)) reject("completed deletion requires explicit selected drawing owners/rows");
     const auto base=closed_base(value.at("base_command"));
     if (selection.openings) {
         if (!std::holds_alternative<ApplyEntityChanges>(base)) reject("hosted opening base must be a raw deletion");
@@ -443,6 +477,8 @@ std::optional<Revision> ordinary_selection_removal_source_saved_revision(const J
 Entities replay_completed_ordinary_selection_removal(const DocumentSnapshot& source,const Json& value) try {
     OrdinarySelectionRemovalReplayScope scope;
     const auto retained=validate_completed_ordinary_selection_removal_intent(value);
+    const auto selection=decode_ordinary_selection_removal_intent(retained.at("selection"));
+    admit_component_membership_source(source.entities(),selection);
     if (source.history().empty() || source.history().size()>4096 || source.revision()>=source.history().size() ||
         source.history()[source.revision()].revision!=source.revision() || source.assets().size()>65536 ||
         source.named_revisions().size()>4096 ||
@@ -456,14 +492,14 @@ Entities replay_completed_ordinary_selection_removal(const DocumentSnapshot& sou
         reject("captured complete source authority changed");
     const auto key=std::pair{source_digest,retained.dump()};
     if (const auto found=replay_memo->results.find(key);found!=replay_memo->results.end()) return found->second;
-    const auto selection=decode_ordinary_selection_removal_intent(retained.at("selection"));
     const auto base=closed_base(retained.at("base_command"));
     // The complete original deletion has its own source-derived expected map.
     // Never compare this base preview to the later drawing-composed result.
     auto without_drawing=selection;without_drawing.drawing={};
-    (void)prepare_ordinary_selection_removal_stage(source,without_drawing,base);
+    const auto base_stage=prepare_ordinary_selection_removal_stage(source,without_drawing,base);
     Entities expected;
-    if (selection.openings) expected=replay_drawing_selection_removal_with_openings(
+    if (!has_drawing(selection.drawing)) expected=base_stage.entities();
+    else if (selection.openings) expected=replay_drawing_selection_removal_with_openings(
         source.entities(),selection.drawing,*selection.openings,source.uses_active_phase_constraints());
     else if (std::holds_alternative<ApplyEntityChanges>(base))
         expected=replay_drawing_selection_removal_with_deletion_geometry(source.entities(),selection.drawing,
@@ -477,11 +513,15 @@ Entities replay_completed_ordinary_selection_removal(const DocumentSnapshot& sou
 ApplyBoundaryConstraintChanges prepare_completed_ordinary_selection_removal(const DocumentSnapshot& source,
     const OrdinarySelectionRemovalIntent& intent,const Command& base_command) {
     OrdinarySelectionRemovalReplayScope scope;
-    Json value={{"version",1},{"selection",encode_ordinary_selection_removal_intent(intent)},
+    (void)authority(intent);
+    admit_component_membership_source(source.entities(),intent);
+    const bool memberships=!intent.openings && wall_authority(intent.wall_geometry_proof,intent.wall_ids).component_memberships;
+    Json value={{"version",memberships ? 2 : 1},{"selection",encode_ordinary_selection_removal_intent(intent)},
         {"base_command",command_to_json(base_command)},{"source_snapshot_digest",document_snapshot_digest(source)},
         {"source_authoring_digest",document_authoring_source_digest_v2(source)},
         {"source_entities_digest",entity_map_digest(source.entities())},
         {"source_saved_revision",source.saved_revision_optional() ? Json(*source.saved_revision_optional()) : Json(nullptr)}};
+    if (memberships) value["complete_wall_component_phase_memberships"]=true;
     (void)validate_completed_ordinary_selection_removal_intent(value);
     const auto expected=replay_completed_ordinary_selection_removal(source,value);
     ApplyBoundaryConstraintChanges command;

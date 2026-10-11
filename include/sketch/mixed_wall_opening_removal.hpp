@@ -15,6 +15,13 @@ struct MixedWallOpeningRemovalIntent {
 
 using MixedWallOpeningRemovalEntities = std::map<std::string, Entity, std::less<>>;
 
+// Analytical source/closure authentication before controller native inspection;
+// destination allocations are unnecessary and grant no phase authority.
+[[nodiscard]] std::optional<std::pair<std::string, std::string>>
+derive_mixed_wall_opening_removal_component_phase_choice(const MixedWallOpeningRemovalEntities& actual,
+    const MixedWallOpeningRemovalIntent& intent,
+    const std::optional<std::pair<std::string, std::string>>& required_component_phase_choice=std::nullopt);
+
 // Complete immutable-source leaves. Openings on selected walls collapse into
 // wall consequences; independent openings retain their own complete leaf.
 // Other architectural/catalog roots are optional, retaining the architectural
@@ -26,28 +33,38 @@ using MixedWallOpeningRemovalEntities = std::map<std::string, Entity, std::less<
 // it never lends authority to independent single-cut opening erasure.
 [[nodiscard]] MixedWallOpeningRemovalEntities replay_mixed_wall_opening_removal(
     const MixedWallOpeningRemovalEntities& actual, const MixedWallOpeningRemovalIntent& intent,
-    bool active_phase_constraints, bool complete_corner_window_consequences=false);
+    bool active_phase_constraints, bool complete_corner_window_consequences=false,
+    bool complete_component_phase_memberships=false,
+    const std::optional<std::pair<std::string, std::string>>& required_component_phase_choice=std::nullopt);
 
 // Reserves all wall/roof slots against real source/history/assets before native
 // work, and validates deterministic asset-free raw changes through exact real
 // snapshot preview and geometry admission. Publication retains the source fence.
 [[nodiscard]] ApplyEntityChanges prepare_mixed_wall_opening_removal(
     const DocumentSnapshot& source, const MixedWallOpeningRemovalIntent& intent,
-    const std::string& message, bool complete_corner_window_consequences=false);
+    const std::string& message, bool complete_corner_window_consequences=false,
+    bool complete_component_phase_memberships=false,
+    const std::optional<std::pair<std::string, std::string>>& required_component_phase_choice=std::nullopt);
 
 struct DecodedMixedWallOpeningDeletionReviewProof {
     ApplyEntityChanges command;
     MixedWallOpeningRemovalIntent intent;
     bool complete_corner_window_consequences{false};
+    bool complete_component_phase_memberships{false};
+    std::optional<std::pair<std::string, std::string>> component_phase_choice;
 };
 
 // Closed version40 mixed_wall_opening_deletion envelope. Historical wall/mixed
 // proofs keep their existing meanings. The raw version-one child is asset-free.
 // Closed v50 explicitly completes corner owners/cuts and catalog consequences;
 // a managed-cut selection can retire only its complete actual owner aggregate.
+// Closed v56 also binds actual declared component retirement and exact
+// companion pruning; historical envelopes retain their local ASCII grammar.
 [[nodiscard]] nlohmann::json encode_mixed_wall_opening_deletion_review_proof(
     const DocumentSnapshot& source, const MixedWallOpeningRemovalIntent& intent,
-    const Command& command, bool complete_corner_window_consequences=false);
+    const Command& command, bool complete_corner_window_consequences=false,
+    bool complete_component_phase_memberships=false,
+    const std::optional<std::pair<std::string, std::string>>& required_component_phase_choice=std::nullopt);
 [[nodiscard]] DecodedMixedWallOpeningDeletionReviewProof decode_mixed_wall_opening_deletion_review_proof(
     const nlohmann::json& proof);
 

@@ -855,6 +855,25 @@ DrawingSelectionRemovalEntities replay_drawing_selection_removal_with_architectu
     }
 }
 namespace {
+void admit_deletion_component_membership_source(const Entities& actual,const Json& proof) {
+    if (!proof.is_object() || !proof.contains("kind") || !proof.contains("version")) return;
+    std::vector<std::string> walls;
+    if (proof.at("kind")=="physical_wall_deletion" && proof.at("version")==54) {
+        (void)decode_physical_wall_deletion_review_proof(proof);
+        walls=proof.at("wall_ids").get<std::vector<std::string>>();
+    } else if (proof.at("kind")=="mixed_wall_deletion" && proof.at("version")==55)
+        walls=decode_mixed_wall_deletion_review_proof(proof).intent.wall_ids;
+    else if (proof.at("kind")=="mixed_wall_opening_deletion" && proof.at("version")==56)
+        walls=decode_mixed_wall_opening_deletion_review_proof(proof).intent.wall_ids;
+    else return;
+    const auto& value=proof.at("component_phase_choice");
+    const auto choice=value.is_null() ? std::optional<std::pair<std::string,std::string>>{} :
+        std::optional{value.get<std::pair<std::string,std::string>>()};
+    // The analytical leaf bounds the entire raw actual map and admits every
+    // catalog before resolving phase ownership or entering geometry replay.
+    if (derive_physical_walls_deletion_component_phase_choice(actual,walls,choice)!=choice)
+        reject("component phase choice differs from the complete actual wall source");
+}
 Entities deletion_geometry_stage(const Entities& actual,const Json& proof,bool active) {
     Budget budget;budget.read(proof);
     if (budget.wire_upper_bound>intent_byte_limit || !proof.is_object() ||
@@ -872,6 +891,7 @@ Entities deletion_geometry_stage(const Entities& actual,const Json& proof,bool a
         }
         reject("unsupported deletion geometry authority");
     }();
+    admit_deletion_component_membership_source(actual,proof);
     const auto* raw=std::get_if<ApplyEntityChanges>(&command);
     if (!raw || !raw->asset_changes.empty()) reject("deletion geometry must retain an asset-free raw child");
     auto stage=actual;
@@ -905,6 +925,7 @@ DrawingSelectionRemovalEntities replay_drawing_selection_removal_with_deletion_g
     const DrawingSelectionRemovalEntities& actual,const DrawingSelectionRemovalIntent& drawing,
     const nlohmann::json& geometry_proof,bool active_phase_constraints) {
     try {
+        admit_deletion_component_membership_source(actual,geometry_proof);
         (void)replay(actual,actual,drawing,active_phase_constraints);
         const auto stage=deletion_geometry_stage(actual,geometry_proof,active_phase_constraints);
         return replay(actual,stage,drawing,active_phase_constraints,&stage);
@@ -914,6 +935,7 @@ DrawingSelectionRemovalEntities replay_drawing_selection_removal_with_deletion_r
     const DocumentSnapshot& source,const DrawingSelectionRemovalIntent& drawing,
     const nlohmann::json& geometry_proof,const Command& pure_room_review_command) {
     try {
+        admit_deletion_component_membership_source(source.entities(),geometry_proof);
         const auto active=source.uses_active_phase_constraints();
         (void)replay(source.entities(),source.entities(),drawing,active);
         (void)deletion_geometry_stage(source.entities(),geometry_proof,active);
@@ -923,7 +945,8 @@ DrawingSelectionRemovalEntities replay_drawing_selection_removal_with_deletion_r
         if (!review || !review->room_review_completion || !review->room_review_geometry_completion ||
             review->room_review_geometry_proof.dump()!=geometry_proof.dump() || review->expected_revision!=source.revision() ||
             (version!=27 && version!=30 && version!=31 && version!=35 && version!=36 && version!=37 &&
-                version!=38 && version!=39 && version!=40 && version!=48 && version!=49 && version!=50))
+                version!=38 && version!=39 && version!=40 && version!=48 && version!=49 && version!=50 &&
+                version!=54 && version!=55 && version!=56))
             reject("drawing composition requires the exact closed deletion room review");
         const auto canonical=command_from_json(wire);
         if (command_to_json(canonical).dump()!=wire.dump()) reject("deletion room review is not canonical");

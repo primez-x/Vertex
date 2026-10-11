@@ -14,6 +14,52 @@ changed source does not acquire runtime acceptance without later qualification.
 
 ## Current delivery state
 
+### October 11 ordinary wall/component retirement integration
+
+The preceding wall/component demolition integration is committed and pushed as
+6d4a2c41, with the exact remote branch ref verified. Current source work extends
+ordinary/proposed-only wall, mixed-wall and wall/opening Delete/Cut with closed
+geometry proofs54/55/56. The new authority derives one actual saved choice from
+selected physical ownership, reached catalog/host ownership and declared
+component rows before native
+work. Null is not permission to skip declared retirement checks. Every physical,
+opening, corner and object lane replays the immutable original source; required
+companions may change only through exact typed pruning. Historical commands
+retain their wire shape, identity grammar and authority.
+
+Controller integration prepares this complete authority before roof/join
+inspection and retains it through mandatory room decisions, independent drawing
+rows and mixed skylight composition. Command57/completed intent2 retains the
+new proof in no-room/no-drawing operations instead of publishing only an
+unqualified raw history event. Reader215/extraction213 cover current, nested,
+wrapped, retained and undone proofs, including history following reader214.
+Integrated source review found a P1: an undeclared legacy component row could
+belong to a foreign physical catalog registry while the mixed deletion proof
+claimed the selected wall's saved choice. The common retirement guard now
+checks each actual catalog and placement host before skipping unlisted rows,
+including actual opening parent walls and corner owners, cuts and walls. Active
+same-registry baseline carriers remain permitted. Independent source review
+approved this guard. The corresponding early choice derivation correction now
+checks the complete actual physical/catalog/placement/inherited-host closure
+before controller inspection or native replay. Review also found a P2: a valid
+ordinary baseline component in a registry without alternatives was refused.
+The shared helper now permits null only for actual existing baseline rows with
+no alternative usage in an actual registry with no alternatives. Physical
+retirement and retained carrier ownership checks still apply, and a supplied
+choice cannot replace that actual null state. Independent review approved the
+corrected integrated source with no confirmed P1/P2 remaining. Root reviewed
+the shared helper, default/explicit APIs, proof/history discrimination and
+existing source-kit link closure. Named whitespace checks pass. No runtime or
+production acceptance is claimed.
+
+No builds, tests, scripts, probes, native jobs, launches, packages or installations
+ran. The installed application is unchanged. Compilation, interaction, native
+admission, Undo/Redo, save/reopen and extraction remain unverified. Required
+component-companion editing quarantine and all ten production gates remain open.
+Mixed clipboard, detach/shared types, uncaptured copies, nested profiles,
+joint-only patches, deformed/cross-Site carry and the full production
+qualification remain required gaps.
+
 ### October 11 wall/component deletion integration
 
 The preceding coordinated component integration is committed and pushed as

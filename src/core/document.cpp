@@ -3154,8 +3154,8 @@ static Command room_review_geometry_command(const ApplyBoundaryConstraintChanges
     const bool grouped_deletion=proof.at("kind")=="physical_wall_deletion";
     const bool mixed_deletion=proof.at("kind")=="mixed_wall_deletion";
     const bool mixed_opening_deletion=proof.at("kind")=="mixed_wall_opening_deletion";
-    if ((mixed_opening_deletion && version!=40 && version!=50) || (mixed_deletion && version!=37 && version!=39 && version!=49) ||
-        (grouped_deletion && version!=31 && version!=35 && version!=36 && version!=38 && version!=48) || (!grouped_deletion && !mixed_deletion && !mixed_opening_deletion &&
+    if ((mixed_opening_deletion && version!=40 && version!=50 && version!=56) || (mixed_deletion && version!=37 && version!=39 && version!=49 && version!=55) ||
+        (grouped_deletion && version!=31 && version!=35 && version!=36 && version!=38 && version!=48 && version!=54) || (!grouped_deletion && !mixed_deletion && !mixed_opening_deletion &&
         version!=1 && version!=10 && version!=17 && version!=19 && version!=21 && version!=22 && version!=23 && version!=34 && version!=43 && version!=51 && version!=53 && !ordinary_room_wall_proof_version(version)))
         throw std::invalid_argument("Room review cannot wrap another geometry intent");
     const auto decoded=[&]()->Command {
@@ -3293,7 +3293,7 @@ static std::vector<nlohmann::json> phase_constraint_authoring_proofs(const Apply
         }
         // Removal envelopes own full snapshot-bound replay. Forty-five's child
         // is staged; completed ordinary/phase removal owns its own source fence.
-        else if (version==45 || version==46 || version==47) return;
+        else if (version==45 || version==46 || version==47 || version==57) return;
         // The new independent removal is one validated outer enclosure;
         // preserve the historical child walk's existing depth allowance.
         else if (version==41 || version==42) self(self,proof.at("proof"),depth);
@@ -3328,7 +3328,7 @@ static std::vector<nlohmann::json> mixed_clipboard_placement_proofs(const ApplyB
         if (proof.at("kind")!="apply_boundary_constraint_changes") return;
         const auto version=proof.at("version").get<int>();
         if (version==51) result.push_back(proof.at("clipboard_placement_intent"));
-        else if (version==45 || version==46 || version==47) return;
+        else if (version==45 || version==46 || version==47 || version==57) return;
         else if (version==41 || version==42) self(self,proof.at("proof"),depth);
         else if (version==19 || version==22) self(self,proof.at("proof"),depth+1);
         else if (proof.contains("room_review_geometry_proof"))
@@ -3687,9 +3687,9 @@ static bool has_complete_wall_join_deletion_proof(const ApplyBoundaryConstraintC
     const auto& proof=command.room_review_geometry_proof;
     return command.room_review_geometry_completion && proof.is_object() &&
         proof.contains("kind") && proof.contains("version") && proof.at("version").is_number_integer() &&
-        ((proof.at("kind")=="physical_wall_deletion" && (proof.at("version")==36 || proof.at("version")==38 || proof.at("version")==48)) ||
-         (proof.at("kind")=="mixed_wall_deletion" && (proof.at("version")==37 || proof.at("version")==39 || proof.at("version")==49)) ||
-         (proof.at("kind")=="mixed_wall_opening_deletion" && (proof.at("version")==40 || proof.at("version")==50)));
+        ((proof.at("kind")=="physical_wall_deletion" && (proof.at("version")==36 || proof.at("version")==38 || proof.at("version")==48 || proof.at("version")==54)) ||
+         (proof.at("kind")=="mixed_wall_deletion" && (proof.at("version")==37 || proof.at("version")==39 || proof.at("version")==49 || proof.at("version")==55)) ||
+         (proof.at("kind")=="mixed_wall_opening_deletion" && (proof.at("version")==40 || proof.at("version")==50 || proof.at("version")==56)));
 }
 static PhysicalWallJoinRemovalAdditionalIdentities complete_wall_join_deletion_destinations(
     const ApplyBoundaryConstraintChanges& command) {
@@ -3799,7 +3799,7 @@ static PhaseConstraintLifetimeProofs phase_constraint_lifetime_proofs(const Appl
                 result.ordinary_roof_destinations.insert(ids.begin(),ids.end());
             }
         }
-        else if (version==46) {
+        else if (version==46 || version==57) {
             const auto intent=validate_completed_ordinary_selection_removal_intent(proof.at("ordinary_selection_removal_intent"));
             const auto ordinary=ordinary_selection_removal_authority(
                 decode_ordinary_selection_removal_intent(intent.at("selection")));
@@ -3837,7 +3837,7 @@ static PhaseConstraintLifetimeProofs phase_constraint_lifetime_proofs(const Appl
             } else if (intent.at("version")==3) {
                 // The completed ordinary envelope reserves its own original-stage
                 // identities without supplying outer source or phase authority.
-                if (intent.at("ordinary_command").at("version")==46)
+                if (intent.at("ordinary_command").at("version")==46 || intent.at("ordinary_command").at("version")==57)
                     self(self,intent.at("ordinary_command"),depth);
                 const auto ordinary=ordinary_selection_removal_authority(
                     decode_ordinary_selection_removal_intent(intent.at("ordinary")));
@@ -8801,7 +8801,7 @@ nlohmann::json command_to_json(const Command& command) {
                     validate_ordinary_selection_removal_mode(typed);
                     if (typed.message.size()>1024 || !is_valid_utf8_without_nul(typed.message))
                         throw std::invalid_argument("Ordinary selection removal message is invalid");
-                    auto encoded=nlohmann::json{{"version",46},{"kind","apply_boundary_constraint_changes"},
+                    auto encoded=nlohmann::json{{"version",typed.ordinary_selection_removal_intent.at("version")==2 ? 57 : 46},{"kind","apply_boundary_constraint_changes"},
                         {"expected_revision",typed.expected_revision},{"message",typed.message},
                         {"ordinary_selection_removal_completion",true},
                         {"ordinary_selection_removal_intent",typed.ordinary_selection_removal_intent}};
@@ -9299,7 +9299,7 @@ Command command_from_json(const nlohmann::json& value,
     try {
         if (!value.is_object() || !value.contains("version") || !value.contains("kind") ||
             !value.at("version").is_number_integer() ||
-            (value.at("version")<1 || value.at("version")>53) ||
+            (value.at("version")<1 || value.at("version")>57) ||
             !value.at("kind").is_string()) {
             document_error(DocumentErrorCode::invalid_entity, "serialized command envelope is invalid");
         }
@@ -9474,7 +9474,7 @@ Command command_from_json(const nlohmann::json& value,
                     throw std::invalid_argument("Phase selection removal requires its canonical closed envelope");
                 return result;
             }
-            if (value.at("version")==46) {
+            if (value.at("version")==46 || value.at("version")==57) {
                 command_exact_fields(value,{"version","kind","expected_revision","message",
                     "ordinary_selection_removal_completion","ordinary_selection_removal_intent"},
                     DocumentErrorCode::invalid_entity,"serialized ordinary selection removal");
@@ -9698,7 +9698,7 @@ Command command_from_json(const nlohmann::json& value,
                 (void)command_to_json(Command{result});
                 return result;
             }
-            if (value.at("version")==18 || value.at("version")==24 || value.at("version")==25 || value.at("version")==26 || value.at("version")==27 || value.at("version")==28 || value.at("version")==29 || value.at("version")==30 || value.at("version")==31 || value.at("version")==32 || value.at("version")==35 || value.at("version")==36 || value.at("version")==37 || value.at("version")==38 || value.at("version")==39 || value.at("version")==40 || value.at("version")==44 || value.at("version")==48 || value.at("version")==49 || value.at("version")==50) {
+            if (value.at("version")==18 || value.at("version")==24 || value.at("version")==25 || value.at("version")==26 || value.at("version")==27 || value.at("version")==28 || value.at("version")==29 || value.at("version")==30 || value.at("version")==31 || value.at("version")==32 || value.at("version")==35 || value.at("version")==36 || value.at("version")==37 || value.at("version")==38 || value.at("version")==39 || value.at("version")==40 || value.at("version")==44 || value.at("version")==48 || value.at("version")==49 || value.at("version")==50 || value.at("version")==54 || value.at("version")==55 || value.at("version")==56) {
                 const bool geometry=value.at("version")!=18 && value.at("version")!=29;
                 const bool batch=value.at("version")==27;
                 if (batch)

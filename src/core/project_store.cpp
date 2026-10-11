@@ -381,6 +381,24 @@ std::uint32_t required_format_version_internal(const DocumentSnapshot& snapshot,
                 if (!value.is_object() || value.size()!=fields.size()) return false;
                 return std::all_of(fields.begin(),fields.end(),[&](const char* field) { return value.contains(field); });
             };
+            const bool ordinary_wall_membership_shape=
+                (closed_shape({"version","kind","expected_revision","message","wall_ids","proof",
+                    "complete_hosted_removal","complete_join_removal","additional_join_identities",
+                    "complete_opening_hosted_removal","complete_corner_window_consequences",
+                    "complete_hosted_catalog_consequences","complete_component_phase_memberships","component_phase_choice"}) &&
+                    value.at("kind")=="physical_wall_deletion" && value.at("version")==54) ||
+                (closed_shape({"version","kind","expected_revision","message","intent","proof",
+                    "complete_opening_hosted_removal","complete_corner_window_consequences",
+                    "complete_hosted_catalog_consequences","complete_component_phase_memberships","component_phase_choice"}) &&
+                    value.at("kind")=="mixed_wall_deletion" && value.at("version")==55) ||
+                (closed_shape({"version","kind","expected_revision","message","intent","proof",
+                    "complete_corner_window_consequences","complete_hosted_catalog_consequences",
+                    "complete_component_phase_memberships","component_phase_choice"}) &&
+                    value.at("kind")=="mixed_wall_opening_deletion" && value.at("version")==56);
+            if (ordinary_wall_membership_shape &&
+                value.at("complete_hosted_catalog_consequences").is_boolean() && value.at("complete_hosted_catalog_consequences")==true &&
+                value.at("complete_component_phase_memberships").is_boolean() && value.at("complete_component_phase_memberships")==true)
+                floor=std::max(floor,215U);
             if (closed_shape({"version","kind","object_ids","components","drawing",
                     "complete_wall_component_phase_memberships"}) && value.at("version")==4 &&
                 value.at("kind")=="phase_deletion" &&
@@ -750,9 +768,9 @@ std::uint32_t required_format_version_internal(const DocumentSnapshot& snapshot,
     };
     for (const auto& revision : snapshot.history()) {
         if (revision.phase_entity_import) required=std::max(required,160U);
-        if (required<214 && revision.boundary_geometry_edit)
+        if (required<215 && revision.boundary_geometry_edit)
             required=std::max(required,typed_edit_reader_floor(encode_boundary_geometry_edit(*revision.boundary_geometry_edit)));
-        if (required<214 && revision.boundary_constraint_changes)
+        if (required<215 && revision.boundary_constraint_changes)
             required=std::max(required,typed_edit_reader_floor(command_to_json(Command{*revision.boundary_constraint_changes})));
         if (required<122 && revision.boundary_geometry_edit)
             required=std::max(required,quantity_reader_floor(encode_boundary_geometry_edit(*revision.boundary_geometry_edit)));
@@ -1078,6 +1096,7 @@ std::uint32_t required_format_version_internal(const DocumentSnapshot& snapshot,
             };
             const auto profile_proof=[&](const auto& self,const nlohmann::json& proof,unsigned depth)->std::uint32_t {
                 if (depth>3 || !proof.is_object()) return 0;
+                if (typed_edit_reader_floor(proof)==215U) return 215U;
                 if (proof.value("kind",std::string{})=="apply_boundary_constraint_changes" &&
                     (proof.value("version",0)==43 || proof.value("version",0)==44)) return 173U;
                 if (proof.value("kind",std::string{})=="apply_boundary_constraint_changes" &&
@@ -3235,6 +3254,7 @@ bool verify_sqlite_schema(sqlite3* database, bool allow_recovery = false) {
          sqlite3_column_int(user_version.get(), 0) != 212 &&
          sqlite3_column_int(user_version.get(), 0) != 213 &&
          sqlite3_column_int(user_version.get(), 0) != 214 &&
+         sqlite3_column_int(user_version.get(), 0) != 215 &&
          sqlite3_column_int(user_version.get(), 0) != 207 &&
          sqlite3_column_int(user_version.get(), 0) != 202 &&
          sqlite3_column_int(user_version.get(), 0) != 200 &&
@@ -3960,6 +3980,8 @@ DocumentSnapshot read_snapshot(sqlite3* database, RecoveryLedger* recovery = nul
     // here and authenticate the manifest with its stored version below.
     const auto required_format = required_format_version_internal(snapshot, format_number < 28);
     if (required_format > format_number) {
+        if (required_format>=215)
+            storage_error(StorageErrorCode::unsupported_format,"This project requires reader 215 for ordinary wall and component membership retirement with drawing and room review");
         if (required_format>=214)
             storage_error(StorageErrorCode::unsupported_format,"This project requires reader 214 for complete wall and component phase deletion with room review");
         if (required_format>=213)

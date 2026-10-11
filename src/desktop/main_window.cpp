@@ -34053,7 +34053,22 @@ public:
             require_current();
             return finalizeSelectionRemoval(*final,prepared,clipboard,clipboard_text);
         }
-        intent.other=captureArchitecturalSelectionRemoval(source,std::move(other_ids),std::move(components));
+        const bool component_memberships=hasComponentPhaseMemberships(source);
+        ArchitecturalSelectionRemovalIntent ordinary_roster{other_ids,components,{}};
+        std::sort(ordinary_roster.object_ids.begin(),ordinary_roster.object_ids.end());
+        std::sort(ordinary_roster.components.begin(),ordinary_roster.components.end());
+        const auto component_choice=component_memberships ?
+            (!opening_ids.empty() ? derive_mixed_wall_opening_removal_component_phase_choice(source.entities(),
+                MixedWallOpeningRemovalIntent{intent.wall_ids,opening_ids,{},ordinary_roster}) :
+             !ordinary_roster.object_ids.empty() || !ordinary_roster.components.empty() ?
+                derive_mixed_wall_removal_component_phase_choice(source.entities(),
+                    MixedWallRemovalIntent{intent.wall_ids,{},ordinary_roster}) :
+                derive_physical_walls_deletion_component_phase_choice(source.entities(),intent.wall_ids)) :
+            std::optional<std::pair<std::string,std::string>>{};
+        intent.other=captureArchitecturalSelectionRemoval(source,std::move(other_ids),std::move(components),
+            component_memberships,component_memberships,component_choice);
+        preflight_physical_walls_deletion_join_inference(source.entities(),intent.wall_ids,true,true,true,
+            component_memberships,component_choice);
         const auto joins=inspect_physical_wall_join_removal(source.entities(),intent.wall_ids);
         if (!joins.ready()) {
             for (const auto& diagnostic:joins.diagnostics) if (diagnostic.blocking)
@@ -34087,31 +34102,32 @@ public:
         Command command;
         json proof=nullptr;
         if (!opening_ids.empty()) {
-            command=prepare_mixed_wall_opening_removal(source,opening_intent,message,true);
-            proof=encode_mixed_wall_opening_deletion_review_proof(source,opening_intent,command,true);
+            command=prepare_mixed_wall_opening_removal(source,opening_intent,message,true,component_memberships,component_choice);
+            proof=encode_mixed_wall_opening_deletion_review_proof(source,opening_intent,command,true,component_memberships,component_choice);
         } else if (!intent.other.object_ids.empty() || !intent.other.components.empty()) {
-            command=prepare_mixed_wall_removal(source,intent,message,true,true);
-            proof=encode_mixed_wall_deletion_review_proof(source,intent,command,true,true);
+            command=prepare_mixed_wall_removal(source,intent,message,true,true,component_memberships,component_choice);
+            proof=encode_mixed_wall_deletion_review_proof(source,intent,command,true,true,component_memberships,component_choice);
         } else {
             auto prepared=prepare_physical_walls_deletion(source,intent.wall_ids,true,true,
-                intent.wall_additional_identities,true,true);
+                intent.wall_additional_identities,true,true,component_memberships,component_choice);
             prepared.message=message;
             command=std::move(prepared);
         }
         const auto ordinary_geometry_proof=proof.is_null()
-            ? encode_physical_wall_deletion_review_proof(source,command) : proof;
-        const auto candidate=preview_physical_wall_room_review_geometry(source,command,proof);
+            ? encode_physical_wall_deletion_review_proof(source,command,component_memberships,component_choice) : proof;
+        const auto candidate=preview_physical_wall_room_review_geometry(source,command,ordinary_geometry_proof);
         const auto primary_wall=intent.wall_ids.front();
         const auto groups=affectedPhysicalWallRoomGroups(source,candidate.entities(),primary_wall,true);
         require_current();
         std::optional<Command> final=command;
         if (!groups.empty()) final=reviewPhysicalWallRoomsAfterGeometry(source,candidate,command,
-            primary_wall,authority,owner,require_current,proof,independent_selection);
+            primary_wall,authority,owner,require_current,ordinary_geometry_proof,independent_selection);
         if (!final) {
             if (!prepared) { clearError();refreshInspector(); }
             return false;
         }
-        if (hasIndependentDrawingRemoval(drawing_intent)) {
+        if (hasIndependentDrawingRemoval(drawing_intent) ||
+            (component_memberships && std::holds_alternative<ApplyEntityChanges>(*final))) {
             OrdinarySelectionRemovalIntent ordinary;
             ordinary.wall_ids=intent.wall_ids;
             ordinary.wall_geometry_proof=ordinary_geometry_proof;
@@ -34242,7 +34258,12 @@ public:
         std::optional<Command> final_command;
         PreparedSelectionRemoval details;
         {
-            preflight_physical_walls_deletion_join_inference(source.entities(),wall_ids,true,true,true);
+            const bool component_memberships=hasComponentPhaseMemberships(source);
+            const auto component_choice=component_memberships ?
+                derive_physical_walls_deletion_component_phase_choice(source.entities(),wall_ids) :
+                std::optional<std::pair<std::string,std::string>>{};
+            preflight_physical_walls_deletion_join_inference(source.entities(),wall_ids,true,true,true,
+                component_memberships,component_choice);
             const auto join_plan=inspect_physical_wall_join_removal(source.entities(),wall_ids);
             if (!join_plan.ready()) {
                 std::string reasons;
@@ -34267,23 +34288,30 @@ public:
             validate_physical_wall_join_removal_identity_lifetime(source,additional);
             details.wall_intent=MixedWallRemovalIntent{wall_ids,additional,{}};
             std::sort(details.wall_intent->wall_ids.begin(),details.wall_intent->wall_ids.end());
-            auto deletion=prepare_physical_walls_deletion(source,wall_ids,true,true,additional,true,true);
+            auto deletion=prepare_physical_walls_deletion(source,wall_ids,true,true,additional,true,true,
+                component_memberships,component_choice);
             if (cut) deletion.message = "Cut walls and attached objects";
             const Command command = std::move(deletion);
-            details.geometry_proof=encode_physical_wall_deletion_review_proof(source,command);
-            const auto candidate = preview_physical_wall_room_review_geometry(source, command);
+            details.geometry_proof=encode_physical_wall_deletion_review_proof(source,command,component_memberships,component_choice);
+            const auto candidate = preview_physical_wall_room_review_geometry(source, command, details.geometry_proof);
             const auto primary_wall_id = authority.ordinary_selection.contains(authority.context.selected_id)
                 ? authority.context.selected_id.toStdString() : wall_ids.front();
             const auto groups = affectedPhysicalWallRoomGroups(source, candidate.entities(), primary_wall_id, true);
             require_current();
             if (!groups.empty())
                 final_command=reviewPhysicalWallRoomsAfterGeometry(source,candidate,command,
-                    primary_wall_id,authority,owner,require_current);
+                    primary_wall_id,authority,owner,require_current,details.geometry_proof);
             else final_command=command;
         }
         if (!final_command) {
             if (!prepared) { clearError();refreshInspector(); }
             return false;
+        }
+        if (hasComponentPhaseMemberships(source) && std::holds_alternative<ApplyEntityChanges>(*final_command)) {
+            OrdinarySelectionRemovalIntent ordinary;
+            ordinary.wall_ids=details.wall_intent->wall_ids;
+            ordinary.wall_geometry_proof=details.geometry_proof;
+            final_command=prepare_completed_ordinary_selection_removal(source,ordinary,*final_command);
         }
         require_current();
         return finalizeSelectionRemoval(*final_command,prepared,clipboard,clipboard_text,std::move(details));
@@ -59420,7 +59448,7 @@ private:
                         proof.value("kind",std::string{})=="physical_wall_deletion"
                         ? decode_physical_wall_deletion_review_proof(proof) : command_from_json(proof);
                     const auto candidate=preview_physical_wall_room_review_geometry(source,geometry_command,
-                        mixed || mixed_opening ? proof : json(nullptr));
+                        mixed || mixed_opening || proof.value("kind",std::string{})=="physical_wall_deletion" ? proof : json(nullptr));
                     if (is_physical_wall_room_deletion_review_command(geometry_command))
                         validate_physical_wall_room_deletion_review_source(source.entities(),candidate.entities(),geometry_command,proof,
                             source.uses_active_phase_constraints());
@@ -69713,6 +69741,9 @@ public:
                 if (retained_geometry_proof.value("kind",std::string{})=="mixed_wall_opening_deletion") {
                     const auto decoded=decode_mixed_wall_opening_deletion_review_proof(retained_geometry_proof);
                     wall_ids=decoded.intent.wall_ids;opening_ids=decoded.intent.opening_ids;other=decoded.intent.other;
+                } else if (retained_geometry_proof.value("kind",std::string{})=="physical_wall_deletion") {
+                    (void)decode_physical_wall_deletion_review_proof(retained_geometry_proof);
+                    wall_ids=retained_geometry_proof.at("wall_ids").get<std::vector<std::string>>();
                 } else {
                     const auto decoded=decode_mixed_wall_deletion_review_proof(retained_geometry_proof);
                     wall_ids=decoded.intent.wall_ids;other=decoded.intent.other;
