@@ -327,7 +327,8 @@ public:
     // v221 retains architectural/drawing removal4 and mixed removal14 extent retirement.
     // v222 retains mixed transform19/ordinary6 actual host-derived dimension carry.
     // v223 retains phase31/inner6 coordinated ordinary host dimension carry.
-    static constexpr std::uint32_t format_version = 223;
+    // v224 retains phase32, mixed20 and command61/placement3 roof component dimensions.
+    static constexpr std::uint32_t format_version = 224;
     static constexpr std::uint32_t recovery_format_version = 4;
     [[nodiscard]] static std::uint32_t required_format_version(const DocumentSnapshot& snapshot);
     static constexpr std::uint64_t maximum_file_bytes = 4ULL * 1024ULL * 1024ULL * 1024ULL;

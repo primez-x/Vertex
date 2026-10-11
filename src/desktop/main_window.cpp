@@ -50042,12 +50042,24 @@ private:
                 auto intent=make_phase_constraint_authoring_intent(source,semantic);
                 intent.ordinary_roof_edits=json::array();
                 for (const auto& edit:edits) intent.ordinary_roof_edits.push_back(encode_roof_edit_intent(edit));
+                intent.complete_ordinary_roof_component_dimensions=true;
                 ApplyBoundaryConstraintChanges typed;
                 typed.expected_revision=source.revision(); typed.message=message;
                 typed.phase_constraint_authoring_completion=true;
                 typed.phase_constraint_authoring_intent=encode_phase_constraint_authoring_intent(intent);
+                ApplyEntityChanges dimensions{source.revision(), {}, {}, message};
+                appendOrdinaryHostedDimensions(source,expected,dimensions);
+                auto complete_expected=expected;
+                for (auto& change:dimensions.entity_changes)
+                    complete_expected.at(change.entity.id)=std::move(change.entity);
                 const auto candidate=Document::preview_command(source,Command{typed});
-                if (candidate.entities()!=physical)
+                if (candidate.entities()!=complete_expected ||
+                    !std::equal(candidate.entities().begin(),candidate.entities().end(),
+                        complete_expected.begin(),complete_expected.end(),
+                        [](const auto& left,const auto& right) {
+                            return left.first==right.first && left.second.properties.dump()==right.second.properties.dump() &&
+                                left.second.extensions.dump()==right.second.extensions.dump();
+                        }))
                     throw std::invalid_argument("The skylight edit differs from its typed source replay.");
                 return typed;
             }
@@ -50747,7 +50759,7 @@ private:
                     if (!inserted && found->second != proposed)
                         throw std::invalid_argument("The reviewed alternative edit has conflicting proposed identities.");
                 }
-            } else if (version == 51 || version == 58 || version == 52) {
+            } else if (version == 51 || version == 58 || version == 61 || version == 52) {
                 const auto intent=version!=52 ?
                     validate_mixed_clipboard_placement_intent(encoded.at("clipboard_placement_intent")) :
                     validate_mixed_selection_edit_intent(encoded.at("mixed_selection_edit_intent"));

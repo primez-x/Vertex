@@ -1,5 +1,17 @@
 # Portable project extraction
 
+Exchange version222 requires native reader224 for standalone roof phase32 and
+mixed transform20 under command52, plus command61/clipboard placement3. Phase32
+retains explicit ordinary typed roof authority plus existing hosted component
+dimension carry; mixed20 requires its
+nonnull roof32 leaf and ordinary6, preserving complete original-source geometry,
+room decisions, text-baseline and child identity proofs. Clipboard proofs retain
+exact passive component origins, fresh destination mapping and separately derived
+roof/page/phase consequences. Current, nested and undone history keep the reader
+requirement. Older roof and mixed dialects keep
+their original consequences and cannot borrow the new leaf. No extraction or
+migration execution is claimed.
+
 Exchange version221 requires native reader223 for phase authoring31 and its
 closed coordinated inner6 dimension wrapper. One historical inner1-5 body keeps
 its exact family and replacement semantics; actual ordinary family replays add

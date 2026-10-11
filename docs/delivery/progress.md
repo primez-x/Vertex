@@ -14,6 +14,38 @@ changed source does not acquire runtime acceptance without later qualification.
 
 ## Current delivery state
 
+### October 11 retained ordinary roof dimensions
+
+The ordinary compound stair follow-up is committed and pushed as 468dd011, with
+the exact remote branch ref matching local HEAD. Current source work gives the
+retained direct roof route explicit dimension authority instead of appending
+changes its saved proof cannot reproduce. Standalone phase32 independently
+derives the typed roof body candidate and carries existing qualified embedded
+dimensions from actual changed host frames under ordinary policy. Historical
+phase17/20 preserve their original replay. Current mixed transform20 pairs
+ordinary6 with nonnull roof32, keeping original-source leaf composition, mandatory
+room review, child identity and geometry proofs. Historical mixed dialects reject
+that leaf. Reader224/extraction222 retain current, nested and undone authority.
+The current mixed Paste caller also passes the new roof leaf. Separate command61/
+placement3 admits it with placement2's passive-origin, fresh-name, phase and page
+protections, while historical command51/58 reject it. Room-review and lifetime
+consumers retain that exact pair.
+Controller preview compares complete bodies and dimension consequences against
+its independent actual-source candidate, including raw property/extension values.
+
+Independent integrated source review found a generic command-reader ceiling that
+rejected the new command61 before its exact decoder could run. The source ceiling
+now admits 61; the explicit command51/placement1, command58/placement2 and
+command61/placement3 pair checks remain. The reviewer proved no other P1/P2 in the
+batch. Root source inspection confirms this narrow correction; Git records the
+source backup identity. Required
+dimension gaps still include host/cohort/phase retirement, protected replacement
+copies, unresolved component profile/path changes and linked-view targets.
+The complete drawing, architectural, appraisal, exchange, assistance and delivery
+plan remains required. No builds/tests/jobs, launches, packages or installations
+ran. Runtime/history/storage behavior is unverified, the installed candidate is
+unchanged, and all ten production gates remain open.
+
 ### October 11 ordinary compound stair dimensions
 
 The direct/coordinated host dimension batch is committed and pushed as 9e471074;

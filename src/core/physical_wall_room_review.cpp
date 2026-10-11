@@ -2387,10 +2387,11 @@ bool is_physical_wall_room_mixed_clipboard_review_command(const Command& command
         budget.text(geometry->message);budget.read(geometry->clipboard_placement_intent);
         const auto proof=command_to_json(command);
         keys(proof,{"version","kind","expected_revision","message","clipboard_placement_completion","clipboard_placement_intent"});
-        if ((proof.at("version")!=51 && proof.at("version")!=58) || proof.at("kind")!="apply_boundary_constraint_changes" ||
+        if ((proof.at("version")!=51 && proof.at("version")!=58 && proof.at("version")!=61) || proof.at("kind")!="apply_boundary_constraint_changes" ||
             proof.dump().size()>ClipboardRoomProofBudget::limit) return false;
-        // v51/v58 validate their closed fresh-only additions and optional
-        // roof leaf. No legacy active-design predicate is broadened here.
+        // v51/v58 keep their historical roof leaf; v61 separately pairs the
+        // closed additions/provenance proof with ordinary roof phase32.
+        // No legacy active-design predicate is broadened here.
         return command_to_json(command_from_json(proof)).dump()==proof.dump();
     } catch (const std::exception&) { return false; }
 }

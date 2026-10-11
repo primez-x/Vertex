@@ -184,10 +184,14 @@ std::set<std::string, std::less<>> explicit_parents(const Json& ordinary) {
     return result;
 }
 std::vector<RoofEditIntent> roof_edits(const Json& roof, const Json& enclosing) {
+    const bool complete_dimensions = enclosing.at("version") == 20;
+    if (complete_dimensions && (roof.is_null() || !roof.is_object() || roof.value("version", Json()) != 32))
+        reject("mixed dialect twenty requires standalone roof phase dialect thirty-two");
     if (roof.is_null()) return {};
     if (!roof.is_object() || !roof.contains("version") || !roof.at("version").is_number_integer() ||
-        (roof.at("version") != 4 && roof.at("version") != 17 && roof.at("version") != 20 && roof.at("version") != 21))
-        reject("requires standalone roof phase dialect four, seventeen, twenty or twenty-one");
+        (complete_dimensions ? roof.at("version") != 32 :
+            (roof.at("version") != 4 && roof.at("version") != 17 && roof.at("version") != 20 && roof.at("version") != 21)))
+        reject("requires a matching standalone roof phase dialect");
     const auto decoded = decode_phase_constraint_authoring_intent(roof);
     if (encode_phase_constraint_authoring_intent(decoded).dump() != roof.dump()) reject("roof authority is not canonical");
     for (const auto* key : {"expected_revision", "source_snapshot_digest", "source_authoring_digest",
@@ -215,7 +219,7 @@ void validate(const Json& value) {
     Budget budget; budget.json(value, 0);
     const bool identity_dialect = value.is_object() && value.contains("version") &&
         value.at("version").is_number_integer() &&
-        (value.at("version") == 4 || value.at("version") == 18 || value.at("version") == 19);
+        (value.at("version") == 4 || value.at("version") == 18 || value.at("version") == 19 || value.at("version") == 20);
     if (identity_dialect)
         fields(value, {"version", "expected_revision", "source_snapshot_digest", "source_authoring_digest",
             "source_entities_digest", "source_saved_revision", "ordinary_request", "roof_authoring", "roof_opening_members",
@@ -233,7 +237,7 @@ void validate(const Json& value) {
         reject("saved revision exceeds source head");
     message(value.at("message"));
     const auto ordinary = validate_ordinary_selection_edit_request(value.at("ordinary_request"));
-    const Json ordinary_version = value.at("version") == 19 ? Json(6) :
+    const Json ordinary_version = (value.at("version") == 19 || value.at("version") == 20) ? Json(6) :
         value.at("version") == 18 ? Json(5) : value.at("version");
     if (ordinary.at("version") != ordinary_version)
         reject("ordinary request requires its matching mixed intent dialect");
@@ -393,14 +397,14 @@ bool mixed_selection_edit_active_phase_policy(const Json& value) {
         return mixed_selection_property_edit_active_phase_policy(value);
     validate(value);
     return !value.at("roof_authoring").is_null() ||
-        ((value.at("version") == 4 || value.at("version") == 18 || value.at("version") == 19) &&
+        ((value.at("version") == 4 || value.at("version") == 18 || value.at("version") == 19 || value.at("version") == 20) &&
             !value.at("roof_identity_requests").empty());
 }
 bool mixed_selection_edit_has_geometry(const Json& value) {
     if (properties_dialect(value))
         return mixed_selection_property_edit_has_geometry(value);
     validate(value);
-    return (value.at("version") == 3 || value.at("version") == 4 || value.at("version") == 18 || value.at("version") == 19) &&
+    return (value.at("version") == 3 || value.at("version") == 4 || value.at("version") == 18 || value.at("version") == 19 || value.at("version") == 20) &&
         !value.at("ordinary_request").at("geometry").is_null();
 }
 std::vector<Json> mixed_selection_edit_room_reviews(const Json& value) {
@@ -436,7 +440,7 @@ std::string authenticate_source(const DocumentSnapshot& source, const Json& valu
 // full replay always passes null and therefore always performs mandatory review.
 Entities derive_mixed_selection_edit(const DocumentSnapshot& source, const Json& value,
     std::optional<SelectionGeometryTransformPreparation>* unreviewed_geometry) {
-    const bool identity_dialect = value.at("version") == 4 || value.at("version") == 18 || value.at("version") == 19;
+    const bool identity_dialect = value.at("version") == 4 || value.at("version") == 18 || value.at("version") == 19 || value.at("version") == 20;
     const auto selected = members(value.at("roof_opening_members"),value.at("version") == 3 || identity_dialect,identity_dialect);
     for (const auto& member : selected) (void)child_row(source.entities(), member.key);
     if (identity_dialect && !value.at("roof_identity_requests").empty()) {
@@ -559,11 +563,14 @@ Json mixed_intent(const DocumentSnapshot& source, const Json& ordinary_request,
     budget.node(1); budget.quoted(text);
     if (text.size() > 1024 || text.find('\0') != std::string_view::npos) reject("invalid message");
     const auto canonical_ordinary = validate_ordinary_selection_edit_request(ordinary_request);
+    const bool complete_roof_dimensions = roof_authoring.is_object() && roof_authoring.value("version", Json()) == 32;
+    if (complete_roof_dimensions && canonical_ordinary.at("version") != 6)
+        reject("standalone roof phase dialect thirty-two requires ordinary request six");
     const bool dimension_carry = canonical_ordinary.at("version") == 5 || canonical_ordinary.at("version") == 6;
     if (dimension_carry && roof_identity_requests.is_null())
         reject("dimension carry requires an explicit identity roster");
     Json value = {{"version", dimension_carry ?
-            (canonical_ordinary.at("version") == 6 ? Json(19) : Json(18)) :
+            (canonical_ordinary.at("version") == 6 ? (complete_roof_dimensions ? Json(20) : Json(19)) : Json(18)) :
             (roof_identity_requests.is_null() ? canonical_ordinary.at("version") : Json(4))},
         {"expected_revision", source.revision()},
         {"source_snapshot_digest", document_snapshot_digest(source)},

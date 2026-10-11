@@ -1,4 +1,34 @@
-# Vertex project formats v1 through v223
+# Vertex project formats v1 through v224
+
+Reader224 retains standalone ordinary roof phase authoring32. Its exact ten keys
+extend historical ordinary roof authoring with literal
+`complete_ordinary_roof_component_dimensions:true`. Only a nonempty canonical
+ordinary/proposed roof-edit list and a message-only inner intent are admitted.
+Current rotation and opening-transfer rows keep their existing typed authority;
+historical outer17/20 retain their original keys and replay consequences.
+
+The actual typed roof replay supplies complete physical bodies and changed roof
+hosts. Existing qualified embedded component extent dimensions are carried from
+actual source/candidate frames once, under ordinary active/baseline policy. Raw
+placement equality cannot hide a changed physical frame. Associated original
+dimensions, root identities, host bindings and non-placement fields remain exact
+before carry. This grants no dimension cloning, retirement or replacement-copy
+authority; unresolved root/profile/path changes require separate integration.
+
+Mixed transform20 under command52 pairs ordinary selection6 exclusively with
+nonnull roof phase32. It retains mixed19's closed geometry, room-review,
+text-baseline, child-roster and invariant-child proofs. Each leaf derives the
+same original source; exact overlapping consequences merge once or refuse.
+Historical mixed1-19 reject roof32; ordinary6 with historical/null roof leaves
+still uses mixed19. Mixed clipboard placement3 under command61 separately
+requires nonnull roof32 and retains placement2's closed passive component source,
+fresh destination mapping, original-source replay, registry/page enrollment and
+history reservation protections. Its detached-component array is always present,
+including an empty roster. Command51/placement1 and command58/placement2 preserve
+their exact pairing and reject roof32. Room-review and identity-reservation
+consumers admit the new pair explicitly. Current, nested and undone proofs require
+reader224/extraction222. Compilation, runtime/history, migration and extraction
+remain unverified.
 
 Reader223 retains phase authoring31, paired exclusively with closed coordinated
 inner6: `version`, `authoring`, and literal

@@ -1395,6 +1395,8 @@ nlohmann::json encode_phase_constraint_authoring_intent(const PhaseConstraintAut
     }
     if (exclusive_operations > (baseline_wall_group_scale ? 2 : 1))
         invalid("Active design operations cannot borrow another replacement or demolition authority");
+    if (value.complete_ordinary_roof_component_dimensions && value.ordinary_roof_edits.is_null())
+        invalid("Ordinary roof component dimension completion requires standalone typed roof edits");
     if (value.intent.wall_group_scale) {
         ConstraintAuthoringIntent only_scale;
         only_scale.wall_group_scale=value.intent.wall_group_scale;
@@ -1553,7 +1555,10 @@ nlohmann::json encode_phase_constraint_authoring_intent(const PhaseConstraintAut
     }
     if (!value.ordinary_roof_edits.is_null()) {
         (void)ordinary_roof_edits(value.ordinary_roof_edits, true);
-        if (has_rotated_roof_edits(value.ordinary_roof_edits)) result["version"] = 20;
+        if (value.complete_ordinary_roof_component_dimensions) {
+            result["version"]=32;
+            result["complete_ordinary_roof_component_dimensions"]=true;
+        } else if (has_rotated_roof_edits(value.ordinary_roof_edits)) result["version"] = 20;
         ConstraintAuthoringIntent empty;
         empty.message=value.intent.message;
         if (encode_intent(value.intent)!=encode_intent(empty))
@@ -1596,7 +1601,9 @@ PhaseConstraintAuthoringIntent decode_phase_constraint_authoring_intent(const Js
     const bool coordinated_demolition=value.is_object() && value.contains("version") && value.at("version")==15;
     const bool wall_demolition=value.is_object() && value.contains("version") && value.at("version")==16;
     const bool ordinary_roof_rotations=value.is_object() && value.contains("version") && value.at("version")==20;
-    const bool ordinary_roofs=ordinary_roof_rotations || (value.is_object() && value.contains("version") && value.at("version")==17);
+    const bool ordinary_roof_dimensions=value.is_object() && value.contains("version") && value.at("version")==32;
+    const bool ordinary_roofs=ordinary_roof_dimensions || ordinary_roof_rotations ||
+        (value.is_object() && value.contains("version") && value.at("version")==17);
     const bool wall_group_scale=value.is_object() && value.contains("version") && value.at("version")==18;
     const bool baseline_wall_group_scale=wall_edit_version==19;
     const bool component_demolition=value.is_object() && value.contains("version") && value.at("version")==30;
@@ -1628,11 +1635,14 @@ PhaseConstraintAuthoringIntent decode_phase_constraint_authoring_intent(const Js
         "source_entities_digest","source_saved_revision","phase_selections","intent","coordinated_demolition"});
     else if (wall_demolition) keys(value,{"version","expected_revision","source_snapshot_digest","source_authoring_digest",
         "source_entities_digest","source_saved_revision","phase_selections","intent","wall_demolition"});
+    else if (ordinary_roof_dimensions) keys(value,{"version","expected_revision","source_snapshot_digest","source_authoring_digest",
+        "source_entities_digest","source_saved_revision","phase_selections","intent","ordinary_roof_edits",
+        "complete_ordinary_roof_component_dimensions"});
     else if (ordinary_roofs) keys(value,{"version","expected_revision","source_snapshot_digest","source_authoring_digest",
         "source_entities_digest","source_saved_revision","phase_selections","intent","ordinary_roof_edits"});
     else keys(value,{"version","expected_revision","source_snapshot_digest","source_authoring_digest",
         "source_entities_digest","source_saved_revision","phase_selections","intent"});
-    if (!value.at("version").is_number_integer() || (value.at("version")!=1 && value.at("version")!=2 && value.at("version")!=3 && value.at("version")!=4 && value.at("version")!=5 && value.at("version")!=6 && value.at("version")!=7 && value.at("version")!=8 && value.at("version")!=9 && value.at("version")!=10 && value.at("version")!=11 && value.at("version")!=12 && value.at("version")!=13 && value.at("version")!=14 && value.at("version")!=15 && value.at("version")!=16 && value.at("version")!=17 && value.at("version")!=18 && value.at("version")!=19 && value.at("version")!=20 && value.at("version")!=21 && value.at("version")!=22 && value.at("version")!=23 && value.at("version")!=24 && value.at("version")!=25 && value.at("version")!=26 && value.at("version")!=27 && value.at("version")!=28 && value.at("version")!=29 && value.at("version")!=30 && value.at("version")!=31) ||
+    if (!value.at("version").is_number_integer() || (value.at("version")!=1 && value.at("version")!=2 && value.at("version")!=3 && value.at("version")!=4 && value.at("version")!=5 && value.at("version")!=6 && value.at("version")!=7 && value.at("version")!=8 && value.at("version")!=9 && value.at("version")!=10 && value.at("version")!=11 && value.at("version")!=12 && value.at("version")!=13 && value.at("version")!=14 && value.at("version")!=15 && value.at("version")!=16 && value.at("version")!=17 && value.at("version")!=18 && value.at("version")!=19 && value.at("version")!=20 && value.at("version")!=21 && value.at("version")!=22 && value.at("version")!=23 && value.at("version")!=24 && value.at("version")!=25 && value.at("version")!=26 && value.at("version")!=27 && value.at("version")!=28 && value.at("version")!=29 && value.at("version")!=30 && value.at("version")!=31 && value.at("version")!=32) ||
         !value.at("expected_revision").is_number_unsigned()) invalid("Phase constraint proof version or revision is invalid");
     if (!value.at("source_saved_revision").is_null() && !value.at("source_saved_revision").is_number_unsigned())
         invalid("Phase constraint saved revision is invalid");
@@ -1724,8 +1734,14 @@ PhaseConstraintAuthoringIntent decode_phase_constraint_authoring_intent(const Js
     }
     if (ordinary_roofs) {
         result.ordinary_roof_edits=value.at("ordinary_roof_edits");
-        (void)ordinary_roof_edits(result.ordinary_roof_edits, ordinary_roof_rotations);
-        if (has_rotated_roof_edits(result.ordinary_roof_edits) != ordinary_roof_rotations)
+        if (ordinary_roof_dimensions) {
+            if (!value.at("complete_ordinary_roof_component_dimensions").is_boolean() ||
+                value.at("complete_ordinary_roof_component_dimensions")!=true)
+                invalid("Ordinary roof component dimension completion requires literal true authority");
+            result.complete_ordinary_roof_component_dimensions=true;
+        }
+        (void)ordinary_roof_edits(result.ordinary_roof_edits, ordinary_roof_rotations || ordinary_roof_dimensions);
+        if (!ordinary_roof_dimensions && has_rotated_roof_edits(result.ordinary_roof_edits) != ordinary_roof_rotations)
             invalid("Ordinary roof outer and rotation versions do not match");
     }
     if (encode_phase_constraint_authoring_intent(result)!=value) invalid("Phase constraint proof is not canonical");
@@ -1786,6 +1802,12 @@ PhaseConstraintAuthoringIntent make_phase_constraint_authoring_intent(
 
 Entities replay_phase_constraint_authoring(const Entities& source,const Json& proof) {
     const auto decoded=decode_phase_constraint_authoring_intent(proof);
+    if (decoded.complete_ordinary_roof_component_dimensions) {
+        coordinated_map_budget(source);
+        // Saved phase scope and the typed roof producer both resolve actual
+        // component memberships, so admit all catalogs before either discovery.
+        admit_component_demolition_source_catalogs(source);
+    }
     if (!decoded.component_demolition.is_null()) admit_component_demolition_source_catalogs(source);
     if (!decoded.wall_demolition.is_null() &&
         phase_wall_demolition_complete_component_phase_memberships(decoded.wall_demolition))
@@ -1804,7 +1826,41 @@ Entities replay_phase_constraint_authoring(const Entities& source,const Json& pr
         const auto partition=partition_phase_roof_geometry_edits(source,edits);
         if (partition.replacement || !partition.baseline_roof_edits.empty())
             invalid("Ordinary roof authoring requires actual ordinary/proposed membership");
-        return replay_roof_edit_entities(source,edits);
+        auto candidate=replay_roof_edit_entities(source,edits);
+        if (!decoded.complete_ordinary_roof_component_dimensions) return candidate;
+        coordinated_map_budget(candidate);
+        const auto scope=constraint_phase_scope(source);
+        std::set<std::string,std::less<>> protected_baselines;
+        for (const auto& [key,entity]:source) if (entity.type=="model_phases") {
+            (void)key;
+            const auto model=ModelPhases::from_json(entity.properties.at("model"));
+            if (model.active_alternative())
+                protected_baselines.insert(model.baseline_ids().begin(),model.baseline_ids().end());
+        }
+        std::vector<std::string> hosts;
+        for (const auto& [key,original]:source) {
+            const auto found=candidate.find(key);
+            if (can_recognize_boundary_dimension_entity_type(original.type) &&
+                inspect_boundary_dimension_version(original).format==BoundaryDimensionFormat::supported_v6 &&
+                (found==candidate.end() || !exact(original,found->second)))
+                invalid("Ordinary roof candidates must retain original component dimension rows");
+            if (original.type!="roof") continue;
+            if (found==candidate.end() || found->second.id!=key || found->second.type!=original.type)
+                invalid("Ordinary roof dimension hosts must retain actual owner identity and type");
+            if (exact(original,found->second)) continue;
+            if (scope.inactive_owner_ids.contains(key) || protected_baselines.contains(key))
+                invalid("Ordinary roof dimension hosts require active nonbaseline authority");
+            if (hosts.size()>=100000) invalid("Ordinary roof dimension host roster budget exceeded");
+            hosts.push_back(key);
+        }
+        auto dimensions=carry_hosted_assembly_dimension_transform_entities(source,candidate,hosts);
+        std::vector<std::string> changed_dimension_ids;
+        changed_dimension_ids.reserve(dimensions.size());
+        for (const auto& dimension:dimensions) changed_dimension_ids.push_back(dimension.id);
+        validate_ordinary_assembly_dimension_changes(source,changed_dimension_ids);
+        for (auto& dimension:dimensions) candidate.at(dimension.id)=std::move(dimension);
+        coordinated_map_budget(candidate);
+        return candidate;
     }
     if (!decoded.wall_demolition.is_null())
         return replay_phase_wall_demolition_authoring(source,decoded);

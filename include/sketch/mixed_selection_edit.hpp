@@ -46,7 +46,8 @@ private:
         const nlohmann::json&, std::string_view, const nlohmann::json&);
 };
 
-// Accepts ordinary four/mixed four, five/eighteen or six/nineteen, with
+// Accepts ordinary four/mixed four, five/eighteen or six/nineteen (six/twenty
+// when the independent roof leaf is phase thirty-two), with
 // geometry.room_reviews empty. Five/eighteen grants selected-root component
 // dimension carry; six/nineteen additionally grants host-derived carry.
 // Historical dialects retain their original consequences.
@@ -109,6 +110,12 @@ private:
 // Version nineteen pairs ordinary six and also carries embedded component
 // dimensions from actual admitted selected-host pose consequences. Version
 // eighteen retains its explicitly selected-root-only consequences.
+// Version twenty pairs ordinary six with a nonnull standalone roof phase
+// dialect thirty-two. Both leaves independently carry actual host-frame
+// component extent dimensions from the original source, then compose their
+// complete maps under the same exact overlap rules. It retains version
+// nineteen's geometry, room review, text-baseline and invariant-child authority;
+// earlier mixed dialects cannot admit roof phase dialect thirty-two.
 [[nodiscard]] nlohmann::json make_mixed_selection_edit_intent(
     const DocumentSnapshot& source, const nlohmann::json& ordinary_request,
     const nlohmann::json& roof_authoring, const nlohmann::json& roof_members,

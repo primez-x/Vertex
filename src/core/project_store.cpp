@@ -381,6 +381,19 @@ std::uint32_t required_format_version_internal(const DocumentSnapshot& snapshot,
                 if (!value.is_object() || value.size()!=fields.size()) return false;
                 return std::all_of(fields.begin(),fields.end(),[&](const char* field) { return value.contains(field); });
             };
+            if (closed_shape({"version","kind","expected_revision","message",
+                    "clipboard_placement_completion","clipboard_placement_intent"}) &&
+                value.at("version")==61 && value.at("kind")=="apply_boundary_constraint_changes" &&
+                value.at("clipboard_placement_completion")==true && value.at("clipboard_placement_intent").is_object() &&
+                value.at("clipboard_placement_intent").value("version",nlohmann::json())==3)
+                floor=std::max(floor,224U);
+            if (closed_shape({"version","expected_revision","source_snapshot_digest","source_authoring_digest",
+                    "source_entities_digest","source_saved_revision","phase_selections","intent","ordinary_roof_edits",
+                    "complete_ordinary_roof_component_dimensions"}) && value.at("version").is_number_integer() &&
+                value.at("version")==32 && value.at("complete_ordinary_roof_component_dimensions").is_boolean() &&
+                value.at("complete_ordinary_roof_component_dimensions")==true && value.at("ordinary_roof_edits").is_array() &&
+                !value.at("ordinary_roof_edits").empty())
+                floor=std::max(floor,224U);
             if (closed_shape({"version","expected_revision","source_snapshot_digest","source_authoring_digest",
                     "source_entities_digest","source_saved_revision","phase_selections","intent","coordinated_replacements"}) &&
                 value.at("version").is_number_integer() && value.at("version")==31) {
@@ -416,13 +429,14 @@ std::uint32_t required_format_version_internal(const DocumentSnapshot& snapshot,
                 floor=std::max(floor,217U);
             if (closed_shape({"version","expected_revision","source_snapshot_digest","source_authoring_digest",
                     "source_entities_digest","source_saved_revision","roof_authoring","additions",
-                    "selected_registry_id","message","detached_components"}) && value.at("version")==2 &&
+                    "selected_registry_id","message","detached_components"}) &&
+                (value.at("version")==2 || value.at("version")==3) &&
                 value.at("detached_components").is_array() &&
                 std::all_of(value.at("detached_components").begin(),value.at("detached_components").end(),[](const auto& row) {
                     return row.is_object() && row.size()==2 && row.contains("source") && row.contains("destination_owner_id") &&
                         row.at("source").is_object() && row.at("destination_owner_id").is_string();
                 }))
-                floor=std::max(floor,216U);
+                floor=std::max(floor,value.at("version")==3 ? 224U : 216U);
             const bool ordinary_wall_membership_shape=
                 (closed_shape({"version","kind","expected_revision","message","wall_ids","proof",
                     "complete_hosted_removal","complete_join_removal","additional_join_identities",
@@ -605,6 +619,8 @@ std::uint32_t required_format_version_internal(const DocumentSnapshot& snapshot,
                 value.contains("mixed_selection_edit_completion") && value.contains("mixed_selection_edit_intent")) {
                 floor=std::max(floor,187U);
                 const auto& intent=value.at("mixed_selection_edit_intent");
+                if (intent.is_object() && intent.value("version",nlohmann::json())==20)
+                    floor=std::max(floor,224U);
                 if (intent.is_object() && intent.value("version",nlohmann::json())==19)
                     floor=std::max(floor,222U);
                 if (intent.is_object() && intent.value("version",nlohmann::json())==18)
@@ -824,9 +840,9 @@ std::uint32_t required_format_version_internal(const DocumentSnapshot& snapshot,
     };
     for (const auto& revision : snapshot.history()) {
         if (revision.phase_entity_import) required=std::max(required,160U);
-        if (required<223 && revision.boundary_geometry_edit)
+        if (required<224 && revision.boundary_geometry_edit)
             required=std::max(required,typed_edit_reader_floor(encode_boundary_geometry_edit(*revision.boundary_geometry_edit)));
-        if (required<223 && revision.boundary_constraint_changes)
+        if (required<224 && revision.boundary_constraint_changes)
             required=std::max(required,typed_edit_reader_floor(command_to_json(Command{*revision.boundary_constraint_changes})));
         if (required<122 && revision.boundary_geometry_edit)
             required=std::max(required,quantity_reader_floor(encode_boundary_geometry_edit(*revision.boundary_geometry_edit)));
@@ -839,6 +855,9 @@ std::uint32_t required_format_version_internal(const DocumentSnapshot& snapshot,
             const auto& edits=*revision.boundary_constraint_changes;
             if (edits.mixed_selection_edit_completion || !edits.mixed_selection_edit_intent.is_null()) {
                 required=std::max(required,187U);
+                if (edits.mixed_selection_edit_intent.is_object() &&
+                    edits.mixed_selection_edit_intent.value("version",nlohmann::json())==20)
+                    required=std::max(required,224U);
                 if (edits.mixed_selection_edit_intent.is_object() &&
                     edits.mixed_selection_edit_intent.value("version",nlohmann::json())==19)
                     required=std::max(required,222U);
@@ -981,6 +1000,8 @@ std::uint32_t required_format_version_internal(const DocumentSnapshot& snapshot,
                 return false;
             };
             const auto profile_intent=[&](const nlohmann::json& intent)->std::uint32_t {
+                if (intent.is_object() && intent.value("version",nlohmann::json())==32 &&
+                    typed_edit_reader_floor(intent)==224U) return 224U;
                 if (intent.is_object() && intent.value("version",nlohmann::json())==31 &&
                     typed_edit_reader_floor(intent)==223U) return 223U;
                 if (intent.is_object() && intent.value("version",nlohmann::json())==16 &&
@@ -3330,6 +3351,7 @@ bool verify_sqlite_schema(sqlite3* database, bool allow_recovery = false) {
          sqlite3_column_int(user_version.get(), 0) != 221 &&
          sqlite3_column_int(user_version.get(), 0) != 222 &&
          sqlite3_column_int(user_version.get(), 0) != 223 &&
+         sqlite3_column_int(user_version.get(), 0) != 224 &&
          sqlite3_column_int(user_version.get(), 0) != 207 &&
          sqlite3_column_int(user_version.get(), 0) != 202 &&
          sqlite3_column_int(user_version.get(), 0) != 200 &&
@@ -4055,6 +4077,8 @@ DocumentSnapshot read_snapshot(sqlite3* database, RecoveryLedger* recovery = nul
     // here and authenticate the manifest with its stored version below.
     const auto required_format = required_format_version_internal(snapshot, format_number < 28);
     if (required_format > format_number) {
+        if (required_format>=224)
+            storage_error(StorageErrorCode::unsupported_format,"This project requires reader 224 for retained ordinary roof component dimensions");
         if (required_format>=223)
             storage_error(StorageErrorCode::unsupported_format,"This project requires reader 223 for coordinated ordinary host component dimensions");
         if (required_format>=222)

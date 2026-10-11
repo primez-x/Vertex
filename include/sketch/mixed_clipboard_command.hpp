@@ -13,6 +13,10 @@ namespace sketch {
 // Version 2 adds exactly detached_components: passive source evidence mapped to
 // fresh independent additions. Source phase provenance grants no destination
 // authority; enrollment is still derived from the actual destination registry.
+// Version 3 retains version 2's closed fields and passive-source protections,
+// always including detached_components (which may be empty), and requires a
+// nonnull standalone roof phase intent 32 for complete ordinary roof component
+// dimensions. Versions 1 and 2 retain their original roof dialect admission.
 [[nodiscard]] nlohmann::json make_mixed_clipboard_placement_intent(
     const DocumentSnapshot& source, const nlohmann::json& roof_authoring,
     const ApplyEntityChanges& fresh_additions, std::string_view selected_registry_id,

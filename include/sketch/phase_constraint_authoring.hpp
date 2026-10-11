@@ -137,6 +137,12 @@ struct PhaseConstraintAuthoringIntent {
     // changes only companion demolition membership; the inner intent is
     // message-only and no sibling edit or replacement authority is admitted.
     nlohmann::json component_demolition=nullptr;
+    // Dialect thirty-two: standalone ordinary roof edits retain their exact
+    // historical authority and additionally carry existing supported hosted
+    // component dimensions from the complete actual-source typed candidate.
+    // Its tenth outer key is this literal-true flag; no replacement copies,
+    // retirement, fresh dimension IDs or coordinated wrapper are admitted.
+    bool complete_ordinary_roof_component_dimensions=false;
 };
 
 [[nodiscard]] PhaseConstraintAuthoringIntent decode_phase_constraint_authoring_intent(
