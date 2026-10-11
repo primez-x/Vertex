@@ -14,6 +14,57 @@ changed source does not acquire runtime acceptance without later qualification.
 
 ## Current delivery state
 
+### October 11 wall replacement component dimension integration
+
+The stair transform/coordinated batch is committed and pushed as 4268e0ce;
+the exact remote branch matched that source checkpoint. Current source work
+adds wall leaf12 and phase36: actual-source embedded extent discovery, exact
+fresh dimension allocation and grouped cloning after complete initial physical
+and catalog copies. Original dimension owners remain exact; fresh owners join
+only the actual active alternative's proposed registry. Final placement follows
+the complete solved wall/opening candidate after hosted carry. An opening whose
+parent wall moves participates even if its own local fields do not change.
+Existing dimensions on surviving ordinary/proposed hosts also participate.
+Copy discovery and final carry each retain a 1000-association bound; the combined
+fresh owner/child/catalog/hosted/dimension allocation is bounded to 4096.
+
+Document lifetime reservation covers actual and retained/undone dimension
+destinations, with proof-token reservation scoped to the new authority. Current
+standalone wall geometry, profile, layer and corner-window replacement callers
+request the new inventory and reserve complete retained-history aliases. All
+four canvas-proposal APIs retain a trailing explicit dimension flag with false
+historical defaults. Current standalone wall canvas and opening move/resize,
+profile, rehost and family callers request the new inventory; the mixed
+wall/physical group caller retains its historical lane. Reader
+232/extraction230 retain actual leaf12, including empty dimension inventories,
+through current, nested and undone proofs. Historical wall28/leaf11 and
+coordinated1 through7 retain their authority.
+
+Independent integrated source review found no proved introduced P1/P2 in the
+core, four central callers, room review, history or reader integration. Narrow
+review also approved the four added proposal APIs and five standalone callers
+with no proved introduced P1/P2. Root source review covers the source-derived
+roster, final host/frame carry, allocation and closed historical boundaries.
+Scoped whitespace inspection passes; Git records the source backup. Compilation,
+canvas behavior, Undo/redo, save/reopen and
+extraction execution remain unverified. No builds/tests/jobs, launches, packages
+or installations ran, and the installed candidate is unchanged. All ten
+production gates remain open; the complete approved plan remains active.
+
+Next integration is Properties allocations and mixed/coordinated editing, which
+need their own versioned contracts; existing coordinated1 through7 must not be
+widened. The bounded next packet is inner8/phase37 around canonical body5 with
+an actual wall phase36/leaf12 child and literal wall/hosted dimension authority;
+stair authority must bind actual child8 when present. Extend the wall fresh
+inventory and retained-original dimension roster. Keep final ordinary-host
+carry separate from wallleaf12's already completed wall/opening contribution.
+The mixed wall/physical controller at main_window.cpp's proposal call still
+passes three Booleans (new dimension default false); activate its fourth flag
+only with the new coordinated contract and wrapper selection. Reader detection,
+history and Properties request/receipt authority require corresponding updates.
+Other family copies, component profiles/paths and linked views, broader
+drawing/appraisal/exchange/assistance and full qualification remain unfinished.
+
 ### October 11 stair transform and coordinated dimension copy integration
 
 The Properties integration is committed and pushed as 8d602800; the exact remote

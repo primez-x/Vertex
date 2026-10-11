@@ -1451,7 +1451,8 @@ nlohmann::json encode_phase_constraint_authoring_intent(const PhaseConstraintAut
         if (encode_phase_wall_replacement_authoring(replacement).dump()!=value.wall_replacement.dump())
             invalid("Wall replacement decisions are not canonical");
         if (replacement.complete_scalar_profiles) result["version"]=replacement.complete_vertical_profiles ? 26 : 23;
-        const auto& wall_body=replacement.complete_hosted_instances ? value.wall_replacement.at("authoring") : value.wall_replacement;
+        const auto& hosted_body=replacement.complete_component_dimensions ? value.wall_replacement.at("authoring") : value.wall_replacement;
+        const auto& wall_body=replacement.complete_hosted_instances ? hosted_body.at("authoring") : hosted_body;
         if (baseline_wall_group_scale && (wall_body.at("version")!=8 ||
             !replacement.complete_presentations || !replacement.complete_corner_windows ||
             !replacement.wall_profiles.empty() || !replacement.opening_profiles.empty() ||
@@ -1462,7 +1463,7 @@ nlohmann::json encode_phase_constraint_authoring_intent(const PhaseConstraintAut
             // Qualified copying is additive authority. Preserve the exact
             // historical edit lane explicitly; old outers cannot borrow it.
             result["wall_edit_version"]=result.at("version");
-            result["version"]=28;
+            result["version"]=replacement.complete_component_dimensions ? 36 : 28;
         }
         result["wall_replacement"]=value.wall_replacement;
     }
@@ -1597,7 +1598,9 @@ nlohmann::json encode_phase_constraint_authoring_intent(const PhaseConstraintAut
 PhaseConstraintAuthoringIntent decode_phase_constraint_authoring_intent(const Json& value) {
     resource_shape(value);
     if (value.dump().size()>proof_budget) invalid("Phase constraint proof exceeds its byte budget");
-    const bool hosted_walls=value.is_object() && value.contains("version") && value.at("version")==28;
+    const bool wall_component_dimensions=value.is_object() && value.contains("version") && value.at("version")==36;
+    const bool hosted_walls=wall_component_dimensions ||
+        (value.is_object() && value.contains("version") && value.at("version")==28);
     if (hosted_walls && (!value.contains("wall_edit_version") || !value.at("wall_edit_version").is_number_integer() ||
         (value.at("wall_edit_version")!=2 && value.at("wall_edit_version")!=19 &&
          value.at("wall_edit_version")!=23 && value.at("wall_edit_version")!=26)))
@@ -1668,7 +1671,7 @@ PhaseConstraintAuthoringIntent decode_phase_constraint_authoring_intent(const Js
         "source_entities_digest","source_saved_revision","phase_selections","intent","ordinary_roof_edits"});
     else keys(value,{"version","expected_revision","source_snapshot_digest","source_authoring_digest",
         "source_entities_digest","source_saved_revision","phase_selections","intent"});
-    if (!value.at("version").is_number_integer() || value.at("version")<1 || value.at("version")>35 ||
+    if (!value.at("version").is_number_integer() || value.at("version")<1 || value.at("version")>36 ||
         !value.at("expected_revision").is_number_unsigned()) invalid("Phase constraint proof version or revision is invalid");
     if (!value.at("source_saved_revision").is_null() && !value.at("source_saved_revision").is_number_unsigned())
         invalid("Phase constraint saved revision is invalid");
@@ -1682,7 +1685,7 @@ PhaseConstraintAuthoringIntent decode_phase_constraint_authoring_intent(const Js
         if (result.wall_replacement.is_null()) invalid("Wall replacement dialect requires wall replacement decisions");
         const auto leaf=decode_phase_wall_replacement_authoring(result.wall_replacement);
         if (leaf.complete_scalar_profiles!=scalar_walls || leaf.complete_vertical_profiles!=vertical_walls ||
-            leaf.complete_hosted_instances!=hosted_walls)
+            leaf.complete_hosted_instances!=hosted_walls || leaf.complete_component_dimensions!=wall_component_dimensions)
             invalid("Wall scalar cohort outer and leaf versions do not match");
     }
     if (demolition) {
@@ -3376,7 +3379,7 @@ Entities compose_phase_property_selection_edit_candidates(const DocumentSnapshot
             intent.source_entities_digest!=entities_digest || intent.phase_selections.dump()!=choices.dump())
             invalid("Phase Properties contribution differs from its complete original source");
         const auto version=wire.at("version").get<int>();
-        const bool qualified_scalar_wall=version==28 &&
+        const bool qualified_scalar_wall=(version==28 || version==36) &&
             (wire.at("wall_edit_version")==23 || wire.at("wall_edit_version")==26);
         std::string registry,alternative;
         Entities replay;

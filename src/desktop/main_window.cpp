@@ -25691,13 +25691,13 @@ public:
 
     static std::optional<Command> prepareAlternativeWallGeometryCommand(
         const DocumentSnapshot& source, const ConstraintAuthoringIntent& semantic) {
-        auto occupied = retainedSlabIdentityNames(source);
+        auto occupied = retainedSlabIdentityNames(source, true);
         auto proposal = prepare_phase_wall_canvas_proposal(source, semantic,
             [&](std::string_view) {
                 auto proposed = new_id("proposed");
                 while (!occupied.insert(proposed).second) proposed = new_id("proposed");
                 return proposed;
-            }, true, true, true);
+            }, true, true, true, true);
         if (!proposal) return std::nullopt;
         // An incomplete room stage is retained only as typed semantic intent.
         // Canvas projection and release handle it without preparing history.
@@ -30916,13 +30916,13 @@ public:
         }
         const auto profile = capture_hosted_opening_profile_edit(original, candidate);
         if (profile) {
-            auto occupied = retainedSlabIdentityNames(source);
+            auto occupied = retainedSlabIdentityNames(source, true);
             auto proposal = prepare_phase_hosted_opening_canvas_proposal(source, {*profile},
                 [&](std::string_view) {
                     auto proposed = new_id("proposed");
                     while (!occupied.insert(proposed).second) proposed = new_id("proposed");
                     return proposed;
-                }, true, true, true);
+                }, true, true, true, true);
             if (proposal) {
                 proposal->intent.intent.message = move_offset ? "Move proposed hosted opening" : "Resize proposed hosted opening";
                 return Command{phase_wall_replacement_authoring_command(proposal->intent)};
@@ -30937,6 +30937,7 @@ public:
         if (!plan.ready() || !plan.complete_hosted_instances)
             throw std::invalid_argument("The wall edit requires its complete captured component inventory.");
         replacement.complete_hosted_instances = true;
+        replacement.complete_component_dimensions = plan.complete_component_dimensions;
         const auto allocate = [&]() {
             auto proposed = new_id("proposed");
             while (!occupied.insert(proposed).second) proposed = new_id("proposed");
@@ -30949,6 +30950,9 @@ public:
         for (const auto& original : plan.required_hosted_instance_ids)
             if (!replacement.hosted_instance_identities.emplace(original, allocate()).second)
                 throw std::invalid_argument("The wall edit repeats a qualified component identity.");
+        for (const auto& original : plan.required_dimension_ids)
+            if (!replacement.dimension_identities.emplace(original, allocate()).second)
+                throw std::invalid_argument("The wall edit repeats a component dimension identity.");
     }
 
     static Command cornerWindowProfileGeometryCommand(const DocumentSnapshot& source,
@@ -30958,7 +30962,7 @@ public:
         const auto request=phase_corner_window_profile_replacement_request(source.entities(),{*profile});
         if (!request) return corner_window_upsert_command(source,replacement,source.revision());
         const auto plan=inspect_phase_wall_replacement_plan(source.entities(),request->seed_wall_ids,
-            request->registry_id,request->alternative_id,true,true,true);
+            request->registry_id,request->alternative_id,true,true,true,true);
         if (!plan.ready()) {
             std::string reason="The corner-window design edit has unsupported dependencies.";
             for (const auto& diagnostic:plan.diagnostics) if (diagnostic.blocking)
@@ -30970,7 +30974,7 @@ public:
         edit.seed_wall_ids=request->seed_wall_ids;
         edit.complete_presentations=true; edit.complete_corner_windows=true;
         edit.corner_profiles={*profile};
-        auto occupied=retainedSlabIdentityNames(source);
+        auto occupied=retainedSlabIdentityNames(source,true);
         allocateQualifiedWallReplacementIdentities(plan, edit, occupied);
         ConstraintAuthoringIntent semantic; semantic.message=message;
         auto intent=make_phase_constraint_authoring_intent(source,semantic);
@@ -52353,7 +52357,7 @@ private:
         if (requests.size()!=1) throw std::invalid_argument("This edit replaces baseline walls in several design registries. Edit each building's alternative separately.");
         const auto& request=requests.front();
         const auto plan=inspect_phase_wall_replacement_plan(source.entities(),request.seed_wall_ids,
-            request.registry_id,request.alternative_id,true,true,true);
+            request.registry_id,request.alternative_id,true,true,true,true);
         if (!plan.ready()) {
             QStringList reasons;
             for (const auto& diagnostic:plan.diagnostics) if (diagnostic.blocking)
@@ -52364,7 +52368,7 @@ private:
         replacement.alternative_id=request.alternative_id;replacement.seed_wall_ids=request.seed_wall_ids;
         replacement.complete_presentations=true;
         replacement.complete_corner_windows=true;
-        auto occupied=retainedSlabIdentityNames(source);
+        auto occupied=retainedSlabIdentityNames(source,true);
         allocateQualifiedWallReplacementIdentities(plan, replacement, occupied);
         intent.wall_replacement=encode_phase_wall_replacement_authoring(replacement);
         return finishAlternativeWallEdit(source,intent,*constrained,proposed_ids);
@@ -52452,7 +52456,7 @@ private:
         const auto captured = capture_wall_layer_stack_edit(source.entities().at(intent.wall_id),
             staged.at(intent.wall_id), intent);
         if (!captured) return true;
-        auto occupied = retainedSlabIdentityNames(source);
+        auto occupied = retainedSlabIdentityNames(source, true);
         std::set<std::string, std::less<>> existing;
         const auto& original = source.entities().at(intent.wall_id);
         if (original.properties.contains("layers"))
@@ -52462,7 +52466,7 @@ private:
         const auto request = phase_wall_layer_stack_replacement_request(source.entities(), {*captured});
         if (request) {
             const auto plan = inspect_phase_wall_replacement_plan(source.entities(), request->seed_wall_ids,
-                request->registry_id, request->alternative_id, true, true, true);
+                request->registry_id, request->alternative_id, true, true, true, true);
             if (!plan.ready()) {
                 QStringList reasons;
                 for (const auto& diagnostic : plan.diagnostics) if (diagnostic.blocking)
@@ -52553,14 +52557,14 @@ private:
         std::sort(replacement.seed_wall_ids.begin(),replacement.seed_wall_ids.end());
         const auto plan=inspect_phase_wall_replacement_plan(source.entities(),replacement.seed_wall_ids,
             replacement.registry_id,replacement.alternative_id,replacement.complete_presentations,
-            replacement.complete_corner_windows,true);
+            replacement.complete_corner_windows,true,true);
         if (!plan.ready()) {
             QStringList reasons;
             for (const auto& diagnostic:plan.diagnostics) if (diagnostic.blocking)
                 reasons.push_back(QString::fromStdString(diagnostic.reason));
             throw std::invalid_argument(reasons.join('\n').toStdString());
         }
-        auto occupied=retainedSlabIdentityNames(source);
+        auto occupied=retainedSlabIdentityNames(source,true);
         allocateQualifiedWallReplacementIdentities(plan, replacement, occupied);
         ConstraintAuthoringIntent semantic;semantic.message=raw->message;
         auto intent=make_phase_constraint_authoring_intent(source,semantic);
@@ -52637,13 +52641,13 @@ private:
             if (captured) profiles.push_back(*captured);
         }
         if (profiles.empty()) return Command{ApplyEntityChanges{source.revision(), {}, {}, raw->message}};
-        auto occupied = retainedSlabIdentityNames(source);
+        auto occupied = retainedSlabIdentityNames(source, true);
         auto proposal = prepare_phase_hosted_opening_canvas_proposal(source, profiles,
             [&](std::string_view) {
                 auto proposed = new_id("proposed");
                 while (!occupied.insert(proposed).second) proposed = new_id("proposed");
                 return proposed;
-            }, true, true, true);
+            }, true, true, true, true);
         if (!proposal) throw std::invalid_argument("The shared opening lost its captured design alternative.");
         proposal->intent.intent.message = raw->message;
         PhaseWallReplacementIdentityMap proposed_ids;
@@ -52721,13 +52725,13 @@ private:
         }
         // Qualify both actual hosts before any original physical replay or
         // ordinary property transaction. Every field binds this complete source.
-        auto occupied = retainedSlabIdentityNames(source);
+        auto occupied = retainedSlabIdentityNames(source, true);
         auto proposal = prepare_phase_hosted_opening_rehost_proposal(source, intents,
             [&](std::string_view) {
                 auto proposed = new_id("proposed");
                 while (!occupied.insert(proposed).second) proposed = new_id("proposed");
                 return proposed;
-            }, true, true, true);
+            }, true, true, true, true);
         if (proposal) {
             proposal->intent.intent.message = raw->message;
             PhaseWallReplacementIdentityMap proposed_ids;
@@ -52825,13 +52829,13 @@ private:
                 throw std::invalid_argument("Opening type conversion cannot change dimensions, host, layer or other retained data.");
             intents.push_back(std::move(intent));
         }
-        auto occupied = retainedSlabIdentityNames(source);
+        auto occupied = retainedSlabIdentityNames(source, true);
         auto proposal = prepare_phase_hosted_opening_family_proposal(source, intents,
             [&](std::string_view) {
                 auto proposed = new_id("proposed");
                 while (!occupied.insert(proposed).second) proposed = new_id("proposed");
                 return proposed;
-            }, true, true, true);
+            }, true, true, true, true);
         if (proposal) {
             proposal->intent.intent.message = raw->message;
             PhaseWallReplacementIdentityMap proposed_ids;

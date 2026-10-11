@@ -4117,6 +4117,7 @@ static void validate_retained_authoring_receipt_identities(
                     const auto wall=decode_phase_wall_replacement_authoring(intent.wall_replacement);
                     require_unused(wall.identities);
                     require_unused(wall.hosted_instance_identities);
+                    require_unused(wall.dimension_identities);
 #ifdef VERTEX_HAS_PHYSICAL_ROOM_REVIEW
                     if (!wall.room_review_intent.is_null())
                         for (const auto& id:phase_room_review_destinations(wall.room_review_intent)) require_unused_id(id);
@@ -4284,6 +4285,7 @@ static void validate_phase_constraint_fresh_lifetime(const std::map<std::string,
     bool complete_opening_demolition=false;
     bool complete_component_dimension_demolition=false;
     bool complete_stair_component_dimension_copies=false;
+    bool complete_wall_component_dimension_copies=false;
     bool complete_stair_ordinary_dimension_carry=false;
     bool complete_coordinated_stair_dimension_copies=false;
     for (const auto& [id,entity] : candidate) {
@@ -4520,6 +4522,8 @@ static void validate_phase_constraint_fresh_lifetime(const std::map<std::string,
             hosted_slab_asset_reservation=true;
             structural_hosted_alias_reservation=true;
         }
+        complete_wall_component_dimension_copies=complete_wall_component_dimension_copies || replacement.complete_component_dimensions;
+        if (replacement.complete_component_dimensions) complete_envelope_reservation=true;
         if (!replacement.wall_stacks.empty()) {
             complete_envelope_reservation=true;
             wall_stack_asset_reservation=true;
@@ -4533,6 +4537,14 @@ static void validate_phase_constraint_fresh_lifetime(const std::map<std::string,
                 throw std::invalid_argument("A proposed wall-hosted component overlaps another fresh identity: "+id);
             nested_fresh.insert(id);
             proposed_hosted_instances.emplace(replacement.identities.at(original.first),id);
+        }
+        for (const auto& [original,id]:replacement.dimension_identities) {
+            (void)original;
+            // Persisted dimensions already appear in candidate fresh owners;
+            // this set detects overlapping declarations, not their existence.
+            if (!nested_fresh.insert(id).second)
+                throw std::invalid_argument("A proposed wall dimension overlaps another declared identity: "+id);
+            fresh.insert(id);
         }
         for (const auto& stack : replacement.wall_stacks) {
             const auto& original=source.at(stack.wall_id);
@@ -4644,6 +4656,10 @@ static void validate_phase_constraint_fresh_lifetime(const std::map<std::string,
         for (const auto* token:{"authoring","complete_component_dimensions","dimension_identities"})
             if (fresh.contains(token))
                 throw std::invalid_argument("A proposed stair destination borrows a dimension copy proof field: "+std::string(token));
+    if (complete_wall_component_dimension_copies)
+        for (const auto* token:{"authoring","complete_component_dimensions","dimension_identities"})
+            if (fresh.contains(token))
+                throw std::invalid_argument("A proposed wall destination borrows a dimension copy proof field: "+std::string(token));
     if (complete_coordinated_stair_dimension_copies && fresh.contains("complete_stair_component_dimensions"))
         throw std::invalid_argument("A coordinated stair destination borrows its dimension copy proof field");
     if (complete_stair_ordinary_dimension_carry && fresh.contains("complete_ordinary_component_dimensions"))

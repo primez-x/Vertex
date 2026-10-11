@@ -71,6 +71,11 @@ struct PhaseWallReplacementAuthoring {
     // into catalog-qualified hosted row copying and changed-host carry.
     bool complete_hosted_instances{false};
     PhaseWallReplacementHostedInstanceIdentityMap hosted_instance_identities;
+    // Leaf twelve wraps canonical leaf eleven and explicitly copies embedded
+    // component dimensions, then carries copied and surviving ordinary wall/
+    // opening dimensions from the initial copy stage to final edited frames.
+    bool complete_component_dimensions{false};
+    PhaseWallReplacementIdentityMap dimension_identities;
 };
 struct PhaseWallReplacementAuthoringPreview {
     PhaseWallReplacementResult replacement;

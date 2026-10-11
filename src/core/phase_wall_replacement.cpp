@@ -3,6 +3,7 @@
 #include "sketch/annotation_entity_codec.hpp"
 #include "sketch/architecture.hpp"
 #include "sketch/assembly_document_adapter.hpp"
+#include "sketch/assembly_dimension_transform.hpp"
 #include "sketch/assembly_geometry.hpp"
 #include "sketch/assembly_model.hpp"
 #include "sketch/assembly_phase_membership.hpp"
@@ -42,6 +43,7 @@ using Json = nlohmann::json;
 using Ids = std::set<std::string, std::less<>>;
 constexpr std::size_t maximum_entities = 65536;
 constexpr std::size_t maximum_replacements = 4096;
+constexpr std::size_t maximum_component_dimensions = 1000;
 constexpr std::size_t maximum_json_nodes = 4 * 1024 * 1024;
 constexpr std::size_t maximum_json_string_bytes = 64 * 1024 * 1024;
 
@@ -254,6 +256,63 @@ Ids discover_hosted_instances(PhaseWallReplacementPlan& plan, const PhaseWallRep
     }
     std::sort(plan.required_hosted_instance_ids.begin(), plan.required_hosted_instance_ids.end());
     return catalogs;
+}
+using ComponentDimensionRoots = std::map<std::string, PhaseWallReplacementHostedInstanceKey, std::less<>>;
+ComponentDimensionRoots discover_component_dimensions(PhaseWallReplacementPlan& plan,
+    const PhaseWallReplacementEntities& source, std::size_t existing_identity_count) {
+    const std::set<PhaseWallReplacementHostedInstanceKey> roots(
+        plan.required_hosted_instance_ids.begin(), plan.required_hosted_instance_ids.end());
+    ComponentDimensionRoots dimensions;
+    std::vector<AssemblyDimensionTarget> targets;
+    for (const auto& [id, entity] : source) {
+        if (!can_recognize_boundary_dimension_entity_type(entity.type)) continue;
+        const auto target = field(entity.properties, "target");
+        const auto assembly = target ? field(*target, "assembly") : nullptr;
+        const auto catalog = assembly ? field(*assembly, "catalog_id") : nullptr;
+        const auto instance = assembly ? field(*assembly, "instance_id") : nullptr;
+        if (!catalog || !catalog->is_string() || !instance || !instance->is_string()) continue;
+        const PhaseWallReplacementHostedInstanceKey key{catalog->get<std::string>(), instance->get<std::string>()};
+        if (!roots.contains(key)) continue;
+        // Independent document owners can share the tuple. Only an explicit
+        // null admits an embedded target, never its entity_id carrier alone.
+        const auto document = field(*assembly, "document_entity_id");
+        if (document && !document->is_null()) continue;
+        try {
+            const auto decoded = decode_boundary_dimension_entity(entity);
+            if (!document || !decoded.supported() || decoded.version != 6 ||
+                decoded.dimension->kind != BoundaryDimensionKind::assembly_extent || !decoded.dimension->assembly_target ||
+                decoded.dimension->assembly_target->component.document_entity_id)
+                reject("affected embedded component dimension requires a supported v6 extent");
+            if (dimensions.size() >= maximum_component_dimensions) reject("associated embedded dimension budget exceeded");
+            dimensions.emplace(id, key);
+            targets.push_back(*decoded.dimension->assembly_target);
+        } catch (const std::exception& error) {
+            diagnostic(plan, id, "affected embedded component dimension is unsupported: " + std::string(error.what()));
+        }
+    }
+    if (existing_identity_count > maximum_replacements || dimensions.size() > maximum_replacements - existing_identity_count)
+        reject("combined replacement/dimension identity budget exceeded");
+    // One complete original-source batch admits every retained nested path.
+    if (!targets.empty()) {
+        try { (void)resolve_assembly_dimensions(source, targets); }
+        catch (const std::exception& error) {
+            for (const auto& [id, key] : dimensions) {
+                (void)key; diagnostic(plan, id, "affected embedded component dimension cannot resolve: " + std::string(error.what()));
+            }
+        }
+    }
+    plan.required_dimension_ids.clear();
+    for (const auto& [id, key] : dimensions) { (void)key; plan.required_dimension_ids.push_back(id); }
+    return dimensions;
+}
+Entity component_dimension_remainder(Entity scratch) {
+    // Called only for the exact supported roster admitted above. Keep opaque
+    // property and extension siblings in the dependency scan.
+    auto& target = scratch.properties.at("target");
+    target.erase("entity_id");
+    auto& assembly = target.at("assembly");
+    for (const auto* key : {"version", "form", "catalog_id", "instance_id", "document_entity_id", "part_path", "axis"}) assembly.erase(key);
+    return scratch;
 }
 Wall decoded_wall(const PhaseWallReplacementEntities& source, const std::string& id) {
     Wall wall; std::string error;
@@ -587,8 +646,10 @@ bool PhaseWallReplacementPlan::ready() const noexcept {
 PhaseWallReplacementPlan inspect_phase_wall_replacement_plan(
     const PhaseWallReplacementEntities& source, const std::vector<std::string>& seed_wall_ids,
     const std::string& registry_id, const std::string& alternative_id, bool complete_presentations,
-    bool complete_corner_windows, bool complete_hosted_instances) {
+    bool complete_corner_windows, bool complete_hosted_instances, bool complete_component_dimensions) {
     try {
+        if (complete_component_dimensions && !complete_hosted_instances)
+            reject("component dimension completion requires hosted instance completion");
         identity(registry_id); identity(alternative_id);
         if (source.size() > maximum_entities) reject("source entity budget exceeded");
         Strings occupied;
@@ -624,6 +685,7 @@ PhaseWallReplacementPlan inspect_phase_wall_replacement_plan(
         plan.complete_presentations = complete_presentations;
         plan.complete_corner_windows = complete_corner_windows;
         plan.complete_hosted_instances = complete_hosted_instances;
+        plan.complete_component_dimensions = complete_component_dimensions;
         if (seed_wall_ids.empty() || seed_wall_ids.size() > maximum_replacements) reject("requires a bounded nonempty explicit wall seed");
         std::sort(plan.seed_wall_ids.begin(), plan.seed_wall_ids.end());
         if (std::adjacent_find(plan.seed_wall_ids.begin(), plan.seed_wall_ids.end()) != plan.seed_wall_ids.end()) reject("wall seeds must be unique");
@@ -938,7 +1000,8 @@ PhaseWallReplacementPlan inspect_phase_wall_replacement_plan(
                 diagnostic(plan, id, "unsupported physical-room transit requires reviewed source completion");
         for (const auto& [id, entity] : source) if (can_recognize_boundary_dimension_entity_type(entity.type)) {
             const auto decoded = decode_boundary_dimension_entity(entity);
-            if (decoded.dimension && owners.contains(decoded.dimension->boundary_id)) {
+            if (decoded.dimension && (!complete_component_dimensions || decoded.dimension->kind != BoundaryDimensionKind::assembly_extent) &&
+                owners.contains(decoded.dimension->boundary_id)) {
                 validate_boundary_dimension_target(*decoded.dimension, source.at(decoded.dimension->boundary_id)); owners.insert(id);
             }
         }
@@ -954,7 +1017,10 @@ PhaseWallReplacementPlan inspect_phase_wall_replacement_plan(
         if (owners.size() + children.size() > maximum_replacements) reject("replacement entity/child budget exceeded");
         const auto catalogs = complete_hosted_instances ? discover_hosted_instances(plan, source, owners,
             scope, organization, memberships, baseline) : Ids{};
+        const auto component_dimensions = complete_component_dimensions ? discover_component_dimensions(plan, source,
+            owners.size() + catalogs.size() + children.size() + plan.required_hosted_instance_ids.size()) : ComponentDimensionRoots{};
         Ids presentation_owners = owners;
+        for (const auto& [id, key] : component_dimensions) { (void)key; presentation_owners.insert(id); }
         if (complete_hosted_instances) {
             const auto aliases = embedded_assembly_presentation_ids(source);
             for (const auto& key : plan.required_hosted_instance_ids) presentation_owners.insert(aliases.at(key));
@@ -1024,9 +1090,15 @@ PhaseWallReplacementPlan inspect_phase_wall_replacement_plan(
                 diagnostic(plan, child, "replacement child identity is owned by multiple actual source owners");
             if (owners.size() + children.size() > maximum_replacements) reject("replacement entity/child budget exceeded");
         }
-        if (owners.size() + catalogs.size() + children.size() + plan.required_hosted_instance_ids.size() > maximum_replacements)
-            reject("replacement entity/child/hosted budget exceeded");
+        if (owners.size() + catalogs.size() + children.size() + plan.required_hosted_instance_ids.size() +
+            plan.required_dimension_ids.size() > maximum_replacements)
+            reject("replacement entity/child/hosted/dimension budget exceeded");
         Ids affected = presentation_owners; affected.insert(children.begin(), children.end());
+        Ids component_dimension_dependencies = affected;
+        for (const auto& key : plan.required_hosted_instance_ids) {
+            component_dimension_dependencies.insert(key.first);
+            component_dimension_dependencies.insert(key.second);
+        }
         for (const auto& id : owners) {
             if (children.contains(id)) reject("entity and owned-child identities overlap: " + id);
             const auto member = memberships.find(id);
@@ -1041,7 +1113,7 @@ PhaseWallReplacementPlan inspect_phase_wall_replacement_plan(
             } catch (const std::exception& error) { diagnostic(plan, id, "copied payload has unsupported typed evidence: " + std::string(error.what())); }
         }
         for (const auto& [id, entity] : source) {
-            if (owners.contains(id) || scope.inactive_owner_ids.contains(id)) continue;
+            if (owners.contains(id) || (scope.inactive_owner_ids.contains(id) && !component_dimensions.contains(id))) continue;
             if (rooms.contains(id)) {
                 auto retained = entity; retained.extensions.erase("physical_wall_room");
                 if (touches(retained.properties, affected) || touches(retained.extensions, affected))
@@ -1103,6 +1175,13 @@ PhaseWallReplacementPlan inspect_phase_wall_replacement_plan(
                 if (decoded.constraint && !constraint_participates(*decoded.constraint, scope)) continue;
             }
             if (can_recognize_boundary_dimension_entity_type(entity.type)) {
+                if (component_dimensions.contains(id)) {
+                    const auto remainder = component_dimension_remainder(entity);
+                    if (touches(remainder.properties, component_dimension_dependencies) ||
+                        touches(remainder.extensions, component_dimension_dependencies))
+                        diagnostic(plan, id, "component dimension has an affected reference outside its validated qualified target");
+                    continue;
+                }
                 const auto decoded = decode_boundary_dimension_entity(entity);
                 if (decoded.dimension && scope.inactive_owner_ids.contains(decoded.dimension->boundary_id)) continue;
             }
@@ -1135,10 +1214,14 @@ PhaseWallReplacementPlan inspect_phase_wall_replacement_plan(
 PhaseWallReplacementResult replay_phase_wall_replacement(
     const PhaseWallReplacementEntities& source, const PhaseWallReplacementPlan& plan,
     const PhaseWallReplacementIdentityMap& identities,
-    const PhaseWallReplacementHostedInstanceIdentityMap& hosted_instance_identities) {
+    const PhaseWallReplacementHostedInstanceIdentityMap& hosted_instance_identities,
+    const PhaseWallReplacementIdentityMap& dimension_identities) {
     try {
+        if (!plan.complete_component_dimensions && !dimension_identities.empty())
+            reject("historical replacement does not admit component dimension mappings");
         const auto derived = inspect_phase_wall_replacement_plan(source, plan.seed_wall_ids, plan.registry_id,
-            plan.alternative_id, plan.complete_presentations, plan.complete_corner_windows, plan.complete_hosted_instances);
+            plan.alternative_id, plan.complete_presentations, plan.complete_corner_windows, plan.complete_hosted_instances,
+            plan.complete_component_dimensions);
         if (derived != plan) reject("supplied plan differs from actual source discovery");
         if (!derived.ready()) reject("replacement has unresolved affected dependencies");
         Ids expected(derived.required_entity_ids.begin(), derived.required_entity_ids.end());
@@ -1150,6 +1233,7 @@ PhaseWallReplacementResult replay_phase_wall_replacement(
         Ids presentation_owners;
         for (const auto& id : derived.required_entity_ids)
             if (source.at(id).type != "assembly_model") presentation_owners.insert(id);
+        presentation_owners.insert(derived.required_dimension_ids.begin(), derived.required_dimension_ids.end());
         if (derived.complete_hosted_instances) {
             original_aliases = embedded_assembly_presentation_ids(source);
             for (const auto& [key, alias] : original_aliases) { (void)key; occupied.values.insert(alias); }
@@ -1188,8 +1272,18 @@ PhaseWallReplacementResult replay_phase_wall_replacement(
             identity(new_id);
             if (occupied.values.contains(new_id) || !fresh.insert(new_id).second) reject("fresh hosted identity collision: " + new_id);
         }
+        const Ids expected_dimensions(derived.required_dimension_ids.begin(), derived.required_dimension_ids.end());
+        if (dimension_identities.size() != expected_dimensions.size()) reject("requires exact component dimension mapping");
+        for (const auto& [old_id, new_id] : dimension_identities) {
+            if (!expected_dimensions.contains(old_id) || expected.contains(old_id)) reject("unrequested or overlapping component dimension mapping");
+            identity(old_id); identity(new_id);
+            if (occupied.values.contains(new_id) || !fresh.insert(new_id).second) reject("fresh dimension identity collision: " + new_id);
+        }
+        auto copy_identities = identities;
+        for (const auto& [old_id, new_id] : dimension_identities)
+            if (!copy_identities.emplace(old_id, new_id).second) reject("component dimension overlaps an existing mapping");
         if (derived.complete_hosted_instances && fresh.size() > maximum_replacements) reject("replacement fresh identity budget exceeded");
-        if (derived.complete_hosted_instances && derived.required_entity_ids.size() > maximum_entities - source.size())
+        if (derived.complete_hosted_instances && derived.required_entity_ids.size() + expected_dimensions.size() > maximum_entities - source.size())
             reject("final entity budget exceeded");
         if (derived.complete_hosted_instances) {
             // Each private replica initially copies its complete source
@@ -1204,7 +1298,7 @@ PhaseWallReplacementResult replay_phase_wall_replacement(
                 if (source.at(id).type == "assembly_model")
                     admit_existing_assembly_catalog_work(source.at(id), destination_work);
         }
-        PhaseWallReplacementResult result{source, identities, {}, derived.affected_original_room_ids,
+        PhaseWallReplacementResult result{source, copy_identities, {}, derived.affected_original_room_ids,
             derived.room_constraint_ids_requiring_review, {}, {}};
         AssemblyPhaseCopiedRoots declared_copied_roots;
         AssemblyPhaseCopiedHosts declared_copied_hosts;
@@ -1219,7 +1313,7 @@ PhaseWallReplacementResult replay_phase_wall_replacement(
             auto copy = source.at(old_id);
             const auto proof_reference = [&](const std::string& id, bool owned) {
                 if (id.empty()) return id;
-                return owned ? identities.at(id) : remap(id, identities);
+                return owned ? copy_identities.at(id) : remap(id, copy_identities);
             };
             if (copy.type == "measurement_linework") visit_stroke_copy(copy, proof_reference);
             else if (can_recognize_boundary_entity_type(copy.type)) {
@@ -1280,10 +1374,10 @@ PhaseWallReplacementResult replay_phase_wall_replacement(
                 admit_existing_assembly_catalog_work(copy, copied_catalog_work);
                 (void)AssemblyModel::from_json(p.at("model"));
             } else if (copy.type == "constraint") {
-                for (auto& binding : p.at("bindings")) for (const auto* key : {"owner_id", "segment_id", "vertex_id"}) remap_field(binding, key, identities);
+                for (auto& binding : p.at("bindings")) for (const auto* key : {"owner_id", "segment_id", "vertex_id"}) remap_field(binding, key, copy_identities);
                 for (const auto* key : {"wall_ids", "entity_ids"}) if (p.contains(key)) {
                     auto ids = p.at(key).get<std::vector<std::string>>();
-                    for (auto& id : ids) id = remap(id, identities);
+                    for (auto& id : ids) id = remap(id, copy_identities);
                     std::sort(ids.begin(), ids.end()); p.at(key) = ids;
                 }
                 const auto decoded = decode_constraint_entity(copy);
@@ -1322,7 +1416,58 @@ PhaseWallReplacementResult replay_phase_wall_replacement(
         if (!declared_copied_roots.empty())
             result.entities = transport_assembly_phase_memberships_for_host_copies(source, result.entities,
                 declared_copied_roots, declared_copied_hosts, plan.registry_id, plan.alternative_id);
-        auto presentation_identities = identities;
+        if (derived.complete_component_dimensions) {
+            // Complete initial physical/catalog copies precede a single atomic
+            // contribution. Geometry edits belong to the enclosing stage.
+            std::map<PhaseWallReplacementHostedInstanceKey, std::size_t> requests_by_root;
+            std::vector<AssemblyDimensionTransformRequest> requests;
+            for (const auto& id : derived.required_dimension_ids) {
+                const auto decoded = decode_boundary_dimension_entity(source.at(id));
+                const auto& component = decoded.dimension->assembly_target->component;
+                const PhaseWallReplacementHostedInstanceKey key{component.catalog_id, component.instance_id};
+                const auto [request, inserted] = requests_by_root.emplace(key, requests.size());
+                if (inserted) requests.push_back({{key.first, key.second, std::nullopt, {}},
+                    {identities.at(key.first), hosted_instance_identities.at(key), std::nullopt, {}},
+                    AssemblyDimensionTransformMode::clone, {}});
+                requests.at(request->second).fresh_dimension_ids.emplace(id, dimension_identities.at(id));
+            }
+            const auto copies = requests.empty() ? std::vector<Entity>{} :
+                carry_assembly_dimension_transform_entities(source, result.entities, requests);
+            if (copies.size() != expected_dimensions.size()) reject("component dimension contribution differs from exact source roster");
+            Ids copied_ids;
+            for (const auto& [old_id, new_id] : dimension_identities) {
+                (void)old_id;
+                copied_ids.insert(new_id);
+            }
+            for (const auto& copy : copies)
+                if (!copied_ids.contains(copy.id) || !result.entities.emplace(copy.id, copy).second)
+                    reject("component dimension contribution has an undeclared or colliding owner");
+
+            // Append only NEW owners to the actual saved active choice. Raw
+            // original lists and every other alternative retain their order.
+            auto& registry = result.entities.at(plan.registry_id);
+            const auto phases = ModelPhases::from_json(registry.properties.at("model"));
+            if (phases.active_alternative() != std::optional<std::string>{plan.alternative_id})
+                reject("component dimension copy lost the actual active alternative");
+            auto dimension_model_ids = phases.entity_ids();
+            auto dimension_alternatives = phases.alternatives();
+            const auto dimension_target = std::find_if(dimension_alternatives.begin(), dimension_alternatives.end(),
+                [&](const auto& row) { return row.id == plan.alternative_id; });
+            if (dimension_target == dimension_alternatives.end()) reject("component dimension copy lost its registry choice");
+            auto dimension_raw = registry.properties.at("model");
+            for (const auto& id : copied_ids) {
+                dimension_model_ids.push_back(id); dimension_target->proposed_ids.push_back(id);
+                dimension_raw.at("entity_ids").push_back(id);
+            }
+            for (auto& row : dimension_raw.at("alternatives")) if (row.at("id") == plan.alternative_id)
+                for (const auto& id : copied_ids) row.at("proposed_ids").push_back(id);
+            const auto dimension_phases = ModelPhases::create(dimension_model_ids, phases.baseline_ids(),
+                dimension_alternatives, phases.active_alternative());
+            if (ModelPhases::from_json(dimension_raw).to_json() != dimension_phases.to_json())
+                reject("raw dimension append differs from validated phase update");
+            registry.properties.at("model") = std::move(dimension_raw);
+        }
+        auto presentation_identities = result.original_to_proposed;
         if (derived.complete_hosted_instances) {
             if (result.hosted_instance_original_to_proposed.size() != expected_instances.size())
                 reject("copied hosted roster differs from actual qualified source discovery");
@@ -1381,6 +1526,29 @@ PhaseWallReplacementResult replay_phase_wall_replacement(
                 const auto decoded = decode_boundary_dimension_entity(copy);
                 validate_boundary_dimension_target(*decoded.dimension, result.entities.at(decoded.dimension->boundary_id));
             }
+        }
+        if (derived.complete_component_dimensions) {
+            std::vector<AssemblyDimensionTarget> copied_targets;
+            for (const auto& old_id : derived.required_dimension_ids) {
+                const auto& original = source.at(old_id);
+                const auto& retained = result.entities.at(old_id);
+                if (original != retained || original.properties.dump() != retained.properties.dump() ||
+                    original.extensions.dump() != retained.extensions.dump()) reject("component copy changed an original dimension");
+                const auto decoded = decode_boundary_dimension_entity(result.entities.at(dimension_identities.at(old_id)));
+                if (!decoded.supported() || decoded.version != 6 || decoded.dimension->kind != BoundaryDimensionKind::assembly_extent ||
+                    !decoded.dimension->assembly_target || decoded.dimension->assembly_target->component.document_entity_id)
+                    reject("component dimension copy lost its supported embedded extent");
+                auto expected_target = *decode_boundary_dimension_entity(original).dimension->assembly_target;
+                const PhaseWallReplacementHostedInstanceKey root{expected_target.component.catalog_id, expected_target.component.instance_id};
+                expected_target.component.catalog_id = identities.at(root.first);
+                expected_target.component.instance_id = hosted_instance_identities.at(root);
+                if (*decoded.dimension->assembly_target != expected_target || decoded.dimension->boundary_id != expected_target.component.catalog_id)
+                    reject("component dimension copy differs from its exact qualified target transport");
+                copied_targets.push_back(*decoded.dimension->assembly_target);
+            }
+            // Qualified extents require complete-map resolution; ordinary
+            // copied dimensions keep the entity-target check above.
+            if (!copied_targets.empty()) (void)resolve_assembly_dimensions(result.entities, copied_targets);
         }
         result.fresh_identity_ids.assign(fresh.begin(), fresh.end());
         return result;

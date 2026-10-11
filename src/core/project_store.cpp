@@ -382,6 +382,22 @@ std::uint32_t required_format_version_internal(const DocumentSnapshot& snapshot,
                 if (!value.is_object() || value.size()!=fields.size()) return false;
                 return std::all_of(fields.begin(),fields.end(),[&](const char* field) { return value.contains(field); });
             };
+            if (closed_shape({"version","authoring","complete_component_dimensions","dimension_identities"}) &&
+                value.at("version").is_number_integer() && value.at("version")==12 &&
+                value.at("complete_component_dimensions").is_boolean() && value.at("complete_component_dimensions")==true &&
+                value.at("dimension_identities").is_object()) {
+                const auto& hosted=value.at("authoring");
+                if (hosted.is_object() && hosted.size()==4 && hosted.contains("version") &&
+                    hosted.at("version").is_number_integer() && hosted.at("version")==11 &&
+                    hosted.contains("complete_hosted_instances") && hosted.at("complete_hosted_instances").is_boolean() &&
+                    hosted.at("complete_hosted_instances")==true && hosted.contains("hosted_instance_identities") &&
+                    hosted.at("hosted_instance_identities").is_array() && hosted.contains("authoring")) {
+                    const auto& historical=hosted.at("authoring");
+                    if (historical.is_object() && historical.contains("version") && historical.at("version").is_number_integer() &&
+                        historical.at("version")>=1 && historical.at("version")<=10)
+                        floor=std::max(floor,232U);
+                }
+            }
             if (closed_shape({"version","kind","expected_revision","message",
                     "clipboard_placement_completion","clipboard_placement_intent"}) &&
                 value.at("version")==61 && value.at("kind")=="apply_boundary_constraint_changes" &&
@@ -1006,9 +1022,9 @@ std::uint32_t required_format_version_internal(const DocumentSnapshot& snapshot,
     };
     for (const auto& revision : snapshot.history()) {
         if (revision.phase_entity_import) required=std::max(required,160U);
-        if (required<231 && revision.boundary_geometry_edit)
+        if (required<232 && revision.boundary_geometry_edit)
             required=std::max(required,typed_edit_reader_floor(encode_boundary_geometry_edit(*revision.boundary_geometry_edit)));
-        if (required<231 && revision.boundary_constraint_changes)
+        if (required<232 && revision.boundary_constraint_changes)
             required=std::max(required,typed_edit_reader_floor(command_to_json(Command{*revision.boundary_constraint_changes})));
         if (required<122 && revision.boundary_geometry_edit)
             required=std::max(required,quantity_reader_floor(encode_boundary_geometry_edit(*revision.boundary_geometry_edit)));
@@ -3527,6 +3543,7 @@ bool verify_sqlite_schema(sqlite3* database, bool allow_recovery = false) {
          sqlite3_column_int(user_version.get(), 0) != 229 &&
          sqlite3_column_int(user_version.get(), 0) != 230 &&
          sqlite3_column_int(user_version.get(), 0) != 231 &&
+         sqlite3_column_int(user_version.get(), 0) != 232 &&
          sqlite3_column_int(user_version.get(), 0) != 207 &&
          sqlite3_column_int(user_version.get(), 0) != 202 &&
          sqlite3_column_int(user_version.get(), 0) != 200 &&
@@ -4252,6 +4269,8 @@ DocumentSnapshot read_snapshot(sqlite3* database, RecoveryLedger* recovery = nul
     // here and authenticate the manifest with its stored version below.
     const auto required_format = required_format_version_internal(snapshot, format_number < 28);
     if (required_format > format_number) {
+        if (required_format>=232)
+            storage_error(StorageErrorCode::unsupported_format,"This project requires reader 232 for wall component dimension copies");
         if (required_format>=231)
             storage_error(StorageErrorCode::unsupported_format,"This project requires reader 231 for stair component dimension copies and ordinary carry");
         if (required_format>=230)

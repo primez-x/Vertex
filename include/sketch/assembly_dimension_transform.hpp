@@ -100,6 +100,15 @@ struct AssemblyDimensionTransformRequest {
     std::span<const std::string> actual_host_ids,
     std::size_t maximum_associated_dimensions);
 
+// Same bounded contribution for actual wall/opening hosts after an admitted
+// wall edit. Openings may retain raw local station fields while their parent
+// wall changes, so the caller supplies that complete physical dependency roster.
+// Historical hosted overloads retain their original supported host families.
+[[nodiscard]] std::vector<Entity> carry_wall_hosted_assembly_dimension_transform_entities(
+    const AssemblyDocumentEntities& source,
+    const AssemblyDocumentEntities& candidate,
+    std::span<const std::string> actual_host_ids);
+
 // Separate current ordinary-authoring policy check for existing dimensions
 // actually changed or removed by a caller. Empty input is a no-op; otherwise
 // IDs must be unique supported v6 source dimensions (at most 1000). Inactive

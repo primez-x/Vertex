@@ -50,6 +50,10 @@ struct PhaseWallReplacementPlan {
     // Qualified actual catalog/local-row copies, never render-alias authority.
     bool complete_hosted_instances{false};
     std::vector<PhaseWallReplacementHostedInstanceKey> required_hosted_instance_ids;
+    // Explicit embedded v6 extent copies on the admitted hosted roots. Source
+    // dimensions remain exact; only fresh copies join the proposed registry.
+    bool complete_component_dimensions{false};
+    std::vector<std::string> required_dimension_ids;
 
     [[nodiscard]] bool ready() const noexcept;
     bool operator==(const PhaseWallReplacementPlan&) const = default;
@@ -73,7 +77,9 @@ struct PhaseWallReplacementResult {
 
 // Requires the actual complete map and the registry's actual saved active
 // alternative. Invalid envelopes/selectors throw; unsupported affected
-// dependencies produce blocking diagnostics. No source is modified.
+// dependencies produce blocking diagnostics. Component dimension completion
+// requires hosted completion and derives only actual embedded v6 extents.
+// No source is modified.
 [[nodiscard]] PhaseWallReplacementPlan inspect_phase_wall_replacement_plan(
     const PhaseWallReplacementEntities& source,
     const std::vector<std::string>& seed_wall_ids,
@@ -81,7 +87,8 @@ struct PhaseWallReplacementResult {
     const std::string& alternative_id,
     bool complete_presentations = false,
     bool complete_corner_windows = false,
-    bool complete_hosted_instances = false);
+    bool complete_hosted_instances = false,
+    bool complete_component_dimensions = false);
 
 // Reinspects source and requires exactly the derived plan and a complete,
 // injective fresh mapping. Never generates identities or accepts clone JSON.
@@ -90,6 +97,8 @@ struct PhaseWallReplacementResult {
 // additive typed presentation rows on retained owners. Hosted copies retain
 // source poses before the enclosing edit; this grants no geometry carry/edit
 // authority. The separate mapping requires exact catalog/local source keys.
+// Opted-in component dimensions use a separate exact fresh mapping and clone
+// contribution after these initial copies; their source owners stay exact.
 // Retained-history reservations and the enclosing source snapshot fence
 // remain the Document's responsibility. Result is an intermediate physical
 // source: affected rooms still require reviewed room completion before commit.
@@ -97,6 +106,7 @@ struct PhaseWallReplacementResult {
     const PhaseWallReplacementEntities& source,
     const PhaseWallReplacementPlan& plan,
     const PhaseWallReplacementIdentityMap& identities,
-    const PhaseWallReplacementHostedInstanceIdentityMap& hosted_instance_identities = {});
+    const PhaseWallReplacementHostedInstanceIdentityMap& hosted_instance_identities = {},
+    const PhaseWallReplacementIdentityMap& dimension_identities = {});
 
 } // namespace sketch

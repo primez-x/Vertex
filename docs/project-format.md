@@ -1,4 +1,35 @@
-# Vertex project formats v1 through v231
+# Vertex project formats v1 through v232
+
+Reader232 retains wall replacement component dimensions. Wall leaf12 has
+exactly four fields: `version:12`, `authoring:<canonical leaf11>`,
+`complete_component_dimensions:true`, and `dimension_identities:<object>`.
+The last field maps original dimension owners to fresh document identities.
+Outer phase36 retains the historical wall lane explicitly in `wall_edit_version`
+(2, 19, 23 or 26); historical outer28/leaf11 and coordinated1 through7 cannot
+borrow this authority.
+
+Inspection admits the complete original raw source and catalogs, then discovers
+supported embedded v6 extents on actual copied catalog/instance roots. Independent
+document-owned dimensions remain unchanged. Replay first constructs the complete
+unchanged-pose physical/catalog copies and clones their dimensions in one grouped
+contribution. Fresh dimensions join only the active alternative's proposed list;
+original dimension envelopes remain exact. After the actual wall solve and hosted
+carry, dimension placement follows the final host-derived frames. The surviving
+ordinary/proposed host cohort also carries existing dimensions, including an
+opening whose local placement is unchanged while its parent wall moves.
+
+Copy discovery and final host carry each admit at most 1000 associated dimensions;
+the combined fresh owner/child/catalog/hosted/dimension allocation is bounded to
+4096. Complete current and retained/undone history reserve declared destinations.
+Current, nested and undone leaf12 proofs require reader232/extraction230 even
+with an empty dimension map. Current standalone wall geometry, profile, layer
+and corner-window replacement callers use this contract and allocate the actual
+source-derived dimension roster. All four canvas-proposal APIs retain a trailing
+explicit dimension flag with historical false defaults. Current standalone wall
+canvas and opening move/resize/profile/rehost/family callers request the new
+inventory; the mixed wall/physical group caller retains its historical lane.
+Properties allocation and coordinated replacements still require their own integration.
+Source implementation does not establish compilation or runtime acceptance.
 
 Reader231 retains coordinated stair-component dimension copies. Outer phase
 authoring34 requires inner7's exact four fields: `version:7`,

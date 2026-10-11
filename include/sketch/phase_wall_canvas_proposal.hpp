@@ -35,6 +35,10 @@ struct PhaseWallCanvasProposal {
 // Opting into complete_hosted_instances also allocates each exact catalog/local
 // row once. Its callback tag is a JSON array [catalog_id, instance_id]; the
 // command retains the qualified pair separately, never a rendered alias.
+// Opting into complete_component_dimensions requires complete_hosted_instances
+// for an actual replacement and allocates each discovered dimension once using
+// its exact source entity ID. The separate dimension map grants leaf-twelve
+// authority around canonical leaf-eleven authoring; copied JSON grants none.
 //
 // The returned complete entity map is a PHYSICAL PREVIEW, not a completed edit.
 // When physical.needs_room_review is true, the command obtained from
@@ -48,7 +52,8 @@ struct PhaseWallCanvasProposal {
     const std::function<std::string(std::string_view original_id)>& allocate_fresh_identity,
     bool complete_presentations = false,
     bool complete_corner_windows = false,
-    bool complete_hosted_instances = false);
+    bool complete_hosted_instances = false,
+    bool complete_component_dimensions = false);
 
 // Discover the actual saved-active shared-baseline hosts before ordinary
 // opening authoring or Document preview. Every profile must retain an existing
@@ -65,7 +70,8 @@ struct PhaseWallCanvasProposal {
     const std::function<std::string(std::string_view original_id)>& allocate_fresh_identity,
     bool complete_presentations = false,
     bool complete_corner_windows = false,
-    bool complete_hosted_instances = false);
+    bool complete_hosted_instances = false,
+    bool complete_component_dimensions = false);
 
 // Discover both actual original and target hosts before ordinary rehosting or
 // preview. Either host can qualify the saved-active baseline replacement.
@@ -79,7 +85,8 @@ struct PhaseWallCanvasProposal {
     const std::function<std::string(std::string_view original_id)>& allocate_fresh_identity,
     bool complete_presentations = false,
     bool complete_corner_windows = false,
-    bool complete_hosted_instances = false);
+    bool complete_hosted_instances = false,
+    bool complete_component_dimensions = false);
 
 // Same-host family conversion discovers actual saved-active baseline owners
 // before ordinary physical replay or Document preview. A complete equivalent
@@ -92,6 +99,7 @@ struct PhaseWallCanvasProposal {
     const std::function<std::string(std::string_view original_id)>& allocate_fresh_identity,
     bool complete_presentations = false,
     bool complete_corner_windows = false,
-    bool complete_hosted_instances = false);
+    bool complete_hosted_instances = false,
+    bool complete_component_dimensions = false);
 
 } // namespace sketch

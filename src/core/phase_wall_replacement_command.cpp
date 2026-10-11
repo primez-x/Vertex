@@ -4,6 +4,7 @@
 #include "sketch/annotation_entity_codec.hpp"
 #include "sketch/architecture.hpp"
 #include "sketch/assembly_document_adapter.hpp"
+#include "sketch/assembly_dimension_transform.hpp"
 #include "sketch/assembly_geometry.hpp"
 #include "sketch/assembly_model.hpp"
 #include "sketch/boundary_integrity.hpp"
@@ -329,6 +330,47 @@ bool has_geometry_or_relation_intent(const ConstraintAuthoringIntent& intent) {
         intent.measured_stroke_vertex_move || intent.measured_stroke_transform || intent.joint_translation ||
         intent.relation_anchor || !intent.relation_mutations.empty();
 }
+void complete_wall_component_dimensions(Stage& stage) {
+    if (!stage.plan.complete_component_dimensions) return;
+    // The source is the complete initial typed copy stage, with original and
+    // proposed dimension rows already admitted. The candidate has final host
+    // geometry and hosted placement; neither screen positions nor supplied
+    // entity payloads establish dimension transport authority.
+    const auto& before=stage.replacement.entities;
+    const auto scope=constraint_phase_scope(before);
+    std::set<std::string,std::less<>> protected_baselines,changed_walls;
+    for (const auto& [id,entity]:before) if (entity.type=="model_phases") {
+        (void)id;
+        const auto model=ModelPhases::from_json(entity.properties.at("model"));
+        if (model.active_alternative())
+            protected_baselines.insert(model.baseline_ids().begin(),model.baseline_ids().end());
+    }
+    for (const auto& [id,entity]:before) if (entity.type=="wall") {
+        const auto after=stage.entities.find(id);
+        if (after==stage.entities.end() || after->second.id!=id || after->second.type!=entity.type)
+            invalid("component dimension wall host lost its persisted identity or type");
+        if (!exact(entity,after->second)) changed_walls.insert(id);
+    }
+    std::vector<std::string> hosts;
+    for (const auto& [id,entity]:before) {
+        if (entity.type!="wall" && entity.type!="opening") continue;
+        const auto after=stage.entities.find(id);
+        if (after==stage.entities.end() || after->second.id!=id || after->second.type!=entity.type)
+            invalid("component dimension host lost its persisted identity or type");
+        const bool parent_changed=entity.type=="opening" &&
+            changed_walls.contains(entity.properties.at("wall_id").get<std::string>());
+        if (exact(entity,after->second) && !parent_changed) continue;
+        if (scope.inactive_owner_ids.contains(id) || protected_baselines.contains(id))
+            invalid("component dimension carry requires an active nonbaseline host");
+        if (hosts.size()>=100000) invalid("component dimension host roster exceeds bound");
+        hosts.push_back(id);
+    }
+    auto dimensions=carry_wall_hosted_assembly_dimension_transform_entities(before,stage.entities,hosts);
+    std::vector<std::string> changed_ids;
+    for (const auto& dimension:dimensions) changed_ids.push_back(dimension.id);
+    validate_ordinary_assembly_dimension_changes(before,changed_ids);
+    for (auto& dimension:dimensions) stage.entities.at(dimension.id)=std::move(dimension);
+}
 Stage physical_stage(const Entities& source,const PhaseConstraintAuthoringIntent& intent,
     const PhaseWallReplacementAuthoring& edit) {
     if (intent.source_entities_digest!=entity_map_digest(source) ||
@@ -413,8 +455,10 @@ Stage physical_stage(const Entities& source,const PhaseConstraintAuthoringIntent
     }
     Stage stage;
     stage.plan=inspect_phase_wall_replacement_plan(source,edit.seed_wall_ids,edit.registry_id,
-        edit.alternative_id,edit.complete_presentations,edit.complete_corner_windows,edit.complete_hosted_instances);
-    stage.replacement=replay_phase_wall_replacement(source,stage.plan,edit.identities,edit.hosted_instance_identities);
+        edit.alternative_id,edit.complete_presentations,edit.complete_corner_windows,edit.complete_hosted_instances,
+        edit.complete_component_dimensions);
+    stage.replacement=replay_phase_wall_replacement(source,stage.plan,edit.identities,edit.hosted_instance_identities,
+        edit.dimension_identities);
     auto mapped=remap_phase_wall_replacement_authoring_intent(intent.intent,stage.replacement.original_to_proposed);
     std::erase_if(mapped.relation_mutations,[&](const auto& mutation) {
         const auto found=stage.replacement.deferred_room_constraints.find(mutation.constraint_id);
@@ -639,6 +683,7 @@ Stage physical_stage(const Entities& source,const PhaseConstraintAuthoringIntent
         validate_corner_window_state(stage.entities);
     }
     complete_hosted_wall_carry(stage,mapped);
+    complete_wall_component_dimensions(stage);
     preserve_baseline(source,stage.entities,stage.plan);
     // Incoming room evidence sees every independently reconstructed new
     // relationship. These copies were withheld from the physical solve; only
@@ -890,6 +935,31 @@ std::optional<PhaseWallReplacementRequest> phase_wall_scalar_profile_replacement
 }
 
 Json encode_phase_wall_replacement_authoring(const PhaseWallReplacementAuthoring& value) {
+    if (value.complete_component_dimensions) {
+        if (!value.complete_hosted_instances || value.dimension_identities.size()>1000 ||
+            value.identities.size()>4096 || value.hosted_instance_identities.size()>4096-value.identities.size() ||
+            value.dimension_identities.size()>4096-value.identities.size()-value.hosted_instance_identities.size())
+            invalid("component dimensions require hosted authority and bounded combined allocation");
+        auto historical=value; historical.complete_component_dimensions=false; historical.dimension_identities.clear();
+        Json result{{"version",12},{"authoring",encode_phase_wall_replacement_authoring(historical)},
+            {"complete_component_dimensions",true},{"dimension_identities",Json::object()}};
+        std::set<std::string,std::less<>> destinations;
+        for (const auto& [source,destination]:value.identities) {
+            destinations.insert(source);destinations.insert(destination);
+        }
+        for (const auto& [source,destination]:value.hosted_instance_identities) {
+            (void)source;destinations.insert(destination);
+        }
+        for (const auto& [source,destination]:value.dimension_identities) {
+            (void)identity(Json(source));(void)identity(Json(destination));
+            if (source==destination || !destinations.insert(destination).second)
+                invalid("component dimension destinations must be globally fresh and injective");
+            result.at("dimension_identities")[source]=destination;
+        }
+        if (result.dump().size()>1024*1024) invalid("replacement decisions exceed one MiB");
+        return result;
+    }
+    if (!value.dimension_identities.empty()) invalid("dimension identities require explicit leaf-twelve authority");
     if (!value.complete_hosted_instances && !value.hosted_instance_identities.empty())
         invalid("qualified hosted identities require explicit leaf-eleven authority");
     if (value.complete_hosted_instances) {
@@ -1029,6 +1099,22 @@ Json encode_phase_wall_replacement_authoring(const PhaseWallReplacementAuthoring
 }
 PhaseWallReplacementAuthoring decode_phase_wall_replacement_authoring(const Json& value) {
     if (value.dump().size()>1024*1024) invalid("replacement decisions exceed one MiB");
+    if (value.is_object() && value.contains("version") && value.at("version").is_number_integer() && value.at("version")==12) {
+        keys(value,{"version","authoring","complete_component_dimensions","dimension_identities"});
+        if (!value.at("complete_component_dimensions").is_boolean() || value.at("complete_component_dimensions")!=true ||
+            !value.at("dimension_identities").is_object() || value.at("dimension_identities").size()>1000)
+            invalid("component dimensions require literal authority and a bounded identity object");
+        const auto& body=value.at("authoring");
+        if (!body.is_object() || !body.contains("version") || !body.at("version").is_number_integer() || body.at("version")!=11)
+            invalid("component dimensions require one canonical leaf-eleven body");
+        auto result=decode_phase_wall_replacement_authoring(body);
+        result.complete_component_dimensions=true;
+        for (const auto& [source,destination]:value.at("dimension_identities").items())
+            result.dimension_identities.emplace(identity(Json(source)),identity(destination));
+        if (encode_phase_wall_replacement_authoring(result).dump()!=value.dump())
+            invalid("component dimension wrapper is not canonical");
+        return result;
+    }
     if (value.is_object() && value.contains("version") && value.at("version").is_number_integer() &&
         value.at("version")==11) {
         keys(value,{"version","complete_hosted_instances","authoring","hosted_instance_identities"});
@@ -1295,7 +1381,8 @@ void validate_phase_wall_replacement_originals(const Entities& source,const Enti
     const PhaseConstraintAuthoringIntent& intent) {
     const auto edit=decode_phase_wall_replacement_authoring(intent.wall_replacement);
     const auto plan=inspect_phase_wall_replacement_plan(source,edit.seed_wall_ids,edit.registry_id,
-        edit.alternative_id,edit.complete_presentations,edit.complete_corner_windows,edit.complete_hosted_instances);
+        edit.alternative_id,edit.complete_presentations,edit.complete_corner_windows,edit.complete_hosted_instances,
+        edit.complete_component_dimensions);
     preserve_baseline(source,candidate,plan);
 }
 namespace {

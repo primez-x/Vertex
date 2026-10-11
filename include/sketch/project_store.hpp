@@ -335,7 +335,8 @@ public:
     // v229 retains proposed stair component dimension copies and dimensional phase members.
     // v230 retains explicit Properties allocation and enclosing receipts for stair dimension copies.
     // v231 retains stair child8 ordinary dimension carry and coordinated stair dimension copies.
-    static constexpr std::uint32_t format_version = 231;
+    // v232 retains wall leaf12 component dimension copies through phase outer36 and retained history.
+    static constexpr std::uint32_t format_version = 232;
     static constexpr std::uint32_t recovery_format_version = 4;
     [[nodiscard]] static std::uint32_t required_format_version(const DocumentSnapshot& snapshot);
     static constexpr std::uint64_t maximum_file_bytes = 4ULL * 1024ULL * 1024ULL * 1024ULL;

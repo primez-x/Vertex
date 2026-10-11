@@ -423,9 +423,10 @@ std::vector<Entity> carry_hosted_assembly_dimension_transform_entities(
     return carry_hosted_assembly_dimension_transform_entities(source,candidate,actual_host_ids,dimension_limit);
 }
 
-std::vector<Entity> carry_hosted_assembly_dimension_transform_entities(
+static std::vector<Entity> carry_hosted_dimension_contribution(
     const AssemblyDocumentEntities& source, const AssemblyDocumentEntities& candidate,
-    std::span<const std::string> actual_host_ids, std::size_t maximum_associated_dimensions) {
+    std::span<const std::string> actual_host_ids, std::size_t maximum_associated_dimensions,
+    bool wall_opening_hosts) {
     require(maximum_associated_dimensions<=dimension_limit, "hosted dimension association budget exceeds bound");
     require(actual_host_ids.size() <= 100000, "actual host roster exceeds entity bound");
     // Admit both complete raw inputs and all catalog work before indexing rows
@@ -443,8 +444,10 @@ std::vector<Entity> carry_hosted_assembly_dimension_transform_entities(
         require(hosts.insert(id).second && original != source.end() && current != candidate.end(),
             "actual host roster must name unique persisted source and candidate hosts");
         const auto& type = original->second.type;
-        require((type == "wall" || type == "column" || type == "beam" || type == "slab" ||
-            type == "roof" || type == "stair" || type == "railing") && current->second.type == type,
+        const bool supported=wall_opening_hosts ? (type=="wall" || type=="opening") :
+            (type == "wall" || type == "column" || type == "beam" || type == "slab" ||
+                type == "roof" || type == "stair" || type == "railing");
+        require(supported && current->second.type == type,
             "actual host roster must retain supported physical host types");
     }
 
@@ -506,6 +509,18 @@ std::vector<Entity> carry_hosted_assembly_dimension_transform_entities(
     // envelopes, then resolves actual selected-node frames on both complete maps.
     // Raw placement equality cannot establish equality of host-derived frames.
     return carry_assembly_dimension_transform_entities(source, candidate, requests);
+}
+
+std::vector<Entity> carry_hosted_assembly_dimension_transform_entities(
+    const AssemblyDocumentEntities& source, const AssemblyDocumentEntities& candidate,
+    std::span<const std::string> actual_host_ids, std::size_t maximum_associated_dimensions) {
+    return carry_hosted_dimension_contribution(source,candidate,actual_host_ids,maximum_associated_dimensions,false);
+}
+
+std::vector<Entity> carry_wall_hosted_assembly_dimension_transform_entities(
+    const AssemblyDocumentEntities& source, const AssemblyDocumentEntities& candidate,
+    std::span<const std::string> actual_host_ids) {
+    return carry_hosted_dimension_contribution(source,candidate,actual_host_ids,dimension_limit,true);
 }
 
 void validate_ordinary_assembly_dimension_changes(

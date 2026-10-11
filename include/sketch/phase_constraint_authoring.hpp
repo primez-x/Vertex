@@ -139,6 +139,12 @@ struct PhaseConstraintAuthoringIntent {
     // two; historical dialect two retains its sixteen-field intent. Complete
     // replacement replay derives and copies actual baseline roots before scale.
     // Neither scale dialect grants demolition or coordinated scale authority.
+    // Dialect thirty-six encloses the historical wall edit lane separately
+    // in wall_edit_version (two/nineteen/twenty-three/twenty-six) and requires
+    // wall replacement leaf twelve. Its explicit dimension mapping clones
+    // qualified embedded extents before the final host/frame carry. Original
+    // baseline dimensions retain their exact source envelopes; historical
+    // twenty-eight/leaf-eleven cannot acquire this authority.
     // Dialect twenty-two retains a pure per-owner similarity joint intent.
     // It keeps the ordinary eight outer keys and grants no replacement lane;
     // historical wrappers cannot carry the new nested operator dialect.
