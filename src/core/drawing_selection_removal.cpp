@@ -831,13 +831,24 @@ DrawingSelectionRemovalEntities replay_drawing_selection_removal_after_review(co
 DrawingSelectionRemovalEntities replay_drawing_selection_removal_with_architectural(
     const DrawingSelectionRemovalEntities& actual, const DrawingSelectionRemovalIntent& drawing,
     const ArchitecturalSelectionRemovalIntent& architectural,
-    bool allow_manufactured_opening_hosts, bool active_phase_constraints) {
+    bool allow_manufactured_opening_hosts, bool active_phase_constraints,
+    bool complete_component_phase_memberships) {
     try {
+        if (complete_component_phase_memberships) {
+            Budget source_budget; bounds(actual,source_budget);
+            AssemblyCatalogTransferBudget catalog_budget;
+            for (const auto& [id,entity]:actual) {
+                (void)id;
+                if (entity.type=="assembly_model") admit_existing_assembly_catalog_work(entity,catalog_budget);
+            }
+        }
         // Analytical actual-source admission runs before any native factory.
         // No caller-supplied candidate can grant this narrower composition path.
         (void)replay(actual, actual, drawing, active_phase_constraints);
         const auto stage = replay_architectural_selection_removal(
-            actual, architectural, allow_manufactured_opening_hosts);
+            actual, architectural, allow_manufactured_opening_hosts, false,
+            complete_component_phase_memberships, complete_component_phase_memberships, false,
+            complete_component_phase_memberships);
         return replay(actual, stage, drawing, active_phase_constraints, &stage);
     } catch (const Json::exception& error) {
         reject(std::string("malformed actual/architectural source: ") + error.what());

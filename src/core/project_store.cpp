@@ -377,6 +377,26 @@ std::uint32_t required_format_version_internal(const DocumentSnapshot& snapshot,
             const auto& value=*pending.back(); pending.pop_back();
             if (++nodes>ProjectStore::maximum_json_values)
                 storage_error(StorageErrorCode::resource_limit,"Typed edit reader-floor scan exceeds its JSON budget");
+            const auto closed_shape=[&](std::initializer_list<const char*> fields) {
+                if (!value.is_object() || value.size()!=fields.size()) return false;
+                return std::all_of(fields.begin(),fields.end(),[&](const char* field) { return value.contains(field); });
+            };
+            if (closed_shape({"version","architectural","drawing","allow_manufactured_opening_hosts",
+                    "complete_component_phase_memberships"}) && value.at("version")==2 &&
+                value.at("allow_manufactured_opening_hosts")==true &&
+                value.at("complete_component_phase_memberships")==true && value.at("architectural").is_object()) {
+                const auto& architectural=value.at("architectural");
+                if ((architectural.contains("object_ids") && architectural.at("object_ids").is_array() &&
+                        !architectural.at("object_ids").empty()) ||
+                    (architectural.contains("components") && architectural.at("components").is_array() &&
+                        !architectural.at("components").empty()))
+                    floor=std::max(floor,209U);
+            }
+            if (closed_shape({"version","ordinary","ordinary_command","members","child_command",
+                    "source_snapshot_digest","source_authoring_digest","source_entities_digest",
+                    "source_saved_revision","stage_snapshot_digest","stage_authoring_digest"}) &&
+                value.at("version")==9)
+                floor=std::max(floor,209U);
             if (value.is_object() && value.value("version",nlohmann::json())==17 &&
                 value.value("carry_component_presentation",nlohmann::json())==true &&
                 value.contains("component_request") && value.contains("component_identity_reservations") &&
@@ -656,9 +676,9 @@ std::uint32_t required_format_version_internal(const DocumentSnapshot& snapshot,
     };
     for (const auto& revision : snapshot.history()) {
         if (revision.phase_entity_import) required=std::max(required,160U);
-        if (required<208 && revision.boundary_geometry_edit)
+        if (required<209 && revision.boundary_geometry_edit)
             required=std::max(required,typed_edit_reader_floor(encode_boundary_geometry_edit(*revision.boundary_geometry_edit)));
-        if (required<208 && revision.boundary_constraint_changes)
+        if (required<209 && revision.boundary_constraint_changes)
             required=std::max(required,typed_edit_reader_floor(command_to_json(Command{*revision.boundary_constraint_changes})));
         if (required<122 && revision.boundary_geometry_edit)
             required=std::max(required,quantity_reader_floor(encode_boundary_geometry_edit(*revision.boundary_geometry_edit)));
@@ -742,7 +762,7 @@ std::uint32_t required_format_version_internal(const DocumentSnapshot& snapshot,
                 required=std::max(required,178U);
             if (command.mixed_selection_removal_completion || !command.mixed_selection_removal_intent.is_null()) {
                 const auto dialect=command.mixed_selection_removal_intent.value("version",1);
-                required=std::max(required,dialect>=8 ? 186U : dialect==7 ? 182U : dialect==6 ? 181U : dialect==5 ? 180U : dialect==4 ? 179U : dialect==3 ? 178U : dialect==2 ? 177U : 176U);
+                required=std::max(required,dialect==9 ? 209U : dialect>=8 ? 186U : dialect==7 ? 182U : dialect==6 ? 181U : dialect==5 ? 180U : dialect==4 ? 179U : dialect==3 ? 178U : dialect==2 ? 177U : 176U);
             }
             if (command.independent_drawing_removal_completion || !command.independent_drawing_removal_intent.is_null())
                 required=std::max(required,
@@ -3129,6 +3149,7 @@ bool verify_sqlite_schema(sqlite3* database, bool allow_recovery = false) {
          sqlite3_column_int(user_version.get(), 0) != 205 &&
          sqlite3_column_int(user_version.get(), 0) != 206 &&
          sqlite3_column_int(user_version.get(), 0) != 208 &&
+         sqlite3_column_int(user_version.get(), 0) != 209 &&
          sqlite3_column_int(user_version.get(), 0) != 207 &&
          sqlite3_column_int(user_version.get(), 0) != 202 &&
          sqlite3_column_int(user_version.get(), 0) != 200 &&
@@ -3854,6 +3875,8 @@ DocumentSnapshot read_snapshot(sqlite3* database, RecoveryLedger* recovery = nul
     // here and authenticate the manifest with its stored version below.
     const auto required_format = required_format_version_internal(snapshot, format_number < 28);
     if (required_format > format_number) {
+        if (required_format>=209)
+            storage_error(StorageErrorCode::unsupported_format,"This project requires reader 209 for explicit component phase membership retirement");
         if (required_format>=208)
             storage_error(StorageErrorCode::unsupported_format,"This project requires reader 208 for component presentation Properties and reference carry");
         if (required_format>=207)

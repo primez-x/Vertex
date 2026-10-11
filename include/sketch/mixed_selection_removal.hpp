@@ -37,6 +37,8 @@ public:
 // Closed removal-only composition. The ordinary map is independently derived
 // from actual roots/qualified rows; typed roof children never select their host.
 // The staged snapshots are detached proofs, not intermediate live history.
+// Dialect nine alone accepts architectural/drawing removal two's explicit
+// component membership retirement. Historical dialect one requires removal one.
 [[nodiscard]] nlohmann::json validate_mixed_selection_removal_intent(const nlohmann::json& value);
 [[nodiscard]] bool mixed_selection_removal_active_phase_policy(const nlohmann::json& value);
 [[nodiscard]] std::optional<Revision> mixed_selection_removal_source_saved_revision(const nlohmann::json& value);

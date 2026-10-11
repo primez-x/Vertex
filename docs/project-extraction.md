@@ -1,5 +1,19 @@
 # Portable project extraction
 
+Exchange version207 requires native reader209 for explicit
+ArchitecturalDrawingRemovalIntent2 and mixed selection removal intent9 in the
+unchanged outer command45. AD2 retains exactly `version`, `architectural`,
+`drawing`, `allow_manufactured_opening_hosts`, and
+`complete_component_phase_memberships`, with both options literal `true` and
+an actual architectural roster. Mixed9 retains the same eleven fields as
+mixed1 and requires ordinary AD2. Source-derived complete component phase
+membership retirement permits actual component rows on surviving roof hosts;
+selected physical roof owners remain refused pending their separate producer.
+Current, nested, wrapped, retained and undone receipts preserve this explicit
+authority. Historical AD1 and mixed1 retain their original authority; mixed1
+requires AD1. This describes source-format support only, without runtime
+acceptance or lifting companion-bearing project quarantine.
+
 Exchange version206 requires native reader208 for component presentation
 Properties17 and component request/authoring2. Original source fences, exact
 overlay allocations, component correspondence and complete lifetime reservations

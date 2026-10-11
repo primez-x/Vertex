@@ -128,9 +128,12 @@ EmbeddedAssemblyPresentationIds expected_aliases(const Entities& source, const s
 Entities replay_architectural_selection_removal(const Entities& actual,
     const ArchitecturalSelectionRemovalIntent& intent, bool allow_manufactured_opening_hosts,
     bool complete_roof_hosted_catalog_consequences, bool complete_wall_hosted_catalog_consequences,
-    bool complete_placed_catalog_consequences, bool complete_corner_window_removal) {
+    bool complete_placed_catalog_consequences, bool complete_corner_window_removal,
+    bool complete_component_phase_memberships) {
     try {
         bounds(actual);
+        if (complete_component_phase_memberships && !allow_manufactured_opening_hosts)
+            reject("component membership retirement requires admitted component hosts");
         if (intent.object_ids.size() > selection_limit ||
             intent.components.size() > selection_limit - intent.object_ids.size() ||
             (intent.object_ids.empty() && intent.components.empty()))
@@ -143,7 +146,11 @@ Entities replay_architectural_selection_removal(const Entities& actual,
             if (!unique.insert(id).second) reject("duplicate selected actual owner: " + id);
             const auto found = actual.find(id);
             if (found == actual.end()) reject("selected actual owner is missing: " + id);
-            if (found->second.type == "roof") roofs.push_back(id);
+            if (found->second.type == "roof") {
+                if (complete_component_phase_memberships)
+                    reject("physical roof removal does not supply complete component phase memberships: " + id);
+                roofs.push_back(id);
+            }
             else if (primitive(found->second) ||
                 (complete_corner_window_removal && found->second.type == "corner_window")) objects.push_back(id);
             else reject("selected root requires a dedicated removal path: " + id);
@@ -160,13 +167,21 @@ Entities replay_architectural_selection_removal(const Entities& actual,
         const bool complete_composition_catalog = complete_roof_hosted_catalog_consequences || complete_generic_catalog;
 
         if (allow_manufactured_opening_hosts) {
+            if (complete_component_phase_memberships) {
+                AssemblyCatalogTransferBudget catalog_budget;
+                for (const auto& [id,entity]:actual) {
+                    (void)id;
+                    if (entity.type=="assembly_model") admit_existing_assembly_catalog_work(entity,catalog_budget);
+                }
+            }
             // Reserve the complete source's conservative shared 16-pass roof,
             // host and component inventory before any native inspector/factory.
             validate_mixed_wall_removal_source_admission(actual, true, complete_corner_window_removal);
             if (!objects.empty() || !selected_components.empty())
                 preflight_architectural_object_removal(actual, objects, intent.components, 0,
                     complete_generic_catalog,
-                    complete_placed_catalog_consequences,complete_corner_window_removal,complete_corner_window_removal);
+                    complete_placed_catalog_consequences,complete_corner_window_removal,complete_corner_window_removal,
+                    complete_component_phase_memberships);
         }
         std::vector<Entities> candidates;
         if (!roofs.empty()) {
@@ -189,10 +204,12 @@ Entities replay_architectural_selection_removal(const Entities& actual,
             auto ordinary = allow_manufactured_opening_hosts ?
                 replay_architectural_object_removal(actual, objects, components, true, 0,
                     complete_generic_catalog,
-                    complete_placed_catalog_consequences,complete_corner_window_removal,complete_corner_window_removal) :
+                    complete_placed_catalog_consequences,complete_corner_window_removal,complete_corner_window_removal,
+                    complete_component_phase_memberships) :
                 replay_architectural_object_removal(actual, objects, components, false, 0,
                     complete_generic_catalog,
-                    complete_placed_catalog_consequences,complete_corner_window_removal,complete_corner_window_removal);
+                    complete_placed_catalog_consequences,complete_corner_window_removal,complete_corner_window_removal,
+                    complete_component_phase_memberships);
             bounds(ordinary);
             candidates.push_back(std::move(ordinary));
         }

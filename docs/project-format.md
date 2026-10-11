@@ -1,4 +1,22 @@
-# Vertex project formats v1 through v208
+# Vertex project formats v1 through v209
+
+Reader209 retains explicit ArchitecturalDrawingRemovalIntent2 and mixed
+selection removal intent9; the outer command45 remains unchanged. AD2 has
+exactly `version`, `architectural`, `drawing`,
+`allow_manufactured_opening_hosts`, and
+`complete_component_phase_memberships`. The last two fields must be literal
+`true`, and architecture must contain an actual selected object or component
+roster. This opts into source-derived retirement of complete component phase
+memberships, including actual component rows on surviving roof hosts. Selected
+physical roof owners remain refused pending their separate producer.
+Mixed9 has the same eleven fields as mixed1: `version`, `ordinary`,
+`ordinary_command`, `members`, `child_command`, `source_snapshot_digest`,
+`source_authoring_digest`, `source_entities_digest`, `source_saved_revision`,
+`stage_snapshot_digest`, and `stage_authoring_digest`; its ordinary request must
+be AD2. Historical AD1 and mixed1 keep their original authority, and mixed1
+requires AD1. Current, nested, wrapped, retained and undone receipts require the
+same reader209 floor. Extraction emits207. This is source-format support only;
+runtime acceptance is unqualified and companion-bearing quarantine remains.
 
 Ordinary captured host copies now add phase membership using the existing
 reader203 companion schema. The admitted physical copy and its actual enrollment

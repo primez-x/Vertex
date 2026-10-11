@@ -24,12 +24,16 @@ struct ArchitecturalSelectionRemovalIntent {
 // active proposed opening without removing its active existing/proposed wall.
 // The separate corner opt-in supplies complete owner-hosted component admission
 // only for the explicit new corner selection producer; defaults stay unchanged.
+// Component membership retirement is an independent opt-in. It requires the
+// admitted component-host lane and refuses physical roof owners until their
+// dedicated producer can account for complete component memberships.
 [[nodiscard]] RoofRemovalEntities replay_architectural_selection_removal(
     const RoofRemovalEntities& actual, const ArchitecturalSelectionRemovalIntent& intent,
     bool allow_manufactured_opening_hosts = false,
     bool complete_roof_hosted_catalog_consequences = false,
     bool complete_wall_hosted_catalog_consequences = false,
     bool complete_placed_catalog_consequences = false,
-    bool complete_corner_window_removal = false);
+    bool complete_corner_window_removal = false,
+    bool complete_component_phase_memberships = false);
 
 } // namespace sketch

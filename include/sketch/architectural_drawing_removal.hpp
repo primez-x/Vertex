@@ -14,6 +14,9 @@ struct ArchitecturalDrawingRemovalIntent {
     ArchitecturalSelectionRemovalIntent architectural;
     DrawingSelectionRemovalIntent drawing;
     bool allow_manufactured_opening_hosts{};
+    // Closed v2 authority for actual component-row retirement and its typed
+    // saved-phase memberships. False preserves the exact historical v1 wire.
+    bool complete_component_phase_memberships = false;
 };
 
 [[nodiscard]] nlohmann::json encode_architectural_drawing_removal_intent(

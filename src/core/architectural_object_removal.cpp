@@ -3,6 +3,7 @@
 #include "sketch/annotation_entity_codec.hpp"
 #include "sketch/assembly_document_adapter.hpp"
 #include "sketch/assembly_geometry.hpp"
+#include "sketch/assembly_phase_membership_transport.hpp"
 #include "sketch/boundary_dimension.hpp"
 #include "sketch/building_entity.hpp"
 #include "sketch/constraint_phase_scope.hpp"
@@ -506,7 +507,14 @@ Entity catalog_local_remainder(Entity entity) {
 // Local material/type references cannot name a document owner merely because
 // their spelling matches it. Mask only validated codec-owned local slots in
 // this inspection copy; authoritative catalog and assignment bytes stay raw.
-Entity global_reference_remainder(Entity entity,bool completed) {
+Entity global_reference_remainder(Entity entity,bool completed,
+    bool complete_component_phase_memberships = false) {
+    if (complete_component_phase_memberships && entity.type == assembly_phase_membership_entity_type) {
+        // Only the closed, admitted typed model is a qualified reference codec.
+        // Opaque carrier properties and extensions retain their refusal policy.
+        (void)AssemblyPhaseMembership::from_json(entity.properties.at("model"));
+        entity.properties.erase("model");
+    }
     try {
         wall_scale_quantity_reference_remainder(entity);
     } catch (const std::invalid_argument& error) {
@@ -556,7 +564,7 @@ Entity global_reference_remainder(Entity entity,bool completed) {
     }
     return scratch;
 }
-Entity corner_consequence_remainder(Entity entity) {
+Entity corner_consequence_remainder(Entity entity, bool complete_component_phase_memberships = false) {
     if (entity.type == kAnnotationEntityType) {
         validate_annotation_entity(entity);
         for (auto& row : entity.properties.at("state").at("overrides"))
@@ -578,7 +586,7 @@ Entity corner_consequence_remainder(Entity entity) {
         for (auto& row : entity.properties.at("model").at("relations")) { row.erase("source_id"); row.erase("target_id"); }
         return entity;
     }
-    return global_reference_remainder(std::move(entity), false);
+    return global_reference_remainder(std::move(entity), false, complete_component_phase_memberships);
 }
 
 // Bound analytical physical work before any native building codec/builder.
@@ -921,7 +929,8 @@ Entities derive(const Entities& source, const std::vector<std::string>& selectio
     bool complete_hosted_catalog_consequences = false,
     bool complete_proposed_opening_catalog_consequences = false,
     bool complete_corner_window_removal = false,
-    bool complete_corner_catalog_hosts = false) {
+    bool complete_corner_catalog_hosts = false,
+    bool complete_component_phase_memberships = false) {
     if (complete_corner_catalog_hosts && !complete_corner_window_removal)
         reject("corner catalog-host admission requires corner-removal authority");
     if (!allow_manufactured_opening_hosts && !complete_corner_catalog_hosts && reserved_native_work)
@@ -929,6 +938,16 @@ Entities derive(const Entities& source, const std::vector<std::string>& selectio
     bounds(source);
     if ((selection.empty() && components.empty()) || selection.size() > selection_limit || components.size() > closure_limit)
         reject("selection requires bounded actual physical roots or qualified components");
+    AssemblyCatalogTransferBudget component_membership_catalog_budget;
+    if (complete_component_phase_memberships) {
+        // Reserve the entire source inventory before membership scope, assembly
+        // decoders or candidate copies. The candidate uses the same ledger.
+        for (const auto& [id, entity] : source) {
+            (void)id;
+            if (entity.type == "assembly_model")
+                admit_existing_assembly_catalog_work(entity, component_membership_catalog_budget);
+        }
+    }
     const auto phase = phases(source); const auto organization = organize_project(source);
     CornerRemoval corners;
     if (complete_corner_window_removal) {
@@ -1170,11 +1189,14 @@ Entities derive(const Entities& source, const std::vector<std::string>& selectio
             instances.emplace(id, row.id); local.insert(row.id); names.insert(aliases.at({id, row.id}));
         }
         if (local.empty()) continue;
-        const auto scratch = catalog_local_remainder(reference_remainder(entity));
-        if (touches(scratch.properties, local) || touches(scratch.extensions, local))
-            reject("affected catalog has opaque retired local-instance reference: " + id);
+        if (!complete_component_phase_memberships) {
+            const auto scratch = catalog_local_remainder(reference_remainder(entity));
+            if (touches(scratch.properties, local) || touches(scratch.extensions, local))
+                reject("affected catalog has opaque retired local-instance reference: " + id);
+        }
         filter(result.at(id).properties.at("model").at("instances"), [&](const Json& row) { return !local.contains(row.at("id").get<std::string>()); });
-        (void)AssemblyModel::from_json(result.at(id).properties.at("model"));
+        if (!complete_component_phase_memberships)
+            (void)AssemblyModel::from_json(result.at(id).properties.at("model"));
     }
     for (const auto& key : explicit_keys) if (!instances.contains(key)) reject("selected qualified actual component row is missing: " + key.first + "/" + key.second);
     const auto costs = physical_bounds(source, geometry_owners, allow_manufactured_opening_hosts);
@@ -1232,14 +1254,43 @@ Entities derive(const Entities& source, const std::vector<std::string>& selectio
         retire_phases(result, source, phase, phase_retired);
         demolish_corners(result, phase, corners);
     } else retire_phases(result, source, phase, retired);
+    if (complete_component_phase_memberships) {
+        for (const auto& id : retired) result.erase(id);
+        for (const auto& id : dimension_ids) result.erase(id);
+        bounds(result);
+        // Admit all remaining catalogs cumulatively before the pruning helper
+        // decodes them or copies its independently derived candidate.
+        for (const auto& [id, entity] : result) {
+            (void)id;
+            if (entity.type == "assembly_model")
+                admit_existing_assembly_catalog_work(entity, component_membership_catalog_budget);
+        }
+        result = prune_removed_assembly_phase_memberships(source, result);
+        // Preserve the historical conservative refusal for opaque references
+        // within affected catalogs, after typed companion cleanup is complete.
+        for (const auto& [id, entity] : source) if (entity.type == "assembly_model") {
+            Ids local;
+            for (auto key = instances.lower_bound({id, ""}); key != instances.end() && key->first == id; ++key)
+                local.insert(key->second);
+            if (local.empty()) continue;
+            const auto scratch = catalog_local_remainder(reference_remainder(entity));
+            if (touches(scratch.properties, local) || touches(scratch.extensions, local))
+                reject("affected catalog has opaque retired local-instance reference: " + id);
+            (void)AssemblyModel::from_json(result.at(id).properties.at("model"));
+        }
+    }
     // Deleted overlay identities stay local to the actual saved view. They are
     // never appended to the global physical/presentation retirement namespace.
     OverlayChildren overlays;
     for (const auto& [id, original] : source) {
         if (retired.contains(id) || (!touches(original.properties, names) && !touches(original.extensions, names))) continue;
-        const auto scratch = complete_corner_window_removal ? corner_consequence_remainder(original) : global_reference_remainder(original,false);
+        const auto scratch = complete_corner_window_removal ? corner_consequence_remainder(original, complete_component_phase_memberships) :
+            global_reference_remainder(original,false, complete_component_phase_memberships);
         if (touches(scratch.properties, names) || touches(scratch.extensions, names))
             reject("affected opaque/reference data lacks qualified retirement codec: " + id);
+        // Early physical staging must not bypass the historical opaque checks
+        // on attached dimensions that the candidate has already removed.
+        if (complete_component_phase_memberships && !result.contains(id)) continue;
         auto& changed = result.at(id);
         if (complete_corner_window_removal &&
             (original.type == kSheetViewEntityType || original.type == kAnnotationEntityType || original.type == "room_relationships")) {
@@ -1291,7 +1342,7 @@ Entities derive(const Entities& source, const std::vector<std::string>& selectio
         if (remaining == remaining_aliases.end() || remaining->second != alias)
             reject("removal would change surviving computed presentation alias: " + key.first + "/" + key.second);
     }
-    validate_completed_architectural_retirement_references(result,names);
+    validate_completed_architectural_retirement_references(result,names, complete_component_phase_memberships);
     for (const auto& [id, entity] : result) {
         if (qualified_instance_reference(entity.properties, instances) || qualified_instance_reference(entity.extensions, instances))
             reject("retained owner/component reference requires qualified retirement codec: " + id);
@@ -1482,10 +1533,20 @@ Entities derive(const Entities& source, const std::vector<std::string>& selectio
 
 void validate_completed_architectural_retirement_references(
     const std::map<std::string, Entity, std::less<>>& candidate,
-    const std::set<std::string, std::less<>>& retired_ids) {
+    const std::set<std::string, std::less<>>& retired_ids,
+    bool complete_component_phase_memberships) {
+    if (complete_component_phase_memberships) {
+        bounds(candidate);
+        AssemblyCatalogTransferBudget catalog_budget;
+        for (const auto& [id, entity] : candidate) {
+            (void)id;
+            if (entity.type == "assembly_model") admit_existing_assembly_catalog_work(entity, catalog_budget);
+        }
+        (void)resolve_assembly_phase_memberships(candidate);
+    }
     for (const auto& [id,entity]:candidate) {
         if (!touches(entity.properties,retired_ids) && !touches(entity.extensions,retired_ids)) continue;
-        const auto scratch=global_reference_remainder(entity,true);
+        const auto scratch=global_reference_remainder(entity,true, complete_component_phase_memberships);
         if (touches(scratch.properties,retired_ids) || touches(scratch.extensions,retired_ids))
             reject("retained owner/component reference requires qualified retirement codec: "+id);
     }
@@ -1497,10 +1558,10 @@ std::map<std::string, Entity, std::less<>> replay_architectural_object_removal(
     const std::vector<std::pair<std::string, std::string>>& explicit_components,
     bool allow_manufactured_opening_hosts, std::size_t reserved_native_work, bool complete_hosted_catalog_consequences,
     bool complete_proposed_opening_catalog_consequences, bool complete_corner_window_removal,
-    bool complete_corner_catalog_hosts) {
+    bool complete_corner_catalog_hosts, bool complete_component_phase_memberships) {
     try { return derive(actual, selected_object_ids, explicit_components, allow_manufactured_opening_hosts,
         reserved_native_work, false, complete_hosted_catalog_consequences, complete_proposed_opening_catalog_consequences,
-        complete_corner_window_removal, complete_corner_catalog_hosts); }
+        complete_corner_window_removal, complete_corner_catalog_hosts, complete_component_phase_memberships); }
     catch (const Json::exception& error) { reject(std::string("malformed actual source: ") + error.what()); }
     catch (const Standard_Failure& error) {
         const auto* message = error.GetMessageString();
@@ -1512,10 +1573,10 @@ void preflight_architectural_object_removal(const Entities& actual,
     const std::vector<std::pair<std::string, std::string>>& explicit_components,
     std::size_t reserved_native_work, bool complete_hosted_catalog_consequences,
     bool complete_proposed_opening_catalog_consequences, bool complete_corner_window_removal,
-    bool complete_corner_catalog_hosts) {
+    bool complete_corner_catalog_hosts, bool complete_component_phase_memberships) {
     try { (void)derive(actual, selected_object_ids, explicit_components, true, reserved_native_work, true,
         complete_hosted_catalog_consequences, complete_proposed_opening_catalog_consequences, complete_corner_window_removal,
-        complete_corner_catalog_hosts); }
+        complete_corner_catalog_hosts, complete_component_phase_memberships); }
     catch (const Json::exception& error) { reject(std::string("malformed actual source: ") + error.what()); }
 }
 std::vector<std::pair<std::string, std::string>> complete_proposed_opening_catalog_consequence_keys(

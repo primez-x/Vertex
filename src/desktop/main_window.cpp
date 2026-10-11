@@ -31444,6 +31444,19 @@ public:
         return intent;
     }
 
+    static bool componentMembershipRemovalMode(const DocumentSnapshot& source,
+        const ArchitecturalSelectionRemovalIntent& intent) {
+        if (intent.object_ids.empty() && intent.components.empty()) return false;
+        // The actual captured roster selects this authority. A selected roof
+        // needs its own completed producer; a component on a surviving roof
+        // still belongs to the ordinary qualified-row lane.
+        for (const auto& id:intent.object_ids)
+            if (source.entities().at(id).type=="roof") return false;
+        return std::any_of(source.entities().begin(),source.entities().end(),[](const auto& row) {
+            return row.second.type==assembly_phase_membership_entity_type;
+        });
+    }
+
     struct PreparedSelectionRemoval {
         Command command;
         std::optional<ArchitecturalSelectionRemovalIntent> architectural_intent;
@@ -31508,7 +31521,9 @@ public:
             }
             if (selected_components.size()!=intent.architectural.components.size()) return;
             const bool architectural=!intent.architectural.object_ids.empty() || !intent.architectural.components.empty();
-            intent.allow_manufactured_opening_hosts=architectural && allow_manufactured_opening_hosts;
+            intent.complete_component_phase_memberships=componentMembershipRemovalMode(source,intent.architectural);
+            intent.allow_manufactured_opening_hosts=architectural &&
+                (allow_manufactured_opening_hosts || intent.complete_component_phase_memberships);
             if (hasIndependentDrawingRemoval(intent.drawing)) canonicalIndependentDrawingRemoval(intent.drawing);
             const auto expected=replay_architectural_drawing_removal(source,intent);
             if (expected.size()!=candidate.entities().size()) return;
@@ -31531,8 +31546,18 @@ public:
         const std::vector<std::pair<std::string,std::string>>& components={},
         bool allow_manufactured_opening_hosts=false,
         std::optional<ArchitecturalSelectionRemovalIntent>* prepared_intent=nullptr) const {
-        if (allow_manufactured_opening_hosts)
+        if (allow_manufactured_opening_hosts) {
+            if (std::any_of(snapshot.entities().begin(),snapshot.entities().end(),[](const auto& row) {
+                return row.second.type==assembly_phase_membership_entity_type;
+            })) {
+                AssemblyCatalogTransferBudget catalog_budget;
+                for (const auto& [id,entity]:snapshot.entities()) {
+                    (void)id;
+                    if (entity.type=="assembly_model") admit_existing_assembly_catalog_work(entity,catalog_budget);
+                }
+            }
             validate_mixed_wall_removal_source_admission(snapshot.entities(),true);
+        }
         std::vector<std::string> physical_roots;
         for (const auto& entity:graph)
             if (entity.type=="stair" || entity.type=="railing" || entity.type=="slab" ||
@@ -31543,9 +31568,12 @@ public:
             if (physical_roots.empty() && components.empty()) return snapshot.entities();
             const auto intent=captureArchitecturalSelectionRemoval(snapshot,std::move(physical_roots),components);
             if (prepared_intent) *prepared_intent=intent;
-            if (allow_manufactured_opening_hosts)
+            const bool complete_memberships=componentMembershipRemovalMode(snapshot,intent);
+            const bool admit_hosts=allow_manufactured_opening_hosts || complete_memberships;
+            if (admit_hosts)
                 validate_physical_wall_join_removal_identity_lifetime(snapshot,intent.roof_additional_identities);
-            return replay_architectural_selection_removal(snapshot.entities(),intent,allow_manufactured_opening_hosts);
+            return replay_architectural_selection_removal(snapshot.entities(),intent,admit_hosts,
+                false,complete_memberships,complete_memberships,false,complete_memberships);
         }();
         for (const auto& entity : graph) {
             const auto surviving=candidate.find(entity.id);
@@ -58873,7 +58901,7 @@ private:
                             ? ordinary_selection_removal_authority(decode_ordinary_selection_removal_intent(intent.at("ordinary")))
                             : intent.at("version")==4
                             ? phase_selection_removal_authority(decode_phase_selection_removal_intent(intent.at("ordinary")))
-                            : (intent.at("version")==5 || intent.at("version")==6 || intent.at("version")==7)
+                            : (intent.at("version")==5 || intent.at("version")==6 || intent.at("version")==7 || intent.at("version")==8)
                             ? corner_selection_removal_authority(decode_corner_selection_removal_intent(intent.at("ordinary")))
                             : decode_architectural_drawing_removal_intent(intent.at("ordinary"));
                         targets.insert(ordinary.architectural.object_ids.begin(),ordinary.architectural.object_ids.end());

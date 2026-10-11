@@ -14,6 +14,51 @@ changed source does not acquire runtime acceptance without later qualification.
 
 ## Current delivery state
 
+### October 11 typed component retirement and retained mixed deletion
+
+The preceding ordinary-copy/catalog-editor batch is committed and pushed as
+b4adfdbb. Current source adds a default-false component membership retirement
+option to the typed architectural object, selection and drawing-composition
+producers. The new path admits all source catalogs before scope decoding,
+stages actual row/physical/dimension/phase deletions, admits remaining catalogs,
+then prunes only actual absent qualified rows from their existing companions.
+Present inactive rows remain declared; baseline rows with a saved active
+alternative still refuse physical retirement. Opaque carrier properties and
+extensions remain conservative refusals; only a decoded typed membership model
+is masked in reference inspection. Generic document edits do not gain pruning.
+
+Architectural/drawing removal two retains literal complete membership authority
+with actual architectural roots/rows and component-host admission. Mixed
+selection removal nine accepts that exact ordinary request under unchanged outer
+command45, independently reconstructs its complete original-source stage and
+then binds surviving selected skylight removal to that stage. Historical
+architectural/drawing one and mixed one retain their original meaning; mixed
+one explicitly requires ordinary one. Active-design dependent protection and
+retained child phase destinations include the new dialect.
+
+Canvas ordinary row/typed-root removal and its optional mixed-selection proof
+derive the same membership option from the captured nonempty architectural
+roster and actual presence of companions. Selected physical roofs keep their
+historical producer; completing their membership retirement remains required.
+Explicit component rows on surviving roof hosts use the new qualified-row lane.
+The Site roster classifier also recognizes existing corner removal eight.
+Reader209/extraction207 retain the new explicit intent through current, nested,
+wrapped, retained and undone history, including histories already requiring208.
+
+Roof-owner and corner-aggregate membership consumers, phase-semantic baseline
+component demolition, complete mixed clipboard, detach/shared-type semantics,
+uncaptured copies, nested profile selection, joint-only patches and deformed/
+cross-Site carry remain required implementation gaps. Companion-bearing
+read-only quarantine remains until all consumers integrate. All ten production
+gates remain open. No builds, tests, scripts, probes, native jobs, launches,
+packages or installations ran; the installed candidate is unchanged.
+Independent source review found and resolved preliminary catalog decoding
+before cumulative admission in the selection, drawing-composition and desktop
+preparation paths. It approved the bounded integration with no confirmed P1/P2
+remaining. Root reviewed exact source replay, actual absence pruning, retained
+history/lifetime and compatibility fences; named whitespace checks pass.
+Compilation and runtime are unverified.
+
 ### October 11 ordinary component copy and catalog row retirement
 
 The preceding presentation-reference batch is committed and pushed as 3acd5e53.

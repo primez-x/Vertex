@@ -65,11 +65,14 @@ struct DrawingSelectionRemovalIntent {
 // Only that stage's exact annotation override consequences may compose with
 // independent selected rows. The generic reviewed-stage contract is unchanged.
 // The snapshot-owning caller reserves fresh identities across retained history.
+// The membership opt-in requests complete supported wall/placed catalog rows
+// from that same source; it adds no physical owner family or corner authority.
 [[nodiscard]] DrawingSelectionRemovalEntities replay_drawing_selection_removal_with_architectural(
     const DrawingSelectionRemovalEntities& actual,
     const DrawingSelectionRemovalIntent& drawing,
     const ArchitecturalSelectionRemovalIntent& architectural,
-    bool allow_manufactured_opening_hosts, bool active_phase_constraints);
+    bool allow_manufactured_opening_hosts, bool active_phase_constraints,
+    bool complete_component_phase_memberships = false);
 
 // These paths reconstruct typed deletion consequences from actual themselves;
 // no caller-supplied candidate grants annotation-override authority.

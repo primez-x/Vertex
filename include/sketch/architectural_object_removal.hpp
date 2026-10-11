@@ -12,9 +12,12 @@ namespace sketch {
 // references to retired identities with the same masking policy as coordinated
 // object removal. This validates the actual candidate; it grants no retirement
 // or replacement authority and never rewrites opaque payloads.
+// The membership opt-in admits the full actual scope before masking only the
+// closed membership model; opaque carrier siblings retain their refusal policy.
 void validate_completed_architectural_retirement_references(
     const std::map<std::string, Entity, std::less<>>& candidate,
-    const std::set<std::string, std::less<>>& retired_ids);
+    const std::set<std::string, std::less<>>& retired_ids,
+    bool complete_component_phase_memberships = false);
 
 // Pure actual-source removal for known stairs/railings, columns/beams and slabs.
 // Derives attached rails, hosted catalog rows and known presentation dependents;
@@ -39,6 +42,10 @@ void validate_completed_architectural_retirement_references(
 // both resolved hosts and cuts; a bare managed cut supplies no copied body.
 // Explicit row-only retirement preserves the complete owner/cut/host bodies
 // and memberships, and cannot prune a protected baseline owner's copies.
+// The component-membership opt-in prunes only actual removed catalog rows from
+// their existing required companions. Present rows keep every partition and raw
+// carrier sibling; baseline rows with a saved active alternative still refuse.
+// This grants no additional physical-owner or phase-demolition authority.
 [[nodiscard]] std::map<std::string, Entity, std::less<>> replay_architectural_object_removal(
     const std::map<std::string, Entity, std::less<>>& actual,
     const std::vector<std::string>& selected_object_ids,
@@ -48,7 +55,8 @@ void validate_completed_architectural_retirement_references(
     bool complete_hosted_catalog_consequences = false,
     bool complete_proposed_opening_catalog_consequences = false,
     bool complete_corner_window_removal = false,
-    bool complete_corner_catalog_hosts = false);
+    bool complete_corner_catalog_hosts = false,
+    bool complete_component_phase_memberships = false);
 
 // Source-only analytical admission for the opt-in opening-host lane. Includes
 // both complete supported source/candidate inventories and component work in
@@ -61,7 +69,8 @@ void preflight_architectural_object_removal(
     bool complete_hosted_catalog_consequences = false,
     bool complete_proposed_opening_catalog_consequences = false,
     bool complete_corner_window_removal = false,
-    bool complete_corner_catalog_hosts = false);
+    bool complete_corner_catalog_hosts = false,
+    bool complete_component_phase_memberships = false);
 
 // Analytical protected-row eligibility for an already actual-source candidate.
 // Requires the real saved choice, an absent qualified row, exact raw carrier
