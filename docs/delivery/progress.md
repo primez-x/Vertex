@@ -14,6 +14,51 @@ changed source does not acquire runtime acceptance without later qualification.
 
 ## Current delivery state
 
+### October 10 floor scaling planes and contextual fields - source integration
+
+Native mixed plan controls are committed and pushed as 71fb3932; exact local
+and remote branch references matched. The following source batch resolves
+uniform-scaling planes for actual persisted architectural rows in one immutable
+batch. Matching selected effective wall bases take precedence. When no wall on
+that floor is selected, its real VerticalLevelBinding and validated graph
+provide the level datum, converted through the actual floor and target Site
+frames. This conversion chooses a pivot only and does not enroll independent
+assembly geometry in a building frame. Unbound legacy geometry retains an
+explicit zero rule; embedded catalog profile roots keep their separate current
+producer. Recorded commands still replay their original explicit pivots.
+
+Text Properties now exposes font family, bold, italic and alignment through the
+existing typed style fields. Reference images expose signed X/Y placement; an
+unchanged axis retains its actual numeric coordinate. Empty controls preserve each
+selected member rather than seeding a common value. Symbol outline-width UI
+was withheld after source inspection: SVG weights are owned by pinned artwork,
+while vector canvas and paper weights currently differ. Consistent editable
+symbol line weight remains an implementation gap, rather than a control that
+silently leaves artwork unchanged.
+
+Directional mixed resizing was traced to a real missing ordinary geometry
+operator. Existing skylight groups support axis factors, but connected walls,
+measured linework and boundary review currently support rigid/similarity
+operators only. Complete directional resize requires a distinct authoritative
+geometry dialect and replay, family-aware architectural/presentation producers,
+mandatory room review, and both plan/native grip routing. Simply passing
+child axis factors or enabling side grips would leave the ordinary roster
+untransformed. Preserve historical rigid/similarity meanings while closing this
+gap; do not replace the full requirement with a supported-family subset.
+
+Independent source review found two required corrections. The new plane resolver
+now checks a declared level against the actual floor binding and refuses
+unresolved level-only sources. Reference position editing no longer treats
+optional raw receipt metadata as authority for an untouched coordinate: after
+an X edit, a Y-only edit retains actual X even if historical v1 replay preserved
+an old optional receipt. Ordinary profile receipt validation and historical v1
+replay retain their meanings. The reviewer approved the corrected bounded
+source change, including floor/Site conversion and CMake dependencies. Root
+reviewed the integrated source and scoped whitespace checking passed.
+No builds, tests/new tests, scripts/probes, native jobs, launches, packages or
+installations have run. The installed app is unchanged and all ten production
+gates remain open.
+
 ### October 10 native mixed plan controls - source integration
 
 The annotation layer/native-restoration batch is committed and pushed as

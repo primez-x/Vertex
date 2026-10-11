@@ -16,6 +16,7 @@
 #include <QLineEdit>
 #include <QPushButton>
 #include <QScrollArea>
+#include <QStringList>
 #include <QTabWidget>
 #include <QTreeWidget>
 #include <QVBoxLayout>
@@ -67,6 +68,24 @@ double scalar(const Entity& entity, const char* canonical, const char* alias = n
     return result;
 }
 
+// Exact retained numeric coordinates do not acquire authority from optional
+// metadata. Reference-image v1 edits historically preserve raw receipt maps.
+Quantity exact_numeric_quantity(const Entity& source, double metres) {
+    require(std::isfinite(metres), "A saved dimension is not finite on " + source.id + ".");
+    std::array<char, 768> buffer{};
+    for (int precision = 0; precision <= 18; ++precision) {
+        const auto converted = std::to_chars(buffer.data(), buffer.data() + buffer.size(), metres,
+                                             std::chars_format::fixed, precision);
+        if (converted.ec != std::errc{}) continue;
+        try {
+            auto result = parse_quantity(std::string(buffer.data(), converted.ptr) + " m", Unit::metre);
+            if (result.metres == metres) return result;
+        } catch (const std::exception&) {}
+    }
+    throw std::invalid_argument("Selection Properties unavailable for " + source.id +
+        ": an unchanged profile dimension has no exact supported measurement receipt.");
+}
+
 // Same-value intent bodies are required by the ordinary codec. Prefer a real
 // receipt; numeric fallback must parse back to the exact actual double.
 Quantity invariant_quantity(const Entity& source, double metres,
@@ -83,18 +102,7 @@ Quantity invariant_quantity(const Entity& source, double metres,
             return result;
         }
     }
-    std::array<char, 768> buffer{};
-    for (int precision = 0; precision <= 18; ++precision) {
-        const auto converted = std::to_chars(buffer.data(), buffer.data() + buffer.size(), metres,
-                                             std::chars_format::fixed, precision);
-        if (converted.ec != std::errc{}) continue;
-        try {
-            auto result = parse_quantity(std::string(buffer.data(), converted.ptr) + " m", Unit::metre);
-            if (result.metres == metres) return result;
-        } catch (const std::exception&) {}
-    }
-    throw std::invalid_argument("Selection Properties unavailable for " + source.id +
-        ": an unchanged profile dimension has no exact supported measurement receipt.");
+    return exact_numeric_quantity(source, metres);
 }
 
 std::optional<std::string> text(QLineEdit* field) {
@@ -145,8 +153,8 @@ bool same_annotation_floor(const DrawingContext& a, const DrawingContext& b) {
 struct Fields {
     QLineEdit *width{}, *depth{}, *height{}, *thickness{}, *elevation{}, *offset{}, *sill{},
         *rise{}, *overhang{}, *rotation{}, *outline{}, *surface{}, *content{}, *scale{},
-        *intensity{}, *frame{}, *curb{}, *glazing{};
-    QComboBox *visible{}, *layer{};
+        *intensity{}, *frame{}, *curb{}, *glazing{}, *font{}, *x{}, *y{};
+    QComboBox *visible{}, *layer{}, *bold{}, *italic{}, *alignment{};
 };
 struct LayerInput {
     std::string id;
@@ -176,6 +184,7 @@ public:
     std::map<SelectionPresentationPropertyFamily, Fields> appearances;
     std::map<QLineEdit*, QString> current_values;
     std::map<QComboBox*, std::optional<bool>> current_visibility_values;
+    std::map<QComboBox*, QString> current_choice_values;
     Fields skylight_fields;
     QTabWidget* tabs{};
     QTreeWidget* selection{};
@@ -246,6 +255,22 @@ public:
         if (!inserted && found->second != std::optional<bool>{value}) found->second.reset();
         field->setItemText(0, !found->second ? "Unchanged (mixed)" :
             *found->second ? "Unchanged (visible)" : "Unchanged (hidden)");
+    }
+    QComboBox* choice(QFormLayout* form, const char* label, const char* object_name,
+                      const QStringList& values) {
+        auto* result = new QComboBox(owner);
+        result->setObjectName(object_name);
+        result->setAccessibleName(label);
+        result->addItem("Unchanged");
+        result->addItems(values);
+        result->setToolTip("Unchanged keeps each selected item's current value.");
+        form->addRow(label, result);
+        return result;
+    }
+    void current_choice(QComboBox* field, const QString& value) {
+        auto [found, inserted] = current_choice_values.emplace(field, value);
+        if (!inserted && found->second != value) found->second = "mixed";
+        field->setItemText(0, "Unchanged (" + found->second + ")");
     }
     void row(const QString& label, const QString& family, const QString& identity) {
         auto* item = new QTreeWidgetItem(selection, {label, family});
@@ -522,7 +547,14 @@ public:
                     f.content->setMaxLength(65536);
                     f.height = dimension(form, "Text size", "selectionLabelSize");
                     f.outline = field(form, "Text color", "selectionLabelColor", "#RRGGBB (unchanged)");
+                    f.font = field(form, "Font family", "selectionLabelFontFamily");
+                    f.font->setMaxLength(256);
+                    f.bold = choice(form, "Bold", "selectionLabelBold", {"On", "Off"});
+                    f.italic = choice(form, "Italic", "selectionLabelItalic", {"On", "Off"});
+                    f.alignment = choice(form, "Alignment", "selectionLabelAlignment", {"Left", "Center", "Right"});
                 } else {
+                    f.x = dimension(form, "X position", "selectionReferenceX");
+                    f.y = dimension(form, "Y position", "selectionReferenceY");
                     f.scale = field(form, "Scale", "selectionReferenceScale");
                     f.scale->setToolTip("Absolute image scale relative to its calibrated source. Leave blank to retain each current scale.");
                     f.intensity = field(form, "Intensity (0–1)", "selectionReferenceIntensity");
@@ -540,6 +572,8 @@ public:
                 require(target.child_id.empty(), "A reference image cannot name an annotation child.");
                 const auto& original = entity(target.owner_id, "reference_asset");
                 const auto& f = appearances.at(target.family);
+                current_length(f.x, original.properties.at("position_m").at(0).get<double>());
+                current_length(f.y, original.properties.at("position_m").at(1).get<double>());
                 current(f.scale, q(native(original.properties.value("scale", 1.0))));
                 current(f.intensity, q(native(original.properties.value("intensity", 1.0))));
                 current(f.rotation, q(native(original.properties.value("rotation_degrees", 0.0))) + "°");
@@ -582,6 +616,10 @@ public:
                     current(f.content, q(value.label->content));
                     current_length(f.height, value.label->style.text_height_metres);
                     current(f.outline, q(value.label->style.stroke_color));
+                    current(f.font, q(value.label->style.font_family));
+                    current_choice(f.bold, value.label->style.bold ? "on" : "off");
+                    current_choice(f.italic, value.label->style.italic ? "on" : "off");
+                    current_choice(f.alignment, q(value.label->style.text_alignment));
                     current_angle(f.rotation, value.label->placement.rotation_radians);
                     current_visibility(f.visible, value.label->visible);
                     row(q(value.label->content).isEmpty() ? "Empty text" : q(value.label->content), "Text",
@@ -736,6 +774,14 @@ public:
             if (target.family == SelectionPresentationPropertyFamily::reference) {
                 SelectionReferencePropertyEditIntent intent;
                 intent.entity_id = target.owner_id;
+                const auto x = length(f.x, unit, false, true);
+                const auto y = length(f.y, unit, false, true);
+                if (x || y) {
+                    const auto& original = source.entities().at(target.owner_id);
+                    intent.position = std::array<Quantity, 2>{
+                        x ? *x : exact_numeric_quantity(original, original.properties.at("position_m").at(0).get<double>()),
+                        y ? *y : exact_numeric_quantity(original, original.properties.at("position_m").at(1).get<double>())};
+                }
                 intent.rotation_degrees = number(f.rotation, -180, 180);
                 intent.scale = number(f.scale, std::numeric_limits<double>::min(), std::numeric_limits<double>::max());
                 intent.intensity = number(f.intensity, 0, 1);
@@ -776,10 +822,19 @@ public:
                 intent.child_id = target.child_id;
                 intent.content = text(f.content);
                 const auto height = length(f.height, unit);
-                if (outline || height) {
+                const auto font = text(f.font);
+                const auto bold = visibility(f.bold);
+                const auto italic = visibility(f.italic);
+                const auto alignment = f.alignment->currentIndex() == 0 ? std::nullopt :
+                    std::optional<std::string>{f.alignment->currentText().toLower().toStdString()};
+                if (outline || height || font || bold || italic || alignment) {
                     SelectionAnnotationStylePropertyEdit style;
                     style.stroke_color = outline;
                     style.text_height = height;
+                    style.font_family = font;
+                    style.bold = bold;
+                    style.italic = italic;
+                    style.text_alignment = alignment;
                     patch.style = std::move(style);
                 }
                 intent.presentation = std::move(patch);

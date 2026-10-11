@@ -150,6 +150,7 @@
 #include "sketch/plan_axis_resize.hpp"
 #include "sketch/presentation_transform.hpp"
 #include "sketch/selection_geometry_transform.hpp"
+#include "sketch/selection_scale_plane.hpp"
 #include "sketch/selection_geometry_review.hpp"
 #include "sketch/hosted_opening_resize.hpp"
 #include "sketch/hosted_opening_geometry.hpp"
@@ -69394,6 +69395,27 @@ public:
                 {"rotation_radians",t.rotation_radians},{"flip_horizontal",t.flip_horizontal},{"flip_vertical",t.flip_vertical}};
             if (presentation) value["scale"]=scale;return value;
         };
+        const auto annotation_owners=site ? std::map<std::string,std::string,std::less<>>{} : annotation_selection_owners(*source,ordinary);
+        std::vector<std::string> architectural_scale_targets, selected_scale_walls;
+        if (scale!=1.0) for (const auto& id:ordinary) {
+            const auto found=source->entities().find(id.toStdString());
+            if (found==source->entities().end() || embeddedAssemblyChild(*source,id.toStdString()) ||
+                annotation_owners.contains(id.toStdString()) || (site && annotation_targets.contains(id))) continue;
+            const auto& type=found->second.type;
+            if (type=="wall") selected_scale_walls.push_back(found->first);
+            else if (type!="reference_asset" && type!="measurement_linework" && !is_closed_boundary_entity(type) &&
+                !can_recognize_boundary_dimension_entity_type(type) && type!="opening" && type!="corner_window")
+                architectural_scale_targets.push_back(found->first);
+        }
+        // Resolve all actual rows once per immutable proposal. A bound floor's
+        // actual graph supplies the missing architectural plane when no wall
+        // in that floor is selected. Embedded profile roots remain a separate
+        // explicit-world lane below, rather than acquiring catalog geometry
+        // authority through a manufactured persisted target identity.
+        const auto architectural_scale_planes=architectural_scale_targets.empty() ?
+            std::map<std::string,SelectionScalePlane,std::less<>>{} :
+            resolve_selection_scale_planes(*source,architectural_scale_targets,selected_scale_walls,
+                site ? SelectionScalePlaneDomain::presentation_world : SelectionScalePlaneDomain::source_local);
         // Wall similarities retain each effective base plane. Architectural
         // members in that same floor must use the matching effective plane,
         // including level shifts, rather than scale their elevations about 0.
@@ -69432,7 +69454,9 @@ public:
         }
         const auto model_json=[&](const PlanarTransform& t,const QString& id) {
             double base=0.0;
-            if (scale!=1.0 && !scale_planes.empty()) {
+            if (const auto resolved=architectural_scale_planes.find(id.toStdString());resolved!=architectural_scale_planes.end())
+                base=resolved->second.effective_source_z_m;
+            else if (scale!=1.0 && !scale_planes.empty()) {
                 const auto placement=placement_for(id);
                 const auto key=scale_key(id,placement);
                 if (const auto planes=scale_planes.find(key);planes!=scale_planes.end()) {
@@ -69475,7 +69499,6 @@ public:
         }
         SelectionGeometryTransformRequest geometry; geometry.expected_revision=source->revision();geometry.message=message;
         if (scale!=1.0) geometry.version=2;
-        const auto annotation_owners=site ? std::map<std::string,std::string,std::less<>>{} : annotation_selection_owners(*source,ordinary);
         std::set<std::string,std::less<>> parents;
         for (const auto& id:ordinary) {
             const auto persisted=source->entities().find(id.toStdString());
