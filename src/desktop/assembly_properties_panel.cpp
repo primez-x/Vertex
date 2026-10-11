@@ -1,6 +1,7 @@
 #include "sketch/desktop/assembly_properties_panel.hpp"
 #include "sketch/desktop/assembly_authoring_dialog.hpp"
 
+#include "sketch/assembly_profile_geometry.hpp"
 #include "sketch/quantity.hpp"
 
 #include <QComboBox>
@@ -270,15 +271,18 @@ void resize_profiles(std::vector<AssemblyProfile>& profiles, const AssemblyTrans
             "or edit the outline/cutouts explicitly. Unequal planar scaling would require unsupported elliptical arcs.");
         factors[1] = factors[0];
     }
+    const AssemblyProfilePlanarAffine planar_resize{bounds.minimum, bounds.minimum,
+        factors[0], 0.0, 0.0, factors[1]};
+    validate_assembly_profile_affine(planar_resize);
     const auto scale_boundary = [&](Boundary& boundary) {
         if (factors[0] == 1 && factors[1] == 1) return;
-        const auto point = [&](Vec2 value) {
-            value = {bounds.minimum.x + (value.x - bounds.minimum.x) * factors[0],
-                     bounds.minimum.y + (value.y - bounds.minimum.y) * factors[1]};
-            require(std::isfinite(value.x) && std::isfinite(value.y), "Resized profile coordinates overflow.");
-            return value;
-        };
-        for (auto& edge : boundary) { edge.start = point(edge.start); edge.end = point(edge.end); }
+        // This historical endpoint path admits lines and planar similarities
+        // only. A general affine circular image needs the mapped-profile codec
+        // and every exact-curve consumer before it can be authored here.
+        for (auto& edge : boundary) {
+            edge.start = assembly_profile_affine_point(edge.start, planar_resize);
+            edge.end = assembly_profile_affine_point(edge.end, planar_resize);
+        }
     };
     for (auto& profile : profiles) {
         scale_boundary(profile.outer);

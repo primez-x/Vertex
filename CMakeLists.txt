@@ -193,9 +193,11 @@ target_link_libraries(sketch_assistance_contract PUBLIC sketch_json)
 add_library(sketch_multipage_document src/core/multipage_document.cpp)
 target_include_directories(sketch_multipage_document PUBLIC include)
 target_link_libraries(sketch_multipage_document PUBLIC sketch_json)
-add_library(sketch_assembly_model src/core/assembly_model.cpp)
+add_library(sketch_assembly_model src/core/assembly_model.cpp
+  src/core/assembly_profile_geometry.cpp)
 target_include_directories(sketch_assembly_model PUBLIC include)
-target_link_libraries(sketch_assembly_model PUBLIC sketch_json sketch_precision)
+target_link_libraries(sketch_assembly_model PUBLIC sketch_json sketch_precision
+  PRIVATE Boost::multiprecision)
 add_library(sketch_product_scope src/core/product_scope.cpp)
 target_include_directories(sketch_product_scope PUBLIC include)
 target_link_libraries(sketch_product_scope PUBLIC sketch_json)

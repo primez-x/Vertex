@@ -14,6 +14,41 @@ changed source does not acquire runtime acceptance without later qualification.
 
 ## Current delivery state
 
+### October 11 exact affine-profile geometry foundation
+
+The reviewed independent mirror correction is committed and pushed as
+382bd0e499d57afc14f98bf91c476ab7c9e09034; exact remote ref verification passed.
+This continuation made source progress and did not treat the status-only turn
+as implementation. The installed application remains unchanged.
+
+The new assembly-profile geometry source supplies anchored orientation-preserving
+affine maps, inverse/composition, stable signed arc evaluation and derivatives,
+analytical extrema/closed area, and bounded curved-length integration. It keeps
+the source circular geometry and exact affine image; it does not manufacture a
+new circle from stretched endpoints. Length integration reports an estimated
+error, not a certified interval bound, with shared work across one boundary.
+Profile/collection consumers still need their own shared aggregate budget.
+
+Root registered the foundation in the existing assembly model target and reused
+its point mapping in the existing numeric Properties resize path. That path
+retains its line/similarity admission and explicit unequal circular-scale refusal.
+No persisted map, new profile schema or side-grip completion is claimed.
+The [directional resize integration design](../design/vertex-component-directional-resize.md)
+records the actual remaining model/codec/reader-floor, native/cache, dimension,
+canvas/editor, exchange and full nested-profile authoring work. Independent
+mathematical review found concrete Windows anchor/cancellation, intermediate
+overflow, inverse underflow, subnormal rounding and area carry defects. Root
+corrected them with bounded exact-dyadic fallback, direct target-grid rounding,
+unrounded inverse expressions and determinant retention through area scaling.
+Normal directional products retain a compensated fast path. The final review
+identified only the remaining one-line area carry correction, now applied
+exactly as requested. Root manually reviewed the integrated source and scoped
+diff checks passed. Accuracy/performance under execution remain unverified.
+
+No builds, tests, scripts, probes, native jobs, launches, packages or installations
+ran. Compilation and runtime remain unverified; all ten production gates and
+external prerequisites remain open.
+
 ### October 11 component mirrors and current transform gap inventory
 
 The component canvas transform batch is committed and pushed as
