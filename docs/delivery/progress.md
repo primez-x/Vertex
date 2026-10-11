@@ -14,6 +14,35 @@ changed source does not acquire runtime acceptance without later qualification.
 
 ## Current delivery state
 
+### October 10 typed Properties preparation - source implementation in progress
+
+Mixed uniform resizing is committed and pushed as 860ff8a8; exact local and
+remote branch references matched. The next batch replaces the skylight group
+Properties form's inline geometry/property loop with a shared original-source
+producer. It accepts typed entered quantities and actual selected child IDs,
+retains each reference centre and unchanged receipts, and admits the complete
+physical cohort before returning roof edits. Zero curb height follows the
+existing nonnegative profile rule. Current roof facet scales are independent
+of the opening angle; no prior rotation-sizing defect was established.
+Root reviewed the shared producer and the Properties form's use of its captured
+quantity/default-unit inputs and unchanged complete-selection/source fence.
+Scoped source whitespace checking is complete; this skylight-only route uses
+the existing roof command/history dialects.
+
+An ordinary selected wall/slab/opening/roof scalar-profile preparation is being
+implemented separately with strict typed inputs and complete source bindings.
+It will expose a read-only proposal, not a publication command or permission to
+skip room review. Root is integrating its existing core-library source target.
+Same-host wall/opening edits are being fused before final physical admission so
+valid coordinated changes are not refused by an invalid intermediate host.
+Complete mixed Properties still requires final semantic composition, mandatory
+room decisions, persisted command admission and the contextual UI. Other
+property families and active-baseline replacement remain required work.
+
+The installed app remains unchanged. No build, test/new test, probe, native
+job, launch, package or installation has run. These source preparations do not
+close a production gate or establish user-observed resolution.
+
 ### October 10 mixed uniform resizing - source integration
 
 The current source batch adds explicit uniform geometry scaling to the complete

@@ -65529,7 +65529,9 @@ private:
                     if (!sourceEditAuthorityCurrent(authority) || targets!=m_selected_roof_openings)
                         throw std::invalid_argument("The project or selected skylights changed. Reopen Properties.");
                     const auto unit=m_metric_units ? Unit::metre : Unit::foot;
-                    std::map<std::string,double,std::less<>> values;
+                    RoofOpeningGroupProperties request;
+                    for (const auto& target:targets)
+                        request.members.push_back({target.roof_id.toStdString(),target.opening_id.toStdString()});
                     for (const auto& [key,field]:fields) {
                         const auto text=field->text().trimmed();
                         if (text.isEmpty()) continue;
@@ -65537,57 +65539,18 @@ private:
                             bool parsed=false; const auto degrees=text.toDouble(&parsed);
                             if (!parsed || !std::isfinite(degrees) || degrees< -180.0 || degrees>180.0)
                                 throw std::invalid_argument("Rotation must be between -180 and 180 degrees.");
-                            values[key]=degrees*std::numbers::pi/180.0;
+                            request.rotation_radians=degrees*std::numbers::pi/180.0;
                         } else {
-                            const auto value=parse_quantity(text.toStdString(),unit).metres;
-                            if (!std::isfinite(value) || value<=0.0)
-                                throw std::invalid_argument("Skylight dimensions must be positive measurements.");
-                            values[key]=value;
+                            const RoofOpeningQuantityInput input{parse_quantity(text.toStdString(),unit),unit};
+                            if (key=="width_m") request.width=input;
+                            else if (key=="depth_m") request.depth=input;
+                            else if (key=="frame_width_m") request.frame_width=input;
+                            else if (key=="curb_height_m") request.curb_height=input;
+                            else if (key=="glazing_thickness_m") request.glazing_thickness=input;
+                            else throw std::invalid_argument("The skylight property field is unavailable.");
                         }
                     }
-                    std::map<std::string,RoofEditIntent,std::less<>> grouped;
-                    for (const auto& target:targets) {
-                        const auto id=target.roof_id.toStdString();
-                        const auto original=roofCanvasChild(*source,target);
-                        const auto roof_object=decode_roof_entity(source->entities().at(id));
-                        const auto mouth=std::visit([&](const auto& roof) {
-                            const auto child=std::find_if(roof.openings.begin(),roof.openings.end(),[&](const auto& opening) {
-                                return opening.id==target.opening_id.toStdString();
-                            });
-                            if (child==roof.openings.end()) throw std::invalid_argument("A selected skylight is missing.");
-                            return roof_opening_plan_frame(roof,*child);
-                        },roof_object);
-                        auto& edit=grouped[id]; edit.roof_id=id; edit.coordinate_world_hosted_geometry=true;
-                        if (!edit.openings) edit.openings=RoofOpeningEditIntent{};
-                        auto& intent=*edit.openings;
-                        intent.roof_id=id; intent.uses_skylight_schema=true;
-                        intent.uses_rotation_schema=values.contains("rotation_deg") || source->entities().at(id).properties.at("version")==4;
-                        RoofOpeningUpsertIntent row; row.opening_id=target.opening_id.toStdString();
-                        // Physical dimensions are converted in each actual facet;
-                        // retain each child's reference centre and authored angle.
-                        if (values.contains("width_m")) {
-                            const auto width=values.at("width_m")/mouth.width_surface_scale;
-                            if (width!=original.at("width_m").get<double>()) {
-                                row.width=roofCanvasQuantity(width);
-                                row.x=roofCanvasQuantity(original.at("x_m").get<double>()+(original.at("width_m").get<double>()-width)*.5);
-                            }
-                        }
-                        if (values.contains("depth_m")) {
-                            const auto depth=values.at("depth_m")/mouth.depth_surface_scale;
-                            if (depth!=original.at("depth_m").get<double>()) {
-                                row.depth=roofCanvasQuantity(depth);
-                                row.y=roofCanvasQuantity(original.at("y_m").get<double>()+(original.at("depth_m").get<double>()-depth)*.5);
-                            }
-                        }
-                        if (values.contains("rotation_deg")) row.rotation_radians=values.at("rotation_deg");
-                        auto profile=original.at("skylight");
-                        for (const auto* key:{"frame_width_m","curb_height_m","glazing_thickness_m"})
-                            if (values.contains(key)) profile[key]=values.at(key);
-                        if (profile!=original.at("skylight")) row.skylight=std::move(profile);
-                        intent.upserts.push_back(std::move(row));
-                    }
-                    std::vector<RoofEditIntent> edits;
-                    for (auto& [id,edit]:grouped) edits.push_back(std::move(edit));
+                    const auto edits=prepare_roof_opening_group_properties(source->entities(),request);
                     if (applyRoofOpeningCohortIntents(source,targets,edits,false)) dialog.accept();
                     else error->setText(lastError());
                 } catch (const std::exception& failure) { error->setText(QString::fromUtf8(failure.what())); }

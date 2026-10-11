@@ -182,6 +182,26 @@ RoofOpeningQuantityInput quantity(double metres) {
     }
     invalid("Skylight group position has no exact supported measurement");
 }
+std::optional<double> property_metres(const std::optional<RoofOpeningQuantityInput>& input,
+    bool positive = true) {
+    if (!input) return std::nullopt;
+    // Validate even equal/unchanged requested inputs before deriving reference
+    // quantities. An inconsistent double or default unit grants no authority.
+    if (input->quantity.original_expression.size() > 4096)
+        invalid("Skylight property quantity expression budget exceeded");
+    switch (input->default_unit) {
+    case Unit::metre: case Unit::millimetre: case Unit::centimetre:
+    case Unit::foot: case Unit::inch: break;
+    default: invalid("Skylight property default unit is unsupported");
+    }
+    const auto parsed = parse_quantity(input->quantity.original_expression, input->default_unit);
+    if (parsed.metres != input->quantity.metres ||
+        parsed.exact_metres != input->quantity.exact_metres ||
+        parsed.entered_unit != input->quantity.entered_unit ||
+        !std::isfinite(parsed.metres) || (positive ? parsed.metres <= 0.0 : parsed.metres < 0.0))
+        invalid("Skylight property quantity must be exact and within its admitted range");
+    return parsed.metres;
+}
 Vec2 rebased_size(const RoofOpening& source, Vec2 before, Vec2 after, Vec2 scale) {
     const Vec2 result{before.x == after.x ? source.width * scale.x : source.width * scale.x * (before.x / after.x),
         before.y == after.y ? source.depth * scale.y : source.depth * scale.y * (before.y / after.y)};
@@ -385,6 +405,92 @@ std::vector<RoofEditIntent> prepare_roof_opening_group_transform(const Entities&
     const auto admitted = replay_roof_edit_entities(actual, result);
     // Retained-only intents validate every requested source, including identity
     // operations. They never become authored edits or promote an unchanged roof.
+    if (!request.retain_invariant_members)
+        std::erase_if(result, [&](const auto& edit) { return admitted.at(edit.roof_id) == actual.at(edit.roof_id); });
+    return result;
+}
+
+std::vector<RoofEditIntent> prepare_roof_opening_group_properties(const Entities& actual,
+    const RoofOpeningGroupProperties& request) {
+    bounded_group(request.members.size());
+    const auto width = property_metres(request.width), depth = property_metres(request.depth);
+    const auto frame_width = property_metres(request.frame_width);
+    const auto curb_height = property_metres(request.curb_height, false);
+    const auto glazing_thickness = property_metres(request.glazing_thickness);
+    if (request.rotation_radians && (!std::isfinite(*request.rotation_radians) ||
+        *request.rotation_radians < -std::numbers::pi || *request.rotation_radians > std::numbers::pi))
+        invalid("Skylight property rotation must be finite and canonical in [-pi,pi]");
+    Hosts hosts;
+    MemberIds ids;
+    std::map<std::string, RoofOpeningEditIntent, std::less<>> grouped;
+    for (const auto& member : request.members) {
+        unique(ids, member.roof_id, member.opening_id);
+        const auto& owner = actual_host(actual, hosts, member.roof_id);
+        const auto source = skylight(owner, member.opening_id);
+        const auto before = plan_frame(owner, source);
+        const auto final_scales = scales(owner, before.center);
+        auto final = source;
+        if (request.rotation_radians) final.rotation_radians = *request.rotation_radians;
+        // Reference scales depend on the actual facet at the retained centre,
+        // not the rotated projected axes. Do not admit an intermediate mouth:
+        // a simultaneous smaller size and rotation may only fit together.
+        const auto retained = rebased_size(source,
+            {before.width_surface_scale, before.depth_surface_scale}, final_scales, {1.0,1.0});
+        final.width = width && (*width != source.width * before.width_surface_scale ||
+            final_scales.x != before.width_surface_scale) ? *width / final_scales.x : retained.x;
+        final.depth = depth && (*depth != source.depth * before.depth_surface_scale ||
+            final_scales.y != before.depth_surface_scale) ? *depth / final_scales.y : retained.y;
+        // Keep the historical relative arithmetic so an unchanged dimension
+        // retains its exact coordinate and input receipt, without cancellation.
+        if (final.width != source.width) final.x = source.x + (source.width - final.width) * .5;
+        if (final.depth != source.depth) final.y = source.y + (source.depth - final.depth) * .5;
+        const auto after = plan_frame(owner, final);
+        if (after.width_surface_scale != final_scales.x || after.depth_surface_scale != final_scales.y)
+            invalid("Skylight property edit cannot change its retained reference facet metric");
+        auto [entry, inserted] = grouped.try_emplace(member.roof_id, opening_intent(owner));
+        (void)inserted;
+        RoofOpeningUpsertIntent row; row.opening_id = member.opening_id;
+        if (final.width != source.width) {
+            row.width = request.width && final_scales.x == 1.0 ? *request.width : quantity(final.width);
+            if (final.x != source.x) row.x = quantity(final.x);
+        }
+        if (final.depth != source.depth) {
+            row.depth = request.depth && final_scales.y == 1.0 ? *request.depth : quantity(final.depth);
+            if (final.y != source.y) row.y = quantity(final.y);
+        }
+        if (final.rotation_radians != source.rotation_radians) {
+            row.rotation_radians = final.rotation_radians;
+            entry->second.uses_rotation_schema = true;
+        }
+        if (frame_width || curb_height || glazing_thickness) {
+            const auto& roster = owner.entity->properties.at("roof_openings");
+            const auto actual_row = std::find_if(roster.begin(), roster.end(), [&](const auto& child) {
+                return child.at("id") == member.opening_id;
+            });
+            if (actual_row == roster.end()) invalid("Skylight property source profile is missing");
+            auto profile = actual_row->at("skylight");
+            bool changed = false;
+            const auto set_dimension = [&](const char* key, const std::optional<double>& value) {
+                if (value && profile.at(key).get<double>() != *value) {
+                    profile[key] = *value; changed = true;
+                }
+            };
+            set_dimension("frame_width_m", frame_width);
+            set_dimension("curb_height_m", curb_height);
+            set_dimension("glazing_thickness_m", glazing_thickness);
+            if (changed) row.skylight = std::move(profile);
+        }
+        entry->second.upserts.push_back(std::move(row));
+    }
+    std::vector<RoofEditIntent> result;
+    result.reserve(grouped.size());
+    for (auto& [id, opening] : grouped) {
+        (void)id;
+        auto edit = composite(std::move(opening));
+        edit.coordinate_world_hosted_geometry = true;
+        result.push_back(std::move(edit));
+    }
+    const auto admitted = replay_roof_edit_entities(actual, result);
     if (!request.retain_invariant_members)
         std::erase_if(result, [&](const auto& edit) { return admitted.at(edit.roof_id) == actual.at(edit.roof_id); });
     return result;

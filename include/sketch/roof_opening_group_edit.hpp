@@ -22,6 +22,19 @@ struct RoofOpeningGroupTransform {
     bool retain_invariant_members{false};
 };
 
+struct RoofOpeningGroupProperties {
+    std::vector<RoofOpeningGroupMember> members;
+    // Mouth dimensions are physical lengths on each actual roof facet;
+    // construction dimensions use the existing fixed skylight profile.
+    std::optional<RoofOpeningQuantityInput> width;
+    std::optional<RoofOpeningQuantityInput> depth;
+    std::optional<RoofOpeningQuantityInput> frame_width;
+    std::optional<RoofOpeningQuantityInput> curb_height;
+    std::optional<RoofOpeningQuantityInput> glazing_thickness;
+    std::optional<double> rotation_radians;
+    bool retain_invariant_members{false};
+};
+
 struct RoofOpeningGroupClone {
     RoofOpeningCloneSource source;
     std::string opening_id;
@@ -68,6 +81,25 @@ struct RoofOpeningGroupClonePlacement {
 [[nodiscard]] std::vector<RoofEditIntent> prepare_roof_opening_group_transform(
     const std::map<std::string, Entity, std::less<>>& actual,
     const RoofOpeningGroupTransform& request);
+
+// Apply optional common Properties to a unique complete requested cohort of
+// actual profiled children. Quantities must reproduce their exact expressions
+// under their captured default units. Mouth/frame/glazing lengths are positive;
+// curb height is nonnegative and the physical facet angle is finite in [-pi,pi].
+// Retain each actual reference centre, host, row metadata and opaque siblings.
+// Convert physical mouth lengths using the final reference centre's facet
+// metric and admit the final rotated mouth; unspecified lengths retain their
+// original physical sizes, including through rotation. The existing facet
+// metric is independent of angle: rotation changes projected axes, not scales.
+// Equal values retain actual quantities, profile and angle without rewriting
+// receipts or promoting schemas. Complete actual-map replay admits every row
+// before any intent is returned. No caller name/context/host/property-map
+// authority is accepted. Unchanged roofs are omitted unless
+// retain_invariant_members requests admitted rows for complete mixed proof;
+// those rows authenticate actual source and confer no publication authority.
+[[nodiscard]] std::vector<RoofEditIntent> prepare_roof_opening_group_properties(
+    const std::map<std::string, Entity, std::less<>>& actual,
+    const RoofOpeningGroupProperties& request);
 
 // Removal-only actual-source authority. Every named member must be a real
 // profiled child of its named roof; containing roofs are never selected roots.
