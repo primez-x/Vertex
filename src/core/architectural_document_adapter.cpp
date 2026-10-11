@@ -34,6 +34,8 @@
 #include <numbers>
 #include <set>
 #include <stdexcept>
+#include <string_view>
+#include <tuple>
 #include <type_traits>
 
 namespace sketch {
@@ -311,6 +313,150 @@ Entity merge_group_hosted_catalog(const Entity& source, const Entity& accumulate
     result.properties.at("model")=merge_disjoint_hosted_assembly_models(
         source.properties.at("model"),accumulated.properties.at("model"),incoming.properties.at("model"));
     return result;
+}
+
+// Discovery borrows raw rows/targets before the shared carry helper resolves
+// their actual frames. Bound both complete inputs before indexing or decoding;
+// catalogs additionally share their nonlinear validation-work ledger.
+struct GroupDimensionSourceBudget {
+    std::size_t bytes{}, nodes{};
+    void text(std::string_view value) {
+        if (value.size() > (64 * 1024 * 1024 - bytes) / 6)
+            throw std::invalid_argument("Architectural group dimension raw byte budget exceeded.");
+        bytes += 6 * value.size();
+    }
+    void read(const nlohmann::json& value, std::size_t depth = 0) {
+        if (depth > 64 || nodes == 4 * 1024 * 1024 || bytes > 64 * 1024 * 1024 - 32 ||
+            value.is_binary() || value.is_discarded() ||
+            (value.is_number_float() && !std::isfinite(value.get<double>())))
+            throw std::invalid_argument("Architectural group dimension raw envelope budget exceeded.");
+        ++nodes; bytes += 32;
+        if (value.is_string()) text(value.get_ref<const std::string&>());
+        else if (value.is_array()) for (const auto& child : value) read(child, depth + 1);
+        else if (value.is_object()) for (const auto& [key, child] : value.items()) {
+            text(key); read(child, depth + 1);
+        }
+    }
+    void map(const EntityState& actual) {
+        if (actual.size() > 100000)
+            throw std::invalid_argument("Architectural group dimension entity budget exceeded.");
+        for (const auto& [id, entity] : actual) {
+            if (id != entity.id || !entity.properties.is_object() || !entity.extensions.is_object())
+                throw std::invalid_argument("Architectural group dimensions require actual entity envelopes.");
+            text(id); text(entity.type); read(entity.properties); read(entity.extensions);
+        }
+    }
+};
+
+void gather_group_dimension_transforms(const EntityState& source, const EntityState& candidate,
+    const std::map<std::string, NormalizedGroupTransform, std::less<>>& intents,
+    const std::set<std::string, std::less<>>& hosted_catalogs, bool carry_hosted,
+    std::vector<AssemblyDimensionTransformRequest>& requests) {
+    GroupDimensionSourceBudget raw;
+    raw.map(source); raw.map(candidate);
+    AssemblyCatalogTransferBudget work;
+    for (const auto* actual : {&source, &candidate}) for (const auto& [id, entity] : *actual) {
+        (void)id;
+        if (entity.type == "assembly_model") admit_existing_assembly_catalog_work(entity, work);
+    }
+    using Key = std::tuple<std::string_view, std::string_view, std::optional<std::string_view>>;
+    const auto key = [](const AssemblyInstancePropertyEditTarget& root) -> Key {
+        return {root.catalog_id, root.instance_id, root.document_entity_id
+            ? std::optional<std::string_view>(*root.document_entity_id) : std::nullopt};
+    };
+    std::map<Key, std::size_t> independent;
+    for (std::size_t i = 0; i < requests.size(); ++i) independent.emplace(key(requests[i].source_root), i);
+    using Rows = std::map<std::string_view, const nlohmann::json*>;
+    std::map<std::string_view, std::pair<Rows, Rows>> catalogs;
+    std::set<std::string_view> unchanged_catalogs;
+    std::map<Key, bool> hosted_admission;
+    const auto rows = [](const Entity& catalog) {
+        Rows result;
+        for (const auto& row : catalog.properties.at("model").at("instances")) {
+            const auto& id = row.at("id").get_ref<const std::string&>();
+            if (!result.emplace(id, &row).second)
+                throw std::invalid_argument("Architectural group dimension root is duplicated.");
+        }
+        return result;
+    };
+    const auto exact = [](const nlohmann::json& a, const nlohmann::json& b) {
+        return a == b && a.dump() == b.dump();
+    };
+    std::set<Key> associated_roots;
+    std::vector<AssemblyDimensionTransformRequest> associated;
+    std::size_t dimension_count{};
+    for (const auto& [id, entity] : source) {
+        (void)id;
+        if (!can_recognize_boundary_dimension_entity_type(entity.type) ||
+            inspect_boundary_dimension_version(entity).format != BoundaryDimensionFormat::supported_v6) continue;
+        const auto& target = entity.properties.at("target").at("assembly");
+        const auto& catalog_id = target.at("catalog_id").get_ref<const std::string&>();
+        const auto& instance_id = target.at("instance_id").get_ref<const std::string&>();
+        const auto& owner = target.at("document_entity_id");
+        const Key root_key{catalog_id, instance_id, owner.is_null() ? std::nullopt :
+            std::optional<std::string_view>(owner.get_ref<const std::string&>())};
+        const auto selected = independent.find(root_key);
+        bool admitted = selected != independent.end();
+        if (!admitted && carry_hosted && owner.is_null() && hosted_catalogs.contains(catalog_id)) {
+            const auto admit_hosted = [&]() {
+                const auto& before = source.at(catalog_id);
+                const auto& after = candidate.at(catalog_id);
+                if (before.type != "assembly_model" || after.type != before.type || after.id != before.id)
+                    throw std::invalid_argument("Architectural group dimension catalog identity changed.");
+                if (unchanged_catalogs.contains(catalog_id)) return false;
+                auto indexed = catalogs.find(catalog_id);
+                if (indexed == catalogs.end()) {
+                    if (exact(before.properties.at("model"), after.properties.at("model"))) {
+                        unchanged_catalogs.insert(catalog_id);
+                        return false;
+                    }
+                    indexed = catalogs.emplace(catalog_id, std::pair{rows(before), rows(after)}).first;
+                }
+                const auto original = indexed->second.first.find(instance_id);
+                const auto current = indexed->second.second.find(instance_id);
+                if (original == indexed->second.first.end() || current == indexed->second.second.end())
+                    throw std::invalid_argument("Architectural group dimension embedded root is missing.");
+                const auto& old_row = *original->second;
+                const auto& new_row = *current->second;
+                const auto placement = old_row.find("placement");
+                if (placement == old_row.end() || !placement->is_object()) return false;
+                const auto& host_id = placement->at("host_entity_id").get_ref<const std::string&>();
+                const auto host_intent = intents.find(host_id);
+                if (host_intent == intents.end() || host_intent->second.identity) return false;
+                const auto& host = source.at(host_id);
+                const auto& moved_host = candidate.at(host_id);
+                bool supported_host = host.type == "stair" || host.type == "railing";
+#ifdef VERTEX_HAS_HORIZONTAL_AUTHORING
+                supported_host = supported_host || host.type == "slab" || host.type == "roof";
+#endif
+                if (!supported_host || host.id != host_id || moved_host.id != host_id || moved_host.type != host.type)
+                    throw std::invalid_argument("Architectural group dimensions require their exact admitted physical host.");
+                const auto& new_placement = new_row.at("placement");
+                if (exact(*placement, new_placement)) return false; // No raw pose change, including legacy host-derived bodies.
+                if (old_row.size() != new_row.size() ||
+                    !exact(placement->at("host_entity_id"), new_placement.at("host_entity_id")))
+                    throw std::invalid_argument("Architectural group dimension carry changed its root or host framing.");
+                for (const auto& [field, value] : old_row.items()) if (field != "placement" &&
+                    (!new_row.contains(field) || !exact(value, new_row.at(field))))
+                    throw std::invalid_argument("Architectural group dimension carry changed fields outside hosted placement.");
+                return true;
+            };
+            const auto known = hosted_admission.find(root_key);
+            admitted = known == hosted_admission.end()
+                ? hosted_admission.emplace(root_key, admit_hosted()).first->second : known->second;
+        }
+        if (!admitted) continue;
+        // Closed target decoding retains nested paths/axes for later measurement;
+        // only qualified root identity participates in this discovery roster.
+        if (++dimension_count > 1000)
+            throw std::invalid_argument("Architectural group associated dimension count exceeds bound.");
+        auto qualified = decode_assembly_dimension_target(target).component;
+        qualified.part_path.clear();
+        if (!associated_roots.insert(root_key).second) continue;
+        if (selected != independent.end()) associated.push_back(requests[selected->second]);
+        else associated.push_back({qualified, qualified, AssemblyDimensionTransformMode::move, {}});
+    }
+    requests = std::move(associated);
 }
 
 Vec3 transform_point(const Vec3& point, const ArchitecturalTransform& transform,
@@ -2250,7 +2396,8 @@ EntityState stage_fresh_architectural_clipboard_translation(const DocumentSnapsh
 
 ApplyEntityChanges architectural_group_transform_command(const DocumentSnapshot& source,
     std::span<const std::string> entity_ids, const ArchitecturalGroupTransform& transform,
-    const std::string& transaction_id, Revision expected_revision, bool carry_assembly_dimensions) {
+    const std::string& transaction_id, Revision expected_revision, bool carry_assembly_dimensions,
+    bool carry_hosted_component_dimensions) {
     if (source.revision()!=expected_revision)
         throw DocumentError(DocumentErrorCode::stale_revision,"The architectural group source changed.");
     if (!source.is_editable())
@@ -2260,12 +2407,14 @@ ApplyEntityChanges architectural_group_transform_command(const DocumentSnapshot&
     std::vector<ArchitecturalGroupTransformTarget> targets;
     targets.reserve(entity_ids.size());
     for (const auto& id : entity_ids) targets.push_back({id,transform});
-    return architectural_group_transform_command(source, targets, transaction_id, expected_revision, carry_assembly_dimensions);
+    return architectural_group_transform_command(source, targets, transaction_id, expected_revision,
+        carry_assembly_dimensions, carry_hosted_component_dimensions);
 }
 
 ApplyEntityChanges architectural_group_transform_command(const DocumentSnapshot& source,
     std::span<const ArchitecturalGroupTransformTarget> requested_targets,
-    const std::string& transaction_id, Revision expected_revision, bool carry_assembly_dimensions) {
+    const std::string& transaction_id, Revision expected_revision, bool carry_assembly_dimensions,
+    bool carry_hosted_component_dimensions) {
     if (source.revision()!=expected_revision)
         throw DocumentError(DocumentErrorCode::stale_revision,"The architectural group source changed.");
     if (!source.is_editable())
@@ -2409,6 +2558,7 @@ ApplyEntityChanges architectural_group_transform_command(const DocumentSnapshot&
         operations.push_back(std::move(operation));
     }
     auto candidate = copy_entities(source);
+    std::set<std::string, std::less<>> hosted_catalogs;
     auto transaction_targets=targets;
 #ifdef VERTEX_HAS_HORIZONTAL_AUTHORING
     if (!slab_intents.empty()) {
@@ -2427,6 +2577,7 @@ ApplyEntityChanges architectural_group_transform_command(const DocumentSnapshot&
             if (after.type!="assembly_model")
                 throw std::invalid_argument("Architectural slab replay changed an unrelated actual object.");
             transaction_targets.push_back(id);
+            hosted_catalogs.insert(id);
         }
     }
 #endif
@@ -2447,6 +2598,7 @@ ApplyEntityChanges architectural_group_transform_command(const DocumentSnapshot&
                 else candidate.at(id)=merge_group_hosted_catalog(before,accumulated,after);
                 if (std::find(transaction_targets.begin(),transaction_targets.end(),id)==transaction_targets.end())
                     transaction_targets.push_back(id);
+                hosted_catalogs.insert(id);
                 continue;
             }
             if (!selected.contains(id) || after.type != "roof" || before.type != "roof" || after.id != id)
@@ -2472,6 +2624,7 @@ ApplyEntityChanges architectural_group_transform_command(const DocumentSnapshot&
                 else candidate.at(id)=merge_group_hosted_catalog(before,accumulated,after);
                 if (std::find(transaction_targets.begin(),transaction_targets.end(),id)==transaction_targets.end())
                     transaction_targets.push_back(id);
+                hosted_catalogs.insert(id);
                 continue;
             }
             if (after.type!="stair" && after.type!="railing")
@@ -2538,8 +2691,15 @@ ApplyEntityChanges architectural_group_transform_command(const DocumentSnapshot&
             after = transform_building_entity(source.entities(), before, movement, horizontal, vertical);
         }
     }
-    // Only actual selected independent roots declare carry authority. Preserve
-    // every original dimension until the complete cohort has been measured.
+    // Keep producer-owned catalog consequences distinct from selected roots.
+    // Discovery adds only dimension-bearing rows whose actual placement moved
+    // under a selected nonidentity host. Historical selected-only replay never
+    // acquires that authority. Original dimension envelopes stay intact until
+    // this one source/candidate measurement and ordinary-policy admission.
+    if (carry_assembly_dimensions && carry_hosted_component_dimensions &&
+        (!dimension_transforms.empty() || !hosted_catalogs.empty()))
+        gather_group_dimension_transforms(source.entities(), candidate, intents, hosted_catalogs,
+            carry_hosted_component_dimensions, dimension_transforms);
     if (carry_assembly_dimensions && !dimension_transforms.empty()) {
         auto dimensions = carry_assembly_dimension_transform_entities(
             source.entities(), candidate, dimension_transforms);

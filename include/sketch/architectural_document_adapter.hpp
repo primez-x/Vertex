@@ -200,12 +200,17 @@ inline constexpr std::size_t maximum_architectural_group_targets = 1000;
 // saved-design guards; shared-baseline replacement requires its qualified lane.
 // Equivalent identity intent validates targets/transaction identity and returns
 // no history edit. Walls, joins and embedded assembly members are not targets.
-// Current authoring carries qualified independent-component dimensions. Only
-// historical producer replay opts out to retain its saved body-only meaning.
+// Current authoring carries qualified independent-component dimensions and,
+// separately, dimensions on actual embedded rows moved by admitted selected
+// hosts. Hosted carry uses the final raw source/candidate frames, including
+// producer-owned Site coordination, and requires carry_assembly_dimensions.
+// Retained history opts out of each capability independently: body-only replay
+// disables both; selected-component-only replay disables hosted carry alone.
 [[nodiscard]] ApplyEntityChanges architectural_group_transform_command(
     const DocumentSnapshot& source, std::span<const std::string> entity_ids,
     const ArchitecturalGroupTransform& transform, const std::string& transaction_id,
-    Revision expected_revision, bool carry_assembly_dimensions = true);
+    Revision expected_revision, bool carry_assembly_dimensions = true,
+    bool carry_hosted_component_dimensions = true);
 
 // The same atomic admission with individually captured local pivots/operations.
 // Selected hosted railings require affine-equivalent intent to their selected
@@ -218,7 +223,7 @@ inline constexpr std::size_t maximum_architectural_group_targets = 1000;
 [[nodiscard]] ApplyEntityChanges architectural_group_transform_command(
     const DocumentSnapshot& source, std::span<const ArchitecturalGroupTransformTarget> targets,
     const std::string& transaction_id, Revision expected_revision,
-    bool carry_assembly_dimensions = true);
+    bool carry_assembly_dimensions = true, bool carry_hosted_component_dimensions = true);
 
 // Admit changed physical wall/opening, slab, room, canonical beam and independent
 // straight-railing descriptors against the complete detached candidate.

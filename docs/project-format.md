@@ -1,4 +1,21 @@
-# Vertex project formats v1 through v221
+# Vertex project formats v1 through v222
+
+Reader222 retains mixed transform intent19 under command52, paired with ordinary
+selection request6. The new pair inherits ordinary5/mixed18's closed source,
+geometry, room-review, text-baseline and invariant-child authority. It also
+carries qualified embedded component extent dimensions when selected
+architectural hosts actually change their component placements. Original and
+candidate component geometry supply the physical frames; unchanged rows and
+unselected hosts grant no new carry authority. Dimensions retain their exact
+root/path/axis and raw metadata. The shared selected-root/host consequence batch
+is bounded and carries each dimension once.
+
+Ordinary5/mixed18 retain selected-root-only dimension consequences; earlier
+stored dialects retain their original meanings. Current, nested and undone
+command52/intent19 proofs require reader222/extraction220. Other direct host
+editing routes, protected replacement and linked-view dimension lifecycles
+remain separate integration work. Compilation, runtime/history, migration and
+extraction remain unverified.
 
 Reader221 retains architectural/drawing removal4 and mixed removal14. The
 ordinary codec has explicit boolean component/roof membership flags plus literal

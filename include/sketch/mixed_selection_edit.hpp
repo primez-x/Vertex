@@ -46,9 +46,10 @@ private:
         const nlohmann::json&, std::string_view, const nlohmann::json&);
 };
 
-// Accepts ordinary four/mixed four or ordinary five/mixed eighteen, with
-// geometry.room_reviews empty. Only the latter grants associated component
-// dimension carry; historical dialects retain their original consequences.
+// Accepts ordinary four/mixed four, five/eighteen or six/nineteen, with
+// geometry.room_reviews empty. Five/eighteen grants selected-root component
+// dimension carry; six/nineteen additionally grants host-derived carry.
+// Historical dialects retain their original consequences.
 // Every leaf and the geometry preparation derive the same original snapshot;
 // old room state in the drawing preview does not discharge review requirements.
 [[nodiscard]] MixedSelectionEditPreparation prepare_mixed_selection_edit(
@@ -105,6 +106,9 @@ private:
 // version four's explicit invariant-child roster. Actual independent/embedded
 // component transforms also carry qualified extent dimensions. It adds no
 // Properties, phase replacement, linked-view or new identity authority.
+// Version nineteen pairs ordinary six and also carries embedded component
+// dimensions from actual admitted selected-host pose consequences. Version
+// eighteen retains its explicitly selected-root-only consequences.
 [[nodiscard]] nlohmann::json make_mixed_selection_edit_intent(
     const DocumentSnapshot& source, const nlohmann::json& ordinary_request,
     const nlohmann::json& roof_authoring, const nlohmann::json& roof_members,

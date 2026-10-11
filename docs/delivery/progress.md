@@ -14,6 +14,30 @@ changed source does not acquire runtime acceptance without later qualification.
 
 ## Current delivery state
 
+### October 11 host-derived embedded component dimension carry
+
+The qualified retirement batch is committed and pushed as ca3c508b; the exact
+remote branch ref matches local HEAD. Current source work connects selected
+architectural host movement to dimensions on actual changed embedded component
+placements. One source/candidate consequence roster shares the existing bounded
+dimension carry path with explicitly selected independent roots. Only actual
+dimension-bearing changed roots are admitted; unselected hosts and unchanged
+placements gain no new authority. Physical frames derive from actual component
+geometry instead of assuming the host transform is the component transform.
+
+Ordinary request6 and mixed transform19 retain this additional authority under
+reader222/extraction220. Ordinary5/mixed18 retain selected-root-only carry and
+older dialects preserve their original consequences. Current canvas/numeric
+mixed transforms request the new pair. Independent integrated source review
+approved the frozen batch with no proved P1/P2 finding. Root scoped whitespace
+review passes; Git records the source backup identity. Other direct
+physical-host/stair edit routes, coordinated
+host/cohort/phase retirement, linked-view targets, protected replacements and
+mixed-family lifecycles remain required. No builds/tests/jobs, launches, packages
+or installations ran; compilation, interaction, cancellation, Undo/redo,
+storage/migration and production acceptance remain unverified. All ten gates
+remain open and the installed candidate is unchanged.
+
 ### October 11 qualified embedded component dimension retirement
 
 The mixed transform batch is committed and pushed as 9af3e26a, with the exact
@@ -34,7 +58,7 @@ batch, requires both retained envelopes exact, and masks only its validated
 closed target during the tuple-reference check; extra properties/extensions keep
 their refusal policy. Focused correction review approved the integrated source
 with no remaining proved P1/P2 finding. Root scoped whitespace review passes;
-the batch is being committed and backed up.
+the batch is committed and backed up as ca3c508b.
 This does not complete host-driven transform carry,
 physical-host/mixed-owner/phase dimension retirement, linked-view targets or
 protected replacement lifecycles. No builds/tests/jobs, launches, packages or

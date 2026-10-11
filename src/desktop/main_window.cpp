@@ -71210,7 +71210,7 @@ public:
             for (const auto& child:children) if (!ordinary.contains(child.roof_id))
                 throw std::invalid_argument("Select the skylight's roof to move them vertically together.");
         }
-        json request={{"version",5},{"expected_revision",source->revision()},{"transaction_id",new_id("mixed-transform")},
+        json request={{"version",6},{"expected_revision",source->revision()},{"transaction_id",new_id("mixed-transform")},
             {"architectural",json::array()},{"embedded",json::array()},{"annotations",json::array()},
             {"references",json::array()},{"geometry",nullptr},{"message",message}};
         const auto planar_json=[scale](const PlanarTransform& t,bool presentation) {

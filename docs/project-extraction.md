@@ -1,5 +1,13 @@
 # Portable project extraction
 
+Exchange version220 requires native reader222 for mixed transform intent19 and
+ordinary selection request6. The source-bound pair carries qualified embedded
+component dimensions from actual selected-host placement consequences alongside
+selected-root dimension carry. Closed geometry/room decisions and invariant
+child proofs remain required. Nested and undone history retains the requirement;
+ordinary5/mixed18 preserve their selected-root-only semantics. No extraction or
+migration execution is claimed.
+
 Exchange version219 requires native reader221 for architectural/drawing removal4
 and mixed removal14. Actual embedded catalog/instance identities authorize exact
 supported extent-dimension retirement; component phase permissions remain
