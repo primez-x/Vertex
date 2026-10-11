@@ -122,6 +122,11 @@ struct PhaseConstraintAuthoringIntent {
     // Dialect twenty-two retains a pure per-owner similarity joint intent.
     // It keeps the ordinary eight outer keys and grants no replacement lane;
     // historical wrappers cannot carry the new nested operator dialect.
+    // Dialect thirty: registry-preserving demolition of actual qualified
+    // baseline component rows in their saved alternative. The closed leaf
+    // changes only companion demolition membership; the inner intent is
+    // message-only and no sibling edit or replacement authority is admitted.
+    nlohmann::json component_demolition=nullptr;
 };
 
 [[nodiscard]] PhaseConstraintAuthoringIntent decode_phase_constraint_authoring_intent(
@@ -134,8 +139,11 @@ struct PhaseConstraintAuthoringIntent {
 // do not acquire replacement authority through this enumeration.
 [[nodiscard]] std::vector<PhaseConstraintAuthoringIntent> phase_constraint_replacement_components(
     const PhaseConstraintAuthoringIntent& intent);
+// Pass the component leaf directly to admit all source catalogs before saved
+// phase selections are decoded. Null preserves the historical make path.
 [[nodiscard]] PhaseConstraintAuthoringIntent make_phase_constraint_authoring_intent(
-    const DocumentSnapshot& source, const ConstraintAuthoringIntent& intent);
+    const DocumentSnapshot& source, const ConstraintAuthoringIntent& intent,
+    const nlohmann::json& component_demolition = nullptr);
 [[nodiscard]] std::map<std::string,Entity,std::less<>> replay_phase_constraint_authoring(
     const std::map<std::string,Entity,std::less<>>& source, const nlohmann::json& proof);
 // Detached physical preview only for coordinated inner v2/v3/v4 wall replacements.

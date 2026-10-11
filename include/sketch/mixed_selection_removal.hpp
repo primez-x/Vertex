@@ -63,12 +63,15 @@ public:
 // Dialect two retains a complete phase-demolition command. These are explicit
 // ordinary roots/qualified components, never the demolition's derived closure.
 // Each preparation independently binds the proof to the actual full snapshot.
+// Local component IDs are admitted only by a canonical pure phase30 child.
+// The remaining-child opt-in supplies spelling validation, not command authority.
 [[nodiscard]] DocumentSnapshot prepare_mixed_selection_removal_stage(
     const DocumentSnapshot& source, const ArchitecturalSelectionRemovalIntent& ordinary,
     const Command& ordinary_command);
 [[nodiscard]] std::vector<RoofOpeningGroupMember> mixed_selection_removal_remaining_children(
     const DocumentSnapshot& source, const ArchitecturalSelectionRemovalIntent& ordinary,
-    const std::vector<RoofOpeningGroupMember>& members);
+    const std::vector<RoofOpeningGroupMember>& members,
+    bool complete_component_phase_demolition = false);
 [[nodiscard]] nlohmann::json make_mixed_selection_removal_intent(
     const DocumentSnapshot& source, const ArchitecturalSelectionRemovalIntent& ordinary,
     const Command& ordinary_command, const std::vector<RoofOpeningGroupMember>& members,
@@ -91,6 +94,8 @@ public:
 // Dialect four retains complete phase deletion and accepted room review,
 // with independently selected drawing rows. Historical dialect two keeps
 // its pure phase34 meaning.
+// Selection dialect two additionally retains explicit component demolition;
+// its flag must agree with an exact pure phase30 base or completed phase47.
 [[nodiscard]] DocumentSnapshot prepare_mixed_selection_removal_stage(
     const DocumentSnapshot& source, const PhaseSelectionRemovalIntent& ordinary,
     const Command& ordinary_command);

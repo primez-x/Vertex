@@ -1,5 +1,30 @@
 # Portable project extraction
 
+Exchange version210 requires native reader212 for explicit phase constraint
+authoring30 inside unchanged outer command34. Its exact nine fields are
+`version`, `expected_revision`, `source_snapshot_digest`,
+`source_authoring_digest`, `source_entities_digest`, `source_saved_revision`,
+`phase_selections`, `intent`, and `component_demolition`. The nonnull leaf has
+exactly `version: 1`, `kind: "component_phase_demolition"`, and `components`;
+its one through 1000 sorted unique rows each have exactly `catalog_id` and
+`instance_id`. Source replay appends only actual baseline component roots to
+the actual saved alternative companion demolition partition, without changing
+physical objects, catalogs, registries, or phase choices. Current, nested,
+wrapped, retained and undone history preserves reader212, including outer34,
+mixed2, completed phase outer47 and mixed phase/drawing4 receipts carrying
+this explicit leaf, and histories after earlier reader211 receipts.
+Historical phase authoring versions retain their original authority. The
+explicit phase selection2 receipt adds literal
+`complete_component_phase_demolition: true` to the historical five selection
+fields. Its component-only roots require the phase30 base, preserving nonblank
+catalog-local identities up to 4096 bytes, including spaces and Unicode.
+Historical selection1 retains its identity contract. Mixed2 admits the wider
+local grammar only with its closed phase30 child; completed47 and mixed4 retain
+selection2 and that child. These explicit receipts require reader212.
+The existing native-format-minus-two emitter supplies exchange210. This describes
+source-format support only, without runtime acceptance or lifting
+companion-bearing project quarantine.
+
 Exchange version209 requires native reader211 for explicit corner removal
 intents5 (owner), 6 (component-only) and 7 (selected cuts), and mixed selection
 removal intents11, 12 and 13, respectively, inside unchanged outer command45.

@@ -7,6 +7,7 @@
 #include "sketch/constraint_entity.hpp"
 #include "sketch/annotation_entity_codec.hpp"
 #include "sketch/assembly_document_adapter.hpp"
+#include "sketch/assembly_component_phase_demolition.hpp"
 #include "sketch/assembly_phase_membership.hpp"
 #include "sketch/assembly_phase_membership_transport.hpp"
 #include "sketch/constraint_phase_scope.hpp"
@@ -55,6 +56,19 @@ using Entities = std::map<std::string,Entity,std::less<>>;
 constexpr std::size_t proof_budget = 1024 * 1024;
 
 [[noreturn]] void invalid(const char* reason) { throw std::invalid_argument(reason); }
+void admit_component_demolition_source_catalogs(const Entities& source) {
+    // Charge every catalog, including unused carriers, before phase scope can
+    // decode a registry or resolve any qualified component membership.
+    AssemblyCatalogTransferBudget budget;
+    for (const auto& [key,entity]:source) {
+        (void)key;
+        if (entity.type!="assembly_model") continue;
+        if (!entity.properties.is_object() || !entity.properties.contains("model") ||
+            !entity.properties.at("model").is_object())
+            invalid("Component demolition requires an actual typed catalog carrier");
+        admit_existing_assembly_catalog_work(entity,budget);
+    }
+}
 void resource_shape(const Json& root) {
     std::set<std::string,std::less<>> owners;
     std::size_t nodes=0;
@@ -1280,6 +1294,7 @@ nlohmann::json encode_phase_constraint_authoring_intent(const PhaseConstraintAut
         static_cast<int>(!value.coordinated_demolition.is_null()) +
         static_cast<int>(!value.wall_demolition.is_null()) +
         static_cast<int>(!value.ordinary_roof_edits.is_null()) +
+        static_cast<int>(!value.component_demolition.is_null()) +
         static_cast<int>(value.intent.wall_group_scale.has_value());
     // The standalone baseline scale lane pairs only these two authorities.
     // Every other operation remains exclusive, including ordinary scale.
@@ -1303,12 +1318,23 @@ nlohmann::json encode_phase_constraint_authoring_intent(const PhaseConstraintAut
             invalid("Wall group scale cannot borrow sibling geometry or relationship authority");
     }
     const auto coordinated_version=value.coordinated_replacements.is_null()?0:coordinated(value.coordinated_replacements,value).version;
-    Json result={{"version",baseline_wall_group_scale?19:value.intent.wall_group_scale?18:!value.ordinary_roof_edits.is_null()?17:!value.wall_demolition.is_null()?16:!value.coordinated_demolition.is_null()?15:!value.stair_demolition_retirement.is_null()?13:!value.stair_replacement.is_null()?12:!value.stair_demolition.is_null()?11:!value.structural_replacement.is_null()?9:coordinated_version==5?29:coordinated_version==4?14:coordinated_version==3?10:coordinated_version==2?8:coordinated_version==1?7:!value.slab_demolition.is_null()?6:!value.slab_replacement.is_null()?5:!value.roof_replacement.is_null()?4:!value.opening_demolition.is_null()?3:value.wall_replacement.is_null()?1:2},{"expected_revision",value.expected_revision},
+    Json result={{"version",!value.component_demolition.is_null()?30:baseline_wall_group_scale?19:value.intent.wall_group_scale?18:!value.ordinary_roof_edits.is_null()?17:!value.wall_demolition.is_null()?16:!value.coordinated_demolition.is_null()?15:!value.stair_demolition_retirement.is_null()?13:!value.stair_replacement.is_null()?12:!value.stair_demolition.is_null()?11:!value.structural_replacement.is_null()?9:coordinated_version==5?29:coordinated_version==4?14:coordinated_version==3?10:coordinated_version==2?8:coordinated_version==1?7:!value.slab_demolition.is_null()?6:!value.slab_replacement.is_null()?5:!value.roof_replacement.is_null()?4:!value.opening_demolition.is_null()?3:value.wall_replacement.is_null()?1:2},{"expected_revision",value.expected_revision},
         {"source_snapshot_digest",value.source_snapshot_digest},{"source_authoring_digest",value.source_authoring_digest},
         {"source_entities_digest",value.source_entities_digest},
         {"source_saved_revision",value.source_saved_revision ? Json(*value.source_saved_revision) : Json(nullptr)},
         {"phase_selections",value.phase_selections},{"intent",encode_intent(value.intent)}};
     if (joint_similarity) result["version"]=22;
+    if (!value.component_demolition.is_null()) {
+        const auto demolition=decode_assembly_component_phase_demolition_intent(value.component_demolition);
+        const auto canonical=encode_assembly_component_phase_demolition_intent(demolition);
+        if (canonical.dump()!=value.component_demolition.dump())
+            invalid("Component demolition decisions are not canonical");
+        ConstraintAuthoringIntent empty;
+        empty.message=value.intent.message;
+        if (encode_intent(value.intent)!=encode_intent(empty))
+            invalid("Component demolition cannot borrow geometry or relationship authority");
+        result["component_demolition"]=canonical;
+    }
     if (!value.wall_replacement.is_null()) {
         const auto replacement=decode_phase_wall_replacement_authoring(value.wall_replacement);
         if (encode_phase_wall_replacement_authoring(replacement).dump()!=value.wall_replacement.dump())
@@ -1485,7 +1511,10 @@ PhaseConstraintAuthoringIntent decode_phase_constraint_authoring_intent(const Js
     const bool ordinary_roofs=ordinary_roof_rotations || (value.is_object() && value.contains("version") && value.at("version")==17);
     const bool wall_group_scale=value.is_object() && value.contains("version") && value.at("version")==18;
     const bool baseline_wall_group_scale=wall_edit_version==19;
-    if (hosted_walls) keys(value,{"version","wall_edit_version","expected_revision","source_snapshot_digest","source_authoring_digest",
+    const bool component_demolition=value.is_object() && value.contains("version") && value.at("version")==30;
+    if (component_demolition) keys(value,{"version","expected_revision","source_snapshot_digest","source_authoring_digest",
+        "source_entities_digest","source_saved_revision","phase_selections","intent","component_demolition"});
+    else if (hosted_walls) keys(value,{"version","wall_edit_version","expected_revision","source_snapshot_digest","source_authoring_digest",
         "source_entities_digest","source_saved_revision","phase_selections","intent","wall_replacement"});
     else if (replacement || baseline_wall_group_scale) keys(value,{"version","expected_revision","source_snapshot_digest","source_authoring_digest",
         "source_entities_digest","source_saved_revision","phase_selections","intent","wall_replacement"});
@@ -1515,7 +1544,7 @@ PhaseConstraintAuthoringIntent decode_phase_constraint_authoring_intent(const Js
         "source_entities_digest","source_saved_revision","phase_selections","intent","ordinary_roof_edits"});
     else keys(value,{"version","expected_revision","source_snapshot_digest","source_authoring_digest",
         "source_entities_digest","source_saved_revision","phase_selections","intent"});
-    if (!value.at("version").is_number_integer() || (value.at("version")!=1 && value.at("version")!=2 && value.at("version")!=3 && value.at("version")!=4 && value.at("version")!=5 && value.at("version")!=6 && value.at("version")!=7 && value.at("version")!=8 && value.at("version")!=9 && value.at("version")!=10 && value.at("version")!=11 && value.at("version")!=12 && value.at("version")!=13 && value.at("version")!=14 && value.at("version")!=15 && value.at("version")!=16 && value.at("version")!=17 && value.at("version")!=18 && value.at("version")!=19 && value.at("version")!=20 && value.at("version")!=21 && value.at("version")!=22 && value.at("version")!=23 && value.at("version")!=24 && value.at("version")!=25 && value.at("version")!=26 && value.at("version")!=27 && value.at("version")!=28 && value.at("version")!=29) ||
+    if (!value.at("version").is_number_integer() || (value.at("version")!=1 && value.at("version")!=2 && value.at("version")!=3 && value.at("version")!=4 && value.at("version")!=5 && value.at("version")!=6 && value.at("version")!=7 && value.at("version")!=8 && value.at("version")!=9 && value.at("version")!=10 && value.at("version")!=11 && value.at("version")!=12 && value.at("version")!=13 && value.at("version")!=14 && value.at("version")!=15 && value.at("version")!=16 && value.at("version")!=17 && value.at("version")!=18 && value.at("version")!=19 && value.at("version")!=20 && value.at("version")!=21 && value.at("version")!=22 && value.at("version")!=23 && value.at("version")!=24 && value.at("version")!=25 && value.at("version")!=26 && value.at("version")!=27 && value.at("version")!=28 && value.at("version")!=29 && value.at("version")!=30) ||
         !value.at("expected_revision").is_number_unsigned()) invalid("Phase constraint proof version or revision is invalid");
     if (!value.at("source_saved_revision").is_null() && !value.at("source_saved_revision").is_number_unsigned())
         invalid("Phase constraint saved revision is invalid");
@@ -1536,6 +1565,11 @@ PhaseConstraintAuthoringIntent decode_phase_constraint_authoring_intent(const Js
         result.opening_demolition = value.at("opening_demolition");
         if (result.opening_demolition.is_null()) invalid("Version three requires opening demolition decisions");
         (void)decode_phase_opening_demolition_intent(result.opening_demolition);
+    }
+    if (component_demolition) {
+        result.component_demolition=value.at("component_demolition");
+        if (result.component_demolition.is_null()) invalid("Version thirty requires component demolition decisions");
+        (void)decode_assembly_component_phase_demolition_intent(result.component_demolition);
     }
     if (roof) {
         result.roof_replacement = value.at("roof_replacement");
@@ -1622,6 +1656,8 @@ std::vector<PhaseConstraintAuthoringIntent> phase_constraint_replacement_compone
         return phase_coordinated_demolition_components(intent.coordinated_demolition,intent);
     // Standalone phase nineteen returns its complete scale/replacement pair,
     // so original-preservation guards inspect its actual replacement plan.
+    // Component demolition also returns itself: it reserves no fresh roots
+    // and provides no copied stage or physical replacement authority.
     if (intent.coordinated_replacements.is_null()) return {intent};
     std::vector<PhaseConstraintAuthoringIntent> result;
     const auto lanes=coordinated(intent.coordinated_replacements,intent);
@@ -1643,18 +1679,24 @@ std::vector<PhaseConstraintAuthoringIntent> phase_constraint_replacement_compone
 }
 
 PhaseConstraintAuthoringIntent make_phase_constraint_authoring_intent(
-    const DocumentSnapshot& source,const ConstraintAuthoringIntent& intent) {
+    const DocumentSnapshot& source,const ConstraintAuthoringIntent& intent,const Json& component_demolition) {
+    if (!component_demolition.is_null()) admit_component_demolition_source_catalogs(source.entities());
     PhaseConstraintAuthoringIntent result{source.revision(),document_snapshot_digest(source),
         document_authoring_source_digest_v2(source),entity_map_digest(source.entities()),
         source.saved_revision_optional(),phase_constraint_authoring_selections(source.entities()),intent};
+    result.component_demolition=component_demolition;
     (void)encode_phase_constraint_authoring_intent(result); return result;
 }
 
 Entities replay_phase_constraint_authoring(const Entities& source,const Json& proof) {
     const auto decoded=decode_phase_constraint_authoring_intent(proof);
+    if (!decoded.component_demolition.is_null()) admit_component_demolition_source_catalogs(source);
     if (decoded.source_entities_digest!=entity_map_digest(source) ||
         decoded.phase_selections!=phase_constraint_authoring_selections(source))
         invalid("Phase constraint proof does not describe the actual source entities and saved choices");
+    if (!decoded.component_demolition.is_null())
+        return replay_assembly_component_phase_demolition(source,
+            decode_assembly_component_phase_demolition_intent(decoded.component_demolition));
     if (!decoded.ordinary_roof_edits.is_null()) {
         const auto edits=ordinary_roof_edits(decoded.ordinary_roof_edits, true);
         const auto partition=partition_phase_roof_geometry_edits(source,edits);

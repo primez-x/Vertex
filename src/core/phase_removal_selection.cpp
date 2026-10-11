@@ -1,6 +1,7 @@
 #include "sketch/phase_removal_selection.hpp"
 
 #include "sketch/phase_constraint_authoring.hpp"
+#include "sketch/assembly_component_phase_demolition.hpp"
 #include "sketch/phase_coordinated_demolition.hpp"
 #include "sketch/phase_opening_demolition.hpp"
 #include "sketch/phase_roof_replacement.hpp"
@@ -108,10 +109,13 @@ struct Selection {
             count();
         }
     }
-    void add(const std::vector<std::pair<std::string, std::string>>& keys) {
+    void add(const std::vector<std::pair<std::string, std::string>>& keys, bool component_demolition = false) {
         if (keys.size() > selection_limit) invalid("leaf component budget exceeded");
         for (std::size_t i = 0; i < keys.size(); ++i) {
-            identity(keys[i].first); identity(keys[i].second);
+            identity(keys[i].first);
+            // Only the new leaf's canonical codec admits bounded local row
+            // identities. Historical ordinary-component lanes stay strict.
+            if (!component_demolition) identity(keys[i].second);
             if (i && keys[i - 1] >= keys[i]) invalid("leaf components must be ascending and unique");
             if (!components.insert(keys[i]).second) invalid("explicit component roots repeat across demolition lanes");
             count();
@@ -142,7 +146,9 @@ void preflight_selection(const Json& proof, std::size_t& count, std::size_t dept
     if (depth > semantic_depth_limit) invalid("demolition enclosure depth exceeded");
     const auto& version = field(proof, "version");
     if (!version.is_number_integer()) invalid("requires a known demolition envelope version");
-    if (version == 3) {
+    if (version == 30) {
+        preflight_ids(field(field(proof, "component_demolition"), "components"), count);
+    } else if (version == 3) {
         preflight_ids(field(field(proof, "opening_demolition"), "opening_ids"), count);
     } else if (version == 6) {
         preflight_ids(field(field(proof, "slab_demolition"), "slab_ids"), count);
@@ -195,7 +201,11 @@ void extract(const PhaseConstraintAuthoringIntent& proof,
     // Equality proves all source/history/save/phase choices and empty siblings.
     auto expected = actual_binding;
     expected.intent.message = proof.intent.message;
-    if (!proof.opening_demolition.is_null()) {
+    if (!proof.component_demolition.is_null()) {
+        const auto leaf=decode_assembly_component_phase_demolition_intent(proof.component_demolition);
+        expected.component_demolition=encode_assembly_component_phase_demolition_intent(leaf);
+        selected.add(leaf.components, true);
+    } else if (!proof.opening_demolition.is_null()) {
         const auto leaf = decode_phase_opening_demolition_intent(proof.opening_demolition);
         expected.opening_demolition = encode_phase_opening_demolition_intent(leaf);
         selected.add(leaf.opening_ids);
@@ -274,7 +284,7 @@ ArchitecturalSelectionRemovalIntent phase_removal_selection_authority(
 
     ConstraintAuthoringIntent empty;
     empty.message = proof.intent.message;
-    const auto actual_binding = make_phase_constraint_authoring_intent(source, empty);
+    const auto actual_binding = make_phase_constraint_authoring_intent(source, empty, proof.component_demolition);
     Selection selected;
     extract(proof, actual_binding, selected, 0);
     if (selected.objects.empty() && selected.components.empty()) invalid("demolition selection cannot be empty");

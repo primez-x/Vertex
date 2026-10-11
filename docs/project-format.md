@@ -1,4 +1,31 @@
-# Vertex project formats v1 through v211
+# Vertex project formats v1 through v212
+
+Reader212 retains explicit phase constraint authoring30 inside unchanged outer
+command34. Its exact nine fields are `version`, `expected_revision`,
+`source_snapshot_digest`, `source_authoring_digest`, `source_entities_digest`,
+`source_saved_revision`, `phase_selections`, `intent`, and
+`component_demolition`. The nonnull demolition leaf has exactly `version: 1`,
+`kind: "component_phase_demolition"`, and `components`. The components array
+contains one through 1000 sorted unique rows, each with exactly `catalog_id`
+and `instance_id`. Source replay appends only actual baseline component roots
+to the actual saved alternative companion demolition partition; physical
+objects, catalogs, registries, and phase choices do not change.
+Current, nested, wrapped, retained and undone histories require reader212,
+including outer34, mixed2, completed phase outer47 and mixed phase/drawing4
+receipts carrying this explicit leaf, and histories after earlier reader211
+receipts. Historical phase authoring versions retain their original authority.
+Phase selection2 has exactly `version`, `kind`, `object_ids`, `components`,
+`drawing`, and literal `complete_component_phase_demolition: true`. It requires
+component-only architectural roots bound to the complete phase30 base. Catalog
+identities retain the document grammar; local component identities preserve
+the membership grammar of up to 4096 nonblank bytes, including spaces and
+Unicode. Historical selection1 retains its original identity contract. Mixed2
+admits this local grammar only with its explicit closed phase30 child; mixed4
+and completed47 retain selection2 and that same child. Neither an ordinary
+architectural request nor a historical demolition child can borrow the option.
+Extraction emits210 through the existing native-format-minus-two emitter.
+This is source-format support only; runtime acceptance remains unqualified
+and companion-bearing quarantine remains.
 
 Reader211 retains explicit corner removal intents5 (owner), 6 (component-only)
 and 7 (selected cuts), and mixed selection removal intents11, 12 and 13,

@@ -93,7 +93,8 @@ struct DrawingSelectionRemovalIntent {
 [[nodiscard]] DrawingSelectionRemovalEntities replay_drawing_selection_removal_with_phase(
     const DocumentSnapshot& source, const DrawingSelectionRemovalIntent& drawing,
     const ArchitecturalSelectionRemovalIntent& architectural,
-    const Command& pure_phase_deletion_command);
+    const Command& pure_phase_deletion_command,
+    bool complete_component_phase_demolition = false);
 
 // Corner retirement/demolition is reconstructed from its explicit actual-owner
 // authority. Only that independently admitted stage supplies override changes.

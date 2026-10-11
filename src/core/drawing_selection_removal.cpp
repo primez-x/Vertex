@@ -935,13 +935,23 @@ DrawingSelectionRemovalEntities replay_drawing_selection_removal_with_deletion_r
 }
 DrawingSelectionRemovalEntities replay_drawing_selection_removal_with_phase(
     const DocumentSnapshot& source,const DrawingSelectionRemovalIntent& drawing,
-    const ArchitecturalSelectionRemovalIntent& architectural,const Command& pure_phase_deletion_command) {
+    const ArchitecturalSelectionRemovalIntent& architectural,const Command& pure_phase_deletion_command,
+    bool complete_component_phase_demolition) {
     try {
+        if (complete_component_phase_demolition) {
+            Budget source_budget; bounds(source.entities(),source_budget);
+            AssemblyCatalogTransferBudget catalog_budget;
+            for (const auto& [id,entity]:source.entities()) {
+                (void)id;
+                if (entity.type=="assembly_model") admit_existing_assembly_catalog_work(entity,catalog_budget);
+            }
+        }
         // Demolition and its accepted room choices activate the same phase
         // policy as the original command, even if the captured snapshot has
         // not yet published phase-aware authoring history.
         (void)replay(source.entities(),source.entities(),drawing,true);
-        (void)phase_selection_removal_base_authority(source,pure_phase_deletion_command,architectural);
+        (void)phase_selection_removal_base_authority(source,pure_phase_deletion_command,architectural,
+            complete_component_phase_demolition);
         const auto wire=command_to_json(pure_phase_deletion_command);
         const auto canonical=command_from_json(wire);
         if (command_to_json(canonical).dump()!=wire.dump()) reject("phase deletion is not canonical");

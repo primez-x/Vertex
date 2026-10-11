@@ -11,6 +11,9 @@ namespace sketch {
 struct PhaseSelectionRemovalIntent {
     ArchitecturalSelectionRemovalIntent architectural;
     DrawingSelectionRemovalIntent drawing;
+    // Selection dialect two exclusively binds a pure phase-authoring thirty
+    // component demolition. False retains the exact historical dialect one.
+    bool complete_component_phase_demolition = false;
 };
 
 [[nodiscard]] nlohmann::json encode_phase_selection_removal_intent(
@@ -24,9 +27,12 @@ struct PhaseSelectionRemovalIntent {
 // wall demolition or outer34 typed demolition. Does not accept wrapper47 or
 // derive root authority from raw entity payloads. Complete review admission
 // remains the responsibility of the source-owning preview/composition paths.
+// Component completion is required exclusively for a pure phase30 base;
+// its canonical leaf owns local-ID spelling and exact qualified-root matching.
 [[nodiscard]] ArchitecturalSelectionRemovalIntent phase_selection_removal_base_authority(
     const DocumentSnapshot& source, const Command& pure_phase_deletion_command,
-    const ArchitecturalSelectionRemovalIntent& explicit_selection);
+    const ArchitecturalSelectionRemovalIntent& explicit_selection,
+    bool complete_component_phase_demolition = false);
 
 [[nodiscard]] DocumentSnapshot prepare_phase_selection_removal_stage(
     const DocumentSnapshot& source, const PhaseSelectionRemovalIntent& intent,

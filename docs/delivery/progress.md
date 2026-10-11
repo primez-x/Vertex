@@ -14,6 +14,55 @@ changed source does not acquire runtime acceptance without later qualification.
 
 ## Current delivery state
 
+### October 11 baseline component demolition
+
+The preceding corner/component deletion batch is committed and pushed as
+19521f0d. Current source adds a pure source-derived baseline component
+demolition leaf with 1..1000 exact sorted qualified catalog/instance roots.
+It admits the complete raw map and all source catalogs before membership scope,
+requires declared active baseline-existing roots and actual saved alternatives,
+and appends only those roots to their actual companion demolition partition.
+Catalog rows, baseline/proposal partitions, registries, physical bodies, raw
+carrier siblings/extensions and other alternatives remain retained. The final
+map shares cumulative raw/catalog admission before membership validation.
+
+Exclusive phase authoring thirty retains the canonical leaf inside unchanged
+outer34. Its nine fields add only component_demolition to the historical
+source/revision/save/choice binding and message-only semantic intent. No sibling
+geometry, relationship, replacement, physical removal or fresh identity is
+admitted. Live and retained Document source guards, make and replay admit all
+source catalogs before phase selections. Actual phase-removal selection proof
+captures qualified roots from that closed leaf; existing mixed2, phase drawing
+and mixed4 retain the explicit new child through independent source replay.
+Independent review identified a mismatch between valid catalog-local component
+identities and historical wrapper document-ID validation. The correction uses
+explicit phase selection2 and phase30-bound mixed admission, preserving spaces,
+Unicode and longer local IDs while retaining historical identity contracts.
+Reader212/extraction210 cover current, nested, wrapped, retained and undone
+authority even after older reader211 records.
+
+Canvas Delete selects this producer before corner/ordinary retirement only for
+a complete baseline component cohort in saved active alternatives. It resolves
+actual aliases, checks active catalogs/placement hosts, and publishes one typed
+command. Site footprint retains selected qualified aliases and actual hosts
+despite unchanged physical bodies. Component plus independent drawing Delete
+uses the same phase30 base and completed47 composition in one command. Mixed
+skylight deletion captures the same explicit phase selection2 authority.
+The core target and source-kit allowlist include the new leaf.
+Coordinated demolition combining components with physical or ordinary roots,
+complete mixed clipboard, detach/shared-type semantics, uncaptured copies,
+nested profile selection, joint-only patches and deformed/cross-Site carry
+remain implementation gaps.
+Required-companion editing quarantine remains until all consumers integrate;
+all ten production gates remain open. No builds, tests, scripts, probes, native
+jobs, launches, packages or installations ran; installed app unchanged.
+Independent source review approved the corrected bounded integration with no
+confirmed P1/P2 findings remaining. Root reviewed the closed leaf, old/new
+selection contracts, exact phase30/base/root agreement, early canvas routing,
+source admission, Site targets, retained reader floors and source-kit inputs.
+Named staged whitespace checks pass. Compilation, runtime, Undo/Redo,
+save/reopen, extraction round trips and production qualification are unverified.
+
 ### October 11 corner component membership retirement
 
 The preceding roof/component deletion batch is committed and pushed as bf027d01.

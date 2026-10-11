@@ -3617,6 +3617,17 @@ static std::vector<bool> active_constraint_history_policies(const std::vector<Re
 }
 
 #ifdef VERTEX_HAS_CONSTRAINT_AUTHORING
+static void admit_phase_component_demolition_source(
+    const std::map<std::string,Entity,std::less<>>& entities,
+    const PhaseConstraintAuthoringIntent& intent) {
+    if (intent.component_demolition.is_null()) return;
+    AssemblyCatalogTransferBudget budget;
+    for (const auto& [id,entity]:entities) {
+        (void)id;
+        if (entity.type=="assembly_model") admit_existing_assembly_catalog_work(entity,budget);
+    }
+}
+
 static void validate_phase_constraint_authoring_source(const DocumentSnapshot& source,
     const ApplyBoundaryConstraintChanges& command) {
     if (!has_mixed_clipboard_placement(command))
@@ -3624,6 +3635,7 @@ static void validate_phase_constraint_authoring_source(const DocumentSnapshot& s
             validate_mixed_clipboard_placement_source(source,intent);
     for (const auto& encoded : phase_constraint_authoring_proofs(command)) {
         const auto intent=decode_phase_constraint_authoring_intent(encoded);
+        admit_phase_component_demolition_source(source.entities(),intent);
         if (intent.expected_revision!=source.revision() ||
             intent.source_snapshot_digest!=document_snapshot_digest(source) ||
             intent.source_authoring_digest!=document_authoring_source_digest_v2(source) ||
@@ -3642,6 +3654,7 @@ static void validate_retained_phase_constraint_authoring_source(const DocumentSn
     const RevisionRecord& source, const ApplyBoundaryConstraintChanges& command,std::size_t preceding_records) {
     for (const auto& encoded : phase_constraint_authoring_proofs(command)) {
         const auto intent=decode_phase_constraint_authoring_intent(encoded);
+        admit_phase_component_demolition_source(source.entities,intent);
         if (intent.expected_revision!=source.revision ||
             intent.source_snapshot_digest!=document_snapshot_digest_at_revision(snapshot,source.revision,intent.source_saved_revision) ||
             intent.source_authoring_digest!=document_authoring_source_digest_v2_at_revision(snapshot,source.revision) ||

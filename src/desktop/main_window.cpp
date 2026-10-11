@@ -32,6 +32,7 @@
 #include "sketch/mixed_clipboard_command.hpp"
 #include "sketch/authored_phase_membership.hpp"
 #include "sketch/assembly_phase_membership_transport.hpp"
+#include "sketch/assembly_component_phase_demolition.hpp"
 #include "sketch/corner_window_edit.hpp"
 #include "sketch/dxf_architectural_source.hpp"
 #include "sketch/phase_corner_window_edit.hpp"
@@ -31443,6 +31444,66 @@ public:
         }
     }
 
+    static std::optional<Command> componentPhaseDemolitionCommand(
+        const DocumentSnapshot& source,const QStringList& selection,const std::string& message) {
+        if (!hasComponentPhaseMemberships(source) || selection.isEmpty()) return std::nullopt;
+        if (selection.size()>1000)
+            throw std::invalid_argument("Select at most 1000 components for demolition.");
+        admitComponentMembershipRemovalSource(source);
+        const auto aliases=embedded_assembly_presentation_ids(source.entities());
+        std::map<std::string,AssemblyPhaseRoot,std::less<>> qualified;
+        for (const auto& [key,alias]:aliases) qualified.emplace(alias,key);
+        const auto membership_scope=resolve_assembly_phase_memberships(source.entities());
+        const auto physical_scope=constraint_phase_scope(source.entities());
+        std::set<std::string,std::less<>> active_registries;
+        for (const auto& registry:physical_scope.registries)
+            if (registry.alternative_id) active_registries.insert(registry.registry_id);
+        AssemblyComponentPhaseDemolitionIntent demolition;
+        std::map<std::string,AssemblyModel,std::less<>> catalogs;
+        std::map<std::string,std::map<std::string,const AssemblyInstance*,std::less<>>,std::less<>> rows;
+        for (const auto& selected:selection) {
+            const auto id=selected.toStdString();
+            // Physical owners and independent drawings keep their own complete
+            // removal producers. This lane never promotes an alias to a host.
+            if (source.entities().contains(id)) return std::nullopt;
+            const auto actual=qualified.find(id);
+            if (actual==qualified.end()) return std::nullopt;
+            const auto& key=actual->second;
+            const auto owner=membership_scope.owners.find(key);
+            const auto state=membership_scope.states.find(key);
+            if (owner==membership_scope.owners.end() || state==membership_scope.states.end() ||
+                state->second!=ModelPhase::existing || !active_registries.contains(owner->second.registry_id))
+                return std::nullopt;
+            if (physical_scope.inactive_owner_ids.contains(key.first))
+                throw std::invalid_argument("The selected component catalog is not visible in the active design.");
+            auto indexed=rows.find(key.first);
+            if (indexed==rows.end()) {
+                const auto catalog=catalogs.emplace(key.first,AssemblyModel::from_json(
+                    source.entities().at(key.first).properties.at("model"))).first;
+                indexed=rows.emplace(key.first,std::map<std::string,const AssemblyInstance*,std::less<>>{}).first;
+                for (const auto& row:catalog->second.instances()) indexed->second.emplace(row.id,&row);
+            }
+            const auto row=indexed->second.find(key.second);
+            if (row==indexed->second.end())
+                throw std::invalid_argument("The selected component no longer has its actual catalog row.");
+            if (row->second->placement && physical_scope.inactive_owner_ids.contains(row->second->placement->host_entity_id))
+                throw std::invalid_argument("The selected component host is not visible in the active design.");
+            demolition.components.push_back(key);
+        }
+        std::sort(demolition.components.begin(),demolition.components.end());
+        const auto leaf=encode_assembly_component_phase_demolition_intent(demolition);
+        ConstraintAuthoringIntent semantic;
+        semantic.message=message;
+        const auto intent=make_phase_constraint_authoring_intent(source,semantic,leaf);
+        ApplyBoundaryConstraintChanges command;
+        command.expected_revision=source.revision();
+        command.message=message;
+        command.phase_constraint_authoring_completion=true;
+        command.phase_constraint_authoring_intent=encode_phase_constraint_authoring_intent(intent);
+        (void)Document::preview_command(source,Command{command});
+        return Command{std::move(command)};
+    }
+
     static ArchitecturalSelectionRemovalIntent captureArchitecturalSelectionRemoval(
         const DocumentSnapshot& source, std::vector<std::string> object_ids,
         std::vector<std::pair<std::string,std::string>> components={},
@@ -33493,6 +33554,14 @@ public:
         return selected;
     }
 
+    static bool componentPhaseDemolitionMode(const Command& command) {
+        const auto* phase=std::get_if<ApplyBoundaryConstraintChanges>(&command);
+        if (!phase || !phase->phase_constraint_authoring_completion ||
+            phase->phase_constraint_authoring_intent.is_null()) return false;
+        const auto intent=decode_phase_constraint_authoring_intent(phase->phase_constraint_authoring_intent);
+        return !intent.component_demolition.is_null();
+    }
+
     ApplyBoundaryConstraintChanges completePhaseDrawingSelectionRemoval(
         const DocumentSnapshot& source,const Command& base,
         const DrawingSelectionRemovalIntent& drawing,const QStringList& selection) const {
@@ -33500,7 +33569,9 @@ public:
         if (selected.drawing!=drawing)
             throw std::invalid_argument("The phase removal proof does not cover the exact drawing selection. The selection has been preserved.");
         PhaseSelectionRemovalIntent intent;
-        intent.architectural=phase_selection_removal_base_authority(source,base,selected.architectural);
+        intent.complete_component_phase_demolition=componentPhaseDemolitionMode(base);
+        intent.architectural=phase_selection_removal_base_authority(source,base,selected.architectural,
+            intent.complete_component_phase_demolition);
         intent.drawing=drawing;
         return prepare_completed_phase_selection_removal(source,intent,base);
     }
@@ -34182,7 +34253,9 @@ public:
     }
 
     std::optional<bool> removeSelectedArchitecturalDrawing(const DocumentSnapshot& source,bool cut,
-        std::optional<PreparedSelectionRemoval>* prepared=nullptr) {
+        std::optional<PreparedSelectionRemoval>* prepared=nullptr,bool component_demolition_only=false) {
+        if (component_demolition_only && !hasComponentPhaseMemberships(source)) return std::nullopt;
+        admitComponentMembershipRemovalSource(source);
         const auto authority=captureSourceEditAuthority(source);
         DrawingSelectionRemovalIntent drawing;
         std::vector<std::string> architectural_ids;
@@ -34216,7 +34289,14 @@ public:
         (void)replay_drawing_selection_removal(source.entities(),drawing,source.uses_active_phase_constraints());
         const std::string message=cut ? "Cut selected architectural objects and drawings" :
             "Delete selected architectural objects and drawings";
-        auto command=coordinatedDemolitionCommand(source,architectural_ids,message,true);
+        std::optional<Command> command;
+        if (!cut) {
+            QStringList component_ids;
+            for (const auto& id:architectural_ids) component_ids.push_back(QString::fromStdString(id));
+            command=componentPhaseDemolitionCommand(source,component_ids,message);
+        }
+        if (component_demolition_only && !command) return std::nullopt;
+        if (!command) command=coordinatedDemolitionCommand(source,architectural_ids,message,true);
         if (!command) return std::nullopt;
         require_current();
         QString clipboard_text;
@@ -36178,6 +36258,15 @@ public:
                 return prepared;
             };
             const auto& ordinary_selection=ordinarySelectionIDs();
+            if (const auto demolition=componentPhaseDemolitionCommand(source,ordinary_selection,"Demolish selected components")) {
+                source_guard();
+                finalizeSelectionRemoval(*demolition,&prepared);
+                return finish_preparation();
+            }
+            // Baseline component aliases keep their phase-semantic producer
+            // even when selected beside drawings or hosted by a corner owner.
+            if (const auto removed=removeSelectedArchitecturalDrawing(source,false,&prepared,true))
+                return finish_preparation();
             const bool has_corner=std::any_of(ordinary_selection.begin(),ordinary_selection.end(),[&](const auto& id) {
                 return cornerWindowClipboardOwner(source,id).has_value();
             });
@@ -36364,9 +36453,11 @@ public:
                 phase_selection=decode_phase_selection_removal_intent(intent.at("selection"));
             } else {
                 PhaseSelectionRemovalIntent intent;
+                intent.complete_component_phase_demolition=componentPhaseDemolitionMode(prepared->command);
                 intent.architectural=phase_selection_removal_base_authority(*source,prepared->command,
-                    selected.architectural);
-                if (version==34 && !hasIndependentDrawingRemoval(selected.drawing))
+                    selected.architectural,intent.complete_component_phase_demolition);
+                if (version==34 && !intent.complete_component_phase_demolition &&
+                    !hasIndependentDrawingRemoval(selected.drawing))
                     phase_ordinary=std::move(intent.architectural);
                 else phase_selection=std::move(intent);
             }
@@ -59054,6 +59145,26 @@ private:
                     // must enter Site/selection authority independently of a
                     // physical payload diff or a registry-only consequence.
                     for (const auto& component:phase_constraint_replacement_components(intent)) {
+                        if (!component.component_demolition.is_null()) {
+                            const auto leaf=decode_assembly_component_phase_demolition_intent(component.component_demolition);
+                            const auto aliases=embedded_assembly_presentation_ids(source.entities());
+                            std::map<std::string,AssemblyModel,std::less<>> catalogs;
+                            std::map<std::string,std::map<std::string,const AssemblyInstance*,std::less<>>,std::less<>> rows;
+                            for (const auto& key:leaf.components) {
+                                targets.insert(key.first);targets.insert(aliases.at(key));
+                                auto indexed=rows.find(key.first);
+                                if (indexed==rows.end()) {
+                                    const auto catalog=catalogs.emplace(key.first,
+                                        AssemblyModel::from_json(source.entities().at(key.first).properties.at("model"))).first;
+                                    indexed=rows.emplace(key.first,std::map<std::string,const AssemblyInstance*,std::less<>>{}).first;
+                                    for (const auto& row:catalog->second.instances()) indexed->second.emplace(row.id,&row);
+                                }
+                                const auto row=indexed->second.find(key.second);
+                                if (row==indexed->second.end())
+                                    throw std::invalid_argument("The selected component is absent from its captured catalog.");
+                                if (row->second->placement) targets.insert(row->second->placement->host_entity_id);
+                            }
+                        }
                         if (!component.opening_demolition.is_null()) {
                             const auto leaf=decode_phase_opening_demolition_intent(component.opening_demolition);
                             targets.insert(leaf.opening_ids.begin(),leaf.opening_ids.end());
