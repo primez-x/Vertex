@@ -423,7 +423,7 @@ ApplyEntityChanges prepare_corner_selection_removal(const DocumentSnapshot& sour
         if (physical(entity)) required.insert(id);
     }
     if (command.entity_changes.empty() || command.entity_changes.size() > change_limit) reject("raw change inventory exceeded");
-    const auto preview = Document::preview_command(source, Command{command});
+    const auto preview = Document::preview_corner_selection_removal_stage(source, intent, Command{command});
     metadata(source, preview);
     if (preview.entities().size() != expected.size()) reject("real command admission changed candidate inventory");
     for (const auto& [id, entity] : expected) {

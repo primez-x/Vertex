@@ -1051,7 +1051,8 @@ std::optional<ApplyEntityChanges> derive_snapshot(const DocumentSnapshot& source
     }
     // The real captured snapshot supplies history, assets and policy admission.
     // Never fabricate a snapshot from a filtered/truncated entity map.
-    const auto preview = Document::preview_command(source, Command{command});
+    const auto preview = Document::preview_hosted_opening_removal_stage(source,
+        HostedOpeningRemovalStageRequest{selection, complete_component_dimensions}, Command{command});
     if (preview.entities() != candidate || preview.assets() != source.assets() || !preview.is_editable())
         reject("final raw command admission changed unrelated state or made the document read-only");
     for (const auto& [id, entity] : candidate) if (!exact(entity, preview.entities().at(id)))

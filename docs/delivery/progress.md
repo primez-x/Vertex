@@ -14,6 +14,54 @@ changed source does not acquire runtime acceptance without later qualification.
 
 ## Current delivery state
 
+### October 11 closed component retirement and controller continuation
+
+The prior status turn made no source changes. This continuation adds five
+closed Document previews for ordinary, architectural/drawing, corner,
+hosted-opening and opening/architectural deletion. Each derives the complete
+result from the actual source and typed selection before privately applying
+the original command. Complete entity representation, assets, metadata and
+one-event history are compared; no public candidate map grants admission.
+The ordinary producer now exposes its existing reconstruction separately from
+preview, preserving its original wall review and opening completion modes.
+
+Standalone dialect17 under exclusive command45 retains exact typed selectors,
+canonical bounded original commands, source/save and stage fences, empty
+children, and operation-local replay reuse. Historical dialects1 through16 keep
+their required skylight children and original interpretations. Lifetime admission
+reserves actual roof split and nested wall/room destinations. Reader243 and
+native extraction241 cover direct and recognized nested retained commands,
+including undone records. The project-format contract documents the new lane.
+
+Delete and Cut publication now retain their prepared metadata and promote raw
+standalone bases to the complete command. Mixed skylight preparation retains
+its original base; existing typed phase/room envelopes remain unchanged.
+Hosted-opening metadata explicitly retains dimension completion without
+granting membership or hosted-catalog completion. Roof and mixed-roof producer
+previews use their actual typed selections.
+
+Independent source review proved a controller regression: generic cleanup can
+normalize a schema5 saved view to schema6 while pure drawing deletion preserves
+schema5. The correction compares requested raw entities against pure source
+reconstruction before choosing optional typed admission. Generic mismatches
+retain ordinary admission behind the universal membership guard. A separate
+cleanup correction preserves an empty appearance roster so metadata merging
+cannot restore references to deleted objects. Independent integrated review
+approved the amended checkpoint with no remaining proved P1/P2 in its bounded
+core, store and controller scope. Root reviewed interfaces, closed base/replay
+recursion, lifetime, format floors, original preparation and publication paths;
+scoped diff checks pass. This is manual source evidence only.
+
+Required implementation gaps remain: generic saved-view/registry cleanup combined
+with qualified component membership retirement, the exclusive catalog-local Copy
+controller, complete Properties metadata/dimension lifecycle, and stable profile/
+edge dimensions. The global companion read-only latch and current copy/catalog/
+Properties refusals remain until those integrations are complete. Their removal
+is not implied by this checkpoint. Broader production gaps remain in the plan.
+No builds, tests, scripts, probes, native jobs, launches, packages or installations
+ran. The installed application is unchanged; compilation, runtime, Undo/reopen
+and user acceptance remain unverified. All ten production gates remain open.
+
 ### October 11 universal current component-membership admission
 
 Current Document publication now admits component membership on every command

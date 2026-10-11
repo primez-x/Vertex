@@ -2,6 +2,7 @@
 
 #include "sketch/architectural_drawing_removal.hpp"
 #include "sketch/corner_selection_removal.hpp"
+#include "sketch/hosted_opening_removal.hpp"
 #include "sketch/ordinary_selection_removal.hpp"
 #include "sketch/phase_selection_removal.hpp"
 #include "sketch/roof_opening_group_edit.hpp"
@@ -57,6 +58,27 @@ public:
 [[nodiscard]] std::optional<Revision> mixed_selection_removal_source_saved_revision(const nlohmann::json& value);
 [[nodiscard]] DrawingSelectionRemovalEntities replay_mixed_selection_removal(
     const DocumentSnapshot& source, const nlohmann::json& value);
+
+// Closed dialect seventeen completes one standalone actual-source retirement.
+// It retains an exact typed selector and canonical preceding command, with no
+// selected roof children or child-command authority. Publication uses outer45.
+[[nodiscard]] ArchitecturalDrawingRemovalIntent completed_component_selection_removal_authority(
+    const nlohmann::json& value);
+[[nodiscard]] ApplyBoundaryConstraintChanges prepare_completed_component_selection_removal(
+    const DocumentSnapshot& source, const ArchitecturalDrawingRemovalIntent& intent,
+    const Command& base_command);
+[[nodiscard]] ApplyBoundaryConstraintChanges prepare_completed_component_selection_removal(
+    const DocumentSnapshot& source, const CornerSelectionRemovalIntent& intent,
+    const Command& base_command);
+[[nodiscard]] ApplyBoundaryConstraintChanges prepare_completed_component_selection_removal(
+    const DocumentSnapshot& source, const OrdinarySelectionRemovalIntent& intent,
+    const Command& base_command);
+[[nodiscard]] ApplyBoundaryConstraintChanges prepare_completed_component_selection_removal(
+    const DocumentSnapshot& source, const HostedOpeningRemovalStageRequest& intent,
+    const Command& base_command);
+[[nodiscard]] ApplyBoundaryConstraintChanges prepare_completed_component_selection_removal(
+    const DocumentSnapshot& source, const OpeningArchitecturalRemovalIntent& intent,
+    const Command& base_command);
 
 [[nodiscard]] DocumentSnapshot prepare_mixed_selection_removal_stage(
     const DocumentSnapshot& source, const ArchitecturalDrawingRemovalIntent& ordinary,

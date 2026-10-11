@@ -382,16 +382,16 @@ std::uint32_t required_format_version_internal(const DocumentSnapshot& snapshot,
     const auto typed_edit=[&](const BoundaryGeometryEdit& edit) {
         return (edit.arc_construction && edit.arc_construction->chord_input) || typed_authoring(edit.replacement_authoring);
     };
-    const auto qualified_copy_reader_floor=[](const nlohmann::json& root) {
+    const auto retained_component_reader_floor=[](const nlohmann::json& root) {
         std::uint64_t nodes{};
         const auto visit=[&](const auto& self,const nlohmann::json& value,unsigned depth)->std::uint32_t {
             if (++nodes>ProjectStore::maximum_json_values || depth>64)
-                storage_error(StorageErrorCode::resource_limit,"Qualified copy reader-floor scan exceeds its command budget");
+                storage_error(StorageErrorCode::resource_limit,"Retained component reader-floor scan exceeds its command budget");
             if (!value.is_object() || value.value("kind",nlohmann::json())!="apply_boundary_constraint_changes" ||
                 !value.contains("version") || !value.at("version").is_number_integer()) return false;
-            // The general typed-edit scan walks opaque retained JSON. Copy
-            // authority belongs only to a canonical command in an actual known
-            // command slot, and never to copy-shaped source/extension metadata.
+            // Component copy and standalone retirement authority belong only
+            // to canonical commands in known command slots, never to opaque
+            // source/extension metadata traversed by the general edit scan.
             try {
                 const auto decoded=command_from_json(value);
                 const auto* command=std::get_if<ApplyBoundaryConstraintChanges>(&decoded);
@@ -415,7 +415,8 @@ std::uint32_t required_format_version_internal(const DocumentSnapshot& snapshot,
                     return child(value.at("ordinary_selection_removal_intent"),"base_command");
                 if (version==45) {
                     const auto& intent=value.at("mixed_selection_removal_intent");
-                    return std::max(child(intent,"ordinary_command"),child(intent,"child_command"));
+                    const auto nested=std::max(child(intent,"ordinary_command"),child(intent,"child_command"));
+                    return intent.at("version")==17 ? std::max(nested,243U) : nested;
                 }
                 // Canonical decoding above owns the historical room wrapper's
                 // exact dialect and permitted inner command. It still refuses
@@ -1511,8 +1512,8 @@ std::uint32_t required_format_version_internal(const DocumentSnapshot& snapshot,
     };
     for (const auto& revision : snapshot.history()) {
         if (revision.phase_entity_import) required=std::max(required,160U);
-        if (required<242 && revision.boundary_constraint_changes)
-            required=std::max(required,qualified_copy_reader_floor(command_to_json(Command{*revision.boundary_constraint_changes})));
+        if (required<243 && revision.boundary_constraint_changes)
+            required=std::max(required,retained_component_reader_floor(command_to_json(Command{*revision.boundary_constraint_changes})));
         if (required<240 && revision.boundary_geometry_edit)
             required=std::max(required,typed_edit_reader_floor(encode_boundary_geometry_edit(*revision.boundary_geometry_edit)));
         if (required<240 && revision.boundary_constraint_changes)
@@ -1614,7 +1615,7 @@ std::uint32_t required_format_version_internal(const DocumentSnapshot& snapshot,
                 required=std::max(required,178U);
             if (command.mixed_selection_removal_completion || !command.mixed_selection_removal_intent.is_null()) {
                 const auto dialect=command.mixed_selection_removal_intent.value("version",1);
-                required=std::max(required,dialect==16 ? 226U : dialect==15 ? 225U : dialect>=11 && dialect<=13 ? 211U : dialect==10 ? 210U : dialect==9 ? 209U : dialect>=8 ? 186U : dialect==7 ? 182U : dialect==6 ? 181U : dialect==5 ? 180U : dialect==4 ? 179U : dialect==3 ? 178U : dialect==2 ? 177U : 176U);
+                required=std::max(required,dialect==17 ? 243U : dialect==16 ? 226U : dialect==15 ? 225U : dialect>=11 && dialect<=13 ? 211U : dialect==10 ? 210U : dialect==9 ? 209U : dialect>=8 ? 186U : dialect==7 ? 182U : dialect==6 ? 181U : dialect==5 ? 180U : dialect==4 ? 179U : dialect==3 ? 178U : dialect==2 ? 177U : 176U);
             }
             if (command.independent_drawing_removal_completion || !command.independent_drawing_removal_intent.is_null())
                 required=std::max(required,
@@ -4056,6 +4057,7 @@ bool verify_sqlite_schema(sqlite3* database, bool allow_recovery = false) {
          sqlite3_column_int(user_version.get(), 0) != 239 &&
          sqlite3_column_int(user_version.get(), 0) != 240 &&
          sqlite3_column_int(user_version.get(), 0) != 241 &&
+         sqlite3_column_int(user_version.get(), 0) != 243 &&
          sqlite3_column_int(user_version.get(), 0) != 242 &&
          sqlite3_column_int(user_version.get(), 0) != 207 &&
          sqlite3_column_int(user_version.get(), 0) != 202 &&
@@ -4782,6 +4784,8 @@ DocumentSnapshot read_snapshot(sqlite3* database, RecoveryLedger* recovery = nul
     // here and authenticate the manifest with its stored version below.
     const auto required_format = required_format_version_internal(snapshot, format_number < 28);
     if (required_format > format_number) {
+        if (required_format>=243)
+            storage_error(StorageErrorCode::unsupported_format,"This project requires reader 243 for source-bound standalone component retirement");
         if (required_format>=242)
             storage_error(StorageErrorCode::unsupported_format,"This project requires reader 242 for explicit companion allocation in source-bound embedded component copies");
         if (required_format>=241)

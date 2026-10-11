@@ -29,6 +29,11 @@ namespace sketch {
 
 using Revision = std::uint64_t;
 class ProjectStoreAccess;
+struct OrdinarySelectionRemovalIntent;
+struct ArchitecturalDrawingRemovalIntent;
+struct CornerSelectionRemovalIntent;
+struct HostedOpeningRemovalStageRequest;
+struct OpeningArchitecturalRemovalIntent;
 
 std::string make_stable_id();
 std::string sha256_hex(std::span<const std::byte> bytes);
@@ -733,6 +738,27 @@ public:
     // or source-snapshot check when committing to a live document.
     [[nodiscard]] static DocumentSnapshot preview_command(
         const DocumentSnapshot& source, const Command& command);
+    // Closed removal-stage previews independently reconstruct the complete
+    // actual-source result from explicit typed selection/proof. They preserve
+    // normal document admission while admitting the derived component roster
+    // retirement. No caller-supplied candidate map or transferable publication
+    // authority is accepted. Live publication still requires its complete typed
+    // removal command; these previews do not authorize raw live edits.
+    [[nodiscard]] static DocumentSnapshot preview_ordinary_selection_removal_stage(
+        const DocumentSnapshot& source, const OrdinarySelectionRemovalIntent& intent,
+        const Command& original_command);
+    [[nodiscard]] static DocumentSnapshot preview_architectural_drawing_removal_stage(
+        const DocumentSnapshot& source, const ArchitecturalDrawingRemovalIntent& intent,
+        const Command& original_command);
+    [[nodiscard]] static DocumentSnapshot preview_corner_selection_removal_stage(
+        const DocumentSnapshot& source, const CornerSelectionRemovalIntent& intent,
+        const Command& original_command);
+    [[nodiscard]] static DocumentSnapshot preview_hosted_opening_removal_stage(
+        const DocumentSnapshot& source, const HostedOpeningRemovalStageRequest& request,
+        const Command& original_command);
+    [[nodiscard]] static DocumentSnapshot preview_opening_architectural_removal_stage(
+        const DocumentSnapshot& source, const OpeningArchitecturalRemovalIntent& intent,
+        const Command& original_command);
     // Additional preservation checks for typed phase drawing composition.
     // These maps supply no source or admission authority; callers must still
     // independently reconstruct the complete base and drawing stages.
@@ -775,6 +801,14 @@ private:
 
     [[nodiscard]] const RevisionRecord& head_record() const;
     void update_editability();
+    // Derived maps enter only from the closed Document-owned preview routes.
+    // The public live writer always uses null; typed publication reconstructs
+    // its own admission from the actual retained source inside this method.
+    Revision apply_impl(const Command& command,
+        const std::map<std::string,Entity,std::less<>>* derived_component_stage);
+    [[nodiscard]] static DocumentSnapshot preview_derived_component_removal_stage(
+        const DocumentSnapshot& source, const Command& command,
+        const std::map<std::string,Entity,std::less<>>& derived_entities);
 
     std::string document_id_;
     Revision head_revision_ = 0;

@@ -7,6 +7,14 @@
 
 namespace sketch {
 
+// Transient intent for captured-snapshot admission of standalone opening
+// retirement. Dimension completion grants only association retirement; it does
+// not grant component membership or hosted-closure bypass authority.
+struct HostedOpeningRemovalStageRequest {
+    std::vector<std::string> opening_ids;
+    bool complete_component_dimensions = false;
+};
+
 // Actual-map replay of the same bounded semantic opening retirement below.
 // The caller supplies the complete actual source and its captured constraint
 // validation policy; phase registries alone cannot determine history policy.

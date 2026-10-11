@@ -176,7 +176,7 @@ ApplyEntityChanges prepare_opening_architectural_removal(const DocumentSnapshot&
         if (physical(entity)) required.insert(id);
     }
     if (command.entity_changes.empty() || command.entity_changes.size() > change_limit) reject("raw change inventory exceeded");
-    const auto preview = Document::preview_command(source, Command{command});
+    const auto preview = Document::preview_opening_architectural_removal_stage(source, intent, Command{command});
     if (preview.entities().size() != candidate.size() || preview.assets() != source.assets() || !preview.is_editable())
         reject("real command admission changed candidate/assets/editability");
     for (const auto& [id, entity] : candidate) {

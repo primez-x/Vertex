@@ -16,6 +16,8 @@
 #include <memory>
 #include <set>
 #include <stdexcept>
+#include <type_traits>
+#include <variant>
 
 namespace sketch {
 namespace {
@@ -307,6 +309,187 @@ Command closed_phase_drawing_deletion_command(const Json& value) {
     if (command_to_json(command).dump()!=value.dump()) reject("phase drawing removal command is not canonical");
     return command;
 }
+using CompletedSelection=std::variant<ArchitecturalDrawingRemovalIntent,CornerSelectionRemovalIntent,
+    OrdinarySelectionRemovalIntent,HostedOpeningRemovalStageRequest,OpeningArchitecturalRemovalIntent>;
+
+// These helpers decode only the closed selector. They must not call the outer
+// validator or the public authority projection, which would recurse through
+// command codecs while validating retained history.
+Json completed_selector(const ArchitecturalDrawingRemovalIntent& selection) {
+    return {{"kind","architectural_drawing"},{"selection",encode_architectural_drawing_removal_intent(selection)}};
+}
+Json completed_selector(const CornerSelectionRemovalIntent& selection) {
+    return {{"kind","corner"},{"selection",encode_corner_selection_removal_intent(selection)}};
+}
+Json completed_selector(const OrdinarySelectionRemovalIntent& selection) {
+    return {{"kind","ordinary"},{"selection",encode_ordinary_selection_removal_intent(selection)}};
+}
+Json completed_selector(const HostedOpeningRemovalStageRequest& selection) {
+    if (selection.opening_ids.empty() || selection.opening_ids.size()>1000 ||
+        !std::is_sorted(selection.opening_ids.begin(),selection.opening_ids.end()) ||
+        std::adjacent_find(selection.opening_ids.begin(),selection.opening_ids.end())!=selection.opening_ids.end())
+        reject("standalone opening roots must be nonempty, sorted and unique within 1000");
+    for (const auto& id:selection.opening_ids) identity(id);
+    return {{"kind","hosted_opening"},{"selection",{{"opening_ids",selection.opening_ids},
+        {"complete_component_dimensions",selection.complete_component_dimensions}}}};
+}
+Json completed_selector(const OpeningArchitecturalRemovalIntent& selection) {
+    if (selection.other.object_ids.empty() && selection.other.components.empty())
+        reject("opening architectural completion requires an explicit other lane");
+    OrdinarySelectionRemovalIntent ordinary;ordinary.openings=selection;
+    return {{"kind","opening_architectural"},{"selection",encode_ordinary_selection_removal_intent(ordinary)}};
+}
+CompletedSelection decode_completed_selector(const Json& value) {
+    fields(value,{"kind","selection"});
+    if (!value.at("kind").is_string()) reject("standalone completion requires a typed selector kind");
+    const auto& kind=value.at("kind");const auto& wire=value.at("selection");
+    CompletedSelection result;
+    if (kind=="architectural_drawing") result=decode_architectural_drawing_removal_intent(wire);
+    else if (kind=="corner") result=decode_corner_selection_removal_intent(wire);
+    else if (kind=="ordinary") result=decode_ordinary_selection_removal_intent(wire);
+    else if (kind=="hosted_opening") {
+        fields(wire,{"opening_ids","complete_component_dimensions"});
+        if (!wire.at("opening_ids").is_array() || wire.at("opening_ids").empty() ||
+            wire.at("opening_ids").size()>1000 || !wire.at("complete_component_dimensions").is_boolean())
+            reject("invalid standalone opening selector");
+        for (const auto& id:wire.at("opening_ids")) if (!id.is_string()) reject("opening root requires an identity");
+        result=HostedOpeningRemovalStageRequest{wire.at("opening_ids").get<std::vector<std::string>>(),
+            wire.at("complete_component_dimensions").get<bool>()};
+    } else if (kind=="opening_architectural") {
+        const auto ordinary=decode_ordinary_selection_removal_intent(wire);
+        if (!ordinary.openings || !ordinary.wall_ids.empty() || !ordinary.wall_geometry_proof.is_null() ||
+            !ordinary.drawing.owner_ids.empty() || !ordinary.drawing.annotations.empty() ||
+            (ordinary.openings->other.object_ids.empty() && ordinary.openings->other.components.empty()))
+            reject("opening architectural completion requires only openings and an explicit other lane");
+        result=*ordinary.openings;
+    } else reject("unsupported standalone completion selector kind");
+    if (std::visit([](const auto& selection){return completed_selector(selection);},result).dump()!=value.dump())
+        reject("standalone completion selector is not canonical");
+    return result;
+}
+ArchitecturalDrawingRemovalIntent completed_authority(const CompletedSelection& selection) {
+    return std::visit([](const auto& intent)->ArchitecturalDrawingRemovalIntent {
+        using T=std::decay_t<decltype(intent)>;
+        if constexpr (std::is_same_v<T,ArchitecturalDrawingRemovalIntent>) return intent;
+        else if constexpr (std::is_same_v<T,CornerSelectionRemovalIntent>) return corner_selection_removal_authority(intent);
+        else if constexpr (std::is_same_v<T,OrdinarySelectionRemovalIntent>) return ordinary_selection_removal_authority(intent);
+        else if constexpr (std::is_same_v<T,HostedOpeningRemovalStageRequest>) {
+            ArchitecturalDrawingRemovalIntent result;result.architectural.object_ids=intent.opening_ids;
+            result.allow_manufactured_opening_hosts=true;return result;
+        } else {
+            OrdinarySelectionRemovalIntent ordinary;ordinary.openings=intent;
+            return ordinary_selection_removal_authority(ordinary);
+        }
+    },selection);
+}
+bool completed_active_phase_policy(const CompletedSelection& selection) {
+    return std::visit([](const auto& intent) {
+        using T=std::decay_t<decltype(intent)>;
+        if constexpr (std::is_same_v<T,CornerSelectionRemovalIntent>) return true;
+        else if constexpr (std::is_same_v<T,ArchitecturalDrawingRemovalIntent>)
+            return intent.complete_component_phase_memberships || intent.complete_roof_component_phase_memberships;
+        else if constexpr (std::is_same_v<T,OrdinarySelectionRemovalIntent>) {
+            const auto& proof=intent.wall_geometry_proof;
+            return proof.is_object() &&
+                ((proof.value("kind",Json())=="physical_wall_deletion" && proof.value("version",Json())==54) ||
+                 (proof.value("kind",Json())=="mixed_wall_deletion" && proof.value("version",Json())==55) ||
+                 (proof.value("kind",Json())=="mixed_wall_opening_deletion" && proof.value("version",Json())==56) ||
+                 (((proof.value("kind",Json())=="physical_wall_deletion" && proof.value("version",Json())==63) ||
+                   (proof.value("kind",Json())=="mixed_wall_deletion" && proof.value("version",Json())==64) ||
+                   (proof.value("kind",Json())=="mixed_wall_opening_deletion" && proof.value("version",Json())==65)) &&
+                  proof.at("complete_component_phase_memberships")==true));
+        } else return false;
+    },selection);
+}
+Command closed_completed_command(const Json& wire,const CompletedSelection& selection) {
+    // The complete outer intent is bounded before reaching a command codec.
+    // Outer45 is deliberately absent: a standalone proof cannot retain itself.
+    const auto command=std::holds_alternative<OrdinarySelectionRemovalIntent>(selection) ?
+        closed_ordinary_deletion_command(wire,
+            std::get<OrdinarySelectionRemovalIntent>(selection).openings &&
+            std::get<OrdinarySelectionRemovalIntent>(selection).openings->complete_component_dimensions) :
+        closed_command(wire,false);
+    if (std::visit([](const auto& typed){return typed.message.size()>4096;},command))
+        reject("standalone base message exceeds 4096 bytes");
+    if (const auto* raw=std::get_if<ApplyEntityChanges>(&command)) {
+        if (raw->entity_changes.empty() || raw->entity_changes.size()>4096)
+            reject("standalone base change inventory must contain one to 4096 rows");
+    }
+    if (wire.at("version")==46 || wire.at("version")==57 || wire.at("version")==62) {
+        const auto completed=validate_completed_ordinary_selection_removal_intent(wire.at("ordinary_selection_removal_intent"));
+        if (completed.at("selection").dump()!=
+            encode_ordinary_selection_removal_intent(std::get<OrdinarySelectionRemovalIntent>(selection)).dump())
+            reject("standalone ordinary base differs from its exact selector");
+    }
+    return command;
+}
+DocumentSnapshot completed_stage(const DocumentSnapshot& source,const CompletedSelection& selection,const Command& command) {
+    if (std::visit([&](const auto& typed){return typed.expected_revision!=source.revision();},command))
+        reject("standalone base does not bind the actual source revision");
+    const auto stage=std::visit([&](const auto& intent) {
+        using T=std::decay_t<decltype(intent)>;
+        if constexpr (std::is_same_v<T,ArchitecturalDrawingRemovalIntent>)
+            return Document::preview_architectural_drawing_removal_stage(source,intent,command);
+        else if constexpr (std::is_same_v<T,CornerSelectionRemovalIntent>)
+            return Document::preview_corner_selection_removal_stage(source,intent,command);
+        else if constexpr (std::is_same_v<T,OrdinarySelectionRemovalIntent>)
+            return Document::preview_ordinary_selection_removal_stage(source,intent,command);
+        else if constexpr (std::is_same_v<T,HostedOpeningRemovalStageRequest>)
+            return Document::preview_hosted_opening_removal_stage(source,intent,command);
+        else return Document::preview_opening_architectural_removal_stage(source,intent,command);
+    },selection);
+    metadata(source,stage);
+    if (stage.history().size()!=source.history().size()+1 || stage.revision()!=source.history().size())
+        reject("standalone removal must create exactly one detached history event");
+    return stage;
+}
+void completed_source_bounds(const DocumentSnapshot& source) {
+    if (!source.is_editable() || source.entities().size()>65536 || source.history().empty() ||
+        source.history().size()>4096 || source.revision()>=source.history().size() ||
+        source.history()[source.revision()].revision!=source.revision() || source.assets().size()>65536 ||
+        source.named_revisions().size()>4096 ||
+        (source.saved_revision_optional() && *source.saved_revision_optional()>=source.history().size()))
+        reject("standalone captured source inventory is invalid");
+    for (const auto& [name,revision]:source.named_revisions()) {
+        (void)name;if (revision>=source.history().size()) reject("standalone named revision is outside history");
+    }
+    // Match the existing hosted-source raw ceiling before recursive codecs or
+    // snapshot serialization. Leaf-specific tighter budgets remain in replay.
+    constexpr std::size_t node_limit=4*1024*1024,byte_limit=64*1024*1024;
+    std::size_t nodes=0,bytes=0;
+    const auto text=[&](const std::string& value) {
+        if (value.size()>byte_limit-bytes) reject("standalone source string/key budget exceeded");
+        bytes+=value.size();
+    };
+    for (const auto& [id,entity]:source.entities()) {
+        identity(id);
+        if (id!=entity.id || !entity.properties.is_object() || !entity.extensions.is_object())
+            reject("standalone source has an inconsistent entity envelope");
+        text(id);text(entity.type);
+        std::vector<std::pair<const Json*,std::size_t>> pending{{&entity.properties,0},{&entity.extensions,0}};
+        while (!pending.empty()) {
+            const auto [value,depth]=pending.back();pending.pop_back();
+            if (depth>64 || ++nodes>node_limit) reject("standalone source node/nesting budget exceeded");
+            if (value->is_discarded() || (value->is_number_float() && !std::isfinite(value->get<double>())))
+                reject("standalone source has an unsupported scalar");
+            if (value->is_string()) text(value->get_ref<const std::string&>());
+            if (value->is_binary()) {
+                if (value->get_binary().size()>byte_limit-bytes) reject("standalone source binary budget exceeded");
+                bytes+=value->get_binary().size();
+            }
+            if (!value->is_structured()) continue;
+            if (value->size()>node_limit-nodes || pending.size()>node_limit-nodes-value->size())
+                reject("standalone source pending-node budget exceeded");
+            if (value->is_object()) for (const auto& [key,child]:value->items()) {
+                text(key);pending.emplace_back(&child,depth+1);
+            } else for (const auto& child:*value) pending.emplace_back(&child,depth+1);
+        }
+    }
+    AssemblyCatalogTransferBudget catalog_budget;
+    for (const auto& [id,entity]:source.entities()) {
+        (void)id;if (entity.type=="assembly_model") admit_existing_assembly_catalog_work(entity,catalog_budget);
+    }
+}
 Json encoded_edits(const std::vector<RoofEditIntent>& edits) {
     Json rows=Json::array();for (const auto& edit:edits) rows.push_back(encode_roof_edit_intent(edit));return rows;
 }
@@ -372,11 +555,21 @@ Json validate_mixed_selection_removal_intent(const Json& value) {
         if (value.dump().size()>1024*1024) reject("intent exceeds one MiB");
         fields(value,{"version","ordinary","ordinary_command","members","child_command","source_snapshot_digest",
             "source_authoring_digest","source_entities_digest","source_saved_revision","stage_snapshot_digest","stage_authoring_digest"});
-        if (!value.at("version").is_number_integer() || (value.at("version")!=1 && value.at("version")!=2 && value.at("version")!=3 && value.at("version")!=4 && value.at("version")!=5 && value.at("version")!=6 && value.at("version")!=7 && value.at("version")!=8 && value.at("version")!=9 && value.at("version")!=10 && value.at("version")!=11 && value.at("version")!=12 && value.at("version")!=13 && value.at("version")!=14 && value.at("version")!=15 && value.at("version")!=16))
+        if (!value.at("version").is_number_integer() || (value.at("version")!=1 && value.at("version")!=2 && value.at("version")!=3 && value.at("version")!=4 && value.at("version")!=5 && value.at("version")!=6 && value.at("version")!=7 && value.at("version")!=8 && value.at("version")!=9 && value.at("version")!=10 && value.at("version")!=11 && value.at("version")!=12 && value.at("version")!=13 && value.at("version")!=14 && value.at("version")!=15 && value.at("version")!=16 && value.at("version")!=17))
             reject("unsupported intent version");
-        const auto members=decode_members(value.at("members"));
+        const bool standalone=value.at("version")==17;
+        if (standalone && (!value.at("members").is_array() || !value.at("members").empty() ||
+                !value.at("child_command").is_null()))
+            reject("standalone completion requires an exact empty child inventory and null child command");
+        const auto members=standalone ? std::vector<RoofOpeningGroupMember>{} : decode_members(value.at("members"));
         std::size_t count=0;
-        if (value.at("version")==1 || value.at("version")==9 || value.at("version")==10 ||
+        if (standalone) {
+            const auto selection=decode_completed_selector(value.at("ordinary"));
+            const auto authority=completed_authority(selection);
+            count=authority.architectural.object_ids.size()+authority.architectural.components.size()+
+                authority.drawing.owner_ids.size()+authority.drawing.annotations.size();
+            (void)closed_completed_command(value.at("ordinary_command"),selection);
+        } else if (value.at("version")==1 || value.at("version")==9 || value.at("version")==10 ||
             value.at("version")==14 || value.at("version")==15) {
             const auto ordinary=decode_architectural_drawing_removal_intent(value.at("ordinary"));
             // Membership retirement has distinct retained authority. Historical
@@ -445,6 +638,7 @@ Json validate_mixed_selection_removal_intent(const Json& value) {
 }
 bool mixed_selection_removal_active_phase_policy(const Json& value) {
     (void)validate_mixed_selection_removal_intent(value);
+    if (value.at("version")==17) return completed_active_phase_policy(decode_completed_selector(value.at("ordinary")));
     // Ordinary dialects three and sixteen share the existing policy: opening
     // dimension completion alone grants no phase membership authority. Actual
     // typed child phase replacement still requires the active-phase policy.
@@ -457,12 +651,17 @@ std::optional<Revision> mixed_selection_removal_source_saved_revision(const Json
     (void)validate_mixed_selection_removal_intent(value);
     return value.at("source_saved_revision").is_null() ? std::nullopt : std::optional<Revision>{value.at("source_saved_revision").get<Revision>()};
 }
+ArchitecturalDrawingRemovalIntent completed_component_selection_removal_authority(const Json& value) {
+    (void)validate_mixed_selection_removal_intent(value);
+    if (value.at("version")!=17) reject("standalone authority requires dialect seventeen");
+    return completed_authority(decode_completed_selector(value.at("ordinary")));
+}
 DocumentSnapshot prepare_mixed_selection_removal_stage(const DocumentSnapshot& source,
     const ArchitecturalDrawingRemovalIntent& ordinary,const Command& ordinary_command) {
     const auto wire=command_to_json(ordinary_command);(void)closed_command(wire,false);
     if (std::get<ApplyEntityChanges>(ordinary_command).expected_revision!=source.revision()) reject("ordinary source revision changed");
     const auto expected=replay_architectural_drawing_removal(source,ordinary);
-    const auto stage=Document::preview_command(source,ordinary_command);metadata(source,stage);
+    const auto stage=Document::preview_architectural_drawing_removal_stage(source,ordinary,ordinary_command);metadata(source,stage);
     if (!exact(stage.entities(),expected)) reject("ordinary command differs from complete actual-source selection replay");
     if (stage.history().size()!=source.history().size()+1 || stage.revision()!=source.history().size())
         reject("ordinary removal must create exactly one detached history event");
@@ -523,6 +722,25 @@ std::vector<RoofOpeningGroupMember> mixed_selection_removal_remaining_children(c
 Entities replay_mixed_selection_removal(const DocumentSnapshot& source,const Json& value) {
     MixedSelectionRemovalReplayScope scope;
     (void)validate_mixed_selection_removal_intent(value);
+    if (value.at("version")==17) {
+        const auto selection=decode_completed_selector(value.at("ordinary"));
+        completed_source_bounds(source);
+        const auto source_digest=document_snapshot_digest(source);
+        const auto saved=value.at("source_saved_revision").is_null() ? std::nullopt :
+            std::optional<Revision>{value.at("source_saved_revision").get<Revision>()};
+        if (source.saved_revision_optional()!=saved || source_digest!=value.at("source_snapshot_digest") ||
+            document_authoring_source_digest_v2(source)!=value.at("source_authoring_digest") ||
+            entity_map_digest(source.entities())!=value.at("source_entities_digest"))
+            reject("standalone captured full source authority changed");
+        const auto key=std::pair{source_digest,value.dump()};
+        if (const auto retained=replay_memo->results.find(key);retained!=replay_memo->results.end()) return retained->second;
+        const auto stage=completed_stage(source,selection,closed_completed_command(value.at("ordinary_command"),selection));
+        if (document_snapshot_digest(stage)!=value.at("stage_snapshot_digest") ||
+            document_authoring_source_digest_v2(stage)!=value.at("stage_authoring_digest"))
+            reject("standalone detached stage authority changed");
+        remember(key,stage.entities());
+        return stage.entities();
+    }
     if (source.history().empty() || source.history().size()>4096 || source.revision()>=source.history().size() ||
         source.history()[source.revision()].revision!=source.revision() || source.assets().size()>65536 ||
         source.named_revisions().size()>4096 ||
@@ -739,7 +957,7 @@ DocumentSnapshot prepare_mixed_selection_removal_stage(const DocumentSnapshot& s
     if (std::visit([&](const auto& typed){return typed.expected_revision!=source.revision();},canonical))
         reject("corner removal source revision changed");
     const auto expected=replay_corner_selection_removal(source,ordinary);
-    const auto stage=Document::preview_command(source,canonical);metadata(source,stage);
+    const auto stage=Document::preview_corner_selection_removal_stage(source,ordinary,ordinary_command);metadata(source,stage);
     if (!exact(stage.entities(),expected)) reject("corner command differs from complete actual-source reconstruction");
     if (stage.history().size()!=source.history().size()+1 || stage.revision()!=source.history().size())
         reject("corner removal must create exactly one detached history event");
@@ -767,5 +985,59 @@ Json make_mixed_selection_removal_intent(const DocumentSnapshot& source,const Co
         {"stage_authoring_digest",document_authoring_source_digest_v2(stage)}};
     (void)replay_mixed_selection_removal(source,value);
     return value;
+}
+namespace {
+ApplyBoundaryConstraintChanges prepare_completed_component_selection(const DocumentSnapshot& source,
+    const Json& selector,const Command& base_command) {
+    MixedSelectionRemovalReplayScope scope;
+    const auto base_wire=command_to_json(base_command);
+    const Json retained={{"ordinary",selector},{"ordinary_command",base_wire}};
+    std::size_t nodes=0,bytes=0;wire_budget(retained,nodes,bytes);
+    if (retained.dump().size()>1024*1024) reject("standalone selector/base exceeds one MiB");
+    const auto selection=decode_completed_selector(selector);
+    const auto canonical=closed_completed_command(base_wire,selection);
+    completed_source_bounds(source);
+    const auto stage=completed_stage(source,selection,canonical);
+    Json value={{"version",17},{"ordinary",selector},{"ordinary_command",base_wire},
+        {"members",Json::array()},{"child_command",nullptr},
+        {"source_snapshot_digest",document_snapshot_digest(source)},
+        {"source_authoring_digest",document_authoring_source_digest_v2(source)},
+        {"source_entities_digest",entity_map_digest(source.entities())},
+        {"source_saved_revision",source.saved_revision_optional() ? Json(*source.saved_revision_optional()) : Json(nullptr)},
+        {"stage_snapshot_digest",document_snapshot_digest(stage)},
+        {"stage_authoring_digest",document_authoring_source_digest_v2(stage)}};
+    const auto expected=replay_mixed_selection_removal(source,value);
+    ApplyBoundaryConstraintChanges command;
+    command.expected_revision=source.revision();
+    command.message=std::visit([](const auto& typed){return typed.message;},canonical);
+    command.mixed_selection_removal_completion=true;
+    command.mixed_selection_removal_intent=std::move(value);
+    const auto candidate=Document::preview_command(source,Command{command});
+    metadata(source,candidate);
+    if (!exact(candidate.entities(),expected) || candidate.history().size()!=source.history().size()+1 ||
+        candidate.revision()!=source.history().size())
+        reject("standalone completed publication differs from its admitted stage");
+    return command;
+}
+} // namespace
+ApplyBoundaryConstraintChanges prepare_completed_component_selection_removal(const DocumentSnapshot& source,
+    const ArchitecturalDrawingRemovalIntent& intent,const Command& base_command) {
+    return prepare_completed_component_selection(source,completed_selector(intent),base_command);
+}
+ApplyBoundaryConstraintChanges prepare_completed_component_selection_removal(const DocumentSnapshot& source,
+    const CornerSelectionRemovalIntent& intent,const Command& base_command) {
+    return prepare_completed_component_selection(source,completed_selector(intent),base_command);
+}
+ApplyBoundaryConstraintChanges prepare_completed_component_selection_removal(const DocumentSnapshot& source,
+    const OrdinarySelectionRemovalIntent& intent,const Command& base_command) {
+    return prepare_completed_component_selection(source,completed_selector(intent),base_command);
+}
+ApplyBoundaryConstraintChanges prepare_completed_component_selection_removal(const DocumentSnapshot& source,
+    const HostedOpeningRemovalStageRequest& intent,const Command& base_command) {
+    return prepare_completed_component_selection(source,completed_selector(intent),base_command);
+}
+ApplyBoundaryConstraintChanges prepare_completed_component_selection_removal(const DocumentSnapshot& source,
+    const OpeningArchitecturalRemovalIntent& intent,const Command& base_command) {
+    return prepare_completed_component_selection(source,completed_selector(intent),base_command);
 }
 } // namespace sketch

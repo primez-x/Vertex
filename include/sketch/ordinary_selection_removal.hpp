@@ -29,8 +29,15 @@ struct OrdinarySelectionRemovalIntent {
 [[nodiscard]] ArchitecturalDrawingRemovalIntent ordinary_selection_removal_authority(
     const OrdinarySelectionRemovalIntent& intent);
 
-// Independently reconstructs the deletion and previews the complete original
-// command, including retained room decisions and optional drawing retirement.
+// Derives the complete deletion entities from the actual source and the closed
+// original command, including retained room decisions and drawing retirement.
+// This supplies no command admission or caller-provided candidate authority.
+[[nodiscard]] DrawingSelectionRemovalEntities replay_ordinary_selection_removal_stage_entities(
+    const DocumentSnapshot& source, const OrdinarySelectionRemovalIntent& intent,
+    const Command& original_command);
+
+// Previews the complete original command through source-derived admission,
+// retaining metadata, one history event and architectural geometry validation.
 // Publication and the full captured-snapshot fence remain with the controller.
 [[nodiscard]] DocumentSnapshot prepare_ordinary_selection_removal_stage(
     const DocumentSnapshot& source, const OrdinarySelectionRemovalIntent& intent,

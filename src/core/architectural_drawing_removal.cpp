@@ -273,7 +273,7 @@ ApplyEntityChanges prepare_architectural_drawing_removal(const DocumentSnapshot&
     for (const auto& [id,entity]:expected)
         if (!source.entities().contains(id)) command.entity_changes.push_back(EntityChange::upsert(entity));
     if (command.entity_changes.empty() || command.entity_changes.size()>4096) reject("complete removal change inventory is invalid");
-    const auto candidate=Document::preview_command(source,Command{command});
+    const auto candidate=Document::preview_architectural_drawing_removal_stage(source,intent,Command{command});
     if (candidate.entities().size()!=expected.size()) reject("complete removal preview changed its inventory");
     for (const auto& [id,entity]:expected) {
         const auto actual=candidate.entities().find(id);

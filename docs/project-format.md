@@ -1,4 +1,29 @@
-# Vertex project formats v1 through v242
+# Vertex project formats v1 through v243
+
+Reader243 adds standalone retirement dialect17 under the existing exclusive
+command45. Its eleven fields are `version`, `ordinary`, `ordinary_command`,
+`members`, `child_command`, `source_snapshot_digest`, `source_authoring_digest`,
+`source_entities_digest`, `source_saved_revision`, `stage_snapshot_digest`, and
+`stage_authoring_digest`. `members` is exactly an empty array and `child_command`
+is null. `ordinary` is an exact `{kind, selection}` selector for architectural/
+drawing, corner, ordinary, hosted-opening, or opening/architectural removal.
+The original command is canonical and closed; it cannot contain command45.
+Actual source replay authenticates snapshot, authoring, entities and saved state,
+independently derives the complete deletion stage from the typed selection,
+and authenticates both stage digests. No submitted candidate supplies authority.
+
+Hosted-opening selection retains sorted unique opening IDs and its existing
+`complete_component_dimensions` flag. That flag grants no component membership
+or host/catalog completion. Historical mixed dialects1 through16 retain their
+required skylight selections and original interpretations. Allocated roof splits
+and nested wall/room identities remain reserved through retained and undone
+history. Native extraction241 follows reader243; recognized nested command
+slots and undone records retain this floor without changing SQLite tables.
+
+Standalone controller publication carries the complete proof while mixed
+skylight preparation retains its original base. The component read-only latch
+and copy/catalog/Properties restrictions remain pending complete integration.
+This source contract does not establish compilation, runtime or acceptance.
 
 Reader242 adds closed copy request2 under exclusive command67. It retains
 request1's source fences, targets, transforms, dimension identities and message,

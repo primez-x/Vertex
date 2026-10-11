@@ -357,7 +357,7 @@ ArchitecturalDrawingRemovalIntent ordinary_selection_removal_authority(const Ord
     (void)encode_ordinary_selection_removal_intent(intent);return authority(intent);
 }
 
-DocumentSnapshot prepare_ordinary_selection_removal_stage(const DocumentSnapshot& source,
+Entities replay_ordinary_selection_removal_stage_entities(const DocumentSnapshot& source,
     const OrdinarySelectionRemovalIntent& intent,const Command& original_command) try {
     OrdinarySelectionRemovalReplayScope scope;
     (void)encode_ordinary_selection_removal_intent(intent);
@@ -442,8 +442,14 @@ DocumentSnapshot prepare_ordinary_selection_removal_stage(const DocumentSnapshot
             }
         }
     }
-    const auto stage=Document::preview_command(source,original_command);metadata(source,stage);
-    if (!exact(stage.entities(),expected)) reject("complete original command differs from independently reconstructed ordinary removal");
+    return expected;
+} catch (const Json::exception& error) { reject(std::string("malformed captured command/source: ")+error.what()); }
+
+DocumentSnapshot prepare_ordinary_selection_removal_stage(const DocumentSnapshot& source,
+    const OrdinarySelectionRemovalIntent& intent,const Command& original_command) try {
+    OrdinarySelectionRemovalReplayScope scope;
+    const auto stage=Document::preview_ordinary_selection_removal_stage(source,intent,original_command);
+    metadata(source,stage);
     if (stage.history().size()!=source.history().size()+1 || stage.revision()!=source.history().size())
         reject("ordinary removal must create exactly one detached history event");
     if (intent.openings) {

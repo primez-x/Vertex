@@ -55,6 +55,10 @@
 #include "sketch/drawing_selection_removal.hpp"
 #include "sketch/mixed_selection_removal.hpp"
 #include "sketch/ordinary_selection_removal.hpp"
+#include "sketch/architectural_drawing_removal.hpp"
+#include "sketch/corner_selection_removal.hpp"
+#include "sketch/hosted_opening_removal.hpp"
+#include "sketch/opening_architectural_removal.hpp"
 #include "sketch/phase_selection_removal.hpp"
 #include "sketch/mixed_clipboard_command.hpp"
 #include "sketch/mixed_selection_edit.hpp"
@@ -3682,7 +3686,7 @@ static std::map<std::string,Entity,std::less<>> checked_phase_selection_removal_
 static void validate_phase_mixed_removal_dependents(const DocumentSnapshot& source,
     const std::map<std::string,Entity,std::less<>>& result,const nlohmann::json& encoded) {
     const auto intent=validate_mixed_selection_removal_intent(encoded);
-    if (intent.at("version")!=4 && intent.at("version")!=5 && intent.at("version")!=6 && intent.at("version")!=7 && intent.at("version")!=8 && intent.at("version")!=9 && intent.at("version")!=10 && intent.at("version")!=11 && intent.at("version")!=12 && intent.at("version")!=13) return;
+    if (intent.at("version")!=4 && intent.at("version")!=5 && intent.at("version")!=6 && intent.at("version")!=7 && intent.at("version")!=8 && intent.at("version")!=9 && intent.at("version")!=10 && intent.at("version")!=11 && intent.at("version")!=12 && intent.at("version")!=13 && intent.at("version")!=17) return;
     validate_active_design_preserved_dependents(source.entities(),result,false,true);
 }
 #endif
@@ -3949,7 +3953,17 @@ static PhaseConstraintLifetimeProofs phase_constraint_lifetime_proofs(const Appl
         }
         else if (version==45) {
             const auto intent=validate_mixed_selection_removal_intent(proof.at("mixed_selection_removal_intent"));
-            if (intent.at("version")==5 || intent.at("version")==6 || intent.at("version")==7 || intent.at("version")==8 || intent.at("version")==11 || intent.at("version")==12 || intent.at("version")==13) {
+            if (intent.at("version")==17) {
+                // Standalone completion retains the original room/wall identity
+                // proof as well as its explicit roof split destinations. This
+                // projection is allocation ownership, never replay authority.
+                self(self,intent.at("ordinary_command"),depth);
+                const auto ordinary=completed_component_selection_removal_authority(intent);
+                for (const auto& [original,ids]:ordinary.architectural.roof_additional_identities) {
+                    (void)original;
+                    result.ordinary_roof_destinations.insert(ids.begin(),ids.end());
+                }
+            } else if (intent.at("version")==5 || intent.at("version")==6 || intent.at("version")==7 || intent.at("version")==8 || intent.at("version")==11 || intent.at("version")==12 || intent.at("version")==13) {
                 const auto ordinary=corner_selection_removal_authority(
                     decode_corner_selection_removal_intent(intent.at("ordinary")));
                 for (const auto& [original,ids]:ordinary.architectural.roof_additional_identities) {
@@ -11011,6 +11025,107 @@ DocumentSnapshot Document::preview_command(const DocumentSnapshot& source, const
     return candidate.snapshot();
 }
 
+DocumentSnapshot Document::preview_derived_component_removal_stage(const DocumentSnapshot& source,
+    const Command& command,const std::map<std::string,Entity,std::less<>>& derived_entities) {
+    // Only the closed actual-source producers below can enter this
+    // private route. The map is their independently reconstructed result,
+    // never an expected payload submitted alongside an arbitrary command.
+    auto candidate=fork(source);
+    candidate.apply_impl(command,&derived_entities);
+    const auto preview=candidate.snapshot();
+    if (preview.entities().size()!=derived_entities.size())
+        document_error(DocumentErrorCode::invalid_entity,"Removal stage changed the source-derived entity inventory");
+    for (const auto& [id,entity]:derived_entities) {
+        const auto actual=preview.entities().find(id);
+        if (actual==preview.entities().end() || !exact_entity_payload(entity,actual->second))
+            document_error(DocumentErrorCode::invalid_entity,"Removal stage differs from the complete source-derived result: "+id);
+    }
+    if (preview.assets().size()!=source.assets().size())
+        document_error(DocumentErrorCode::invalid_asset,"Removal stage changed assets");
+    for (const auto& [id,asset]:source.assets()) {
+        const auto actual=preview.assets().find(id);
+        if (actual==preview.assets().end() || !exact_asset_payload(asset,actual->second))
+            document_error(DocumentErrorCode::invalid_asset,"Removal stage changed an original asset: "+id);
+    }
+    if (preview.document_id()!=source.document_id() ||
+        preview.history().at(static_cast<std::size_t>(preview.revision())).name!=
+            source.history().at(static_cast<std::size_t>(source.revision())).name ||
+        preview.saved_revision_optional()!=source.saved_revision_optional() ||
+        preview.named_revisions()!=source.named_revisions() ||
+        preview.history().size()!=source.history().size()+1 || preview.revision()!=source.history().size())
+        document_error(DocumentErrorCode::invalid_history,"Removal stage must retain metadata and add one detached history event");
+    return preview;
+}
+
+DocumentSnapshot Document::preview_ordinary_selection_removal_stage(const DocumentSnapshot& source,
+    const OrdinarySelectionRemovalIntent& intent,const Command& original_command) {
+#ifdef VERTEX_HAS_CONSTRAINT_AUTHORING
+    const auto derived=replay_ordinary_selection_removal_stage_entities(source,intent,original_command);
+    return preview_derived_component_removal_stage(source,original_command,derived);
+#else
+    document_error(DocumentErrorCode::invalid_entity,"Ordinary removal preview requires the production authoring engine");
+#endif
+}
+
+DocumentSnapshot Document::preview_architectural_drawing_removal_stage(const DocumentSnapshot& source,
+    const ArchitecturalDrawingRemovalIntent& intent,const Command& original_command) {
+#ifdef VERTEX_HAS_CONSTRAINT_AUTHORING
+    const auto* raw=std::get_if<ApplyEntityChanges>(&original_command);
+    if (!raw || !raw->asset_changes.empty())
+        document_error(DocumentErrorCode::invalid_entity,"Architectural removal preview requires an asset-free ordinary command");
+    const auto derived=replay_architectural_drawing_removal(source,intent);
+    return preview_derived_component_removal_stage(source,original_command,derived);
+#else
+    document_error(DocumentErrorCode::invalid_entity,"Architectural removal preview requires the production authoring engine");
+#endif
+}
+
+DocumentSnapshot Document::preview_corner_selection_removal_stage(const DocumentSnapshot& source,
+    const CornerSelectionRemovalIntent& intent,const Command& original_command) {
+#ifdef VERTEX_HAS_CONSTRAINT_AUTHORING
+    const auto* raw=std::get_if<ApplyEntityChanges>(&original_command);
+    if (!raw || !raw->asset_changes.empty())
+        document_error(DocumentErrorCode::invalid_entity,"Corner removal preview requires an asset-free ordinary command");
+    const auto derived=replay_corner_selection_removal(source,intent);
+    return preview_derived_component_removal_stage(source,original_command,derived);
+#else
+    document_error(DocumentErrorCode::invalid_entity,"Corner removal preview requires the production authoring engine");
+#endif
+}
+
+DocumentSnapshot Document::preview_hosted_opening_removal_stage(const DocumentSnapshot& source,
+    const HostedOpeningRemovalStageRequest& request,const Command& original_command) {
+#ifdef VERTEX_HAS_CONSTRAINT_AUTHORING
+    const auto* raw=std::get_if<ApplyEntityChanges>(&original_command);
+    if (!raw || !raw->asset_changes.empty())
+        document_error(DocumentErrorCode::invalid_entity,"Hosted opening removal preview requires an asset-free ordinary command");
+    // Keep the standalone producer's historical host/catalog/membership modes.
+    // The request can opt into its existing dimension retirement, never a
+    // different saved-design choice or complete hosted-catalog authority.
+    const auto derived=replay_hosted_opening_removal(source.entities(),request.opening_ids,
+        source.uses_active_phase_constraints(),false,false,std::nullopt,request.complete_component_dimensions);
+    if (!derived)
+        document_error(DocumentErrorCode::invalid_entity,"Hosted opening removal preview requires actual selected openings");
+    return preview_derived_component_removal_stage(source,original_command,*derived);
+#else
+    document_error(DocumentErrorCode::invalid_entity,"Hosted opening removal preview requires the production authoring engine");
+#endif
+}
+
+DocumentSnapshot Document::preview_opening_architectural_removal_stage(const DocumentSnapshot& source,
+    const OpeningArchitecturalRemovalIntent& intent,const Command& original_command) {
+#ifdef VERTEX_HAS_CONSTRAINT_AUTHORING
+    const auto* raw=std::get_if<ApplyEntityChanges>(&original_command);
+    if (!raw || !raw->asset_changes.empty())
+        document_error(DocumentErrorCode::invalid_entity,"Opening architectural removal preview requires an asset-free ordinary command");
+    validate_physical_wall_join_removal_identity_lifetime(source,intent.other.roof_additional_identities);
+    const auto derived=replay_opening_architectural_removal(source.entities(),intent,source.uses_active_phase_constraints());
+    return preview_derived_component_removal_stage(source,original_command,derived);
+#else
+    document_error(DocumentErrorCode::invalid_entity,"Opening architectural removal preview requires the production authoring engine");
+#endif
+}
+
 Command complete_disto_measurement_command(
     const DocumentSnapshot& source, const Command& geometry_command,
     std::string_view owner_id, const DistoMeasurementRecord& record, bool replace_existing) {
@@ -11082,6 +11197,11 @@ Command complete_selection_command(const DocumentSnapshot& source, const Command
 }
 
 Revision Document::apply(const Command& command) {
+    return apply_impl(command,nullptr);
+}
+
+Revision Document::apply_impl(const Command& command,
+    const std::map<std::string,Entity,std::less<>>* derived_component_stage) {
 #ifdef VERTEX_HAS_CONSTRAINT_AUTHORING
     PhaseSelectionRemovalReplayScope phase_selection_removal_replay_scope;
     OrdinarySelectionRemovalReplayScope ordinary_selection_removal_replay_scope;
@@ -11092,7 +11212,7 @@ Revision Document::apply(const Command& command) {
         document_error(DocumentErrorCode::read_only, read_only_reason_);
     }
     return std::visit(
-        [this](const auto& typed_command) -> Revision {
+        [this,derived_component_stage](const auto& typed_command) -> Revision {
             validate_expected_revision(head_revision_, typed_command.expected_revision);
             const auto& current = head_record();
             DxfReceiptValidationCache receipt_cache;
@@ -11111,6 +11231,8 @@ Revision Document::apply(const Command& command) {
             next.undo_stack.push_back(head_revision_);
             std::optional<std::string> next_unsupported_constraints;
             ComponentMembershipAdmission membership_admission;
+            if (derived_component_stage)
+                retain_current_component_membership_admission(current.entities,*derived_component_stage,&membership_admission);
             auto next_identity_history = boundary_identity_history_;
 
             using CommandType = std::decay_t<decltype(typed_command)>;
