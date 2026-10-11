@@ -313,10 +313,13 @@ std::optional<PreparedNativeGeometry> prepare_native_geometry(
     auto& solids = result.solids;
     const auto& entities = snapshot.entities();
     std::set<std::string, std::less<>> inactive_owner_ids;
+    AssemblyPhaseMembershipScope assembly_memberships;
     try {
         // Saved registry choices establish physical activity. Keep the complete
         // captured map for authority, relationships and assembly dependencies.
-        inactive_owner_ids = constraint_phase_scope(entities).inactive_owner_ids;
+        const auto phase_scope = constraint_phase_scope(entities);
+        inactive_owner_ids = phase_scope.inactive_owner_ids;
+        assembly_memberships = phase_scope.assembly_memberships;
     } catch (const std::exception& error) {
         append_unique(errors, "native phase scope: " + std::string(error.what()));
         return result;
@@ -1080,6 +1083,9 @@ std::optional<PreparedNativeGeometry> prepare_native_geometry(
             const auto catalog = AssemblyModel::from_json(catalog_entity.properties.at("model"));
             for (const auto& instance : catalog.instances()) {
                     if (cancelled && cancelled()) return std::nullopt;
+                if (assembly_memberships.inactive_roots.contains({catalog_id, instance.id})) continue;
+                if (assembly_memberships.owners.contains({catalog_id, instance.id}) && instance.placement &&
+                    assembly_host_inactive_in_phase(entities, inactive_owner_ids, instance.placement->host_entity_id)) continue;
                 const auto child_id = embedded_presentation_ids.at({catalog_id, instance.id});
                 try {
                 const auto expansion = catalog.expand(instance, embedded_materialization_budget);

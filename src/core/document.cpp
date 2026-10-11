@@ -11,6 +11,7 @@
 #include "sketch/assembly_document_adapter.hpp"
 #include "sketch/site_frame.hpp"
 #include "sketch/model_phases.hpp"
+#include "sketch/assembly_phase_membership.hpp"
 #include "sketch/room_relationships.hpp"
 #include "sketch/room_relationship_geometry.hpp"
 #include "sketch/vertical_levels.hpp"
@@ -600,6 +601,12 @@ void validate_entity(const Entity& entity) {
         validate_embedded_model([](const nlohmann::json& model) {
             (void)AssemblyModel::from_json(model);
         }, "assembly model");
+    } else if (entity.type == assembly_phase_membership_entity_type) {
+        if (!entity.required)
+            document_error(DocumentErrorCode::invalid_entity, "assembly phase membership must be required");
+        validate_embedded_model([](const nlohmann::json& model) {
+            (void)AssemblyPhaseMembership::from_json(model);
+        }, "assembly phase membership");
     } else if (entity.type == "model_phases") {
         validate_embedded_model([](const nlohmann::json& model) {
             (void)ModelPhases::from_json(model);
@@ -746,6 +753,17 @@ void collect_references(const Entity& entity, std::vector<EntityReference>& refe
         } catch (const std::exception& error) {
             document_error(DocumentErrorCode::invalid_entity,
                            std::string("invalid slab layer reference: ") + error.what());
+        }
+    }
+    if (entity.type == assembly_phase_membership_entity_type) {
+        try {
+            const auto model = AssemblyPhaseMembership::from_json(entity.properties.at("model"));
+            references.push_back({model.registry_id(), "model_phases", EntityReference::Target::entity});
+            for (const auto& root : model.roots())
+                references.push_back({root.first, "assembly_model", EntityReference::Target::entity});
+        } catch (const std::exception& error) {
+            document_error(DocumentErrorCode::invalid_entity,
+                           std::string("invalid assembly phase references: ") + error.what());
         }
     }
     if (entity.type == "assembly_model" && entity.properties.contains("model")) {
@@ -1133,6 +1151,7 @@ std::optional<std::string> validate_state(const std::map<std::string, Entity, st
     }
     try {
         validate_corner_window_state(entities);
+        (void)resolve_assembly_phase_memberships(entities);
     } catch (const std::exception& error) {
         document_error(DocumentErrorCode::invalid_entity, error.what());
     }
@@ -2132,13 +2151,13 @@ std::string sha256_hex(std::span<const std::byte> bytes) {
 }
 
 bool is_known_entity_type(std::string_view type) noexcept {
-    static constexpr std::array<std::string_view, 38> known{
+    static constexpr std::array<std::string_view, 39> known{
         "property",             "building", "floor",  "layer", "boundary",
         "measurement_boundary", "room_boundary", "wall", "opening", "corner_window", "room",
         "slab",                 "roof",     "stair",  "railing", "column", "beam",
         "label",                "sheet",    "view",   "constraint", "dimension",
         "sheet_view_model",    "annotation_state", "reference_asset",
-        "assembly_model", "assembly_instance", "model_phases", "room_relationships", "vertical_levels",
+        "assembly_model", "assembly_instance", "assembly_phase_membership", "model_phases", "room_relationships", "vertical_levels",
         "reference_grid", "terrain_surface", "dxf_source", "ifc_source",
         "georeferencing", "wall_join", "roof_join", "measurement_linework"};
     return std::find(known.begin(), known.end(), type) != known.end();
@@ -10833,6 +10852,15 @@ void Document::update_editability() {
         return;
     }
     for (const auto& [id, entity] : head_record().entities) {
+        // Row filtering is understood, but existing host-copy/remap/removal and
+        // shared-type writers do not yet carry this required authority. Keep
+        // such documents viewable without letting legacy writers revive rows.
+        // Enable editing together with the closed component replacement lane.
+        if (entity.type == assembly_phase_membership_entity_type) {
+            editable_ = false;
+            read_only_reason_ = "Qualified component alternatives require component replacement and dependency integration (" + id + ")";
+            return;
+        }
         if (entity.required && !is_known_entity_type(entity.type)) {
             editable_ = false;
             read_only_reason_ = "required entity type is unsupported: " + entity.type + " (" + id + ")";

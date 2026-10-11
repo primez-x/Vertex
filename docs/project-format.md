@@ -1,4 +1,21 @@
-# Vertex project formats v1 through v202
+# Vertex project formats v1 through v203
+
+Reader203 preserves required `assembly_phase_membership` entities in every
+retained revision. Native extraction emits201. The closed `properties.model`
+schema is `sketch.assembly_phase_membership`, version1, with `registry_id`,
+`roots`, `baseline_roots` and `alternatives`. Each root is exactly
+`{catalog_id, instance_id}`; aliases are presentation-only. Alternative rows
+contain exactly `alternative_id`, `demolished_roots` and `proposed_roots`.
+Declared roots partition into baseline or one proposal; demolition references
+baseline only. The actual referenced ModelPhases registry supplies the selected
+alternative. Missing registry, alternative, catalog/row or competing qualified
+membership refuses. Surviving raw roster/alternative order is retained.
+
+Declared activity is distinct from catalog support and intersects actual host
+activity. Absent row membership retains legacy behavior. The codec and consumers
+are source foundations: no UI emits this authority yet, and documents containing
+it remain read-only pending closed replacement and host-copy/remap/removal/type
+integration. Compilation and runtime/round-trip qualification remain open.
 
 Reader202 retains explicit slab elevation carry in profile leaf3, selected
 Properties request5, phase selection request4, slab replacement leaf7/phase

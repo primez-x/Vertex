@@ -62,6 +62,29 @@ struct AssemblyInstancePropertyEditIntent {
 [[nodiscard]] AssemblyInstancePropertyEditIntent decode_assembly_instance_property_edit_intent(
     const nlohmann::json&);
 
+struct AssemblyInstancePropertyEditImpact {
+    // Exact qualified root identity; part_path is always empty.
+    AssemblyInstancePropertyEditTarget root;
+    bool changed{};
+    std::vector<std::string> protected_registry_ids;
+    std::vector<std::string> protected_host_registry_ids;
+};
+
+// Read-only consumer foundation for standalone-owner and embedded-catalog
+// baseline membership. Requires the complete actual original map and the same
+// 1..1000 sorted unique closed typed targets as replay. All selected paths in
+// one root compose against its original expansion. Returns sorted qualified
+// root impacts, including no-ops, after source/final typed expansion and genuine
+// geometry admission. Only active-alternative baseline registries are reported:
+// the actual document owner for independent roots, catalog for embedded rows,
+// and exact placement host separately. Inactive sources and overlapping registry
+// memberships refuse. No input mutation, snapshot fabrication, publishable map,
+// replacement authorization, dependency completion or publication is supplied.
+// Enclosing replacement producers must establish those prerequisites themselves;
+// this standalone/embedded membership foundation remains runtime-unverified.
+[[nodiscard]] std::vector<AssemblyInstancePropertyEditImpact> inspect_assembly_instance_property_edits(
+    const AssemblyDocumentEntities&, std::span<const AssemblyInstancePropertyEditIntent>);
+
 // Derives one immutable whole-map result exclusively from the actual original
 // map. 1..1000 sorted unique qualified targets; multiple distinct paths in one
 // root are composed against that root's original expansion. All catalog rows,

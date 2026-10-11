@@ -744,9 +744,9 @@ target_include_directories(sketch_room_relationship_geometry_commit PUBLIC inclu
 target_link_libraries(sketch_room_relationship_geometry_commit PUBLIC sketch_room_relationships
   sketch_document sketch_building_entities sketch_boundary_receipts sketch_wall_semantics
   sketch_constraint_authoring)
-add_library(sketch_model_phases src/core/model_phases.cpp)
+add_library(sketch_model_phases src/core/model_phases.cpp src/core/assembly_phase_membership.cpp)
 target_include_directories(sketch_model_phases PUBLIC include)
-target_link_libraries(sketch_model_phases PUBLIC sketch_json)
+target_link_libraries(sketch_model_phases PUBLIC sketch_json PRIVATE sketch_assembly_model)
 add_library(sketch_import_worker_policy src/core/import_worker_policy.cpp)
 target_include_directories(sketch_import_worker_policy PUBLIC include)
 target_link_libraries(sketch_import_worker_policy PUBLIC sketch_json)

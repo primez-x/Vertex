@@ -9,6 +9,7 @@
 #include "sketch/corner_window.hpp"
 #include "sketch/stair_semantics.hpp"
 #include "sketch/assembly_document_adapter.hpp"
+#include "sketch/constraint_phase_scope.hpp"
 #include "sketch/roof_entity_codec.hpp"
 
 #include <AIS_InteractiveContext.hxx>
@@ -890,6 +891,15 @@ public:
             try {
                 const auto embedded = resolve_embedded_assembly_presentation(source.entities(), id);
                 if (!embedded) return false;
+                const auto phase_scope = constraint_phase_scope(source.entities());
+                const AssemblyPhaseRoot root{embedded->assembly_catalog_id, embedded->instance.id};
+                if (phase_scope.assembly_memberships.inactive_roots.contains(
+                        root) ||
+                    (embedded->instance.placement &&
+                        (phase_scope.inactive_owner_ids.contains(embedded->instance.placement->host_entity_id) ||
+                         (phase_scope.assembly_memberships.owners.contains(root) &&
+                          assembly_host_inactive_in_phase(source.entities(), phase_scope.inactive_owner_ids,
+                              embedded->instance.placement->host_entity_id))))) return false;
                 const auto& catalog = source.entities().at(embedded->assembly_catalog_id);
                 const auto model = AssemblyModel::from_json(catalog.properties.at("model"));
                 return !model.expand(embedded->instance.id).profiles.empty();

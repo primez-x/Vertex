@@ -487,7 +487,9 @@ std::string assembly_quantity_column(const AssemblyQuantityKey& key,
 
 void append_assembly_rows(const DocumentSnapshot& document,
                           DocumentScheduleProjection& projection,
-                          const std::set<std::string, std::less<>>* visible_entity_ids) {
+                          const std::set<std::string, std::less<>>* visible_entity_ids,
+                          const ConstraintPhaseScope& phase_scope,
+                          const std::set<std::string, std::less<>>* requested_visibility) {
     const auto visible = [&](const std::string& id) {
         return !visible_entity_ids || visible_entity_ids->contains(id);
     };
@@ -500,6 +502,33 @@ void append_assembly_rows(const DocumentSnapshot& document,
         // Resolve aliases against the complete captured source so visibility
         // filtering cannot change an embedded root's presentation identity.
         const auto embedded_ids = embedded_assembly_presentation_ids(document.entities());
+        AssemblyExpansionBudget visibility_budget;
+        const auto embedded_visible = [&](const std::string& catalog_id, const AssemblyInstance& instance,
+                                          const AssemblyModel& model) {
+            const AssemblyPhaseRoot key{catalog_id, instance.id};
+            if (phase_scope.assembly_memberships.inactive_roots.contains(key)) return false;
+            if (phase_scope.assembly_memberships.owners.contains(key)) {
+                // A declared row has its own saved phase state. Keep actual
+                // host activity and the caller's visibility mask separate from
+                // the catalog's historical support-owner membership.
+                if (instance.placement && assembly_host_inactive_in_phase(document.entities(),
+                        phase_scope.inactive_owner_ids, instance.placement->host_entity_id)) return false;
+                if (!requested_visibility) return true;
+                const auto& anchor = instance.placement ? instance.placement->host_entity_id : catalog_id;
+                if (requested_visibility->contains(embedded_ids.at(key))) return true;
+                if (!requested_visibility->contains(anchor)) return false;
+                // Host-only visibility remains valid for legacy host copies.
+                // Genuine profiles also require the catalog's presentation
+                // layer unless their exact alias was explicitly admitted.
+                return requested_visibility->contains(catalog_id) || model.expand(instance, visibility_budget).profiles.empty();
+            }
+            return instance.placement ? visible(instance.placement->host_entity_id) : visible(catalog_id);
+        };
+        std::set<std::string, std::less<>> declared_active_catalogs;
+        for (const auto& [root, membership] : phase_scope.assembly_memberships.owners) {
+            (void)membership;
+            if (!phase_scope.assembly_memberships.inactive_roots.contains(root)) declared_active_catalogs.insert(root.first);
+        }
         // Supporting catalogs may be hidden. Hidden independent owners neither
         // expand nor contribute diagnostics to a visibility-scoped schedule.
         for (const auto& [id, entity] : document.entities()) {
@@ -527,14 +556,15 @@ void append_assembly_rows(const DocumentSnapshot& document,
                     }
                 }
             }
-            if (!visible(catalog_id) && !host_visible && !required_catalogs.contains(catalog_id)) continue;
+            if (!visible(catalog_id) && !host_visible && !declared_active_catalogs.contains(catalog_id) &&
+                !required_catalogs.contains(catalog_id)) continue;
             context = catalog_id;
             if (!entity.properties.contains("model"))
                 throw std::invalid_argument("assembly catalog has no model: " + catalog_id);
             const auto original = AssemblyModel::from_json(entity.properties.at("model"));
             auto instances = original.instances();
             std::erase_if(instances, [&](const auto& instance) {
-                return instance.placement ? !visible(instance.placement->host_entity_id) : !visible(catalog_id);
+                return !embedded_visible(catalog_id, instance, original);
             });
             const auto model = AssemblyModel::create(original.materials(), original.types(), std::move(instances));
             auto source = entity;
@@ -1168,7 +1198,8 @@ void append_roof_join_rows(const DocumentSnapshot& document,
 
 DocumentScheduleProjection augment(const DocumentSnapshot& document, DocumentScheduleProjection projection,
                                    const std::set<std::string, std::less<>>* visible_entity_ids,
-                                   const ConstraintPhaseScope& phase_scope) {
+                                   const ConstraintPhaseScope& phase_scope,
+                                   const std::set<std::string, std::less<>>* requested_visibility) {
     // Physical cuts follow the complete document's saved phase choices;
     // presentation visibility only controls which schedule rows are emitted.
     std::map<std::string, std::vector<const Entity*>, std::less<>> openings;
@@ -1238,7 +1269,7 @@ DocumentScheduleProjection augment(const DocumentSnapshot& document, DocumentSch
         }
     }
     append_layer_material_rows(document, openings, projection, visible_entity_ids);
-    append_assembly_rows(document, projection, visible_entity_ids);
+    append_assembly_rows(document, projection, visible_entity_ids, phase_scope, requested_visibility);
     append_building_rows(document, projection, visible_entity_ids);
     // The core adapter's generic homogeneous assignment row is replaced by
     // the complete architecture-specific joined partition, never added twice.
@@ -1260,7 +1291,7 @@ DocumentScheduleProjection project_active_architectural_schedules(const Document
     const std::set<std::string, std::less<>>* visible_entity_ids) {
     const auto phase_scope = constraint_phase_scope(document.entities());
     if (!visible_entity_ids && phase_scope.inactive_owner_ids.empty())
-        return augment(document, build_document_schedules(document), nullptr, phase_scope);
+        return augment(document, build_document_schedules(document), nullptr, phase_scope, nullptr);
     std::set<std::string, std::less<>> active_entity_ids;
     for (const auto& [id, entity] : document.entities()) {
         if (phase_scope.inactive_owner_ids.contains(id) ||
@@ -1281,7 +1312,7 @@ DocumentScheduleProjection project_active_architectural_schedules(const Document
     // Saved activity is authoritative for every schedule producer; a supplied
     // presentation selection can further restrict it, never reactivate it.
     return augment(document, build_document_schedules(document, active_entity_ids),
-                   &active_entity_ids, phase_scope);
+                   &active_entity_ids, phase_scope, visible_entity_ids);
 }
 } // namespace
 

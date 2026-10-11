@@ -292,7 +292,8 @@ public:
     // Properties twelve without changing historical profile/phase meanings.
     // v202 retains coordinated slab elevation/hosted carry, phase outer27 and
     // mixed Properties thirteen without changing historical profile meanings.
-    static constexpr std::uint32_t format_version = 202;
+    // v203 requires qualified component phase membership in retained history.
+    static constexpr std::uint32_t format_version = 203;
     static constexpr std::uint32_t recovery_format_version = 4;
     [[nodiscard]] static std::uint32_t required_format_version(const DocumentSnapshot& snapshot);
     static constexpr std::uint64_t maximum_file_bytes = 4ULL * 1024ULL * 1024ULL * 1024ULL;

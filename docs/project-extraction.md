@@ -1,5 +1,13 @@
 # Portable project extraction
 
+Exchange version201 requires native reader203 when any retained revision carries
+required qualified component phase membership. Structured catalog/instance keys,
+the referenced registry, raw surviving membership order and required status
+remain part of the extraction. Existing generic extraction retains the complete
+entity payload. Native editing remains read-only until the closed component
+replacement and dependency consumers integrate; no UI emits it yet. This does
+not certify IFC/DXF component-alternative transport or runtime round trips.
+
 Exchange version200 requires native reader202 for coordinated slab elevation and
 actual hosted component carry in mixed Properties dialect13. Ordinary and phase
 contributions derive from the same original source; qualified proposed rows and

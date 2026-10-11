@@ -4087,10 +4087,18 @@ QString phase_alternative_label(const RemodelingAlternative& alternative) {
 
 bool saved_design_reference_inactive(const DocumentSnapshot& source,
     const ConstraintPhaseScope& scope, const std::string& id) {
-    if (scope.inactive_owner_ids.empty()) return false;
+    if (scope.inactive_owner_ids.empty() && scope.assembly_memberships.inactive_roots.empty()) return false;
     if (scope.inactive_owner_ids.contains(id)) return true;
     const auto found = source.entities().find(id);
-    if (found == source.entities().end()) return false;
+    if (found == source.entities().end()) {
+        try {
+            const auto embedded = canvas_embedded_assembly_binding(source, id);
+            return embedded && (scope.assembly_memberships.inactive_roots.contains(
+                {embedded->value.assembly_catalog_id, embedded->value.instance.id}) ||
+                (embedded->value.instance.placement && scope.inactive_owner_ids.contains(
+                    embedded->value.instance.placement->host_entity_id)));
+        } catch (const std::exception&) { return false; }
+    }
     if (can_recognize_boundary_dimension_entity_type(found->second.type)) {
         try {
             const auto decoded = decode_boundary_dimension_entity(found->second);
@@ -4188,6 +4196,26 @@ std::set<std::string, std::less<>> visible_project_entities_with_phase(
     }
     const auto scope = constraint_phase_scope(snapshot.entities());
     std::erase_if(visible, [&](const auto& id) { return saved_design_reference_inactive(snapshot, scope, id); });
+    if (!scope.assembly_memberships.owners.empty()) {
+        // A declared component has independent phase activity. Its catalog is
+        // still subject to the user's layer filters, but catalog phase support
+        // cannot erase the row's own active presentation identity.
+        const auto presentation = visible_project_entities(snapshot, filter);
+        const auto aliases = embedded_assembly_presentation_ids(snapshot.entities());
+        for (const auto& [root, membership] : scope.assembly_memberships.owners) {
+            (void)membership;
+            if (scope.assembly_memberships.inactive_roots.contains(root)) continue;
+            const auto& alias = aliases.at(root);
+            const auto binding = canvas_embedded_assembly_binding(snapshot, alias);
+            if (!binding) continue;
+            const auto& instance = binding->value.instance;
+            const auto& anchor = instance.placement ? instance.placement->host_entity_id : root.first;
+            if (!presentation.contains(anchor) ||
+                (binding->geometric.value_or(false) && !presentation.contains(root.first)) ||
+                (instance.placement && saved_design_reference_inactive(snapshot, scope, anchor))) continue;
+            visible.insert(alias);
+        }
+    }
     return visible;
 }
 
@@ -57580,6 +57608,8 @@ private:
             try {
                 const auto model = AssemblyModel::from_json(catalog_entity.properties.at("model"));
                 for (const auto& instance : model.instances()) {
+                    if (phase_scope.assembly_memberships.inactive_roots.contains({catalog_id, instance.id}) ||
+                        (instance.placement && phase_scope.inactive_owner_ids.contains(instance.placement->host_entity_id))) continue;
                     const auto expansion = model.expand(instance, embedded_materialization_budget);
                     const auto child_id = embedded_presentation_ids.at({catalog_id,instance.id});
                     if (!expansion.profiles.empty()) {
@@ -57655,6 +57685,18 @@ private:
         }
         for (const auto& [child_id, host_id] : assembly_child_hosts) {
             const auto catalog = geometric_child_catalogs.find(child_id);
+            const auto* binding = phase_scope.assembly_memberships.owners.empty() ? nullptr :
+                canvas_embedded_assembly_binding(snapshot, child_id);
+            if (binding && phase_scope.assembly_memberships.owners.contains(
+                    {binding->value.assembly_catalog_id, binding->value.instance.id})) {
+                // The shared visibility resolver already intersected declared
+                // phase activity with the raw layer/host presentation mask.
+                // Apply output-specific hidden objects without reintroducing
+                // the catalog's historical phase activity as row authority.
+                if ((catalog != geometric_child_catalogs.end() && presentation_hidden_ids.contains(catalog->second)) ||
+                    presentation_hidden_ids.contains(host_id) || presentation_hidden_ids.contains(child_id)) visible_ids.erase(child_id);
+                continue;
+            }
             const bool catalog_visible = catalog == geometric_child_catalogs.end() ||
                 (visible_ids.contains(catalog->second) && !presentation_hidden_ids.contains(catalog->second));
             if (catalog_visible && visible_ids.contains(host_id) && !presentation_hidden_ids.contains(host_id) &&

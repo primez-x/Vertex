@@ -559,6 +559,8 @@ void admit_geometry(const AssemblyDocumentEntities& actual, const Target& target
 void require_active_dependencies(const AssemblyDocumentEntities& actual, const Target& target,
     const AssemblyInstance& instance, const ConstraintPhaseScope& scope) {
     const auto& owner_id = target.document_entity_id ? *target.document_entity_id : target.catalog_id;
+    if (!target.document_entity_id && scope.assembly_memberships.inactive_roots.contains({target.catalog_id, target.instance_id}))
+        reject("selected embedded root is inactive in the saved design");
     if (scope.inactive_owner_ids.contains(owner_id)) reject("selected source owner is inactive in the saved design");
     if (instance.placement) {
         const auto& host_id = instance.placement->host_entity_id;
@@ -571,15 +573,96 @@ void require_active_dependencies(const AssemblyDocumentEntities& actual, const T
     }
     if (target.document_entity_id) (void)resolve_site_presentation(actual, *target.document_entity_id);
 }
-std::set<std::string, std::less<>> protected_baselines(const AssemblyDocumentEntities& actual) {
-    std::set<std::string, std::less<>> result;
+struct ProtectedBaselines {
+    std::set<std::string, std::less<>> owner_ids;
+    std::map<std::string, std::vector<std::string>, std::less<>> registry_ids;
+    std::vector<std::string> registries_for(const std::string& owner_id) const {
+        const auto found = registry_ids.find(owner_id);
+        return found == registry_ids.end() ? std::vector<std::string>{} : found->second;
+    }
+};
+ProtectedBaselines protected_baselines(const AssemblyDocumentEntities& actual) {
+    ProtectedBaselines result;
     for (const auto& [id, entity] : actual) if (entity.type == "model_phases") {
-        (void)id;
         const auto model = ModelPhases::from_json(entity.properties.at("model"));
-        if (model.active_alternative()) result.insert(model.baseline_ids().begin(), model.baseline_ids().end());
+        if (model.active_alternative()) for (const auto& owner_id : model.baseline_ids()) {
+            result.owner_ids.insert(owner_id);
+            result.registry_ids[owner_id].push_back(id);
+        }
     }
     return result;
 }
+struct InspectedRoot {
+    Target target;
+    AssemblyInstance original;
+    AssemblyInstance changed;
+    AssemblyExpansion final_expansion;
+};
+// Shared actual-source inspection. It neither patches raw rows nor decides
+// whether a protected change may publish; replay retains that separate guard.
+struct PropertyEditSourceInspection {
+    const AssemblyDocumentEntities& original;
+    ConstraintPhaseScope scope;
+    ProtectedBaselines baselines;
+    std::map<std::string, AssemblyModel, std::less<>> models;
+    std::map<RootKey, std::vector<const Intent*>> grouped;
+    AssemblyExpansionBudget before_budget, after_budget;
+    std::size_t opening_work{};
+    std::map<std::string, TopoDS_Shape, std::less<>> host_cache;
+
+    PropertyEditSourceInspection(const AssemblyDocumentEntities& actual, std::span<const Intent> intents)
+        : original(actual) {
+        (void)encode_intents(intents);
+        AssemblyCatalogTransferBudget catalog_budget;
+        // Admit every source catalog before any expensive semantic model decode.
+        for (const auto& [id, entity] : original) {
+            if (id != entity.id) reject("actual map and source owner identity differ");
+            if (entity.type == "assembly_model") admit_existing_assembly_catalog_work(entity, catalog_budget);
+        }
+        validate_document_assembly_instances(original);
+        validate_document_site_frames(original);
+        if (const auto diagnostic = validate_active_phase_constraint_integrity(original))
+            throw std::invalid_argument(*diagnostic);
+        scope = constraint_phase_scope(original);
+        baselines = protected_baselines(original);
+        for (const auto& intent : intents) grouped[{intent.target.catalog_id, intent.target.instance_id,
+            intent.target.document_entity_id}].push_back(&intent);
+    }
+
+    InspectedRoot inspect(const std::vector<const Intent*>& rows) {
+        auto target = rows.front()->target;
+        target.part_path.clear();
+        const auto catalog = original.find(target.catalog_id);
+        if (catalog == original.end() || catalog->second.type != "assembly_model") reject("actual selected catalog is missing");
+        if (!models.contains(target.catalog_id)) models.emplace(target.catalog_id,
+            AssemblyModel::from_json(catalog->second.properties.at("model")));
+        const auto& model = models.at(target.catalog_id);
+        AssemblyInstance instance;
+        if (target.document_entity_id) {
+            const auto found = original.find(*target.document_entity_id);
+            if (found == original.end() || found->second.type != "assembly_instance") reject("actual independent root is missing");
+            const auto value = decode_document_assembly_instance(found->second);
+            if (value.assembly_catalog_id != target.catalog_id || value.instance.id != target.instance_id)
+                reject("qualified independent root does not match actual source identity");
+            instance = value.instance;
+        } else {
+            const auto found = std::find_if(model.instances().begin(), model.instances().end(),
+                [&](const auto& value) { return value.id == target.instance_id; });
+            if (found == model.instances().end()) reject("actual embedded catalog row is missing");
+            instance = *found;
+        }
+        require_active_dependencies(original, target, instance, scope);
+        const auto before = model.expand(instance, before_budget);
+        admit_geometry(original, target, before, opening_work, host_cache);
+        auto changed = change_instance(instance, before, model, rows);
+        auto after = model.expand(changed, after_budget);
+        return {std::move(target), std::move(instance), std::move(changed), std::move(after)};
+    }
+
+    void admit_final_geometry(const InspectedRoot& root) {
+        admit_geometry(original, root.target, root.final_expansion, opening_work, host_cache);
+    }
+};
 Revision revision(const Json& value) {
     if (value.is_number_unsigned()) return value.get<Revision>();
     if (value.is_number_integer() && value.get<std::int64_t>() >= 0) return static_cast<Revision>(value.get<std::int64_t>());
@@ -625,65 +708,46 @@ Json encode_assembly_instance_property_edit_intent(const Intent& intent) {
 Intent decode_assembly_instance_property_edit_intent(const Json& value) {
     Budget{}.visit(value); return decode_intent(value);
 }
+std::vector<AssemblyInstancePropertyEditImpact> inspect_assembly_instance_property_edits(
+    const AssemblyDocumentEntities& original, std::span<const Intent> intents) {
+    PropertyEditSourceInspection source(original, intents);
+    std::vector<AssemblyInstancePropertyEditImpact> result;
+    result.reserve(source.grouped.size());
+    for (const auto& [key, rows] : source.grouped) {
+        (void)key;
+        const auto root = source.inspect(rows);
+        source.admit_final_geometry(root);
+        const auto& owner_id = root.target.document_entity_id ? *root.target.document_entity_id : root.target.catalog_id;
+        result.push_back({root.target, root.changed != root.original, source.baselines.registries_for(owner_id),
+            root.original.placement ? source.baselines.registries_for(root.original.placement->host_entity_id) :
+                std::vector<std::string>{}});
+    }
+    return result;
+}
 AssemblyDocumentEntities replay_assembly_instance_property_entities(const AssemblyDocumentEntities& original,
     std::span<const Intent> intents) {
-    (void)encode_intents(intents);
-    AssemblyCatalogTransferBudget catalog_budget;
-    // Admit every source catalog before any expensive semantic model decode.
-    for (const auto& [id, entity] : original) {
-        if (id != entity.id) reject("actual map and source owner identity differ");
-        if (entity.type == "assembly_model") admit_existing_assembly_catalog_work(entity, catalog_budget);
-    }
-    validate_document_assembly_instances(original);
-    validate_document_site_frames(original);
-    if (const auto diagnostic = validate_active_phase_constraint_integrity(original)) throw std::invalid_argument(*diagnostic);
-    const auto scope = constraint_phase_scope(original);
-    const auto baselines = protected_baselines(original);
-    std::map<std::string, AssemblyModel, std::less<>> models;
-    std::map<RootKey, std::vector<const Intent*>> grouped;
-    for (const auto& intent : intents) grouped[{intent.target.catalog_id, intent.target.instance_id,
-        intent.target.document_entity_id}].push_back(&intent);
+    PropertyEditSourceInspection source(original, intents);
+    const auto& scope = source.scope;
+    const auto& baselines = source.baselines.owner_ids;
+    const auto& grouped = source.grouped;
     auto result = original;
-    AssemblyExpansionBudget before_budget, after_budget;
-    std::size_t opening_work{};
-    std::map<std::string, TopoDS_Shape, std::less<>> host_cache;
     std::map<RootKey, AssemblyInstance> expected;
     for (const auto& [key, rows] : grouped) {
-        const auto& target = rows.front()->target;
-        const auto catalog = original.find(target.catalog_id);
-        if (catalog == original.end() || catalog->second.type != "assembly_model") reject("actual selected catalog is missing");
-        if (!models.contains(target.catalog_id)) models.emplace(target.catalog_id,
-            AssemblyModel::from_json(catalog->second.properties.at("model")));
-        const auto& model = models.at(target.catalog_id);
-        AssemblyInstance instance;
-        if (target.document_entity_id) {
-            const auto found = original.find(*target.document_entity_id);
-            if (found == original.end() || found->second.type != "assembly_instance") reject("actual independent root is missing");
-            const auto value = decode_document_assembly_instance(found->second);
-            if (value.assembly_catalog_id != target.catalog_id || value.instance.id != target.instance_id)
-                reject("qualified independent root does not match actual source identity");
-            instance = value.instance;
-        } else {
-            const auto found = std::find_if(model.instances().begin(), model.instances().end(),
-                [&](const auto& value) { return value.id == target.instance_id; });
-            if (found == model.instances().end()) reject("actual embedded catalog row is missing");
-            instance = *found;
-        }
-        require_active_dependencies(original, target, instance, scope);
-        const auto before = model.expand(instance, before_budget);
-        admit_geometry(original, target, before, opening_work, host_cache);
-        auto changed = change_instance(instance, before, model, rows);
-        const auto after = model.expand(changed, after_budget);
+        const auto root = source.inspect(rows);
+        const auto& target = root.target;
+        const auto& instance = root.original;
+        const auto& changed = root.changed;
+        const auto& catalog = original.at(target.catalog_id);
         expected.emplace(key, changed);
         if (changed == instance) continue;
         const auto& owner_id = target.document_entity_id ? *target.document_entity_id : target.catalog_id;
         if (baselines.contains(owner_id) || (instance.placement && baselines.contains(instance.placement->host_entity_id)))
             reject("changed instance belongs to a protected active-alternative baseline; use full replacement");
-        admit_geometry(original, target, after, opening_work, host_cache);
+        source.admit_final_geometry(root);
         if (target.document_entity_id) {
             auto& owner = result.at(owner_id);
             auto& raw = owner.properties.at("instance");
-            patch_instance(raw, instance, changed, catalog->second.properties.at("model"));
+            patch_instance(raw, instance, changed, catalog.properties.at("model"));
             const bool vertical = raw.at("root_transform").contains("vertical_scale") ||
                 std::any_of(raw.at("nested_overrides").begin(), raw.at("nested_overrides").end(),
                     [](const Json& row) { return row.at("transform").is_object() && row.at("transform").contains("vertical_scale"); });
@@ -695,7 +759,7 @@ AssemblyDocumentEntities replay_assembly_instance_property_entities(const Assemb
             const auto row = std::find_if(raw_rows.begin(), raw_rows.end(),
                 [&](const Json& value) { return value.at("id") == target.instance_id; });
             if (row == raw_rows.end()) reject("actual embedded raw row is missing");
-            patch_instance(*row, instance, changed, catalog->second.properties.at("model"));
+            patch_instance(*row, instance, changed, catalog.properties.at("model"));
             complete_row_envelope(*row);
             if (needs_embedded_promotion(raw_model, *row)) raw_model["schema"] = "sketch.assemblies.v7";
         }
@@ -730,7 +794,7 @@ AssemblyDocumentEntities replay_assembly_instance_property_entities(const Assemb
         if (actual != intended) reject("raw replay differs from original-source typed intent");
         require_active_dependencies(result, target, actual, scope);
         const auto expansion = model.expand(actual, final_budget);
-        admit_geometry(result, target, expansion, opening_work, host_cache);
+        admit_geometry(result, target, expansion, source.opening_work, source.host_cache);
     }
     for (const auto& [id, entity] : original)
         if ((scope.inactive_owner_ids.contains(id) || baselines.contains(id)) && !exact(entity, result.at(id)))

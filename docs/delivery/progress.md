@@ -14,6 +14,48 @@ changed source does not acquire runtime acceptance without later qualification.
 
 ## Current delivery state
 
+### October 10 qualified component alternative foundations
+
+Complete component-profile drafts and wall/slab elevation integration are
+committed and pushed as 34801cc9, with exact local and remote references matched.
+The current source batch adds read-only edit impacts for actual independent and
+qualified embedded roots, including exact no-ops and active-baseline owner/host
+registry inventories. Inspection and existing replay share original-source
+admission, path composition and geometry work. Historical v1 replay retains its
+baseline/inactive protection and final exact-source checks.
+
+Independent architecture review selected a required companion model for
+qualified catalog/instance memberships, linked to the actual ModelPhases v1
+registry. It has no second active choice or render-alias ownership. A closed,
+bounded immutable codec, source-retaining membership order and complete-map
+registry/catalog/row admission are source-integrated. Saved and explicit
+comparison choices resolve declared activity separately from document owners.
+Reader203/extraction201 retain this required authority in all history, including
+undone revisions. Native/plan selection and architectural quantity producers
+filter declared inactive rows and retain actual host activity. Schedules keep
+the caller's visibility separate from historical catalog support membership.
+Unlisted rows keep their legacy behavior; catalog phase does not become a new
+blanket hide rule.
+
+This is a foundation, not a completed replacement workflow. No UI creates the
+companion yet. Documents carrying it remain explicitly read-only until the
+closed producer and dependency consumers integrate: current host-copy/remap,
+removal and shared-type writers must not revive inactive rows or lose qualified
+membership. Next implement actual-source standalone/private-catalog replacement,
+fresh identities, baseline expansion preservation, qualified dependency and
+annotation completion, mixed Properties publication and selected part-path
+restoration. Then enable editing after those consumers are covered.
+
+Independent source review approved this bounded foundation after correcting
+catalog-versus-row visibility, caller presentation masks and inherited opening
+host activity. It found no remaining confirmed P1/P2 in the reviewed paths;
+that approval does not certify the unfinished replacement workflow. Source
+review and scoped whitespace checking are the available evidence.
+Compilation, interactions, history/round trips and product acceptance remain
+unverified. No builds, tests, probes, native jobs, launches, packages or
+installations run. The installed app is unchanged; all ten production gates
+remain open.
+
 ### October 10 complete component-profile drafts and wall/slab movement
 
 Wall elevation and native wall-cohort Z integration are committed and pushed as

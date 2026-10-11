@@ -1144,6 +1144,7 @@ std::uint32_t required_format_version_internal(const DocumentSnapshot& snapshot,
         }
         if (revision.boundary_translations) required = std::max(required, 9U);
         for (const auto& [id, entity] : revision.entities) {
+            if (entity.type == "assembly_phase_membership") required = std::max(required, 203U);
             if (entity.type == "corner_window" ||
                 (entity.type == "opening" && entity.properties.contains("corner_window_id")))
                 required = std::max(required, 170U);
@@ -3098,6 +3099,7 @@ bool verify_sqlite_schema(sqlite3* database, bool allow_recovery = false) {
          sqlite3_column_int(user_version.get(), 0) != 198 &&
          sqlite3_column_int(user_version.get(), 0) != 199 &&
          sqlite3_column_int(user_version.get(), 0) != 201 &&
+         sqlite3_column_int(user_version.get(), 0) != 203 &&
          sqlite3_column_int(user_version.get(), 0) != 202 &&
          sqlite3_column_int(user_version.get(), 0) != 200 &&
          sqlite3_column_int(user_version.get(), 0) != 174 &&
@@ -3822,6 +3824,8 @@ DocumentSnapshot read_snapshot(sqlite3* database, RecoveryLedger* recovery = nul
     // here and authenticate the manifest with its stored version below.
     const auto required_format = required_format_version_internal(snapshot, format_number < 28);
     if (required_format > format_number) {
+        if (required_format>=203)
+            storage_error(StorageErrorCode::unsupported_format,"This project requires reader 203 for qualified component phase membership");
         if (required_format>=202)
             storage_error(StorageErrorCode::unsupported_format,"This project requires reader 202 for coordinated slab elevation and hosted component carry");
         if (required_format>=201)
