@@ -14,7 +14,50 @@ changed source does not acquire runtime acceptance without later qualification.
 
 ## Current delivery state
 
+### October 11 ordinary component dimension carry
+
+The dimension/native batch below is committed and pushed as 41443100, with the
+exact remote ref verified. The current source batch implements the two concrete
+ordinary authoring gaps discovered after that batch. Embedded transforms now
+contribute associated text-anchor/direction changes in the same command; clones
+allocate fresh history-reserved dimensions, retarget the exact qualified root
+and preserve original components/annotations. A pure complete-map producer
+measures actual source/destination nested targets in one bounded batch each,
+carries authored XY through their actual similarity/reflection frames, and
+retains raw metadata and unchanged numeric representations. The controller now
+patches only the selected raw component row under the existing row-local v7
+dialect instead of rewriting all catalog definitions and original clone rows.
+
+Ordinary Copy/Paste now discovers independent component dimensions and detaches
+embedded ones with the actual copied row into an independent wire owner. Typed
+destination remapping changes only actual catalog/document/root identities;
+local part paths and axes retain their own namespace. Passive source/capture
+measurement checks use complete retained source catalogs, not an incomplete
+wire subset replacing catalogs still used by unrelated owners. Destination
+allocation and existing atomic document admission remain the authority. Mutable
+clipboard previews now share one current geometry/phase/unique-host batch for
+at most 1000 component annotations rather than repeating complete-map work.
+
+Independent integrated carry/clipboard source review approved this frozen batch
+with no open P1/P2 findings. Corrected findings preserve legacy opaque
+`target.assembly` metadata, retain one owner-derived dimension update when the
+owner and callout are selected together, batch initial Site cohort frames and
+normalize mutable embedded dimension previews to their world-authored frame.
+Canonical Site normalization now uses admitted hosts and one cached organization
+per actual immutable source. Scoped whitespace review passes; the batch is being
+committed and backed up. No builds/tests/jobs or installed-app changes ran;
+compilation, physical display, interaction, clipboard cross-project round trips,
+Undo/redo and save/reopen remain unverified. Source integration does not remove
+the component-companion editing quarantine or finish coordinated cross-registry
+replacement, nested linked-view dimensions, mixed-family transforms/properties,
+joint-only/profile edits or every dimension deletion/host-carry route. All ten
+production gates remain open.
+
 ### October 11 qualified component dimensions and native presentation
+
+This integrated dimension/native batch is committed and pushed as 41443100;
+the exact remote branch ref matches the local commit. Work now proceeds to
+ordinary associative dimension transform/clone and clipboard lifecycle carry.
 
 The preceding status-only turn made no implementation progress. This
 continuation corrects repeated complete-map measurement admission in the actual

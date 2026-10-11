@@ -1139,6 +1139,46 @@ BoundaryDimensionResolution resolve_current_boundary_dimension(const BoundaryDim
     return resolve_current_boundary_dimension(dimension, snapshot.entities());
 }
 
+std::vector<BoundaryDimensionResolution> resolve_current_assembly_boundary_dimensions(
+    std::span<const BoundaryDimension> dimensions,
+    const std::map<std::string, Entity, std::less<>>& entities) {
+    if (dimensions.empty() || dimensions.size()>1000)
+        invalid("component dimension preparation requires 1..1000 targets");
+    std::vector<AssemblyDimensionTarget> targets;
+    targets.reserve(dimensions.size());
+    for (const auto& dimension:dimensions) {
+        validate_model(dimension);
+        if (dimension.kind!=BoundaryDimensionKind::assembly_extent)
+            invalid("component dimension batch contains another annotation kind");
+        targets.push_back(*dimension.assembly_target);
+    }
+    auto measurements=resolve_assembly_dimensions(entities,targets);
+    const auto phase=constraint_phase_scope(entities);
+    std::set<std::string,std::less<>> host_ids;
+    for (const auto& measurement:measurements)
+        if (measurement.placement_host_id) host_ids.insert(*measurement.placement_host_id);
+    const std::vector<std::string> hosts(host_ids.begin(),host_ids.end());
+    std::map<std::string,bool,std::less<>> qualified_hosts;
+    if (!hosts.empty()) {
+        (void)resolve_vertical_placements(entities,hosts);
+        (void)resolve_site_presentations(entities,hosts);
+        for (const auto& host:hosts)
+            qualified_hosts.emplace(host,!assembly_host_inactive_in_phase(entities,phase.inactive_owner_ids,host));
+    }
+    std::vector<BoundaryDimensionResolution> result;
+    result.reserve(measurements.size());
+    for (auto& measurement:measurements) {
+        validate_current_assembly_dimension_phase(measurement.target,entities,phase,
+            measurement.placement_host_id,&qualified_hosts);
+        BoundaryDimensionResolution resolved;
+        resolved.kind=BoundaryDimensionKind::assembly_extent;
+        resolved.segment_length_metres=measurement.span_metres;
+        resolved.assembly_geometry=std::move(measurement);
+        result.push_back(std::move(resolved));
+    }
+    return result;
+}
+
 BoundaryDimensionResolution BoundaryDimension::resolve(const Entity& boundary_entity) const {
     return resolve_boundary_dimension(*this, boundary_entity);
 }

@@ -133,6 +133,7 @@
 #include "sketch/area_subtraction.hpp"
 #include "sketch/boundary_construction.hpp"
 #include "sketch/boundary_dimension.hpp"
+#include "sketch/assembly_dimension_transform.hpp"
 #include "sketch/boundary_receipt.hpp"
 #include "sketch/measurement_linework.hpp"
 #include "sketch/measurement_area_graph.hpp"
@@ -997,6 +998,25 @@ void remap_entity_references(Entity& entity,
             mappings(sources.wall_ids),mappings(sources.context_ids),mappings(sources.phase_registry_ids));
     }
     if (entity.type == "dimension" && properties.contains("target")) {
+        auto& target = properties.at("target");
+        if (inspect_boundary_dimension_version(entity).format==BoundaryDimensionFormat::supported_v6) {
+            // Document/catalog identities and local part paths are separate
+            // namespaces. Never recursively remap the qualified target.
+            const auto decoded=decode_boundary_dimension_entity(entity);
+            auto qualified = *decoded.dimension->assembly_target;
+            auto& component = qualified.component;
+            if (material_catalog_mapping && material_catalog_mapping->contains(component.catalog_id))
+                component.catalog_id = material_catalog_mapping->at(component.catalog_id);
+            else if (remap.contains(component.catalog_id)) component.catalog_id = remap.at(component.catalog_id);
+            if (component.document_entity_id && remap.contains(*component.document_entity_id)) {
+                component.document_entity_id = remap.at(*component.document_entity_id);
+                component.instance_id = *component.document_entity_id;
+            }
+            auto& saved = target.at("assembly");
+            saved["catalog_id"] = component.catalog_id;
+            saved["instance_id"] = component.instance_id;
+            saved["document_entity_id"] = component.document_entity_id ? json(*component.document_entity_id) : json(nullptr);
+        }
         reference(properties.at("target"), "entity_id");
         reference(properties.at("target"), "segment_id");
         reference(properties.at("target"), "segment_ids");
@@ -1305,12 +1325,19 @@ std::vector<Entity> clipboard_entities_for_selection(const DocumentSnapshot& sna
     const bool closed_boundary = root->second.type == "boundary" ||
                                  root->second.type == "measurement_boundary" ||
                                  root->second.type == "room_boundary";
-    if (closed_boundary || root->second.type=="measurement_linework" || root->second.type=="wall") {
+    if (closed_boundary || root->second.type=="measurement_linework" || root->second.type=="wall" ||
+        root->second.type=="assembly_instance") {
         for (const auto& [id, entity] : snapshot.entities()) {
             (void)id;
             if (entity.type != "dimension" || !entity.properties.is_object()) continue;
             const auto target = entity.properties.value("target", json::object());
             if (target.is_object() && target.value("entity_id", "") == root_id) {
+                if (root->second.type=="assembly_instance") {
+                    const auto decoded=decode_boundary_dimension_entity(entity);
+                    if (!decoded.supported() || decoded.dimension->kind!=BoundaryDimensionKind::assembly_extent ||
+                        decoded.dimension->assembly_target->component.document_entity_id!=root_id)
+                        throw std::invalid_argument("The component has an unsupported attached dimension. Resolve it before copying.");
+                }
                 add_unique(entity);
             }
         }
@@ -8345,15 +8372,44 @@ public:
         }
         instance.placement.reset();
         instance.root_transform = transform;
-        auto instances = model.instances();
-        if (clone) instances.push_back(instance);
-        else for (auto& value : instances) if (value.id == instance.id) value = instance;
         auto catalog = original;
-        catalog.properties["model"] = AssemblyModel::create(model.materials(), model.types(), std::move(instances)).to_json();
+        // A selected row edit must preserve the raw definitions and every
+        // unrelated/original row, including authored numeric representations.
+        // V7 permits the new root envelope locally without canonicalizing all
+        // legacy rows merely to transform or clone one component.
+        auto& raw_model=catalog.properties.at("model");
+        raw_model["schema"]="sketch.assemblies.v7";
+        const auto generated=AssemblyModel::create(model.materials(),model.types(),{instance}).to_json();
+        const auto& changed_row=generated.at("instances").front();
+        if (clone) raw_model.at("instances").push_back(changed_row);
+        else for (auto& row:raw_model.at("instances")) if (row.at("id")==instance.id) row=changed_row;
         auto candidate = source.entities(); candidate.insert_or_assign(catalog.id, catalog);
         validate_document_assembly_instances(candidate);
         const auto target = embedded_assembly_presentation_id(candidate,catalog.id,instance.id);
         std::vector<EntityChange> changes{EntityChange::upsert(std::move(catalog))};
+        const AssemblyInstancePropertyEditTarget source_root{binding->assembly_catalog_id,binding->instance.id,std::nullopt,{}};
+        const AssemblyInstancePropertyEditTarget destination_root{binding->assembly_catalog_id,instance.id,std::nullopt,{}};
+        std::map<std::string,std::string,std::less<>> copied_dimension_ids;
+        if (clone) {
+            auto occupied=retainedSlabIdentityNames(source,true);
+            for (const auto& [id,entity]:source.entities()) {
+                if (!can_recognize_boundary_dimension_entity_type(entity.type)) continue;
+                const auto decoded=decode_boundary_dimension_entity(entity);
+                if (!decoded.supported() || decoded.dimension->kind!=BoundaryDimensionKind::assembly_extent) continue;
+                const auto& component=decoded.dimension->assembly_target->component;
+                if (component.catalog_id!=source_root.catalog_id || component.instance_id!=source_root.instance_id ||
+                    component.document_entity_id!=source_root.document_entity_id) continue;
+                if (copied_dimension_ids.size()==1000)
+                    throw std::invalid_argument("The component exceeds the associated dimension copy limit.");
+                auto fresh=new_id("dimension");
+                while (!occupied.insert(fresh).second) fresh=new_id("dimension");
+                copied_dimension_ids.emplace(id,std::move(fresh));
+            }
+        }
+        for (auto& dimension:carry_assembly_dimension_transform_entities(source.entities(),candidate,
+                source_root,destination_root,clone ? AssemblyDimensionTransformMode::clone : AssemblyDimensionTransformMode::move,
+                copied_dimension_ids))
+            changes.push_back(EntityChange::upsert(std::move(dimension)));
         if (clone) for (const auto& [id, annotation] : source.entities()) {
             (void)id;
             if (annotation.type != kAnnotationEntityType) continue;
@@ -25348,6 +25404,11 @@ public:
             const auto found = source.entities().find(id.toStdString());
             if (found != source.entities().end() &&
                 can_recognize_boundary_dimension_entity_type(found->second.type)) {
+                // An explicitly selected callout attached to a moved embedded
+                // component already follows that component's admitted frame.
+                // Publish that contribution once; do not move it again from
+                // the old source or append a duplicate command change.
+                if (changed_catalogs.contains(found->first)) continue;
                 const auto decoded=decode_boundary_dimension_entity(found->second);
                 if (!decoded.supported()) throw std::invalid_argument(decoded.unsupported_reason);
                 auto dimension=*decoded.dimension;
@@ -31823,6 +31884,7 @@ public:
         QStringList ordinary_ids;
         std::vector<AssemblyClipboardDetachRequest> requests;
         std::map<std::string, std::string, std::less<>> copied_children;
+        std::map<AssemblyPhaseRoot, std::string> copied_component_roots;
         for (auto& id : copied_ids) {
             const auto binding = geometric_assembly_for_child(source_snapshot, id.toStdString());
             if (!binding) { ordinary_ids.push_back(id); continue; }
@@ -31831,6 +31893,7 @@ public:
             auto fresh=new_id("assembly");
             while (!occupied.insert(fresh).second) fresh=new_id("assembly");
             requests.push_back({binding->assembly_catalog_id,binding->instance.id,fresh});
+            copied_component_roots.emplace(AssemblyPhaseRoot{binding->assembly_catalog_id,binding->instance.id},fresh);
             copied_children.emplace(original_child,fresh); id=id_from(fresh);
         }
         auto entities=ordinary_ids.isEmpty() ? std::vector<Entity>{} :
@@ -31857,6 +31920,27 @@ public:
         if (!copied_children.empty()) for (const auto& [id, entity] : source_snapshot.entities()) {
             (void)id;
             if (can_recognize_boundary_dimension_entity_type(entity.type)) {
+                const auto decoded=decode_boundary_dimension_entity(entity);
+                if (decoded.supported() && decoded.dimension->kind==BoundaryDimensionKind::assembly_extent &&
+                    !decoded.dimension->assembly_target->component.document_entity_id) {
+                    const auto& component=decoded.dimension->assembly_target->component;
+                    const auto copied=copied_component_roots.find({component.catalog_id,component.instance_id});
+                    if (copied!=copied_component_roots.end()) {
+                        // Passive capture detaches this exact embedded row into
+                        // an independent wire owner. Retain path, axis, raw style
+                        // and text anchor; destination allocation follows later.
+                        auto dimension=entity;
+                        auto& target=dimension.properties.at("target");
+                        target["entity_id"]=copied->second;
+                        target.at("assembly")["instance_id"]=copied->second;
+                        target.at("assembly")["document_entity_id"]=copied->second;
+                        (void)decode_boundary_dimension_entity(dimension);
+                        const auto existing=std::find_if(entities.begin(),entities.end(),[&](const auto& row) { return row.id==dimension.id; });
+                        if (existing==entities.end()) entities.push_back(std::move(dimension));
+                        else *existing=std::move(dimension);
+                        continue;
+                    }
+                }
                 const auto target=entity.properties.find("target");
                 if (target!=entity.properties.end() && target->is_object() && target->contains("entity_id") &&
                     target->at("entity_id").is_string() && copied_children.contains(target->at("entity_id").get<std::string>())) {
@@ -31924,6 +32008,29 @@ public:
         }
         if(entities.size()>kMaximumClipboardEntities)
             throw std::invalid_argument("Clipboard material dependencies exceed the entity limit.");
+        std::vector<AssemblyDimensionTarget> source_dimension_targets,captured_dimension_targets;
+        for (const auto& entity:entities) {
+            if (!can_recognize_boundary_dimension_entity_type(entity.type)) continue;
+            const auto dimension=decode_boundary_dimension_entity(entity);
+            if (!dimension.supported() || dimension.dimension->kind!=BoundaryDimensionKind::assembly_extent) continue;
+            if (source_dimension_targets.size()==1000)
+                throw std::invalid_argument("The copied components exceed the associated dimension limit.");
+            const auto original=decode_boundary_dimension_entity(source_snapshot.entities().at(entity.id));
+            if (!original.supported() || original.dimension->kind!=BoundaryDimensionKind::assembly_extent)
+                throw std::invalid_argument("The copied component dimension lost its actual source identity.");
+            source_dimension_targets.push_back(*original.dimension->assembly_target);
+            captured_dimension_targets.push_back(*dimension.dimension->assembly_target);
+        }
+        if (!source_dimension_targets.empty()) {
+            (void)resolve_assembly_dimensions(source_snapshot.entities(),source_dimension_targets);
+            // Keep every actual source catalog/root during passive capture
+            // admission. Minimal wire catalogs must not replace a source
+            // catalog still used by unrelated source owners in this map.
+            auto capture_context=source_snapshot.entities();
+            for (const auto& entity:entities) if (entity.type=="assembly_instance")
+                capture_context.insert_or_assign(entity.id,entity);
+            (void)resolve_assembly_dimensions(capture_context,captured_dimension_targets);
+        }
         validate_assembly_component_clipboard_source_rows(detached.provenance,entities);
         if (detached_sources) *detached_sources=detached.provenance;
         json payload{{"format", std::string(kClipboardFormat)}, {"version", 1}, {"root_id",entities.front().id},
@@ -35084,8 +35191,12 @@ public:
         session->reserved.insert(session->ordinary.reserved_identities.begin(),session->ordinary.reserved_identities.end());
         auto fresh_entities=session->source->entities();
         for (const auto& change:session->request.ordinary.entity_changes) fresh_entities.insert_or_assign(change.entity.id,change.entity);
-        if (session->site_frames) for (const auto& change:session->request.ordinary.entity_changes)
-            session->fresh_site_frames.emplace(change.entity.id,resolve_site_presentation(fresh_entities,change.entity.id));
+        if (session->site_frames && !session->request.ordinary.entity_changes.empty()) {
+            std::vector<std::string> fresh_ids;
+            fresh_ids.reserve(session->request.ordinary.entity_changes.size());
+            for (const auto& change:session->request.ordinary.entity_changes) fresh_ids.push_back(change.entity.id);
+            session->fresh_site_frames=resolve_site_presentations(fresh_entities,fresh_ids);
+        }
         for (const auto& [key,alias]:embedded_assembly_presentation_ids(fresh_entities)) { (void)key; session->reserved.insert(alias); }
         const auto allocate=[&](std::string_view prefix) {
             auto id=new_id(prefix); while (!session->reserved.insert(id).second) id=new_id(prefix); return id;
@@ -35645,6 +35756,40 @@ public:
         }
         const auto referenced=session.view ? architectural_view_references(*session.view,entities,unavailable) :
             std::set<std::string,std::less<>>{};
+        std::vector<BoundaryDimension> component_dimensions;
+        for (const auto& id:dimensions) {
+            const auto found=entities.find(id);
+            if (found==entities.end()) throw std::invalid_argument("A copied dimension is missing from its prepared graph.");
+            const auto decoded=decode_boundary_dimension_entity(found->second);
+            if (decoded.supported() && decoded.dimension->kind==BoundaryDimensionKind::assembly_extent) {
+                if (component_dimensions.size()==1000)
+                    throw std::invalid_argument("The copied component dimension preview exceeds 1000 targets.");
+                component_dimensions.push_back(*decoded.dimension);
+            }
+        }
+        std::map<std::string,BoundaryDimensionResolution,std::less<>> component_measurements;
+        if (!component_dimensions.empty()) {
+            auto measured=resolve_current_assembly_boundary_dimensions(component_dimensions,entities);
+            for (std::size_t index=0;index<measured.size();++index)
+                component_measurements.emplace(component_dimensions[index].id,std::move(measured[index]));
+        }
+        std::map<std::string,SitePresentationPlacement,std::less<>> dimension_frames;
+        if (session.site_frames) {
+            const std::vector<std::string> requested_frames(dimensions.begin(),dimensions.end());
+            dimension_frames=resolve_site_presentations(entities,requested_frames);
+            for (const auto& [id,measurement]:component_measurements) {
+                const auto& geometry=*measurement.assembly_geometry;
+                if (geometry.target.component.document_entity_id) continue;
+                auto& placement=dimension_frames.at(id);
+                if (geometry.placement_host_id)
+                    if (const auto context=organization.drawing_context(*geometry.placement_host_id))
+                        placement.drawing_context=*context;
+                // Embedded witness/text coordinates are already world-authored,
+                // just as in canonical Site presentation. A catalog's frame
+                // cannot transform those coordinates a second time.
+                placement.source_frame={};placement.forward={};placement.inverse={};
+            }
+        }
         for (const auto& id:dimensions) {
             const auto found=entities.find(id);
             if (found==entities.end()) throw std::invalid_argument("A copied dimension is missing from its prepared graph.");
@@ -35658,14 +35803,17 @@ public:
                 session.external_dimension_ids.insert(id);
             // Resolve before visibility decisions: unsupported/stale targets
             // are errors, never silently replaced with retained source ink.
-            auto projected=project_boundary_dimension(dimension,owner->second,entities,
-                session.authority->context.metric_units,false,ansi_boundary_dimensions(source,owner->second));
+            auto projected=dimension.kind==BoundaryDimensionKind::assembly_extent ?
+                project_boundary_dimension_resolution(dimension,owner->second,component_measurements.at(id),
+                    session.authority->context.metric_units,false,false) :
+                project_boundary_dimension(dimension,owner->second,entities,
+                    session.authority->context.metric_units,false,ansi_boundary_dimensions(source,owner->second));
             if ((dimension.presentation && !dimension.presentation->visible) || !semantic_visible(id) ||
                 !semantic_visible(owner->first) || hidden.contains(id) ||
                 (session.view && session.view->presentation.appearance && !session.view->presentation.appearance->visible) ||
                 (session.view && (session.view->restrict_to_objects || !session.view->object_ids.empty()) && !referenced.contains(id))) continue;
             if (session.site_frames) {
-                const auto placement=resolve_site_presentation(entities,id);
+                const auto& placement=dimension_frames.at(id);
                 projected.label=site_presented_canvas_label(projected.label,placement);
                 if (projected.line) *projected.line=site_presented_canvas_entity(*projected.line,placement);
             } else if (session.frame) {
@@ -58806,15 +58954,27 @@ private:
         const auto decoded=decode_boundary_dimension_entity(found->second);
         if (!decoded.supported() || decoded.dimension->kind!=BoundaryDimensionKind::assembly_extent ||
             decoded.dimension->assembly_target->component.document_entity_id) return placement;
-        const auto& target=decoded.dimension->assembly_target->component;
-        const auto model=AssemblyModel::from_json(source.entities().at(target.catalog_id).properties.at("model"));
-        const auto row=std::find_if(model.instances().begin(),model.instances().end(),[&](const auto& instance) {
-            return instance.id==target.instance_id;
-        });
-        if (row==model.instances().end()) throw std::invalid_argument("The component dimension's qualified root is unavailable.");
-        if (row->placement)
-            if (const auto context=organize_project(source).drawing_context(row->placement->host_entity_id))
+        const auto resolved=resolve_current_boundary_dimension(*decoded.dimension,source);
+        if (resolved.assembly_geometry->placement_host_id) {
+            struct SourceOrganization {
+                std::optional<DocumentSnapshot> source;
+                ProjectOrganization organization;
+            };
+            thread_local std::array<SourceOrganization,2> organizations;
+            thread_local std::size_t next=0;
+            auto found=std::find_if(organizations.begin(),organizations.end(),[&](const auto& entry) {
+                return entry.source && source.shares_authoring_source_with(*entry.source);
+            });
+            if (found==organizations.end()) {
+                auto& entry=organizations[next];
+                entry.organization=organize_project(source);
+                entry.source=source;
+                found=organizations.begin()+static_cast<std::ptrdiff_t>(next);
+                next=(next+1)%organizations.size();
+            }
+            if (const auto context=found->organization.drawing_context(*resolved.assembly_geometry->placement_host_id))
                 placement.drawing_context=*context;
+        }
         // Embedded poses already use world coordinates. Match the object's
         // canonical Site presentation rather than applying its catalog frame.
         placement.source_frame={};placement.forward={};placement.inverse={};

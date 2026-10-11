@@ -3263,6 +3263,10 @@
     },
     {
       "category": "source",
+      "path": "include/sketch/assembly_dimension_transform.hpp"
+    },
+    {
+      "category": "source",
       "path": "include/sketch/assembly_document_adapter.hpp"
     },
     {
@@ -4820,6 +4824,10 @@
     {
       "category": "source",
       "path": "src/core/assembly_dimension.cpp"
+    },
+    {
+      "category": "source",
+      "path": "src/core/assembly_dimension_transform.cpp"
     },
     {
       "category": "source",

@@ -6,6 +6,7 @@
 #include <cstdint>
 #include <map>
 #include <optional>
+#include <span>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -202,5 +203,14 @@ void validate_boundary_dimension_target(
 // current-value qualification and caller obligations as the overload above.
 [[nodiscard]] BoundaryDimensionResolution resolve_current_boundary_dimension(
     const BoundaryDimension& dimension, const DocumentSnapshot& snapshot);
+
+// Mutable-map preparation callers resolve all component annotations together.
+// 1..1000 assembly-extent dimensions, in input order. Complete actual-map
+// admission, geometry expansion, phase scope and unique host qualification
+// are shared once; new/retargeted proposals receive no snapshot/publication
+// authority. Other dimension kinds must use their existing owning resolver.
+[[nodiscard]] std::vector<BoundaryDimensionResolution> resolve_current_assembly_boundary_dimensions(
+    std::span<const BoundaryDimension> dimensions,
+    const std::map<std::string, Entity, std::less<>>& entities);
 
 }  // namespace sketch
