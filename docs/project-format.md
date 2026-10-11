@@ -1,4 +1,27 @@
-# Vertex project formats v1 through v225
+# Vertex project formats v1 through v226
+
+Reader226 retains ordinary selection2 exclusively for `kind:hosted_opening`.
+Its six exact fields are `version`, `kind`, `opening_ids`, `other`, `drawing`
+and literal `complete_opening_component_dimensions:true`. Original opening roots
+derive the actual hosted catalog rows; qualified v6 embedded extent dimensions
+resolve together against the complete original source before entering the known
+retirement closure. Same-tuple independent dimensions and their actual document
+owners remain exact. Required, inactive, baseline, foreign-registry and opaque
+references retain their protections. Dimension authority cannot imply component
+membership, additional physical-family removal, copying or phase demolition.
+
+Completed ordinary3 retains the existing seven-field original-source envelope,
+requires selection2 and explicit drawing rows, and pairs exclusively with
+command62. Historical command46/57 keep completed1/2 and reject selection2.
+The opening/other aggregate is a root/row/lifetime projection; nested actual
+component-only or hosted authority stays separately validated and encoded.
+Mixed removal16 pairs selection2 with the complete ordinary source command and
+retains stage/source digests, child dominance, identity and alias protections.
+Historical mixed3 requires selection1 and rejects command62; raw ordinary
+commands remain subject to exact original-source candidate comparison.
+Current, nested and undone proofs require reader226/extraction224. Other wall,
+phase, replacement and linked-view producers require separate completion.
+Compilation, runtime/history, migration and extraction remain unverified.
 
 Reader225 retains architectural/drawing removal5. Its seven exact fields are
 `version`, `architectural`, `drawing`, `allow_manufactured_opening_hosts`,

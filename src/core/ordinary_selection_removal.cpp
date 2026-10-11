@@ -166,7 +166,21 @@ ArchitecturalDrawingRemovalIntent authority(const OrdinarySelectionRemovalIntent
         const auto& opening=*intent.openings;canonical_ids(opening.opening_ids);
         if (!has_other(opening.other) && !opening.other.roof_additional_identities.empty())
             reject("roof destinations require other architectural selections");
-        result.architectural=opening.other;add_roots(result.architectural,opening.opening_ids);
+        result.architectural=opening.other;
+        if (opening.complete_component_dimensions) {
+            if (has_other(opening.other)) {
+                ArchitecturalDrawingRemovalIntent other;other.architectural=opening.other;
+                other.allow_manufactured_opening_hosts=true;
+                (void)encode_architectural_drawing_removal_intent(other);
+            } else if (opening.other.complete_component_dimensions || opening.other.complete_hosted_component_dimensions)
+                reject("other dimension authority requires actual other selections");
+            // This aggregate is only the explicit root/row/lifetime projection.
+            // Dimension authority remains in the separately validated original
+            // other leaf; added opening roots cannot promote or invalidate it.
+            result.architectural.complete_component_dimensions=false;
+            result.architectural.complete_hosted_component_dimensions=false;
+        }
+        add_roots(result.architectural,opening.opening_ids);
         result.allow_manufactured_opening_hosts=true;
     } else {
         const auto wall=wall_authority(intent.wall_geometry_proof,intent.wall_ids);
@@ -287,9 +301,11 @@ Json encode_ordinary_selection_removal_intent(const OrdinarySelectionRemovalInte
     if (intent.openings) {
         ArchitecturalDrawingRemovalIntent other;other.architectural=intent.openings->other;
         other.allow_manufactured_opening_hosts=true;
-        result={{"version",1},{"kind","hosted_opening"},{"opening_ids",intent.openings->opening_ids},
+        result={{"version",intent.openings->complete_component_dimensions ? 2 : 1},
+            {"kind","hosted_opening"},{"opening_ids",intent.openings->opening_ids},
             {"other",has_other(other.architectural) ? encode_architectural_drawing_removal_intent(other) : Json(nullptr)},
             {"drawing",drawing}};
+        if (intent.openings->complete_component_dimensions) result["complete_opening_component_dimensions"]=true;
     } else result={{"version",1},{"kind","wall_geometry"},{"wall_ids",intent.wall_ids},
         {"geometry_proof",intent.wall_geometry_proof},{"drawing",drawing}};
     bounded_wire(result);return result;
@@ -298,14 +314,22 @@ Json encode_ordinary_selection_removal_intent(const OrdinarySelectionRemovalInte
 OrdinarySelectionRemovalIntent decode_ordinary_selection_removal_intent(const Json& value) try {
     bounded_wire(value);
     if (!value.is_object() || !value.contains("version") || !value.at("version").is_number_integer() ||
-        value.at("version")!=1 || !value.contains("kind") || !value.at("kind").is_string())
+        (value.at("version")!=1 && value.at("version")!=2) ||
+        !value.contains("kind") || !value.at("kind").is_string())
         reject("unsupported intent version or kind");
+    const bool opening_dimensions=value.at("version")==2;
     OrdinarySelectionRemovalIntent result;
     if (value.at("kind")=="hosted_opening") {
-        fields(value,{"version","kind","opening_ids","other","drawing"});
+        if (opening_dimensions) {
+            fields(value,{"version","kind","opening_ids","other","drawing","complete_opening_component_dimensions"});
+            if (!value.at("complete_opening_component_dimensions").is_boolean() ||
+                value.at("complete_opening_component_dimensions")!=true)
+                reject("opening dimensions require a literal completion marker");
+        } else fields(value,{"version","kind","opening_ids","other","drawing"});
         if (!value.at("opening_ids").is_array() || value.at("opening_ids").size()>selection_limit)
             reject("invalid opening inventory");
         OpeningArchitecturalRemovalIntent opening;
+        opening.complete_component_dimensions=opening_dimensions;
         opening.opening_ids=value.at("opening_ids").get<std::vector<std::string>>();
         if (!value.at("other").is_null()) {
             const auto other=decode_architectural_drawing_removal_intent(value.at("other"));
@@ -315,6 +339,7 @@ OrdinarySelectionRemovalIntent decode_ordinary_selection_removal_intent(const Js
         }
         result.openings=std::move(opening);
     } else if (value.at("kind")=="wall_geometry") {
+        if (opening_dimensions) reject("version two requires hosted opening authority");
         fields(value,{"version","kind","wall_ids","geometry_proof","drawing"});
         if (!value.at("wall_ids").is_array() || value.at("wall_ids").size()>selection_limit)
             reject("invalid wall inventory");
@@ -345,10 +370,14 @@ DocumentSnapshot prepare_ordinary_selection_removal_stage(const DocumentSnapshot
     const bool active=source.uses_active_phase_constraints();
     Entities expected;
     const bool completed=wire.at("kind")=="apply_boundary_constraint_changes" &&
-        (wire.at("version")==46 || wire.at("version")==57);
+        (wire.at("version")==46 || wire.at("version")==57 || wire.at("version")==62);
     if (completed) {
         const auto& typed=std::get<ApplyBoundaryConstraintChanges>(canonical);
         const auto retained=validate_completed_ordinary_selection_removal_intent(typed.ordinary_selection_removal_intent);
+        const bool opening_dimensions=intent.openings && intent.openings->complete_component_dimensions;
+        if ((wire.at("version")==62)!=opening_dimensions ||
+            (wire.at("version")==62 && retained.at("version")!=3))
+            reject("completed command version differs from opening dimension authority");
         if (!typed.ordinary_selection_removal_completion ||
             retained.at("selection").dump()!=encode_ordinary_selection_removal_intent(intent).dump())
             reject("completed ordinary command differs from the exact helper selection");
@@ -361,7 +390,8 @@ DocumentSnapshot prepare_ordinary_selection_removal_stage(const DocumentSnapshot
         else if (has_other(intent.openings->other)) expected=replay_opening_architectural_removal(
             source.entities(),*intent.openings,active);
         else {
-            const auto opening=replay_hosted_opening_removal(source.entities(),intent.openings->opening_ids,active,true);
+            const auto opening=replay_hosted_opening_removal(source.entities(),intent.openings->opening_ids,active,
+                true, false, std::nullopt, intent.openings->complete_component_dimensions);
             if (!opening) reject("actual source does not admit the explicit opening selection");
             expected=*opening;
         }
@@ -431,9 +461,10 @@ DocumentSnapshot prepare_ordinary_selection_removal_stage(const DocumentSnapshot
 Json validate_completed_ordinary_selection_removal_intent(const Json& value) try {
     bounded_wire(value);
     if (!value.is_object() || !value.contains("version") || !value.at("version").is_number_integer() ||
-        (value.at("version")!=1 && value.at("version")!=2))
+        (value.at("version")!=1 && value.at("version")!=2 && value.at("version")!=3))
         reject("unsupported completed intent version");
     const bool memberships=value.at("version")==2;
+    const bool opening_dimensions=value.at("version")==3;
     if (memberships) {
         fields(value,{"version","selection","base_command","source_snapshot_digest","source_authoring_digest",
             "source_entities_digest","source_saved_revision","complete_wall_component_phase_memberships"});
@@ -443,6 +474,8 @@ Json validate_completed_ordinary_selection_removal_intent(const Json& value) try
     } else fields(value,{"version","selection","base_command","source_snapshot_digest","source_authoring_digest",
         "source_entities_digest","source_saved_revision"});
     const auto selection=decode_ordinary_selection_removal_intent(value.at("selection"));
+    if (opening_dimensions!=static_cast<bool>(selection.openings && selection.openings->complete_component_dimensions))
+        reject("completed version differs from explicit opening dimension authority");
     if (memberships) {
         if (selection.openings || !wall_authority(selection.wall_geometry_proof,selection.wall_ids).component_memberships)
             reject("completed wall component memberships require an exact new wall deletion proof");
@@ -516,7 +549,9 @@ ApplyBoundaryConstraintChanges prepare_completed_ordinary_selection_removal(cons
     (void)authority(intent);
     admit_component_membership_source(source.entities(),intent);
     const bool memberships=!intent.openings && wall_authority(intent.wall_geometry_proof,intent.wall_ids).component_memberships;
-    Json value={{"version",memberships ? 2 : 1},{"selection",encode_ordinary_selection_removal_intent(intent)},
+    const bool opening_dimensions=intent.openings && intent.openings->complete_component_dimensions;
+    Json value={{"version",opening_dimensions ? 3 : memberships ? 2 : 1},
+        {"selection",encode_ordinary_selection_removal_intent(intent)},
         {"base_command",command_to_json(base_command)},{"source_snapshot_digest",document_snapshot_digest(source)},
         {"source_authoring_digest",document_authoring_source_digest_v2(source)},
         {"source_entities_digest",entity_map_digest(source.entities())},

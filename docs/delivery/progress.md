@@ -14,6 +14,42 @@ changed source does not acquire runtime acceptance without later qualification.
 
 ## Current delivery state
 
+### October 11 qualified opening component dimension retirement
+
+The physical-host deletion batch is committed and pushed as ec1b9f3e, with the
+exact remote branch ref matching local HEAD. Current source work extends the
+dedicated semantic door/window removal producer with separate dimension authority.
+Actual removed opening hosts derive their qualified catalog rows; supported v6
+embedded extent targets resolve together in one bounded original-source batch.
+Their dimensions join the existing constraint, phase and presentation retirement
+closure. Same-tuple independent dimensions and actual owners remain exact;
+validated target masking leaves opaque sibling fields/extensions subject to the
+existing refusal policy. Required/inactive/shared-baseline/foreign-registry
+protection and ordinary dimension policy remain in force.
+
+Current standalone and opening/architectural Delete/Cut preparation opts in.
+Ordinary selection2 records literal complete_opening_component_dimensions with
+the original actual roots, nested other authority and drawing roster. Completed
+ordinary3 under command62 pairs with that selection and explicit drawing rows;
+historical command46/57 retain completed1/2. Mixed removal16 binds selection2
+and reconstructs the complete original ordinary stage before roof-child removal.
+The aggregate selection projection carries no new dimension permissions; actual
+nested component-only/hosted leaves retain their own closed authority.
+Reader226/extraction224 retain current, nested and undone proofs.
+
+Independent integrated source review found a Site admission branch that sent
+mixed16 to the old architectural/drawing decoder. The source now dispatches
+mixed3/16 through their ordinary selection authority. The reviewer proved no
+other P1/P2 in the batch; root source inspection confirms the narrow correction
+and scoped whitespace review passes. Git records its source backup identity.
+Wall-host
+deletion, mixed wall/opening cohorts, coordinated phase demolition, protected
+replacement copies, unresolved component profile/path edits and linked-view
+dimensions remain required implementation work. The complete production plan
+remains active. No builds/tests/jobs, launches, packages or installations ran;
+runtime/history/storage behavior is unverified, the installed candidate is
+unchanged, and all ten production gates remain open.
+
 ### October 11 physical-host component dimension retirement
 
 The retained roof edit/mixed Paste batch is committed and pushed as 5975edda;

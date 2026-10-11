@@ -25,6 +25,10 @@ namespace sketch {
 // This replay-only option grants no raw command or baseline demolition authority.
 // An optional required choice needs membership completion and authenticates the
 // full retired hosted-row closure as proposed in that actual saved choice.
+// Dimension completion additionally retires only supported v6 embedded extents
+// on those actual rows, after one complete-source measurement batch. Same-tuple
+// independent dimensions and their actual owners remain exact. This grants no
+// host, row, phase membership, dimension-copy or baseline demolition authority.
 [[nodiscard]] std::optional<std::map<std::string, Entity, std::less<>>>
 replay_hosted_opening_removal(
     const std::map<std::string, Entity, std::less<>>& actual,
@@ -32,7 +36,8 @@ replay_hosted_opening_removal(
     bool active_phase_constraints,
     bool complete_hosted_catalog_consequences = false,
     bool complete_component_phase_memberships = false,
-    const std::optional<std::pair<std::string, std::string>>& required_component_phase_choice = std::nullopt);
+    const std::optional<std::pair<std::string, std::string>>& required_component_phase_choice = std::nullopt,
+    bool complete_component_dimensions = false);
 
 // Pure, bounded physical retirement of actual semantic opening entities from
 // the full captured source. Empty/non-opening selections return nullopt; a
@@ -46,6 +51,7 @@ replay_hosted_opening_removal(
 [[nodiscard]] std::optional<ApplyEntityChanges> prepare_hosted_opening_removal(
     const DocumentSnapshot& source,
     const std::vector<std::string>& selected_opening_ids,
-    const std::string& message);
+    const std::string& message,
+    bool complete_component_dimensions = false);
 
 } // namespace sketch

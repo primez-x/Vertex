@@ -39,6 +39,12 @@ void intent_bound(const OpeningArchitecturalRemovalIntent& intent) {
         intent.other.components.size() > root_limit - intent.opening_ids.size() - intent.other.object_ids.size() ||
         (intent.other.object_ids.empty() && intent.other.components.empty()))
         reject("requires openings and other actual selections within 1000 aggregate roots");
+    if (intent.complete_component_dimensions && intent.other.complete_component_dimensions &&
+        (!intent.other.object_ids.empty() || intent.other.components.empty()))
+        reject("component dimensions require an explicit component-only other lane");
+    if (intent.complete_component_dimensions && intent.other.complete_hosted_component_dimensions &&
+        (intent.other.complete_component_dimensions || intent.other.object_ids.empty()))
+        reject("hosted dimensions require actual other owners without component-only authority");
     canonical(intent.opening_ids); canonical(intent.other.object_ids); canonical(intent.other.components);
     for (const auto& id : intent.opening_ids) identity(id);
     for (const auto& id : intent.other.object_ids) identity(id);
@@ -103,14 +109,21 @@ Entities replay_opening_architectural_removal(const Entities& actual,
         const auto original_aliases = embedded_assembly_presentation_ids(actual);
         for (const auto& key : intent.other.components)
             if (!original_aliases.contains(key)) reject("qualified component is absent from actual source");
-        auto opening = replay_hosted_opening_removal(actual, intent.opening_ids, active_phase_constraints);
+        auto opening = replay_hosted_opening_removal(actual, intent.opening_ids, active_phase_constraints,
+            false, false, std::nullopt, intent.complete_component_dimensions);
         if (!opening) reject("opening producer did not admit the selection");
         const auto opening_aliases = embedded_assembly_presentation_ids(*opening);
         auto other = intent.other;
         std::erase_if(other.components, [&](const auto& key) { return !opening_aliases.contains(key); });
         std::vector<Entities> candidates; candidates.push_back(std::move(*opening));
+        // Only the new opening lane supplies these complete catalog consequences
+        // for the same admitted physical families, independently of memberships.
+        // Historical opening compositions retain their original catalog policy.
+        const bool complete_hosted_catalog = intent.complete_component_dimensions &&
+            other.complete_hosted_component_dimensions;
         if (!other.object_ids.empty() || !other.components.empty())
-            candidates.push_back(replay_architectural_selection_removal(actual, other,true));
+            candidates.push_back(replay_architectural_selection_removal(actual, other, true,
+                complete_hosted_catalog, complete_hosted_catalog, complete_hosted_catalog));
         auto expected_aliases = original_aliases;
         auto expected_inactive = constraint_phase_scope(actual).inactive_owner_ids;
         for (const auto& candidate : candidates) {

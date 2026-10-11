@@ -1,5 +1,14 @@
 # Portable project extraction
 
+Exchange version224 requires native reader226 for ordinary hosted-opening
+selection2, completed ordinary3 under command62 and mixed removal16. Actual
+qualified component targets enter the original-source dimension retirement
+closure; independent dimensions and owners remain exact. Historical selection1,
+command46/57 and mixed3 retain their original authority. Explicit nested other
+leaves, drawing rows, source/stage proofs and current/nested/undone history retain
+the reader requirement. Separate wall/phase/replacement and linked-view producers
+remain required. No extraction or migration execution is claimed.
+
 Exchange version223 requires native reader225 for architectural/drawing removal5
 and mixed removal15 under command45. The explicit hosted-dimension flag derives
 retirement from actual physically removed hosts and their qualified embedded rows,

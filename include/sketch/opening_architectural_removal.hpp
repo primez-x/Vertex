@@ -7,6 +7,9 @@ namespace sketch {
 struct OpeningArchitecturalRemovalIntent {
     std::vector<std::string> opening_ids;
     ArchitecturalSelectionRemovalIntent other;
+    // Separate qualified hosted-extent retirement authority. Historical/default
+    // opening intents retain their original dimension consequences.
+    bool complete_component_dimensions = false;
 };
 
 // Closed complete-actual-map composition. Both lanes are required, and each

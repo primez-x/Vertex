@@ -13,6 +13,9 @@ namespace sketch {
 // its independently admitted ordinary and skylight stages remain unchanged.
 // Mixed removal15 exclusively pairs architectural/drawing removal5 with actual
 // selected owners and complete hosted component dimension retirement.
+// Mixed removal16 exclusively pairs ordinary selection removal2 with complete
+// hosted-opening component dimensions. Historical mixed3 requires selection1;
+// both retain independent ordinary and typed roof-child replay authority.
 
 // Dialect five retains independently reconstructed coordinated corner owners,
 // their physical/phase consequences, and explicit ordinary/drawing selections.

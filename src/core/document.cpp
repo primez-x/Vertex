@@ -3345,7 +3345,7 @@ static std::vector<nlohmann::json> phase_constraint_authoring_proofs(const Apply
         }
         // Removal envelopes own full snapshot-bound replay. Forty-five's child
         // is staged; completed ordinary/phase removal owns its own source fence.
-        else if (version==45 || version==46 || version==47 || version==57) return;
+        else if (version==45 || version==46 || version==47 || version==57 || version==62) return;
         // The new independent removal is one validated outer enclosure;
         // preserve the historical child walk's existing depth allowance.
         else if (version==41 || version==42) self(self,proof.at("proof"),depth);
@@ -3380,7 +3380,7 @@ static std::vector<nlohmann::json> mixed_clipboard_placement_proofs(const ApplyB
         if (proof.at("kind")!="apply_boundary_constraint_changes") return;
         const auto version=proof.at("version").get<int>();
         if (version==51 || version==58 || version==61) result.push_back(proof.at("clipboard_placement_intent"));
-        else if (version==45 || version==46 || version==47 || version==57) return;
+        else if (version==45 || version==46 || version==47 || version==57 || version==62) return;
         else if (version==41 || version==42) self(self,proof.at("proof"),depth);
         else if (version==19 || version==22) self(self,proof.at("proof"),depth+1);
         else if (proof.contains("room_review_geometry_proof"))
@@ -3861,7 +3861,7 @@ static PhaseConstraintLifetimeProofs phase_constraint_lifetime_proofs(const Appl
                 result.ordinary_roof_destinations.insert(ids.begin(),ids.end());
             }
         }
-        else if (version==46 || version==57) {
+        else if (version==46 || version==57 || version==62) {
             const auto intent=validate_completed_ordinary_selection_removal_intent(proof.at("ordinary_selection_removal_intent"));
             const auto ordinary=ordinary_selection_removal_authority(
                 decode_ordinary_selection_removal_intent(intent.at("selection")));
@@ -3896,10 +3896,11 @@ static PhaseConstraintLifetimeProofs phase_constraint_lifetime_proofs(const Appl
                 if (ordinary.at("version")!=34 || !phase || !phase->phase_constraint_authoring_completion)
                     throw std::invalid_argument("Retained mixed removal ordinary command lacks pure phase authoring authority");
                 result.phase_proofs.push_back(phase->phase_constraint_authoring_intent);
-            } else if (intent.at("version")==3) {
+            } else if (intent.at("version")==3 || intent.at("version")==16) {
                 // The completed ordinary envelope reserves its own original-stage
                 // identities without supplying outer source or phase authority.
-                if (intent.at("ordinary_command").at("version")==46 || intent.at("ordinary_command").at("version")==57)
+                if (intent.at("ordinary_command").at("version")==46 || intent.at("ordinary_command").at("version")==57 ||
+                    intent.at("ordinary_command").at("version")==62)
                     self(self,intent.at("ordinary_command"),depth);
                 const auto ordinary=ordinary_selection_removal_authority(
                     decode_ordinary_selection_removal_intent(intent.at("ordinary")));
@@ -8945,7 +8946,8 @@ nlohmann::json command_to_json(const Command& command) {
                     validate_ordinary_selection_removal_mode(typed);
                     if (typed.message.size()>1024 || !is_valid_utf8_without_nul(typed.message))
                         throw std::invalid_argument("Ordinary selection removal message is invalid");
-                    auto encoded=nlohmann::json{{"version",typed.ordinary_selection_removal_intent.at("version")==2 ? 57 : 46},{"kind","apply_boundary_constraint_changes"},
+                    auto encoded=nlohmann::json{{"version",typed.ordinary_selection_removal_intent.at("version")==3 ? 62 :
+                        typed.ordinary_selection_removal_intent.at("version")==2 ? 57 : 46},{"kind","apply_boundary_constraint_changes"},
                         {"expected_revision",typed.expected_revision},{"message",typed.message},
                         {"ordinary_selection_removal_completion",true},
                         {"ordinary_selection_removal_intent",typed.ordinary_selection_removal_intent}};
@@ -9443,7 +9445,7 @@ Command command_from_json(const nlohmann::json& value,
     try {
         if (!value.is_object() || !value.contains("version") || !value.contains("kind") ||
             !value.at("version").is_number_integer() ||
-            (value.at("version")<1 || value.at("version")>61) ||
+            (value.at("version")<1 || value.at("version")>62) ||
             !value.at("kind").is_string()) {
             document_error(DocumentErrorCode::invalid_entity, "serialized command envelope is invalid");
         }
@@ -9657,7 +9659,7 @@ Command command_from_json(const nlohmann::json& value,
                     throw std::invalid_argument("Phase selection removal requires its canonical closed envelope");
                 return result;
             }
-            if (value.at("version")==46 || value.at("version")==57) {
+            if (value.at("version")==46 || value.at("version")==57 || value.at("version")==62) {
                 command_exact_fields(value,{"version","kind","expected_revision","message",
                     "ordinary_selection_removal_completion","ordinary_selection_removal_intent"},
                     DocumentErrorCode::invalid_entity,"serialized ordinary selection removal");

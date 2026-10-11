@@ -916,7 +916,8 @@ DrawingSelectionRemovalEntities replay_drawing_selection_removal_with_openings(
             if (!openings.other.object_ids.empty() || !openings.other.components.empty())
                 return replay_opening_architectural_removal(actual,openings,active_phase_constraints);
             if (!openings.other.roof_additional_identities.empty()) reject("opening-only removal cannot allocate architectural destinations");
-            const auto candidate=replay_hosted_opening_removal(actual,openings.opening_ids,active_phase_constraints,true);
+            const auto candidate=replay_hosted_opening_removal(actual,openings.opening_ids,active_phase_constraints,
+                true,false,std::nullopt,openings.complete_component_dimensions);
             if (!candidate) reject("opening removal requires actual selected semantic openings");
             return *candidate;
         }();

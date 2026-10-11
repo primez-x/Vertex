@@ -34209,7 +34209,11 @@ public:
             }
         }
         validate_mixed_wall_removal_source_admission(source.entities(),true);
-        intent.other=captureArchitecturalSelectionRemoval(source,std::move(other_ids),std::move(components));
+        const bool complete_other_host_dimensions=!other_ids.empty();
+        intent.complete_component_dimensions=true;
+        intent.other=captureArchitecturalSelectionRemoval(source,std::move(other_ids),std::move(components),
+            complete_other_host_dimensions,false,std::nullopt,complete_other_host_dimensions);
+        intent.other.complete_component_dimensions=intent.other.object_ids.empty() && !intent.other.components.empty();
         validate_physical_wall_join_removal_identity_lifetime(source,intent.other.roof_additional_identities);
         QString clipboard_text;
         QClipboard* clipboard=nullptr;
@@ -34224,7 +34228,8 @@ public:
         if (!intent.other.object_ids.empty() || !intent.other.components.empty())
             command=prepare_opening_architectural_removal(source,intent,message);
         else {
-            const auto prepared=prepare_hosted_opening_removal(source,intent.opening_ids,message);
+            const auto prepared=prepare_hosted_opening_removal(source,intent.opening_ids,message,
+                intent.complete_component_dimensions);
             if (!prepared) throw std::invalid_argument("The selected openings have no actual removal source.");
             command=*prepared;
         }
@@ -34704,7 +34709,7 @@ public:
         if (!command) {
             if (const auto demolition=phase_opening_demolition_command(source,opening_ids))
                 command=Command{*demolition};
-            else if (const auto removal=prepare_hosted_opening_removal(source,opening_ids,message)) {
+            else if (const auto removal=prepare_hosted_opening_removal(source,opening_ids,message,true)) {
                 command=Command{*removal};
                 details.hosted_opening_ids=opening_ids;
                 std::sort(details.hosted_opening_ids.begin(),details.hosted_opening_ids.end());
@@ -37142,6 +37147,7 @@ public:
                 else {
                     ordinary->openings.emplace();
                     ordinary->openings->opening_ids=prepared->hosted_opening_ids;
+                    ordinary->openings->complete_component_dimensions=true;
                 }
             } else if (prepared->wall_intent || prepared->wall_opening_intent) {
                 ordinary.emplace();
@@ -59864,7 +59870,7 @@ private:
                             targets.insert(key.first);targets.insert(aliases.at(key));
                         }
                     } else {
-                        const auto ordinary=intent.at("version")==3
+                        const auto ordinary=(intent.at("version")==3 || intent.at("version")==16)
                             ? ordinary_selection_removal_authority(decode_ordinary_selection_removal_intent(intent.at("ordinary")))
                             : intent.at("version")==4
                             ? phase_selection_removal_authority(decode_phase_selection_removal_intent(intent.at("ordinary")))
