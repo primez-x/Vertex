@@ -14,10 +14,11 @@ changed source does not acquire runtime acceptance without later qualification.
 
 ## Current delivery state
 
-### October 10 typed Properties preparation - source implementation in progress
+### October 10 typed Properties preparation - source integration
 
 Mixed uniform resizing is committed and pushed as 860ff8a8; exact local and
-remote branch references matched. The next batch replaces the skylight group
+remote branch references matched. The skylight batch, committed and pushed as
+adfd4766 with matching exact remote references, replaces the skylight group
 Properties form's inline geometry/property loop with a shared original-source
 producer. It accepts typed entered quantities and actual selected child IDs,
 retains each reference centre and unchanged receipts, and admits the complete
@@ -29,12 +30,17 @@ quantity/default-unit inputs and unchanged complete-selection/source fence.
 Scoped source whitespace checking is complete; this skylight-only route uses
 the existing roof command/history dialects.
 
-An ordinary selected wall/slab/opening/roof scalar-profile preparation is being
-implemented separately with strict typed inputs and complete source bindings.
-It will expose a read-only proposal, not a publication command or permission to
-skip room review. Root is integrating its existing core-library source target.
-Same-host wall/opening edits are being fused before final physical admission so
-valid coordinated changes are not refused by an invalid intermediate host.
+An ordinary selected wall/slab/opening/roof scalar-profile preparation now has
+strict canonical typed inputs, exact selection coverage and complete source/save
+bindings. Its copied proposal is read-only and has no publication admission.
+The existing core-library target and snapshot friendship are integrated.
+Same-host wall/opening fields derive from their original owners and compose
+before final physical admission, allowing valid coordinated changes that have
+an invalid intermediate host. Exterior measurement consequences derive from
+the original source and complete final map. Retained rooms, inactive owners and
+protected baselines remain exact. Independent source review approves this
+bounded preparation; root reviewed the interfaces and source integration.
+Symbol/label/reference property preparation is being implemented separately.
 Complete mixed Properties still requires final semantic composition, mandatory
 room decisions, persisted command admission and the contextual UI. Other
 property families and active-baseline replacement remain required work.

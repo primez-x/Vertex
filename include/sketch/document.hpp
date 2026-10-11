@@ -622,6 +622,7 @@ private:
     // A sealed, source-derived drawing proposal is explicitly read-only and
     // has no admission certificate or room-decision publication authority.
     friend class MixedSelectionEditPreparation;
+    friend class SelectionPropertyEditPreparation;
     friend class test::DetachedDocumentSnapshotFixture;
     friend class ProjectStore;
     friend class ProjectStoreAccess;
