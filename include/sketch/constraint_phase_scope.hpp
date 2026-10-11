@@ -25,7 +25,9 @@ struct ConstraintPhaseScope {
     const PersistentConstraint& constraint,const ConstraintPhaseScope& scope);
 
 // Actual opening hosts inherit their actual wall's activity, even when the
-// opening itself is unregistered. Visibility and render aliases are not proof.
+// opening itself is unregistered. Corner cuts also inherit the real corner
+// owner's two cuts/walls; visited identities prevent the backlink cycle.
+// Visibility and render aliases are not proof.
 // Malformed/unresolved parents retain the caller's existing diagnostic path.
 [[nodiscard]] bool assembly_host_inactive_in_phase(
     const std::map<std::string, Entity, std::less<>>& entities,

@@ -212,7 +212,9 @@ struct EmbeddedAssemblyGroupTarget {
     std::string catalog_id;
     std::string instance_id;
     // A fresh identity in this catalog's embedded instance namespace. The
-    // source record remains unchanged when this is present.
+    // source record remains unchanged when this is present. Declared phase
+    // rows require a sealed companion-enrollment producer; the raw transform
+    // command refuses such additive copies instead of leaving them unlisted.
     std::optional<std::string> copy_instance_id;
     // Optional independently captured operator for this presentation's frame.
     // Absence retains the command's shared operator meaning.
@@ -226,6 +228,11 @@ struct EmbeddedAssemblyGroupTarget {
 // retains the source pose representation. Identity targets retain their exact
 // raw pose even when other selected roots change. Metadata-only instances
 // are refused.
+// Actual saved row membership governs source admission; a proposed row may
+// share a baseline carrier. Inactive rows and placement-host ancestry refuse.
+// Ordinary protected baseline mutation requires the dedicated replacement
+// route. Active source copies retain their source roles and all original rows;
+// undeclared local copies reserve their qualified identity through history.
 // Changed roots carry their associated v6 dimensions in the same command.
 // Local row copies require an exact original dimension ID to caller-reserved
 // fresh document ID mapping; missing, extraneous or colliding mappings refuse.
@@ -249,6 +256,11 @@ struct EmbeddedAssemblyGroupTarget {
 // preserving their actual nested paths, axes, metadata and moved text frames.
 // An exact original dimension ID to caller-reserved fresh document ID mapping
 // is mandatory when associated dimensions exist; no IDs are allocated here.
+// Actual declared row and host activity is required even though the source is
+// retained. Active baseline sources may be copied without baseline mutation;
+// inactive associated dimensions refuse. Fresh document/dimension identities
+// cannot reuse retained or undone history. No companion membership is inferred
+// for these independent destination owners.
 [[nodiscard]] ApplyEntityChanges embedded_assembly_group_copy_command(
     const DocumentSnapshot& source, std::span<const EmbeddedAssemblyGroupTarget> targets,
     const ArchitecturalGroupTransform& transform, Revision expected_revision,

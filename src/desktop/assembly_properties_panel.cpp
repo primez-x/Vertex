@@ -34,6 +34,7 @@ using Intent = AssemblyInstancePropertyEditIntent;
 using Operation = AssemblyInstancePropertyPatchOperation;
 using Path = std::vector<std::string>;
 constexpr std::size_t maximum_targets = 1000;
+constexpr std::size_t maximum_profiles = 4096;
 
 void require(bool condition, const std::string& message) {
     if (!condition) throw std::invalid_argument("Assembly Properties: " + message);
@@ -102,8 +103,19 @@ struct ValueRow {
 struct ProfileRow {
     AssemblyProfile draft;
     QLineEdit *elevation{}, *height{};
+    QComboBox* material_slot{};
     QLabel* summary{};
     QPushButton* edit{};
+};
+struct ProfileCollection {
+    std::size_t source_index{};
+    QWidget* widget{};
+    QTableWidget* table{};
+    QPushButton *add{}, *remove{};
+    std::vector<ProfileRow> profiles;
+    // Retain removed identities for the entire dialog lifetime, including IDs
+    // in the shared type hidden by an existing instance override.
+    std::set<std::string> reserved_ids;
 };
 struct Page {
     std::vector<Source> sources;
@@ -113,8 +125,9 @@ struct Page {
     std::array<QLineEdit*, 6> pose{};
     QComboBox* geometry_operation{};
     std::array<QLineEdit*, 3> dimensions{};
-    std::vector<ProfileRow> profiles;
-    QTableWidget* profile_table{};
+    QComboBox* profile_source{};
+    QStackedWidget* profile_stack{};
+    std::vector<std::unique_ptr<ProfileCollection>> profile_collections;
 };
 
 struct ProfileBounds {
@@ -122,7 +135,7 @@ struct ProfileBounds {
     double bottom{}, top{};
 };
 ProfileBounds profile_bounds(const std::vector<AssemblyProfile>& profiles) {
-    require(!profiles.empty(), "This node has no own profiles to measure or resize. Choose a part with geometry.");
+    require(!profiles.empty(), "This node has no own profiles to measure or resize. Add a profile or leave its dimensions blank.");
     ProfileBounds result;
     bool first = true;
     for (const auto& profile : profiles) {
@@ -436,23 +449,171 @@ public:
         return QString("%1 outline edges; %2 cutouts").arg(static_cast<qulonglong>(profile.outer.size()))
             .arg(static_cast<qulonglong>(profile.holes.size()));
     }
-    std::vector<AssemblyProfile> profile_draft(const Page& page) const {
-        require(page.sources.size() == 1, "Detailed profile edits require one selected node.");
+    std::vector<AssemblyProfile> profile_draft(const ProfileCollection& collection) const {
         std::vector<AssemblyProfile> result;
-        result.reserve(page.profiles.size());
-        for (const auto& row : page.profiles) {
+        result.reserve(collection.profiles.size());
+        for (const auto& row : collection.profiles) {
             auto profile = row.draft;
             try {
                 if (supplied(row.elevation)) profile.elevation_m = parse_quantity(row.elevation->text().toStdString(), length_unit).metres;
                 if (supplied(row.height)) profile.height_m = parse_quantity(row.height->text().toStdString(), length_unit).metres;
                 require(std::isfinite(profile.elevation_m) && std::isfinite(profile.height_m) && profile.height_m > 0,
                     "Elevation must be finite and extrusion height must be finite and positive.");
+                if (row.material_slot->currentIndex() > 0) {
+                    const auto slot = row.material_slot->currentData().toString().toStdString();
+                    profile.material_slot = slot.empty() ? std::nullopt : std::optional<std::string>{slot};
+                }
             } catch (const std::exception& failure) {
                 throw std::invalid_argument("Profile " + profile.id + ": " + failure.what());
             }
             result.push_back(std::move(profile));
         }
         return result;
+    }
+    void append_profile(ProfileCollection& collection, const Source& selected, AssemblyProfile profile) {
+        require(collection.profiles.size() < maximum_profiles, "This node already has 4096 own profiles.");
+        auto* table = collection.table;
+        const auto row_index = table->rowCount();
+        table->insertRow(row_index);
+        ProfileRow row;
+        row.draft = std::move(profile);
+        const auto& draft = row.draft;
+        auto* id = new QTableWidgetItem(q(draft.id));
+        id->setToolTip("Stable local profile identity: " + q(draft.id));
+        table->setItem(row_index, 0, id);
+        row.summary = new QLabel(profile_summary(draft), table);
+        table->setCellWidget(row_index, 1, row.summary);
+        row.elevation = field(table, "assemblyProfileElevation" + q(draft.id), length(draft.elevation_m));
+        row.height = field(table, "assemblyProfileHeight" + q(draft.id), length(draft.height_m));
+        row.elevation->setAccessibleName("Profile " + q(draft.id) + " local elevation");
+        row.height->setAccessibleName("Profile " + q(draft.id) + " local extrusion height");
+        const auto units = length_unit == Unit::metre ? QString("Bare numbers use metres.") : QString("Bare numbers use feet.");
+        row.elevation->setToolTip("Current local elevation: " + length(draft.elevation_m) + "\nBlank retains it. " + units);
+        row.height->setToolTip("Current local height: " + length(draft.height_m) + "\nEnter a positive length; blank retains it. " + units);
+        table->setCellWidget(row_index, 2, row.elevation);
+        table->setCellWidget(row_index, 3, row.height);
+        row.material_slot = new QComboBox(table);
+        row.material_slot->setObjectName("assemblyProfileMaterialSlot" + q(draft.id));
+        row.material_slot->setAccessibleName("Profile " + q(draft.id) + " material slot");
+        row.material_slot->addItem(draft.material_slot ? "Keep (" + q(*draft.material_slot) + ")" : "Keep (no material slot)");
+        row.material_slot->addItem("No material slot", QString{});
+        for (const auto& [slot, unused] : selected.type->materials) {
+            (void)unused;
+            row.material_slot->addItem(q(slot), q(slot));
+            const auto material = std::find_if(selected.model->materials().begin(), selected.model->materials().end(),
+                [&](const auto& value) { return value.id == selected.node->materials.at(slot); });
+            require(material != selected.model->materials().end(), "A profile material slot has no actual resolved material.");
+            row.material_slot->setItemData(row.material_slot->count() - 1,
+                "Current material: " + q(material->name), Qt::ToolTipRole);
+        }
+        row.material_slot->setToolTip("Choose one of this component type's declared slots. Materials are resolved through "
+            "this node's overrides; use the Materials tab to change their material. Keep retains this profile's slot.");
+        table->setCellWidget(row_index, 4, row.material_slot);
+        row.edit = new QPushButton("Edit outline and cutouts…", table);
+        row.edit->setObjectName("assemblyProfileEdit" + q(draft.id));
+        row.edit->setAccessibleName("Edit profile " + q(draft.id) + " outline and cutouts");
+        table->setCellWidget(row_index, 5, row.edit);
+        const auto profile_id = draft.id;
+        collection.reserved_ids.insert(profile_id);
+        collection.profiles.push_back(std::move(row));
+        QObject::connect(collection.profiles.back().edit, &QPushButton::clicked, owner,
+            [this, collection_ptr = &collection, profile_id] {
+                try {
+                    const auto found = std::find_if(collection_ptr->profiles.begin(), collection_ptr->profiles.end(),
+                        [&](const auto& value) { return value.draft.id == profile_id; });
+                    require(found != collection_ptr->profiles.end(), "The selected profile is no longer in this draft.");
+                    // Boundary editing is independent of incomplete extrusion
+                    // text and pending material choices. Retain both controls.
+                    if (auto accepted = edit_assembly_profile_geometry(owner, found->draft, length_unit == Unit::metre)) {
+                        require(accepted->id == found->draft.id && accepted->material_slot == found->draft.material_slot,
+                            "The outline editor changed a retained profile identity or material slot.");
+                        found->draft.outer = std::move(accepted->outer);
+                        found->draft.holes = std::move(accepted->holes);
+                        found->summary->setText(profile_summary(found->draft));
+                        error->clear(); error->hide();
+                    }
+                } catch (const std::exception& failure) { error->setText(q(failure.what())); error->show(); }
+            });
+        table->resizeRowToContents(row_index);
+        collection.add->setEnabled(collection.profiles.size() < maximum_profiles);
+    }
+    void show_profile_collection(Page& page, std::size_t index) {
+        require(index < page.sources.size(), "Choose an actual selected component.");
+        if (!page.profile_collections[index]) {
+            auto collection = std::make_unique<ProfileCollection>();
+            collection->source_index = index;
+            const auto& selected = page.sources[index];
+            collection->widget = new QWidget(page.profile_stack);
+            auto* layout = new QVBoxLayout(collection->widget);
+            layout->setContentsMargins(0, 0, 0, 0);
+            collection->table = new QTableWidget(collection->widget);
+            auto* table = collection->table;
+            table->setObjectName("assemblyGeometryProfiles");
+            table->setAccessibleName("This component's own geometry profiles");
+            table->setColumnCount(6);
+            table->setHorizontalHeaderLabels({"Profile ID", "Outline / cutouts", "Local elevation", "Local height", "Material slot", "Geometry"});
+            table->setSelectionBehavior(QAbstractItemView::SelectRows);
+            table->setSelectionMode(QAbstractItemView::SingleSelection);
+            table->setEditTriggers(QAbstractItemView::NoEditTriggers);
+            table->horizontalHeader()->setSectionResizeMode(QHeaderView::ResizeToContents);
+            table->horizontalHeader()->setSectionResizeMode(1, QHeaderView::Stretch);
+            table->verticalHeader()->hide();
+            layout->addWidget(table);
+            auto* actions = new QHBoxLayout;
+            collection->add = new QPushButton("Add profile…", collection->widget);
+            collection->add->setObjectName("assemblyProfileAdd");
+            collection->add->setAccessibleName("Add an own profile to this component");
+            collection->add->setToolTip("Create a new local profile with a fresh ID using the complete outline and cutout editor. "
+                "Its initial local elevation is zero and extrusion height is one metre; edit them in the new row.");
+            collection->remove = new QPushButton("Remove selected profile", collection->widget);
+            collection->remove->setObjectName("assemblyProfileRemove");
+            collection->remove->setAccessibleName("Remove this component's selected own profile");
+            collection->remove->setToolTip("Remove only this profile from the local draft. Normal Properties preview and review "
+                "recalculate extent dimensions; no dimensions are discarded. Removing the last solid is refused.");
+            collection->remove->setEnabled(false);
+            actions->addWidget(collection->add); actions->addWidget(collection->remove); actions->addStretch();
+            layout->addLayout(actions);
+            for (const auto& profile : selected.type->profiles) collection->reserved_ids.insert(profile.id);
+            collection->profiles.reserve(selected.profiles->size());
+            for (const auto& profile : *selected.profiles) append_profile(*collection, selected, profile);
+            auto* collection_ptr = collection.get();
+            QObject::connect(table, &QTableWidget::itemSelectionChanged, owner, [collection_ptr] {
+                collection_ptr->remove->setEnabled(collection_ptr->table->currentRow() >= 0 &&
+                    !collection_ptr->table->selectedItems().empty());
+            });
+            QObject::connect(collection->add, &QPushButton::clicked, owner, [this, page_ptr = &page, collection_ptr] {
+                try {
+                    require(collection_ptr->profiles.size() < maximum_profiles, "This node already has 4096 own profiles.");
+                    AssemblyProfile draft;
+                    do { draft.id = make_stable_id(); } while (collection_ptr->reserved_ids.contains(draft.id));
+                    collection_ptr->reserved_ids.insert(draft.id);
+                    draft.height_m = 1;
+                    if (auto accepted = edit_assembly_profile_geometry(owner, draft, length_unit == Unit::metre)) {
+                        require(accepted->id == draft.id && accepted->material_slot == draft.material_slot,
+                            "The outline editor changed the new profile identity or material slot.");
+                        append_profile(*collection_ptr, page_ptr->sources[collection_ptr->source_index], std::move(*accepted));
+                        collection_ptr->table->setCurrentCell(collection_ptr->table->rowCount() - 1, 0);
+                        error->clear(); error->hide();
+                    }
+                } catch (const std::exception& failure) { error->setText(q(failure.what())); error->show(); }
+            });
+            QObject::connect(collection->remove, &QPushButton::clicked, owner, [this, collection_ptr] {
+                try {
+                    const auto row = collection_ptr->table->currentRow();
+                    require(row >= 0 && static_cast<std::size_t>(row) < collection_ptr->profiles.size() &&
+                        !collection_ptr->table->selectedItems().empty(), "Select an own profile to remove.");
+                    collection_ptr->profiles.erase(collection_ptr->profiles.begin() + row);
+                    collection_ptr->table->removeRow(row);
+                    collection_ptr->add->setEnabled(collection_ptr->profiles.size() < maximum_profiles);
+                    collection_ptr->remove->setEnabled(collection_ptr->table->currentRow() >= 0 &&
+                        !collection_ptr->table->selectedItems().empty());
+                    error->clear(); error->hide();
+                } catch (const std::exception& failure) { error->setText(q(failure.what())); error->show(); }
+            });
+            page.profile_stack->addWidget(collection->widget);
+            page.profile_collections[index] = std::move(collection);
+        }
+        page.profile_stack->setCurrentWidget(page.profile_collections[index]->widget);
     }
     void build_geometry(Page& page, QTabWidget* tabs) {
         auto* form = tab(tabs, "Geometry");
@@ -491,78 +652,53 @@ public:
             page.dimensions[i] = input;
             form->addRow(labels[i], input);
         }
-        if (page.sources.size() == 1) {
-            auto* local_note = new QLabel("Individual profile elevations and extrusion heights use local coordinates, "
-                "before pose scaling. Edit outline and cutouts opens the vertex and circular-arc editor. "
-                "Profile IDs and material slots are retained.", tabs);
-            local_note->setWordWrap(true); form->addRow(local_note);
-            page.profile_table = new QTableWidget(tabs);
-            auto* table = page.profile_table;
-            table->setObjectName("assemblyGeometryProfiles");
-            table->setAccessibleName("This node's own geometry profiles");
-            table->setColumnCount(5);
-            table->setHorizontalHeaderLabels({"Profile", "Outline / cutouts", "Local elevation", "Local height", "Geometry"});
-            table->setSelectionBehavior(QAbstractItemView::SelectRows);
-            table->setEditTriggers(QAbstractItemView::NoEditTriggers);
-            table->horizontalHeader()->setSectionResizeMode(QHeaderView::ResizeToContents);
-            table->horizontalHeader()->setSectionResizeMode(1, QHeaderView::Stretch);
-            table->verticalHeader()->hide();
-            const auto& profiles = *page.sources.front().profiles;
-            table->setRowCount(static_cast<int>(profiles.size()));
-            page.profiles.reserve(profiles.size());
-            for (std::size_t index = 0; index < profiles.size(); ++index) {
-                const auto& profile = profiles[index];
-                const auto row_index = static_cast<int>(index);
-                ProfileRow row;
-                row.draft = profile;
-                auto* id = new QTableWidgetItem(q(profile.id));
-                id->setToolTip(profile.material_slot ? "Material slot: " + q(*profile.material_slot) : "No material slot");
-                table->setItem(row_index, 0, id);
-                row.summary = new QLabel(profile_summary(profile), table);
-                table->setCellWidget(row_index, 1, row.summary);
-                row.elevation = field(table, "assemblyProfileElevation" + q(profile.id), length(profile.elevation_m));
-                row.height = field(table, "assemblyProfileHeight" + q(profile.id), length(profile.height_m));
-                row.elevation->setAccessibleName("Profile " + q(profile.id) + " local elevation");
-                row.height->setAccessibleName("Profile " + q(profile.id) + " local extrusion height");
-                const auto units = length_unit == Unit::metre ? QString("Bare numbers use metres.") : QString("Bare numbers use feet.");
-                row.elevation->setToolTip("Current local elevation: " + length(profile.elevation_m) + "\nBlank retains it. " + units);
-                row.height->setToolTip("Current local height: " + length(profile.height_m) + "\nEnter a positive length; blank retains it. " + units);
-                table->setCellWidget(row_index, 2, row.elevation);
-                table->setCellWidget(row_index, 3, row.height);
-                row.edit = new QPushButton("Edit outline and cutouts…", table);
-                row.edit->setObjectName("assemblyProfileEdit" + q(profile.id));
-                row.edit->setAccessibleName("Edit profile " + q(profile.id) + " outline and cutouts");
-                table->setCellWidget(row_index, 4, row.edit);
-                page.profiles.push_back(std::move(row));
-                QObject::connect(page.profiles.back().edit, &QPushButton::clicked, owner, [this, page_ptr = &page, index] {
-                    try {
-                        auto& row = page_ptr->profiles.at(index);
-                        // The reusable editor owns only boundary changes. Extrusion
-                        // text remains independent so incomplete input is retained.
-                        if (auto accepted = edit_assembly_profile_geometry(owner, row.draft, length_unit == Unit::metre)) {
-                            require(accepted->id == row.draft.id && accepted->material_slot == row.draft.material_slot,
-                                "The outline editor changed a retained profile identity or material slot.");
-                            row.draft.outer = std::move(accepted->outer);
-                            row.draft.holes = std::move(accepted->holes);
-                            row.summary->setText(profile_summary(row.draft));
-                            error->clear(); error->hide();
-                        }
-                    } catch (const std::exception& failure) { error->setText(q(failure.what())); error->show(); }
-                });
+        auto* local_note = new QLabel("Own profiles belong to the chosen component; nested parts retain their own geometry. "
+            "Adding, removing or editing a profile changes only this component's local draft. "
+            "Local elevation and extrusion height are measured before pose scaling. "
+            "Edit outline and cutouts opens the vertex and circular-arc editor. "
+            "Keep and Use type geometry ignore these drafts; Set applies them together with the common dimensions above.", tabs);
+        local_note->setWordWrap(true); form->addRow(local_note);
+        page.profile_stack = new QStackedWidget(tabs);
+        page.profile_stack->setObjectName("assemblyGeometryProfileCollections");
+        page.profile_collections.resize(page.sources.size());
+        if (page.sources.size() > 1) {
+            page.profile_source = new QComboBox(tabs);
+            page.profile_source->setObjectName("assemblyGeometryProfileSource");
+            page.profile_source->setAccessibleName("Component whose own profiles are edited");
+            page.profile_source->setToolTip("Each selected component retains its own profile draft when you switch. "
+                "Common dimensions resize every source separately; detailed profiles are never copied to other selected components.");
+            for (std::size_t index = 0; index < page.sources.size(); ++index) {
+                const auto& selected = page.sources[index];
+                auto label = selected.type->name.empty() ? QString("Component") : q(selected.type->name);
+                if (selected.target.document_entity_id) {
+                    const auto& properties = source.entities().at(*selected.target.document_entity_id).properties;
+                    if (properties.is_object() && properties.contains("name") && properties.at("name").is_string()) {
+                        const auto name = q(properties.at("name").get<std::string>()).trimmed();
+                        if (!name.isEmpty()) label = name + (selected.target.part_path.empty() ? QString{} : " / " + label);
+                    }
+                }
+                page.profile_source->addItem(label + QString(" (%1)").arg(static_cast<qulonglong>(index + 1)));
+                page.profile_source->setItemData(static_cast<int>(index), q(selected.target.catalog_id) + " / " +
+                    q(selected.target.instance_id) + (selected.target.document_entity_id ?
+                        " / " + q(*selected.target.document_entity_id) : QString{}) +
+                    (selected.target.part_path.empty() ? " / root" : " / " + path_label(selected.target.part_path)), Qt::ToolTipRole);
             }
-            table->resizeRowsToContents();
-            table->setEnabled(false);
-            form->addRow(table);
-            if (profiles.empty()) form->addRow(new QLabel("This node has no own profiles. Choose a part with geometry.", tabs));
-        } else {
-            auto* bulk = new QLabel("Common dimensions apply separately to each selected node's actual geometry. "
-                "To edit individual outlines, cutouts or extrusion elevations, select one node.", tabs);
-            bulk->setWordWrap(true); form->addRow(bulk);
+            form->addRow("Own profiles of", page.profile_source);
+            QObject::connect(page.profile_source, &QComboBox::currentIndexChanged, owner, [this, page_ptr = &page](int index) {
+                if (index < 0) return;
+                try {
+                    show_profile_collection(*page_ptr, static_cast<std::size_t>(index));
+                    error->clear(); error->hide();
+                } catch (const std::exception& failure) { error->setText(q(failure.what())); error->show(); }
+            });
         }
+        show_profile_collection(page, 0);
+        page.profile_stack->setEnabled(false);
+        form->addRow(page.profile_stack);
         QObject::connect(page.geometry_operation, &QComboBox::currentIndexChanged, owner, [page_ptr = &page](int) {
             const bool enabled = operation(page_ptr->geometry_operation) == Operation::set;
             for (auto* input : page_ptr->dimensions) input->setEnabled(enabled);
-            if (page_ptr->profile_table) page_ptr->profile_table->setEnabled(enabled);
+            page_ptr->profile_stack->setEnabled(enabled);
         });
     }
     void build(Page& page) {
@@ -769,12 +905,9 @@ public:
             }
         }
         const auto geometry_operation = operation(page.geometry_operation);
-        std::optional<std::vector<AssemblyProfile>> detailed_profiles;
-        if (geometry_operation == Operation::set) {
-            if (page.sources.size() == 1) detailed_profiles = profile_draft(page);
-        }
         std::vector<Intent> result;
-        for (const auto& selected : page.sources) {
+        for (std::size_t index = 0; index < page.sources.size(); ++index) {
+            const auto& selected = page.sources[index];
             auto intent = shared;
             intent.target = selected.target;
             if (pose_operation == Operation::clear) intent.pose.operation = Operation::clear;
@@ -800,7 +933,8 @@ public:
             if (geometry_operation == Operation::set) {
                 // Dimensions are applied only after all pages' pose patches have
                 // been collected. Each cohort member keeps its actual profiles.
-                intent.profile_geometry.value = detailed_profiles ? *detailed_profiles : *selected.profiles;
+                intent.profile_geometry.value = page.profile_collections[index] ?
+                    profile_draft(*page.profile_collections[index]) : *selected.profiles;
             }
             result.push_back(std::move(intent));
         }

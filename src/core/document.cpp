@@ -3548,6 +3548,25 @@ static void validate_active_design_preserved_dependents(const std::map<std::stri
     bool retires_proposals=false) {
     const auto scope=constraint_phase_scope(source);
     std::set<std::string,std::less<>> inactive_targets=scope.inactive_owner_ids;
+    auto inactive_component_roots=scope.assembly_memberships.inactive_roots;
+    if (!scope.assembly_memberships.owners.empty()) {
+        // Row membership does not release actual host activity. Inspect each
+        // already-admitted raw row once, rather than decode per dimension.
+        for (const auto& [catalog_id,entity]:source) if (entity.type=="assembly_model")
+            for (const auto& row:entity.properties.at("model").at("instances")) {
+                const AssemblyPhaseRoot root{catalog_id,row.at("id").get<std::string>()};
+                if (!scope.assembly_memberships.owners.contains(root) ||
+                    !row.contains("placement") || !row.at("placement").is_object()) continue;
+                if (assembly_host_inactive_in_phase(source,scope.inactive_owner_ids,
+                        row.at("placement").at("host_entity_id").get<std::string>()))
+                    inactive_component_roots.insert(root);
+            }
+        const auto component_aliases=embedded_assembly_presentation_ids(source);
+        for (const auto& root:inactive_component_roots) {
+            const auto alias=component_aliases.find(root);
+            if (alias!=component_aliases.end()) inactive_targets.insert(alias->second);
+        }
+    }
     for (const auto& id : scope.inactive_owner_ids) {
         const auto& entity=source.at(id);
         if (can_recognize_boundary_entity_type(entity.type) &&
@@ -3572,7 +3591,18 @@ static void validate_active_design_preserved_dependents(const std::map<std::stri
             if (decoded.supported() && !constraint_participates(*decoded.constraint,scope)) require_exact(id,original);
         } else if (can_recognize_boundary_dimension_entity_type(original.type)) {
             const auto decoded=decode_boundary_dimension_entity(original);
-            if (decoded.supported() && inactive_targets.contains(decoded.dimension->boundary_id)) require_exact(id,original);
+            if (decoded.supported()) {
+                bool inactive=inactive_targets.contains(decoded.dimension->boundary_id);
+                if (decoded.dimension->assembly_target && !decoded.dimension->assembly_target->component.document_entity_id) {
+                    const auto& component=decoded.dimension->assembly_target->component;
+                    const AssemblyPhaseRoot root{component.catalog_id,component.instance_id};
+                    // Explicit row activity supersedes a shared carrier's role;
+                    // a different row in that carrier may remain active.
+                    if (scope.assembly_memberships.owners.contains(root))
+                        inactive=inactive_component_roots.contains(root);
+                }
+                if (inactive) require_exact(id,original);
+            }
         } else if (original.type=="opening") {
             std::string host,diagnostic;
             if (!read_document_wall_id(original,host,diagnostic)) throw std::invalid_argument(diagnostic);

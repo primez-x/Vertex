@@ -5,6 +5,7 @@
 #include "assembly_instance_property_carry.hpp"
 
 #include "sketch/assembly_geometry.hpp"
+#include "sketch/assembly_catalog_phase_edit.hpp"
 #include "sketch/assembly_dimension_transform.hpp"
 #include "sketch/building_entity.hpp"
 #include "sketch/constraint_integrity.hpp"
@@ -731,6 +732,8 @@ struct InspectedRoot {
     AssemblyInstance changed;
     AssemblyExpansion final_expansion;
 };
+struct PropertyEditSourceInspection;
+std::optional<std::string> replacement_registry(const PropertyEditSourceInspection&, const InspectedRoot&);
 // Shared actual-source inspection. It neither patches raw rows nor decides
 // whether a protected change may publish; replay retains that separate guard.
 struct PropertyEditSourceInspection {
@@ -858,7 +861,7 @@ Intent decode_assembly_instance_property_edit_intent(const Json& value) {
 }
 std::vector<AssemblyInstancePropertyEditImpact> inspect_assembly_instance_property_edits(
     const AssemblyDocumentEntities& original, std::span<const Intent> intents) {
-    PropertyEditSourceInspection source(original, intents);
+    PropertyEditSourceInspection source(original, intents, true);
     std::vector<AssemblyInstancePropertyEditImpact> result;
     result.reserve(source.grouped.size());
     for (const auto& [key, rows] : source.grouped) {
@@ -866,9 +869,21 @@ std::vector<AssemblyInstancePropertyEditImpact> inspect_assembly_instance_proper
         const auto root = source.inspect(rows);
         source.admit_final_geometry(root);
         const auto& owner_id = root.target.document_entity_id ? *root.target.document_entity_id : root.target.catalog_id;
-        result.push_back({root.target, root.changed != root.original, source.baselines.registries_for(owner_id),
-            root.original.placement ? source.baselines.registries_for(root.original.placement->host_entity_id) :
-                std::vector<std::string>{}});
+        const bool declared = !root.target.document_entity_id && source.scope.assembly_memberships.owners.contains(
+            {root.target.catalog_id, root.target.instance_id});
+        if (declared) {
+            const AssemblyPhaseRoot qualified{root.target.catalog_id,root.target.instance_id};
+            const auto& owner=source.scope.assembly_memberships.owners.at(qualified);
+            const auto membership=AssemblyPhaseMembership::from_json(original.at(owner.membership_entity_id).properties.at("model"));
+            const auto registry=ModelPhases::from_json(original.at(owner.registry_id).properties.at("model"));
+            const bool baseline=std::binary_search(membership.baseline_roots().begin(),membership.baseline_roots().end(),qualified);
+            result.push_back({root.target, root.changed != root.original,
+                baseline && registry.active_alternative() ? std::vector<std::string>{owner.registry_id} : std::vector<std::string>{},
+                baseline && root.original.placement ? source.baselines.registries_for(root.original.placement->host_entity_id) :
+                    std::vector<std::string>{}});
+        } else result.push_back({root.target, root.changed != root.original, source.baselines.registries_for(owner_id),
+                root.original.placement ? source.baselines.registries_for(root.original.placement->host_entity_id) :
+                    std::vector<std::string>{}});
     }
     return result;
 }
@@ -1433,7 +1448,7 @@ PhaseAssemblyInstancePropertyEditResult replay_phase_assembly_instance_property_
 
 AssemblyDocumentEntities replay_assembly_instance_property_entities(const AssemblyDocumentEntities& original,
     std::span<const Intent> intents) {
-    PropertyEditSourceInspection source(original, intents);
+    PropertyEditSourceInspection source(original, intents, true);
     const auto& scope = source.scope;
     const auto& baselines = source.baselines.owner_ids;
     const auto& grouped = source.grouped;
@@ -1450,7 +1465,7 @@ AssemblyDocumentEntities replay_assembly_instance_property_entities(const Assemb
         if (changed == instance) continue;
         changed_roots.insert(key);
         const auto& owner_id = target.document_entity_id ? *target.document_entity_id : target.catalog_id;
-        if (baselines.contains(owner_id) || (instance.placement && baselines.contains(instance.placement->host_entity_id)))
+        if (replacement_registry(source, root))
             reject("changed instance belongs to a protected active-alternative baseline; use full replacement");
         source.admit_final_geometry(root);
         if (target.document_entity_id) {
@@ -1497,13 +1512,15 @@ AssemblyDocumentEntities replay_assembly_instance_property_entities(const Assemb
         };
         sort_paths(intended); sort_paths(actual);
         if (actual != intended) reject("raw replay differs from original-source typed intent");
-        require_active_dependencies(result, target, actual, scope);
+        require_active_dependencies(result, target, actual, scope, true);
         const auto expansion = model.expand(actual, final_budget);
         admit_geometry(result, target, expansion, source.opening_work, source.host_cache);
     }
     for (const auto& [id, entity] : original)
-        if ((scope.inactive_owner_ids.contains(id) || baselines.contains(id)) && !exact(entity, result.at(id)))
+        if (entity.type != "assembly_model" &&
+            (scope.inactive_owner_ids.contains(id) || baselines.contains(id)) && !exact(entity, result.at(id)))
             reject("replay changed an inactive or protected source owner");
+    validate_current_assembly_catalog_phase_preservation(original, result);
     if (std::any_of(intents.begin(),intents.end(),[](const Intent& intent) {
             return intent.profile_geometry.operation!=Operation::unchanged;
         })) {

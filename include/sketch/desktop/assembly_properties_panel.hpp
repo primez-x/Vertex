@@ -24,8 +24,11 @@ public:
     // Throws on invalid input. Always retains every originally selected target.
     // Geometry edits replace only a node's own effective source profiles. Bulk
     // dimensions resize each source separately using pending ancestor pose
-    // scales. Detailed outline/cutout and local extrusion edits require one
-    // node. Untouched geometry stays Keep.
+    // scales. Detailed outline/cutout, local extrusion, material slot and
+    // collection edits keep a separate draft for each selected node. New local
+    // profile IDs are fresh across current, type and removed dialog profiles.
+    // Keep and Use type geometry ignore those drafts. Dependency completion
+    // and refusal of last-solid removal remain the enclosing workflow's job.
     [[nodiscard]] std::vector<AssemblyInstancePropertyEditIntent> intents() const;
     [[nodiscard]] QString lastError() const;
 

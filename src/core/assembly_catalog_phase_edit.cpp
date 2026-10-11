@@ -417,6 +417,7 @@ bool reached_definitions_changed(const Models& before, const Models& after, cons
 }
 void classify(const PhaseInventory& phases, AssemblyCatalogPhaseEditRootImpact& impact) {
     std::vector<AssemblyCatalogPhaseEditBinding> decisive;
+    bool declared_proposed = false;
     const auto add = [&](const std::string& id, bool decides) {
         if (auto binding = phases.binding(id)) {
             impact.phase_bindings.push_back(*binding);
@@ -435,6 +436,7 @@ void classify(const PhaseInventory& phases, AssemblyCatalogPhaseEditRootImpact& 
             std::binary_search(membership.baseline_roots().begin(), membership.baseline_roots().end(), pair),
             owner.membership_entity_id};
         impact.phase_bindings.push_back(binding); decisive.push_back(binding);
+        declared_proposed = !binding.baseline && binding.state == ModelPhase::proposed;
         // The qualified row supplies membership, not its shared carrier. Retain
         // that carrier's actual registry binding for later private-catalog work.
         add(impact.root.catalog_id, false);
@@ -446,7 +448,10 @@ void classify(const PhaseInventory& phases, AssemblyCatalogPhaseEditRootImpact& 
     const bool inactive = std::any_of(decisive.begin(), decisive.end(), [](const auto& binding) {
         return !binding.state || *binding.state == ModelPhase::demolished;
     });
-    const bool protected_baseline = std::any_of(decisive.begin(), decisive.end(), [](const auto& binding) {
+    // An actual declared proposal keeps its row authority on a protected host.
+    // Every host still decides inactivity; undeclared/independent roots retain
+    // their legacy catalog/owner and host baseline protection.
+    const bool protected_baseline = !declared_proposed && std::any_of(decisive.begin(), decisive.end(), [](const auto& binding) {
         return binding.baseline && binding.active_alternative.has_value();
     });
     impact.cohort = inactive ? AssemblyCatalogPhaseEditCohort::inactive_retained : protected_baseline ?
@@ -703,6 +708,15 @@ void validate_current_assembly_catalog_phase_preservation(const Entities& source
         closure(impact.after,impact.after_type_ids,impact.after_material_ids);
         require(equal_expansion(impact.before,impact.after) && !reached_definitions_changed(before,after,impact),
             "current catalog editing changed protected/inactive component definitions; create phase-isolated replacements");
+        // Semantic equality is insufficient for retained source authority:
+        // optional fields, numeric kinds and the original row dialect survive
+        // even when decoding would produce the same type/material value.
+        for (const auto& id : impact.before_type_ids)
+            require(exact(row(raw_model(original_catalog),"types",id), row(raw_model(candidate_catalog),"types",id)),
+                "current catalog editing changed a protected/inactive raw type definition");
+        for (const auto& id : impact.before_material_ids)
+            require(exact(row(raw_model(original_catalog),"materials",id), row(raw_model(candidate_catalog),"materials",id)),
+                "current catalog editing changed a protected/inactive raw material definition");
     }
 }
 

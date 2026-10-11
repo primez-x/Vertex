@@ -14,6 +14,53 @@ changed source does not acquire runtime acceptance without later qualification.
 
 ## Current delivery state
 
+### October 11 profile collection and qualified component consumer continuation
+
+The individual geometry batch is committed and pushed as a5877762; its exact
+remote branch matched the source checkpoint. This continuation adds per-target
+own-profile collections to Properties, including multi-selection, Add/Remove,
+analytic outline/cutout editing, local extrusion and declared material slots.
+Fresh local IDs reserve current/type profiles and removed or cancelled dialog
+drafts. Each target retains its own draft; Keep/Use type ignore local drafts.
+Extent dimensions remeasure actual surviving geometry. Last-solid suppression
+retains the existing atomic refusal rather than dropping dimensions.
+
+Qualified proposed row classification and ordinary Properties now distinguish
+that row's role from an unchanged active baseline host. Inactive rows/hosts and
+protected baseline mutation remain guarded. Current preservation checks retain
+raw reached definitions as well as typed geometry. Direct embedded transform
+and detached copy now admit actual qualified activity and full opening/corner
+host ancestry. Fresh copied document/dimension identities reserve retained and
+undone history plus typed receipt allocations. Inactive row aliases/dimensions
+join active-design dependent preservation, and shared host activity includes
+both corner-window legs. Independent integrated source review found no proved
+introduced P1/P2 in the examined changes. Root reviewed the interfaces, source
+preservation and callback lifetimes; scoped diff checks pass. This evidence does
+not establish compilation or runtime behavior.
+
+The global companion read-only latch and controller baseline-embedded Properties
+refusal remain: universal source-to-candidate membership transition admission and
+sealed additive local-row copy/enrollment are unfinished. Do not remove those
+guards merely because these individual consumers now understand row activity.
+Controller completion will also require actual private catalog/row allocation,
+fresh required companion allocation, alias lifetime reservation and retained
+selection redirection. Existing typed host-copy transport and removal pruning
+are implemented consumers to reuse rather than restart.
+
+Profile/edge dimensions are a separate implementation gap, not a defect in
+existing overall extents. Current profile rings/segments/vertices have no stable
+topology identity. The next additive lane needs versioned profile topology,
+exact own-profile targets, analytic segment/endpoint resolution, and explicit
+reviewed mappings/removals for redraw, profile/cutout retirement and clear-to-type.
+It must integrate ordinary/protected Properties, transform/clone/clipboard,
+canvas/linked-view/3D rendering, history/store and DXF without widening historical
+extent or anonymous-profile authority.
+
+No builds, tests, scripts, probes, jobs, launches, packages or installations ran.
+The installed candidate is unchanged; no runtime acceptance is claimed. All ten
+production gates remain open. The preceding goal turn made source progress;
+this continuation is implementation, not a verified wait or completion claim.
+
 ### October 11 individual component geometry source integration
 
 Previous committed/pushed source is f87914c2. This source batch
