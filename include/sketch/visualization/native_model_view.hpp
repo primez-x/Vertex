@@ -260,6 +260,9 @@ public:
     // Direct manipulator commit: stable entity ID, world-space translation in
     // metres, signed Z rotation in radians, and a positive uniform scale. The
     // desktop shell applies one authoritative undoable document transaction.
+    // Single component rotations snap absolute authored root yaw to 45 degrees;
+    // Shift retains the fine angle. Preview and release share the same world
+    // operator about the captured displayed pivot, including Site placement.
     std::function<void(QString, double, double, double, double, double)>
         onEntityTransformRequested;
     // Stationary right release: hit entity ID (empty for background), followed

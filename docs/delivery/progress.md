@@ -14,6 +14,52 @@ changed source does not acquire runtime acceptance without later qualification.
 
 ## Current delivery state
 
+### October 11 component canvas transform continuation
+
+Reference text labels are committed and pushed as
+33a81cdb5705351613e48489e51c0ff2975c3601; exact remote ref verification passed.
+The previous status-only turn made no source changes. This continuation resumes
+the identified canvas work rather than restarting completed profile authoring.
+
+Native single-component vertical rotation now captures actual authored root yaw,
+the displayed physical pivot and the current selection/source/camera. It computes
+one 45-degree snapped world operator for preview and release; Shift permits fine
+rotation and updates stationary previews. A compact live readout shows the
+resulting authored angle and clears on completion/cancellation. Zero motion restores identity. Site
+remains presentation, with the existing controller converting the operator once.
+
+Profile-edge dimension resolution now supplies an analytical midpoint relative
+to its source anchor and a material-outward unit normal. Actual ring winding and
+outer/cutout role decide the side; circular arcs use their analytical midpoint.
+Reflected placement uses the actual authored axes. Vertex-to-vertex dimensions
+keep their explicit chord placement because they need not follow a profile edge.
+The result is pure geometry and does not change persisted target formats.
+
+Independent component plan corner resizing and the controller integration now
+use the ordinary captured preview lane. The plan operation changes XY size while retaining base
+elevation and physical height. It uses the existing complete Properties producer
+for dimensions, presentation and actual baseline replacement, with exact
+manufactured preview/publication and selection redirection. Root extracted the
+actual-source typed pose producer so native/nonclone nonmirror numerical independent edits
+use the same complete replacement/carry authority while retaining uniform XYZ
+scaling and Z translation. Native values reach that producer directly, avoiding
+a degree-string round trip. The displayed numerical Transform dialog initially
+still used the older transaction; independent review found that its preview
+rejected active-baseline roots. It now uses the same uniform-XYZ pose producer
+and actual source/candidate selection redirect before retaining its preview.
+Clone/mirror lanes are unchanged and are not certified by this correction.
+Identity edits retain the no-op route; candidate
+replacement selection derives from the independently admitted source command.
+Directional assembly side resize remains separate required work. Independent
+integrated source review and its narrow follow-up approved the batch with no
+remaining actionable P1/P2 findings. Root reviewed the integrated source and
+scoped diff checks passed. Compilation, native interactions, rendered output,
+Undo and save/reopen remain unverified; no production qualification is claimed.
+
+No builds, tests, scripts, probes, native jobs, launches, packages or installations
+ran. The installed application is unchanged; all ten production gates and external
+compatibility prerequisites remain open.
+
 ### October 11 reference text labels and remaining component canvas gaps
 
 The reviewed profile redraw batch is committed and pushed as

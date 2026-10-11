@@ -317,10 +317,16 @@ polling timeout does not permit restarting it.
     complete declared IFC/DXF/Pinc fidelity and independently consumed output.
     Qualify existing offline OCR dimensions and the October 11 source addition
     for recognized-text label proposals, retaining text regions/confidence and
-    explicit review on the calibrated plan. Complete independent component plan
-    corner resizing through actual component Properties replacement/carry and
-    manufactured preview/publication, and single-component native 3D physical
-    angle snapping shared by preview and release. Directional assembly side
+    explicit review on the calibrated plan. Qualify the October 11 source for
+    independent component plan corner resizing through actual Properties
+    replacement/carry, full candidate frames, manufactured preview/publication
+    and admitted replacement selection. Plan XY scale retains physical height
+    and base elevation; native/nonclone numerical edits use the same complete
+    pose producer with their genuine uniform XYZ semantics. Qualify native
+    single-component physical-angle snapping shared by preview and release,
+    Shift fine input, numeric feedback and source/camera retirement. Qualify
+    winding/cutout-aware analytical profile-edge label placement through authored
+    reflected axes with Site presentation applied once. Directional assembly side
     resizing requires a real supported geometry contract. New
     semantic forms and references require versioned format migration coverage.
 

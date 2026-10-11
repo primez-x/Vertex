@@ -48,6 +48,7 @@
 #include <V3d_Viewer.hxx>
 #include <WNT_Window.hxx>
 #include <gp_Pnt.hxx>
+#include <gp_Ax1.hxx>
 #include <gp_Ax2.hxx>
 #include <gp_Dir.hxx>
 #include <gp_Trsf.hxx>
@@ -567,6 +568,14 @@ public:
         std::uint64_t navigation_generation{};
     };
     std::optional<SelectionCapture> selection_capture;
+    struct ComponentRotationCapture {
+        SelectionCapture context;
+        double source_yaw{};
+        gp_Pnt world_pivot;
+        NativeInputPoint preview_point;
+        double preview_rotation{};
+    };
+    std::optional<ComponentRotationCapture> component_rotation_capture;
     // Separate transient preparation never changes solids/published_snapshot.
     NativeGeometryRegenerator roof_preview_regenerator;
     QTimer* roof_preview_timer{};
@@ -813,11 +822,19 @@ public:
                               : (!geometry_status.isEmpty() ? geometry_status :
                                  (!operation_error.isEmpty() ? operation_error :
                                   (!input_error.isEmpty() ? input_error : export_error)));
-        status_label->setText(text.isEmpty() ? roof_transform_feedback : text);
-        status_label->setVisible(!text.isEmpty() || !roof_transform_feedback.isEmpty());
+        QString feedback=roof_transform_feedback;
+        if (component_rotation_capture) {
+            constexpr double turn=6.28318530717958647692;
+            auto yaw=std::fmod(component_rotation_capture->source_yaw+
+                component_rotation_capture->preview_rotation,turn);
+            if (yaw<0.0) yaw+=turn;
+            feedback=QStringLiteral("Rotation: %1°").arg(yaw*360.0/turn,0,'f',1);
+        }
+        status_label->setText(text.isEmpty() ? feedback : text);
+        status_label->setVisible(!text.isEmpty() || !feedback.isEmpty());
         status_label->raise();
         auto bounds = owner->rect().adjusted(12, 12, -12, -12);
-        if ((regenerator.is_pending() || !input_error.isEmpty() || !export_error.isEmpty() || !roof_transform_feedback.isEmpty()) &&
+        if ((regenerator.is_pending() || !input_error.isEmpty() || !export_error.isEmpty() || !feedback.isEmpty()) &&
             native_error.isEmpty() && operation_error.isEmpty()) {
             // Keep the valid scene visible during preparation or a recovered
             // input/export failure; a diagnostic must not cover the viewport.
@@ -1463,6 +1480,8 @@ public:
 
     void detach_manipulator() noexcept {
         manipulation_transform.reset();
+        component_rotation_capture.reset();
+        try { refresh_status_label(); } catch (...) {}
         roof_transform_resize_axis.reset();
         if (!manipulator.IsNull()) {
             try {
@@ -1600,6 +1619,28 @@ public:
         viewer->Redraw();
     }
 
+    std::optional<double> component_source_yaw(const std::string& id,
+        const DocumentSnapshot& source) const {
+        AssemblyInstance instance;
+        const auto persisted=source.entities().find(id);
+        if (persisted!=source.entities().end()) {
+            if (persisted->second.type!="assembly_instance") return std::nullopt;
+            instance=decode_document_assembly_instance(persisted->second).instance;
+        } else {
+            const auto embedded=resolve_embedded_assembly_presentation(source.entities(),id);
+            if (!embedded) return std::nullopt;
+            instance=embedded->instance;
+        }
+        // Match AssemblyModel::expand and the plan component frame. An
+        // unplaced geometric catalog root has actual identity placement;
+        // nested profiles and local-Y mirroring do not redefine root yaw.
+        const double angle=instance.root_transform ? instance.root_transform->rotation_radians :
+            instance.placement ? instance.placement->rotation_radians : 0.0;
+        if (!std::isfinite(angle)) throw std::invalid_argument("The component source yaw is unavailable.");
+        constexpr double turn=6.28318530717958647692;
+        return std::remainder(angle,turn);
+    }
+
     bool begin_manipulation(const NativeInputPoint point) {
         const bool coordinated=coordinated_plan_selection();
         if ((coordinated && (!coordinated_plan_transform_enabled() || roof_transform_proxy.IsNull() ||
@@ -1627,6 +1668,18 @@ public:
                 if (axis<0 || axis>2) return false;
                 if (axis<2) roof_transform_resize_axis=axis;
             }
+            component_rotation_capture.reset();
+            if (!coordinated && selected_roof_openings.empty() && manipulator_entity_id &&
+                manipulator->ActiveMode()==AIS_MM_Rotation) {
+                if (!published_snapshot) return false;
+                if (const auto yaw=component_source_yaw(*manipulator_entity_id,*published_snapshot)) {
+                    const auto pivot=manipulator->Position().Location();
+                    if (manipulator->ActiveAxisIndex()!=2 || !std::isfinite(pivot.X()) ||
+                        !std::isfinite(pivot.Y()) || !std::isfinite(pivot.Z()))
+                        throw std::invalid_argument("The component vertical rotation pivot is unavailable.");
+                    component_rotation_capture=ComponentRotationCapture{capture_selection(),*yaw,pivot,point};
+                }
+            }
             manipulator->StartTransform(point.x, point.y, view);
             manipulation_transform.reset();
             return true;
@@ -1646,15 +1699,62 @@ public:
         if (manipulator.IsNull() || !manipulator->HasActiveTransformation() || view.IsNull()) return;
         const QPointer<NativeModelView> guard(owner);
         const bool child_gesture = roof_transform_capture.has_value();
-        const auto fail = [this,guard,child_gesture](const QString& message) {
+        const bool component_gesture=component_rotation_capture.has_value();
+        const auto fail = [this,guard,child_gesture,component_gesture](const QString& message) {
             if (!guard) return;
-            if (child_gesture) {
+            if (child_gesture || component_gesture) {
                 owner->cancelInteraction();
                 if (guard) show_input_error(message);
             } else show_operation_error(message);
         };
         try {
-            manipulation_transform = manipulator->Transform(point.x, point.y, view);
+            if (component_rotation_capture) {
+                if (!selection_current(component_rotation_capture->context) || !owner->hasFocus() ||
+                    QApplication::activeModalWidget())
+                    throw std::invalid_argument("The component source, selection or camera changed. Begin the rotation again.");
+                if (!owner->admitSceneInput(false) || !guard || !component_rotation_capture) return;
+                if (!selection_current(component_rotation_capture->context) ||
+                    manipulator.IsNull() || manipulator->ActiveMode()!=AIS_MM_Rotation ||
+                    manipulator->ActiveAxisIndex()!=2)
+                    throw std::invalid_argument("The component rotation capture changed. Begin the rotation again.");
+                gp_Trsf raw;
+                // False also covers OCCT's zero-angle sample. Apply identity
+                // explicitly so returning to the press supersedes an old preview.
+                (void)manipulator->ObjectTransformation(point.x,point.y,view,raw);
+                gp_XYZ axis;
+                double angle=0.0;
+                if (raw.GetRotation(axis,angle) && axis.Z()<0.0) angle=-angle;
+                constexpr double epsilon=1.0e-9;
+                if (!std::isfinite(angle) || !std::isfinite(raw.ScaleFactor()) ||
+                    std::abs(raw.ScaleFactor()-1.0)>epsilon ||
+                    (std::abs(angle)>epsilon && (!std::isfinite(axis.X()) || !std::isfinite(axis.Y()) ||
+                        !std::isfinite(axis.Z()) || std::abs(axis.X())>epsilon || std::abs(axis.Y())>epsilon ||
+                        std::abs(std::abs(axis.Z())-1.0)>epsilon)))
+                    throw std::invalid_argument("Vertex supports component rotation around the vertical axis only.");
+                if (std::abs(angle)>epsilon && !modifiers.testFlag(Qt::ShiftModifier)) {
+                    constexpr double pi=3.14159265358979323846;
+                    constexpr double step=pi/4.0;
+                    const double initial=component_rotation_capture->source_yaw;
+                    angle=std::remainder(std::round((initial+angle)/step)*step-initial,2.0*pi);
+                }
+                gp_Trsf proposal;
+                if (angle!=0.0) proposal.SetRotation(gp_Ax1(component_rotation_capture->world_pivot,
+                    gp_Dir(0,0,1)),angle);
+                const auto translation=proposal.TranslationPart();
+                if (!std::isfinite(translation.X()) || !std::isfinite(translation.Y()) ||
+                    !std::isfinite(translation.Z()))
+                    throw std::invalid_argument("The component rotation exceeds native coordinate precision.");
+                // SetRotation rebuilds the origin translation for this exact
+                // world pivot. Keeping raw.TranslationPart() would move the
+                // component when its yaw is quantized. Site remains a
+                // presentation frame; the controller conjugates this world
+                // operator into the authored frame on release.
+                manipulator->Transform(proposal);
+                manipulation_transform=proposal;
+                component_rotation_capture->preview_point=point;
+                component_rotation_capture->preview_rotation=angle;
+                refresh_status_label();
+            } else manipulation_transform = manipulator->Transform(point.x, point.y, view);
             if (roof_transform_capture) request_roof_preview(modifiers);
             if (!guard) return;
             if (!viewer.IsNull()) viewer->RedrawImmediate();
@@ -3024,6 +3124,8 @@ void NativeModelView::resetInteraction(bool restore_controls, bool keep_tablet_d
         }
     }
     m_impl->manipulation_transform.reset();
+    m_impl->component_rotation_capture.reset();
+    m_impl->refresh_status_label();
     m_impl->gesture_snapshot.reset();
     m_impl->selection_capture.reset();
     if (m_impl->selection_rectangle) m_impl->selection_rectangle->hide();
@@ -3086,6 +3188,19 @@ bool NativeModelView::event(QEvent* event) {
     }
     if (event->type()==QEvent::ShortcutOverride &&
         static_cast<QKeyEvent*>(event)->key()==Qt::Key_Space) {
+        event->accept();
+        return true;
+    }
+    if ((event->type()==QEvent::KeyPress || event->type()==QEvent::KeyRelease) &&
+        static_cast<QKeyEvent*>(event)->key()==Qt::Key_Shift &&
+        m_impl->gesture==Impl::Gesture::manipulate && m_impl->left_moved &&
+        m_impl->component_rotation_capture) {
+        const auto* key=static_cast<QKeyEvent*>(event);
+        if (!key->isAutoRepeat()) {
+            auto modifiers=key->modifiers();
+            modifiers.setFlag(Qt::ShiftModifier,event->type()==QEvent::KeyPress);
+            m_impl->preview_manipulation(m_impl->component_rotation_capture->preview_point,modifiers);
+        }
         event->accept();
         return true;
     }
@@ -3968,7 +4083,7 @@ void NativeModelView::pointerRelease(QSinglePointEvent* event) {
         }
         const auto translation_id = m_impl->translation_entity_id;
         const auto translation_start = m_impl->translation_start;
-        if (was_manipulation) m_impl->preview_manipulation(point);
+        if (was_manipulation) m_impl->preview_manipulation(point,event->modifiers());
         if (!owner_guard) { event->accept(); return; }
         // Final preview failures notify observers synchronously. Revalidate
         // touch ownership after those callbacks before retaining commit data.

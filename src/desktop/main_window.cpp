@@ -8868,7 +8868,8 @@ public:
     [[nodiscard]] bool transformSelectedArchitecturalObject(
         const QString& rotation_degrees, const QString& offset_x,
         const QString& offset_y, const QString& offset_z,
-        const QString& uniform_scale, bool clone) {
+        const QString& uniform_scale, bool clone,
+        const std::optional<ArchitecturalTransform>& captured_transform = std::nullopt) {
         if (!m_document->is_editable()) {
             setError(QStringLiteral("This document is read-only."));
             return false;
@@ -8897,6 +8898,15 @@ public:
                 throw std::invalid_argument("Select an editable architectural object first.");
             }
             const auto [command,root]=[&]() -> std::pair<Command,std::string> {
+                if (!clone && found->second.type=="assembly_instance") {
+                    const auto movement=captured_transform ? *captured_transform :
+                        parseArchitecturalTransform(rotation_degrees,offset_x,offset_y,offset_z,uniform_scale);
+                    const auto command=independentComponentModelTransformCommand(source,found->second,movement);
+                    const auto candidate=Document::preview_command(source,command);
+                    const auto redirect=admittedAlternativeSelectionRedirect(source,candidate,command);
+                    const auto mapped=redirect.find(found->first);
+                    return {command,mapped==redirect.end() ? found->first : mapped->second};
+                }
                 if (clone && structuralObject(found->second))
                     return architecturalObjectMirrorCommand(source,found->second,
                         parseArchitecturalTransform(rotation_degrees,offset_x,offset_y,offset_z,uniform_scale),
@@ -8919,6 +8929,7 @@ public:
                 if (!applyDocumentCommand(*reviewed)) { clearError(); refreshInspector(); return false; }
             } else if (!applyAuthoredCommand(command)) { clearError(); refreshInspector(); return false; }
             m_selected_id = id_from(alternativeReplacementTargetID(command, root));
+            if (!clone && found->second.type=="assembly_instance") m_selected_ids={m_selected_id};
             clearError();
             refresh();
             return true;
@@ -13666,6 +13677,14 @@ public:
                             return architecturalObjectMirrorCommand(source,*original,
                                 parseArchitecturalTransform(rotation->text(),offset_x->text(),offset_y->text(),offset_z->text(),scale->text()),
                                 clone->isChecked(),flip_horizontal->isChecked(),flip_vertical->isChecked());
+                        if (!clone->isChecked() && original->type=="assembly_instance") {
+                            const auto command=independentComponentModelTransformCommand(source,*original,
+                                parseArchitecturalTransform(rotation->text(),offset_x->text(),offset_y->text(),offset_z->text(),scale->text()));
+                            const auto candidate=Document::preview_command(source,command);
+                            const auto redirect=admittedAlternativeSelectionRedirect(source,candidate,command);
+                            const auto mapped=redirect.find(original->id);
+                            return {command,mapped==redirect.end() ? original->id : mapped->second};
+                        }
                         const auto [transaction, target] = makeArchitecturalObjectTransformTransaction(
                             source,*original,rotation->text(),offset_x->text(),offset_y->text(),
                             offset_z->text(),scale->text(),clone->isChecked());
@@ -26361,6 +26380,125 @@ public:
         return can_transform_architectural_entity_type(type) && type!="assembly_instance";
     }
 
+    static Command independentComponentPoseTransformCommand(const DocumentSnapshot& source,
+        const Entity& entity, const AssemblyInstancePosePropertyPatch& pose,
+        const std::string& message) {
+        const auto actual=source.entities().find(entity.id);
+        if (entity.type!="assembly_instance" || actual==source.entities().end() || actual->second!=entity)
+            throw std::invalid_argument("The independent component transform source changed.");
+        const auto before=decode_document_assembly_instance(entity);
+        AssemblyInstancePropertyEditIntent intent;
+        intent.target={before.assembly_catalog_id,before.instance.id,entity.id,{}};
+        intent.pose=pose;
+        PhaseAssemblyInstancePropertyEditAuthoring authoring;
+        authoring.intents={intent};
+        authoring.carry_presentation_references=true;
+        authoring.complete_component_dimensions=true;
+        const auto plan=inspect_phase_assembly_instance_property_edit_plan(source.entities(),authoring.intents);
+        auto occupied=retainedSlabIdentityNames(source,true);
+        for (const auto& [binding,alias]:embedded_assembly_presentation_ids(source.entities())) {
+            (void)binding;occupied.insert(alias);
+        }
+        std::set<std::string,std::less<>> allocated;
+        const auto fresh=[&](const char* kind) {
+            auto id=new_id(kind);
+            while (!occupied.insert(id).second) id=new_id(kind);
+            allocated.insert(id);return id;
+        };
+        for (const auto& replacement:plan.replacement_roots) {
+            if (!replacement.root.document_entity_id)
+                throw std::invalid_argument("The plan transform requires an independent component root.");
+            PhaseAssemblyInstanceReplacementIdentity ids;
+            ids.proposed_entity_id=fresh("proposed-component");
+            ids.proposed_instance_id=*ids.proposed_entity_id;
+            authoring.allocation.roots.emplace(replacement.root,std::move(ids));
+        }
+        for (const auto& registry:plan.required_membership_registry_ids)
+            authoring.allocation.membership_entity_ids.emplace(registry,fresh("requiredcompanion"));
+        for (const auto& id:inspect_phase_assembly_instance_property_presentation_overlay_ids(
+                source.entities(),authoring.intents,true))
+            authoring.presentation_overlay_identities.emplace(id,fresh("proposed-component-dimension"));
+        for (const auto& [id,target]:inspect_phase_assembly_instance_property_dimension_clone_roster(
+                source.entities(),authoring.intents)) {
+            (void)target;authoring.dimension_identities.emplace(id,fresh("proposed-component-dimension"));
+        }
+        validate_retained_authoring_fresh_identities(source.history(),source.history().size(),allocated);
+        const auto prepared=prepare_component_presentation_property_edit(source,authoring,nullptr,message);
+        ApplyBoundaryConstraintChanges command;
+        command.expected_revision=source.revision();command.message=message;
+        command.mixed_selection_edit_completion=true;
+        command.mixed_selection_edit_intent=complete_mixed_selection_property_edit(source,prepared,{},{});
+        return command;
+    }
+
+    static Command independentComponentPlanTransformCommand(const DocumentSnapshot& source,
+        const Entity& entity, double factor, double radians, Vec2 pivot) {
+        if (entity.type!="assembly_instance" || !std::isfinite(factor) || factor<=0.0 ||
+            !std::isfinite(radians) || !std::isfinite(pivot.x) || !std::isfinite(pivot.y))
+            throw std::invalid_argument("The independent component plan transform is invalid.");
+        const auto before=decode_document_assembly_instance(entity);
+        const auto& current=before.instance.root_transform.value();
+        const auto rotation=assembly_rotation_components(radians);
+        const auto x=current.translation_m.x-pivot.x,y=current.translation_m.y-pivot.y;
+        AssemblyInstancePosePropertyPatch pose;
+        pose.operation=AssemblyInstancePropertyPatchOperation::set;
+        pose.x_metres=pivot.x+factor*(rotation.cosine*x-rotation.sine*y);
+        pose.y_metres=pivot.y+factor*(rotation.sine*x+rotation.cosine*y);
+        pose.rotation_radians=current.rotation_radians+radians;
+        pose.scale=current.scale*factor;
+        // Plan corners resize only XY. Preserve the authored base/elevation and
+        // physical Z scale, including nested profile heights; never scale Z
+        // about world zero. Side grips require a separate directional contract.
+        pose.vertical_scale=current.vertical_scale/factor;
+        return independentComponentPoseTransformCommand(source,entity,pose,
+            "Transform independent component in plan");
+    }
+
+    static Command independentComponentModelTransformCommand(const DocumentSnapshot& source,
+        const Entity& entity, const ArchitecturalTransform& movement) {
+        const auto current=decode_document_assembly_instance(entity).instance.root_transform.value();
+        // Native/numerical transforms are uniform XYZ operators;
+        // unlike a plan corner, they may change elevation/height.
+        const AssemblyTransform operation{{movement.x,movement.y,movement.z},
+            movement.rotation_z_radians,movement.scale,false,1.0};
+        const auto final=compose_assembly_transform(operation,current);
+        if (final==current)
+            return ApplyEntityChanges{source.revision(),{}, {},"Transform independent component"};
+        AssemblyInstancePosePropertyPatch pose;
+        pose.operation=AssemblyInstancePropertyPatchOperation::set;
+        pose.x_metres=final.translation_m.x;pose.y_metres=final.translation_m.y;
+        pose.z_metres=final.translation_m.z;pose.rotation_radians=final.rotation_radians;
+        pose.scale=final.scale;pose.vertical_scale=final.vertical_scale;
+        return independentComponentPoseTransformCommand(source,entity,pose,
+            "Transform independent component in 3D");
+    }
+
+    static CanvasSelectionFrame independentComponentPlanFrame(const DocumentSnapshot& source,
+        const Entity& entity, const BuildingViewFrame* projection=nullptr) {
+        const auto angle=decode_document_assembly_instance(entity).instance.root_transform.value().rotation_radians;
+        AssemblyExpansionBudget budget;
+        auto segments=project_assembly_plan(expand_document_assembly_instance(entity,source.entities(),budget));
+        const auto rotation=assembly_rotation_components(angle);
+        for (auto& edge:segments) for (auto* point:{&edge.start,&edge.end}) {
+            const auto x=point->x,y=point->y;
+            *point={rotation.cosine*x+rotation.sine*y,-rotation.sine*x+rotation.cosine*y};
+        }
+        const auto bounds=boundary_bounds(segments);
+        const auto x=(bounds.minimum.x+bounds.maximum.x)/2.0,y=(bounds.minimum.y+bounds.maximum.y)/2.0;
+        CanvasSelectionFrame frame{{rotation.cosine*x-rotation.sine*y,rotation.sine*x+rotation.cosine*y},angle,
+            bounds.maximum.x-bounds.minimum.x,bounds.maximum.y-bounds.minimum.y};
+        if (!std::isfinite(frame.center.x) || !std::isfinite(frame.center.y) ||
+            !std::isfinite(frame.width_metres) || !std::isfinite(frame.depth_metres))
+            throw std::invalid_argument("The independent component frame exceeds the supported range.");
+        frame.source_rotation_radians=angle;
+        if (projection) {
+            frame.source_rotation_direction=model_plan_rotation_delta(1.0,*projection);
+            frame.center=project_plan_point(frame.center,*projection);
+            frame.rotation_radians=project_plan_angle(angle,*projection);
+        }
+        return frame;
+    }
+
     static double physicalPlanRotationAngle(const Entity& entity) {
         if (entity.type=="assembly_instance")
             return decode_document_assembly_instance(entity).instance.root_transform.value().rotation_radians;
@@ -27427,7 +27565,8 @@ public:
                     const auto& dimension=*decoded.dimension;
                     const auto& dimension_owner=candidate.at(dimension.boundary_id);
                     const bool physical_room_dimension=is_physical_wall_room(dimension_owner);
-                    if (!physical_room_dimension && entity==source.entities().at(entity.id) &&
+                    if (!physical_room_dimension && source.entities().contains(entity.id) &&
+                        source.entities().contains(dimension.boundary_id) && entity==source.entities().at(entity.id) &&
                         dimension_owner==source.entities().at(dimension.boundary_id)) continue;
                     try {
                         const auto projection=project_boundary_dimension(dimension,
@@ -27511,7 +27650,7 @@ public:
                     }
                 } else if (entity.type == "assembly_instance") {
                     const auto binding=decode_document_assembly_instance(entity);
-                    if (entity == source.entities().at(entity.id) &&
+                    if (source.entities().contains(entity.id) && entity == source.entities().at(entity.id) &&
                         candidate.at(binding.assembly_catalog_id)==source.entities().at(binding.assembly_catalog_id)) continue;
                     const auto& expansion=candidate_assembly(entity.id,std::nullopt);
                     AssemblyExpansion presented;
@@ -28005,7 +28144,8 @@ public:
                     const auto& dimension=*decoded.dimension;
                     const auto& dimension_owner=candidate.at(dimension.boundary_id);
                     const bool physical_room_dimension=is_physical_wall_room(dimension_owner);
-                    if (!physical_room_dimension && entity==source.entities().at(entity.id) &&
+                    if (!physical_room_dimension && source.entities().contains(entity.id) &&
+                        source.entities().contains(dimension.boundary_id) && entity==source.entities().at(entity.id) &&
                         dimension_owner==source.entities().at(dimension.boundary_id)) continue;
                     CanvasLabel projected=label;
                     try {
@@ -28156,15 +28296,19 @@ public:
         const std::set<std::string, std::less<>>& appraisal_area_ids,
         const std::map<QString, QRectF>& label_footprints, const std::vector<Bounds2>& component_bounds,
         const std::optional<ArchitecturalViewContext>& view_context, const QFont& label_font,
-        const SiteEndpointPreviewInput* site_input = nullptr) {
+        const SiteEndpointPreviewInput* site_input = nullptr,
+        const PhaseWallReplacementIdentityMap* presentation_overlays = nullptr) {
         if (identities.empty()) return std::nullopt;
         std::map<QString, QString> aliases;
         for (const auto& [old_id, new_id] : identities) {
             const auto original = source.entities().find(old_id);
             if (original != source.entities().end() &&
-                (original->second.type == "roof" || original->second.type == "roof_join" || original->second.type == "slab"))
+                (original->second.type == "roof" || original->second.type == "roof_join" || original->second.type == "slab" ||
+                 original->second.type == "assembly_instance" || can_recognize_boundary_dimension_entity_type(original->second.type)))
                 aliases.emplace(id_from(new_id), id_from(old_id));
         }
+        std::map<QString,QString> profile_aliases;
+        std::map<QString,QString> proposed_profile_keys;
         const auto adapt = [&](const std::vector<CanvasEntity>& captured) {
             std::vector<CanvasEntity> result;
             for (auto item : captured) {
@@ -28173,11 +28317,24 @@ public:
                 // Only render aliases change. Both physical snapshots remain
                 // the actual source and admitted complete proposed document.
                 item.id = id_from(mapping->second);
+                if (!item.presentation_key.isEmpty() && source.entities().at(mapping->first).type=="assembly_instance") {
+                    auto identity=decode_assembly_profile_presentation_identity(json::parse(item.presentation_key.toStdString()));
+                    const auto binding=decode_document_assembly_instance(candidate.entities().at(mapping->second));
+                    identity.catalog_id=binding.assembly_catalog_id;identity.instance_id=binding.instance.id;
+                    identity.document_entity_id=mapping->second;
+                    const auto key=QString::fromStdString(encode_assembly_profile_presentation_identity(identity).dump());
+                    profile_aliases.emplace(key,item.presentation_key);
+                    proposed_profile_keys.emplace(item.presentation_key,key);item.presentation_key=key;
+                }
                 result.push_back(std::move(item));
             }
             return result;
         };
         auto proposed_retained = adapt(retained), proposed_eligible = adapt(eligible);
+        auto proposed_labels=labels;
+        for (auto& label:proposed_labels)
+            if (const auto mapping=identities.find(label.id.toStdString());mapping!=identities.end() &&
+                aliases.contains(id_from(mapping->second))) label.id=id_from(mapping->second);
         auto context = view_context;
         if (context && !context->view_id.empty()) {
             const auto owner = candidate.entities().find(context->sheet_view_entity_id);
@@ -28196,21 +28353,45 @@ public:
             site = *site_input;
             for (const auto& [identity, frame] : site_input->frames.geometry) {
                 const auto mapping = identities.find(identity.first.toStdString());
-                if (mapping != identities.end() && aliases.contains(id_from(mapping->second)))
-                    site->frames.geometry.emplace(std::make_pair(id_from(mapping->second), identity.second), frame);
+                if (mapping != identities.end() && aliases.contains(id_from(mapping->second))) {
+                    const auto key=proposed_profile_keys.find(identity.second);
+                    site->frames.geometry.emplace(std::make_pair(id_from(mapping->second),
+                        key==proposed_profile_keys.end() ? identity.second : key->second),frame);
+                }
+            }
+            site->component_presentations.clear();
+            for (const auto& [identity,bounds]:site_input->component_presentations) {
+                const auto mapping=identities.find(identity.first.toStdString());
+                if (mapping==identities.end() || !aliases.contains(id_from(mapping->second)))
+                    site->component_presentations.emplace(identity,bounds);
+                else {
+                    const auto key=proposed_profile_keys.find(identity.second);
+                    site->component_presentations.emplace(std::make_pair(id_from(mapping->second),
+                        key==proposed_profile_keys.end() ? identity.second : key->second),bounds);
+                }
             }
             for (const auto& [id, frame] : site_input->move_frames) {
                 const auto mapping = identities.find(id.toStdString());
                 if (mapping != identities.end() && aliases.contains(id_from(mapping->second)))
                     site->move_frames.emplace(id_from(mapping->second), frame);
             }
+            for (const auto& [id,frame]:site_input->frames.auxiliary) {
+                const auto mapping=identities.find(id.toStdString());
+                if (mapping!=identities.end() && aliases.contains(id_from(mapping->second)))
+                    site->frames.auxiliary.emplace(id_from(mapping->second),frame);
+            }
         }
         auto projection = computeConstraintGeometryProjection(source, candidate, proposed_retained,
-            proposed_eligible, labels, metric_units, appraisal_area_ids, label_footprints, component_bounds,
+            proposed_eligible, proposed_labels, metric_units, appraisal_area_ids, label_footprints, component_bounds,
             context, label_font, site ? &*site : nullptr);
         if (!projection) throw std::invalid_argument("The proposed physical geometry could not be projected in the captured view.");
-        for (auto& item : projection->entities)
+        for (auto& item : projection->entities) {
             if (const auto alias = aliases.find(item.id); alias != aliases.end()) item.id = alias->second;
+            if (const auto alias=profile_aliases.find(item.presentation_key);alias!=profile_aliases.end())
+                item.presentation_key=alias->second;
+        }
+        for (auto& label:projection->labels)
+            if (const auto alias=aliases.find(label.id);alias!=aliases.end()) label.id=alias->second;
         // Bound view overlays have separately declared identities. Match their
         // preview to the captured overlay, retaining actual candidate values.
         if (context) {
@@ -28219,6 +28400,11 @@ public:
             for (const auto& [old_id, new_id] : identities) {
                 const auto original = id_from(context->view_id + "/overlay/" + old_id);
                 overlay_aliases.emplace(id_from(context->view_id + "/overlay/" + new_id), original);
+                old_overlays.insert(original);
+            }
+            if (presentation_overlays) for (const auto& [old_id,new_id]:*presentation_overlays) {
+                const auto original=id_from(context->view_id+"/overlay/"+old_id);
+                overlay_aliases.insert_or_assign(id_from(context->view_id+"/overlay/"+new_id),original);
                 old_overlays.insert(original);
             }
             std::erase_if(projection->entities, [&](const auto& item) { return old_overlays.contains(item.id); });
@@ -28240,8 +28426,18 @@ public:
         const std::optional<ArchitecturalViewContext>& view_context, const QFont& label_font,
         const SiteEndpointPreviewInput* site_input = nullptr) {
         const auto* phase = std::get_if<ApplyBoundaryConstraintChanges>(&command);
-        if (!phase || !phase->phase_constraint_authoring_completion ||
-            phase->phase_constraint_authoring_intent.is_null()) return std::nullopt;
+        if (!phase) return std::nullopt;
+        if (phase->mixed_selection_edit_completion) {
+            PhaseWallReplacementIdentityMap overlays;
+            const auto identities=alternativeCommandReplacementIdentities(command,
+                nullptr,nullptr,nullptr,nullptr,&source,nullptr,&overlays);
+            return computeReplacementPhysicalGeometryProjection(source,candidate,
+                identities,
+                retained,eligible,labels,metric_units,appraisal_area_ids,label_footprints,component_bounds,
+                view_context,label_font,site_input,&overlays);
+        }
+        if (!phase->phase_constraint_authoring_completion || phase->phase_constraint_authoring_intent.is_null())
+            return std::nullopt;
         const auto intent=decode_phase_constraint_authoring_intent(phase->phase_constraint_authoring_intent);
         return computeReplacementPhysicalGeometryProjection(source,candidate,alternativePhysicalReplacementIdentities(intent),
             retained,eligible,labels,metric_units,appraisal_area_ids,label_footprints,component_bounds,view_context,label_font,site_input);
@@ -28474,8 +28670,11 @@ public:
             command=makeSelectionGeometryTransformCommand(source,{capture.id},planar);
         else {
             const auto& entity=source.entities().at(capture.id.toStdString());
-            if (!can_transform_architectural_entity_type(entity.type) || physicalPlanRotationFamily(entity.type))
+            if (!can_transform_architectural_entity_type(entity.type) ||
+                (physicalPlanRotationFamily(entity.type) && entity.type!="assembly_instance"))
                 throw std::invalid_argument("The captured object does not support this geometric transform.");
+            if (entity.type == "assembly_instance")
+                return independentComponentPlanTransformCommand(source,entity,intent.scale,intent.source_radians,intent.source_pivot);
             if (entity.type == "slab") {
                 SlabGeometryEditIntent edit;
                 edit.slab_id = entity.id;
@@ -28571,6 +28770,16 @@ public:
                                 label_font,site_input.get(),component_sources.get());
                             if (*result && !cancellation.is_cancelled()) {
                                 retainNoOpMovePresentations(**result,*source,candidate,*retained,*labels,{id});
+                                const auto replacements=alternativeCommandReplacementIdentities(command,
+                                    nullptr,nullptr,nullptr,nullptr,source.get());
+                                const auto selected_replacement=replacements.find(id.toStdString());
+                                const auto selected_owner=candidate.entities().find(selected_replacement==replacements.end()
+                                    ? id.toStdString() : selected_replacement->second);
+                                std::optional<CanvasSelectionFrame> independent_frame;
+                                if (!ordinary_capture->embedded && selected_owner!=candidate.entities().end() &&
+                                    selected_owner->second.type=="assembly_instance")
+                                    independent_frame=independentComponentPlanFrame(candidate,selected_owner->second,
+                                        !site_input && view_context ? &view_context->frame : nullptr);
                                 for (auto& proposed:(**result).entities) {
                                     if (proposed.segments.empty() || (!site_input && proposed.id!=id)) continue;
                                     if (site_input && site_input->move_annotation_targets.contains(proposed.id)) continue;
@@ -28578,7 +28787,13 @@ public:
                                         return item.id==proposed.id && item.presentation_key==proposed.presentation_key;
                                     });
                                     if (original==retained->end() || !original->resize_frame) continue;
-                                    const auto owner=candidate.entities().find(alternativeReplacementTargetID(command, proposed.id.toStdString()));
+                                    const auto replacement=replacements.find(proposed.id.toStdString());
+                                    const auto owner=candidate.entities().find(replacement==replacements.end()
+                                        ? proposed.id.toStdString() : replacement->second);
+                                    if (independent_frame && proposed.id==id) {
+                                        proposed.resize_frame=*independent_frame;
+                                        continue;
+                                    }
                                     const bool embedded_presentation=site_input && proposed.type==QStringLiteral("assembly_instance") &&
                                         (!proposed.presentation_key.isEmpty() || !source->entities().contains(proposed.id.toStdString())) &&
                                         embeddedAssemblyChild(*source,proposed.id.toStdString()).has_value();
@@ -29609,6 +29824,7 @@ public:
         if (!siteCanvas(canvas)) {
             const auto found=m_entity_transform_source->entities().find(id.toStdString());
             if (found!=m_entity_transform_source->entities().end() && physicalPlanRotationFamily(found->second.type) &&
+                found->second.type!="assembly_instance" &&
                 !geometric_assembly_for_child(*m_entity_transform_source,id.toStdString()))
                 captureConstraintGeometryPreview(canvas,m_entity_transform_source->revision());
             else if (!m_presentation_transform_capture) {
@@ -29656,7 +29872,7 @@ public:
             const auto found=m_entity_transform_source->entities().find(id.toStdString());
             const bool embedded=geometric_assembly_for_child(*m_entity_transform_source,id.toStdString()).has_value();
             if (!embedded && found!=m_entity_transform_source->entities().end() &&
-                physicalPlanRotationFamily(found->second.type)) return;
+                physicalPlanRotationFamily(found->second.type) && found->second.type!="assembly_instance") return;
             const bool measured=!embedded && found!=m_entity_transform_source->entities().end() &&
                 (is_closed_boundary_entity(found->second.type) || found->second.type=="measurement_linework");
             if (!embedded && !measured && (found==m_entity_transform_source->entities().end() ||
@@ -29986,6 +30202,7 @@ public:
         if (canvas && m_entity_transform_source) {
             const auto found=m_entity_transform_source->entities().find(id.toStdString());
             if (found!=m_entity_transform_source->entities().end() && physicalPlanRotationFamily(found->second.type) &&
+                found->second.type!="assembly_instance" &&
                 (!siteCanvas(canvas) || !m_site_edit_annotation_targets.contains(id)) &&
                 !geometric_assembly_for_child(*m_entity_transform_source,id.toStdString()))
                 return previewPhysicalPlanRotationFromCanvas(canvas,id,scale,radians,canvas_pivot,serial);
@@ -30015,10 +30232,13 @@ public:
                 throw std::invalid_argument("Use source floor plan dimensions to resize closed areas and measured lines.");
             OrdinaryGeometryTransformIntent intent;
             intent.scale=scale;intent.radians=radians;intent.canvas_pivot=canvas_pivot;
+            const bool independent=!capture->embedded && owner!=m_entity_transform_source->entities().end() &&
+                owner->second.type=="assembly_instance";
             intent.source_pivot=capture->site_input
                 ? site_source_plan_point(canvas_pivot,*capture->site_input->move_frame)
+                : independent ? (capture->frame ? unproject_plan_point(canvas_pivot,*capture->frame) : canvas_pivot)
                 : capture->architectural_pivot.value_or(capture->frame
-                ? unproject_plan_point(canvas_pivot,*capture->frame) : canvas_pivot);
+                    ? unproject_plan_point(canvas_pivot,*capture->frame) : canvas_pivot);
             intent.source_radians=capture->frame ? model_plan_rotation_delta(radians,*capture->frame) : radians;
             if (!canvas->markEntityTransformPreviewPending(serial)) return std::vector<CanvasEntity>{};
             m_entity_transform_scale=scale;
@@ -34107,17 +34327,30 @@ public:
                     const auto [c,s]=assembly_rotation_components(geometry.selected_node.transform.rotation_radians);
                     const auto sign=geometry.selected_node.transform.mirrored_y ? -1.0 : 1.0;
                     auto outward=selected.axis==AssemblyDimensionAxis::width ? Vec2{s*sign,-c*sign} : Vec2{-c,-s};
+                    Vec2 midpoint{a.x+(b.x-a.x)*0.5,a.y+(b.y-a.y)*0.5};
                     if(geometry.profile_geometry) {
-                        const auto& edge=geometry.profile_geometry->segment_from_anchor_m;
-                        const auto dx=edge.end.x-edge.start.x,dy=edge.end.y-edge.start.y;
-                        const auto chord=std::hypot(dx,dy);
-                        if(chord>0) {
-                            const Vec2 tangent{(c*dx-s*sign*dy)/chord,(s*dx+c*sign*dy)/chord};
-                            outward={tangent.y,-tangent.x};
+                        if (const auto& placement=geometry.profile_geometry->edge_placement;placement) {
+                            // Defaults are authored before Site presentation.
+                            // Map relative physical offsets and the true solid
+                            // outward normal through the mirrored authored axes
+                            // once, including analytical arc midpoints/holes.
+                            const auto authored=[&](Vec2 value) {
+                                return Vec2{c*value.x-s*sign*value.y,s*value.x+c*sign*value.y};
+                            };
+                            const auto offset=authored(placement->midpoint_from_anchor_m);
+                            midpoint={geometry.anchor_authored_m.x+offset.x,geometry.anchor_authored_m.y+offset.y};
+                            outward=authored(placement->outward_unit_profile);
+                        } else {
+                            const auto& edge=geometry.profile_geometry->segment_from_anchor_m;
+                            const auto dx=edge.end.x-edge.start.x,dy=edge.end.y-edge.start.y;
+                            const auto chord=std::hypot(dx,dy);
+                            if(chord>0) {
+                                const Vec2 tangent{(c*dx-s*sign*dy)/chord,(s*dx+c*sign*dy)/chord};
+                                outward={tangent.y,-tangent.x};
+                            }
                         }
                     }
-                    dimension.text_position={a.x+(b.x-a.x)*0.5+outward.x*gap,
-                        a.y+(b.y-a.y)*0.5+outward.y*gap};
+                    dimension.text_position={midpoint.x+outward.x*gap,midpoint.y+outward.y*gap};
                     value->setText(format_boundary_length(geometry.span_metres,m_metric_units,false));
                     draft=std::move(dimension);
                 } catch (const std::exception& error) { value->setText(QString::fromUtf8(error.what())); }
@@ -51386,7 +51619,8 @@ private:
         std::vector<PhaseSlabReplacementAuthoring>* slab_components=nullptr,
         std::vector<PhaseRoofReplacementAuthoring>* roof_components=nullptr,
         const DocumentSnapshot* source=nullptr,
-        std::vector<PhaseWallReplacementAuthoring>* wall_components=nullptr) {
+        std::vector<PhaseWallReplacementAuthoring>* wall_components=nullptr,
+        PhaseWallReplacementIdentityMap* presentation_overlays=nullptr) {
         PhaseWallReplacementIdentityMap identities;
         if (!std::holds_alternative<ApplyBoundaryConstraintChanges>(command)) return identities;
         // Room completion retains the complete geometry command in its closed
@@ -51449,6 +51683,23 @@ private:
                         if (!inserted && found->second!=*proposed.document_entity_id)
                             throw std::invalid_argument("The component edit has conflicting proposed identities.");
                     }
+                    if (prepared.intent().contains("component_request")) {
+                        // The complete Properties request was independently
+                        // replayed above. Its real dimension allocations also
+                        // supply render aliases for the proposed full component.
+                        const auto authoring=decode_phase_assembly_instance_property_edit_authoring(
+                            prepared.intent().at("component_request").at("authoring"));
+                        for (const auto& [original,proposed]:authoring.dimension_identities) {
+                            const auto [found,inserted]=identities.emplace(original,proposed);
+                            if (!inserted && found->second!=proposed)
+                                throw std::invalid_argument("The component edit has conflicting dimension identities.");
+                        }
+                        if (presentation_overlays) for (const auto& [original,proposed]:authoring.presentation_overlay_identities) {
+                            const auto [found,inserted]=presentation_overlays->emplace(original,proposed);
+                            if (!inserted && found->second!=proposed)
+                                throw std::invalid_argument("The component edit has conflicting overlay identities.");
+                        }
+                    }
                     for (const auto& encoded_leaf:prepared.phase_authorings()) {
                         const auto leaf=decode_phase_constraint_authoring_intent(encoded_leaf);
                         if (wall_components && !leaf.wall_replacement.is_null())
@@ -51502,7 +51753,8 @@ private:
                  original->second.type != "slab" && original->second.type != "wall" &&
                  original->second.type != "opening" && original->second.type != "column" &&
                  original->second.type != "beam" && original->second.type != "assembly_model" &&
-                 original->second.type != "stair" && original->second.type != "railing")) continue;
+                 original->second.type != "stair" && original->second.type != "railing" &&
+                 original->second.type != "assembly_instance")) continue;
             const auto proposed = candidate.entities().find(proposed_id);
             if (proposed == candidate.entities().end() || proposed->second.type != original->second.type)
                 throw std::invalid_argument("The admitted alternative edit lost its proposed selection owner.");
@@ -65481,7 +65733,7 @@ private:
                     // Retain a real authored orientation. Unsupported legacy
                     // transport-only descriptors cannot acquire rotation handles.
                     (void)physicalPlanRotationAngle(found->second);
-                    return {false, true};
+                    return {found->second.type=="assembly_instance", true};
                 } catch (const std::exception&) { return {false, false}; }
             }
             if (found->second.type == "reference_asset" ||
@@ -65624,7 +65876,11 @@ private:
             const auto snapshot = authoringSnapshot();
             const auto wanted = m_selected_ids.front().toStdString();
             if (const auto found = snapshot.entities().find(wanted); found != snapshot.entities().end()) {
-                try { (void)plan_axis_resize_frame(found->second); axis_resize = true; }
+                try {
+                    if (found->second.type!="assembly_instance") {
+                        (void)plan_axis_resize_frame(found->second); axis_resize = true;
+                    }
+                }
                 catch (const std::exception&) {}
             } else if (!siteCanvas(m_architecturalCanvas)) {
                 for (const auto& [id, entity] : snapshot.entities()) {
@@ -65654,10 +65910,10 @@ private:
                 resize_selection=(can_transform_architectural_entity_type(found->second.type) && found->second.type!="wall") ||
                     found->second.type=="reference_asset";
                 if (physicalPlanRotationFamily(found->second.type)) {
-                    resize_selection=false;
+                    resize_selection=found->second.type=="assembly_instance";
                     try {
                         rotate_selection=rotate_selection && std::isfinite(physicalPlanRotationAngle(found->second));
-                    } catch (const std::exception&) { rotate_selection=false; }
+                    } catch (const std::exception&) { rotate_selection=false;resize_selection=false; }
                 }
             } else if(geometric_assembly_for_child(source,m_selected_id.toStdString())) {
                 resize_selection=true;rotate_selection=true;
@@ -70459,7 +70715,7 @@ private:
             return transformSelectedArchitecturalObject(
                 QString::number(transform.rotation_z_radians * 180.0 / std::numbers::pi, 'g', 17),
                 metres(transform.x), metres(transform.y), metres(transform.z),
-                QString::number(transform.scale, 'g', 17), false);
+                QString::number(transform.scale, 'g', 17), false, transform);
         } catch (const std::exception& error) {
             setError(QStringLiteral("3D edit: %1").arg(QString::fromUtf8(error.what())));
             return false;

@@ -1,5 +1,16 @@
 # Placed boundary dimensions
 
+Component profile-edge dimensions retain the actual profile, ring and edge
+identities. Their default text anchor uses the analytical edge midpoint and the
+normal pointing out of profile material, derived from the actual ring winding.
+An outer ring points away from the solid; a cutout points into its void. Circular
+edges use the curve midpoint rather than the chord midpoint. The relative
+physical offset is mapped through the component's authored rotated/reflected
+axes before independent Site presentation is applied once. User-positioned
+text stays explicit. Vertex-to-vertex dimensions keep a separate chord policy
+because their selected chord need not follow the solid boundary. This geometry
+result does not add a persisted target or command version.
+
 Version3 segment-length dimensions may target an ordered `target.segment_ids`
 chain of 2 to 128 distinct, forward-contiguous stable edges. The singular
 `segment_id` field is omitted from their JSON. Resolution verifies stable shared

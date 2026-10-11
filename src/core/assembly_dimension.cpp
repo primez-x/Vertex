@@ -5,6 +5,7 @@
 #include <cmath>
 #include <initializer_list>
 #include <map>
+#include <numbers>
 #include <stdexcept>
 #include <utility>
 
@@ -358,6 +359,33 @@ void measure_own_profile(AssemblyDimensionResolution& result, const AssemblyExpa
     const auto start = geometry.start_profile_m, end = geometry.end_profile_m;
     const auto offset = finite(AssemblyPoint3{
         (end.x - start.x) * scale, (end.y - start.y) * scale, 0});
+    if (geometry.segment_profile_m) {
+        // The admitted ring's signed area integrates every analytical edge.
+        // Charge both linear ring passes before doing that work.
+        budget.charge(boundary->size()); budget.charge(boundary->size());
+        const auto area = finite(signed_area(*boundary));
+        require(area != 0.0, "selected profile ring has no representable orientation");
+        const auto dx = finite(end.x - start.x), dy = finite(end.y - start.y);
+        const auto chord = finite(std::hypot(dx, dy));
+        require(chord > 0.0, "selected profile edge has no representable chord");
+        const Vec2 left{finite(-dy / chord), finite(dx / chord)};
+        const auto sweep = finite(geometry.segment_profile_m->sweep_radians);
+        require(std::abs(sweep) < 2.0 * std::numbers::pi,
+            "selected profile edge sweep exceeds numeric bounds");
+        // At the analytical arc midpoint, the directed tangent is parallel to
+        // its chord. Its sagitta avoids subtracting absolute source positions.
+        const auto sagitta = finite((chord / 2.0) * finite(std::tan(sweep / 4.0)));
+        AssemblyProfileDimensionEdgePlacement placement;
+        placement.midpoint_from_anchor_m = {
+            finite(finite(dx / 2.0 - left.x * sagitta) * scale),
+            finite(finite(dy / 2.0 - left.y * sagitta) * scale)};
+        const bool hole = boundary != &profile.outer;
+        const auto outward_sign = (area > 0.0) != hole ? -1.0 : 1.0;
+        placement.outward_unit_profile = {
+            finite(left.x * outward_sign), finite(left.y * outward_sign)};
+        budget.output.reserve(8);
+        geometry.edge_placement = placement;
+    }
     if (selector.measurement == AssemblyProfileDimensionMeasurement::vertex_distance)
         result.span_metres = finite(std::hypot(offset.x, offset.y));
     require(result.span_metres > 0, "selected profile dimension is unrepresentable");

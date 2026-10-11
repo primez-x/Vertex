@@ -47,6 +47,15 @@ struct AssemblyDimensionTarget {
 [[nodiscard]] nlohmann::json encode_assembly_dimension_target(const AssemblyDimensionTarget&);
 [[nodiscard]] AssemblyDimensionTarget decode_assembly_dimension_target(const nlohmann::json&);
 
+struct AssemblyProfileDimensionEdgePlacement {
+    // Analytical edge midpoint in physical metres along the selected node's
+    // unit width/depth axes, relative to the dimension's start anchor.
+    Vec2 midpoint_from_anchor_m;
+    // Unit normal pointing out of profile material, in source local XY.
+    // Apply the actual width/depth basis, including its reflection, once.
+    Vec2 outward_unit_profile;
+};
+
 struct AssemblyProfileDimensionGeometry {
     // Exact source points and elevation in the selected profile's local frame.
     Vec2 start_profile_m, end_profile_m;
@@ -58,6 +67,8 @@ struct AssemblyProfileDimensionGeometry {
     // reflecting these axes reverses its visible sweep. Vertex distance is a
     // straight chord. This avoids subtracting distant absolute endpoints.
     Segment segment_from_anchor_m;
+    // Edge-only default placement; vertex distances retain their chord policy.
+    std::optional<AssemblyProfileDimensionEdgePlacement> edge_placement;
 };
 
 struct AssemblyDimensionResolution {
