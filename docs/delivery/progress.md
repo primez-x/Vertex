@@ -14,6 +14,42 @@ changed source does not acquire runtime acceptance without later qualification.
 
 ## Current delivery state
 
+### October 11 corner component membership retirement
+
+The preceding roof/component deletion batch is committed and pushed as bf027d01.
+Current source integrates component membership retirement with corner-window
+owner, managed-cut and component-only deletion. Separate corner five/six/seven
+and mixed eleven/twelve/thirteen retain explicit completion authority; historical
+corner one through four and mixed one through ten retain their own meaning.
+Historical corner wrappers cannot borrow newer nested architectural membership
+options. Actual selected roofs require separate nested roof completion.
+
+The corner owner leaf forwards membership completion to the existing typed
+object producer. Aggregate deletion keeps authenticated owner dominance over
+already retired hosted rows. Every catalog is admitted before source scope,
+component expansion and native work; complete leaf maps and the final union are
+admitted before downstream validation. Composition uses exact source-derived
+companion pruning. Present baseline-retained owner/cut/component bodies and
+their memberships remain exact, and opaque companion siblings remain checked.
+Drawing composition performs source admission before its first independent
+drawing replay. Canvas preparation captures both membership options from the
+actual source and roster; Document and Site retain the new mixed authority and
+phase/lifetime protections. Reader211/extraction209 carry current, nested,
+wrapped, retained and undone new intent even after earlier reader210 history.
+
+Baseline component demolition and coordinated physical/component demolition,
+complete mixed clipboard, detach/shared-type semantics, uncaptured copies,
+nested profile selection, joint-only patches and deformed/cross-Site carry remain
+required implementation gaps. Companion-bearing editing quarantine remains
+until all consumers integrate; all ten production gates remain open. No builds,
+tests, scripts, probes, native jobs, launches, packages or installations ran.
+The installed candidate is unchanged. Independent source review approved the
+bounded corner integration with no confirmed P1/P2 findings. Root reviewed
+closed codec separation, exact source-derived companion pruning, actual
+owner/cut dominance, controller capture, protected baseline bodies and retained
+history/reader floors. Named whitespace checks pass; compilation, runtime and
+production qualification are unverified.
+
 ### October 11 roof component membership retirement and removal composition
 
 The preceding typed retirement batch is committed and pushed as 693cbc71.

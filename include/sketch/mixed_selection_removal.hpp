@@ -12,6 +12,9 @@ namespace sketch {
 // their physical/phase consequences, and explicit ordinary/drawing selections.
 // Dialect six alone enables version-two corner catalog-host completion.
 // Dialect seven enables qualified corner-copy rows without selected owners.
+// Dialect eight retains selected managed cuts. Dialects eleven, twelve and
+// thirteen require corner dialects five, six and seven respectively, retaining
+// complete component phase memberships for owners, qualified rows and cuts.
 [[nodiscard]] DocumentSnapshot prepare_mixed_selection_removal_stage(
     const DocumentSnapshot& source, const CornerSelectionRemovalIntent& ordinary,
     const Command& ordinary_command);

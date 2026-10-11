@@ -38,26 +38,28 @@ void constraints(const CornerWindowRemovalEntities& actual, bool active) {
 
 CornerWindowRemovalEntities replay_corner_window_removal(const CornerWindowRemovalEntities& actual,
     const std::vector<std::string>& sorted_corner_owner_ids, bool active_phase_constraints,
-    bool complete_corner_catalog_hosts) {
+    bool complete_corner_catalog_hosts, bool complete_component_phase_memberships) {
+    if (complete_component_phase_memberships && !complete_corner_catalog_hosts)
+        reject("component membership retirement requires complete corner catalog hosts");
     selection(actual, sorted_corner_owner_ids);
     // The shared analytical admission bounds the complete source, closure and
     // source/candidate native inventories before any physical factory runs.
     preflight_architectural_object_removal(actual, sorted_corner_owner_ids, {}, 0, false, false, true,
-        complete_corner_catalog_hosts);
+        complete_corner_catalog_hosts, complete_component_phase_memberships);
     constraints(actual, active_phase_constraints);
     auto candidate = replay_architectural_object_removal(actual, sorted_corner_owner_ids, {}, false, 0, false, false, true,
-        complete_corner_catalog_hosts);
+        complete_corner_catalog_hosts, complete_component_phase_memberships);
     constraints(candidate, active_phase_constraints);
     return candidate;
 }
 
 ApplyEntityChanges prepare_corner_window_removal(const DocumentSnapshot& source,
     const std::vector<std::string>& sorted_corner_owner_ids, const std::string& message,
-    bool complete_corner_catalog_hosts) try {
+    bool complete_corner_catalog_hosts, bool complete_component_phase_memberships) try {
     if (!source.is_editable()) throw DocumentError(DocumentErrorCode::read_only, source.read_only_reason());
     if (message.size() > 4096) reject("command message budget exceeded");
     const auto expected = replay_corner_window_removal(source.entities(), sorted_corner_owner_ids,
-        source.uses_active_phase_constraints(), complete_corner_catalog_hosts);
+        source.uses_active_phase_constraints(), complete_corner_catalog_hosts, complete_component_phase_memberships);
     ApplyEntityChanges command{source.revision(), {}, {}, message};
     std::set<std::string, std::less<>> hosts;
     for (const auto& id : sorted_corner_owner_ids) {

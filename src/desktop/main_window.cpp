@@ -36192,6 +36192,7 @@ public:
                 // not manufacture additional selection authority.
                 CornerSelectionRemovalIntent intent;
                 intent.complete_corner_catalog_hosts=true;
+                intent.complete_component_phase_memberships=hasComponentPhaseMemberships(source);
                 intent.component_only=!has_corner;
                 intent.other=captureExplicitSelectionRemoval(source,authority.ordinary_selection,true);
                 std::vector<std::string> other_ids;
@@ -36205,8 +36206,14 @@ public:
                         actual.type+"/"+id+". The complete selection has been preserved.");
                 }
                 intent.other.architectural=captureArchitecturalSelectionRemoval(source,std::move(other_ids),
-                    std::move(intent.other.architectural.components));
-                intent.other.allow_manufactured_opening_hosts=!intent.other.architectural.components.empty();
+                    std::move(intent.other.architectural.components),intent.complete_component_phase_memberships,
+                    intent.complete_component_phase_memberships);
+                intent.other.complete_component_phase_memberships=componentMembershipRemovalMode(
+                    source,intent.other.architectural);
+                intent.other.complete_roof_component_phase_memberships=componentMembershipRoofRemovalMode(
+                    source,intent.other.architectural);
+                intent.other.allow_manufactured_opening_hosts=!intent.other.architectural.components.empty() ||
+                    intent.other.complete_component_phase_memberships;
                 // Preserve explicit selected cuts in the closed proof. Core
                 // independently authenticates and deduplicates their complete
                 // owner aggregates; no derived owner becomes explicit authority.
@@ -36223,7 +36230,8 @@ public:
                     (void)entity;
                     if (!candidate.entities().contains(id)) retired.insert(id);
                 }
-                validate_completed_architectural_retirement_references(candidate.entities(),retired);
+                validate_completed_architectural_retirement_references(candidate.entities(),retired,
+                    intent.complete_component_phase_memberships);
                 validate_architectural_geometry_changes(source,candidate);
                 validate_document_assembly_instances(candidate.entities());
                 preserveSurvivingRemovalAliases(source.entities(),candidate.entities());
@@ -58931,7 +58939,8 @@ private:
                             ? ordinary_selection_removal_authority(decode_ordinary_selection_removal_intent(intent.at("ordinary")))
                             : intent.at("version")==4
                             ? phase_selection_removal_authority(decode_phase_selection_removal_intent(intent.at("ordinary")))
-                            : (intent.at("version")==5 || intent.at("version")==6 || intent.at("version")==7 || intent.at("version")==8)
+                            : (intent.at("version")==5 || intent.at("version")==6 || intent.at("version")==7 || intent.at("version")==8 ||
+                                intent.at("version")==11 || intent.at("version")==12 || intent.at("version")==13)
                             ? corner_selection_removal_authority(decode_corner_selection_removal_intent(intent.at("ordinary")))
                             : decode_architectural_drawing_removal_intent(intent.at("ordinary"));
                         targets.insert(ordinary.architectural.object_ids.begin(),ordinary.architectural.object_ids.end());

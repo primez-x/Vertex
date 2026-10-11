@@ -306,7 +306,9 @@ public:
     // with complete component phase membership retirement.
     // v210 retains explicit architectural/drawing removal3 and mixed removal10
     // with complete actual roof component phase membership retirement.
-    static constexpr std::uint32_t format_version = 210;
+    // v211 retains explicit corner removal5..7 and mixed removal11..13
+    // with complete component phase membership retirement.
+    static constexpr std::uint32_t format_version = 211;
     static constexpr std::uint32_t recovery_format_version = 4;
     [[nodiscard]] static std::uint32_t required_format_version(const DocumentSnapshot& snapshot);
     static constexpr std::uint64_t maximum_file_bytes = 4ULL * 1024ULL * 1024ULL * 1024ULL;

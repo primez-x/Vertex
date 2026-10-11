@@ -44,6 +44,14 @@ bool other_present(const ArchitecturalDrawingRemovalIntent& intent) {
     return architectural(intent) || drawing(intent);
 }
 void bounded(const CornerSelectionRemovalIntent& intent) {
+    if (intent.complete_component_phase_memberships && !intent.complete_corner_catalog_hosts)
+        reject("component membership retirement requires complete corner catalog hosts");
+    if (!intent.complete_component_phase_memberships &&
+        (intent.other.complete_component_phase_memberships || intent.other.complete_roof_component_phase_memberships))
+        reject("historical corner authority cannot borrow nested component membership retirement");
+    if (intent.complete_component_phase_memberships && architectural(intent.other) &&
+        (!intent.other.complete_component_phase_memberships || !intent.other.allow_manufactured_opening_hosts))
+        reject("complete corner membership authority requires matching nested component membership and host authority");
     if (!intent.selected_cut_ids.empty() &&
         (!intent.complete_corner_catalog_hosts || intent.component_only))
         reject("selected cuts require complete corner catalog hosts and owner-removal consequences");
@@ -66,7 +74,8 @@ void bounded(const CornerSelectionRemovalIntent& intent) {
         count += size;
     }
     if (other_present(intent.other)) (void)encode_architectural_drawing_removal_intent(intent.other);
-    else if (intent.other.allow_manufactured_opening_hosts ||
+    else if (intent.other.allow_manufactured_opening_hosts || intent.other.complete_component_phase_memberships ||
+        intent.other.complete_roof_component_phase_memberships ||
         !intent.other.architectural.roof_additional_identities.empty())
         reject("absent other selection cannot carry architectural options");
     for (const auto& id : intent.corner_ids) {
@@ -92,6 +101,8 @@ void bounded(const CornerSelectionRemovalIntent& intent) {
                 reject("roof destination borrows a selected cut or its intent token");
             for (const auto* token : {"corner_ids", "other", "corner_removal"})
                 if (id == token) reject("roof destination borrows a corner intent token");
+            if (intent.complete_component_phase_memberships && id == "complete_component_phase_memberships")
+                reject("roof destination borrows a corner intent token");
         }
     }
 }
@@ -157,6 +168,13 @@ bool exact(const Entity& left, const Entity& right) {
     return left == right && left.properties.dump() == right.properties.dump() &&
         left.extensions.dump() == right.extensions.dump();
 }
+void admit_catalogs(const Entities& entities, AssemblyCatalogTransferBudget& budget) {
+    if (entities.size() > 65536) reject("complete source entity budget exceeded");
+    for (const auto& [id, entity] : entities) {
+        (void)id;
+        if (entity.type == "assembly_model") admit_existing_assembly_catalog_work(entity, budget);
+    }
+}
 void constraints(const Entities& entities, bool active) {
     const auto reason = active ? validate_active_phase_constraint_integrity(entities) :
         validate_constraint_integrity(entities);
@@ -198,9 +216,11 @@ void metadata(const DocumentSnapshot& source, const DocumentSnapshot& preview) {
 
 Json encode_corner_selection_removal_intent(const CornerSelectionRemovalIntent& intent) {
     bounded(intent);
-    Json result{{"version", !intent.selected_cut_ids.empty() ? 4 : intent.component_only ? 3 : intent.complete_corner_catalog_hosts ? 2 : 1}, {"kind", "corner_removal"}, {"corner_ids", intent.corner_ids},
+    const int version = !intent.selected_cut_ids.empty() ? 4 : intent.component_only ? 3 : intent.complete_corner_catalog_hosts ? 2 : 1;
+    Json result{{"version", intent.complete_component_phase_memberships ? version + 3 : version}, {"kind", "corner_removal"}, {"corner_ids", intent.corner_ids},
         {"other", other_present(intent.other) ? encode_architectural_drawing_removal_intent(intent.other) : Json(nullptr)}};
     if (!intent.selected_cut_ids.empty()) result["selected_cut_ids"] = intent.selected_cut_ids;
+    if (intent.complete_component_phase_memberships) result["complete_component_phase_memberships"] = true;
     if (result.dump().size() > intent_byte_limit) reject("intent exceeds one MiB");
     return result;
 }
@@ -211,17 +231,26 @@ CornerSelectionRemovalIntent decode_corner_selection_removal_intent(const Json& 
     if (value.dump().size() > intent_byte_limit) reject("intent exceeds one MiB");
     if (!value.is_object() || !value.contains("version") || !value.contains("kind") ||
         !value.contains("corner_ids") || !value.contains("other")) reject("unsupported intent field set");
-    if (!value.at("version").is_number_integer() || (value.at("version") != 1 && value.at("version") != 2 && value.at("version") != 3 && value.at("version") != 4) ||
+    if (!value.at("version").is_number_integer() || value.at("version") < 1 || value.at("version") > 7 ||
         !value.at("kind").is_string() || value.at("kind") != "corner_removal") reject("unsupported intent version/kind");
-    const bool selected_cuts = value.at("version") == 4;
-    if (value.size() != (selected_cuts ? 5 : 4) || value.contains("selected_cut_ids") != selected_cuts)
+    const int version = value.at("version").get<int>();
+    const bool complete_memberships = version >= 5;
+    const bool selected_cuts = version == 4 || version == 7;
+    const bool component_only = version == 3 || version == 6;
+    if (value.size() != (selected_cuts ? 5u : 4u) + (complete_memberships ? 1u : 0u) ||
+        value.contains("selected_cut_ids") != selected_cuts ||
+        value.contains("complete_component_phase_memberships") != complete_memberships)
         reject("unsupported intent field set");
+    if (complete_memberships && (!value.at("complete_component_phase_memberships").is_boolean() ||
+        !value.at("complete_component_phase_memberships").get<bool>()))
+        reject("complete membership dialect requires literal component membership retirement");
     const auto& ids = value.at("corner_ids");
-    if (!ids.is_array() || (ids.empty() && value.at("version") != 3 && !selected_cuts) || ids.size() > selection_limit)
+    if (!ids.is_array() || (ids.empty() && !component_only && !selected_cuts) || ids.size() > selection_limit)
         reject("invalid explicit corner inventory");
     CornerSelectionRemovalIntent result;
     result.complete_corner_catalog_hosts = value.at("version") != 1;
-    result.component_only = value.at("version") == 3;
+    result.component_only = component_only;
+    result.complete_component_phase_memberships = complete_memberships;
     for (const auto& id : ids) {
         if (!id.is_string()) reject("corner owner must be an identity");
         result.corner_ids.push_back(id.get<std::string>());
@@ -252,6 +281,8 @@ ArchitecturalDrawingRemovalIntent corner_selection_removal_authority(const Corne
 Entities replay_corner_selection_removal_architectural(const Entities& actual,
     const CornerSelectionRemovalIntent& intent, bool active_phase_constraints) try {
     (void)encode_corner_selection_removal_intent(intent);
+    AssemblyCatalogTransferBudget catalog_budget;
+    if (intent.complete_component_phase_memberships) admit_catalogs(actual, catalog_budget);
     // Reserve the shared source/host/roof/native work before either complete
     // producer runs. The ordinary lane retains its historical authority.
     validate_mixed_wall_removal_source_admission(actual, true, intent.complete_corner_catalog_hosts);
@@ -293,7 +324,8 @@ Entities replay_corner_selection_removal_architectural(const Entities& actual,
     std::vector<Entities> candidates;
     if (intent.component_only) candidates.push_back(actual);
     else candidates.push_back(replay_corner_window_removal(actual, effective_owners, active_phase_constraints,
-        intent.complete_corner_catalog_hosts));
+        intent.complete_corner_catalog_hosts, intent.complete_component_phase_memberships));
+    if (intent.complete_component_phase_memberships) admit_catalogs(candidates.front(), catalog_budget);
     auto other=intent.other.architectural;
     const auto corner_aliases=embedded_assembly_presentation_ids(candidates.front());
     Ids corner_closure;
@@ -317,7 +349,12 @@ Entities replay_corner_selection_removal_architectural(const Entities& actual,
     });
     if (!other.object_ids.empty() || !other.components.empty())
         candidates.push_back(replay_architectural_selection_removal(actual,other,
-            intent.other.allow_manufactured_opening_hosts,false,false,false,intent.complete_corner_catalog_hosts));
+            intent.other.allow_manufactured_opening_hosts,intent.other.complete_roof_component_phase_memberships,
+            intent.complete_component_phase_memberships,intent.complete_component_phase_memberships,
+            intent.complete_corner_catalog_hosts,intent.complete_component_phase_memberships,
+            intent.other.complete_roof_component_phase_memberships));
+    if (intent.complete_component_phase_memberships)
+        for (std::size_t leaf = 1; leaf < candidates.size(); ++leaf) admit_catalogs(candidates[leaf], catalog_budget);
     for (const auto& candidate : candidates) {
         const auto aliases = embedded_assembly_presentation_ids(candidate);
         for (const auto& [key, alias] : aliases) {
@@ -332,7 +369,9 @@ Entities replay_corner_selection_removal_architectural(const Entities& actual,
         expected_inactive.insert(scope.inactive_owner_ids.begin(), scope.inactive_owner_ids.end());
     }
     auto result = candidates.size() == 1 ? std::move(candidates.front()) :
-        compose_ordinary_architectural_removal_candidates(actual, candidates, true, true);
+        compose_ordinary_architectural_removal_candidates(actual, candidates, true, true,
+            intent.complete_component_phase_memberships);
+    if (intent.complete_component_phase_memberships) admit_catalogs(result, catalog_budget);
     validate_mixed_wall_removal_source_admission(result, true, intent.complete_corner_catalog_hosts);
     validate_corner_window_state(result);
     validate_document_assembly_instances(result);
@@ -343,7 +382,7 @@ Entities replay_corner_selection_removal_architectural(const Entities& actual,
         (void)entity;
         if (!result.contains(id)) retired.insert(id);
     }
-    validate_completed_architectural_retirement_references(result, retired);
+    validate_completed_architectural_retirement_references(result, retired, intent.complete_component_phase_memberships);
     validate_constraint_transition(actual, result);
     constraints(result, active_phase_constraints);
     return result;

@@ -1,4 +1,19 @@
-# Vertex project formats v1 through v210
+# Vertex project formats v1 through v211
+
+Reader211 retains explicit corner removal intents5 (owner), 6 (component-only)
+and 7 (selected cuts), and mixed selection removal intents11, 12 and 13,
+respectively. Corner5 and corner6 have exactly `version`, `kind`, `corner_ids`,
+`other` and `complete_component_phase_memberships`; corner7 additionally has
+`selected_cut_ids`. `kind` is `corner_removal` and the membership option is
+literal `true`. This authority explicitly retires complete phase memberships
+of actual removed corner components. Mixed11 through mixed13 retain the same
+eleven fields listed for mixed9 below and require corner5 through corner7,
+respectively, inside the unchanged outer command45. Historical corner1 through
+corner4 and mixed1 through mixed10 retain their original authority. Current,
+nested, wrapped, retained and undone receipts require reader211, including
+after earlier reader210 receipts. Extraction emits209. This is source-format
+support only; runtime acceptance remains unqualified and companion-bearing
+quarantine remains.
 
 Reader210 retains explicit ArchitecturalDrawingRemovalIntent3 and mixed
 selection removal intent10 inside unchanged outer command45. AD3 has exactly

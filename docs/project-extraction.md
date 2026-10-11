@@ -1,5 +1,21 @@
 # Portable project extraction
 
+Exchange version209 requires native reader211 for explicit corner removal
+intents5 (owner), 6 (component-only) and 7 (selected cuts), and mixed selection
+removal intents11, 12 and 13, respectively, inside unchanged outer command45.
+Corner5 and corner6 have exactly `version`, `kind`, `corner_ids`, `other` and
+`complete_component_phase_memberships`; corner7 additionally has
+`selected_cut_ids`. `kind` is `corner_removal` and the membership option is
+literal `true`. The explicit authority retires complete phase memberships of
+actual removed corner components. Mixed11 through mixed13 have the same eleven
+fields as mixed9 and mixed1 and require corner5 through corner7, respectively.
+Current, nested, wrapped, retained and undone history preserves reader211,
+including after earlier reader210 receipts. Historical corner1 through corner4
+and mixed1 through mixed10 retain their original authority. The existing
+native-format-minus-two emitter supplies exchange209 without a new extraction
+path. This describes source-format support only, without runtime acceptance
+or lifting companion-bearing project quarantine.
+
 Exchange version208 requires native reader210 for explicit
 ArchitecturalDrawingRemovalIntent3 and mixed selection removal intent10 inside
 unchanged outer command45. AD3 has exactly `version`, `architectural`, `drawing`,

@@ -955,6 +955,14 @@ DrawingSelectionRemovalEntities replay_drawing_selection_removal_with_corners(
     const DrawingSelectionRemovalEntities& actual, const DrawingSelectionRemovalIntent& drawing,
     const CornerSelectionRemovalIntent& corners, bool active_phase_constraints) {
     try {
+        if (corners.complete_component_phase_memberships) {
+            Budget source_budget; bounds(actual,source_budget);
+            AssemblyCatalogTransferBudget catalog_budget;
+            for (const auto& [id,entity]:actual) {
+                (void)id;
+                if (entity.type=="assembly_model") admit_existing_assembly_catalog_work(entity,catalog_budget);
+            }
+        }
         (void)replay(actual,actual,drawing,active_phase_constraints);
         const auto stage=replay_corner_selection_removal_architectural(actual,corners,active_phase_constraints);
         auto result=replay(actual,stage,drawing,active_phase_constraints,&stage);

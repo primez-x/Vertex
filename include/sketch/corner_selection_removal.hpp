@@ -17,6 +17,9 @@ struct CornerSelectionRemovalIntent {
     // Version four retains explicitly selected actual managed cuts. Their
     // authenticated owners derive consequences without becoming selection.
     std::vector<std::string> selected_cut_ids;
+    // Closed versions five through seven complete only actual retired catalog
+    // rows' typed phase memberships; historical wrappers retain their authority.
+    bool complete_component_phase_memberships{false};
 };
 
 using CornerSelectionRemovalEntities = DrawingSelectionRemovalEntities;
