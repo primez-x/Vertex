@@ -14,6 +14,38 @@ changed source does not acquire runtime acceptance without later qualification.
 
 ## Current delivery state
 
+### October 10 complete mixed numeric Transform - source integration
+
+The room-dialog adapter is committed and pushed as 7ecb4037 with exact
+local/remote ref verification. The next source batch, committed and pushed as
+42041a46 with exact local/remote ref verification, connects complete mixed numeric
+Transform to explicit ordinary objects and actual selected skylight children.
+It captures the full source, uses actual opening geometry for common bounds,
+collects mandatory room decisions, caches a complete preview and restores the
+qualified selection, order and primary after one publication. Independent source
+review identified coordinate-basis, embedded Site frame, qualified alias and
+invariant-child gaps. The adapter corrections are written; changed roof groups
+retain complete member upserts and source-invariant groups have separate typed
+proofs rather than silently dropping selected children.
+
+Reader191/extraction189 carry new mixed/ordinary dialect four. An additional
+review found model-plan text anchors and stored angles use different frames.
+The source producer now authenticates a separate linear text baseline operator;
+historical dialects retain their original meaning. Fixed
+skylight reflection preserves actual physical facet geometry and rejects
+nonrepresentable rectangular reflection. Broader reflection coverage remains
+required. Independent source review approves the identity proof and corrected
+text/desktop integration. The caller canonicalizes a half-turn with both flips
+before every producer and skips trigonometric baseline conversion for pure
+translation, preserving exact identity angles. Root reviewed the integrated
+source and reader floors; source whitespace is clean. Compilation, interaction,
+history/save/reopen, extraction and performance are unverified.
+
+Complete mixed Properties, direct plan/native dragging and resizing, ordinary
+phase replacement and geometry scaling remain implementation work. No builds,
+tests/new tests, probes, native jobs, launches, packages or installations run.
+The installed app remains unchanged and all ten production gates stay open.
+
 ### October 10 complete mixed geometry command - source integration
 
 Reviewed selected geometry and corner callouts are committed and pushed as
