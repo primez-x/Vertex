@@ -31,6 +31,7 @@
 #include "sketch/mixed_clipboard_placement.hpp"
 #include "sketch/mixed_clipboard_command.hpp"
 #include "sketch/authored_phase_membership.hpp"
+#include "sketch/assembly_phase_membership_transport.hpp"
 #include "sketch/corner_window_edit.hpp"
 #include "sketch/dxf_architectural_source.hpp"
 #include "sketch/phase_corner_window_edit.hpp"
@@ -6015,6 +6016,10 @@ class MainWindow::Impl {
         // Filled only by a source-derived physical copy producer after genuine
         // Document admission, including qualified presentation additions.
         std::optional<ApplyEntityChanges> intent;
+        // Actual qualified bindings supplied by the physical clone producer.
+        // They are not guessed from aliases or type names after the copy.
+        AssemblyPhaseCopiedRoots component_roots;
+        AssemblyPhaseCopiedHosts component_hosts;
     };
     struct PresentationTransformCapture {
         std::string owner_id;
@@ -8350,7 +8355,7 @@ public:
             auto command = sourceDerivedStructuralCloneCommand(source, {{original.id, transform}},
                 "Copy transformed structural object", identities, &capture);
             auto complete = augmentAuthoredCommand(command, source);
-            requireIndependentCopyRegistrations(source, command,
+            completeIndependentCopyRegistrations(source, command,
                 std::get<ApplyEntityChanges>(complete), &capture);
             return {std::move(complete), identities.at(original.id)};
         }
@@ -8360,7 +8365,7 @@ public:
             auto command = sourceDerivedSlabCloneCommand(source, {original.id},
                 {{original.id, transform}}, "Copy transformed horizontal assembly", identities, &capture);
             auto complete = augmentAuthoredCommand(command, source);
-            requireIndependentCopyRegistrations(source, command,
+            completeIndependentCopyRegistrations(source, command,
                 std::get<ApplyEntityChanges>(complete), &capture);
             return {std::move(complete), identities.at(original.id)};
         }
@@ -8370,7 +8375,7 @@ public:
             auto command = sourceDerivedRoofCloneCommand(source, {original.id},
                 {{original.id, transform}}, "Copy transformed roof", identities, &capture);
             auto complete = augmentAuthoredCommand(command, source);
-            requireIndependentCopyRegistrations(source, command,
+            completeIndependentCopyRegistrations(source, command,
                 std::get<ApplyEntityChanges>(complete), &capture);
             return {std::move(complete), identities.at(original.id)};
         }
@@ -8381,7 +8386,7 @@ public:
             auto command = sourceDerivedStairCloneCommand(source, {{original.id, transform}},
                 "Copy transformed stair or railing", identities, children, &capture);
             auto complete = augmentAuthoredCommand(command, source);
-            requireIndependentCopyRegistrations(source, command,
+            completeIndependentCopyRegistrations(source, command,
                 std::get<ApplyEntityChanges>(complete), &capture);
             return {std::move(complete), identities.at(original.id)};
         }
@@ -10026,7 +10031,7 @@ public:
             // Physical presentation containers retain their original rows. Admit
             // only the exact source-derived additions and phase/page enrollment,
             // rather than requiring those retained targets to become copies.
-            requireIndependentCopyRegistrations(source, *model_copy->intent, command, model_copy);
+            completeIndependentCopyRegistrations(source, *model_copy->intent, command, model_copy);
             (void)Document::preview_command(source, command);
             return command;
         }
@@ -10217,9 +10222,10 @@ public:
                 const auto owner=source.entities().find(key.first);
                 if (owner!=source.entities().end() && physical_family(owner->second)) physical_children.emplace(key,copied);
             }
+            IndependentModelCopyCapture physical_capture;
             const auto physical_command=makeIndependentSelectionCloneCommand(source,std::move(physical),transform,
                 ApplyEntityChanges{source.revision(),{}, {},"Copy architectural objects"},physical_ids,
-                physical_children,maximum_entities,owner_transform);
+                physical_children,maximum_entities,owner_transform,&physical_capture);
             std::set<std::string,std::less<>> covered_owners;
             for (const auto& [id,copied]:physical_ids) {
                 const auto [found,inserted]=identities.emplace(id,copied);
@@ -10298,6 +10304,8 @@ public:
             const auto admitted=Document::preview_command(source,Command{command});
             validate_architectural_geometry_changes(source,admitted);
             if (model_copy) {
+                model_copy->component_roots=std::move(physical_capture.component_roots);
+                model_copy->component_hosts=std::move(physical_capture.component_hosts);
                 model_copy->source_digest=document_snapshot_digest(source);
                 model_copy->intent=command;
             }
@@ -10703,7 +10711,7 @@ public:
                  transform.rotation_radians, 1.0, transform.flip_horizontal, transform.flip_vertical}}},
                 "Copy horizontal assembly", identities, &capture);
             auto complete = augmentAuthoredCommand(command, source);
-            requireIndependentCopyRegistrations(source, command,
+            completeIndependentCopyRegistrations(source, command,
                 std::get<ApplyEntityChanges>(complete), &capture);
             return {std::move(complete), identities.at(original.id)};
         }
@@ -14309,9 +14317,9 @@ public:
                 if (group && clone->isChecked()) {
                     auto* copied = std::get_if<ApplyEntityChanges>(&candidate.first);
                     if (!copied) throw std::invalid_argument("A complete selection copy requires one entity command.");
-                    requireIndependentCopyRegistrations(source,*copy_intent,*copied,&roof_copy_capture);
+                    completeIndependentCopyRegistrations(source,*copy_intent,*copied,&roof_copy_capture);
                     candidate.first = validateIndependentAreaCopy(source,*copied,&roof_copy_capture);
-                    requireIndependentCopyRegistrations(source,*copy_intent,
+                    completeIndependentCopyRegistrations(source,*copy_intent,
                         std::get<ApplyEntityChanges>(candidate.first),&roof_copy_capture);
                 }
                 if (group && !clone->isChecked() && presentation_scene) {
@@ -17769,18 +17777,20 @@ public:
             if (document_snapshot_digest(source) != document_snapshot_digest(authoringSnapshot()))
                 throw std::invalid_argument("The project changed while the assembly catalog was open.");
             const auto found = source.entities().find(catalog_id);
-            auto entity = found == source.entities().end()
-                ? Entity{catalog_id, "assembly_model", {{"model", AssemblyModel::create({}, {}, {}).to_json()}}}
-                : found->second;
-            if (entity.type != "assembly_model") throw std::invalid_argument("The assembly catalog is unavailable.");
-            auto updated_model = model.to_json();
-            if (entity.properties.contains("model") && entity.properties.at("model").is_object())
-                updated_model = retain_assembly_catalog_dialect(entity.properties.at("model"), std::move(updated_model));
-            entity.properties["model"] = std::move(updated_model);
-            if (found != source.entities().end() && entity == found->second) { clearError(); return true; }
-            const ApplyEntityChanges command{
-                source.revision(), {EntityChange::upsert(std::move(entity))}, {},
-                message.toStdString()};
+            ApplyEntityChanges command{source.revision(), {}, {}, message.toStdString()};
+            if (found != source.entities().end()) {
+                // Admission must precede dialect retention: retention itself
+                // decodes the generated replacement's complete type graph.
+                command = assembly_catalog_update_command(source, catalog_id, model, source.revision(), message.toStdString());
+                const auto& updated = command.entity_changes.front().entity;
+                if (command.entity_changes.size() == 1 && updated == found->second &&
+                    updated.properties.dump() == found->second.properties.dump() &&
+                    updated.extensions.dump() == found->second.extensions.dump()) { clearError(); return true; }
+            } else {
+                auto entity = Entity{catalog_id, "assembly_model", {{"model", AssemblyModel::create({}, {}, {}).to_json()}}};
+                entity.properties["model"] = retain_assembly_catalog_dialect(entity.properties.at("model"), model.to_json());
+                command.entity_changes.push_back(EntityChange::upsert(std::move(entity)));
+            }
             (void)Document::preview_command(source, Command{command});
             applyDocumentCommand(Command{command});
             clearError();
@@ -25545,7 +25555,7 @@ public:
                 {{}, {movement.x,movement.y,movement.z},movement.rotation_z_radians,movement.scale,false,false}}},
                 transaction.undo_label(),identities,children,&capture);
             auto complete=augmentAuthoredCommandForRegistry(command,source,{},registry_id);
-            requireIndependentCopyRegistrationsForRegistry(source,command,std::get<ApplyEntityChanges>(complete),&capture,registry_id);
+            completeIndependentCopyRegistrationsForRegistry(source,command,std::get<ApplyEntityChanges>(complete),&capture,registry_id);
             return complete;
         }
         if ((original.type=="stair" || original.type=="railing") && operations.size()==1 &&
@@ -25567,7 +25577,7 @@ public:
                 {{}, {movement.x, movement.y, movement.z}, movement.rotation_z_radians, movement.scale, false, false}}},
                 transaction.undo_label(), identities, &capture);
             auto complete = augmentAuthoredCommandForRegistry(command, source, {}, registry_id);
-            requireIndependentCopyRegistrationsForRegistry(source, command,
+            completeIndependentCopyRegistrationsForRegistry(source, command,
                 std::get<ApplyEntityChanges>(complete), &capture, registry_id);
             return complete;
         }
@@ -25582,7 +25592,7 @@ public:
                 {{}, {movement.x, movement.y, movement.z}, movement.rotation_z_radians, movement.scale, false, false}}},
                 transaction.undo_label(), identities, &capture);
             auto complete = augmentAuthoredCommandForRegistry(command, source, {}, registry_id);
-            requireIndependentCopyRegistrationsForRegistry(source, command,
+            completeIndependentCopyRegistrationsForRegistry(source, command,
                 std::get<ApplyEntityChanges>(complete), &capture, registry_id);
             return complete;
         }
@@ -25592,9 +25602,14 @@ public:
             operations[1].object_id == operations[0].duplicate_id && operations[1].transform) {
             const auto& movement = *operations[1].transform;
             RoofCloneIdentityMap identities{{original.id, operations[0].duplicate_id}};
-            return sourceDerivedRoofCloneCommand(source, {original.id}, {{original.id,
+            IndependentModelCopyCapture capture;
+            auto command = sourceDerivedRoofCloneCommand(source, {original.id}, {{original.id,
                 {{}, {movement.x, movement.y, movement.z}, movement.rotation_z_radians, movement.scale, false, false}}},
-                transaction.undo_label(), identities);
+                transaction.undo_label(), identities, &capture);
+            auto complete = augmentAuthoredCommandForRegistry(command, source, {}, registry_id);
+            completeIndependentCopyRegistrationsForRegistry(source, command,
+                std::get<ApplyEntityChanges>(complete), &capture, registry_id);
+            return complete;
         }
         if (original.type == "roof" && operations.size() == 1 &&
             operations.front().action == ArchitecturalAction::transform &&
@@ -48474,6 +48489,76 @@ private:
             phaseRegistryForAuthoring(source));
     }
 
+    void completeIndependentCopyRegistrations(const DocumentSnapshot& source,
+        const ApplyEntityChanges& intent, ApplyEntityChanges& candidate,
+        const IndependentModelCopyCapture* model_copy = nullptr) const {
+        completeIndependentCopyRegistrationsForRegistry(source, intent, candidate, model_copy,
+            phaseRegistryForAuthoring(source));
+    }
+
+    static void completeIndependentCopyRegistrationsForRegistry(const DocumentSnapshot& source,
+        const ApplyEntityChanges& intent, ApplyEntityChanges& candidate,
+        const IndependentModelCopyCapture* model_copy = nullptr, const std::string& registry_id = {}) {
+        if (!model_copy || !model_copy->intent || model_copy->component_roots.empty()) {
+            requireIndependentCopyRegistrationsForRegistry(source, intent, candidate, model_copy, registry_id);
+            return;
+        }
+        if (model_copy->source_digest != document_snapshot_digest(source) ||
+            command_to_json(Command{intent}).dump() != command_to_json(Command{*model_copy->intent}).dump())
+            throw std::invalid_argument("The component copy no longer matches its actual source-derived intent.");
+        auto registered = intent;
+        registerNewObjectMemberships(source, registered, {}, registry_id);
+        auto entities = source.entities();
+        std::set<std::string, std::less<>> changed;
+        for (const auto& change : registered.entity_changes) {
+            if (change.kind != EntityChangeKind::upsert || !changed.insert(change.entity.id).second)
+                throw std::invalid_argument("A component host copy requires unique additive entity changes.");
+            entities.insert_or_assign(change.entity.id, change.entity);
+        }
+        const auto completed = transport_assembly_phase_memberships_for_independent_host_copies(
+            source.entities(), entities, model_copy->component_roots, model_copy->component_hosts);
+        auto expected = registered;
+        for (const auto& [id, entity] : completed) {
+            const auto& before = entities.at(id);
+            if (entity == before && entity.properties.dump() == before.properties.dump() &&
+                entity.extensions.dump() == before.extensions.dump()) continue;
+            if (entity.type != assembly_phase_membership_entity_type || !source.entities().contains(id) || changed.contains(id))
+                throw std::invalid_argument("Component copy transport changed an unqualified retained carrier.");
+            expected.entity_changes.push_back(EntityChange::upsert(entity));
+        }
+        // The ordinary registered input and this exact derived completion are
+        // the only accepted forms. Repeated preview completion is idempotent.
+        const auto submitted = command_to_json(Command{candidate}).dump();
+        if (submitted != command_to_json(Command{registered}).dump() &&
+            submitted != command_to_json(Command{expected}).dump())
+            throw std::invalid_argument("A component copy changed more than its actual additions and design membership.");
+        candidate = std::move(expected);
+    }
+
+    static void captureIndependentComponentCopyBindings(const DocumentSnapshot& source,
+        const std::map<std::string, std::string, std::less<>>& identities,
+        const std::map<AssemblyPhaseRoot, std::string>& hosted_identities,
+        IndependentModelCopyCapture& capture) {
+        capture.component_roots.clear();
+        capture.component_hosts.clear();
+        for (const auto& [original, copied] : hosted_identities) {
+            const auto& rows = source.entities().at(original.first).properties.at("model").at("instances");
+            const auto row = std::find_if(rows.begin(), rows.end(),
+                [&](const auto& value) { return value.at("id") == original.second; });
+            if (row == rows.end() || !row->contains("placement") || row->at("placement").is_null())
+                throw std::invalid_argument("A copied component lost its actual source placement.");
+            const auto host = row->at("placement").at("host_entity_id").get<std::string>();
+            const auto copied_host = identities.find(host);
+            const auto copied_catalog = identities.find(original.first);
+            if (copied_host == identities.end() || copied_catalog == identities.end())
+                throw std::invalid_argument("A copied component is missing its actual copied host or catalog.");
+            capture.component_roots.emplace(original, AssemblyPhaseRoot{copied_catalog->second, copied});
+            const auto [found, inserted] = capture.component_hosts.emplace(host, copied_host->second);
+            if (!inserted && found->second != copied_host->second)
+                throw std::invalid_argument("A copied component has conflicting physical host destinations.");
+        }
+    }
+
     static void registerNewObjectMemberships(const DocumentSnapshot& source, ApplyEntityChanges& command,
         const std::set<std::string,std::less<>>& admitted_destinations={}, const std::string& registry_id={}) {
         auto* changes = &command;
@@ -49060,6 +49145,7 @@ private:
             throw std::invalid_argument("A roof copy must retain its actual shared assets.");
         (void)Document::preview_command(source, creation);
         if (capture) {
+            captureIndependentComponentCopyBindings(source, identities, hosted_identities, *capture);
             capture->source_digest = document_snapshot_digest(source);
             capture->intent = creation;
         }
@@ -49987,7 +50073,11 @@ private:
         }
         const auto preview=Document::preview_command(source,Command{creation});
         validate_architectural_geometry_changes(source,preview);
-        if (capture) { capture->source_digest=document_snapshot_digest(source); capture->intent=creation; }
+        if (capture) {
+            captureIndependentComponentCopyBindings(source, identities, authoring.hosted_instance_identities, *capture);
+            capture->source_digest=document_snapshot_digest(source);
+            capture->intent=creation;
+        }
         return creation;
     }
 
@@ -50058,6 +50148,7 @@ private:
         const auto preview = Document::preview_command(source, creation);
         validate_architectural_geometry_changes(source, preview);
         if (capture) {
+            captureIndependentComponentCopyBindings(source, identities, authoring.hosted_instance_identities, *capture);
             capture->source_digest = document_snapshot_digest(source);
             capture->intent = creation;
         }
@@ -50109,6 +50200,7 @@ private:
             if (owner!=source.entities().end() && owner->second.type=="stair") stair_children.emplace(key,copied);
         }
         std::vector<ModelCopyEntities> candidates;
+        IndependentModelCopyCapture structural_capture, roof_capture, slab_capture, stair_capture;
         const auto append_family = [&](const ApplyEntityChanges& command) {
             if (command.expected_revision != source.revision() || !command.asset_changes.empty())
                 throw std::invalid_argument("A mixed copy must retain its actual source revision and shared assets.");
@@ -50116,10 +50208,10 @@ private:
                 throw std::invalid_argument("A mixed copy cannot remove original owners.");
             candidates.push_back(Document::preview_command(source, Command{command}).entities());
         };
-        if (!structural.empty()) append_family(sourceDerivedStructuralCloneCommand(source, structural, message, structural_ids));
-        if (!roofs.empty()) append_family(sourceDerivedRoofCloneCommand(source, roof_owners, roofs, message, roof_ids));
-        if (!slabs.empty()) append_family(sourceDerivedSlabCloneCommand(source, slab_owners, slabs, message, slab_ids));
-        if (!stairs.empty()) append_family(sourceDerivedStairCloneCommand(source,stairs,message,stair_ids,stair_children));
+        if (!structural.empty()) append_family(sourceDerivedStructuralCloneCommand(source, structural, message, structural_ids, &structural_capture));
+        if (!roofs.empty()) append_family(sourceDerivedRoofCloneCommand(source, roof_owners, roofs, message, roof_ids, &roof_capture));
+        if (!slabs.empty()) append_family(sourceDerivedSlabCloneCommand(source, slab_owners, slabs, message, slab_ids, &slab_capture));
+        if (!stairs.empty()) append_family(sourceDerivedStairCloneCommand(source,stairs,message,stair_ids,stair_children, &stair_capture));
         std::set<std::string, std::less<>> fresh;
         for (const auto& [key,copied]:stair_children) {
             if (occupied.contains(copied) || !fresh.insert(copied).second)
@@ -50166,6 +50258,18 @@ private:
         const auto preview = Document::preview_command(source, Command{creation});
         validate_architectural_geometry_changes(source, preview);
         if (capture) {
+            capture->component_roots.clear();
+            capture->component_hosts.clear();
+            for (const auto* family : {&structural_capture, &roof_capture, &slab_capture, &stair_capture}) {
+                for (const auto& [original, copied] : family->component_roots)
+                    if (!capture->component_roots.emplace(original, copied).second)
+                        throw std::invalid_argument("A mixed copy repeats a qualified hosted component source.");
+                for (const auto& [original, copied] : family->component_hosts) {
+                    const auto [found, inserted] = capture->component_hosts.emplace(original, copied);
+                    if (!inserted && found->second != copied)
+                        throw std::invalid_argument("A mixed copy has conflicting component host destinations.");
+                }
+            }
             capture->source_digest = document_snapshot_digest(source);
             capture->intent = creation;
         }
@@ -50299,6 +50403,7 @@ private:
         }
         (void)Document::preview_command(source, creation);
         if (capture) {
+            captureIndependentComponentCopyBindings(source, identities, hosted_identities, *capture);
             capture->source_digest = document_snapshot_digest(source);
             capture->intent = creation;
         }

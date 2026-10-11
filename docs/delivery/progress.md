@@ -14,6 +14,57 @@ changed source does not acquire runtime acceptance without later qualification.
 
 ## Current delivery state
 
+### October 11 ordinary component copy and catalog row retirement
+
+The preceding presentation-reference batch is committed and pushed as 3acd5e53.
+Current source adds separate additive phase membership transport for ordinary
+host copies. It derives declared source roots and their actual companion from
+the admitted source, and derives the fresh destination's baseline or proposed
+role from its physically enrolled host and saved design choice. Original rows
+and registry roles remain unchanged; duplication does not demolish the source.
+Legacy unlisted rows remain unlisted while their fresh hosts may follow ordinary
+authoring enrollment. Declared cross-registry coupling still refuses explicitly.
+
+The captured roof, horizontal, structural and stair/railing clone producers now
+retain actual qualified row and physical-host mappings. Single-object mirror/
+duplicate and captured numeric group completion carry those bindings after
+physical enrollment; mixed architectural families and physical-plus-drawing
+composition preserve the complete capture. Completion admits only the exact
+registered physical intent or its independently derived companion additions,
+including repeated preview completion. Structural copy discovery now recognizes
+the closed membership model while keeping opaque siblings subject to refusal.
+
+The catalog editor now routes existing catalog updates through a core command
+producer. Actual removed embedded rows derive companion pruning in the same
+command; present inactive rows remain declared. Removing baseline rows with a
+saved active alternative still refuses. The original registry, assets and raw
+companion carriers remain retained. This changes no historical generic command
+meaning or reader floor: the explicit resulting upserts already use the existing
+catalog and reader203 membership schemas. New catalog creation remains separate.
+
+Broader typed owner/catalog/registry deletion, complete mixed clipboard,
+detach/shared-type semantics, uncaptured copy paths, nested profile selection,
+joint-only patches and deformed/cross-Site carry remain implementation gaps.
+Required-companion read-only quarantine remains in place until all consumers
+integrate; this batch does not enable or certify component alternatives.
+All ten production gates remain open. No builds, tests, scripts, probes, launches,
+packages or installations ran; the installed candidate is unchanged. Source
+review and named whitespace checks are the only current verification, with
+compilation and runtime still unverified.
+Independent integrated review found and resolved candidate decoding before
+cumulative catalog admission, including the preliminary desktop retention bypass.
+It then approved the bounded source change with no confirmed P1/P2 remaining.
+Root reviewed exact producer maps, repeated completion, additive phase roles,
+catalog retirement, retained raw payloads and unchanged history/format authority.
+
+The next typed removal inventory is source-backed: architectural object removal
+filters actual hosted/explicit catalog rows, but its reference scratch has no
+membership codec and its final scope rejects the resulting dangling roots.
+Add an explicit opt-in prune authority before those reference checks, and carry
+it through a distinct selection/retained command dialect. Existing corner
+selection versions1..4 and mixed removal versions1..8 must keep their meanings.
+Physical retirement and active-baseline demolition need separate behavior.
+
 ### October 11 component presentation reference transport
 
 The preceding retained joint Properties batch is committed and pushed as

@@ -29,6 +29,24 @@ transport_assembly_phase_memberships_for_host_copies(
     const AssemblyPhaseCopiedHosts& copied_hosts,
     std::string_view registry_id, std::string_view alternative_id);
 
+// Ordinary additive copies supply an independently admitted complete candidate
+// after actual physical phase enrollment. Source hosts, reached catalogs and
+// companions remain raw-exact; original physical registry roles and saved
+// choices remain unchanged. Only declared active source rows gain fresh roots
+// in their actual companion. The fresh actual placement host supplies its
+// registry and baseline-existing or saved-alternative-proposed destination role.
+// Declared cross-registry coupling refuses; unlisted source rows remain unlisted.
+// Their hosts may follow independently admitted ordinary phase enrollment. No
+// allocation, caller phase choice, geometry or Document publication authority
+// is supplied. Empty mappings still admit both complete maps and return exactly
+// the candidate. Inputs are never mutated.
+[[nodiscard]] AssemblyPhaseTransportEntities
+transport_assembly_phase_memberships_for_independent_host_copies(
+    const AssemblyPhaseTransportEntities& source,
+    const AssemblyPhaseTransportEntities& candidate,
+    const AssemblyPhaseCopiedRoots& copied_roots,
+    const AssemblyPhaseCopiedHosts& copied_hosts);
+
 // A removal producer may leave unchanged source companions referencing rows
 // now absent from its independently admitted candidate. Prune only those actual
 // absences from every partition; present inactive rows remain declared. Removing

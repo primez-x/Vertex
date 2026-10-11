@@ -309,6 +309,179 @@ AssemblyPhaseTransportEntities transport_assembly_phase_memberships_for_host_cop
     }
 }
 
+AssemblyPhaseTransportEntities transport_assembly_phase_memberships_for_independent_host_copies(
+    const Entities& source, const Entities& candidate, const AssemblyPhaseCopiedRoots& copied_roots,
+    const AssemblyPhaseCopiedHosts& copied_hosts) {
+    try {
+        require(copied_roots.size() <= max_bindings && copied_hosts.size() <= max_bindings,
+            "independent assembly phase transport copied binding budget exceeded");
+        Budget budget;
+        for (const auto& [from, to] : copied_roots) {
+            root_id(from); root_id(to);
+            budget.text(from.first); budget.text(from.second); budget.text(to.first); budget.text(to.second);
+        }
+        for (const auto& [from, to] : copied_hosts) {
+            document_id(from); document_id(to); budget.text(from); budget.text(to);
+        }
+        budget.entities(source); budget.entities(candidate);
+        // Admit the complete carriers and cumulative nonlinear work before any
+        // scope or catalog decoder, including catalogs not reached by a copy.
+        std::set<std::string, std::less<>> original_catalog_ids, proposed_catalog_ids;
+        for (const auto& [id, entity] : source)
+            if (entity.type == "assembly_model") original_catalog_ids.insert(id);
+        for (const auto& [id, entity] : candidate)
+            if (entity.type == "assembly_model") proposed_catalog_ids.insert(id);
+        AssemblyCatalogTransferBudget catalog_budget;
+        admit_catalogs(source, original_catalog_ids, catalog_budget);
+        admit_catalogs(candidate, proposed_catalog_ids, catalog_budget);
+        const Phases original_phases(source), proposed_phases(candidate);
+        const auto original_scope = resolve_assembly_phase_memberships(source);
+        const auto proposed_scope = resolve_assembly_phase_memberships(candidate);
+        const auto original_catalogs = catalogs(source, original_catalog_ids);
+        const auto proposed_catalogs = catalogs(candidate, proposed_catalog_ids);
+        companions_exact(source, candidate, false);
+
+        // Project away only genuinely fresh physical owners. Every source
+        // registry role, alternative, saved choice and raw representation must
+        // survive ordinary enrollment, including inactive alternative roles.
+        for (const auto& [id, registry] : original_phases.registries) {
+            (void)registry;
+            const auto found = candidate.find(id);
+            require(found != candidate.end() && proposed_phases.registries.contains(id),
+                "independent assembly phase transport removed an actual source registry");
+            auto retained = found->second;
+            auto& saved_roles = retained.properties.at("model");
+            const auto remove_fresh = [&](Json& rows) {
+                std::erase_if(rows.get_ref<Json::array_t&>(), [&](const Json& row) {
+                    return !source.contains(row.get_ref<const std::string&>());
+                });
+            };
+            remove_fresh(saved_roles.at("entity_ids"));
+            remove_fresh(saved_roles.at("baseline_ids"));
+            for (auto& alternative : saved_roles.at("alternatives")) {
+                remove_fresh(alternative.at("demolished_ids"));
+                remove_fresh(alternative.at("proposed_ids"));
+            }
+            require(exact(source.at(id), retained),
+                "independent assembly phase transport changed source registry roles or saved selection");
+        }
+        for (const auto& [id, registry_id] : proposed_phases.owners) {
+            if (!source.contains(id)) continue;
+            const auto owner = original_phases.owners.find(id);
+            require(owner != original_phases.owners.end() && owner->second == registry_id,
+                "independent assembly phase transport changed an original physical owner's registry");
+        }
+
+        std::set<std::string, std::less<>> fresh_hosts;
+        for (const auto& [from, to] : copied_hosts) {
+            require(from != to && !source.contains(to) && fresh_hosts.insert(to).second && !copied_hosts.contains(to),
+                "independent assembly phase transport copied host must have a fresh injective actual identity");
+            actual_host(source, from); actual_host(candidate, from); actual_host(candidate, to);
+            require(source.at(from).type == candidate.at(to).type && exact(source.at(from), candidate.at(from)),
+                "independent assembly phase transport changed its retained source host or physical family");
+            require(!assembly_host_inactive_in_phase(source, original_phases.inactive, from) &&
+                !assembly_host_inactive_in_phase(candidate, proposed_phases.inactive, to),
+                "independent assembly phase transport copied placement host is inactive");
+            const auto destination_owner = proposed_phases.owners.find(to);
+            if (destination_owner == proposed_phases.owners.end()) continue;
+            const auto& registry = proposed_phases.registries.at(destination_owner->second);
+            const auto state = proposed_phases.states.find(to);
+            require(state != proposed_phases.states.end() && state->second ==
+                (registry.active_alternative() ? ModelPhase::proposed : ModelPhase::existing),
+                "independent assembly phase transport requires actual ordinary fresh host enrollment");
+        }
+
+        struct Additions {
+            std::vector<AssemblyPhaseRoot> baseline;
+            std::map<std::string, std::vector<AssemblyPhaseRoot>, std::less<>> proposed;
+            std::size_t count{};
+        };
+        std::map<std::string, Additions, std::less<>> edits;
+        std::set<AssemblyPhaseRoot> fresh_roots;
+        std::set<std::string, std::less<>> checked_source_catalogs;
+        for (const auto& [from, to] : copied_roots) {
+            require(from != to && fresh_roots.insert(to).second && !copied_roots.contains(to),
+                "independent assembly phase transport destination is aliased, duplicated or another source");
+            require(!original_scope.owners.contains(to) && !proposed_scope.owners.contains(to),
+                "independent assembly phase transport cannot overwrite or re-enroll destination membership");
+            const auto& original = instance(original_catalogs, from);
+            const auto& destination = instance(proposed_catalogs, to);
+            const auto existing_catalog = original_catalogs.find(to.first);
+            require(existing_catalog == original_catalogs.end() || !existing_catalog->second.instances.contains(to.second),
+                "independent assembly phase transport destination qualified identity is not fresh");
+            if (checked_source_catalogs.insert(from.first).second) {
+                const auto retained = candidate.find(from.first);
+                require(retained != candidate.end() && exact(source.at(from.first), retained->second),
+                    "independent assembly phase transport changed its retained actual source catalog");
+            }
+            require(original.placement && destination.placement,
+                "independent assembly phase transport copied rows require actual placements");
+            const auto host = copied_hosts.find(original.placement->host_entity_id);
+            require(host != copied_hosts.end() && host->second == destination.placement->host_entity_id,
+                "independent assembly phase transport destination host is not its actual source-derived copied host");
+            // Placement has no independent host-kind field: the actual typed
+            // host is its authority, and its kind must survive the row mapping.
+            require(source.at(original.placement->host_entity_id).type ==
+                candidate.at(destination.placement->host_entity_id).type,
+                "independent assembly phase transport changed the actual placement host kind");
+            const auto owner = original_scope.owners.find(from);
+            if (owner == original_scope.owners.end()) continue; // No inferred legacy enrollment.
+            const auto state = original_scope.states.find(from);
+            require(state != original_scope.states.end() && state->second != ModelPhase::demolished,
+                "independent assembly phase transport source row is absent or inactive in its saved design");
+            const auto& registry_id = owner->second.registry_id;
+            const auto source_host_owner = original_phases.owners.find(original.placement->host_entity_id);
+            require(source_host_owner == original_phases.owners.end() || source_host_owner->second == registry_id,
+                "independent assembly phase transport cannot encode cross-registry source row/host coupling");
+            proposed_phases.owned(destination.placement->host_entity_id, registry_id);
+            inherited_host(source, original_phases, original.placement->host_entity_id, registry_id);
+            inherited_host(candidate, proposed_phases, destination.placement->host_entity_id, registry_id);
+            const auto& registry = proposed_phases.registries.at(registry_id);
+            require(original_phases.registries.at(registry_id).active_alternative() == registry.active_alternative(),
+                "independent assembly phase transport source and destination must retain the same saved selection");
+            auto& edit = edits[owner->second.membership_entity_id];
+            ++edit.count;
+            if (registry.active_alternative()) edit.proposed[*registry.active_alternative()].push_back(to);
+            else edit.baseline.push_back(to);
+        }
+        if (copied_roots.empty()) return candidate;
+
+        std::map<std::string, Json, std::less<>> replacements;
+        for (const auto& [id, edit] : edits) {
+            const auto& saved = model(source.at(id), assembly_phase_membership_entity_type);
+            const auto membership = AssemblyPhaseMembership::from_json(saved);
+            require(edit.count <= max_bindings - membership.roots().size(),
+                "independent assembly phase transport resulting root budget exceeded");
+            auto roots = membership.roots();
+            auto baseline = membership.baseline_roots();
+            auto alternatives = membership.alternatives();
+            roots.insert(roots.end(), edit.baseline.begin(), edit.baseline.end());
+            baseline.insert(baseline.end(), edit.baseline.begin(), edit.baseline.end());
+            for (const auto& [alternative_id, additions] : edit.proposed) {
+                roots.insert(roots.end(), additions.begin(), additions.end());
+                auto alternative = std::find_if(alternatives.begin(), alternatives.end(),
+                    [&](const auto& row) { return row.alternative_id == alternative_id; });
+                if (alternative == alternatives.end()) {
+                    require(alternatives.size() < 1000,
+                        "independent assembly phase transport resulting alternative budget exceeded");
+                    alternatives.push_back({alternative_id, {}, {}});
+                    alternative = std::prev(alternatives.end());
+                }
+                alternative->proposed_roots.insert(alternative->proposed_roots.end(), additions.begin(), additions.end());
+            }
+            const auto proposed = AssemblyPhaseMembership::create(membership.registry_id(), std::move(roots),
+                std::move(baseline), std::move(alternatives));
+            replacements.emplace(id, retain_assembly_phase_membership_source(saved, proposed));
+        }
+        auto result = candidate;
+        for (auto& [id, replacement] : replacements) result.at(id).properties.at("model") = std::move(replacement);
+        (void)resolve_assembly_phase_memberships(result);
+        return result;
+    } catch (const Json::exception& error) {
+        throw std::invalid_argument(std::string("invalid independent assembly phase copy transport: ") + error.what());
+    }
+}
+
 AssemblyPhaseTransportEntities prune_removed_assembly_phase_memberships(const Entities& source, const Entities& candidate) {
     try {
         Budget budget;

@@ -183,6 +183,12 @@ struct AssemblyDocumentTypeUpdateImpact {
     const std::string& entity_id, const AssemblyDocumentInstance& value, Revision expected_revision);
 [[nodiscard]] ApplyEntityChanges assembly_instance_remove_command(const DocumentSnapshot& source,
     const std::string& entity_id, Revision expected_revision);
+// Updates an existing catalog and prunes actual phase membership rows only when
+// their embedded instances were deleted. Present inactive rows remain declared;
+// baseline row deletion refuses while a saved alternative is active.
+[[nodiscard]] ApplyEntityChanges assembly_catalog_update_command(const DocumentSnapshot& source,
+    const std::string& catalog_id, const AssemblyModel& replacement, Revision expected_revision,
+    std::string message = "Update assembly catalog");
 // Validates every external instance against the replacement catalog before
 // returning one catalog upsert. No input snapshot is mutated.
 [[nodiscard]] ApplyEntityChanges independent_assembly_type_update_command(const DocumentSnapshot& source,

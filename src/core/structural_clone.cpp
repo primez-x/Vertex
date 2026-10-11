@@ -2,6 +2,7 @@
 
 #include "sketch/annotation_entity_codec.hpp"
 #include "sketch/assembly_model.hpp"
+#include "sketch/assembly_phase_membership.hpp"
 #include "sketch/building_entity.hpp"
 #include "sketch/constraint_phase_scope.hpp"
 #include "sketch/model_phases.hpp"
@@ -144,7 +145,10 @@ void remap_field(Json& value, const char* key, const StructuralCloneIdentityMap&
 // sibling remains visible to the affected-reference refusal check.
 Entity opaque_remainder(Entity entity) {
     auto& p = entity.properties;
-    if (entity.type == "model_phases") {
+    if (entity.type == assembly_phase_membership_entity_type) {
+        (void)AssemblyPhaseMembership::from_json(p.at("model"));
+        p.erase("model"); // Typed membership is retained separately; siblings remain opaque.
+    } else if (entity.type == "model_phases") {
         (void)ModelPhases::from_json(p.at("model"));
         auto& model = p.at("model");
         model.erase("entity_ids"); model.erase("baseline_ids");

@@ -1,5 +1,16 @@
 # Vertex project formats v1 through v208
 
+Ordinary captured host copies now add phase membership using the existing
+reader203 companion schema. The admitted physical copy and its actual enrollment
+determine the destination role; declared source rows gain baseline or proposed
+copies without source demolition. Legacy undeclared rows remain undeclared.
+Existing catalog row removal derives missing-root pruning across the companion
+partitions, with active-alternative baseline retirement refused. These producers
+persist their explicit resulting catalog/companion changes through the existing
+generic entity-change command; no historical command or format gains implicit
+transport. Companion-bearing project quarantine and remaining mutation-consumer
+work are unchanged. Source integration is not runtime qualification.
+
 Reader208 retains component presentation Properties17 in mixed envelope52.
 It adds literal `carry_component_presentation:true` to the Properties16 fields and
 requires component request/authoring2. That closed authoring adds literal

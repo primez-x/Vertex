@@ -1,6 +1,7 @@
 #include "sketch/assembly_document_adapter.hpp"
 #include "sketch/annotation_entity_codec.hpp"
 #include "sketch/architectural_document_adapter.hpp"
+#include "sketch/assembly_phase_membership_transport.hpp"
 #include "sketch/slab_semantics.hpp"
 #include "sketch/wall_semantics.hpp"
 #include <algorithm>
@@ -1192,6 +1193,50 @@ ApplyEntityChanges assembly_instance_remove_command(const DocumentSnapshot& sour
     candidate.erase(entity_id);
     validate_document_assembly_instances(candidate);
     return {expected_revision, {EntityChange::erase(entity_id)}, {}, "Remove assembly instance"};
+}
+ApplyEntityChanges assembly_catalog_update_command(const DocumentSnapshot& source,
+    const std::string& catalog_id, const AssemblyModel& replacement, Revision expected_revision,
+    std::string message) {
+    revision(source, expected_revision);
+    identifier(catalog_id);
+    const auto found = source.entities().find(catalog_id);
+    require(found != source.entities().end(), "assembly catalog update target is missing");
+    require(found->second.id == catalog_id && found->second.type == "assembly_model",
+        "assembly catalog update target has the wrong identity or entity type");
+    AssemblyCatalogTransferBudget budget;
+    bool has_membership = false;
+    for (const auto& [id, entity] : source.entities()) {
+        (void)id;
+        if (entity.type == "assembly_model") admit_existing_assembly_catalog_work(entity, budget);
+        if (entity.type == "assembly_phase_membership") has_membership = true;
+    }
+    Entity updated = found->second;
+    updated.properties["model"] = replacement.to_json();
+    // Dialect retention itself decodes the generated model. Charge the entire
+    // candidate catalog roster on the same source/candidate work ledger first.
+    for (const auto& [id, entity] : source.entities())
+        if (entity.type == "assembly_model")
+            admit_existing_assembly_catalog_work(id == catalog_id ? updated : entity, budget);
+    (void)catalog(found->second);
+    updated.properties["model"] = retain_assembly_catalog_dialect(found->second.properties.at("model"),
+        std::move(updated.properties.at("model")));
+    auto candidate = source.entities();
+    candidate.insert_or_assign(catalog_id, updated);
+    validate_document_assembly_instances(candidate);
+    if (has_membership) candidate = prune_removed_assembly_phase_memberships(source.entities(), candidate);
+    ApplyEntityChanges command{expected_revision, {EntityChange::upsert(std::move(updated))}, {},
+        std::move(message)};
+    for (const auto& [id, entity] : source.entities()) {
+        if (entity.type != "assembly_phase_membership") continue;
+        const auto derived = candidate.find(id);
+        if (derived == candidate.end()) command.entity_changes.push_back(EntityChange::erase(id));
+        else if (entity.id != derived->second.id || entity.type != derived->second.type ||
+            entity.required != derived->second.required ||
+            entity.properties.dump() != derived->second.properties.dump() ||
+            entity.extensions.dump() != derived->second.extensions.dump())
+            command.entity_changes.push_back(EntityChange::upsert(derived->second));
+    }
+    return command;
 }
 ApplyEntityChanges independent_assembly_type_update_command(const DocumentSnapshot& source,
     const std::string& catalog_id, AssemblyType replacement, Revision expected_revision) {
