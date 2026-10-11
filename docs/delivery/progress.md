@@ -14,10 +14,61 @@ changed source does not acquire runtime acceptance without later qualification.
 
 ## Current delivery state
 
+### October 11 wall/component deletion integration
+
+The preceding coordinated component integration is committed and pushed as
+8391dc32. Current source adds wall demolition inner6 under unchanged phase16
+and outer34. Its fourteen fields retain complete actual corner/hosted authority
+and add a separate nullable canonical phase30 component child plus literal
+membership completion. Explicit baseline components remain exact catalog rows;
+only their own membership demolition partitions change. Actual physically
+retired proposed/ordinary rows use independently proved source pruning. Every
+lane authenticates the same saved alternative and original source before the
+whole-floor room inventory and accepted review. Historical wall1..5 retain their
+authority. Catalog reservation precedes phase resolution; returned growth and
+the final map share cumulative admission without larger limits.
+
+Pure ordinary/baseline wall helpers separately forward membership and expected
+choice through corner/object preflight and replay. Required companions change
+only to exact typed proofs; opaque carrier metadata, retained baseline bodies,
+other alternatives and surviving aliases stay protected. Canvas preparation
+partitions actual baseline and ordinary qualified rows, including wall-only
+dispatch. Selection4 binds only phase16/inner6 and propagates through completed47,
+mixed4 and canonical mixed2 contexts. Derived corner owners are closure evidence,
+not extra selected roots. Document live/retained guards, Site footprints and
+reader214/extraction212 retain the new authority through current, nested,
+wrapped, retained and undone commands, including history after reader213 rows.
+
+Independent source review approved the two-file ordinary wall prerequisite.
+Integrated review found and corrected a P2: an attached proposed railing's
+declared hosted component was pruned by the reused stair retirement leaf, then
+rejected by its unrelated-envelope guard. The new opt-in pure stair membership
+option authenticates every retired hosted root against the actual saved choice,
+admits source, physical and projected final inventories before native work, and
+permits only independently proved exact companion pruning. Wall6/coordinator8
+forward this option; standalone historical stair consumers retain their defaults.
+The final replay must equal the admitted pure registry projection exactly.
+Independent review approved the integrated source and the correction with no
+confirmed P1/P2 findings remaining. Root reviewed the appended API defaults,
+projection against the existing baseline compositor, consumer includes and
+new-mode forwarding. Named whitespace checks pass.
+Compilation, runtime, room decisions, Undo/Redo, save/reopen and extraction round
+trips remain unverified. No builds, tests, scripts, probes, native jobs, launches,
+packages or installations ran; the installed app is unchanged.
+
+Direct ordinary/proposed-only wall command codecs still lack explicit membership
+authority; their physical, mixed-wall and mixed-wall/opening proof families and
+controller/drawing/room/history consumers are the next implementation gap.
+Mixed clipboard, detach/shared types, uncaptured copies, nested profiles,
+joint-only patches and deformed/cross-Site carry remain gaps. Companion editing
+quarantine and all ten production gates remain open. This batch does not certify
+architectural lifecycle, Apex compatibility or any complete production package.
+
 ### October 11 coordinated component demolition integration
 
-The hosted-opening prerequisite is committed and pushed as ef1f1930. Current
-source adds closed coordinated demolition inner8 under unchanged phase15 and
+The hosted-opening prerequisite is committed and pushed as ef1f1930. The
+coordinated integration is committed and pushed as 8391dc32. Its source adds
+closed coordinated demolition inner8 under unchanged phase15 and
 outer34. Its eleven fields separate nullable canonical phase30 component
 authoring from independently replayed physical/ordinary/opening lanes and
 require literal hosted-catalog and component-membership completion. Actual

@@ -12,11 +12,14 @@ struct PhaseSelectionRemovalIntent {
     ArchitecturalSelectionRemovalIntent architectural;
     DrawingSelectionRemovalIntent drawing;
     // Selection dialect two exclusively binds a pure phase-authoring thirty
-    // component demolition. Both completion flags false retain dialect one.
+    // component demolition. All completion flags false retain dialect one.
     bool complete_component_phase_demolition = false;
     // Selection dialect three exclusively binds pure phase15/inner8 complete
     // component memberships, with physical roots and qualified component rows.
     bool complete_coordinated_component_phase_memberships = false;
+    // Selection dialect four exclusively binds pure phase16/inner6 complete
+    // wall component memberships. All three completion modes are exclusive.
+    bool complete_wall_component_phase_memberships = false;
 };
 
 [[nodiscard]] nlohmann::json encode_phase_selection_removal_intent(
@@ -34,11 +37,14 @@ struct PhaseSelectionRemovalIntent {
 // its canonical leaf owns local-ID spelling and exact qualified-root matching.
 // Coordinated completion separately requires pure phase15/inner8. Its complete
 // actual-source extraction admits the exact physical and qualified-root roster.
+// Wall completion separately requires pure phase16/inner6 and retains its
+// independently source-bound physical and qualified component root roster.
 [[nodiscard]] ArchitecturalSelectionRemovalIntent phase_selection_removal_base_authority(
     const DocumentSnapshot& source, const Command& pure_phase_deletion_command,
     const ArchitecturalSelectionRemovalIntent& explicit_selection,
     bool complete_component_phase_demolition = false,
-    bool complete_coordinated_component_phase_memberships = false);
+    bool complete_coordinated_component_phase_memberships = false,
+    bool complete_wall_component_phase_memberships = false);
 
 [[nodiscard]] DocumentSnapshot prepare_phase_selection_removal_stage(
     const DocumentSnapshot& source, const PhaseSelectionRemovalIntent& intent,

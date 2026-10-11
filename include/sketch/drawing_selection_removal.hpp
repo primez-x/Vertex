@@ -95,7 +95,8 @@ struct DrawingSelectionRemovalIntent {
     const ArchitecturalSelectionRemovalIntent& architectural,
     const Command& pure_phase_deletion_command,
     bool complete_component_phase_demolition = false,
-    bool complete_coordinated_component_phase_memberships = false);
+    bool complete_coordinated_component_phase_memberships = false,
+    bool complete_wall_component_phase_memberships = false);
 
 // Corner retirement/demolition is reconstructed from its explicit actual-owner
 // authority. Only that independently admitted stage supplies override changes.

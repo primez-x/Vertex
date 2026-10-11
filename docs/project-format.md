@@ -1,4 +1,27 @@
-# Vertex project formats v1 through v213
+# Vertex project formats v1 through v214
+
+Reader214 retains wall demolition inner6 under unchanged phase authoring16 and
+outer command34. Its exact fourteen fields are `version`, `wall_demolition`,
+`other_authoring`, `ordinary`, `opening_ids`, `room_review_intent`,
+`ordinary_wall_ids`, `wall_additional_identities`,
+`complete_hosted_catalog_consequences`, `complete_corner_window_consequences`,
+`complete_actual_corner_window_cohorts`, `explicit_corner_window_ids`,
+`component_authoring`, and `complete_component_phase_memberships`. All four
+completion markers are literal `true`. The separate component child is null
+or a canonical full phase30 envelope; its explicit baseline rows remain present
+and receive only source-derived demolition membership. Ordinary physically
+retired rows supply exact typed companion pruning. Every lane uses the original
+source and one actual saved registry/alternative before the complete room review.
+Historical inner1..5 retain their original authority.
+
+Phase selection4 has exactly `version`, `kind`, `object_ids`, `components`,
+`drawing`, and literal `complete_wall_component_phase_memberships:true`. It
+binds exclusively to pure phase16/inner6. Completed47 and mixed4 retain that
+selection; mixed2 admits wider catalog-local IDs only in its canonical wall6
+context. Captured root authority excludes derived corner owners. Reader214
+covers current, nested, wrapped, retained and undone intent, including history
+following reader213 records. Portable extraction uses version212. Compilation
+and round trips require qualification; the reader floor is not acceptance.
 
 Reader213 retains coordinated demolition inner8 under unchanged phase
 authoring15/outer command34. Inner8 has exactly `version`, `opening_authoring`,

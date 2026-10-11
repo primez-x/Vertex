@@ -64,7 +64,7 @@ public:
 // ordinary roots/qualified components, never the demolition's derived closure.
 // Each preparation independently binds the proof to the actual full snapshot.
 // Local component IDs are admitted only by canonical pure phase30 or
-// phase15/inner8 complete component membership authority.
+// phase15/inner8 or phase16/inner6 complete component membership authority.
 // The remaining-child opt-in supplies spelling validation, not command authority.
 [[nodiscard]] DocumentSnapshot prepare_mixed_selection_removal_stage(
     const DocumentSnapshot& source, const ArchitecturalSelectionRemovalIntent& ordinary,
@@ -73,7 +73,8 @@ public:
     const DocumentSnapshot& source, const ArchitecturalSelectionRemovalIntent& ordinary,
     const std::vector<RoofOpeningGroupMember>& members,
     bool complete_component_phase_demolition = false,
-    bool complete_coordinated_component_phase_memberships = false);
+    bool complete_coordinated_component_phase_memberships = false,
+    bool complete_wall_component_phase_memberships = false);
 [[nodiscard]] nlohmann::json make_mixed_selection_removal_intent(
     const DocumentSnapshot& source, const ArchitecturalSelectionRemovalIntent& ordinary,
     const Command& ordinary_command, const std::vector<RoofOpeningGroupMember>& members,
@@ -100,6 +101,8 @@ public:
 // its flag must agree with an exact pure phase30 base or completed phase47.
 // Selection dialect three separately binds pure phase15/inner8 complete
 // component memberships, or completed phase47 retaining that exact selector.
+// Selection dialect four separately binds pure phase16/inner6 wall component
+// memberships, or completed phase47 retaining that exact selector.
 [[nodiscard]] DocumentSnapshot prepare_mixed_selection_removal_stage(
     const DocumentSnapshot& source, const PhaseSelectionRemovalIntent& ordinary,
     const Command& ordinary_command);

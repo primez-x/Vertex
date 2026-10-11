@@ -191,13 +191,29 @@ void preflight_selection(const Json& proof, std::size_t& count, std::size_t dept
     } else if (version == 16) {
         const auto& wall = field(proof, "wall_demolition");
         const auto& inner_version = field(wall, "version");
-        if (!inner_version.is_number_integer() || inner_version < 1 || inner_version > 5)
+        if (!inner_version.is_number_integer() || inner_version < 1 || inner_version > 6)
             invalid("unsupported wall demolition version");
+        if (inner_version == 6) {
+            if (!wall.is_object() || wall.size()!=14)
+                invalid("wall component memberships require the closed inner6 field set");
+            for (const auto* flag : {"complete_hosted_catalog_consequences", "complete_corner_window_consequences",
+                    "complete_actual_corner_window_cohorts", "complete_component_phase_memberships"}) {
+                const auto& complete=field(wall,flag);
+                if (!complete.is_boolean() || complete!=true)
+                    invalid("wall component memberships require literal completion authority");
+            }
+            const auto& component=field(wall,"component_authoring");
+            if (!component.is_null()) {
+                if (field(component,"version")!=30)
+                    invalid("wall component slot requires a phase30 child");
+                preflight_selection(component,count,depth+1);
+            }
+        }
         preflight_ids(field(field(wall, "wall_demolition"), "wall_ids"), count);
         if (inner_version != 1) preflight_ids(field(wall, "ordinary_wall_ids"), count);
         preflight_ordinary(field(wall, "ordinary"), count);
         preflight_ids(field(wall, "opening_ids"), count);
-        if (inner_version == 5) preflight_ids(field(wall, "explicit_corner_window_ids"), count);
+        if (inner_version == 5 || inner_version == 6) preflight_ids(field(wall, "explicit_corner_window_ids"), count);
         const auto& other = field(wall, "other_authoring");
         if (!other.is_null()) preflight_selection(other, count, depth + 1);
     } else {
@@ -264,8 +280,13 @@ void extract(const PhaseConstraintAuthoringIntent& proof,
         selected.add(leaf.wall_demolition.wall_ids);
         selected.add(leaf.ordinary_wall_ids);
         selected.add(leaf.ordinary.object_ids);
-        selected.add(leaf.ordinary.components);
+        selected.add(leaf.ordinary.components,leaf.complete_component_phase_memberships);
         selected.add(leaf.opening_ids);
+        // This inventory also contains owners derived from selected managed
+        // cuts, and repeats selected owners already in ordinary.object_ids.
+        // It grants closure authority, never an additional selected root.
+        if (!leaf.component_authoring.is_null())
+            extract(decode_phase_constraint_authoring_intent(leaf.component_authoring), actual_binding, selected, depth + 1);
         if (!leaf.other_authoring.is_null())
             extract(decode_phase_constraint_authoring_intent(leaf.other_authoring), actual_binding, selected, depth + 1);
     } else {
@@ -298,8 +319,15 @@ ArchitecturalSelectionRemovalIntent phase_removal_selection_authority(
 
     ConstraintAuthoringIntent empty;
     empty.message = proof.intent.message;
-    const bool component_memberships = !proof.coordinated_demolition.is_null() &&
+    const bool coordinated_memberships = !proof.coordinated_demolition.is_null() &&
         phase_coordinated_demolition_complete_component_phase_memberships(proof.coordinated_demolition, proof);
+    const bool wall_memberships = !proof.wall_demolition.is_null() &&
+        phase_wall_demolition_complete_component_phase_memberships(proof.wall_demolition);
+    // Reserve all catalogs before actual phase/model resolution, including
+    // those needed by a nested coordinator. This admission grants no roots.
+    if (wall_memberships)
+        preflight_phase_wall_demolition_component_catalogs(source.entities(),proof.wall_demolition,proof);
+    const bool component_memberships = coordinated_memberships || wall_memberships;
     const auto actual_binding = make_phase_constraint_authoring_intent(source, empty, proof.component_demolition,
         component_memberships);
     Selection selected;

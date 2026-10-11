@@ -1,5 +1,6 @@
 #include "sketch/phase_wall_demolition.hpp"
 
+#include "sketch/assembly_document_adapter.hpp"
 #include "sketch/assembly_model.hpp"
 #include "sketch/architectural_object_removal.hpp"
 #include "sketch/constraint_phase_scope.hpp"
@@ -99,6 +100,20 @@ void bounds(const Entities& source) {
         }
     }
 }
+void admit_catalogs(const Entities& entities, AssemblyCatalogTransferBudget& budget) {
+    for (const auto& [id, entity] : entities) {
+        (void)id;
+        if (entity.type == "assembly_model") admit_existing_assembly_catalog_work(entity, budget);
+    }
+}
+void membership_options(bool complete_corners, bool complete_memberships,
+    const std::optional<std::pair<std::string,std::string>>& required_choice) {
+    if (complete_memberships && !complete_corners)
+        reject("complete component memberships require complete actual corner cohorts");
+    if (required_choice && !complete_memberships)
+        reject("required component phase choice needs complete component memberships");
+    if (required_choice) { identity(required_choice->first); identity(required_choice->second); }
+}
 bool contains(const std::vector<std::string>& ids, const std::string& id) {
     return std::binary_search(ids.begin(), ids.end(), id);
 }
@@ -138,11 +153,16 @@ void append_missing(Json& rows, const Ids& additions) {
     for (const auto& id : additions) if (retained.insert(id).second) rows.push_back(id);
 }
 std::optional<Entity> prepare_registry(const Entities& entities,const std::vector<std::string>& selected_wall_ids,
-    bool complete_corners=false,std::vector<std::string>* corner_owner_ids=nullptr) {
+    bool complete_corners=false,std::vector<std::string>* corner_owner_ids=nullptr,
+    bool complete_memberships=false,
+    const std::optional<std::pair<std::string,std::string>>& required_choice=std::nullopt) {
+    membership_options(complete_corners,complete_memberships,required_choice);
     if (selected_wall_ids.size() > root_limit) reject("selected wall count exceeds 128");
     if (selected_wall_ids.empty()) return std::nullopt;
     try {
         bounds(entities);
+        AssemblyCatalogTransferBudget membership_catalog_budget;
+        if (complete_memberships) admit_catalogs(entities,membership_catalog_budget);
         const auto scope = constraint_phase_scope(entities);
         std::map<std::string, const PhysicalWallPhaseState*, std::less<>> owners;
         std::map<std::string, ModelPhases, std::less<>> models;
@@ -172,6 +192,10 @@ std::optional<Entity> prepare_registry(const Entities& entities,const std::vecto
         const auto& phases = models.at(destination->registry_id);
         if (phases.active_alternative() != destination->alternative_id)
             reject("destination differs from actual saved alternative");
+        std::optional<std::pair<std::string,std::string>> component_choice;
+        if (complete_memberships) component_choice.emplace(destination->registry_id,*destination->alternative_id);
+        if (required_choice && required_choice != component_choice)
+            reject("required component phase choice differs from actual wall registry/alternative");
         const auto active_baseline = [&](const std::string& id, bool unregistered_allowed) {
             const auto found = entities.find(id);
             if (found == entities.end()) reject("affected owner is missing: " + id);
@@ -249,7 +273,7 @@ std::optional<Entity> prepare_registry(const Entities& entities,const std::vecto
             // use these same checks without manufacturing an interim snapshot.
             validate_mixed_wall_removal_source_admission(entities,true,true);
             if (!corners.empty()) preflight_architectural_object_removal(
-                entities,corners,{},0,true,false,true,true);
+                entities,corners,{},0,true,false,true,true,complete_memberships,component_choice);
         }
         std::map<std::string, std::vector<const Entity*>, std::less<>> openings;
         for (const auto& [id, entity] : entities) {
@@ -316,6 +340,7 @@ std::optional<Entity> prepare_registry(const Entities& entities,const std::vecto
         auto stage = entities;
         stage.at(destination->registry_id) = replacement;
         bounds(stage);
+        if (complete_memberships) admit_catalogs(stage,membership_catalog_budget);
         const auto admitted = ModelPhases::create(phases.entity_ids(), phases.baseline_ids(),
             std::move(alternatives), phases.active_alternative());
         if (ModelPhases::from_json(raw_model).to_json() != admitted.to_json())
@@ -387,10 +412,16 @@ PhaseWallDemolitionIntent decode_phase_wall_demolition_intent(const Json& value)
 }
 
 std::optional<PhaseWallDemolitionSelection> inspect_phase_wall_demolition_selection(
-    const Entities& actual,const std::vector<std::string>& selected_wall_ids,bool complete_actual_corner_window_cohorts) {
+    const Entities& actual,const std::vector<std::string>& selected_wall_ids,bool complete_actual_corner_window_cohorts,
+    bool complete_component_phase_memberships,
+    const std::optional<std::pair<std::string,std::string>>& required_component_phase_choice) {
+    membership_options(complete_actual_corner_window_cohorts,complete_component_phase_memberships,
+        required_component_phase_choice);
     if (selected_wall_ids.empty()) return std::nullopt;
     if (selected_wall_ids.size()>root_limit) reject("selected wall count exceeds 128");
     bounds(actual);
+    AssemblyCatalogTransferBudget membership_catalog_budget;
+    if (complete_component_phase_memberships) admit_catalogs(actual,membership_catalog_budget);
     const auto scope=constraint_phase_scope(actual);
     std::map<std::string,bool,std::less<>> owners;
     for (const auto& registry:scope.registries) {
@@ -410,7 +441,8 @@ std::optional<PhaseWallDemolitionSelection> inspect_phase_wall_demolition_select
     }
     if (baseline.empty()) return std::nullopt;
     std::vector<std::string> baseline_ids(baseline.begin(),baseline.end());
-    const auto registry=prepare_registry(actual,baseline_ids,complete_actual_corner_window_cohorts);
+    const auto registry=prepare_registry(actual,baseline_ids,complete_actual_corner_window_cohorts,nullptr,
+        complete_component_phase_memberships,required_component_phase_choice);
     if (!registry) reject("baseline selection no longer has an actual saved choice");
     const auto model=ModelPhases::from_json(registry->properties.at("model"));
     if (!model.active_alternative()) reject("baseline selection no longer has an active alternative");
@@ -419,21 +451,38 @@ std::optional<PhaseWallDemolitionSelection> inspect_phase_wall_demolition_select
         std::vector<std::string>(ordinary.begin(),ordinary.end())};
 }
 
-Entities replay_phase_wall_demolition_entities(const Entities& actual,const PhaseWallDemolitionIntent& intent) {
+Entities replay_phase_wall_demolition_entities(const Entities& actual,const PhaseWallDemolitionIntent& intent,
+    bool complete_component_phase_memberships,
+    const std::optional<std::pair<std::string,std::string>>& required_component_phase_choice) {
+    membership_options(intent.complete_actual_corner_window_cohorts,complete_component_phase_memberships,
+        required_component_phase_choice);
     (void)encode_phase_wall_demolition_intent(intent);
+    AssemblyCatalogTransferBudget membership_catalog_budget;
+    if (complete_component_phase_memberships) {
+        bounds(actual);
+        admit_catalogs(actual,membership_catalog_budget);
+    }
     std::vector<std::string> corners;
-    const auto registry=prepare_registry(actual,intent.wall_ids,intent.complete_actual_corner_window_cohorts,&corners);
+    const auto registry=prepare_registry(actual,intent.wall_ids,intent.complete_actual_corner_window_cohorts,&corners,
+        complete_component_phase_memberships,required_component_phase_choice);
     if (!registry || registry->id!=intent.registry_id)
         reject("semantic wall selection differs from its actual saved registry");
     const auto phases=ModelPhases::from_json(registry->properties.at("model"));
     if (phases.active_alternative()!=std::optional<std::string>{intent.alternative_id})
         reject("semantic wall selection differs from its actual saved alternative");
+    std::optional<std::pair<std::string,std::string>> component_choice;
+    if (complete_component_phase_memberships) component_choice.emplace(registry->id,intent.alternative_id);
     auto result=actual;
     if (intent.complete_actual_corner_window_cohorts && !corners.empty()) {
         // The wall and corner leaves independently see the ORIGINAL source.
         // Corner replay owns exact retirement, dependents, catalogs and phase
         // filtering; never grant it the partially parked wall source.
-        result=replay_architectural_object_removal(actual,corners,{},true,0,true,false,true,true);
+        result=replay_architectural_object_removal(actual,corners,{},true,0,true,false,true,true,
+            complete_component_phase_memberships,component_choice);
+        if (complete_component_phase_memberships) {
+            bounds(result);
+            admit_catalogs(result,membership_catalog_budget);
+        }
         auto& raw=result.at(registry->id).properties.at("model");
         const auto& wall_raw=registry->properties.at("model");
         for (auto& row:raw.at("alternatives")) if (row.at("id")==intent.alternative_id) {
@@ -442,13 +491,25 @@ Entities replay_phase_wall_demolition_entities(const Entities& actual,const Phas
                 for (const auto& id:parked.at("demolished_ids")) additions.insert(id.get<std::string>());
             append_missing(row.at("demolished_ids"),additions);
         }
+        // The same ledger covers original source, manufactured corner candidate
+        // and final catalog inventory before downstream phase/model decoding.
+        if (complete_component_phase_memberships) {
+            bounds(result);
+            admit_catalogs(result,membership_catalog_budget);
+        }
         raw=retain_model_phase_source(actual.at(registry->id).properties.at("model"),ModelPhases::from_json(raw));
         // Corner replay must not alter the original selected baseline bodies.
         for (const auto& id:intent.wall_ids) if (result.at(id)!=actual.at(id) ||
             result.at(id).properties.dump()!=actual.at(id).properties.dump() ||
             result.at(id).extensions.dump()!=actual.at(id).extensions.dump())
             reject("complete corner consequence changed a retained baseline wall: "+id);
-    } else result.at(registry->id)=*registry;
+    } else {
+        result.at(registry->id)=*registry;
+        if (complete_component_phase_memberships) {
+            bounds(result);
+            admit_catalogs(result,membership_catalog_budget);
+        }
+    }
     if (intent.complete_actual_corner_window_cohorts) {
         bounds(result);
         validate_corner_window_state(result);

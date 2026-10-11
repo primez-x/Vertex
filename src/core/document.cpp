@@ -3620,6 +3620,11 @@ static std::vector<bool> active_constraint_history_policies(const std::vector<Re
 static void admit_phase_component_demolition_source(
     const std::map<std::string,Entity,std::less<>>& entities,
     const PhaseConstraintAuthoringIntent& intent) {
+    if (!intent.wall_demolition.is_null() &&
+        phase_wall_demolition_complete_component_phase_memberships(intent.wall_demolition)) {
+        preflight_phase_wall_demolition_component_catalogs(entities,intent.wall_demolition,intent);
+        return;
+    }
     if (!intent.coordinated_demolition.is_null() &&
         phase_coordinated_demolition_complete_component_phase_memberships(intent.coordinated_demolition,intent)) {
         preflight_phase_coordinated_demolition_component_catalogs(entities,intent.coordinated_demolition,intent);
@@ -4168,6 +4173,7 @@ static void validate_phase_constraint_fresh_lifetime(const std::map<std::string,
     bool complete_wall_catalog_demolition=false;
     bool complete_wall_corner_demolition=false;
     bool complete_actual_wall_corner_demolition=false;
+    bool complete_wall_component_demolition=false;
     bool complete_hosted_demolition=false;
     bool complete_opening_demolition=false;
     for (const auto& [id,entity] : candidate) {
@@ -4204,6 +4210,7 @@ static void validate_phase_constraint_fresh_lifetime(const std::map<std::string,
             complete_wall_catalog_demolition=complete_wall_catalog_demolition || demolition.complete_hosted_catalog_consequences;
             complete_wall_corner_demolition=complete_wall_corner_demolition || demolition.complete_corner_window_consequences;
             complete_actual_wall_corner_demolition=complete_actual_wall_corner_demolition || demolition.complete_actual_corner_window_cohorts;
+            complete_wall_component_demolition=complete_wall_component_demolition || demolition.complete_component_phase_memberships;
             complete_ordinary_wall_demolition=complete_ordinary_wall_demolition ||
                 !demolition.ordinary_wall_ids.empty() || demolition.complete_hosted_catalog_consequences;
             for (const auto& [original,ids]:demolition.wall_additional_identities) {
@@ -4496,6 +4503,11 @@ static void validate_phase_constraint_fresh_lifetime(const std::map<std::string,
     if (complete_actual_wall_corner_demolition &&
         (fresh.contains("complete_actual_corner_window_cohorts") || fresh.contains("explicit_corner_window_ids")))
         throw std::invalid_argument("A fresh wall demolition destination borrows an actual corner cohort proof field");
+    if (complete_wall_component_demolition)
+        for (const auto* token:{"component_authoring","complete_component_phase_memberships",
+                "complete_wall_component_phase_memberships"})
+            if (fresh.contains(token))
+                throw std::invalid_argument("A fresh wall demolition destination borrows a component phase proof field");
     if (complete_opening_demolition && fresh.contains("ordinary_opening_ids"))
         throw std::invalid_argument("A fresh architectural demolition destination borrows the ordinary opening proof field");
     if (phase_drawing_enclosure) {

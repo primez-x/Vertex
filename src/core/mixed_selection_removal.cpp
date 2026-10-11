@@ -7,6 +7,7 @@
 #include "sketch/phase_coordinated_demolition.hpp"
 #include "sketch/phase_roof_replacement.hpp"
 #include "sketch/phase_removal_selection.hpp"
+#include "sketch/phase_wall_demolition_authoring.hpp"
 #include "sketch/roof_entity_codec.hpp"
 
 #include <algorithm>
@@ -120,16 +121,18 @@ Command closed_command(const Json& value,bool child) {
     return command;
 }
 Json encode_phase_selection(const ArchitecturalSelectionRemovalIntent& ordinary, bool component_demolition = false,
-    bool coordinated_component_memberships = false) {
+    bool coordinated_component_memberships = false, bool wall_component_memberships = false) {
     if (!ordinary.roof_additional_identities.empty() ||
         ordinary.object_ids.size()+ordinary.components.size()==0 ||
         ordinary.object_ids.size()+ordinary.components.size()>1000)
         reject("phase selection requires explicit roots without destination authority");
-    if (component_demolition && coordinated_component_memberships)
-        reject("component demolition and coordinated memberships are exclusive modes");
-    if (coordinated_component_memberships) {
+    if (static_cast<unsigned>(component_demolition)+static_cast<unsigned>(coordinated_component_memberships)+
+        static_cast<unsigned>(wall_component_memberships)>1)
+        reject("component demolition, coordinated and wall memberships are exclusive modes");
+    if (coordinated_component_memberships || wall_component_memberships) {
         PhaseSelectionRemovalIntent selection;selection.architectural=ordinary;
-        selection.complete_coordinated_component_phase_memberships=true;
+        selection.complete_coordinated_component_phase_memberships=coordinated_component_memberships;
+        selection.complete_wall_component_phase_memberships=wall_component_memberships;
         (void)encode_phase_selection_removal_intent(selection);
     }
     if (component_demolition) {
@@ -144,14 +147,14 @@ Json encode_phase_selection(const ArchitecturalSelectionRemovalIntent& ordinary,
     }
     for (std::size_t i=0;i<ordinary.components.size();++i) {
         const auto& key=ordinary.components[i];identity(key.first);
-        if (!component_demolition && !coordinated_component_memberships) identity(key.second);
+        if (!component_demolition && !coordinated_component_memberships && !wall_component_memberships) identity(key.second);
         if (i && ordinary.components[i-1]>=key) reject("phase component selection must be ascending and unique");
         components.push_back({{"catalog_id",key.first},{"instance_id",key.second}});
     }
     return {{"version",1},{"kind","phase_demolition"},{"object_ids",ordinary.object_ids},{"components",components}};
 }
 ArchitecturalSelectionRemovalIntent decode_phase_selection(const Json& value, bool component_demolition = false,
-    bool coordinated_component_memberships = false) {
+    bool coordinated_component_memberships = false, bool wall_component_memberships = false) {
     fields(value,{"version","kind","object_ids","components"});
     if (!value.at("version").is_number_integer() || value.at("version")!=1 || value.at("kind")!="phase_demolition" ||
         !value.at("object_ids").is_array() || !value.at("components").is_array() ||
@@ -168,7 +171,7 @@ ArchitecturalSelectionRemovalIntent decode_phase_selection(const Json& value, bo
             reject("phase component selection requires qualified identities");
         result.components.emplace_back(row.at("catalog_id").get<std::string>(),row.at("instance_id").get<std::string>());
     }
-    if (encode_phase_selection(result,component_demolition,coordinated_component_memberships).dump()!=value.dump()) reject("phase selection is not canonical");
+    if (encode_phase_selection(result,component_demolition,coordinated_component_memberships,wall_component_memberships).dump()!=value.dump()) reject("phase selection is not canonical");
     return result;
 }
 Command closed_phase_removal_command(const Json& value) {
@@ -202,6 +205,26 @@ bool coordinated_component_phase_command(const Command& command) {
     const auto proof=decode_phase_constraint_authoring_intent(wire);
     return phase_coordinated_demolition_complete_component_phase_memberships(proof.coordinated_demolition,proof);
 }
+bool wall_component_phase_command(const Command& command) {
+    const auto* typed=std::get_if<ApplyBoundaryConstraintChanges>(&command);
+    if (!typed || !typed->phase_constraint_authoring_completion || typed->phase_constraint_authoring_intent.is_null()) return false;
+    const auto& wire=typed->phase_constraint_authoring_intent;
+    if (!wire.is_object() || !wire.contains("version") || wire.at("version")!=16) return false;
+    const auto proof=decode_phase_constraint_authoring_intent(wire);
+    return phase_wall_demolition_complete_component_phase_memberships(proof.wall_demolition);
+}
+void wall_component_selection_binding(const ArchitecturalSelectionRemovalIntent& selection,const Command& command) {
+    if (!wall_component_phase_command(command)) return;
+    const auto proof=decode_phase_constraint_authoring_intent(
+        std::get<ApplyBoundaryConstraintChanges>(command).phase_constraint_authoring_intent);
+    const auto wall=decode_phase_wall_demolition_authoring(proof.wall_demolition);
+    if (wall.component_authoring.is_null()) return;
+    const auto child=decode_phase_constraint_authoring_intent(wall.component_authoring);
+    const auto leaf=decode_assembly_component_phase_demolition_intent(child.component_demolition);
+    for (const auto& root:leaf.components)
+        if (!std::binary_search(selection.components.begin(),selection.components.end(),root))
+            reject("wall component child is outside the explicit selection");
+}
 void coordinated_component_selection_binding(const ArchitecturalSelectionRemovalIntent& selection,const Command& command) {
     if (!coordinated_component_phase_command(command)) return;
     const auto proof=decode_phase_constraint_authoring_intent(
@@ -220,6 +243,7 @@ void phase_selection_binding(const ArchitecturalSelectionRemovalIntent& selectio
         encode_assembly_component_phase_demolition_intent({selection.components}).dump())
         reject("component demolition command differs from exact explicit component roots");
     coordinated_component_selection_binding(selection,command);
+    wall_component_selection_binding(selection,command);
 }
 void phase_drawing_selection_binding(const PhaseSelectionRemovalIntent& selection,const Json& wire) {
     // A completed enclosure independently validates its exact inner selection.
@@ -241,6 +265,10 @@ void phase_drawing_selection_binding(const PhaseSelectionRemovalIntent& selectio
     if (coordinated!=selection.complete_coordinated_component_phase_memberships)
         reject("coordinated memberships require selection three and pure phase15/inner8 authority");
     coordinated_component_selection_binding(selection.architectural,command);
+    const bool wall=wall_component_phase_command(command);
+    if (wall!=selection.complete_wall_component_phase_memberships)
+        reject("wall memberships require selection four and pure phase16/inner6 authority");
+    wall_component_selection_binding(selection.architectural,command);
 }
 Command closed_ordinary_deletion_command(const Json& value) {
     if (!value.is_object() || !value.contains("version") || !value.at("version").is_number_integer() ||
@@ -352,7 +380,7 @@ Json validate_mixed_selection_removal_intent(const Json& value) {
         } else if (value.at("version")==2) {
             const auto command=closed_phase_removal_command(value.at("ordinary_command"));
             const auto ordinary=decode_phase_selection(value.at("ordinary"),component_phase_command(command),
-                coordinated_component_phase_command(command));
+                coordinated_component_phase_command(command),wall_component_phase_command(command));
             count=ordinary.object_ids.size()+ordinary.components.size();
             phase_selection_binding(ordinary,command);
         } else if (value.at("version")==3) {
@@ -423,16 +451,18 @@ std::vector<RoofOpeningGroupMember> mixed_selection_removal_remaining_children(c
 }
 std::vector<RoofOpeningGroupMember> mixed_selection_removal_remaining_children(const DocumentSnapshot& source,
     const ArchitecturalSelectionRemovalIntent& ordinary,const std::vector<RoofOpeningGroupMember>& members,
-    bool complete_component_phase_demolition,bool complete_coordinated_component_phase_memberships) {
+    bool complete_component_phase_demolition,bool complete_coordinated_component_phase_memberships,
+    bool complete_wall_component_phase_memberships) {
     const auto canonical=decode_members(encode_members(members));
     // This helper is also called by the original raw architectural dialect,
     // whose allocated roof destinations are not part of selection authority.
     auto roots=ordinary;roots.roof_additional_identities.clear();
     if (!roots.object_ids.empty() || !roots.components.empty())
-        (void)encode_phase_selection(roots,complete_component_phase_demolition,complete_coordinated_component_phase_memberships);
-    else if (complete_component_phase_demolition || complete_coordinated_component_phase_memberships)
+        (void)encode_phase_selection(roots,complete_component_phase_demolition,complete_coordinated_component_phase_memberships,
+            complete_wall_component_phase_memberships);
+    else if (complete_component_phase_demolition || complete_coordinated_component_phase_memberships || complete_wall_component_phase_memberships)
         reject("complete component modes require explicit architectural roots");
-    if (complete_component_phase_demolition || complete_coordinated_component_phase_memberships) {
+    if (complete_component_phase_demolition || complete_coordinated_component_phase_memberships || complete_wall_component_phase_memberships) {
         // This helper can run before stage preparation in the controller.
         // Admit unused catalogs too before any actual roof/model decoding.
         AssemblyCatalogTransferBudget catalog_budget;
@@ -491,7 +521,8 @@ Entities replay_mixed_selection_removal(const DocumentSnapshot& source,const Jso
     const auto phase_command=phase ? std::optional<Command>{closed_phase_removal_command(value.at("ordinary_command"))} : std::nullopt;
     const bool component_phase=phase && component_phase_command(*phase_command);
     const bool coordinated_component_phase=phase && coordinated_component_phase_command(*phase_command);
-    const auto phase_selection=phase ? decode_phase_selection(value.at("ordinary"),component_phase,coordinated_component_phase) : ArchitecturalSelectionRemovalIntent{};
+    const bool wall_component_phase=phase && wall_component_phase_command(*phase_command);
+    const auto phase_selection=phase ? decode_phase_selection(value.at("ordinary"),component_phase,coordinated_component_phase,wall_component_phase) : ArchitecturalSelectionRemovalIntent{};
     const auto complete_selection=complete ? decode_ordinary_selection_removal_intent(value.at("ordinary")) : OrdinarySelectionRemovalIntent{};
     const auto phase_drawing_selection=phase_drawing ? decode_phase_selection_removal_intent(value.at("ordinary")) : PhaseSelectionRemovalIntent{};
     const auto corner_selection=corners ? decode_corner_selection_removal_intent(value.at("ordinary")) : CornerSelectionRemovalIntent{};
@@ -505,7 +536,7 @@ Entities replay_mixed_selection_removal(const DocumentSnapshot& source,const Jso
     const auto remaining=corners ? mixed_selection_removal_remaining_children(source,corner_selection,members) :
         phase_drawing ? mixed_selection_removal_remaining_children(source,phase_drawing_selection,members) :
         complete ? mixed_selection_removal_remaining_children(source,complete_selection,members) :
-        phase ? mixed_selection_removal_remaining_children(source,phase_selection,members,component_phase,coordinated_component_phase) :
+        phase ? mixed_selection_removal_remaining_children(source,phase_selection,members,component_phase,coordinated_component_phase,wall_component_phase) :
         mixed_selection_removal_remaining_children(source,ordinary,members);
     if (remaining.empty()) {
         if (!value.at("child_command").is_null()) reject("selected roofs dominate children; no replacement authority remains");
@@ -545,13 +576,14 @@ DocumentSnapshot prepare_mixed_selection_removal_stage(const DocumentSnapshot& s
     preflight_phase_removal_selection_proof(typed->phase_constraint_authoring_intent);
     const bool component=component_phase_command(ordinary_command);
     const bool coordinated=coordinated_component_phase_command(ordinary_command);
-    const auto selection=encode_phase_selection(ordinary,component,coordinated);
+    const bool wall=wall_component_phase_command(ordinary_command);
+    const auto selection=encode_phase_selection(ordinary,component,coordinated,wall);
     // Admit the original typed object too, before a codec projection could
     // hide competing fields. This independently binds its complete source.
-    const auto actual=phase_selection_removal_base_authority(source,ordinary_command,ordinary,component,coordinated);
+    const auto actual=phase_selection_removal_base_authority(source,ordinary_command,ordinary,component,coordinated,wall);
     const auto canonical=closed_phase_removal_command(command_to_json(ordinary_command));
     phase_selection_binding(ordinary,canonical);
-    if (encode_phase_selection(actual,component,coordinated).dump()!=selection.dump())
+    if (encode_phase_selection(actual,component,coordinated,wall).dump()!=selection.dump())
         reject("ordinary phase proof does not represent the exact explicit selection");
     const auto stage=Document::preview_command(source,canonical);metadata(source,stage);
     if (stage.history().size()!=source.history().size()+1 || stage.revision()!=source.history().size())
@@ -563,7 +595,7 @@ Json make_mixed_selection_removal_intent(const DocumentSnapshot& source,const Ar
     const auto stage=prepare_mixed_selection_removal_stage(source,ordinary,ordinary_command);
     const auto canonical=closed_phase_removal_command(command_to_json(ordinary_command));
     Json value={{"version",2},{"ordinary",encode_phase_selection(ordinary,component_phase_command(canonical),
-        coordinated_component_phase_command(canonical))},
+        coordinated_component_phase_command(canonical),wall_component_phase_command(canonical))},
         {"ordinary_command",command_to_json(ordinary_command)},{"members",encode_members(members)},
         {"child_command",child_command ? command_to_json(*child_command) : Json(nullptr)},
         {"source_snapshot_digest",document_snapshot_digest(source)},
@@ -615,7 +647,8 @@ std::vector<RoofOpeningGroupMember> mixed_selection_removal_remaining_children(c
     const PhaseSelectionRemovalIntent& ordinary,const std::vector<RoofOpeningGroupMember>& members) {
     const auto authority=phase_selection_removal_authority(ordinary);
     return mixed_selection_removal_remaining_children(source,authority.architectural,members,
-        ordinary.complete_component_phase_demolition,ordinary.complete_coordinated_component_phase_memberships);
+        ordinary.complete_component_phase_demolition,ordinary.complete_coordinated_component_phase_memberships,
+        ordinary.complete_wall_component_phase_memberships);
 }
 Json make_mixed_selection_removal_intent(const DocumentSnapshot& source,const PhaseSelectionRemovalIntent& ordinary,
     const Command& ordinary_command,const std::vector<RoofOpeningGroupMember>& members,const std::optional<Command>& child_command) {

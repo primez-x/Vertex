@@ -1,5 +1,19 @@
 # Portable project extraction
 
+Exchange version212 requires native reader214 for complete wall/component phase
+deletion with room review. Wall inner6 has fourteen fields: the historical inner5
+inventory plus nullable `component_authoring` and literal
+`complete_component_phase_memberships:true`; hosted catalog, corner consequence
+and actual-cohort markers are also literal `true`. The component child is a
+canonical full phase30 envelope. Its retained baseline rows receive explicit
+demolition additions; physical retirement supplies exact source-derived
+companion pruning. All lanes use one original source and saved alternative
+before the whole room review. Phase selection4 has the historical five fields
+plus literal `complete_wall_component_phase_memberships:true`, binds only this
+new base, and remains retained through completed47/mixed4. Mixed2 derives wider
+local IDs exclusively from the same canonical context. Historical wall1..5 and
+selection1..3 authority remain unchanged. Extraction round trips are unverified.
+
 Exchange version211 requires native reader213 for coordinated demolition
 inner8 under unchanged phase authoring15/outer command34. The exact eleven
 fields are `version`, `opening_authoring`, `roof_authoring`, `slab_authoring`,

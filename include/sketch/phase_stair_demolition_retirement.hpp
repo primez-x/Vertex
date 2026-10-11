@@ -2,6 +2,7 @@
 
 #include "sketch/phase_stair_demolition.hpp"
 
+#include <optional>
 #include <utility>
 
 namespace sketch {
@@ -46,16 +47,24 @@ phase_stair_demolition_retirement_request(
 
 [[nodiscard]] StairDemolitionRetirementPlan inspect_phase_stair_demolition_retirement_plan(
     const std::map<std::string, Entity, std::less<>>& source,
-    const StairDemolitionRetirementIntent& intent);
+    const StairDemolitionRetirementIntent& intent,
+    bool complete_component_phase_memberships = false,
+    const std::optional<std::pair<std::string, std::string>>& required_component_phase_choice = std::nullopt);
 
 // Re-derive every retired owner/row/reference from actual source, retire only
 // active-only proposed attached rails, then compose ordinary baseline demolition.
 // All baseline physical envelopes, other alternatives and catalog definitions
 // survive exactly. A blocking opaque reference or changed surviving alias refuses.
+// Opt-in component completion authenticates every actual retired hosted row in
+// the intent's saved choice before geometry admission and proves companions by
+// exact source pruning. A supplied choice must match that actual choice and
+// requires completion; neither option extends the closed v1 intent grammar.
 [[nodiscard]] std::map<std::string, Entity, std::less<>>
 replay_phase_stair_demolition_retirement_entities(
     const std::map<std::string, Entity, std::less<>>& source,
-    const StairDemolitionRetirementIntent& intent);
+    const StairDemolitionRetirementIntent& intent,
+    bool complete_component_phase_memberships = false,
+    const std::optional<std::pair<std::string, std::string>>& required_component_phase_choice = std::nullopt);
 
 // Explicit selective lane for stair replacement. rail_ids is a nonempty,
 // bounded, sorted unique subset of actual active-only proposed attached rails

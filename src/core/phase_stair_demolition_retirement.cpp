@@ -73,9 +73,8 @@ struct Budget {
         }
     }
 };
-void source_bounds(const Entities& source) {
+void source_bounds(const Entities& source, Budget& budget, std::size_t& phase_work) {
     if (source.size() > entity_limit) invalid("source entity budget exceeded");
-    Budget budget; std::size_t phase_work{};
     for (const auto& [id, entity] : source) {
         identity(id);
         if (entity.id != id || !entity.properties.is_object() || !entity.extensions.is_object())
@@ -92,6 +91,30 @@ void source_bounds(const Entities& source) {
         if (members->size() > (phase_limit - phase_work) / contexts) invalid("phase state work budget exceeded");
         phase_work += members->size() * contexts;
     }
+}
+void source_bounds(const Entities& source) {
+    Budget budget; std::size_t phase_work{};
+    source_bounds(source, budget, phase_work);
+}
+// One ledger admits every complete inventory before its phase/model/resolver
+// consumers. The source, physical retirement candidate and final demolition
+// projection are charged cumulatively; failed work remains charged.
+struct ComponentAdmission {
+    Budget raw;
+    std::size_t phase_work{};
+    AssemblyCatalogTransferBudget catalogs;
+    void admit(const Entities& entities) {
+        source_bounds(entities, raw, phase_work);
+        for (const auto& [id, entity] : entities) {
+            (void)id;
+            if (entity.type == "assembly_model") admit_existing_assembly_catalog_work(entity, catalogs);
+        }
+    }
+};
+void component_options(bool complete,
+    const std::optional<std::pair<std::string, std::string>>& required_choice) {
+    if (required_choice && !complete) invalid("a required component phase choice requires component completion");
+    if (required_choice) { identity(required_choice->first); identity(required_choice->second); }
 }
 bool supported(const Entity& entity) {
     const auto version = field(entity.properties, "version"), form = field(entity.properties, "form");
@@ -162,6 +185,9 @@ template<class Predicate> void filter(Json& rows, Predicate keep) {
 }
 void remove_ids(Json& rows, const Ids& ids) {
     filter(rows, [&](const Json& row) { return !ids.contains(row.get<std::string>()); });
+}
+bool exact(const Entity& a, const Entity& b) {
+    return a == b && a.properties.dump() == b.properties.dump() && a.extensions.dump() == b.extensions.dump();
 }
 
 struct Derivation {
@@ -465,20 +491,29 @@ void retire_presentations(Derivation& derived, const Entities& source, const Ids
     }
 }
 
-Derivation derive(const Entities& source, const StairDemolitionRetirementIntent& intent, RetirementMode mode) {
+Derivation derive(const Entities& source, const StairDemolitionRetirementIntent& intent, RetirementMode mode,
+    ComponentAdmission* component_admission = nullptr,
+    const std::optional<std::pair<std::string, std::string>>& required_choice = std::nullopt) {
     (void)encode_stair_demolition_retirement_intent(intent);
+    if (component_admission) component_admission->admit(source);
     if (mode == RetirementMode::demolition_closure) {
         const auto discovered = discover(source, intent.selected_object_ids);
         if (!discovered || *discovered != intent) invalid("proof differs from actual active baseline/proposed attachment inventory");
     } else if (discover_selected_proposals(source, intent.registry_id, intent.alternative_id,
         intent.retired_proposed_rail_ids) != intent)
         invalid("selective host evidence differs from actual selected proposed attachments");
+    // Discovery has authenticated this choice against the complete actual
+    // source. An enclosing choice is a consistency check, never authority.
+    if (component_admission && required_choice &&
+        *required_choice != std::pair{intent.registry_id, intent.alternative_id})
+        invalid("required component phase choice differs from the actual saved retirement choice");
     Derivation result;
     result.plan.intent = intent; result.retired = source;
     result.rails.insert(intent.retired_proposed_rail_ids.begin(), intent.retired_proposed_rail_ids.end());
     retire_registry(result, source);
     const auto aliases = embedded_assembly_presentation_ids(source);
     std::size_t inventory{};
+    Ids changed_catalogs;
     for (const auto& [id, entity] : source) {
         if (entity.type != "assembly_model") continue;
         const auto raw = field(entity.properties, "model"), rows = raw ? field(*raw, "instances") : nullptr;
@@ -503,9 +538,10 @@ Derivation derive(const Entities& source, const StairDemolitionRetirementIntent&
         }
         auto& changed = result.retired.at(id).properties.at("model");
         filter(changed.at("instances"), [&](const Json& row) { return !instances.contains(row.at("id").get<std::string>()); });
+        changed_catalogs.insert(id);
         // The exact raw envelope, definitions, materials and unrelated rows are
         // retained, including an empty instances array and its catalog owner.
-        (void)AssemblyModel::from_json(changed);
+        if (!component_admission) (void)AssemblyModel::from_json(changed);
         // A local identity has meaning only in its actual catalog. Inspect
         // opaque data there after stripping codec-owned definition references;
         // never treat an unqualified spelling as global erase authority.
@@ -514,12 +550,20 @@ Derivation derive(const Entities& source, const StairDemolitionRetirementIntent&
             diagnostic(result.plan, id, "affected catalog contains an opaque reference to a retired local instance");
     }
     result.plan.retired_hosted_instances.assign(result.instances.begin(), result.instances.end());
+    if (component_admission)
+        validate_assembly_phase_retirement_roots(source, result.plan.retired_hosted_instances,
+            intent.registry_id, intent.alternative_id);
     std::sort(result.plan.retired_presentation_ids.begin(), result.plan.retired_presentation_ids.end());
     Ids names = result.rails;
     names.insert(result.plan.retired_presentation_ids.begin(), result.plan.retired_presentation_ids.end());
     Ids overlays;
     retire_presentations(result, source, names, overlays);
     for (const auto& id : result.rails) result.retired.erase(id);
+    if (component_admission) {
+        component_admission->admit(result.retired);
+        for (const auto& id : changed_catalogs)
+            (void)AssemblyModel::from_json(result.retired.at(id).properties.at("model"));
+    }
     if (std::any_of(source.begin(), source.end(), [](const auto& row) {
             return row.second.type == assembly_phase_membership_entity_type;
         }))
@@ -547,6 +591,90 @@ Derivation derive(const Entities& source, const StairDemolitionRetirementIntent&
         return std::pair{a.entity_id, a.reason} < std::pair{b.entity_id, b.reason};
     });
     return result;
+}
+
+// The legacy baseline composer admits native bodies before returning its
+// registry patch. Construct only that patch here so the complete final catalog
+// inventory and companion proof can be admitted before entering that composer.
+// Its eventual result must match this independent projection exactly.
+Entities baseline_demolition_projection(const Derivation& derived, ComponentAdmission& admission) {
+    auto result = derived.retired;
+    const auto& intent = derived.plan.intent;
+    const auto scope = constraint_phase_scope(derived.retired);
+    const auto registry = std::find_if(scope.registries.begin(), scope.registries.end(), [&](const auto& row) {
+        return row.registry_id == intent.registry_id;
+    });
+    if (registry == scope.registries.end() || registry->alternative_id != std::optional{intent.alternative_id})
+        invalid("baseline projection lost its actual saved retirement choice");
+    Ids selected(intent.selected_object_ids.begin(), intent.selected_object_ids.end()), append = selected;
+    for (const auto& [id, entity] : derived.retired) {
+        const auto host = host_id(entity);
+        if (!host || !selected.contains(*host) || derived.retired.at(*host).type != "stair") continue;
+        const auto state = registry->states.find(id);
+        if (state != registry->states.end() && state->second == ModelPhase::existing) append.insert(id);
+    }
+    auto& raw = result.at(intent.registry_id).properties.at("model");
+    bool appended = false;
+    for (auto& alternative : raw.at("alternatives")) if (alternative.at("id") == intent.alternative_id) {
+        for (const auto& id : append) alternative.at("demolished_ids").push_back(id);
+        appended = true;
+    }
+    if (!appended) invalid("baseline projection lacks its actual saved alternative");
+    admission.admit(result);
+    const auto before = ModelPhases::from_json(derived.retired.at(intent.registry_id).properties.at("model"));
+    const auto alternative = std::find_if(before.alternatives().begin(), before.alternatives().end(), [&](const auto& row) {
+        return row.id == intent.alternative_id;
+    });
+    if (alternative == before.alternatives().end()) invalid("baseline projection lost its typed saved alternative");
+    auto amended = *alternative;
+    amended.demolished_ids.insert(amended.demolished_ids.end(), append.begin(), append.end());
+    if (ModelPhases::from_json(raw).to_json() != before.with_updated_alternative(std::move(amended)).to_json())
+        invalid("baseline projection differs from its exact typed demolition append");
+    validate_stair_attachment_state(result);
+    const auto after = constraint_phase_scope(result);
+    auto expected_inactive = scope.inactive_owner_ids;
+    expected_inactive.insert(append.begin(), append.end());
+    if (after.inactive_owner_ids != expected_inactive)
+        invalid("baseline projection changed another actual owner's phase lifetime");
+    return result;
+}
+
+// Restore only actual source companions into the complete physical projection.
+// Typed source pruning is the sole exception to exact envelope preservation:
+// compare every resulting carrier, including raw siblings/order/extensions and
+// other alternatives. No fresh or unproved missing carrier is admitted.
+Ids prove_pruned_companions(const Entities& source, const Entities& candidate,
+    const StairDemolitionRetirementIntent& intent) {
+    const auto scope = resolve_assembly_phase_memberships(source);
+    std::map<std::string, Ids, std::less<>> remaining;
+    for (const auto& [id, entity] : candidate) if (entity.type == "assembly_model") {
+        auto& ids = remaining[id];
+        for (const auto& row : entity.properties.at("model").at("instances"))
+            ids.insert(row.at("id").get<std::string>());
+    }
+    std::vector<AssemblyPhaseRoot> retired;
+    for (const auto& [root, owner] : scope.owners) {
+        (void)owner;
+        const auto catalog = remaining.find(root.first);
+        if (catalog == remaining.end() || !catalog->second.contains(root.second)) retired.push_back(root);
+    }
+    validate_assembly_phase_retirement_roots(source, retired, intent.registry_id, intent.alternative_id);
+    auto projection = candidate;
+    for (const auto& [id, entity] : candidate) if (entity.type == assembly_phase_membership_entity_type &&
+        (!source.contains(id) || source.at(id).type != assembly_phase_membership_entity_type))
+        invalid("component retirement introduced a fresh companion: " + id);
+    for (const auto& [id, entity] : source) if (entity.type == assembly_phase_membership_entity_type)
+        projection.insert_or_assign(id, entity);
+    const auto proof = prune_removed_assembly_phase_memberships(source, projection);
+    Ids changed;
+    for (const auto& [id, entity] : source) if (entity.type == assembly_phase_membership_entity_type) {
+        const auto expected = proof.find(id), actual = candidate.find(id);
+        if ((expected == proof.end()) != (actual == candidate.end()) ||
+            (expected != proof.end() && !exact(expected->second, actual->second)))
+            invalid("component retirement differs from exact actual source companion pruning: " + id);
+        if (expected == proof.end() || !exact(entity, expected->second)) changed.insert(id);
+    }
+    return changed;
 }
 
 // Actual selected rows and all aggregate analytical bounds are admitted before
@@ -632,9 +760,6 @@ void admit_retired_geometry(const Entities& source, const RetirementGeometry& pr
     for (const auto& [object, transform] : prepared.legacy)
         (void)transform_assembly_shape(make_building_shape(object, source), transform);
 }
-bool exact(const Entity& a, const Entity& b) {
-    return a == b && a.properties.dump() == b.properties.dump() && a.extensions.dump() == b.extensions.dump();
-}
 } // namespace
 
 Json encode_stair_demolition_retirement_intent(const StairDemolitionRetirementIntent& intent) {
@@ -680,10 +805,19 @@ std::optional<StairDemolitionRetirementIntent> phase_stair_demolition_retirement
     }
 }
 StairDemolitionRetirementPlan inspect_phase_stair_demolition_retirement_plan(
-    const Entities& source, const StairDemolitionRetirementIntent& intent) {
+    const Entities& source, const StairDemolitionRetirementIntent& intent,
+    bool complete_component_phase_memberships,
+    const std::optional<std::pair<std::string, std::string>>& required_component_phase_choice) {
     try {
-        auto derived = derive(source, intent, RetirementMode::demolition_closure);
+        component_options(complete_component_phase_memberships, required_component_phase_choice);
+        ComponentAdmission admission;
+        auto derived = derive(source, intent, RetirementMode::demolition_closure,
+            complete_component_phase_memberships ? &admission : nullptr, required_component_phase_choice);
         if (derived.plan.ready()) {
+            if (complete_component_phase_memberships) {
+                const auto projection = baseline_demolition_projection(derived, admission);
+                (void)prove_pruned_companions(source, projection, intent);
+            }
             try { (void)prepare_retired_geometry(source, derived); }
             catch (const std::exception& error) {
                 diagnostic(derived.plan, intent.registry_id, std::string("actual retirement analytical admission refused: ") + error.what());
@@ -697,16 +831,35 @@ StairDemolitionRetirementPlan inspect_phase_stair_demolition_retirement_plan(
     }
 }
 Entities replay_phase_stair_demolition_retirement_entities(const Entities& source,
-    const StairDemolitionRetirementIntent& intent) {
+    const StairDemolitionRetirementIntent& intent,
+    bool complete_component_phase_memberships,
+    const std::optional<std::pair<std::string, std::string>>& required_component_phase_choice) {
     try {
-        auto derived = derive(source, intent, RetirementMode::demolition_closure);
+        component_options(complete_component_phase_memberships, required_component_phase_choice);
+        ComponentAdmission admission;
+        auto derived = derive(source, intent, RetirementMode::demolition_closure,
+            complete_component_phase_memberships ? &admission : nullptr, required_component_phase_choice);
         if (!derived.plan.ready()) {
             const auto& diagnostic = derived.plan.diagnostics.front();
             invalid("blocked at " + diagnostic.entity_id + ": " + diagnostic.reason);
         }
+        std::optional<Entities> projection;
+        Ids proved_companions;
+        if (complete_component_phase_memberships) {
+            projection = baseline_demolition_projection(derived, admission);
+            proved_companions = prove_pruned_companions(source, *projection, intent);
+        }
         const auto prepared = prepare_retired_geometry(source, derived);
         auto result = replay_phase_stair_demolition_entities(derived.retired,
             StairDemolitionIntent{intent.registry_id, intent.alternative_id, intent.selected_object_ids});
+        if (projection) {
+            if (result.size() != projection->size()) invalid("baseline replay differs from the admitted final projection inventory");
+            for (const auto& [id, entity] : *projection) {
+                const auto actual = result.find(id);
+                if (actual == result.end() || !exact(entity, actual->second))
+                    invalid("baseline replay differs from its admitted final projection: " + id);
+            }
+        }
         admit_retired_geometry(source, prepared);
         validate_stair_attachment_state(result);
         if (result.size() != derived.retired.size()) invalid("baseline demolition changed the retired entity inventory");
@@ -723,7 +876,8 @@ Entities replay_phase_stair_demolition_retirement_entities(const Entities& sourc
                 invalid("baseline/other retained physical envelope changed: " + id);
         }
         for (const auto& [id, entity] : source) if (id != intent.registry_id && !derived.rails.contains(id) &&
-            entity.type != "assembly_model" && entity.type != kSheetViewEntityType && entity.type != kAnnotationEntityType)
+            entity.type != "assembly_model" && entity.type != kSheetViewEntityType && entity.type != kAnnotationEntityType &&
+            !proved_companions.contains(id))
             if (!exact(result.at(id), entity)) invalid("unrelated organization/property/level envelope changed: " + id);
         return result;
     } catch (const Json::exception& error) { invalid(std::string("malformed actual replay source: ") + error.what()); }

@@ -1648,9 +1648,13 @@ std::vector<PhaseConstraintAuthoringIntent> phase_constraint_replacement_compone
     (void)encode_phase_constraint_authoring_intent(intent);
     if (!intent.wall_demolition.is_null()) {
         const auto demolition=decode_phase_wall_demolition_authoring(intent.wall_demolition);
-        if (demolition.other_authoring.is_null()) return {};
-        return phase_constraint_replacement_components(
-            decode_phase_constraint_authoring_intent(demolition.other_authoring));
+        std::vector<PhaseConstraintAuthoringIntent> result;
+        if (!demolition.other_authoring.is_null())
+            result=phase_constraint_replacement_components(
+                decode_phase_constraint_authoring_intent(demolition.other_authoring));
+        if (demolition.complete_component_phase_memberships && !demolition.component_authoring.is_null())
+            result.push_back(decode_phase_constraint_authoring_intent(demolition.component_authoring));
+        return result;
     }
     if (!intent.coordinated_demolition.is_null())
         return phase_coordinated_demolition_components(intent.coordinated_demolition,intent);
@@ -1693,6 +1697,9 @@ PhaseConstraintAuthoringIntent make_phase_constraint_authoring_intent(
 Entities replay_phase_constraint_authoring(const Entities& source,const Json& proof) {
     const auto decoded=decode_phase_constraint_authoring_intent(proof);
     if (!decoded.component_demolition.is_null()) admit_component_demolition_source_catalogs(source);
+    if (!decoded.wall_demolition.is_null() &&
+        phase_wall_demolition_complete_component_phase_memberships(decoded.wall_demolition))
+        preflight_phase_wall_demolition_component_catalogs(source,decoded.wall_demolition,decoded);
     if (!decoded.coordinated_demolition.is_null() &&
         phase_coordinated_demolition_complete_component_phase_memberships(decoded.coordinated_demolition,decoded))
         preflight_phase_coordinated_demolition_component_catalogs(source,decoded.coordinated_demolition,decoded);

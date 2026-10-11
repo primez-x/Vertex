@@ -1184,7 +1184,11 @@ Entities replay_complete(const Entities& source, const PhaseConstraintAuthoringI
     QualifiedComponents placed_retirements;
     candidates.reserve(decoded.leaves.size() + (decoded.ordinary ? 1 : 0) + (!decoded.ordinary_opening_ids.empty() ? 1 : 0));
     for (const auto& leaf : decoded.leaves) {
-        auto candidate = replay_phase_constraint_authoring(source, encode_phase_constraint_authoring_intent(leaf));
+        auto candidate = decoded.complete_component_phase_memberships && !leaf.stair_demolition_retirement.is_null() ?
+            replay_phase_stair_demolition_retirement_entities(source,
+                decode_stair_demolition_retirement_intent(leaf.stair_demolition_retirement),true,
+                std::optional{decoded.saved_choice}) :
+            replay_phase_constraint_authoring(source, encode_phase_constraint_authoring_intent(leaf));
         if (decoded.complete_component_phase_memberships)
             charge_component_catalog_growth(source, candidate, component_catalog_budget);
         retain_registry_order(source, candidate, decoded.saved_choice);

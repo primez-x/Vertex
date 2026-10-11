@@ -174,17 +174,23 @@ void validate_physical_wall_room_dimension_placements(
 // active retained baseline carrier of the selected wall's saved registry. The
 // physical wall must have sole active proposal ownership; carrier membership,
 // definitions, materials and every surviving raw row remain unchanged.
+// Component membership completion is a pure composition option requiring both
+// opening-host and catalog consequences. Required companions may change only
+// by exact source-derived pruning; an optional saved choice also binds every
+// physically retired declared row. Historical commands gain no authority.
 [[nodiscard]] std::map<std::string,Entity,std::less<>> replay_complete_physical_walls_deletion(
     const std::map<std::string,Entity,std::less<>>& actual,const std::vector<std::string>& wall_ids,
     const PhysicalWallJoinRemovalAdditionalIdentities& additional_join_identities={},
     bool complete_opening_hosted_removal=false,bool complete_hosted_catalog_consequences=false,
-    bool complete_corner_window_consequences=false);
+    bool complete_corner_window_consequences=false,bool complete_component_phase_memberships=false,
+    const std::optional<std::pair<std::string,std::string>>& required_component_phase_choice=std::nullopt);
 // Analytical aggregate admission before native join inspection. The caller
 // must first reserve fresh identities against the complete original snapshot.
 void preflight_physical_walls_deletion_join_inference(
     const std::map<std::string,Entity,std::less<>>& actual,const std::vector<std::string>& wall_ids,
     bool complete_opening_hosted_removal=false,bool complete_hosted_catalog_consequences=false,
-    bool complete_corner_window_consequences=false);
+    bool complete_corner_window_consequences=false,bool complete_component_phase_memberships=false,
+    const std::optional<std::pair<std::string,std::string>>& required_component_phase_choice=std::nullopt);
 [[nodiscard]] nlohmann::json encode_physical_wall_deletion_review_proof(
     const DocumentSnapshot& source,const Command& command);
 // Accepts only bounded canonical grouped v31 or complete v35/v36/v38/v48 envelopes and

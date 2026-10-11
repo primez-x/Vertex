@@ -33572,6 +33572,15 @@ public:
             phase_coordinated_demolition_complete_component_phase_memberships(intent.coordinated_demolition,intent);
     }
 
+    static bool wallComponentMembershipDemolitionMode(const Command& command) {
+        const auto* phase=std::get_if<ApplyBoundaryConstraintChanges>(&command);
+        if (!phase || !phase->phase_constraint_authoring_completion ||
+            phase->phase_constraint_authoring_intent.is_null()) return false;
+        const auto intent=decode_phase_constraint_authoring_intent(phase->phase_constraint_authoring_intent);
+        return !intent.wall_demolition.is_null() &&
+            phase_wall_demolition_complete_component_phase_memberships(intent.wall_demolition);
+    }
+
     ApplyBoundaryConstraintChanges completePhaseDrawingSelectionRemoval(
         const DocumentSnapshot& source,const Command& base,
         const DrawingSelectionRemovalIntent& drawing,const QStringList& selection) const {
@@ -33581,8 +33590,10 @@ public:
         PhaseSelectionRemovalIntent intent;
         intent.complete_component_phase_demolition=componentPhaseDemolitionMode(base);
         intent.complete_coordinated_component_phase_memberships=coordinatedComponentMembershipDemolitionMode(base);
+        intent.complete_wall_component_phase_memberships=wallComponentMembershipDemolitionMode(base);
         intent.architectural=phase_selection_removal_base_authority(source,base,selected.architectural,
-            intent.complete_component_phase_demolition,intent.complete_coordinated_component_phase_memberships);
+            intent.complete_component_phase_demolition,intent.complete_coordinated_component_phase_memberships,
+            intent.complete_wall_component_phase_memberships);
         intent.drawing=drawing;
         return prepare_completed_phase_selection_removal(source,intent,base);
     }
@@ -33819,6 +33830,7 @@ public:
         if (authority.ordinary_selection.isEmpty() || authority.ordinary_selection.size()>1000 ||
             (authority.roof_opening_cohort.empty() && !authority.ordinary_selection.contains(authority.context.selected_id)))
             throw std::invalid_argument("The mixed selection changed. Select the objects again.");
+        admitComponentMembershipRemovalSource(source);
         validate_mixed_wall_removal_source_admission(source.entities(),true,true);
         MixedWallRemovalIntent intent;
         const auto explicit_selection=captureExplicitSelectionRemoval(source,authority.ordinary_selection,true);
@@ -33876,7 +33888,9 @@ public:
             if (std::none_of(graph.begin(),graph.end(),[&](const auto& entity){return entity.id==id && entity.type=="opening";}))
                 throw std::invalid_argument("The mixed selection no longer contains its actual opening roots.");
         const std::string message=cut ? "Cut selected walls and objects" : "Delete selected walls and objects";
-        if (const auto wall_selection=inspect_phase_wall_demolition_selection(source.entities(),intent.wall_ids,true)) {
+        const bool component_memberships=hasComponentPhaseMemberships(source);
+        if (const auto wall_selection=inspect_phase_wall_demolition_selection(source.entities(),intent.wall_ids,true,
+                component_memberships)) {
             const PhysicalWallPhaseSelection destination{wall_selection->baseline.registry_id,wall_selection->baseline.alternative_id};
             if (!destination.alternative_id)
                 throw std::invalid_argument("The active wall demolition design changed. Select the objects again.");
@@ -33899,6 +33913,28 @@ public:
             demolition.complete_hosted_catalog_consequences=true;
             demolition.complete_corner_window_consequences=true;
             demolition.complete_actual_corner_window_cohorts=true;
+            demolition.complete_component_phase_memberships=component_memberships;
+            const auto required_component_choice=component_memberships ?
+                std::optional{std::pair{destination.registry_id,*destination.alternative_id}} : std::nullopt;
+            std::vector<AssemblyPhaseRoot> baseline_components,ordinary_components;
+            if (component_memberships) {
+                const auto memberships=resolve_assembly_phase_memberships(source.entities());
+                for (const auto& root:components) {
+                    if (memberships.inactive_roots.contains(root))
+                        throw std::invalid_argument("The selected component is inactive in the saved design.");
+                    const auto owner=memberships.owners.find(root);
+                    if (owner==memberships.owners.end()) { ordinary_components.push_back(root);continue; }
+                    const auto state=memberships.states.find(root);
+                    const auto registry=std::find_if(scope.registries.begin(),scope.registries.end(),[&](const auto& candidate) {
+                        return candidate.registry_id==owner->second.registry_id;
+                    });
+                    if (owner->second.registry_id!=destination.registry_id ||
+                        registry==scope.registries.end() || registry->alternative_id!=destination.alternative_id ||
+                        state==memberships.states.end())
+                        throw std::invalid_argument("The selected components belong to different actual saved designs.");
+                    (state->second==ModelPhase::existing ? baseline_components : ordinary_components).push_back(root);
+                }
+            } else ordinary_components=components;
             std::vector<std::string> baseline_ids,ordinary_ids;
             for (const auto& id:other_ids) {
                 // The new typed wall lane authenticates and collapses explicit
@@ -33926,8 +33962,15 @@ public:
                 demolition.explicit_corner_window_ids.end()),demolition.explicit_corner_window_ids.end());
             if (const auto other=baselineArchitecturalDemolitionCommand(source,baseline_ids,message,destination))
                 demolition.other_authoring=other->phase_constraint_authoring_intent;
-            demolition.ordinary=captureArchitecturalSelectionRemoval(source,std::move(ordinary_ids),std::move(components),
-                demolition.complete_hosted_catalog_consequences);
+            if (!baseline_components.empty()) {
+                ConstraintAuthoringIntent component_semantic;component_semantic.message=message;
+                demolition.component_authoring=encode_phase_constraint_authoring_intent(
+                    make_phase_constraint_authoring_intent(source,component_semantic,
+                        encode_assembly_component_phase_demolition_intent({baseline_components}),true));
+            }
+            demolition.ordinary=captureArchitecturalSelectionRemoval(source,std::move(ordinary_ids),
+                std::move(ordinary_components),demolition.complete_hosted_catalog_consequences,
+                component_memberships,required_component_choice);
             // All declared slots, including omitted historical copies, reserve
             // their names before independently allocated ordinary roof splits.
             auto occupied=retainedSlabIdentityNames(source,true);
@@ -33939,8 +33982,9 @@ public:
                 "annotations","owner_id","child_id","proof","phase_selection_removal_completion",
                 "phase_selection_removal_intent","phase_deletion","object_ids","components","selection","base_command",
                 "source_snapshot_digest","source_authoring_digest","source_entities_digest","source_saved_revision",
-                "architectural","drawing"}) occupied.insert(token);
-            std::vector<const json*> pending{&demolition.other_authoring};
+                "architectural","drawing","component_authoring","complete_component_phase_memberships",
+                "complete_wall_component_phase_memberships"}) occupied.insert(token);
+            std::vector<const json*> pending{&demolition.other_authoring,&demolition.component_authoring};
             while (!pending.empty()) {
                 const auto& value=*pending.back();pending.pop_back();
                 if (value.is_string()) occupied.insert(value.get_ref<const std::string&>());
@@ -33955,7 +33999,8 @@ public:
             if (!demolition.ordinary_wall_ids.empty()) {
                 require_current();
                 preflight_physical_walls_deletion_join_inference(source.entities(),demolition.ordinary_wall_ids,true,
-                    demolition.complete_hosted_catalog_consequences,demolition.complete_corner_window_consequences);
+                    demolition.complete_hosted_catalog_consequences,demolition.complete_corner_window_consequences,
+                    component_memberships,required_component_choice);
                 const auto joins=inspect_physical_wall_join_removal(source.entities(),demolition.ordinary_wall_ids);
                 if (!joins.ready()) {
                     std::string reasons;
@@ -33975,7 +34020,7 @@ public:
                 require_current();
             }
             ConstraintAuthoringIntent semantic;semantic.message=message;
-            auto phase=make_phase_constraint_authoring_intent(source,semantic);
+            auto phase=make_phase_constraint_authoring_intent(source,semantic,nullptr,component_memberships);
             phase.wall_demolition=encode_phase_wall_demolition_authoring(demolition);
             QString clipboard_text;
             QClipboard* clipboard=nullptr;
@@ -34148,6 +34193,7 @@ public:
         if (authority.ordinary_selection.isEmpty() ||
             (authority.roof_opening_cohort.empty() && !authority.ordinary_selection.contains(authority.context.selected_id)))
             throw std::invalid_argument("The selected wall identity changed. Select the physical walls again.");
+        admitComponentMembershipRemovalSource(source);
         std::vector<std::string> wall_ids;
         std::set<std::string> unique_wall_ids;
         for (const auto& id : authority.ordinary_selection) {
@@ -34160,7 +34206,7 @@ public:
         }
         // Every baseline wall selection uses the complete typed room stage,
         // including wall-only cohorts with no affected rooms or ordinary walls.
-        if (inspect_phase_wall_demolition_selection(source.entities(),wall_ids,true))
+        if (inspect_phase_wall_demolition_selection(source.entities(),wall_ids,true,hasComponentPhaseMemberships(source)))
             return removeSelectedMixedPhysicalWalls(source,cut,prepared);
         const bool site = siteCanvas(m_architecturalCanvas);
         const auto site_generation = m_site_publication_generation;
@@ -36466,11 +36512,13 @@ public:
                 PhaseSelectionRemovalIntent intent;
                 intent.complete_component_phase_demolition=componentPhaseDemolitionMode(prepared->command);
                 intent.complete_coordinated_component_phase_memberships=coordinatedComponentMembershipDemolitionMode(prepared->command);
+                intent.complete_wall_component_phase_memberships=wallComponentMembershipDemolitionMode(prepared->command);
                 intent.architectural=phase_selection_removal_base_authority(*source,prepared->command,
                     selected.architectural,intent.complete_component_phase_demolition,
-                    intent.complete_coordinated_component_phase_memberships);
+                    intent.complete_coordinated_component_phase_memberships,intent.complete_wall_component_phase_memberships);
                 if (version==34 && !intent.complete_component_phase_demolition &&
                     !intent.complete_coordinated_component_phase_memberships &&
+                    !intent.complete_wall_component_phase_memberships &&
                     !hasIndependentDrawingRemoval(selected.drawing))
                     phase_ordinary=std::move(intent.architectural);
                 else phase_selection=std::move(intent);
@@ -59190,6 +59238,7 @@ private:
                         targets.insert(demolition.wall_demolition.wall_ids.begin(),demolition.wall_demolition.wall_ids.end());
                         targets.insert(demolition.ordinary_wall_ids.begin(),demolition.ordinary_wall_ids.end());
                         targets.insert(demolition.opening_ids.begin(),demolition.opening_ids.end());
+                        targets.insert(demolition.explicit_corner_window_ids.begin(),demolition.explicit_corner_window_ids.end());
                         if (demolition.complete_hosted_catalog_consequences)
                             for (const auto& id:demolition.opening_ids)
                                 targets.insert(source.entities().at(id).properties.at("wall_id").get<std::string>());
@@ -59202,7 +59251,12 @@ private:
                                 [&](const auto& instance) { return instance.id==key.second; });
                             if (row==catalog.instances().end())
                                 throw std::invalid_argument("The selected component is absent from its captured catalog.");
-                            if (row->placement) targets.insert(row->placement->host_entity_id);
+                            if (row->placement) {
+                                const auto& host=row->placement->host_entity_id;
+                                targets.insert(host);
+                                if (demolition.complete_component_phase_memberships && source.entities().at(host).type=="opening")
+                                    targets.insert(source.entities().at(host).properties.at("wall_id").get<std::string>());
+                            }
                         }
                         if (!demolition.other_authoring.is_null())
                             historical_demolition=decode_phase_constraint_authoring_intent(demolition.other_authoring);

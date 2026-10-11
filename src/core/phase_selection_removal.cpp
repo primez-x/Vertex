@@ -6,6 +6,7 @@
 #include "sketch/phase_coordinated_demolition.hpp"
 #include "sketch/phase_removal_selection.hpp"
 #include "sketch/phase_wall_demolition.hpp"
+#include "sketch/phase_wall_demolition_authoring.hpp"
 #include "sketch/physical_wall_phase_review.hpp"
 
 #include <algorithm>
@@ -71,9 +72,12 @@ ArchitecturalDrawingRemovalIntent authority(const PhaseSelectionRemovalIntent& i
     if (!intent.architectural.roof_additional_identities.empty()) reject("selection cannot supply destination authority");
     ArchitecturalDrawingRemovalIntent result;
     result.architectural=intent.architectural;result.drawing=intent.drawing;
-    if (intent.complete_component_phase_demolition && intent.complete_coordinated_component_phase_memberships)
-        reject("component demolition and coordinated memberships are exclusive selection dialects");
-    if (intent.complete_component_phase_demolition || intent.complete_coordinated_component_phase_memberships) {
+    if (static_cast<unsigned>(intent.complete_component_phase_demolition)+
+        static_cast<unsigned>(intent.complete_coordinated_component_phase_memberships)+
+        static_cast<unsigned>(intent.complete_wall_component_phase_memberships)>1)
+        reject("component demolition, coordinated and wall memberships are exclusive selection dialects");
+    if (intent.complete_component_phase_demolition || intent.complete_coordinated_component_phase_memberships ||
+        intent.complete_wall_component_phase_memberships) {
         if (intent.complete_component_phase_demolition && !intent.architectural.object_ids.empty())
             reject("component demolition cannot select physical object roots");
         // The canonical leaf owns local-ID spelling; the generic legacy
@@ -238,6 +242,23 @@ void component_binding(const PhaseSelectionRemovalIntent& selection,const Json& 
     }
     if (coordinated!=selection.complete_coordinated_component_phase_memberships)
         reject("coordinated memberships require selection three and pure phase15/inner8 authority");
+    bool wall=false;
+    if (wire.at("version")==34 && wire.at("phase_constraint_authoring_intent").at("version")==16) {
+        const auto proof=decode_phase_constraint_authoring_intent(wire.at("phase_constraint_authoring_intent"));
+        wall=phase_wall_demolition_complete_component_phase_memberships(proof.wall_demolition);
+        if (wall) {
+            const auto leaf=decode_phase_wall_demolition_authoring(proof.wall_demolition);
+            if (!leaf.component_authoring.is_null()) {
+                const auto child=decode_phase_constraint_authoring_intent(leaf.component_authoring);
+                const auto components=decode_assembly_component_phase_demolition_intent(child.component_demolition);
+                for (const auto& root:components.components)
+                    if (!std::binary_search(selection.architectural.components.begin(),selection.architectural.components.end(),root))
+                        reject("wall component child is outside the explicit selection");
+            }
+        }
+    }
+    if (wall!=selection.complete_wall_component_phase_memberships)
+        reject("wall memberships require selection four and pure phase16/inner6 authority");
 }
 void digest(const Json& value) {
     if (!value.is_string()) reject("source binding must be a digest");
@@ -282,26 +303,31 @@ Json encode_phase_selection_removal_intent(const PhaseSelectionRemovalIntent& in
     Json components=Json::array();
     for (const auto& [catalog,local]:intent.architectural.components)
         components.push_back({{"catalog_id",catalog},{"instance_id",local}});
-    Json value={{"version",intent.complete_coordinated_component_phase_memberships ? 3 : intent.complete_component_phase_demolition ? 2 : 1},{"kind","phase_deletion"},{"object_ids",intent.architectural.object_ids},
+    Json value={{"version",intent.complete_wall_component_phase_memberships ? 4 : intent.complete_coordinated_component_phase_memberships ? 3 : intent.complete_component_phase_demolition ? 2 : 1},{"kind","phase_deletion"},{"object_ids",intent.architectural.object_ids},
         {"components",std::move(components)},
         {"drawing",has_drawing(intent.drawing) ? encode_drawing_selection_removal_intent(intent.drawing) : Json(nullptr)}};
     if (intent.complete_component_phase_demolition) value["complete_component_phase_demolition"]=true;
     if (intent.complete_coordinated_component_phase_memberships) value["complete_coordinated_component_phase_memberships"]=true;
+    if (intent.complete_wall_component_phase_memberships) value["complete_wall_component_phase_memberships"]=true;
     bounded_wire(value);return value;
 }
 PhaseSelectionRemovalIntent decode_phase_selection_removal_intent(const Json& value) try {
     bounded_wire(value);
     const bool component=value.is_object() && value.contains("version") && value.at("version")==2;
     const bool coordinated=value.is_object() && value.contains("version") && value.at("version")==3;
+    const bool wall=value.is_object() && value.contains("version") && value.at("version")==4;
     if (component) fields(value,{"version","kind","object_ids","components","drawing","complete_component_phase_demolition"});
     else if (coordinated) fields(value,{"version","kind","object_ids","components","drawing","complete_coordinated_component_phase_memberships"});
+    else if (wall) fields(value,{"version","kind","object_ids","components","drawing","complete_wall_component_phase_memberships"});
     else fields(value,{"version","kind","object_ids","components","drawing"});
-    if (!value.at("version").is_number_integer() || (value.at("version")!=1 && value.at("version")!=2 && value.at("version")!=3) || value.at("kind")!="phase_deletion")
+    if (!value.at("version").is_number_integer() || (value.at("version")!=1 && value.at("version")!=2 && value.at("version")!=3 && value.at("version")!=4) || value.at("kind")!="phase_deletion")
         reject("unsupported selection version or kind");
     if (component && (!value.at("complete_component_phase_demolition").is_boolean() ||
         value.at("complete_component_phase_demolition")!=true)) reject("component demolition requires literal completion authority");
     if (coordinated && (!value.at("complete_coordinated_component_phase_memberships").is_boolean() ||
         value.at("complete_coordinated_component_phase_memberships")!=true)) reject("coordinated memberships require literal completion authority");
+    if (wall && (!value.at("complete_wall_component_phase_memberships").is_boolean() ||
+        value.at("complete_wall_component_phase_memberships")!=true)) reject("wall memberships require literal completion authority");
     const auto& objects=value.at("object_ids");const auto& components=value.at("components");
     if (!objects.is_array() || objects.size()>selection_limit || !components.is_array() ||
         components.size()>selection_limit-objects.size()) reject("aggregate architectural selection budget exceeded");
@@ -316,6 +342,7 @@ PhaseSelectionRemovalIntent decode_phase_selection_removal_intent(const Json& va
     }
     PhaseSelectionRemovalIntent result;result.complete_component_phase_demolition=component;
     result.complete_coordinated_component_phase_memberships=coordinated;
+    result.complete_wall_component_phase_memberships=wall;
     result.architectural.object_ids=objects.get<std::vector<std::string>>();
     for (const auto& row:components) {
         fields(row,{"catalog_id","instance_id"});
@@ -332,10 +359,12 @@ ArchitecturalDrawingRemovalIntent phase_selection_removal_authority(const PhaseS
 
 ArchitecturalSelectionRemovalIntent phase_selection_removal_base_authority(const DocumentSnapshot& source,
     const Command& base,const ArchitecturalSelectionRemovalIntent& explicit_selection,
-    bool complete_component_phase_demolition,bool complete_coordinated_component_phase_memberships) try {
+    bool complete_component_phase_demolition,bool complete_coordinated_component_phase_memberships,
+    bool complete_wall_component_phase_memberships) try {
     PhaseSelectionRemovalIntent selection;selection.architectural=explicit_selection;
     selection.complete_component_phase_demolition=complete_component_phase_demolition;
     selection.complete_coordinated_component_phase_memberships=complete_coordinated_component_phase_memberships;
+    selection.complete_wall_component_phase_memberships=complete_wall_component_phase_memberships;
     (void)encode_phase_selection_removal_intent(selection);source_budget(source);
     const auto wire=base_wire(base);const auto canonical=closed_base(wire);
     component_binding(selection,wire);
@@ -387,7 +416,8 @@ DocumentSnapshot prepare_phase_selection_removal_stage(const DocumentSnapshot& s
         expected=replay_completed_phase_selection_removal(source,retained);
     } else {
         (void)phase_selection_removal_base_authority(source,original,intent.architectural,
-            intent.complete_component_phase_demolition,intent.complete_coordinated_component_phase_memberships);
+            intent.complete_component_phase_demolition,intent.complete_coordinated_component_phase_memberships,
+            intent.complete_wall_component_phase_memberships);
         if (has_drawing(intent.drawing)) reject("drawing selection requires its complete outer47 phase wrapper");
     }
     const auto wire=command_to_json(original);bounded_wire(wire);
@@ -442,7 +472,8 @@ Entities replay_completed_phase_selection_removal(const DocumentSnapshot& source
     // This producer independently owns the same complete source and re-admits
     // the typed base. No externally validated candidate supplies permission.
     const auto expected=replay_drawing_selection_removal_with_phase(source,selection.drawing,selection.architectural,base,
-        selection.complete_component_phase_demolition,selection.complete_coordinated_component_phase_memberships);
+        selection.complete_component_phase_demolition,selection.complete_coordinated_component_phase_memberships,
+        selection.complete_wall_component_phase_memberships);
     remember(key,expected);return expected;
 } catch (const Json::exception& error) { reject(std::string("malformed completed source/intent: ")+error.what()); }
 

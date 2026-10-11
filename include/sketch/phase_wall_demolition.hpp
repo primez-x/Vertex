@@ -2,6 +2,8 @@
 
 #include "sketch/document.hpp"
 
+#include <utility>
+
 namespace sketch {
 
 struct PhaseWallDemolitionIntent {
@@ -24,7 +26,9 @@ struct PhaseWallDemolitionSelection {
 [[nodiscard]] std::optional<PhaseWallDemolitionSelection> inspect_phase_wall_demolition_selection(
     const std::map<std::string,Entity,std::less<>>& actual,
     const std::vector<std::string>& selected_wall_ids,
-    bool complete_actual_corner_window_cohorts=false);
+    bool complete_actual_corner_window_cohorts=false,
+    bool complete_component_phase_memberships=false,
+    const std::optional<std::pair<std::string,std::string>>& required_component_phase_choice=std::nullopt);
 
 // Closed semantic selection: the actual saved registry/alternative and an
 // ascending unique inventory of retained baseline walls. No entity payloads
@@ -42,8 +46,15 @@ struct PhaseWallDemolitionSelection {
 // baseline aggregates are parked; sole active proposed aggregates are physically
 // retired. The complete returned candidate validates corner invariants; a
 // registry-only interim source never escapes as version-two replay authority.
+// The separate pure membership opt-in requires complete corner cohorts. It
+// authenticates actual retired component rows against the walls' saved choice
+// and permits only typed companion pruning; parked baseline rows remain exact.
+// A supplied choice must match that actual registry/alternative. These options
+// add no intent fields, component demolition or historical producer authority.
 [[nodiscard]] std::map<std::string,Entity,std::less<>> replay_phase_wall_demolition_entities(
-    const std::map<std::string,Entity,std::less<>>& actual,const PhaseWallDemolitionIntent& intent);
+    const std::map<std::string,Entity,std::less<>>& actual,const PhaseWallDemolitionIntent& intent,
+    bool complete_component_phase_memberships=false,
+    const std::optional<std::pair<std::string,std::string>>& required_component_phase_choice=std::nullopt);
 
 // Prepare one raw, asset-free registry upsert for the existing phase-room
 // review. No shared-baseline selection returns nullopt. Once any selected wall
