@@ -997,9 +997,41 @@ PhaseWallCanvasProjection project_phase_wall_canvas(const DocumentSnapshot& sour
                 throw std::invalid_argument("Coordinated canvas hosted alias lost its exact proposed host.");
         }
         for (const auto& [catalog_id,original]:private_catalog_sources) {
-            (void)original;
             if (hosted_fresh.contains(catalog_id))
                 throw std::invalid_argument("Coordinated canvas private catalog overlaps a fresh hosted instance.");
+            const auto& actual_source=source.entities().at(original);
+            const auto& actual_destination=stage.at(catalog_id);
+            if (!actual_source.properties.contains("embedded_instance_drawing_contexts") &&
+                !actual_destination.properties.contains("embedded_instance_drawing_contexts")) continue;
+            std::map<std::string,std::string,std::less<>> mapping;
+            for (const auto& [owner,destination]:qualified_hosted)
+                if (owner.first==original && destination.first==catalog_id)
+                    mapping.emplace(owner.second,destination.second);
+            // Preview consumes the manufactured stage. Reconstruct its exact
+            // context roster from source; caller aliases cannot supply records.
+            auto proof=actual_destination;
+            if (actual_source.properties.contains("embedded_instance_drawing_contexts"))
+                proof.properties["embedded_instance_drawing_contexts"]=actual_source.properties.at("embedded_instance_drawing_contexts");
+            else proof.properties.erase("embedded_instance_drawing_contexts");
+            const auto expected=remap_embedded_assembly_drawing_contexts(actual_source,proof,mapping);
+            const auto actual=actual_destination.properties.find("embedded_instance_drawing_contexts");
+            const auto derived=expected.properties.find("embedded_instance_drawing_contexts");
+            if ((actual==actual_destination.properties.end())!=(derived==expected.properties.end()) ||
+                (actual!=actual_destination.properties.end() && actual->dump()!=derived->dump()))
+                throw std::invalid_argument("Coordinated canvas private catalog lost its actual source drawing context records.");
+        }
+        std::vector<std::pair<std::string,std::string>> context_sources,context_destinations;
+        for (const auto& [owner,destination]:qualified_hosted)
+            if (source.entities().at(owner.first).properties.contains("embedded_instance_drawing_contexts") ||
+                stage.at(destination.first).properties.contains("embedded_instance_drawing_contexts")) {
+                context_sources.push_back(owner);context_destinations.push_back(destination);
+            }
+        if (!context_sources.empty()) {
+            const auto before=resolve_embedded_assembly_drawing_contexts(source.entities(),context_sources);
+            const auto after=resolve_embedded_assembly_drawing_contexts(stage,context_destinations);
+            for (std::size_t i=0;i<context_sources.size();++i)
+                if (before.at(context_sources[i])!=after.at(context_destinations[i]))
+                    throw std::invalid_argument("Coordinated canvas hosted replacement changed its actual drawing context.");
         }
         stage_embedded=embedded_assembly_presentation_ids(stage);
         for (const auto& [owner,destination]:qualified_hosted) {

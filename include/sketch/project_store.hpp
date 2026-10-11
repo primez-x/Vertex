@@ -350,7 +350,8 @@ public:
     // v245 retains attached physical-owner dimension membership retirement.
     // v246 retains catalog material impact on architectural assignments/layers.
     // v247 retains complete component Copy presentation and overlay allocations.
-    static constexpr std::uint32_t format_version = 247;
+    // v248 retains explicit embedded-root drawing contexts and Copy request4.
+    static constexpr std::uint32_t format_version = 248;
     static constexpr std::uint32_t recovery_format_version = 4;
     [[nodiscard]] static std::uint32_t required_format_version(const DocumentSnapshot& snapshot);
     static constexpr std::uint64_t maximum_file_bytes = 4ULL * 1024ULL * 1024ULL * 1024ULL;

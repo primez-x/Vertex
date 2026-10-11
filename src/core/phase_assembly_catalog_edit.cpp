@@ -654,6 +654,9 @@ PhaseAssemblyCatalogEditResult replay_phase_assembly_catalog_edit_entities(const
                 auto row = raw_row(source.at(root.root.catalog_id).properties.at("model"), "instances", root.root.instance_id);
                 row.at("id") = destination.instance_id; private_rows = Json::array({std::move(row)});
             }
+            std::map<std::string, std::string, std::less<>> context_mapping;
+            if (!root.root.document_entity_id) context_mapping.emplace(root.root.instance_id, destination.instance_id);
+            catalog = remap_embedded_assembly_drawing_contexts(source.at(root.root.catalog_id), catalog, context_mapping);
             require(result.entities.emplace(destination.catalog_id, std::move(catalog)).second, "fresh private catalog collides");
             if (root.root.document_entity_id) {
                 auto owner = source.at(*root.root.document_entity_id);
@@ -674,6 +677,8 @@ PhaseAssemblyCatalogEditResult replay_phase_assembly_catalog_edit_entities(const
                     auto& rows = result.entities.at(root.root.catalog_id).properties.at("model").at("instances");
                     const auto row = std::find_if(rows.begin(), rows.end(), [&](const Json& value) { return value.at("id") == root.root.instance_id; });
                     require(row != rows.end(), "ordinary actual row disappeared"); rows.erase(row); row_changed_catalogs.insert(root.root.catalog_id);
+                    auto& source_catalog = result.entities.at(root.root.catalog_id);
+                    source_catalog = prune_embedded_assembly_drawing_contexts(source_catalog);
                     if (root.membership_entity_id) {
                         memberships.at(*root.membership_entity_id) = move_membership(memberships.at(*root.membership_entity_id), old, proposed);
                         changed_memberships.insert(*root.membership_entity_id);
@@ -701,6 +706,22 @@ PhaseAssemblyCatalogEditResult replay_phase_assembly_catalog_edit_entities(const
 
         Budget final_raw; final_raw.map(result.entities);
         AssemblyCatalogTransferBudget final_work; admit_catalogs(result.entities, final_work);
+        validate_embedded_assembly_drawing_contexts(result.entities);
+        std::vector<std::pair<std::string, std::string>> context_sources, context_destinations;
+        for (const auto& root : plan.isolation_roots) if (!root.root.document_entity_id) {
+            const auto& destination = result.original_to_proposed.at(root.root);
+            if (!source.at(root.root.catalog_id).properties.contains("embedded_instance_drawing_contexts") &&
+                !result.entities.at(destination.catalog_id).properties.contains("embedded_instance_drawing_contexts")) continue;
+            context_sources.emplace_back(root.root.catalog_id, root.root.instance_id);
+            context_destinations.emplace_back(destination.catalog_id, destination.instance_id);
+        }
+        if (!context_sources.empty()) {
+            const auto before = resolve_embedded_assembly_drawing_contexts(source, context_sources);
+            const auto after = resolve_embedded_assembly_drawing_contexts(result.entities, context_destinations);
+            for (std::size_t i = 0; i < context_sources.size(); ++i)
+                require(before.at(context_sources[i]) == after.at(context_destinations[i]),
+                    "private component changed its actual source drawing context");
+        }
         const auto final_models = decode_models(result.entities);
         const Phases final_phases(result.entities);
         // Expand every actual root once under one shared bounded ledger, not
@@ -784,7 +805,10 @@ PhaseAssemblyCatalogEditResult replay_phase_assembly_catalog_edit_entities(const
         for (const auto& [key, original] : *global_authority) {
             require(result.entities.contains(key), "an unrelated source owner disappeared");
             auto expected = original;
-            if (row_changed_catalogs.contains(key)) expected.properties.at("model").at("instances") = result.entities.at(key).properties.at("model").at("instances");
+            if (row_changed_catalogs.contains(key)) {
+                expected.properties.at("model").at("instances") = result.entities.at(key).properties.at("model").at("instances");
+                expected = prune_embedded_assembly_drawing_contexts(expected);
+            }
             if (changed_owners.contains(key)) expected.properties.at("assembly_catalog_id") = result.entities.at(key).properties.at("assembly_catalog_id");
             if (changed_registries.contains(key) || changed_memberships.contains(key)) expected.properties.at("model") = result.entities.at(key).properties.at("model");
             require(exact(expected, result.entities.at(key)), "an unrelated original envelope/definition/row changed");

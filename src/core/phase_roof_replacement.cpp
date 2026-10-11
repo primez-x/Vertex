@@ -124,6 +124,12 @@ Entity opaque_remainder(Entity entity, bool include_hosted_instances = false) {
         }
     } else if (include_hosted_instances && entity.type == "assembly_model") {
         (void)AssemblyModel::from_json(p.at("model"));
+        if (p.contains("embedded_instance_drawing_contexts")) {
+            AssemblyCatalogTransferBudget context_budget;
+            admit_existing_assembly_catalog_work(entity, context_budget);
+            for (auto& row : p.at("embedded_instance_drawing_contexts").at("rows"))
+                row.erase("instance_id"); // Preserve the actual layer reference.
+        }
         // Typed actual hosts only. Opaque property/extension siblings continue
         // to reserve references; this scratch value is never written back.
         for (auto& row : p.at("model").at("instances"))
@@ -705,6 +711,7 @@ PhaseRoofReplacementResult replay_phase_roof_replacement(
                 }
                 // Actual physical replay supplies any coordinated placement
                 // delta. Keep complete definitions and raw selected rows.
+                PhaseRoofReplacementIdentityMap retained_instances;
                 const auto retained = copy.properties.at("model").at("instances");
                 auto& rows = copy.properties.at("model").at("instances");
                 rows = Json::array();
@@ -713,10 +720,13 @@ PhaseRoofReplacementResult replay_phase_roof_replacement(
                     if (!expected_instances.contains(key)) continue;
                     if (!row.contains("placement") || !roofs.contains(row.at("placement").at("host_entity_id").get<std::string>()))
                         reject("proposed hosted instance lost its actual copied roof host");
+                    retained_instances.emplace(key.second, hosted_instance_identities.at(key));
                     row.at("id") = hosted_instance_identities.at(key);
                     remap_field(row.at("placement"), "host_entity_id", identities);
                     rows.push_back(std::move(row));
                 }
+                if (source.at(id).properties.contains("embedded_instance_drawing_contexts"))
+                    copy = remap_embedded_assembly_drawing_contexts(source.at(id), copy, retained_instances);
                 (void)AssemblyModel::from_json(copy.properties.at("model"));
             } else reject("unsupported copy owner reached replay");
             const auto copy_id = copy.id;
@@ -877,6 +887,18 @@ PhaseRoofReplacementResult replay_phase_roof_replacement(
         if (!ordinary_targets.empty()) admit_roofs_and_joins(result.entities, ordinary_targets, ordinary_joins);
         (void)constraint_phase_scope(result.entities);
         if (include_hosted_instances) {
+            std::vector<PhaseRoofReplacementHostedInstanceKey> source_roots, destination_roots;
+            for (const auto& [root, new_id] : hosted_instance_identities)
+                if (source.at(root.first).properties.contains("embedded_instance_drawing_contexts")) {
+                    source_roots.push_back(root); destination_roots.emplace_back(identities.at(root.first), new_id);
+                }
+            if (!source_roots.empty()) {
+                const auto source_contexts = resolve_embedded_assembly_drawing_contexts(source, source_roots);
+                const auto destination_contexts = resolve_embedded_assembly_drawing_contexts(result.entities, destination_roots);
+                for (std::size_t i = 0; i < source_roots.size(); ++i)
+                    if (source_contexts.at(source_roots[i]) != destination_contexts.at(destination_roots[i]))
+                        reject("hosted replacement changed the source component's complete drawing context");
+            }
             const auto final_plan = inspect_roof_clone_plan(result.entities,
                 std::vector<std::string>(copied_roofs.begin(), copied_roofs.end()), true, plan.complete_component_dimensions);
             if (!final_plan.ready()) reject("proposed hosted geometry has unresolved actual dependencies");

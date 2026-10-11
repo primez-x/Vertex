@@ -748,6 +748,19 @@ void validate_current_assembly_catalog_phase_preservation(const Entities& source
     }
     if (!changed) return;
     AssemblyCatalogTransferBudget work; admit_catalogs(source, work); admit_catalogs(candidate, work);
+    validate_embedded_assembly_drawing_contexts(source);
+    validate_embedded_assembly_drawing_contexts(candidate);
+    const auto drawing_bindings=[](const auto& entities) {
+        std::map<std::pair<std::string,std::string>,const nlohmann::json*> result;
+        for (const auto& [catalog,entity]:entities) {
+            const auto field=entity.properties.find("embedded_instance_drawing_contexts");
+            if (field==entity.properties.end()) continue;
+            for (const auto& row:field->at("rows"))
+                result.emplace(std::pair{catalog,row.at("instance_id").template get<std::string>()},&row);
+        }
+        return result;
+    };
+    const auto original_bindings=drawing_bindings(source), candidate_bindings=drawing_bindings(candidate);
     const auto before = models(source), after = models(candidate);
     const PhaseInventory phases(source);
     std::map<Target, AssemblyInstance> roots;
@@ -768,6 +781,18 @@ void validate_current_assembly_catalog_phase_preservation(const Entities& source
         const auto& candidate_catalog=candidate.at(target.catalog_id);
         auto original_envelope=original_catalog.properties, candidate_envelope=candidate_catalog.properties;
         original_envelope.erase("model"); candidate_envelope.erase("model");
+        // The typed roster may add context for new active destinations. A
+        // protected root's own exact binding cannot be added, erased or changed.
+        // The rest of the carrier remains subject to its original exact fence.
+        if (!target.document_entity_id) {
+            const auto key=std::pair{target.catalog_id,target.instance_id};
+            const auto binding=original_bindings.find(key), proposed=candidate_bindings.find(key);
+            require((binding==original_bindings.end())==(proposed==candidate_bindings.end()) &&
+                (binding==original_bindings.end() || exact(*binding->second,*proposed->second)),
+                "current catalog editing changed a protected/inactive root drawing binding");
+        }
+        original_envelope.erase("embedded_instance_drawing_contexts");
+        candidate_envelope.erase("embedded_instance_drawing_contexts");
         require(original_catalog.type==candidate_catalog.type && original_catalog.required==candidate_catalog.required &&
             exact(original_envelope,candidate_envelope) && exact(original_catalog.extensions,candidate_catalog.extensions),
             "current catalog editing changed a protected/inactive carrier binding");
@@ -817,6 +842,8 @@ void validate_current_assembly_catalog_phase_preservation(const Entities& source
         const auto& proposed = candidate.at(consumer.catalog_id);
         auto original_envelope = original.properties, proposed_envelope = proposed.properties;
         original_envelope.erase("model"); proposed_envelope.erase("model");
+        original_envelope.erase("embedded_instance_drawing_contexts");
+        proposed_envelope.erase("embedded_instance_drawing_contexts");
         require(original.type == proposed.type && original.required == proposed.required &&
             exact(original_envelope, proposed_envelope) && exact(original.extensions, proposed.extensions),
             "current catalog editing changed a protected/inactive physical material carrier binding");

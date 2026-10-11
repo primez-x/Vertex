@@ -403,6 +403,7 @@ std::uint32_t required_format_version_internal(const DocumentSnapshot& snapshot,
                     if (!command->qualified_embedded_assembly_copy_completion ||
                         command->qualified_embedded_assembly_copy_intent.is_null()) return false;
                     const auto request=validate_qualified_embedded_assembly_copy_request(command->qualified_embedded_assembly_copy_intent);
+                    if (request.at("version")==4) return 248U;
                     if (request.at("version")>=3) return 247U;
                     return request.at("version")==2 ? 242U : 241U;
                 }
@@ -1575,11 +1576,11 @@ std::uint32_t required_format_version_internal(const DocumentSnapshot& snapshot,
     };
     for (const auto& revision : snapshot.history()) {
         if (revision.phase_entity_import) required=std::max(required,160U);
-        if (required<247 && revision.boundary_constraint_changes)
+        if (required<248 && revision.boundary_constraint_changes)
             required=std::max(required,retained_component_reader_floor(command_to_json(Command{*revision.boundary_constraint_changes})));
-        if (required<247 && revision.boundary_geometry_edit)
+        if (required<248 && revision.boundary_geometry_edit)
             required=std::max(required,typed_edit_reader_floor(encode_boundary_geometry_edit(*revision.boundary_geometry_edit)));
-        if (required<247 && revision.boundary_constraint_changes)
+        if (required<248 && revision.boundary_constraint_changes)
             required=std::max(required,typed_edit_reader_floor(command_to_json(Command{*revision.boundary_constraint_changes})));
         if (required<122 && revision.boundary_geometry_edit)
             required=std::max(required,quantity_reader_floor(encode_boundary_geometry_edit(*revision.boundary_geometry_edit)));
@@ -2167,6 +2168,8 @@ std::uint32_t required_format_version_internal(const DocumentSnapshot& snapshot,
                 required = std::max(required, 118U);
             (void)id;
             if (entity.type == "assembly_model" && entity.properties.is_object()) {
+                if (entity.properties.contains("embedded_instance_drawing_contexts"))
+                    required=std::max(required,248U);
                 const auto model = entity.properties.find("model");
                 if (model != entity.properties.end() && model->is_object() &&
                     model->value("schema", nlohmann::json()) == "sketch.assemblies.v8")
@@ -4125,6 +4128,7 @@ bool verify_sqlite_schema(sqlite3* database, bool allow_recovery = false) {
          sqlite3_column_int(user_version.get(), 0) != 245 &&
          sqlite3_column_int(user_version.get(), 0) != 246 &&
          sqlite3_column_int(user_version.get(), 0) != 247 &&
+         sqlite3_column_int(user_version.get(), 0) != 248 &&
          sqlite3_column_int(user_version.get(), 0) != 242 &&
          sqlite3_column_int(user_version.get(), 0) != 207 &&
          sqlite3_column_int(user_version.get(), 0) != 202 &&
@@ -4851,6 +4855,8 @@ DocumentSnapshot read_snapshot(sqlite3* database, RecoveryLedger* recovery = nul
     // here and authenticate the manifest with its stored version below.
     const auto required_format = required_format_version_internal(snapshot, format_number < 28);
     if (required_format > format_number) {
+        if (required_format>=248)
+            storage_error(StorageErrorCode::unsupported_format,"This project requires reader 248 for embedded component drawing contexts and context-preserving Copy");
         if (required_format>=247)
             storage_error(StorageErrorCode::unsupported_format,"This project requires reader 247 for source-bound component Copy presentation carry");
         if (required_format>=246)

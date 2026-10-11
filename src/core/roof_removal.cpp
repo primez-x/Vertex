@@ -306,6 +306,12 @@ Entity opaque_remainder(Entity entity, const Ids& retained_roofs) {
 // catalog-local declarations and references. Hosts remain document identities.
 Entity hosted_reference_remainder(Entity entity, const Ids& retained_roofs,
     bool complete_component_phase_memberships = false) {
+    if (entity.type == "assembly_model" && entity.properties.contains("embedded_instance_drawing_contexts")) {
+        AssemblyCatalogTransferBudget context_budget;
+        admit_existing_assembly_catalog_work(entity, context_budget);
+        for (auto& row : entity.properties.at("embedded_instance_drawing_contexts").at("rows"))
+            row.erase("instance_id"); // Only the catalog-local reference is masked.
+    }
     if (complete_component_phase_memberships && entity.type == assembly_phase_membership_entity_type) {
         // Only the closed typed model has qualified reference meaning. Carrier
         // siblings and extensions remain subject to the opaque refusal policy.
@@ -378,6 +384,7 @@ void validate_retained_catalog_rows(const RoofRemovalEntities& source,
         for (const auto& row : expected.properties.at("model").at("instances"))
             if (!retired.at(id).contains(row.at("id").get<std::string>())) rows.push_back(row);
         expected.properties.at("model").at("instances") = std::move(rows);
+        expected = prune_embedded_assembly_drawing_contexts(expected);
         if (found->second != expected || found->second.properties.dump() != expected.properties.dump() ||
             found->second.extensions.dump() != expected.extensions.dump())
             reject("complete roof consequence changed its raw retained catalog beyond admitted rows: " + id);
@@ -618,8 +625,15 @@ Derivation derive(const RoofRemovalEntities& source, const std::vector<std::stri
                         complete_component_phase_memberships, required_component_phase_choice, true);
                 }
                 for (const auto& [id, entity] : source) {
-                    const auto scratch = complete_component_dimensions ?
+                    auto scratch = complete_component_dimensions ?
                         component_dimension_reference_remainder(entity, retired_keys) : std::nullopt;
+                    if (entity.type == "assembly_model" && entity.properties.contains("embedded_instance_drawing_contexts")) {
+                        AssemblyCatalogTransferBudget context_budget;
+                        admit_existing_assembly_catalog_work(entity, context_budget);
+                        scratch = entity;
+                        for (auto& row : scratch->properties.at("embedded_instance_drawing_contexts").at("rows"))
+                            row.erase("instance_id"); // Qualified by its actual catalog owner.
+                    }
                     const auto& reference = scratch ? *scratch : entity;
                     if (unqualified_instance_reference(reference.properties, locals, source) ||
                         unqualified_instance_reference(reference.extensions, locals, source))

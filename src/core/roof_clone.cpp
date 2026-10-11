@@ -149,6 +149,12 @@ Entity opaque_remainder(Entity entity, bool include_hosted_instances = false) {
             receipt.at("entries") = std::move(values);
         }
     } else if (include_hosted_instances && entity.type == "assembly_model") {
+        if (p.contains("embedded_instance_drawing_contexts")) {
+            AssemblyCatalogTransferBudget context_budget;
+            admit_existing_assembly_catalog_work(entity, context_budget);
+            for (auto& row : p.at("embedded_instance_drawing_contexts").at("rows"))
+                row.erase("instance_id"); // Layer references remain document references.
+        }
         // Closed typed admission releases only the actual live host slots.
         // Unknown envelope fields and definition/override strings stay opaque.
         (void)AssemblyModel::from_json(p.at("model"));
@@ -696,16 +702,21 @@ RoofCloneResult replay_roof_clone(const RoofCloneEntities& source, const RoofClo
                 // representation survive. Only selected hosted rows are copied.
                 const auto retained = copy.properties.at("model").at("instances");
                 auto& rows = copy.properties.at("model").at("instances"); rows = Json::array();
+                RoofCloneIdentityMap retained_instances;
                 for (auto row : retained) {
                     if (!row.contains("placement")) continue;
                     const auto host = row.at("placement").at("host_entity_id").get<std::string>();
                     if (!roofs.contains(host)) continue;
                     const RoofCloneHostedInstanceKey key{id, row.at("id").get<std::string>()};
                     if (!expected_instances.contains(key)) continue;
+                    retained_instances.emplace(key.second, hosted_instance_identities.at(key));
                     row.at("id") = hosted_instance_identities.at(key);
                     row.at("placement").at("host_entity_id") = identities.at(host);
                     rows.push_back(std::move(row));
                 }
+                // Copied roofs preserve their actual floor/layer relationships.
+                if (source.at(id).properties.contains("embedded_instance_drawing_contexts"))
+                    copy = remap_embedded_assembly_drawing_contexts(source.at(id), copy, retained_instances);
                 (void)AssemblyModel::from_json(copy.properties.at("model"));
             } else reject("unsupported copy owner reached replay");
             if (copy.type != "assembly_model") owners.insert(id);

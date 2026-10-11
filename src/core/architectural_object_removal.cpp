@@ -413,7 +413,19 @@ void material_assignment(const Entities& source, const Entity& entity) {
 }
 // Known child declarations do not acquire global entity-reference meaning when
 // their local spelling happens to equal a removed physical/render identity.
+Entity catalog_drawing_context_reference_remainder(Entity entity, bool validate = true) {
+    if (entity.type == "assembly_model" && entity.properties.contains("embedded_instance_drawing_contexts")) {
+        if (validate) {
+            AssemblyCatalogTransferBudget context_budget;
+            admit_existing_assembly_catalog_work(entity, context_budget);
+        }
+        for (auto& row : entity.properties.at("embedded_instance_drawing_contexts").at("rows"))
+            row.erase("instance_id"); // Catalog-local; retain the actual layer reference.
+    }
+    return entity;
+}
 Entity declaration_remainder(Entity entity, bool validate = true) {
+    entity = catalog_drawing_context_reference_remainder(std::move(entity), validate);
     auto& p = entity.properties;
     if (entity.type == "stair") {
         const auto form = field(p, "form"), version = field(p, "version");
@@ -456,6 +468,7 @@ bool bound_overlay(const Json& row, const Ids& retired) {
 // This inspection copy removes only codec-owned reference slots. It never
 // supplies deletion authority or replaces an authoritative raw envelope.
 Entity reference_remainder(Entity entity) {
+    entity = catalog_drawing_context_reference_remainder(std::move(entity));
     auto& p = entity.properties;
     if (entity.type == "assembly_model") {
         if (!supported_catalog(p.at("model"))) reject("affected catalog has unsupported schema: " + entity.id);
@@ -1221,6 +1234,7 @@ Entities derive(const Entities& source, const std::vector<std::string>& selectio
                 reject("affected catalog has opaque retired local-instance reference: " + id);
         }
         filter(result.at(id).properties.at("model").at("instances"), [&](const Json& row) { return !local.contains(row.at("id").get<std::string>()); });
+        result.at(id) = prune_embedded_assembly_drawing_contexts(result.at(id));
         if (!complete_component_phase_memberships)
             (void)AssemblyModel::from_json(result.at(id).properties.at("model"));
     }
@@ -1518,6 +1532,7 @@ Entities derive(const Entities& source, const std::vector<std::string>& selectio
         filter(expected.properties.at("model").at("instances"), [&](const Json& row) {
             return !instances.contains({id, row.at("id").get<std::string>()});
         });
+        expected = prune_embedded_assembly_drawing_contexts(expected);
         if (retained->second != expected || retained->second.properties.dump() != expected.properties.dump() ||
             retained->second.extensions.dump() != expected.extensions.dump())
             reject("complete wall consequence changed its raw retained catalog beyond admitted rows: " + id);
@@ -1740,6 +1755,7 @@ std::vector<std::pair<std::string, std::string>> complete_proposed_opening_catal
                 filter(expected.properties.at("model").at("instances"), [&](const Json& row) {
                     return survivors.contains(row.at("id").get<std::string>());
                 });
+                expected = prune_embedded_assembly_drawing_contexts(expected);
                 const bool valid = retained_catalog->second == expected &&
                     retained_catalog->second.properties.dump() == expected.properties.dump() &&
                     retained_catalog->second.extensions.dump() == expected.extensions.dump();

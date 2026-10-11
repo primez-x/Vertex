@@ -289,6 +289,13 @@ void admit_presentation_source(const AssemblyDocumentEntities& source) {
             reject("presentation source requires actual identified entity envelopes");
         budget.read(entity.properties); budget.read(entity.extensions);
     }
+    // Admit the complete actual catalogs before masking codec-owned local IDs.
+    AssemblyCatalogTransferBudget catalog_budget;
+    for (const auto& [id, entity] : source) {
+        (void)id;
+        if (entity.type == "assembly_model") admit_existing_assembly_catalog_work(entity, catalog_budget);
+    }
+    validate_embedded_assembly_drawing_contexts(source);
 }
 Target component_root(Target target) { target.part_path.clear(); return target; }
 struct DimensionRoster {
@@ -427,6 +434,8 @@ Entity opaque_presentation_remainder(Entity entity, const DimensionRoster* dimen
     auto& p = entity.properties;
     if (entity.type == "assembly_model") {
         (void)AssemblyModel::from_json(p.at("model")); p.erase("model");
+        if (p.contains("embedded_instance_drawing_contexts"))
+            for (auto& row : p.at("embedded_instance_drawing_contexts").at("rows")) row.erase("instance_id");
     } else if (entity.type == "assembly_instance") {
         (void)decode_document_assembly_instance(entity);
         p.erase("instance"); p.erase("assembly_catalog_id");

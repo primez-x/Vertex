@@ -422,6 +422,12 @@ Entity remainder(Entity entity) {
             p.at("host").erase(name);
     } else if (entity.type == "assembly_model") {
         (void)AssemblyModel::from_json(p.at("model"));
+        if (p.contains("embedded_instance_drawing_contexts")) {
+            AssemblyCatalogTransferBudget context_budget;
+            admit_existing_assembly_catalog_work(entity, context_budget);
+            for (auto& row : p.at("embedded_instance_drawing_contexts").at("rows"))
+                row.erase("instance_id"); // Preserve the actual layer reference.
+        }
         for (auto& row : p.at("model").at("instances")) {
             row.erase("id");
             if (row.contains("placement")) row.at("placement").erase("host_entity_id");
@@ -2310,6 +2316,7 @@ Entities replay_phase_stair_replacement_authoring(const Entities& actual, const 
                 }
             }
             if (transformed) copy.properties.at("model").at("schema") = derived.physical.at(id).properties.at("model").at("schema");
+            PhaseStairReplacementIdentityMap retained_instances;
             auto& copied_rows = copy.properties.at("model").at("instances"); const auto retained = copied_rows; copied_rows = Json::array();
             for (auto row : retained) {
                 const PhaseStairReplacementHostedInstanceKey key{id, row.at("id").get<std::string>()};
@@ -2322,10 +2329,13 @@ Entities replay_phase_stair_replacement_authoring(const Entities& actual, const 
                     // source row's profile overrides and other raw fields.
                     row.at("placement") = typed->at("placement");
                 }
+                retained_instances.emplace(key.second, authoring.hosted_instance_identities.at(key));
                 row.at("id") = authoring.hosted_instance_identities.at(key);
                 remap_field(row.at("placement"), "host_entity_id", authoring.identities);
                 copied_rows.push_back(std::move(row));
             }
+            if (actual.at(id).properties.contains("embedded_instance_drawing_contexts"))
+                copy = remap_embedded_assembly_drawing_contexts(actual.at(id), copy, retained_instances);
             const auto copy_id = copy.id;
             if (!candidate.emplace(copy_id, std::move(copy)).second) reject("fresh private catalog insertion collided");
         }
@@ -2379,6 +2389,21 @@ Entities replay_phase_stair_replacement_authoring(const Entities& actual, const 
                 if (occupied.values.contains(alias) || authored.values.contains(alias) || fresh.contains(alias) || !fresh_aliases.insert(alias).second)
                     reject("fresh component alias collides with actual/proof/fresh namespace");
                 if (!presentation_ids.emplace(original_aliases.at(key), alias).second) reject("computed alias overlaps actual physical mapping");
+            }
+        }
+        if (!hosted.empty()) {
+            std::vector<PhaseStairReplacementHostedInstanceKey> source_roots, destination_roots;
+            for (const auto& root : hosted)
+                if (actual.at(root.first).properties.contains("embedded_instance_drawing_contexts")) {
+                    source_roots.push_back(root);
+                    destination_roots.emplace_back(authoring.identities.at(root.first), authoring.hosted_instance_identities.at(root));
+                }
+            if (!source_roots.empty()) {
+                const auto source_contexts = resolve_embedded_assembly_drawing_contexts(actual, source_roots);
+                const auto destination_contexts = resolve_embedded_assembly_drawing_contexts(candidate, destination_roots);
+                for (std::size_t i = 0; i < source_roots.size(); ++i)
+                    if (source_contexts.at(source_roots[i]) != destination_contexts.at(destination_roots[i]))
+                        reject("hosted replacement changed the source component's complete drawing context");
             }
         }
         admit_instances(candidate, copied_hosted);

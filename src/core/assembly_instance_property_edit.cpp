@@ -997,6 +997,23 @@ void patch_root(AssemblyDocumentEntities& result, const AssemblyDocumentEntities
         promote_embedded(model, *row);
     }
 }
+void require_embedded_context_carry(const AssemblyDocumentEntities& original,
+    const AssemblyDocumentEntities& result, const std::map<Target, Target>& destinations) {
+    std::vector<std::pair<std::string, std::string>> before, after;
+    for (const auto& [source, destination] : destinations) {
+        if (source.document_entity_id) continue;
+        if (!original.at(source.catalog_id).properties.contains("embedded_instance_drawing_contexts") &&
+            !result.at(destination.catalog_id).properties.contains("embedded_instance_drawing_contexts")) continue;
+        before.emplace_back(source.catalog_id, source.instance_id);
+        after.emplace_back(destination.catalog_id, destination.instance_id);
+    }
+    if (before.empty()) return; // Historical absence retains its existing admission.
+    const auto source_contexts = resolve_embedded_assembly_drawing_contexts(original, before);
+    const auto destination_contexts = resolve_embedded_assembly_drawing_contexts(result, after);
+    for (std::size_t i = 0; i < before.size(); ++i)
+        if (source_contexts.at(before[i]) != destination_contexts.at(after[i]))
+            reject("carried embedded root changed its actual drawing context");
+}
 } // namespace
 
 namespace {
@@ -1039,7 +1056,8 @@ void remove_empty_type_promotion(const Json& before, Json& after) {
         if (!before.contains(key) && after.contains(key) && after.at(key).is_array() && after.at(key).empty())
             after.erase(key);
 }
-void require_carry_catalog(const Entity& before, const Entity& carried) {
+void require_carry_catalog(const Entity& before, const Entity& carried,
+    const std::map<std::string, std::string, std::less<>>& instance_mapping) {
     const auto& saved = before.properties.at("model");
     const auto& model = carried.properties.at("model");
     // Decoding separately admits each actual supported dialect. A carry may
@@ -1069,6 +1087,13 @@ void require_carry_catalog(const Entity& before, const Entity& carried) {
     for (const auto& [key, value] : before.properties.items()) {
         if (key == "model") continue;
         const auto found = carried.properties.find(key);
+        if (key == "embedded_instance_drawing_contexts") {
+            auto proof = carried; proof.properties[key] = value;
+            const auto expected = remap_embedded_assembly_drawing_contexts(before, proof, instance_mapping);
+            if (found == carried.properties.end() || found->dump() != expected.properties.at(key).dump())
+                reject("carry changed source-derived embedded drawing context records");
+            continue;
+        }
         if (found == carried.properties.end() || value.dump() != found->dump()) reject("carry changed raw catalog metadata");
     }
 }
@@ -1169,8 +1194,19 @@ AssemblyDocumentEntities detail::calculate_carried_assembly_instance_property_en
             AssemblyModel::from_json(catalog->second.properties.at("model")));
         const auto& model = carried_models.at(destination.catalog_id);
         const auto carried = actual_carried_instance(derived_carried, destination, model);
-        if (checked_catalogs.emplace(root.target.catalog_id, destination.catalog_id).second)
-            require_carry_catalog(original.at(root.target.catalog_id), catalog->second);
+        if (checked_catalogs.emplace(root.target.catalog_id, destination.catalog_id).second) {
+            std::map<std::string, std::string, std::less<>> instance_mapping;
+            std::set<std::string, std::less<>> mapped;
+            for (const auto& [source_root, destination_root] : roots)
+                if (!source_root.document_entity_id && source_root.catalog_id == root.target.catalog_id &&
+                    destination_root.catalog_id == destination.catalog_id) {
+                    instance_mapping.emplace(source_root.instance_id, destination_root.instance_id);
+                    mapped.insert(destination_root.instance_id);
+                }
+            for (const auto& row : model.instances()) if (!mapped.contains(row.id))
+                instance_mapping.emplace(row.id, row.id);
+            require_carry_catalog(original.at(root.target.catalog_id), catalog->second, instance_mapping);
+        }
         require_carry_instance(original, root.target, root.original, derived_carried, destination, carried);
         const auto before = model.expand(carried, carried_before_budget);
         // Part and declared-slot authority stays at the actual original source.
@@ -1193,6 +1229,7 @@ AssemblyDocumentEntities detail::calculate_carried_assembly_instance_property_en
     admit_catalogs(result);
     validate_document_assembly_instances(result);
     validate_document_site_frames(result);
+    require_embedded_context_carry(original, result, roots);
     if (const auto diagnostic = validate_active_phase_constraint_integrity(result)) throw std::invalid_argument(*diagnostic);
     const auto final_scope = constraint_phase_scope(result);
     std::map<std::string, AssemblyModel, std::less<>> final_models;
@@ -1341,6 +1378,8 @@ PhaseAssemblyInstancePropertyEditResult replay_phase_assembly_instance_property_
             // Keep every raw definition, material and metadata field needed by
             // the selected expansion. Unselected live instances stay at source.
             model["instances"] = Json::array({std::move(private_row)});
+            copy = remap_embedded_assembly_drawing_contexts(original.at(source_root.catalog_id), copy,
+                {{source_root.instance_id, ids.proposed_instance_id}});
             result.entities.emplace(copy.id, std::move(copy));
             const auto companion = replacement.membership_entity_id.value_or(
                 allocation.membership_entity_ids.contains(replacement.registry_id) ?
@@ -1390,6 +1429,7 @@ PhaseAssemblyInstancePropertyEditResult replay_phase_assembly_instance_property_
     }
     validate_document_assembly_instances(result.entities);
     validate_document_site_frames(result.entities);
+    require_embedded_context_carry(original, result.entities, destinations);
     if (const auto diagnostic = validate_active_phase_constraint_integrity(result.entities)) throw std::invalid_argument(*diagnostic);
     const auto final_scope = constraint_phase_scope(result.entities);
     AssemblyExpansionBudget final_budget;
@@ -1489,6 +1529,18 @@ AssemblyDocumentEntities replay_assembly_instance_property_entities(const Assemb
     validate_document_assembly_instances(result);
     validate_document_site_frames(result);
     if (const auto diagnostic = validate_active_phase_constraint_integrity(result)) throw std::invalid_argument(*diagnostic);
+    std::map<Target, Target> context_destinations;
+    for (const auto& [key, rows] : grouped) {
+        (void)key;
+        auto root = rows.front()->target; root.part_path.clear();
+        context_destinations.emplace(root, root);
+    }
+    require_embedded_context_carry(original, result, context_destinations);
+    for (const auto& [id, entity] : original) if (entity.type == "assembly_model" &&
+        entity.properties.contains("embedded_instance_drawing_contexts") &&
+        entity.properties.at("embedded_instance_drawing_contexts").dump() !=
+            result.at(id).properties.at("embedded_instance_drawing_contexts").dump())
+        reject("same-row Properties changed raw embedded drawing context records");
     std::map<std::string, AssemblyModel, std::less<>> final_models;
     AssemblyExpansionBudget final_budget;
     for (const auto& [key, rows] : grouped) {

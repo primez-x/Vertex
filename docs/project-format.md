@@ -1,4 +1,25 @@
-# Vertex project formats v1 through v247
+# Vertex project formats v1 through v248
+
+Reader248 adds closed Copy request4 and explicit embedded component drawing
+contexts. An `assembly_model` may own
+`embedded_instance_drawing_contexts:{"version":1,"rows":[{"instance_id":"local-row-id","layer_id":"layer-id"}]}`.
+Each row refers to an actual local instance and a complete property/building/
+floor/layer context. The closed roster is bounded and rejects duplicate or
+missing identities. A hosted row's explicit context must match its actual host.
+Context is organization metadata; it supplies no pose, hosting, phase or level
+authority. Without this property, historical host/catalog fallback remains.
+Transport remaps actual layer references and local row identities; subset and
+retirement paths prune removed rows. Private catalog replacements derive their
+rosters from actual source correspondence rather than manufactured candidates.
+
+Copy request4 retains request3's fields and presentation contract while
+preserving every destination's actual source drawing context independently of
+geometry hosting. Destinations detach using the actual world pose, including
+identity copies; their context is explicit when host/catalog fallback would
+otherwise differ. Requests1–3 retain their historical copy meanings. The floor
+applies to direct/nested retained requests and metadata in retained snapshots;
+native extraction246 follows reader248. These are source contracts, with
+compilation and runtime qualification still outstanding.
 
 Reader247 adds closed Copy request3 under exclusive command67. Request3 retains
 request2's captured source, targets, exact dimension and companion allocations,
@@ -13,9 +34,8 @@ Request1 and request2 retain their historical meanings. Native extraction245
 follows reader247, including recognized nested retained commands.
 
 Request3 does not add per-row floor/layer context. Nonidentity embedded copying
-can remove placement, so preserving a hosted source's organization independently
-of geometry hosting requires a separate explicit context contract before the
-Site catalog-local Copy workflow is enabled.
+can remove placement; request4 supplies the separate explicit context contract
+for source-preserving Site catalog-local Copy.
 
 Reader246 adds foundation catalog request2. Its closed fields remain `version`,
 `source_entities_digest`, and `edits`; the original catalog and definition

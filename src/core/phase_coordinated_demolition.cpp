@@ -765,8 +765,15 @@ void protected_source(const Entities& source, const Entities& candidate,
         const auto& rows = entity.properties.at("model").at("instances");
         const auto& remaining = next->second.properties.at("model").at("instances");
         if (!rows.is_array() || !remaining.is_array()) invalid("catalog instances must remain arrays");
+        // The leaf already owns its typed instance consequence. Derive the
+        // only permitted metadata consequence from actual source context rows,
+        // including when the admitted model roster contains fresh suffixes.
+        auto expected = entity;
+        expected.properties.at("model").at("instances") = remaining;
+        expected = prune_embedded_assembly_drawing_contexts(expected);
+        expected.properties.at("model").at("instances") = rows;
         restored.properties.at("model").at("instances") = rows;
-        if (!exact(entity, restored)) invalid("complete demolition changed a raw catalog envelope: " + id);
+        if (!exact(expected, restored)) invalid("complete demolition changed a raw catalog envelope: " + id);
         for (const auto& row : rows) {
             if (!row.contains("placement") || row.at("placement").is_null()) continue;
             const auto found = std::find_if(remaining.begin(), remaining.end(), [&](const Json& current) {

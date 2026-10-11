@@ -272,6 +272,12 @@ Entity structural_hosted_catalog_opaque_remainder(const Entity& actual_catalog) 
     Strings bounds; bounds.read(actual_catalog.properties); bounds.read(actual_catalog.extensions);
     (void)AssemblyModel::from_json(actual_catalog.properties.at("model"));
     auto result = actual_catalog;
+    if (result.properties.contains("embedded_instance_drawing_contexts")) {
+        AssemblyCatalogTransferBudget context_budget;
+        admit_existing_assembly_catalog_work(actual_catalog, context_budget);
+        for (auto& row : result.properties.at("embedded_instance_drawing_contexts").at("rows"))
+            row.erase("instance_id"); // Validated catalog-local reference only.
+    }
     for (auto& row : result.properties.at("model").at("instances")) {
         row.erase("id");
         if (row.contains("placement")) row.at("placement").erase("host_entity_id");
@@ -415,9 +421,11 @@ StructuralHostedComponentCopyResult copy_prepared_hosted_components(
         auto copy = actual.at(id); copy.id = catalog_ids.at(id);
         auto raw = replay(actual.at(id));
         auto selected = Json::array();
+        StructuralHostedIdentityMap retained_instances;
         for (auto row : raw.at("instances")) {
             const StructuralHostedInstanceKey key{id, row.at("id").get<std::string>()};
             if (!expected_instances.contains(key)) continue;
+            retained_instances.emplace(key.second, hosted_instance_ids.at(key));
             row.at("id") = hosted_instance_ids.at(key);
             auto& host = row.at("placement").at("host_entity_id");
             host = object_ids.at(host.get<std::string>());
@@ -425,6 +433,10 @@ StructuralHostedComponentCopyResult copy_prepared_hosted_components(
         }
         raw.at("instances") = std::move(selected);
         copy.properties.at("model") = std::move(raw);
+        // Typed physical replay preserves host context; layer references retain
+        // their actual source meaning while local row identities become fresh.
+        if (actual.at(id).properties.contains("embedded_instance_drawing_contexts"))
+            copy = remap_embedded_assembly_drawing_contexts(actual.at(id), copy, retained_instances);
         if (!candidate.emplace(copy.id, copy).second) reject("copied catalog insertion collides");
         result.catalogs.push_back(std::move(copy));
     }

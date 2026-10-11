@@ -993,6 +993,10 @@ std::optional<PreparedNativeGeometry> prepare_native_geometry(
     bool assembly_document_valid = false;
     EmbeddedAssemblyPresentationIds embedded_presentation_ids;
     try {
+        // Row layers govern only the caller's exact alias visibility mask.
+        // Admit their complete organization/actual-host agreement before any
+        // assembly presentation escapes; geometry still uses its real source.
+        validate_embedded_assembly_drawing_contexts(entities);
         AssemblyExpansionBudget budget;
         const auto expansions = expand_document_assembly_instances(entities, budget);
         embedded_presentation_ids = embedded_assembly_presentation_ids(entities);
@@ -1084,7 +1088,8 @@ std::optional<PreparedNativeGeometry> prepare_native_geometry(
             for (const auto& instance : catalog.instances()) {
                     if (cancelled && cancelled()) return std::nullopt;
                 if (assembly_memberships.inactive_roots.contains({catalog_id, instance.id})) continue;
-                if (assembly_memberships.owners.contains({catalog_id, instance.id}) && instance.placement &&
+                if ((assembly_memberships.owners.contains({catalog_id, instance.id}) ||
+                     catalog_entity.properties.contains("embedded_instance_drawing_contexts")) && instance.placement &&
                     assembly_host_inactive_in_phase(entities, inactive_owner_ids, instance.placement->host_entity_id)) continue;
                 const auto child_id = embedded_presentation_ids.at({catalog_id, instance.id});
                 try {

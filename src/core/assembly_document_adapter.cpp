@@ -39,6 +39,45 @@ void local_identifier(const std::string& value) {
     require(!value.empty() && !std::all_of(value.begin(), value.end(),
         [](unsigned char c) { return std::isspace(c); }), "assembly identifier/name must not be blank");
 }
+constexpr const char* embedded_context_key = "embedded_instance_drawing_contexts";
+using EmbeddedContextRows = std::map<std::string, std::string, std::less<>>;
+EmbeddedContextRows embedded_context_rows(const Entity& source, bool require_existing_roots = true) {
+    const auto field = source.properties.find(embedded_context_key);
+    if (field == source.properties.end()) return {};
+    require(source.type == "assembly_model" && source.properties.is_object(),
+        "embedded drawing contexts require an assembly catalog owner");
+    const auto& value = *field;
+    require(value.is_object() && value.size() == 2 && value.contains("version") && value.contains("rows") &&
+        value.at("version").is_number_integer() && value.at("version") == 1 &&
+        value.at("rows").is_array() && value.at("rows").size() <= 4096,
+        "invalid embedded drawing context envelope");
+    const auto& instances = source.properties.at("model").at("instances");
+    require(instances.is_array() && instances.size() <= 4096,
+        "embedded drawing context instance roster exceeds bound");
+    std::set<std::string, std::less<>> roots;
+    for (const auto& row : instances) {
+        require(row.is_object() && row.contains("id") && row.at("id").is_string(),
+            "embedded drawing context requires actual instance identities");
+        const auto& id = row.at("id").get_ref<const std::string&>();
+        require(id.size() <= 4096, "embedded drawing context local identity exceeds bound");
+        local_identifier(id);
+        require(roots.insert(id).second, "embedded drawing context instance identity is duplicated");
+    }
+    EmbeddedContextRows result;
+    for (const auto& row : value.at("rows")) {
+        require(row.is_object() && row.size() == 2 && row.contains("instance_id") && row.contains("layer_id") &&
+            row.at("instance_id").is_string() && row.at("layer_id").is_string(),
+            "invalid embedded drawing context row");
+        const auto& id = row.at("instance_id").get_ref<const std::string&>();
+        const auto& layer = row.at("layer_id").get_ref<const std::string&>();
+        require(id.size() <= 4096, "embedded drawing context local identity exceeds bound");
+        local_identifier(id); identifier(layer);
+        require(!require_existing_roots || roots.contains(id),
+            "embedded drawing context references a missing instance");
+        require(result.emplace(id, layer).second, "embedded drawing context row is duplicated");
+    }
+    return result;
+}
 void retain_assembly_transform_source(nlohmann::json& encoded, const nlohmann::json& raw,
     const AssemblyTransform& before, const AssemblyTransform& after) {
     auto& translation = encoded.at("translation_m");
@@ -499,6 +538,10 @@ AssemblyCatalogSourceReferences preflight_complete_catalog(const Entity& source,
         require(model.at(key).is_array() && model.at(key).size() <= 4096,
             "complete assembly catalog collection budget exceeded");
     }
+    // Closed metadata is admitted before any model decode. Its strings and
+    // nodes were already reserved by the complete carrier JSON ledger.
+    const auto contexts = embedded_context_rows(source);
+    charge_catalog_product(budget, model.at("instances").size() + contexts.size(), 1);
     struct GraphSize { std::size_t nodes{1}, depth{1}, segments{}; };
     struct RawType {
         const nlohmann::json* row;
@@ -828,6 +871,12 @@ AssemblyCatalogSourceReferences complete_assembly_catalog_source_refs(
             identifier(id);
             context.insert(id);
         }
+        for (const auto& [root, layer] : embedded_context_rows(source)) {
+            (void)root;
+            charge_catalog_string(budget, layer);
+            charge_catalog_product(budget, context.size() + 1, 1);
+            context.insert(layer);
+        }
         if (policy == AssemblyCatalogSourceReferencePolicy::document_authoring)
             charge_catalog_product(budget, hosts.size() + context.size(), 1);
         result.hosted_entity_ids.assign(hosts.begin(), hosts.end());
@@ -903,6 +952,9 @@ Entity remap_complete_assembly_catalog_source_refs(const Entity& source,
         const auto found = result.properties.find(std::string(key));
         if (found != result.properties.end()) *found = context_owner_mapping.at(found->get<std::string>());
     }
+    if (result.properties.contains(embedded_context_key))
+        for (auto& row : result.properties.at(embedded_context_key).at("rows"))
+            row.at("layer_id") = context_owner_mapping.at(row.at("layer_id").get<std::string>());
     if (policy == AssemblyCatalogSourceReferencePolicy::document_authoring) {
         for (auto& [key, value] : result.properties.items()) {
             if (catalog_context_slot(key)) continue;
@@ -924,6 +976,198 @@ bool is_complete_assembly_catalog_host_type(std::string_view type) noexcept {
         "boundary", "measurement_boundary", "room_boundary", "wall", "opening", "slab", "roof",
         "stair", "railing", "column", "beam", "terrain_surface"};
     return std::find(host_roles.begin(), host_roles.end(), type) != host_roles.end();
+}
+namespace {
+class EmbeddedDrawingContextIndex {
+public:
+    explicit EmbeddedDrawingContextIndex(const AssemblyDocumentEntities& entities) : entities_(entities) {
+        require(entities.size() <= 100000, "embedded drawing context source entity count exceeds bound");
+        AssemblyCatalogTransferBudget budget;
+        // Complete raw catalog admission precedes organization or semantic
+        // model work, including unrelated catalog rosters.
+        for (const auto& [id, entity] : entities) {
+            require(id == entity.id, "embedded drawing context map identity differs from entity identity");
+            if (entity.properties.contains(embedded_context_key))
+                require(entity.type == "assembly_model", "embedded drawing contexts require an assembly catalog owner");
+            if (entity.type == "assembly_model") admit_existing_assembly_catalog_work(entity, budget);
+        }
+        for (const auto& [id, entity] : entities) {
+            if (entity.type != "assembly_model") continue;
+            const auto contexts = embedded_context_rows(entity);
+            for (const auto& row : entity.properties.at("model").at("instances")) {
+                const auto& local = row.at("id").get_ref<const std::string&>();
+                require(local.size() <= 4096 && roots_.size() < 100000,
+                    "embedded drawing context indexed root budget exceeded");
+                local_identifier(local);
+                const auto key = std::pair{id, local};
+                require(roots_.emplace(key, &row).second, "embedded drawing context root is duplicated");
+                if (const auto context = contexts.find(local); context != contexts.end()) {
+                    require(layers_.size() < 4096, "embedded drawing context aggregate roster exceeds bound");
+                    layers_.emplace(key, context->second);
+                }
+            }
+        }
+    }
+    std::optional<DrawingContext> resolve(const std::pair<std::string, std::string>& root) {
+        require(root.second.size() <= 4096, "embedded drawing context requested identity exceeds bound");
+        identifier(root.first); local_identifier(root.second);
+        const auto row = roots_.find(root);
+        require(row != roots_.end(), "embedded drawing context requested root is missing");
+        const auto explicit_layer = layers_.find(root);
+        std::optional<DrawingContext> declared;
+        if (explicit_layer != layers_.end()) {
+            const auto layer = entities_.find(explicit_layer->second);
+            require(layer != entities_.end() && layer->second.type == "layer" && layer->second.id == layer->first,
+                "embedded drawing context layer is missing or has the wrong identity/type");
+            declared = organization().drawing_context(layer->first);
+            require(declared && declared->complete(), "embedded drawing context layer has incomplete or contradictory organization");
+        }
+        if (row->second->contains("placement")) {
+            const auto& host_id = row->second->at("placement").at("host_entity_id").get_ref<const std::string&>();
+            const auto host = entities_.find(host_id);
+            if (declared) {
+                require(host != entities_.end() && host->second.id == host_id &&
+                    is_complete_assembly_catalog_host_type(host->second.type),
+                    "embedded drawing context placement host is missing or invalid");
+                const auto context = organization().drawing_context(host_id);
+                require(context && *context == *declared,
+                    "embedded drawing context differs from its actual placement host");
+            } else if (const auto context = organization().drawing_context(host_id)) return context;
+        }
+        if (declared) return declared;
+        return organization().drawing_context(root.first);
+    }
+    void validate() {
+        for (const auto& [root, layer] : layers_) { (void)layer; (void)resolve(root); }
+    }
+private:
+    const ProjectOrganization& organization() {
+        if (!organization_) organization_ = organize_project(entities_);
+        return *organization_;
+    }
+    const AssemblyDocumentEntities& entities_;
+    std::map<std::pair<std::string, std::string>, const nlohmann::json*> roots_;
+    std::map<std::pair<std::string, std::string>, std::string> layers_;
+    std::optional<ProjectOrganization> organization_;
+};
+} // namespace
+EmbeddedAssemblyDrawingContexts resolve_embedded_assembly_drawing_contexts(
+    const AssemblyDocumentEntities& entities, std::span<const std::pair<std::string, std::string>> roots) {
+    require(roots.size() <= 4096, "embedded drawing context request roster exceeds bound");
+    std::set<std::pair<std::string, std::string>> requested;
+    for (const auto& root : roots) {
+        require(root.second.size() <= 4096, "embedded drawing context request identity exceeds bound");
+        identifier(root.first); local_identifier(root.second);
+        require(requested.insert(root).second, "embedded drawing context request identity is duplicated");
+    }
+    try {
+        EmbeddedDrawingContextIndex index(entities);
+        index.validate();
+        EmbeddedAssemblyDrawingContexts result;
+        for (const auto& root : requested) result.emplace(root, index.resolve(root));
+        return result;
+    } catch (const nlohmann::json::exception& error) {
+        throw std::invalid_argument(std::string("invalid embedded drawing contexts: ") + error.what());
+    }
+}
+std::optional<DrawingContext> resolve_embedded_assembly_drawing_context(
+    const AssemblyDocumentEntities& entities, const std::string& catalog_id, const std::string& instance_id) {
+    const std::array roots{std::pair{catalog_id, instance_id}};
+    return resolve_embedded_assembly_drawing_contexts(entities, roots).at(roots.front());
+}
+void validate_embedded_assembly_drawing_contexts(const AssemblyDocumentEntities& entities) {
+    require(entities.size() <= 100000, "embedded drawing context source entity count exceeds bound");
+    if (std::none_of(entities.begin(), entities.end(), [](const auto& entry) {
+        return entry.second.properties.contains(embedded_context_key);
+    })) return; // Historical absence does not introduce new organization admission.
+    try { EmbeddedDrawingContextIndex index(entities); index.validate(); }
+    catch (const nlohmann::json::exception& error) {
+        throw std::invalid_argument(std::string("invalid embedded drawing contexts: ") + error.what());
+    }
+}
+Entity prune_embedded_assembly_drawing_contexts(const Entity& source) {
+    try {
+        require(source.type == "assembly_model" && source.properties.is_object(),
+            "embedded drawing context subset requires an assembly catalog owner");
+        if (!source.properties.contains(embedded_context_key)) return source;
+        AssemblyCatalogTransferBudget budget;
+        admit_catalog_json(source.properties, 2, budget);
+        admit_catalog_json(source.extensions, 2, budget);
+        (void)embedded_context_rows(source, false);
+        std::set<std::string, std::less<>> retained;
+        for (const auto& row : source.properties.at("model").at("instances"))
+            retained.insert(row.at("id").get<std::string>());
+        auto result = source;
+        auto& rows = result.properties.at(embedded_context_key).at("rows");
+        rows.erase(std::remove_if(rows.begin(), rows.end(), [&](const auto& row) {
+            return !retained.contains(row.at("instance_id").template get<std::string>());
+        }), rows.end());
+        (void)embedded_context_rows(result);
+        admit_existing_assembly_catalog_work(result, budget);
+        return result;
+    } catch (const nlohmann::json::exception& error) {
+        throw std::invalid_argument(std::string("invalid embedded drawing context subset: ") + error.what());
+    }
+}
+Entity remap_embedded_assembly_drawing_contexts(const Entity& source, const Entity& destination,
+    const std::map<std::string, std::string, std::less<>>& mapping) {
+    require(mapping.size() <= 4096, "embedded drawing context local mapping exceeds bound");
+    try {
+        AssemblyCatalogTransferBudget budget;
+        admit_existing_assembly_catalog_work(source, budget);
+        require(destination.type == "assembly_model" && destination.properties.is_object() && destination.extensions.is_object(),
+            "embedded drawing context destination requires an assembly catalog owner");
+        identifier(destination.id);
+        // An inherited roster can intentionally name the old local IDs until
+        // this helper patches them. Bound the entire destination before copying
+        // it, then perform its complete admission after the exact remap.
+        admit_catalog_json(destination.properties, 2, budget);
+        admit_catalog_json(destination.extensions, 2, budget);
+        const auto& instances = destination.properties.at("model").at("instances");
+        require(instances.is_array() && instances.size() <= 4096,
+            "embedded drawing context destination instance roster exceeds bound");
+        std::set<std::string, std::less<>> source_roots, destination_roots, mapped;
+        const auto collect = [](const nlohmann::json& rows, auto& ids) {
+            for (const auto& row : rows) {
+                require(row.is_object() && row.contains("id") && row.at("id").is_string(),
+                    "embedded drawing context local mapping requires actual row identities");
+                const auto& id = row.at("id").get_ref<const std::string&>();
+                require(id.size() <= 4096, "embedded drawing context local mapping identity exceeds bound");
+                local_identifier(id);
+                require(ids.insert(id).second, "embedded drawing context local mapping row is duplicated");
+            }
+        };
+        collect(source.properties.at("model").at("instances"), source_roots);
+        collect(instances, destination_roots);
+        require(mapping.size() == destination_roots.size(),
+            "embedded drawing context local mapping must cover the complete destination roster");
+        for (const auto& [from, to] : mapping) {
+            require(from.size() <= 4096 && to.size() <= 4096,
+                "embedded drawing context local mapping identity exceeds bound");
+            charge_catalog_string(budget, from); charge_catalog_string(budget, to);
+            local_identifier(from); local_identifier(to);
+            require(source_roots.contains(from) && destination_roots.contains(to) && mapped.insert(to).second,
+                "embedded drawing context local mapping has a missing or repeated endpoint");
+        }
+        const bool has_source = source.properties.contains(embedded_context_key);
+        require(!destination.properties.contains(embedded_context_key) ||
+            (has_source && destination.properties.at(embedded_context_key) == source.properties.at(embedded_context_key)),
+            "embedded drawing context local mapping cannot accept invented destination context records");
+        auto result = destination;
+        if (has_source) {
+            result.properties[embedded_context_key] = source.properties.at(embedded_context_key);
+            auto& rows = result.properties.at(embedded_context_key).at("rows");
+            rows.erase(std::remove_if(rows.begin(), rows.end(), [&](const auto& row) {
+                return !mapping.contains(row.at("instance_id").template get<std::string>());
+            }), rows.end());
+            for (auto& row : rows)
+                row.at("instance_id") = mapping.at(row.at("instance_id").get<std::string>());
+        }
+        admit_existing_assembly_catalog_work(result, budget);
+        return result;
+    } catch (const nlohmann::json::exception& error) {
+        throw std::invalid_argument(std::string("invalid embedded drawing context local mapping: ") + error.what());
+    }
 }
 AssemblyDocumentEntities capture_complete_assembly_catalog_sources(const DocumentSnapshot& source,
     const std::vector<std::string>& catalog_ids, AssemblyCatalogTransferBudget& budget,
@@ -964,6 +1208,15 @@ AssemblyDocumentEntities capture_complete_assembly_catalog_sources(const Documen
             const auto context = source.entities().find(context_id);
             require(context != source.entities().end() && context->second.id == context_id && context->second.type == role,
                 "complete assembly catalog source context is missing or has inconsistent role/identity");
+        }
+        if (owner->second.properties.contains(embedded_context_key)) {
+            std::vector<std::pair<std::string, std::string>> roots;
+            for (const auto& [instance, layer] : embedded_context_rows(owner->second)) {
+                (void)layer; roots.emplace_back(id, instance);
+            }
+            // Actual source layers and host agreement are not established by
+            // isolated carrier inventory or remapping alone.
+            (void)resolve_embedded_assembly_drawing_contexts(source.entities(), roots);
         }
         for (const auto& [reference_id, role] : references.document_owner_roles) {
             charge_catalog_string(budget, reference_id);
@@ -1171,6 +1424,7 @@ AssemblyExpansion expand_document_assembly_instance(const Entity& entity,
 }
 std::map<std::string, AssemblyExpansion, std::less<>> expand_document_assembly_instances(
     const AssemblyDocumentEntities& entities, AssemblyExpansionBudget& budget) {
+    validate_embedded_assembly_drawing_contexts(entities);
     std::map<std::string, AssemblyModel, std::less<>> catalogs;
     for (const auto& [id, entity] : entities) {
         require(id == entity.id, "document map identity differs from entity identity");
@@ -1284,6 +1538,7 @@ AssemblyDocumentEntities clipboard_dependencies(const AssemblyDocumentEntities& 
             entity.properties["model"] = retain_assembly_catalog_dialect(source_entity.properties.at("model"),
                 AssemblyModel::create(std::move(retained_materials), std::move(types), {}).to_json());
         }
+        entity = prune_embedded_assembly_drawing_contexts(entity);
         result.emplace(catalog_id, entity);
         require(closure.emplace(catalog_id, std::move(entity)).second,
             "assembly clipboard root collides with its catalog");
@@ -1402,6 +1657,7 @@ ApplyEntityChanges assembly_catalog_update_command(const DocumentSnapshot& sourc
     }
     Entity updated = found->second;
     updated.properties["model"] = replacement.to_json();
+    updated = prune_embedded_assembly_drawing_contexts(updated);
     // Dialect retention itself decodes the generated model. Charge the entire
     // candidate catalog roster on the same source/candidate work ledger first.
     for (const auto& [id, entity] : source.entities())
@@ -1970,7 +2226,8 @@ static AssemblyDocumentEntities prepare_qualified_embedded_assembly_copy_entitie
     std::span<const EmbeddedAssemblyGroupTarget> targets,
     const ArchitecturalGroupTransform& transform, Revision expected_revision,
     const std::map<std::string, std::string, std::less<>>& copied_dimension_ids,
-    const std::map<std::string, std::string, std::less<>>* membership_entity_ids) {
+    const std::map<std::string, std::string, std::less<>>* membership_entity_ids,
+    bool preserve_source_context = false) {
     revision(source, expected_revision);
     require(!targets.empty() && targets.size() <= maximum_architectural_group_targets,
         "qualified embedded assembly copies require between 1 and 1000 roots");
@@ -1979,7 +2236,7 @@ static AssemblyDocumentEntities prepare_qualified_embedded_assembly_copy_entitie
     require(!membership_entity_ids || membership_entity_ids->size() <= 1000,
         "qualified embedded assembly copy companion identity roster exceeds bound");
 #ifndef VERTEX_HAS_CONSTRAINT_AUTHORING
-    (void)transform; (void)copied_dimension_ids; (void)membership_entity_ids;
+    (void)transform; (void)copied_dimension_ids; (void)membership_entity_ids; (void)preserve_source_context;
     throw std::invalid_argument("qualified embedded assembly copies require the production authoring engine");
 #else
     // The public pure API also admits its complete retained source. A caller
@@ -2015,6 +2272,15 @@ static AssemblyDocumentEntities prepare_qualified_embedded_assembly_copy_entitie
         fresh.insert(*target.copy_instance_id);
         require(fresh_aliases.insert(target.catalog_id + ":instance:" + *target.copy_instance_id).second,
             "qualified embedded assembly copy presentation identity is duplicated");
+    }
+    EmbeddedAssemblyDrawingContexts source_contexts;
+    if (preserve_source_context) {
+        source_contexts = resolve_embedded_assembly_drawing_contexts(source.entities(), source_roots);
+        for (const auto& [root, context] : source_contexts) {
+            (void)root;
+            require(context && context->complete(),
+                "qualified embedded assembly copy requires complete actual source drawing context");
+        }
     }
     for (const auto& alias : fresh_aliases)
         require(fresh.insert(alias).second,
@@ -2092,6 +2358,39 @@ static AssemblyDocumentEntities prepare_qualified_embedded_assembly_copy_entitie
     auto geometry = prepare_embedded_assembly_group_transform(source, targets, transform, expected_revision,
         membership_entity_ids ? EmbeddedAssemblyPreparation::qualified_with_allocation :
             EmbeddedAssemblyPreparation::qualified_embedded_copies);
+    if (preserve_source_context) {
+        // Historical identity Copy retains its placement representation. The
+        // explicit new producer instead detaches every destination, including
+        // identity copies, from the original geometry host. Derive the pose
+        // from actual expansion, never catalog organization or displayed ink.
+        std::map<std::string, Entity*, std::less<>> carriers;
+        for (auto& change : geometry.entity_changes) carriers.emplace(change.entity.id, &change.entity);
+        std::map<std::string, AssemblyModel, std::less<>> models;
+        AssemblyExpansionBudget pose_budget;
+        for (const auto& target : targets) {
+            auto& rows = carriers.at(target.catalog_id)->properties.at("model").at("instances");
+            const auto destination = std::find_if(rows.begin(), rows.end(), [&](const auto& row) {
+                return row.at("id") == *target.copy_instance_id;
+            });
+            require(destination != rows.end(), "qualified embedded assembly copy lost its destination pose");
+            if (!destination->contains("placement")) continue;
+            if (!models.contains(target.catalog_id)) {
+                admit_existing_assembly_catalog_work(source.entities().at(target.catalog_id), catalog_budget);
+                models.emplace(target.catalog_id, catalog(source.entities().at(target.catalog_id)));
+            }
+            const auto& model = models.at(target.catalog_id);
+            const auto instance = std::find_if(model.instances().begin(), model.instances().end(), [&](const auto& row) {
+                return row.id == target.instance_id;
+            });
+            require(instance != model.instances().end(), "qualified embedded assembly copy lost its actual source pose");
+            const auto expansion = model.expand(*instance, pose_budget);
+            require(!expansion.nodes.empty() && !expansion.profiles.empty(),
+                "qualified embedded assembly copy cannot detach a nongeometric host declaration");
+            destination->erase("placement");
+            (*destination)["root_transform"] = encode_assembly_transform(expansion.nodes.front().transform);
+            if (!destination->contains("nested_overrides")) (*destination)["nested_overrides"] = nlohmann::json::array();
+        }
+    }
     append_embedded_group_dimensions(source, targets, false, copied_dimension_ids, geometry);
     auto candidate = source.entities();
     for (const auto& change : geometry.entity_changes) {
@@ -2139,6 +2438,24 @@ static AssemblyDocumentEntities prepare_qualified_embedded_assembly_copy_entitie
             "qualified embedded assembly dimension registry append differs from typed admission");
         entity.properties.at("model") = std::move(raw);
     }
+    if (preserve_source_context) {
+        const std::vector<std::pair<std::string, std::string>> destination_roots(destinations.begin(), destinations.end());
+        const auto before_contexts = resolve_embedded_assembly_drawing_contexts(candidate, destination_roots);
+        for (const auto& [original, destination] : copied_roots) {
+            const auto& context = *source_contexts.at(original);
+            if (before_contexts.at(destination) == std::optional{context}) continue;
+            auto& carrier = candidate.at(destination.first);
+            if (!carrier.properties.contains(embedded_context_key))
+                carrier.properties[embedded_context_key] = {{"version", 1}, {"rows", nlohmann::json::array()}};
+            auto& rows = carrier.properties.at(embedded_context_key).at("rows");
+            require(rows.size() < 4096, "qualified embedded assembly copy drawing context roster exceeds bound");
+            rows.push_back({{"instance_id", destination.second}, {"layer_id", context.layer_id}});
+        }
+        const auto after_contexts = resolve_embedded_assembly_drawing_contexts(candidate, destination_roots);
+        for (const auto& [original, destination] : copied_roots)
+            require(after_contexts.at(destination) == source_contexts.at(original),
+                "qualified embedded assembly copy changed its actual source drawing context");
+    }
     validate_document_assembly_instances(candidate);
     // Admit all actual physical rosters as well as the final row memberships.
     (void)EmbeddedAssemblySourceActivity(candidate);
@@ -2166,6 +2483,17 @@ AssemblyDocumentEntities prepare_qualified_embedded_assembly_copy_entities(const
     const std::map<std::string, std::string, std::less<>>& membership_entity_ids) {
     return prepare_qualified_embedded_assembly_copy_entities_impl(source, targets, transform,
         expected_revision, copied_dimension_ids, &membership_entity_ids);
+}
+AssemblyDocumentEntities prepare_qualified_embedded_assembly_copy_entities(const DocumentSnapshot& source,
+    std::span<const EmbeddedAssemblyGroupTarget> targets,
+    const ArchitecturalGroupTransform& transform, Revision expected_revision,
+    const std::map<std::string, std::string, std::less<>>& copied_dimension_ids,
+    const std::map<std::string, std::string, std::less<>>& membership_entity_ids,
+    EmbeddedAssemblyCopyContextPolicy context_policy) {
+    require(context_policy == EmbeddedAssemblyCopyContextPolicy::preserve_source,
+        "unsupported qualified embedded assembly copy drawing context policy");
+    return prepare_qualified_embedded_assembly_copy_entities_impl(source, targets, transform,
+        expected_revision, copied_dimension_ids, &membership_entity_ids, true);
 }
 ApplyEntityChanges embedded_assembly_group_copy_command(const DocumentSnapshot& source,
     std::span<const EmbeddedAssemblyGroupTarget> targets,
@@ -2233,6 +2561,7 @@ ApplyEntityChanges embedded_assembly_group_copy_command(const DocumentSnapshot& 
         copy.id = *target.copy_instance_id;
         copy.type = "assembly_instance";
         copy.properties.erase("model");
+        copy.properties.erase(embedded_context_key);
         copy.properties["version"] = 1;
         copy.properties["form"] = "independent_assembly_instance";
         copy.properties["assembly_catalog_id"] = target.catalog_id;

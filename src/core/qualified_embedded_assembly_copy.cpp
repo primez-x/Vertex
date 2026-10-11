@@ -179,9 +179,10 @@ Json encode_transform(const ArchitecturalGroupTransform& value) {
 void admit_request(const Json& request) {
     Budget{}.read(request);
     if (!request.is_object() || !request.contains("version") || !request.at("version").is_number_integer() ||
-        (request.at("version") != 1 && request.at("version") != 2 && request.at("version") != 3)) reject("unsupported request version");
+        (request.at("version") != 1 && request.at("version") != 2 && request.at("version") != 3 &&
+            request.at("version") != 4)) reject("unsupported request version");
     const bool v2 = request.at("version") != 1;
-    const bool v3 = request.at("version") == 3;
+    const bool v3 = request.at("version") >= 3;
     if (v3) fields(request, {"version", "expected_revision", "source_snapshot_digest", "source_authoring_digest",
         "source_entities_digest", "source_saved_revision", "targets", "copied_dimension_ids", "membership_entity_ids",
         "presentation_overlay_identities", "message"});
@@ -687,9 +688,10 @@ QualifiedEmbeddedAssemblyCopyPreparation prepare_qualified_embedded_assembly_cop
     request.at("source_entities_digest") = entity_map_digest(source.entities());
     return replay_qualified_embedded_assembly_copy_preparation(source, request);
 }
-QualifiedEmbeddedAssemblyCopyPreparation prepare_qualified_embedded_assembly_copy(const DocumentSnapshot& source,
+static QualifiedEmbeddedAssemblyCopyPreparation prepare_presented_embedded_assembly_copy(const DocumentSnapshot& source,
     std::span<const EmbeddedAssemblyGroupTarget> targets, const ArchitecturalGroupTransform& fallback,
-    const DimensionIds& dimensions, const DimensionIds& memberships, const DimensionIds& overlays, std::string message) {
+    const DimensionIds& dimensions, const DimensionIds& memberships, const DimensionIds& overlays,
+    int version, std::string message) {
     admit_typed(targets, fallback, dimensions, message, &memberships, &overlays);
     if (source.revision() > safe_revision_limit) reject("source revision is not a safe integer");
     if (source.saved_revision_optional() && *source.saved_revision_optional() > source.revision())
@@ -704,7 +706,7 @@ QualifiedEmbeddedAssemblyCopyPreparation prepare_qualified_embedded_assembly_cop
         {"instance_id", target->instance_id}, {"copy_instance_id", *target->copy_instance_id},
         {"transform", encode_transform(target->transform ? *target->transform : fallback)}});
     const std::string pending_digest(64, '0');
-    Json request{{"version", 3}, {"expected_revision", source.revision()},
+    Json request{{"version", version}, {"expected_revision", source.revision()},
         {"source_snapshot_digest", pending_digest}, {"source_authoring_digest", pending_digest},
         {"source_entities_digest", pending_digest},
         {"source_saved_revision", source.saved_revision_optional() ? Json(*source.saved_revision_optional()) : Json(nullptr)},
@@ -716,19 +718,34 @@ QualifiedEmbeddedAssemblyCopyPreparation prepare_qualified_embedded_assembly_cop
     request.at("source_entities_digest") = entity_map_digest(source.entities());
     return replay_qualified_embedded_assembly_copy_preparation(source, request);
 }
+QualifiedEmbeddedAssemblyCopyPreparation prepare_qualified_embedded_assembly_copy(const DocumentSnapshot& source,
+    std::span<const EmbeddedAssemblyGroupTarget> targets, const ArchitecturalGroupTransform& fallback,
+    const DimensionIds& dimensions, const DimensionIds& memberships, const DimensionIds& overlays, std::string message) {
+    return prepare_presented_embedded_assembly_copy(source,targets,fallback,dimensions,memberships,overlays,3,std::move(message));
+}
+QualifiedEmbeddedAssemblyCopyPreparation prepare_qualified_embedded_assembly_copy(const DocumentSnapshot& source,
+    std::span<const EmbeddedAssemblyGroupTarget> targets, const ArchitecturalGroupTransform& fallback,
+    const DimensionIds& dimensions, const DimensionIds& memberships, const DimensionIds& overlays,
+    EmbeddedAssemblyCopyContextPolicy context_policy, std::string message) {
+    if (context_policy!=EmbeddedAssemblyCopyContextPolicy::preserve_source) reject("unsupported copied drawing context policy");
+    return prepare_presented_embedded_assembly_copy(source,targets,fallback,dimensions,memberships,overlays,4,std::move(message));
+}
 QualifiedEmbeddedAssemblyCopyPreparation replay_qualified_embedded_assembly_copy_preparation(
     const DocumentSnapshot& source, const Json& request) {
     admit_request(request); admit_retained_assembly_authoring_source(source);
-    if (request.at("version") == 3) admit_presentation_source(source.entities());
+    if (request.at("version") >= 3) admit_presentation_source(source.entities());
     authenticate(source, request);
     const auto targets = decode_targets(request);
     const auto dimensions = decode_dimensions(request);
-    const auto presentation = request.at("version") == 3 ?
+    const auto presentation = request.at("version") >= 3 ?
         std::optional<PresentationPlan>{inspect_presentation(source.entities(), targets)} : std::nullopt;
     if (presentation) reserve_presentation_allocations(source, request, *presentation);
     // Every target has its actual operator. The unused fallback supplies no
     // allocator, candidate-map, Document fork or partial publication authority.
-    auto entities = request.at("version") == 1 ?
+    auto entities = request.at("version") == 4 ?
+        prepare_qualified_embedded_assembly_copy_entities(source, targets,
+            ArchitecturalGroupTransform{}, revision(request.at("expected_revision")), dimensions, decode_memberships(request),
+            EmbeddedAssemblyCopyContextPolicy::preserve_source) : request.at("version") == 1 ?
         prepare_qualified_embedded_assembly_copy_entities(source, targets,
             ArchitecturalGroupTransform{}, revision(request.at("expected_revision")), dimensions) :
         prepare_qualified_embedded_assembly_copy_entities(source, targets,
@@ -739,7 +756,7 @@ QualifiedEmbeddedAssemblyCopyPreparation replay_qualified_embedded_assembly_copy
 void require_qualified_embedded_assembly_copy_source_current(const DocumentSnapshot& source,
     const QualifiedEmbeddedAssemblyCopyPreparation& preparation) {
     admit_request(preparation.request()); admit_retained_assembly_authoring_source(source);
-    if (preparation.request().at("version") == 3) admit_presentation_source(source.entities());
+    if (preparation.request().at("version") >= 3) admit_presentation_source(source.entities());
     authenticate(source, preparation.request());
     if (preparation.expected_revision() != revision(preparation.request().at("expected_revision")) ||
         preparation.message() != text(preparation.request().at("message")) ||

@@ -1135,16 +1135,20 @@ public:
             try {
                 const auto embedded = resolve_embedded_assembly_presentation(source.entities(), id);
                 if (!embedded) return false;
+                // Invalid row organization cannot grant manipulation through
+                // an alias. This admission does not supply pose or phase state.
+                validate_embedded_assembly_drawing_contexts(source.entities());
+                const auto& catalog = source.entities().at(embedded->assembly_catalog_id);
                 const auto phase_scope = constraint_phase_scope(source.entities());
                 const AssemblyPhaseRoot root{embedded->assembly_catalog_id, embedded->instance.id};
                 if (phase_scope.assembly_memberships.inactive_roots.contains(
                         root) ||
                     (embedded->instance.placement &&
                         (phase_scope.inactive_owner_ids.contains(embedded->instance.placement->host_entity_id) ||
-                         (phase_scope.assembly_memberships.owners.contains(root) &&
+                         ((phase_scope.assembly_memberships.owners.contains(root) ||
+                           catalog.properties.contains("embedded_instance_drawing_contexts")) &&
                           assembly_host_inactive_in_phase(source.entities(), phase_scope.inactive_owner_ids,
                               embedded->instance.placement->host_entity_id))))) return false;
-                const auto& catalog = source.entities().at(embedded->assembly_catalog_id);
                 const auto model = AssemblyModel::from_json(catalog.properties.at("model"));
                 return !model.expand(embedded->instance.id).profiles.empty();
             } catch (...) { return false; }

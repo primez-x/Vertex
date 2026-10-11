@@ -17,7 +17,8 @@ changed source does not acquire runtime acceptance without later qualification.
 ### October 11 component Copy presentation continuation
 
 The preceding alternative-editing batch is committed and pushed as c7241e01.
-The current source continuation adds complete supported presentation carry to
+The presentation continuation is committed and pushed as c93b8970; its exact
+remote branch was verified. It adds complete supported presentation carry to
 catalog-local component Copy. Closed request3 derives the selected source roots,
 associated dimensions, annotation object overrides, saved-view selectors and
 appearance rows, and bound/detached overlays. Original records stay intact;
@@ -39,13 +40,33 @@ reviewed interfaces, actual world/view operator framing, original preservation,
 fresh allocations, retained history and format floors; scoped diff checks pass.
 No runtime acceptance is implied.
 
-Site Copy investigation proved that unhosting a copied root can lose its source
-floor/layer: no current assembly row stores separate drawing context. A second
-worker is adding a closed catalog-owned per-root layer roster and shared context
-resolution, distinct from geometry hosting, pose and phase authority. Existing
-catalog-local Site Copy remains disabled until context carry, all consumers,
-transport and retained format contracts are integrated. Checking only the active
-property does not establish full floor/layer continuity.
+The source continuation adds a closed catalog-owned per-root layer roster
+and shared full-context resolution, distinct from geometry hosting, pose and
+phase authority. Request4 preserves source organization while detaching copied
+geometry, including identity copies. Reader248/extraction246 carries the new
+metadata through retained history. Controller integration connects exact alias
+visibility, selected layer, Site plan and dimension framing, Copy preview/source
+fences, native admission, schedules, transport, removal, and private component
+property/catalog stages. Site Copy source paths are being enabled under these
+contracts; this is not installed or runtime accepted.
+
+Independent integrated source review proved schedules
+were expanding a temporary assembly-only subset without the actual layer/host
+closure. Root now retains supporting actual source entities without admitting
+hidden assembly roots. The review also proved explicit hosted aliases could
+outlive an inactive parent wall; canvas and native geometry now use actual
+recursive host activity before admitting those aliases. Manual wall/roof/stair
+phase copy paths now remap source-derived context rosters, and slab verifies its
+already transported roster independently. All four compare complete contexts.
+The writer returned those paths. Coordinated demolition composition now compares
+exact source-derived pruned-envelope proofs and prunes the final surviving union;
+stair review intermediates use the same authorized pruning. Fresh model suffixes
+cannot invent drawing-context records. Amended independent review approved the
+bounded source with no remaining proved P1/P2 finding. Root reviewed the request
+and format floors, private correspondence, final context equality, inactive
+bindings, shared masks, Site publication fences and deletion composition. Scoped
+diff checks pass. The source batch and this record form one scoped backup commit.
+Checking only the active property does not establish full floor/layer continuity.
 
 Stable component profile-edge dimensions and mixed skylight/ordinary owner
 dimension retirement remain required source work. Broader behavior and external

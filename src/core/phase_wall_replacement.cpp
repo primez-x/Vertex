@@ -167,6 +167,13 @@ struct HostedGeometryAdmission {
 // Local definition/material namespaces remain exact. Only admitted qualified
 // row declarations and host bindings are released from the opaque scan.
 Entity catalog_remainder(Entity scratch, const Ids& released_rows) {
+    if (scratch.properties.contains("embedded_instance_drawing_contexts")) {
+        AssemblyCatalogTransferBudget context_budget;
+        admit_existing_assembly_catalog_work(scratch, context_budget);
+        for (auto& row : scratch.properties.at("embedded_instance_drawing_contexts").at("rows"))
+            if (released_rows.contains(row.at("instance_id").get<std::string>()))
+                row.erase("instance_id"); // The actual layer remains an opaque reference.
+    }
     auto& model = scratch.properties.at("model");
     for (auto& material : model.at("materials")) material.erase("id");
     const auto clear_overrides = [](Json& row) { row.erase("material_overrides"); };
@@ -1350,6 +1357,7 @@ PhaseWallReplacementResult replay_phase_wall_replacement(
                 (void)decode_identified_boundary_entity(copy);
                 if (const auto unsupported = validate_boundary_integrity({{copy.id, copy}})) reject(*unsupported);
             } else if (copy.type == "assembly_model" && derived.complete_hosted_instances) {
+                PhaseWallReplacementIdentityMap retained_instances;
                 const auto retained = p.at("model").at("instances");
                 auto& rows = p.at("model").at("instances");
                 rows = Json::array();
@@ -1360,6 +1368,7 @@ PhaseWallReplacementResult replay_phase_wall_replacement(
                     if (!identities.contains(host) || (source.at(host).type != "wall" && source.at(host).type != "opening"))
                         reject("proposed hosted row lost its actual copied wall/opening host");
                     const PhaseWallReplacementHostedInstanceKey destination{copy.id, hosted_instance_identities.at(key)};
+                    retained_instances.emplace(key.second, destination.second);
                     row.at("id") = destination.second;
                     row.at("placement").at("host_entity_id") = identities.at(host);
                     rows.push_back(std::move(row));
@@ -1371,6 +1380,8 @@ PhaseWallReplacementResult replay_phase_wall_replacement(
                     }
                 }
                 if (rows.empty()) reject("copied catalog requires its exact nonempty qualified roster");
+                if (source.at(old_id).properties.contains("embedded_instance_drawing_contexts"))
+                    copy = remap_embedded_assembly_drawing_contexts(source.at(old_id), copy, retained_instances);
                 admit_existing_assembly_catalog_work(copy, copied_catalog_work);
                 (void)AssemblyModel::from_json(p.at("model"));
             } else if (copy.type == "constraint") {
@@ -1489,6 +1500,18 @@ PhaseWallReplacementResult replay_phase_wall_replacement(
             complete_presentation(result.entities, source, presentation_owners, presentation_identities);
         const auto result_scope = constraint_phase_scope(result.entities);
         if (derived.complete_hosted_instances) {
+            std::vector<PhaseWallReplacementHostedInstanceKey> source_roots, destination_roots;
+            for (const auto& [root, destination] : result.hosted_instance_original_to_proposed)
+                if (source.at(root.first).properties.contains("embedded_instance_drawing_contexts")) {
+                    source_roots.push_back(root); destination_roots.push_back(destination);
+                }
+            if (!source_roots.empty()) {
+                const auto source_contexts = resolve_embedded_assembly_drawing_contexts(source, source_roots);
+                const auto destination_contexts = resolve_embedded_assembly_drawing_contexts(result.entities, destination_roots);
+                for (std::size_t i = 0; i < source_roots.size(); ++i)
+                    if (source_contexts.at(source_roots[i]) != destination_contexts.at(destination_roots[i]))
+                        reject("hosted replacement changed the source component's complete drawing context");
+            }
             HostedGeometryAdmission geometry;
             std::set<PhaseWallReplacementHostedInstanceKey> destinations;
             for (const auto& [key, destination] : result.hosted_instance_original_to_proposed) {

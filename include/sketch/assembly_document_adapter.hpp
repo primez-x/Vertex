@@ -2,6 +2,7 @@
 #include "sketch/architectural_document_adapter.hpp"
 #include "sketch/assembly_model.hpp"
 #include "sketch/document.hpp"
+#include "sketch/project_organization.hpp"
 #include <cstdint>
 #include <span>
 #include <set>
@@ -66,6 +67,32 @@ using EmbeddedAssemblyPresentationIds =
     expand_document_assembly_instances(const AssemblyDocumentEntities& entities,
         AssemblyExpansionBudget& budget);
 void validate_document_assembly_instances(const AssemblyDocumentEntities& entities);
+// Catalog-owned, closed v1 metadata:
+// embedded_instance_drawing_contexts:{version:1,rows:[{instance_id,layer_id}]}.
+// A layer supplies organization only, never host geometry, pose, levels or phase
+// authority. Absent metadata preserves host-first, then catalog context. Explicit
+// hosted context must equal the actual host's complete drawing context. At most
+// 4096 explicit rows per complete map and 4096 requested roots; organization is
+// derived once per batch after shared complete raw catalog admission.
+using EmbeddedAssemblyDrawingContexts =
+    std::map<std::pair<std::string, std::string>, std::optional<DrawingContext>>;
+[[nodiscard]] EmbeddedAssemblyDrawingContexts resolve_embedded_assembly_drawing_contexts(
+    const AssemblyDocumentEntities&, std::span<const std::pair<std::string, std::string>> roots);
+[[nodiscard]] std::optional<DrawingContext> resolve_embedded_assembly_drawing_context(
+    const AssemblyDocumentEntities&, const std::string& catalog_id, const std::string& instance_id);
+void validate_embedded_assembly_drawing_contexts(const AssemblyDocumentEntities&);
+// Explicit subset/removal operation. Retains the envelope and surviving raw row
+// order; removes only context rows whose embedded instance was removed. Does not
+// resolve destination layers or grant catalog/context editing authority.
+[[nodiscard]] Entity prune_embedded_assembly_drawing_contexts(const Entity& catalog);
+// Deliberate subset/local-identity transport. The source-local -> destination-
+// local map must cover every actual destination row exactly once; omitted source
+// rows are pruned. Copies only actual source context records in their raw order,
+// patching instance_id. Layer IDs remain unchanged for subsequent owner remap.
+// No caller-supplied context records, destination organization or copy authority.
+[[nodiscard]] Entity remap_embedded_assembly_drawing_contexts(
+    const Entity& actual_source_catalog, const Entity& destination_catalog,
+    const std::map<std::string, std::string, std::less<>>& retained_instance_mapping);
 struct ArchitecturalMaterialSourceReference {
     std::string catalog_id;
     std::string material_id;
@@ -125,7 +152,8 @@ inline constexpr std::size_t assembly_catalog_transport_byte_limit = 16 * 1024 *
 inline constexpr std::size_t assembly_catalog_transport_node_limit = 1'000'000;
 [[nodiscard]] nlohmann::json parse_assembly_catalog_transport_json(std::string_view bytes);
 // Validates the complete actual catalog after raw work admission. Inventories
-// Legacy policy inventories placement hosts and the four context owner slots,
+// Legacy policy inventories placement hosts, the four context owner slots and
+// explicit embedded-instance drawing layers,
 // refusing its historical unsupported slots. Document-authoring policy adds the
 // native top-level document/asset references. Floor-only vertical bindings are
 // refused on catalogs; phase fields, material assignments and nested
@@ -281,6 +309,18 @@ struct EmbeddedAssemblyGroupTarget {
     const ArchitecturalGroupTransform& transform, Revision expected_revision,
     const std::map<std::string, std::string, std::less<>>& copied_dimension_ids,
     const std::map<std::string, std::string, std::less<>>& membership_entity_ids);
+enum class EmbeddedAssemblyCopyContextPolicy { preserve_source };
+// Explicit new producer meaning; historical overloads retain their saved body/
+// context behavior. Derives context solely from the actual source. Destinations
+// always unhost, including identity Copy, using the actual expanded world pose.
+// They retain the exact source floor/layer/level identity without inventing a
+// placement host. Missing complete source context refuses.
+[[nodiscard]] AssemblyDocumentEntities prepare_qualified_embedded_assembly_copy_entities(
+    const DocumentSnapshot& source, std::span<const EmbeddedAssemblyGroupTarget> targets,
+    const ArchitecturalGroupTransform& transform, Revision expected_revision,
+    const std::map<std::string, std::string, std::less<>>& copied_dimension_ids,
+    const std::map<std::string, std::string, std::less<>>& membership_entity_ids,
+    EmbeddedAssemblyCopyContextPolicy context_policy);
 // Materialize each selected embedded root as a fresh independently editable
 // document instance sharing its immutable source catalog. Here copy_instance_id
 // is required and names a fresh document entity, not an appended catalog row.

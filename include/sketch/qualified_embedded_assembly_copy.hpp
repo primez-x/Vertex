@@ -25,7 +25,7 @@ private:
         const DocumentSnapshot&, const nlohmann::json&);
 };
 
-// Closed bounded v1/v2/v3 requests; canonical target order is catalog/local source.
+// Closed bounded v1/v2/v3/v4 requests; canonical target order is catalog/local source.
 // Every target contains an explicit full operator and fresh catalog-local ID.
 // Admitted numeric representations and raw source properties remain intact.
 [[nodiscard]] nlohmann::json validate_qualified_embedded_assembly_copy_request(const nlohmann::json&);
@@ -57,6 +57,15 @@ private:
     const std::map<std::string, std::string, std::less<>>& membership_entity_ids,
     const std::map<std::string, std::string, std::less<>>& presentation_overlay_identities,
     std::string message);
+// Always emits v4. Context comes only from the actual source; destinations
+// retain floor/layer membership independently of their detached geometry pose.
+[[nodiscard]] QualifiedEmbeddedAssemblyCopyPreparation prepare_qualified_embedded_assembly_copy(
+    const DocumentSnapshot&, std::span<const EmbeddedAssemblyGroupTarget>,
+    const ArchitecturalGroupTransform& fallback_transform,
+    const std::map<std::string, std::string, std::less<>>& copied_dimension_ids,
+    const std::map<std::string, std::string, std::less<>>& membership_entity_ids,
+    const std::map<std::string, std::string, std::less<>>& presentation_overlay_identities,
+    EmbeddedAssemblyCopyContextPolicy context_policy, std::string message);
 [[nodiscard]] QualifiedEmbeddedAssemblyCopyPreparation replay_qualified_embedded_assembly_copy_preparation(
     const DocumentSnapshot&, const nlohmann::json&);
 void require_qualified_embedded_assembly_copy_source_current(

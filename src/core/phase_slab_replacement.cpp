@@ -217,6 +217,12 @@ Entity opaque_remainder(Entity entity) {
         for (auto& layer : p.at("layers")) layer.erase("id");
     } else if (entity.type == "assembly_model") {
         (void)AssemblyModel::from_json(p.at("model"));
+        if (p.contains("embedded_instance_drawing_contexts")) {
+            AssemblyCatalogTransferBudget context_budget;
+            admit_existing_assembly_catalog_work(entity, context_budget);
+            for (auto& row : p.at("embedded_instance_drawing_contexts").at("rows"))
+                row.erase("instance_id"); // Preserve the actual layer reference.
+        }
         // Admission scratch only: authored placements are retained verbatim.
         for (auto& row : p.at("model").at("instances"))
             if (row.contains("placement")) row.at("placement").erase("host_entity_id");
@@ -702,6 +708,22 @@ PhaseSlabReplacementResult replay_phase_slab_replacement(
                         copied_model.at("instances").push_back(std::move(changed));
                     }
                 }
+                if (source.at(id).properties.contains("embedded_instance_drawing_contexts")) {
+                    PhaseSlabReplacementIdentityMap retained_instances;
+                    for (const auto& instance : catalog.instances())
+                        if (expected_instances.contains({id, instance.id}))
+                            retained_instances.emplace(instance.id, hosted_instance_identities.at({id, instance.id}));
+                    // Clone already transported the roster. Derive an independent
+                    // expectation from the exact actual source and final model;
+                    // never reset an intermediate roster merely to trust it.
+                    auto expected_context = source.at(id);
+                    expected_context.id = copy.id;
+                    expected_context.properties.at("model") = copy.properties.at("model");
+                    expected_context = remap_embedded_assembly_drawing_contexts(source.at(id), expected_context, retained_instances);
+                    if (copy.properties.at("embedded_instance_drawing_contexts") !=
+                        expected_context.properties.at("embedded_instance_drawing_contexts"))
+                        reject("hosted catalog context differs from its exact actual source transport");
+                }
                 const auto copy_id = copy.id;
                 if (!result.entities.emplace(copy_id, std::move(copy)).second) reject("hosted catalog copy insertion collides");
             }
@@ -799,6 +821,18 @@ PhaseSlabReplacementResult replay_phase_slab_replacement(
         admit_slabs(result.entities, copies);
         (void)constraint_phase_scope(result.entities);
         if (!expected_instances.empty()) {
+            std::vector<PhaseSlabReplacementHostedInstanceKey> source_roots, destination_roots;
+            for (const auto& [root, new_id] : hosted_instance_identities)
+                if (source.at(root.first).properties.contains("embedded_instance_drawing_contexts")) {
+                    source_roots.push_back(root); destination_roots.emplace_back(identities.at(root.first), new_id);
+                }
+            if (!source_roots.empty()) {
+                const auto source_contexts = resolve_embedded_assembly_drawing_contexts(source, source_roots);
+                const auto destination_contexts = resolve_embedded_assembly_drawing_contexts(result.entities, destination_roots);
+                for (std::size_t i = 0; i < source_roots.size(); ++i)
+                    if (source_contexts.at(source_roots[i]) != destination_contexts.at(destination_roots[i]))
+                        reject("hosted replacement changed the source component's complete drawing context");
+            }
             const auto original_presentations=embedded_assembly_presentation_ids(source);
             const auto final_presentations=embedded_assembly_presentation_ids(result.entities);
             for (const auto& [key,alias]:original_presentations)

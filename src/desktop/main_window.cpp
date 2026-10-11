@@ -4177,6 +4177,23 @@ bool saved_design_overlay_active(const DocumentSnapshot& source,
             !saved_design_reference_inactive(source, scope, overlay.dimension_binding->object_id));
 }
 
+EmbeddedAssemblyDrawingContexts explicit_embedded_drawing_contexts(const AssemblyDocumentEntities& entities) {
+    std::vector<std::pair<std::string,std::string>> roots;
+    for (const auto& [catalog,entity]:entities) {
+        const auto field=entity.properties.find("embedded_instance_drawing_contexts");
+        if (field==entity.properties.end()) continue;
+        const auto& rows=field->at("rows");
+        if (!rows.is_array() || rows.size()>4096-roots.size())
+            throw std::invalid_argument("Embedded drawing-context visibility roster exceeds its bound.");
+        for (const auto& row:rows) {
+            const auto& instance=row.at("instance_id").get_ref<const std::string&>();
+            if (instance.size()>4096) throw std::invalid_argument("Embedded drawing-context identity exceeds its bound.");
+            roots.emplace_back(catalog,instance);
+        }
+    }
+    return roots.empty() ? EmbeddedAssemblyDrawingContexts{} : resolve_embedded_assembly_drawing_contexts(entities,roots);
+}
+
 std::set<std::string, std::less<>> visible_project_entities_with_phase(
     const DocumentSnapshot& snapshot, const ProjectViewFilter& filter) {
     auto visible = visible_project_entities(snapshot, filter);
@@ -4270,6 +4287,22 @@ std::set<std::string, std::less<>> visible_project_entities_with_phase(
                 (binding->geometric.value_or(false) && !presentation.contains(root.first)) ||
                 (instance.placement && saved_design_reference_inactive(snapshot, scope, anchor))) continue;
             visible.insert(alias);
+        }
+    }
+    const auto contexts=explicit_embedded_drawing_contexts(snapshot.entities());
+    if (!contexts.empty()) {
+        const auto aliases=embedded_assembly_presentation_ids(snapshot.entities());
+        for (const auto& [root,context]:contexts) {
+            const auto& alias=aliases.at(root);
+            const auto* binding=canvas_embedded_assembly_binding(snapshot,alias);
+            const bool inactive_host=binding && binding->value.instance.placement &&
+                assembly_host_inactive_in_phase(snapshot.entities(),scope.inactive_owner_ids,
+                    binding->value.instance.placement->host_entity_id);
+            if (!context || filter.hidden_floor_ids.contains(context->floor_id) ||
+                filter.hidden_layer_ids.contains(context->layer_id) || inactive_host ||
+                saved_design_reference_inactive(snapshot,scope,alias))
+                visible.erase(alias);
+            else visible.insert(alias);
         }
     }
     return visible;
@@ -8391,7 +8424,7 @@ public:
             presentation_overlays.emplace(id,fresh("component-overlay"));
         validate_retained_authoring_fresh_identities(source.history(),source.history().size(),allocations);
         auto prepared=prepare_qualified_embedded_assembly_copy(source,targets,transform,dimensions,memberships,
-            presentation_overlays,message);
+            presentation_overlays,EmbeddedAssemblyCopyContextPolicy::preserve_source,message);
         // The generated presentation roster, rather than the raw local IDs,
         // controls preview and selection. Preparation independently reserves it.
         const auto aliases=embedded_assembly_presentation_ids(prepared.preview_entities());
@@ -13483,6 +13516,25 @@ public:
             return;
         }
 
+        auto* edit_canvas=m_workspace==Workspace::measurement ? m_measurementCanvas : m_architecturalCanvas;
+        const bool site_copy=embedded && siteCanvas(edit_canvas);
+        std::uint64_t site_generation{}, site_publication_generation{};
+        try {
+            if (site_copy) {
+                captureSiteEdit(edit_canvas);
+                site_generation=m_site_edit_generation;
+                site_publication_generation=m_site_publication_generation;
+            }
+        } catch (const std::exception& error) { setError(QString::fromUtf8(error.what())); return; }
+        const auto require_site_copy_current=[&] {
+            if (!site_copy) return;
+            requireSiteEditCurrent();
+            if (site_generation!=m_site_edit_generation || site_publication_generation!=m_site_publication_generation)
+                throw std::invalid_argument("The Site Plan frame changed. Reopen Transform.");
+            (void)admittedSiteSelectionFrames(source,m_site_edit_frames,m_site_edit_geometry_selection,
+                m_site_edit_annotation_targets,m_site_edit_selected_presentations,authority.selection);
+        };
+
         QDialog dialog(owner);
         styleDialog(dialog);
         dialog.setObjectName(QStringLiteral("architecturalTransformDialog"));
@@ -13534,7 +13586,7 @@ public:
         clone->setObjectName(QStringLiteral("architecturalTransformClone"));
         layout->addWidget(clone);
         PlanCanvas* catalog_copy_preview=nullptr;
-        if (embedded && !siteCanvas(m_workspace==Workspace::measurement ? m_measurementCanvas : m_architecturalCanvas)) {
+        if (embedded) {
             catalog_copy_preview=new PlanCanvas(&dialog);
             catalog_copy_preview->setObjectName(QStringLiteral("architecturalComponentCopyPreview"));
             catalog_copy_preview->setAccessibleName(QStringLiteral("Component copy preview"));
@@ -13577,6 +13629,7 @@ public:
                     throw std::invalid_argument("This document is read-only.");
                 if (!modalContextUnchanged(context) || !sourceEditAuthorityCurrent(authority))
                     throw std::invalid_argument("The project or selection changed. Reopen the transform editor.");
+                require_site_copy_current();
                 if (embedded) {
                     const auto gesture=parseArchitecturalTransform(rotation->text(),offset_x->text(),offset_y->text(),offset_z->text(),scale->text());
                     if (clone->isChecked() && catalog_copy_preview) {
@@ -13646,6 +13699,7 @@ public:
             }
             if (!candidate_command || (!candidate_snapshot && !candidate_catalog_copy)) return;
             try {
+                require_site_copy_current();
                 if (candidate_catalog_copy) {
                     require_qualified_embedded_assembly_copy_source_current(authoringSnapshot(),candidate_catalog_copy->preparation);
                     const Command command{qualified_embedded_assembly_copy_command(candidate_catalog_copy->preparation)};
@@ -13704,7 +13758,10 @@ public:
         QTimer source_guard(&dialog);
         source_guard.setInterval(100);
         QObject::connect(&source_guard, &QTimer::timeout, &dialog, [&] {
-            if (candidate_command && (!modalContextUnchanged(context) || !sourceEditAuthorityCurrent(authority))) {
+            bool retired=!modalContextUnchanged(context) || !sourceEditAuthorityCurrent(authority);
+            if (!retired && site_copy) try { require_site_copy_current(); }
+                catch (const std::exception&) { retired=true; }
+            if (candidate_command && retired) {
                 candidate_command.reset(); candidate_snapshot.reset();
                 candidate_catalog_copy.reset();
                 if (catalog_copy_preview) { catalog_copy_preview->setEntities({}); catalog_copy_preview->setLabels({}); }
@@ -14300,7 +14357,7 @@ public:
                         }
                         embedded_targets.push_back(std::move(target));
                     }
-                    if (clone->isChecked() && !site_group && !embedded_targets.empty() &&
+                    if (clone->isChecked() && !embedded_targets.empty() &&
                         geometry_selection.isEmpty() && architectural_selection.empty() &&
                         annotation_targets.empty() && reference_targets.empty() && !independent_room_callout_selection) {
                         auto copied=prepareCatalogLocalAssemblyCopy(source,std::move(embedded_targets),
@@ -25631,6 +25688,12 @@ public:
             return;
         }
         const auto catalog=assembly_root_catalog_for_child(snapshot,id.toStdString());
+        if (catalog) if (const auto child=embeddedAssemblyChild(snapshot,id.toStdString())) {
+            if (const auto context=resolve_embedded_assembly_drawing_context(snapshot.entities(),
+                    child->assembly_catalog_id,child->instance.id)) {
+                m_active_layer_id=id_from(context->layer_id); return;
+            }
+        }
         if (const auto context=organization.drawing_context(catalog ? *catalog : id.toStdString())) {
             m_active_layer_id=id_from(context->layer_id); return;
         }
@@ -36300,11 +36363,14 @@ public:
         if (session.site_frames) {
             const std::vector<std::string> requested_frames(dimensions.begin(),dimensions.end());
             dimension_frames=resolve_site_presentations(entities,requested_frames);
+            const auto embedded_contexts=explicit_embedded_drawing_contexts(entities);
             for (const auto& [id,measurement]:component_measurements) {
                 const auto& geometry=*measurement.assembly_geometry;
                 if (geometry.target.component.document_entity_id) continue;
                 auto& placement=dimension_frames.at(id);
-                if (geometry.placement_host_id)
+                const auto context=embedded_contexts.find({geometry.target.component.catalog_id,geometry.target.component.instance_id});
+                if (context!=embedded_contexts.end() && context->second) placement.drawing_context=*context->second;
+                else if (geometry.placement_host_id)
                     if (const auto context=organization.drawing_context(*geometry.placement_host_id))
                         placement.drawing_context=*context;
                 // Embedded witness/text coordinates are already world-authored,
@@ -59172,6 +59238,10 @@ private:
             }
         }
         capture_diagnostic_stage("projection.annotations_assemblies.end");
+        std::map<std::string,DrawingContext,std::less<>> embedded_contexts;
+        if (assembly_document_valid)
+            for (const auto& [root,context]:explicit_embedded_drawing_contexts(snapshot.entities()))
+                if (context) embedded_contexts.emplace(embedded_presentation_ids.at(root),*context);
         // Visibility is derived before annotation layout so hidden components
         // cannot push visible room labels away from otherwise clear space.
         // Geometry validation above remains unconditional.
@@ -59184,6 +59254,13 @@ private:
         }
         for (const auto& [child_id, host_id] : assembly_child_hosts) {
             const auto catalog = geometric_child_catalogs.find(child_id);
+            if (embedded_contexts.contains(child_id)) {
+                // The shared mask uses this root's actual layer, not the
+                // definition carrier's layer. Output hiding remains separate.
+                if ((catalog!=geometric_child_catalogs.end() && presentation_hidden_ids.contains(catalog->second)) ||
+                    presentation_hidden_ids.contains(host_id) || presentation_hidden_ids.contains(child_id)) visible_ids.erase(child_id);
+                continue;
+            }
             const auto* binding = phase_scope.assembly_memberships.owners.empty() ? nullptr :
                 canvas_embedded_assembly_binding(snapshot, child_id);
             if (binding && phase_scope.assembly_memberships.owners.contains(
@@ -59209,6 +59286,7 @@ private:
             std::erase_if(visible_ids, [&](const auto& id) {
                 if (!scope_available) return true;
                 auto context = organization.drawing_context(id);
+                if (const auto embedded=embedded_contexts.find(id);embedded!=embedded_contexts.end()) context=embedded->second;
                 if (!context) {
                     const auto annotation = std::find_if(annotation_child_layers.begin(), annotation_child_layers.end(),
                         [&](const auto& child) { return child.first == id; });
@@ -59615,10 +59693,13 @@ private:
         if (!decoded.supported() || decoded.dimension->kind!=BoundaryDimensionKind::assembly_extent ||
             decoded.dimension->assembly_target->component.document_entity_id) return placement;
         const auto resolved=resolve_current_boundary_dimension(*decoded.dimension,source);
-        if (resolved.assembly_geometry->placement_host_id) {
+        const auto& component=decoded.dimension->assembly_target->component;
+        if (resolved.assembly_geometry->placement_host_id ||
+            source.entities().at(component.catalog_id).properties.contains("embedded_instance_drawing_contexts")) {
             struct SourceOrganization {
                 std::optional<DocumentSnapshot> source;
                 ProjectOrganization organization;
+                EmbeddedAssemblyDrawingContexts embedded_contexts;
             };
             thread_local std::array<SourceOrganization,2> organizations;
             thread_local std::size_t next=0;
@@ -59628,12 +59709,16 @@ private:
             if (found==organizations.end()) {
                 auto& entry=organizations[next];
                 entry.organization=organize_project(source);
+                entry.embedded_contexts=explicit_embedded_drawing_contexts(source.entities());
                 entry.source=source;
                 found=organizations.begin()+static_cast<std::ptrdiff_t>(next);
                 next=(next+1)%organizations.size();
             }
-            if (const auto context=found->organization.drawing_context(*resolved.assembly_geometry->placement_host_id))
-                placement.drawing_context=*context;
+            const auto embedded=found->embedded_contexts.find({component.catalog_id,component.instance_id});
+            if (embedded!=found->embedded_contexts.end() && embedded->second) placement.drawing_context=*embedded->second;
+            else if (resolved.assembly_geometry->placement_host_id)
+                if (const auto context=found->organization.drawing_context(*resolved.assembly_geometry->placement_host_id))
+                    placement.drawing_context=*context;
         }
         // Embedded poses already use world coordinates. Match the object's
         // canonical Site presentation rather than applying its catalog frame.
@@ -59667,6 +59752,7 @@ private:
     SnapshotPlanScene sitePlanScene(const DocumentSnapshot& source,
         SiteCanvasPresentationFrames& frames,bool presented=true,bool include_hidden=false) {
         const auto organization = organize_project(source);
+        const auto embedded_contexts=explicit_embedded_drawing_contexts(source.entities());
         const auto active = organization.drawing_context(m_active_layer_id.toStdString());
         if (!active || active->property_id.empty())
             throw std::invalid_argument("Choose a drawing layer in the property to show its Site Plan.");
@@ -59770,7 +59856,15 @@ private:
             // Host IDs bind organization membership only, never their pose.
             auto host=assembly_host_for_child(source,id.toStdString());
             if (const auto catalog=geometric_assembly_for_child(source,id.toStdString());
-                catalog && catalog->instance.placement) host=catalog->instance.placement->host_entity_id;
+                catalog) {
+                const auto context=embedded_contexts.find({catalog->assembly_catalog_id,catalog->instance.id});
+                if (context!=embedded_contexts.end() && context->second) {
+                    placement.drawing_context=*context->second;
+                    placement.source_frame={};placement.forward={};placement.inverse={};
+                    return placement;
+                }
+                if (catalog->instance.placement) host=catalog->instance.placement->host_entity_id;
+            }
             if (host)
                 if (const auto context=organization.drawing_context(*host)) placement.drawing_context=*context;
             placement.source_frame={};placement.forward={};placement.inverse={};
@@ -60190,6 +60284,15 @@ private:
             if constexpr (requires { value.transformations; })
                 for (const auto& edit:value.transformations) targets.insert(edit.boundary_id);
             if constexpr (requires { value.boundary_edits; }) {
+                if (value.qualified_embedded_assembly_copy_completion || !value.qualified_embedded_assembly_copy_intent.is_null()) {
+                    (void)command_to_json(Command{value});
+                    const auto request=validate_qualified_embedded_assembly_copy_request(value.qualified_embedded_assembly_copy_intent);
+                    const auto aliases=embedded_assembly_presentation_ids(source.entities());
+                    for (const auto& row:request.at("targets"))
+                        targets.insert(aliases.at({row.at("catalog_id").template get<std::string>(),
+                            row.at("instance_id").template get<std::string>()}));
+                    for (const auto& [id,copied]:request.at("copied_dimension_ids").items()) { (void)copied; targets.insert(id); }
+                }
                 if (value.mixed_selection_edit_completion || !value.mixed_selection_edit_intent.is_null()) {
                     mixed_edit=true;
                     const auto intent=validate_mixed_selection_edit_intent(value.mixed_selection_edit_intent);

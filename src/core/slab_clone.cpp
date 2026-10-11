@@ -196,6 +196,12 @@ Entity opaque_remainder(Entity entity) {
         // Closed typed admission does not grant authority over opaque envelope
         // siblings, property strings, or definition/override values.
         (void)AssemblyModel::from_json(p.at("model"));
+        if (p.contains("embedded_instance_drawing_contexts")) {
+            AssemblyCatalogTransferBudget context_budget;
+            admit_existing_assembly_catalog_work(entity, context_budget);
+            for (auto& row : p.at("embedded_instance_drawing_contexts").at("rows"))
+                row.erase("instance_id"); // Preserve the actual layer reference.
+        }
         for (auto& row : p.at("model").at("instances"))
             if (row.contains("placement")) row.at("placement").erase("host_entity_id");
     } else if (entity.type == assembly_phase_membership_entity_type) {
@@ -574,16 +580,21 @@ SlabCloneResult replay_slab_clone(const SlabCloneEntities& source, const SlabClo
                 // and envelope. Closed typed parsing is admission only.
                 const auto retained = copy.properties.at("model").at("instances");
                 auto& rows = copy.properties.at("model").at("instances"); rows = Json::array();
+                SlabCloneIdentityMap retained_instances;
                 for (auto row : retained) {
                     if (!row.contains("placement")) continue;
                     const auto host = row.at("placement").at("host_entity_id").get<std::string>();
                     if (!owners.contains(host)) continue;
                     const SlabCloneHostedInstanceKey key{id, row.at("id").get<std::string>()};
                     if (!expected_instances.contains(key)) continue;
+                    retained_instances.emplace(key.second, hosted_instance_identities.at(key));
                     row.at("id") = hosted_instance_identities.at(key);
                     row.at("placement").at("host_entity_id") = identities.at(host);
                     rows.push_back(std::move(row));
                 }
+                // Copied slabs preserve their actual floor/layer relationships.
+                if (source.at(id).properties.contains("embedded_instance_drawing_contexts"))
+                    copy = remap_embedded_assembly_drawing_contexts(source.at(id), copy, retained_instances);
                 (void)AssemblyModel::from_json(copy.properties.at("model"));
             } else reject("unsupported copy owner reached replay");
             const auto copy_id = copy.id;

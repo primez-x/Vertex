@@ -5026,11 +5026,44 @@ static void validate_current_component_dependent_preservation(
         std::set<std::string,std::less<>> inactive_targets;
         const auto original_aliases=embedded_assembly_presentation_ids(source);
         const auto candidate_aliases=embedded_assembly_presentation_ids(candidate);
+        std::vector<std::pair<std::string,std::string>> context_roots;
+        const auto context_bindings=[](const ComponentMembershipEntities& entities) {
+            std::map<AssemblyPhaseRoot,const nlohmann::json*> result;
+            for (const auto& [catalog,entity]:entities) {
+                const auto contexts=entity.properties.find("embedded_instance_drawing_contexts");
+                if (contexts==entity.properties.end()) continue;
+                const auto& rows=contexts->at("rows");
+                if (!rows.is_array() || rows.size()>4096-result.size())
+                    throw std::invalid_argument("Inactive component drawing-context roster exceeds its bound");
+                for (const auto& row:rows) {
+                    const auto& instance=row.at("instance_id").get_ref<const std::string&>();
+                    if (instance.size()>4096 || !result.emplace(AssemblyPhaseRoot{catalog,instance},&row).second)
+                        throw std::invalid_argument("Inactive component drawing-context roster has invalid identities");
+                }
+            }
+            return result;
+        };
+        const auto original_contexts=context_bindings(source), candidate_contexts=context_bindings(candidate);
+        const auto context_row=[](const auto& bindings,const AssemblyPhaseRoot& root) -> const nlohmann::json* {
+            const auto found=bindings.find(root);
+            return found==bindings.end() ? nullptr : found->second;
+        };
         for (const auto& root:inactive_roots) {
             const auto original=original_aliases.find(root), after=candidate_aliases.find(root);
             if (original==original_aliases.end() || after==candidate_aliases.end() || original->second!=after->second)
                 throw std::invalid_argument("Current editing changed an inactive component presentation binding: "+root.first);
+            const auto before_context=context_row(original_contexts,root), after_context=context_row(candidate_contexts,root);
+            if ((!before_context)!=(!after_context) ||
+                (before_context && before_context->dump()!=after_context->dump()))
+                throw std::invalid_argument("Current editing changed an inactive component drawing-context binding: "+root.first);
+            if (before_context) context_roots.push_back(root);
             inactive_targets.insert(original->second);
+        }
+        if (!context_roots.empty()) {
+            const auto before=resolve_embedded_assembly_drawing_contexts(source,context_roots);
+            const auto after=resolve_embedded_assembly_drawing_contexts(candidate,context_roots);
+            for (const auto& root:context_roots) if (before.at(root)!=after.at(root))
+                throw std::invalid_argument("Current editing changed an inactive component drawing context: "+root.first);
         }
         for (const auto& [id,original]:source) {
             if (!can_recognize_boundary_dimension_entity_type(original.type)) continue;

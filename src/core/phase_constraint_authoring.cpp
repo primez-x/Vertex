@@ -818,6 +818,7 @@ Entity merge_hosted_instance_placements(const Entity& source,const std::vector<c
         auto& instances=normalized.at("instances");
         if (permitted_retirements.empty() && instances.size()!=retained.size())
             invalid("Coordinated hosted catalogs require exact source instance membership");
+        Json surviving=Json::array();
         std::size_t next=0;
         for (std::size_t i=0;i<retained.size();++i) {
             const auto& original_row=retained[i];
@@ -831,6 +832,7 @@ Entity merge_hosted_instance_placements(const Entity& source,const std::vector<c
                 continue;
             }
             auto row=instances[next++];
+            surviving.push_back(original_row);
             if (row.at("id")!=original_row.at("id")) invalid("Coordinated hosted catalog changed source instance order or identity");
             if (promotion && !original_row.contains("root_transform") && row.contains("root_transform") &&
                 row.at("root_transform").is_null() && row.contains("nested_overrides") &&
@@ -858,8 +860,13 @@ Entity merge_hosted_instance_placements(const Entity& source,const std::vector<c
                 invalid("Coordinated hosted catalog changed an unhosted instance");
         }
         if (next!=instances.size()) invalid("Coordinated hosted catalog added or reordered source instances");
-        normalized.at("instances")=retained;
-        if (!exact(source,envelope)) invalid("Coordinated hosted catalog changed definitions or its retained envelope");
+        // Derive organization solely from actual source records and the row
+        // membership admitted above. Placement authority cannot edit context.
+        auto expected=source;
+        expected.properties.at("model").at("instances")=std::move(surviving);
+        expected=prune_embedded_assembly_drawing_contexts(expected);
+        normalized.at("instances")=expected.properties.at("model").at("instances");
+        if (!exact(expected,envelope)) invalid("Coordinated hosted catalog changed definitions or its retained envelope");
     }
     if (!retired.empty()) {
         Json survivors=Json::array();
@@ -868,6 +875,7 @@ Entity merge_hosted_instance_placements(const Entity& source,const std::vector<c
     }
     merged.properties.at("model").at("instances")=std::move(rows);
     if (promoted && !changed.empty()) merged.properties.at("model").at("schema")="sketch.assemblies.v7";
+    merged=prune_embedded_assembly_drawing_contexts(merged);
     (void)AssemblyModel::from_json(merged.properties.at("model"));
     return merged;
 }
@@ -882,7 +890,7 @@ Entity compose_source_container(const Entity& source,const std::vector<const Ent
 // change retained definitions, material assignments, row bytes or order.
 // Only the dialect-sixteen opt-in also consumes fresh raw instance suffixes
 // from complete independently admitted same-source primitive replay maps.
-// Restoring the source instances must still recover the exact source envelope;
+// The exact source envelope is pruned only for admitted instance membership;
 // this is no authority to normalize a dialect or merge arbitrary catalog data.
 Entity merge_demolition_catalog(const Entity& source,const std::vector<const Entity*>& candidates,
     bool allow_shared_reference_retirement=false,bool complete_hosted_catalog_consequences=false,
@@ -922,8 +930,15 @@ Entity merge_demolition_catalog(const Entity& source,const std::vector<const Ent
             if (!surviving.contains(name) && !removed.insert(name).second && !allow_shared_reference_retirement)
                 invalid("Coordinated demolition repeats the same hosted row retirement");
         }
+        // Fresh suffixes have typed leaf authority for model rows only. They
+        // cannot invent organization records; retain and prune actual source
+        // context rows using the independently admitted local membership.
+        auto expected=source;
+        expected.properties.at("model").at("instances")=rows;
+        expected=prune_embedded_assembly_drawing_contexts(expected);
+        expected.properties.at("model").at("instances")=retained;
         envelope.properties.at("model").at("instances")=retained;
-        if (!exact(source,envelope)) invalid("Coordinated demolition changed a retained catalog envelope");
+        if (!exact(expected,envelope)) invalid("Coordinated demolition changed a retained catalog envelope");
     }
     auto result=source;
     auto rows=Json::array();
@@ -931,6 +946,7 @@ Entity merge_demolition_catalog(const Entity& source,const std::vector<const Ent
         if (!removed.contains(row.at("id").get<std::string>())) rows.push_back(row);
     for (const auto& row:fresh_rows) rows.push_back(row);
     result.properties.at("model").at("instances")=std::move(rows);
+    result=prune_embedded_assembly_drawing_contexts(result);
     // Membership completion admits every final catalog together before its
     // pruner and complete-map validation decode the composed result.
     if (!defer_result_decode) (void)AssemblyModel::from_json(result.properties.at("model"));
@@ -2604,6 +2620,7 @@ Entity merge_stair_review_instance_rows(const Entity& source,const Entity& revie
     surviving.erase(std::remove_if(surviving.begin(),surviving.end(),[&](const auto& row) {
         return retired_bindings.contains({source.id,row.at("id").template get<std::string>()});
     }),surviving.end());
+    deletion=prune_embedded_assembly_drawing_contexts(deletion);
     const auto baseline=merge_demolition_catalog(source,{&deletion},true,true);
     std::vector<Entity> normalized;
     normalized.reserve(ordinary.size());
@@ -2618,6 +2635,7 @@ Entity merge_stair_review_instance_rows(const Entity& source,const Entity& revie
                 invalid("Reviewed stair retirement overlaps an ordinary catalog row edit");
             return true;
         }),rows.end());
+        normalized.back()=prune_embedded_assembly_drawing_contexts(normalized.back());
     }
     std::vector<const Entity*> changes{&review};
     for (const auto& lane:normalized) changes.push_back(&lane);
@@ -2828,6 +2846,7 @@ Entities compose_mixed_selection_edit_candidates_impl(const Entities& actual,
                 rows.erase(std::remove_if(rows.begin(),rows.end(),[&](const auto& row) {
                     return reviewed_retired_bindings.contains({key,row.at("id").template get<std::string>()});
                 }),rows.end());
+                deletion=prune_embedded_assembly_drawing_contexts(deletion);
                 result.at(key)=merge_stair_review_instance_rows(original,deletion,changes,reviewed_retired_bindings,
                     assembly_promoted_catalogs && assembly_promoted_catalogs->contains(key));
             } else if (stair_review) {

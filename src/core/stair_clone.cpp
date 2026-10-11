@@ -240,6 +240,12 @@ Entity remainder(Entity entity) {
         if (p.contains("host")) for (const auto* name : {"stair_id", "flight_id", "landing_id", "incoming_flight_id", "outgoing_flight_id"}) p.at("host").erase(name);
     } else if (entity.type == "assembly_model") {
         (void)AssemblyModel::from_json(p.at("model"));
+        if (p.contains("embedded_instance_drawing_contexts")) {
+            AssemblyCatalogTransferBudget context_budget;
+            admit_existing_assembly_catalog_work(entity, context_budget);
+            for (auto& row : p.at("embedded_instance_drawing_contexts").at("rows"))
+                row.erase("instance_id"); // Only the validated local reference.
+        }
         for (auto& row : p.at("model").at("instances")) {
             row.erase("id"); if (row.contains("placement")) row.at("placement").erase("host_entity_id");
         }
@@ -820,10 +826,16 @@ Entities replay_stair_clone_authoring(const Entities& actual, const StairCloneAu
         for (const auto& id : derived.catalogs) {
             auto copy = derived.physical.at(id); copy.id = authoring.identities.at(id);
             auto& copied_rows = copy.properties.at("model").at("instances"); const auto retained = copied_rows; copied_rows = Json::array();
+            StairCloneIdentityMap retained_instances;
             for (auto row : retained) {
                 const StairCloneHostedInstanceKey key{id, row.at("id").get<std::string>()}; if (!hosted.contains(key)) continue;
+                retained_instances.emplace(key.second, authoring.hosted_instance_identities.at(key));
                 row.at("id") = authoring.hosted_instance_identities.at(key); remap_field(row.at("placement"), "host_entity_id", authoring.identities); copied_rows.push_back(std::move(row));
             }
+            // Affine stair replay retains host context. Derive metadata from the
+            // actual catalog, independently of its scratch transformed model.
+            if (actual.at(id).properties.contains("embedded_instance_drawing_contexts"))
+                copy = remap_embedded_assembly_drawing_contexts(actual.at(id), copy, retained_instances);
             const auto copy_id = copy.id;
             if (!candidate.emplace(copy_id, std::move(copy)).second) reject("fresh private catalog insertion collided");
         }

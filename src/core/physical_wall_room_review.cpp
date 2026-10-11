@@ -326,6 +326,12 @@ void refuse_unresolved_wall_deletion_references(const Entities& original,const E
     };
     for (const auto& [entity_id,entity]:candidate) {
         auto properties=entity.properties,extensions=entity.extensions;
+        if (entity.type=="assembly_model" && properties.contains("embedded_instance_drawing_contexts")) {
+            AssemblyCatalogTransferBudget context_budget;
+            admit_existing_assembly_catalog_work(entity,context_budget);
+            for (auto& row:properties.at("embedded_instance_drawing_contexts").at("rows"))
+                row.erase("instance_id"); // Layer references keep document meaning.
+        }
         if (complete_component_phase_memberships && entity.type==assembly_phase_membership_entity_type) {
             // Only the closed actual model is a typed reference codec. Opaque
             // carrier siblings and extensions retain the reference refusal.
@@ -934,13 +940,20 @@ std::vector<EntityChange> complete_physical_wall_deletion_changes(const Entities
                 retired_keys.emplace(catalog,row.id);scan_locals.insert(row.id);
             }
         for (const auto& [entity_id,entity]:source) {
-            const auto scratch=complete_component_dimensions ?
+            auto scratch=complete_component_dimensions ?
                 wall_component_dimension_reference_remainder(entity,retired_keys) : std::nullopt;
+            if (entity.type=="assembly_model" && entity.properties.contains("embedded_instance_drawing_contexts")) {
+                AssemblyCatalogTransferBudget context_budget;
+                admit_existing_assembly_catalog_work(entity,context_budget);
+                scratch=entity;
+                for (auto& row:scratch->properties.at("embedded_instance_drawing_contexts").at("rows"))
+                    row.erase("instance_id"); // Validated own-catalog references only.
+            }
             const auto& reference=scratch ? *scratch : entity;
             if (unqualified_wall_component_reference(reference.properties,scan_locals,source) ||
                 unqualified_wall_component_reference(reference.extensions,scan_locals,source))
                 invalid("affected unqualified component reference has no retirement codec");
-            if (scratch) {
+            if (scratch && can_recognize_boundary_dimension_entity_type(entity.type)) {
                 const auto decoded=decode_boundary_dimension_entity(entity);
                 if (!decoded.dimension->assembly_target->component.document_entity_id) {
                     mutable_owner(entity_id);removed.insert(entity_id);cleanup_names.insert(entity_id);
@@ -1135,6 +1148,7 @@ std::vector<EntityChange> complete_physical_wall_deletion_changes(const Entities
     for (const auto& [catalog,retired]:retired_rows) {
         auto& rows=preflight.at(catalog).properties.at("model").at("instances");
         rows.erase(std::remove_if(rows.begin(),rows.end(),[&](const auto& row){return retired.contains(row.at("id").template get<std::string>());}),rows.end());
+        preflight.at(catalog)=prune_embedded_assembly_drawing_contexts(preflight.at(catalog));
     }
     for (const auto& owner:removed) preflight.erase(owner);
     if (complete_component_phase_memberships) admit_wall_component_catalogs(preflight,component_catalog_budget);
@@ -1169,6 +1183,7 @@ std::vector<EntityChange> complete_physical_wall_deletion_changes(const Entities
             rows.erase(std::remove_if(rows.begin(),rows.end(),[&](const auto& row) {
                 return retired.contains(row.at("id").template get<std::string>());
             }),rows.end());
+            expected=prune_embedded_assembly_drawing_contexts(expected);
             if (after->second!=expected || after->second.properties.dump()!=expected.properties.dump() ||
                 after->second.extensions.dump()!=expected.extensions.dump())
                 invalid("complete wall consequence changed raw retained catalog beyond admitted rows: "+catalog);

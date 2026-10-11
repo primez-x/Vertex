@@ -499,23 +499,46 @@ void append_assembly_rows(const DocumentSnapshot& document,
     std::vector<ScheduleRow> rows;
     std::string context = "assembly scope";
     try {
+        // Explicit row organization is admitted against the complete source,
+        // before a visibility subset can remove its real layer or host.
+        // Historical documents retain the validator's absence fast path.
+        validate_embedded_assembly_drawing_contexts(document.entities());
+        std::set<AssemblyPhaseRoot> explicit_context_roots;
+        for (const auto& [catalog_id, entity] : document.entities()) {
+            const auto contexts = entity.properties.find("embedded_instance_drawing_contexts");
+            if (contexts == entity.properties.end()) continue;
+            for (const auto& row : contexts->at("rows"))
+                explicit_context_roots.emplace(catalog_id, row.at("instance_id").get<std::string>());
+        }
         // Resolve aliases against the complete captured source so visibility
         // filtering cannot change an embedded root's presentation identity.
         const auto embedded_ids = embedded_assembly_presentation_ids(document.entities());
+        std::set<std::string, std::less<>> visible_alias_catalogs;
+        if (requested_visibility) for (const auto& [root, alias] : embedded_ids)
+            if (requested_visibility->contains(alias)) visible_alias_catalogs.insert(root.first);
         AssemblyExpansionBudget visibility_budget;
         const auto embedded_visible = [&](const std::string& catalog_id, const AssemblyInstance& instance,
                                           const AssemblyModel& model) {
             const AssemblyPhaseRoot key{catalog_id, instance.id};
             if (phase_scope.assembly_memberships.inactive_roots.contains(key)) return false;
+            const auto& anchor = instance.placement ? instance.placement->host_entity_id : catalog_id;
+            const bool alias_visible = requested_visibility && requested_visibility->contains(embedded_ids.at(key));
+            // An alias supplies presentation visibility, never saved physical
+            // activity. A declared root retains its own phase membership.
+            if ((instance.placement || !phase_scope.assembly_memberships.owners.contains(key)) &&
+                phase_scope.inactive_owner_ids.contains(anchor)) return false;
+            if ((phase_scope.assembly_memberships.owners.contains(key) || alias_visible) && instance.placement &&
+                assembly_host_inactive_in_phase(document.entities(),
+                    phase_scope.inactive_owner_ids, instance.placement->host_entity_id)) return false;
+            if (alias_visible) return true;
+            // Explicit organization is filtered by the caller's resolved row
+            // alias. Its catalog carrier may occupy another layer.
+            if (requested_visibility && explicit_context_roots.contains(key)) return false;
             if (phase_scope.assembly_memberships.owners.contains(key)) {
                 // A declared row has its own saved phase state. Keep actual
                 // host activity and the caller's visibility mask separate from
                 // the catalog's historical support-owner membership.
-                if (instance.placement && assembly_host_inactive_in_phase(document.entities(),
-                        phase_scope.inactive_owner_ids, instance.placement->host_entity_id)) return false;
                 if (!requested_visibility) return true;
-                const auto& anchor = instance.placement ? instance.placement->host_entity_id : catalog_id;
-                if (requested_visibility->contains(embedded_ids.at(key))) return true;
                 if (!requested_visibility->contains(anchor)) return false;
                 // Host-only visibility remains valid for legacy host copies.
                 // Genuine profiles also require the catalog's presentation
@@ -559,7 +582,8 @@ void append_assembly_rows(const DocumentSnapshot& document,
                     }
                 }
             }
-            if (!visible(catalog_id) && !host_visible && !declared_active_catalogs.contains(catalog_id) &&
+            if (!visible(catalog_id) && !host_visible && !visible_alias_catalogs.contains(catalog_id) &&
+                !declared_active_catalogs.contains(catalog_id) &&
                 !required_catalogs.contains(catalog_id)) continue;
             context = catalog_id;
             if (!entity.properties.contains("model"))
@@ -571,12 +595,28 @@ void append_assembly_rows(const DocumentSnapshot& document,
             });
             const auto model = AssemblyModel::create(original.materials(), original.types(), std::move(instances));
             auto source = entity;
-            source.properties["model"] = model.to_json();
+            // This is a temporary subset, not a catalog edit. Retain surviving
+            // raw instance order/numeric forms and the original model envelope.
+            std::set<std::string, std::less<>> retained_roots;
+            for (const auto& instance : model.instances()) retained_roots.insert(instance.id);
+            auto& raw_instances = source.properties.at("model").at("instances");
+            auto retained = nlohmann::json::array();
+            for (const auto& row : raw_instances)
+                if (retained_roots.contains(row.at("id").get<std::string>())) retained.push_back(row);
+            raw_instances = std::move(retained);
+            source = prune_embedded_assembly_drawing_contexts(source);
             scoped.emplace(catalog_id, std::move(source));
             models.emplace(catalog_id, model);
         }
         AssemblyExpansionBudget budget;
         context = "visible assembly scope";
+        // Visibility scopes only assembly roots. Their retained drawing-context
+        // and placement references still resolve against the actual complete
+        // organization/host source; these supporting entities do not add roots
+        // or schedule rows during assembly expansion.
+        for (const auto& [id, entity] : document.entities())
+            if (entity.type != "assembly_model" && entity.type != "assembly_instance")
+                scoped.emplace(id, entity);
         const auto independent = expand_document_assembly_instances(scoped, budget);
         const auto append = [&](const std::string& catalog_id, const AssemblyExpansion& expansion,
                                 const std::string& owner_id, bool external) {
