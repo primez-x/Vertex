@@ -14,6 +14,30 @@ changed source does not acquire runtime acceptance without later qualification.
 
 ## Current delivery state
 
+### October 11 direct and coordinated ordinary host dimensions
+
+The direct stair controller batch is committed and pushed as 9bc16ffc, with its
+exact remote branch ref matching local HEAD. The current batch adds a shared
+bounded hosted contribution based on actual source/candidate component frames;
+unchanged raw placements remain eligible. Current direct ordinary roof math,
+slab, structural and stair transform edits use their complete typed candidates,
+including entered stair quantity receipts and actual attached rail hosts.
+Current coordinated retained authoring uses closed inner6/outer31, preserving
+historical inner1-5 family semantics and deriving one ordinary host roster from
+independent original-source family replays. Replacement copies gain no dimension
+authority. Document preview, room review and reservation consumers unwrap that
+closed body; reader223/extraction221 retain current, nested and undone history.
+
+Independent integrated source review approved the frozen batch with no proved
+P1/P2 finding; root scoped whitespace review passes. Git records its source
+backup identity. Required
+remaining work includes typed retained direct roof routes, ordinary stair compound
+edits, physical host/cohort/phase dimension retirement, linked-view targets,
+protected replacement dimension copies and the broader production plan.
+No builds/tests/jobs, launches, packages or installations ran. Compilation,
+interaction, Undo/redo and migration remain unverified; the installed candidate
+is unchanged and all ten production gates remain open.
+
 ### October 11 direct ordinary stair movement
 
 The host-derived group batch is committed and pushed as 67388cfb; the exact

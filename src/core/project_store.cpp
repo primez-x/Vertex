@@ -381,6 +381,22 @@ std::uint32_t required_format_version_internal(const DocumentSnapshot& snapshot,
                 if (!value.is_object() || value.size()!=fields.size()) return false;
                 return std::all_of(fields.begin(),fields.end(),[&](const char* field) { return value.contains(field); });
             };
+            if (closed_shape({"version","expected_revision","source_snapshot_digest","source_authoring_digest",
+                    "source_entities_digest","source_saved_revision","phase_selections","intent","coordinated_replacements"}) &&
+                value.at("version").is_number_integer() && value.at("version")==31) {
+                const auto& wrapper=value.at("coordinated_replacements");
+                if (wrapper.is_object() && wrapper.size()==3 && wrapper.contains("version") &&
+                    wrapper.at("version").is_number_integer() && wrapper.at("version")==6 &&
+                    wrapper.contains("authoring") && wrapper.contains("complete_hosted_component_dimensions") &&
+                    wrapper.at("complete_hosted_component_dimensions").is_boolean() &&
+                    wrapper.at("complete_hosted_component_dimensions")==true) {
+                    const auto& body=wrapper.at("authoring");
+                    if (body.is_object() && body.contains("version") && body.at("version").is_number_integer() &&
+                        (body.at("version")==1 || body.at("version")==2 || body.at("version")==3 ||
+                         body.at("version")==4 || body.at("version")==5))
+                        floor=std::max(floor,223U);
+                }
+            }
             if (closed_shape({"version","kind","expected_revision","message",
                     "phase_assembly_catalog_edit_completion","phase_assembly_catalog_edit_intent"}) &&
                 value.at("version")==60 && value.at("kind")=="apply_boundary_constraint_changes" &&
@@ -808,9 +824,9 @@ std::uint32_t required_format_version_internal(const DocumentSnapshot& snapshot,
     };
     for (const auto& revision : snapshot.history()) {
         if (revision.phase_entity_import) required=std::max(required,160U);
-        if (required<222 && revision.boundary_geometry_edit)
+        if (required<223 && revision.boundary_geometry_edit)
             required=std::max(required,typed_edit_reader_floor(encode_boundary_geometry_edit(*revision.boundary_geometry_edit)));
-        if (required<222 && revision.boundary_constraint_changes)
+        if (required<223 && revision.boundary_constraint_changes)
             required=std::max(required,typed_edit_reader_floor(command_to_json(Command{*revision.boundary_constraint_changes})));
         if (required<122 && revision.boundary_geometry_edit)
             required=std::max(required,quantity_reader_floor(encode_boundary_geometry_edit(*revision.boundary_geometry_edit)));
@@ -965,6 +981,8 @@ std::uint32_t required_format_version_internal(const DocumentSnapshot& snapshot,
                 return false;
             };
             const auto profile_intent=[&](const nlohmann::json& intent)->std::uint32_t {
+                if (intent.is_object() && intent.value("version",nlohmann::json())==31 &&
+                    typed_edit_reader_floor(intent)==223U) return 223U;
                 if (intent.is_object() && intent.value("version",nlohmann::json())==16 &&
                     typed_edit_reader_floor(intent)==214U) return 214U;
                 if (intent.is_object() && intent.value("version",nlohmann::json())==15 &&
@@ -3311,6 +3329,7 @@ bool verify_sqlite_schema(sqlite3* database, bool allow_recovery = false) {
          sqlite3_column_int(user_version.get(), 0) != 220 &&
          sqlite3_column_int(user_version.get(), 0) != 221 &&
          sqlite3_column_int(user_version.get(), 0) != 222 &&
+         sqlite3_column_int(user_version.get(), 0) != 223 &&
          sqlite3_column_int(user_version.get(), 0) != 207 &&
          sqlite3_column_int(user_version.get(), 0) != 202 &&
          sqlite3_column_int(user_version.get(), 0) != 200 &&
@@ -4036,6 +4055,8 @@ DocumentSnapshot read_snapshot(sqlite3* database, RecoveryLedger* recovery = nul
     // here and authenticate the manifest with its stored version below.
     const auto required_format = required_format_version_internal(snapshot, format_number < 28);
     if (required_format > format_number) {
+        if (required_format>=223)
+            storage_error(StorageErrorCode::unsupported_format,"This project requires reader 223 for coordinated ordinary host component dimensions");
         if (required_format>=222)
             storage_error(StorageErrorCode::unsupported_format,"This project requires reader 222 for host-derived component dimensions in mixed selection transforms");
         if (required_format>=221)

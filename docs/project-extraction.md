@@ -1,5 +1,15 @@
 # Portable project extraction
 
+Exchange version221 requires native reader223 for phase authoring31 and its
+closed coordinated inner6 dimension wrapper. One historical inner1-5 body keeps
+its exact family and replacement semantics; actual ordinary family replays add
+one final hosted component dimension carry, including indirectly moved rail
+hosts and unchanged raw placements with changed physical frames. Original-source
+bindings, phase protections and nested/undone history retain the requirement.
+Older coordinated dialects reject the new wrapper. Replacement dimension copying
+and linked-view lifecycles require separate authority. No extraction or migration
+execution is claimed.
+
 Exchange version220 requires native reader222 for mixed transform intent19 and
 ordinary selection request6. The source-bound pair carries qualified embedded
 component dimensions from actual selected-host placement consequences alongside

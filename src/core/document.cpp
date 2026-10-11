@@ -3441,8 +3441,9 @@ static bool phase_constraint_authoring_retires_proposals(const ApplyBoundaryCons
         if (replacement!=intent.end() && replacement_retires(*replacement)) return true;
         const auto replacements=intent.find("coordinated_replacements");
         if (replacements!=intent.end() && replacements->is_object()) {
-            const auto stair=replacements->find("stair_replacement");
-            if (stair!=replacements->end() && replacement_retires(*stair)) return true;
+            const auto& body=phase_constraint_coordinated_authoring_body(*replacements);
+            const auto stair=body.find("stair_replacement");
+            if (stair!=body.end() && replacement_retires(*stair)) return true;
         }
 #endif
         if (intent.contains("stair_demolition_retirement") && !intent.at("stair_demolition_retirement").is_null())
@@ -3976,7 +3977,8 @@ static void reserve_phase_clone_sources(const PhaseConstraintAuthoringIntent& ro
         }
     };
     append(root.ordinary_roof_edits);
-    if (!root.coordinated_replacements.is_null()) append(root.coordinated_replacements.at("ordinary_roof_edits"));
+    if (!root.coordinated_replacements.is_null())
+        append(phase_constraint_coordinated_authoring_body(root.coordinated_replacements).at("ordinary_roof_edits"));
     for (const auto& leaf:phase_constraint_replacement_components(root)) if (!leaf.roof_replacement.is_null()) {
         const auto replacement=decode_phase_roof_replacement_authoring(leaf.roof_replacement);
         openings.insert(openings.end(),replacement.roof_opening_edits.begin(),replacement.roof_opening_edits.end());
@@ -4070,7 +4072,7 @@ static void validate_retained_authoring_receipt_identities(
                 };
                 reserve_openings(root.ordinary_roof_edits);
                 if (!root.coordinated_replacements.is_null())
-                    reserve_openings(root.coordinated_replacements.at("ordinary_roof_edits"));
+                    reserve_openings(phase_constraint_coordinated_authoring_body(root.coordinated_replacements).at("ordinary_roof_edits"));
                 for (const auto& id:phase_demolition_ordinary_roof_destinations(root))
                     if (fresh.contains(id))
                         throw std::invalid_argument("Proposed identity was already reserved by retained ordinary roof split intent: "+id);
@@ -4346,7 +4348,7 @@ static void validate_phase_constraint_fresh_lifetime(const std::map<std::string,
             complete_envelope_reservation=true;
             roof_mixed_asset_reservation=true;
             std::vector<RoofEditIntent> ordinary_roof_edits;
-            for (const auto& row : root_intent.coordinated_replacements.at("ordinary_roof_edits"))
+            for (const auto& row : phase_constraint_coordinated_authoring_body(root_intent.coordinated_replacements).at("ordinary_roof_edits"))
                 ordinary_roof_edits.push_back(decode_roof_edit_intent(row));
             for (const auto& id : new_roof_opening_identity_ids(source, roof_edit_opening_intents(ordinary_roof_edits))) {
                 if (!fresh.insert(id).second)

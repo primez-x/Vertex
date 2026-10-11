@@ -1,4 +1,26 @@
-# Vertex project formats v1 through v222
+# Vertex project formats v1 through v223
+
+Reader223 retains phase authoring31, paired exclusively with closed coordinated
+inner6: `version`, `authoring`, and literal
+`complete_hosted_component_dimensions:true`. The borrowed `authoring` body is
+one exact historical inner1-5; wrappers cannot nest. Its historical family,
+qualified wall replacement, baseline and hosted-row protections remain intact.
+Only current wrapper authority adds ordinary hosted component dimension carry.
+
+Ordinary roof/slab/structural/stair family candidates independently replay the
+actual original source. Their actual changed physical hosts, including attached
+rails discovered by stair replay, supply a bounded dependency roster. One final
+source/candidate measurement batch carries existing qualified embedded extent
+dimensions using actual component frames, even when raw placement is unchanged.
+Root identities, host bindings and non-placement fields remain exact; inactive
+and protected baseline dimension edits refuse. No replacement copying, fresh
+dimension allocation, linked-view authority or phase permission is inferred.
+
+Current, nested and undone phase31 proofs require reader223/extraction221.
+Historical coordinated outer7/8/10/14/29 reject inner6 and keep their original
+consequences. Direct ordinary entity-change commands retain their existing
+storage meaning. Compilation, runtime/history, migration and extraction remain
+unverified.
 
 Reader222 retains mixed transform intent19 under command52, paired with ordinary
 selection request6. The new pair inherits ordinary5/mixed18's closed source,

@@ -7,6 +7,7 @@
 #include "sketch/constraint_entity.hpp"
 #include "sketch/annotation_entity_codec.hpp"
 #include "sketch/assembly_document_adapter.hpp"
+#include "sketch/assembly_dimension_transform.hpp"
 #include "sketch/assembly_component_phase_demolition.hpp"
 #include "sketch/assembly_phase_membership.hpp"
 #include "sketch/assembly_phase_membership_transport.hpp"
@@ -358,6 +359,7 @@ void selections(const Json& value) {
 
 struct CoordinatedReplacements {
     int version{1};
+    bool complete_hosted_component_dimensions{false};
     std::optional<PhaseConstraintAuthoringIntent> wall;
     std::optional<PhaseRoofReplacementAuthoring> roof;
     std::optional<PhaseSlabReplacementAuthoring> slab;
@@ -368,9 +370,18 @@ struct CoordinatedReplacements {
     std::vector<StructuralObjectEditIntent> ordinary_structural;
     std::vector<StairTransformIntent> ordinary_stairs;
 };
-CoordinatedReplacements coordinated(const Json& value,const PhaseConstraintAuthoringIntent& enclosing) {
+CoordinatedReplacements coordinated(const Json& value,const PhaseConstraintAuthoringIntent& enclosing,
+    bool allow_dimension_wrapper=true) {
     resource_shape(value);
     if (value.dump().size()>proof_budget) invalid("Coordinated replacement proof byte budget exceeded");
+    if (value.is_object() && value.contains("version") && value.at("version")==6) {
+        if (!allow_dimension_wrapper) invalid("Coordinated dimension authoring cannot nest wrappers");
+        // Keep the historical authored dialect as the composition authority.
+        // The already bounded closed wrapper adds only ordinary dimension carry.
+        auto result=coordinated(phase_constraint_coordinated_authoring_body(value),enclosing,false);
+        result.complete_hosted_component_dimensions=true;
+        return result;
+    }
     const bool hosted_walls=value.is_object() && value.contains("version") && value.at("version")==5;
     const bool stairs=hosted_walls || (value.is_object() && value.contains("version") && value.at("version")==4);
     const bool structural=stairs || (value.is_object() && value.contains("version") && value.at("version")==3);
@@ -1004,6 +1015,43 @@ Entities replay_coordinated(const Entities& source,const PhaseConstraintAuthorin
     std::vector<std::vector<std::string>> family_fresh;
     std::set<std::string,std::less<>> retained_baselines;
     std::map<std::string,std::set<std::string,std::less<>>,std::less<>> permitted_catalog_retirements;
+    std::set<std::string,std::less<>> ordinary_dimension_hosts;
+    std::optional<ConstraintPhaseScope> ordinary_dimension_scope;
+    std::set<std::string,std::less<>> ordinary_dimension_protected_baselines;
+    if (lanes.complete_hosted_component_dimensions) {
+        ordinary_dimension_scope=constraint_phase_scope(source);
+        for (const auto& [key,entity]:source) if (entity.type=="model_phases") {
+            (void)key;
+            const auto model=ModelPhases::from_json(entity.properties.at("model"));
+            if (model.active_alternative())
+                ordinary_dimension_protected_baselines.insert(model.baseline_ids().begin(),model.baseline_ids().end());
+        }
+    }
+    const auto collect_ordinary_dimension_hosts=[&](const Entities& candidate,
+        std::initializer_list<std::string_view> physical_types) {
+        if (!lanes.complete_hosted_component_dimensions) return;
+        coordinated_map_budget(candidate);
+        // This map has just been derived by the family's actual-source typed
+        // producer. No replacement or composed map can supply host authority.
+        for (const auto& [key,original]:source) {
+            const auto found=candidate.find(key);
+            if (can_recognize_boundary_dimension_entity_type(original.type) &&
+                inspect_boundary_dimension_version(original).format==BoundaryDimensionFormat::supported_v6 &&
+                (found==candidate.end() || !exact(original,found->second)))
+                invalid("Coordinated ordinary host candidates must retain original component dimension rows");
+            if (std::find(physical_types.begin(),physical_types.end(),original.type)==physical_types.end()) continue;
+            if (found==candidate.end() || found->second.id!=key || found->second.type!=original.type)
+                invalid("Coordinated ordinary dimension hosts must retain actual owner identity and type");
+            if (exact_json(original.properties,found->second.properties) &&
+                exact_json(original.extensions,found->second.extensions)) continue;
+            if (ordinary_dimension_scope->inactive_owner_ids.contains(key) ||
+                ordinary_dimension_protected_baselines.contains(key))
+                invalid("Coordinated ordinary dimension hosts require active nonbaseline authority");
+            ordinary_dimension_hosts.insert(key);
+            if (ordinary_dimension_hosts.size()>100000)
+                invalid("Coordinated ordinary dimension host roster budget exceeded");
+        }
+    };
     if (lanes.wall) {
         const auto& child=*lanes.wall;
         const auto requests=phase_wall_replacement_requests(source,child.intent);
@@ -1049,6 +1097,7 @@ Entities replay_coordinated(const Entities& source,const PhaseConstraintAuthorin
         if (partition.replacement || !partition.baseline_roof_edits.empty())
             invalid("Coordinated ordinary roof lane requires actual ordinary/proposed membership");
         candidates.push_back(replay_roof_edit_entities(source,lanes.ordinary_roofs));
+        collect_ordinary_dimension_hosts(candidates.back(),{"roof"});
         family_fresh.push_back(new_roof_opening_identity_ids(source,roof_edit_opening_intents(lanes.ordinary_roofs)));
     }
     if (lanes.slab) {
@@ -1064,6 +1113,7 @@ Entities replay_coordinated(const Entities& source,const PhaseConstraintAuthorin
         if (partition.replacement || !partition.baseline_geometry.empty())
             invalid("Coordinated ordinary slab lane requires actual ordinary/proposed membership");
         candidates.push_back(replay_slab_geometry_with_hosted_entities(source,lanes.ordinary_slabs));
+        collect_ordinary_dimension_hosts(candidates.back(),{"slab"});
         family_fresh.emplace_back();
     }
     if (lanes.structural) {
@@ -1100,6 +1150,7 @@ Entities replay_coordinated(const Entities& source,const PhaseConstraintAuthorin
         if (phase_structural_edit_replacement_request(source,lanes.ordinary_structural))
             invalid("Coordinated ordinary structural lane cannot borrow replacement authority");
         candidates.push_back(replay_structural_hosted_component_geometry(source,lanes.ordinary_structural));
+        collect_ordinary_dimension_hosts(candidates.back(),{"column","beam"});
         family_fresh.emplace_back();
     }
     if (lanes.stair) {
@@ -1152,6 +1203,9 @@ Entities replay_coordinated(const Entities& source,const PhaseConstraintAuthorin
         if (phase_stair_replacement_request(source,lanes.ordinary_stairs))
             invalid("Coordinated ordinary stair lane cannot borrow replacement authority for attached baseline owners");
         candidates.push_back(replay_stair_transform_entities(source,lanes.ordinary_stairs));
+        // The stair producer discovers actual attached rails from source, so
+        // their changed physical descriptors participate without selection IDs.
+        collect_ordinary_dimension_hosts(candidates.back(),{"stair","railing"});
         family_fresh.emplace_back();
     }
     if (lanes.version>=3) for (const auto& candidate:candidates) coordinated_map_budget(candidate);
@@ -1247,6 +1301,15 @@ Entities replay_coordinated(const Entities& source,const PhaseConstraintAuthorin
         }
         validate_document_assembly_instances(result);
     }
+    if (lanes.complete_hosted_component_dimensions) {
+        const std::vector<std::string> host_roster(ordinary_dimension_hosts.begin(),ordinary_dimension_hosts.end());
+        auto dimensions=carry_hosted_assembly_dimension_transform_entities(source,result,host_roster);
+        std::vector<std::string> changed_dimension_ids;
+        changed_dimension_ids.reserve(dimensions.size());
+        for (const auto& dimension:dimensions) changed_dimension_ids.push_back(dimension.id);
+        validate_ordinary_assembly_dimension_changes(source,changed_dimension_ids);
+        for (auto& dimension:dimensions) result.at(dimension.id)=std::move(dimension);
+    }
     coordinated_map_budget(result);
     std::set<std::string,std::less<>> members;
     for (const auto& [key,entity]:result) if (entity.type=="model_phases") {
@@ -1266,6 +1329,28 @@ Entities replay_coordinated(const Entities& source,const PhaseConstraintAuthorin
     return result;
 }
 } // namespace
+
+const nlohmann::json& phase_constraint_coordinated_authoring_body(const Json& value) {
+    if (!value.is_object() || !value.contains("version") || value.at("version")!=6) return value;
+    resource_shape(value);
+    if (value.dump().size()>proof_budget) invalid("Coordinated replacement proof byte budget exceeded");
+    keys(value,{"version","authoring","complete_hosted_component_dimensions"});
+    if (!value.at("version").is_number_integer() ||
+        !value.at("complete_hosted_component_dimensions").is_boolean() ||
+        value.at("complete_hosted_component_dimensions")!=true)
+        invalid("Coordinated dimension authoring requires literal complete hosted dimension authority");
+    const auto& body=value.at("authoring");
+    if (!body.is_object() || !body.contains("version") || !body.at("version").is_number_integer() ||
+        (body.at("version")!=1 && body.at("version")!=2 && body.at("version")!=3 &&
+         body.at("version")!=4 && body.at("version")!=5))
+        invalid("Coordinated dimension authoring requires one historical inner dialect without nesting");
+    return body;
+}
+
+nlohmann::json& phase_constraint_coordinated_authoring_body(Json& value) {
+    const auto& body=phase_constraint_coordinated_authoring_body(static_cast<const Json&>(value));
+    return &body==&value ? value : value.at("authoring");
+}
 
 nlohmann::json phase_constraint_authoring_selections(const Entities& source) {
     Json result=Json::array();
@@ -1317,8 +1402,11 @@ nlohmann::json encode_phase_constraint_authoring_intent(const PhaseConstraintAut
         if (encode_intent(value.intent)!=encode_intent(only_scale))
             invalid("Wall group scale cannot borrow sibling geometry or relationship authority");
     }
-    const auto coordinated_version=value.coordinated_replacements.is_null()?0:coordinated(value.coordinated_replacements,value).version;
-    Json result={{"version",!value.component_demolition.is_null()?30:baseline_wall_group_scale?19:value.intent.wall_group_scale?18:!value.ordinary_roof_edits.is_null()?17:!value.wall_demolition.is_null()?16:!value.coordinated_demolition.is_null()?15:!value.stair_demolition_retirement.is_null()?13:!value.stair_replacement.is_null()?12:!value.stair_demolition.is_null()?11:!value.structural_replacement.is_null()?9:coordinated_version==5?29:coordinated_version==4?14:coordinated_version==3?10:coordinated_version==2?8:coordinated_version==1?7:!value.slab_demolition.is_null()?6:!value.slab_replacement.is_null()?5:!value.roof_replacement.is_null()?4:!value.opening_demolition.is_null()?3:value.wall_replacement.is_null()?1:2},{"expected_revision",value.expected_revision},
+    const auto coordinated_lanes=value.coordinated_replacements.is_null()?std::optional<CoordinatedReplacements>{}:
+        std::optional<CoordinatedReplacements>{coordinated(value.coordinated_replacements,value)};
+    const auto coordinated_version=coordinated_lanes?coordinated_lanes->version:0;
+    const bool coordinated_dimensions=coordinated_lanes && coordinated_lanes->complete_hosted_component_dimensions;
+    Json result={{"version",!value.component_demolition.is_null()?30:baseline_wall_group_scale?19:value.intent.wall_group_scale?18:!value.ordinary_roof_edits.is_null()?17:!value.wall_demolition.is_null()?16:!value.coordinated_demolition.is_null()?15:!value.stair_demolition_retirement.is_null()?13:!value.stair_replacement.is_null()?12:!value.stair_demolition.is_null()?11:!value.structural_replacement.is_null()?9:coordinated_dimensions?31:coordinated_version==5?29:coordinated_version==4?14:coordinated_version==3?10:coordinated_version==2?8:coordinated_version==1?7:!value.slab_demolition.is_null()?6:!value.slab_replacement.is_null()?5:!value.roof_replacement.is_null()?4:!value.opening_demolition.is_null()?3:value.wall_replacement.is_null()?1:2},{"expected_revision",value.expected_revision},
         {"source_snapshot_digest",value.source_snapshot_digest},{"source_authoring_digest",value.source_authoring_digest},
         {"source_entities_digest",value.source_entities_digest},
         {"source_saved_revision",value.source_saved_revision ? Json(*value.source_saved_revision) : Json(nullptr)},
@@ -1498,7 +1586,7 @@ PhaseConstraintAuthoringIntent decode_phase_constraint_authoring_intent(const Js
     const bool slab=vertical_slabs || (value.is_object() && value.contains("version") && value.at("version")==5);
     const bool slab_demolition=value.is_object() && value.contains("version") && value.at("version")==6;
     const bool coordinated_replacements=value.is_object() && value.contains("version") &&
-        (value.at("version")==7 || value.at("version")==8 || value.at("version")==10 || value.at("version")==14 || value.at("version")==29);
+        (value.at("version")==7 || value.at("version")==8 || value.at("version")==10 || value.at("version")==14 || value.at("version")==29 || value.at("version")==31);
     const bool scalar_structural=value.is_object() && value.contains("version") && value.at("version")==24;
     const bool structural=scalar_structural || (value.is_object() && value.contains("version") && value.at("version")==9);
     const bool stair_demolition=value.is_object() && value.contains("version") && value.at("version")==11;
@@ -1544,7 +1632,7 @@ PhaseConstraintAuthoringIntent decode_phase_constraint_authoring_intent(const Js
         "source_entities_digest","source_saved_revision","phase_selections","intent","ordinary_roof_edits"});
     else keys(value,{"version","expected_revision","source_snapshot_digest","source_authoring_digest",
         "source_entities_digest","source_saved_revision","phase_selections","intent"});
-    if (!value.at("version").is_number_integer() || (value.at("version")!=1 && value.at("version")!=2 && value.at("version")!=3 && value.at("version")!=4 && value.at("version")!=5 && value.at("version")!=6 && value.at("version")!=7 && value.at("version")!=8 && value.at("version")!=9 && value.at("version")!=10 && value.at("version")!=11 && value.at("version")!=12 && value.at("version")!=13 && value.at("version")!=14 && value.at("version")!=15 && value.at("version")!=16 && value.at("version")!=17 && value.at("version")!=18 && value.at("version")!=19 && value.at("version")!=20 && value.at("version")!=21 && value.at("version")!=22 && value.at("version")!=23 && value.at("version")!=24 && value.at("version")!=25 && value.at("version")!=26 && value.at("version")!=27 && value.at("version")!=28 && value.at("version")!=29 && value.at("version")!=30) ||
+    if (!value.at("version").is_number_integer() || (value.at("version")!=1 && value.at("version")!=2 && value.at("version")!=3 && value.at("version")!=4 && value.at("version")!=5 && value.at("version")!=6 && value.at("version")!=7 && value.at("version")!=8 && value.at("version")!=9 && value.at("version")!=10 && value.at("version")!=11 && value.at("version")!=12 && value.at("version")!=13 && value.at("version")!=14 && value.at("version")!=15 && value.at("version")!=16 && value.at("version")!=17 && value.at("version")!=18 && value.at("version")!=19 && value.at("version")!=20 && value.at("version")!=21 && value.at("version")!=22 && value.at("version")!=23 && value.at("version")!=24 && value.at("version")!=25 && value.at("version")!=26 && value.at("version")!=27 && value.at("version")!=28 && value.at("version")!=29 && value.at("version")!=30 && value.at("version")!=31) ||
         !value.at("expected_revision").is_number_unsigned()) invalid("Phase constraint proof version or revision is invalid");
     if (!value.at("source_saved_revision").is_null() && !value.at("source_saved_revision").is_number_unsigned())
         invalid("Phase constraint saved revision is invalid");
@@ -1594,7 +1682,8 @@ PhaseConstraintAuthoringIntent decode_phase_constraint_authoring_intent(const Js
         result.coordinated_replacements=value.at("coordinated_replacements");
         if (result.coordinated_replacements.is_null()) invalid("Coordinated authoring requires replacement decisions");
         const auto inner=coordinated(result.coordinated_replacements,result);
-        if ((value.at("version")==7 && inner.version!=1) || (value.at("version")==8 && inner.version!=2) ||
+        if ((value.at("version")==31)!=inner.complete_hosted_component_dimensions ||
+            (value.at("version")==7 && inner.version!=1) || (value.at("version")==8 && inner.version!=2) ||
             (value.at("version")==10 && inner.version!=3) || (value.at("version")==14 && inner.version!=4) ||
             (value.at("version")==29 && inner.version!=5))
             invalid("Coordinated outer and inner authoring versions do not match");
@@ -1665,10 +1754,11 @@ std::vector<PhaseConstraintAuthoringIntent> phase_constraint_replacement_compone
     if (intent.coordinated_replacements.is_null()) return {intent};
     std::vector<PhaseConstraintAuthoringIntent> result;
     const auto lanes=coordinated(intent.coordinated_replacements,intent);
+    const auto& body=phase_constraint_coordinated_authoring_body(intent.coordinated_replacements);
     if (lanes.wall && !lanes.wall->wall_replacement.is_null()) result.push_back(*lanes.wall);
     for (const auto* family:{"roof_replacement","slab_replacement","structural_replacement","stair_replacement"}) {
-        if (!intent.coordinated_replacements.contains(family)) continue;
-        const auto& leaf=intent.coordinated_replacements.at(family);
+        if (!body.contains(family)) continue;
+        const auto& leaf=body.at(family);
         if (leaf.is_null()) continue;
         auto component=intent;
         component.coordinated_replacements=nullptr;

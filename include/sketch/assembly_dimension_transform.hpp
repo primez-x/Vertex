@@ -70,6 +70,25 @@ struct AssemblyDimensionTransformRequest {
     const AssemblyDocumentEntities& candidate,
     std::span<const AssemblyDimensionTransformRequest> requests);
 
+// Pure contribution for embedded roots hosted by an already admitted physical
+// dependency roster in a complete, already derived body candidate. Host IDs are
+// unique (at most 100000) and must retain their exact persisted identity and
+// supported wall/column/beam/slab/roof/stair/railing type in both maps. The caller
+// supplies the complete actual dependency roster, including attached rail hosts
+// when applicable; this helper establishes no host-edit or phase authority.
+// Only dimension-bearing embedded roots whose original placement names a supplied
+// host participate. Their qualified identity, host binding and every row field
+// outside placement stay exact; independent owners are untouched. Unchanged raw
+// placement remains eligible because host-derived component frames can change.
+// Complete raw maps/catalog work are bounded before discovery. At most 1000
+// associated v6 dimensions share the existing carry's single source/candidate
+// measurement batches and envelope preservation. Empty association returns empty
+// after host/raw framing. Ordinary policy and publication remain the caller's job.
+[[nodiscard]] std::vector<Entity> carry_hosted_assembly_dimension_transform_entities(
+    const AssemblyDocumentEntities& source,
+    const AssemblyDocumentEntities& candidate,
+    std::span<const std::string> actual_host_ids);
+
 // Separate current ordinary-authoring policy check for existing dimensions
 // actually changed or removed by a caller. Empty input is a no-op; otherwise
 // IDs must be unique supported v6 source dimensions (at most 1000). Inactive

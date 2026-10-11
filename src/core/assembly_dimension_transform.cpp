@@ -97,9 +97,12 @@ class RootRows {
 public:
     explicit RootRows(const AssemblyDocumentEntities& actual) : actual_(actual) {}
     const Json* find(const Root& root) {
-        const auto key = root_key(root);
+        return find(root_key(root));
+    }
+    // Keys borrow stable request identities or framed raw dimension targets.
+    const Json* find(const RootKey& key) {
         if (const auto cached = resolved_.find(key); cached != resolved_.end()) return cached->second;
-        const auto* row = find_uncached(root);
+        const auto* row = find_uncached(key);
         resolved_.emplace(key, row);
         return row;
     }
@@ -108,19 +111,20 @@ private:
     std::map<RootKey, const Json*> resolved_;
     std::map<std::string_view, std::map<std::string_view, const Json*>> embedded_;
 
-    const Json* find_uncached(const Root& root) {
-        const auto catalog = actual_.find(root.catalog_id);
+    const Json* find_uncached(const RootKey& root) {
+        const auto& [catalog_id, instance_id, document_entity_id] = root;
+        const auto catalog = actual_.find(catalog_id);
         if (catalog == actual_.end()) return nullptr;
         require(catalog->second.type == "assembly_model", "root catalog has the wrong entity type");
-        if (root.document_entity_id) {
-            const auto owner = actual_.find(*root.document_entity_id);
+        if (document_entity_id) {
+            const auto owner = actual_.find(*document_entity_id);
             if (owner == actual_.end()) return nullptr;
             const auto value = decode_document_assembly_instance(owner->second);
-            require(value.assembly_catalog_id == root.catalog_id && value.instance.id == root.instance_id,
+            require(value.assembly_catalog_id == catalog_id && value.instance.id == instance_id,
                 "independent root framing differs from its qualified identity");
             return &owner->second.properties.at("instance");
         }
-        auto cached = embedded_.find(root.catalog_id);
+        auto cached = embedded_.find(catalog_id);
         if (cached == embedded_.end()) {
             const auto& rows = catalog->second.properties.at("model").at("instances");
             require(rows.is_array(), "embedded root roster is invalid");
@@ -135,7 +139,7 @@ private:
             }
             cached = embedded_.emplace(catalog->first, std::move(indexed)).first;
         }
-        const auto found = cached->second.find(root.instance_id);
+        const auto found = cached->second.find(instance_id);
         if (found == cached->second.end()) return nullptr;
         require(found->second, "embedded qualified root is duplicated");
         return found->second;
@@ -411,6 +415,90 @@ std::vector<Entity> carry_assembly_dimension_transform_entities(
     for (const auto& request : requests)
         views.push_back({request.source_root, request.destination_root, request.mode, request.fresh_dimension_ids});
     return carry_requests(source, candidate, views);
+}
+
+std::vector<Entity> carry_hosted_assembly_dimension_transform_entities(
+    const AssemblyDocumentEntities& source, const AssemblyDocumentEntities& candidate,
+    std::span<const std::string> actual_host_ids) {
+    require(actual_host_ids.size() <= 100000, "actual host roster exceeds entity bound");
+    // Admit both complete raw inputs and all catalog work before indexing rows
+    // or decoding targets. Discovery borrows these already bounded carriers.
+    RawBudget raw; raw.map(source); raw.map(candidate);
+    AssemblyCatalogTransferBudget catalogs;
+    for (const auto* actual : {&source, &candidate}) for (const auto& [id, entity] : *actual) {
+        (void)id;
+        if (entity.type == "assembly_model") admit_existing_assembly_catalog_work(entity, catalogs);
+    }
+    std::set<std::string_view> hosts;
+    for (const auto& id : actual_host_ids) {
+        document_id(id);
+        const auto original = source.find(id), current = candidate.find(id);
+        require(hosts.insert(id).second && original != source.end() && current != candidate.end(),
+            "actual host roster must name unique persisted source and candidate hosts");
+        const auto& type = original->second.type;
+        require((type == "wall" || type == "column" || type == "beam" || type == "slab" ||
+            type == "roof" || type == "stair" || type == "railing") && current->second.type == type,
+            "actual host roster must retain supported physical host types");
+    }
+
+    if (hosts.empty()) return {};
+    RootRows source_rows(source), candidate_rows(candidate);
+    std::map<RootKey, bool> hosted_roots;
+    std::vector<AssemblyDimensionTransformRequest> requests;
+    std::size_t associated_count{};
+    for (const auto& [id, entity] : source) {
+        (void)id;
+        if (!can_recognize_boundary_dimension_entity_type(entity.type) ||
+            inspect_boundary_dimension_version(entity).format != BoundaryDimensionFormat::supported_v6) continue;
+        const auto& target = entity.properties.at("target");
+        require(target.is_object() && target.size() == 2 && target.contains("entity_id") &&
+            target.contains("assembly"), "known assembly dimension target is not closed");
+        const auto& assembly = target.at("assembly");
+        auto qualified = decode_assembly_dimension_target(assembly).component;
+        require(target.at("entity_id").is_string() && target.at("entity_id") ==
+            qualified.document_entity_id.value_or(qualified.catalog_id),
+            "known assembly dimension carrier differs from its qualified target");
+        if (qualified.document_entity_id) continue;
+        // Borrow keys from the original raw target, never the temporary decoded
+        // root. Both row-index and admission caches outlive each loop iteration.
+        const RootKey key{assembly.at("catalog_id").get_ref<const std::string&>(),
+            assembly.at("instance_id").get_ref<const std::string&>(), std::nullopt};
+        const auto admit = [&]() {
+            const auto* original = source_rows.find(key);
+            if (!original) return false;
+            const auto placement = original->find("placement");
+            if (placement == original->end()) return false;
+            require(placement->is_object() && placement->contains("host_entity_id") &&
+                placement->at("host_entity_id").is_string(), "embedded source placement is malformed");
+            const auto& host = placement->at("host_entity_id").get_ref<const std::string&>();
+            if (!hosts.contains(host)) return false;
+            const auto* current = candidate_rows.find(key);
+            require(current && original->size() == current->size() && current->contains("placement"),
+                "hosted carry changed its qualified root framing");
+            const auto& proposed_placement = current->at("placement");
+            require(proposed_placement.is_object() && proposed_placement.contains("host_entity_id") &&
+                proposed_placement.at("host_entity_id").dump() == placement->at("host_entity_id").dump(),
+                "hosted carry changed its original host binding");
+            for (const auto& [field, value] : original->items()) if (field != "placement")
+                require(current->contains(field) && current->at(field).dump() == value.dump(),
+                    "hosted carry changed fields outside placement");
+            return true;
+        };
+        const auto known = hosted_roots.find(key);
+        const bool first = known == hosted_roots.end();
+        const bool admitted = first ? hosted_roots.emplace(key, admit()).first->second : known->second;
+        if (!admitted) continue;
+        require(associated_count < dimension_limit, "associated hosted dimension count exceeds bound");
+        ++associated_count;
+        if (!first) continue;
+        qualified.part_path.clear();
+        requests.push_back({qualified, qualified, AssemblyDimensionTransformMode::move, {}});
+    }
+    if (requests.empty()) return {};
+    // One shared batch preserves closed paths/axes and original dimension
+    // envelopes, then resolves actual selected-node frames on both complete maps.
+    // Raw placement equality cannot establish equality of host-derived frames.
+    return carry_assembly_dimension_transform_entities(source, candidate, requests);
 }
 
 void validate_ordinary_assembly_dimension_changes(

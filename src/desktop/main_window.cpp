@@ -26187,8 +26187,9 @@ public:
         std::optional<PhaseWallCanvasCoordinatedPhysicalInput> coordinated;
         PhaseWallReplacementAuthoringPreview physical;
         if (!intent.coordinated_replacements.is_null()) {
-            const auto wall = intent.coordinated_replacements.find("wall_authoring");
-            if (wall == intent.coordinated_replacements.end() || wall->is_null() ||
+            const auto& body = phase_constraint_coordinated_authoring_body(intent.coordinated_replacements);
+            const auto wall = body.find("wall_authoring");
+            if (wall == body.end() || wall->is_null() ||
                 decode_phase_constraint_authoring_intent(*wall).wall_replacement.is_null()) return std::nullopt;
             physical = inspect_phase_coordinated_authoring(source, intent);
             coordinated.emplace();
@@ -49977,6 +49978,47 @@ private:
         return result;
     }
 
+    // Body candidates here are complete independently replayed family results,
+    // not arbitrary canvas payloads. Derive the actual changed host closure
+    // (including attached rails), then add its dimension contribution once.
+    static void appendOrdinaryHostedDimensions(const DocumentSnapshot& source,
+        const std::map<std::string,Entity,std::less<>>& bodies, ApplyEntityChanges& command) {
+        if (command.expected_revision!=source.revision() || !command.asset_changes.empty() ||
+            bodies.size()!=source.entities().size())
+            throw std::invalid_argument("Hosted dimensions require the complete captured ordinary body edit.");
+        std::vector<std::string> hosts;
+        for (const auto& [id,after]:bodies) {
+            const auto before=source.entities().find(id);
+            if (before==source.entities().end() || after.id!=id || after.type!=before->second.type)
+                throw std::invalid_argument("Hosted dimensions cannot borrow a changed physical identity.");
+            if (after.type!="wall" && after.type!="column" && after.type!="beam" && after.type!="slab" &&
+                after.type!="roof" && after.type!="stair" && after.type!="railing") continue;
+            if (before->second==after && before->second.properties.dump()==after.properties.dump() &&
+                before->second.extensions.dump()==after.extensions.dump()) continue;
+            if (hosts.size()==100000)
+                throw std::invalid_argument("The actual hosted dimension dependency closure exceeds its bound.");
+            hosts.push_back(id);
+        }
+        if (hosts.empty()) return;
+        auto dimensions=carry_hosted_assembly_dimension_transform_entities(source.entities(),bodies,hosts);
+        std::vector<std::string> dimension_ids;
+        dimension_ids.reserve(dimensions.size());
+        for (const auto& dimension:dimensions) {
+            if (std::any_of(command.entity_changes.begin(),command.entity_changes.end(),[&](const auto& change) {
+                return (change.kind==EntityChangeKind::upsert ? change.entity.id : change.entity_id)==dimension.id;
+            })) throw std::invalid_argument("An ordinary host edit duplicated its dimension consequence.");
+            dimension_ids.push_back(dimension.id);
+        }
+        validate_ordinary_assembly_dimension_changes(source.entities(),dimension_ids);
+        for (auto& dimension:dimensions)
+            command.entity_changes.push_back(EntityChange::upsert(std::move(dimension)));
+    }
+
+    static json withHostedDimensionAuthoring(json authoring) {
+        return {{"version",6},{"authoring",std::move(authoring)},
+            {"complete_hosted_component_dimensions",true}};
+    }
+
     static Command sourceDerivedRoofMathEditCommand(const DocumentSnapshot& source,
         const std::map<std::string, Entity, std::less<>>& physical,
         std::vector<RoofEditIntent> edits, const std::string& message,
@@ -50018,6 +50060,7 @@ private:
                     throw std::invalid_argument("The roof edit changed an unrelated source owner.");
                 command.entity_changes.push_back(EntityChange::upsert(after));
             }
+            appendOrdinaryHostedDimensions(source,expected,command);
             (void)Document::preview_command(source, Command{command});
             return command;
         }
@@ -50137,6 +50180,7 @@ private:
                     before.extensions.dump()!=after.extensions.dump())
                     command.entity_changes.push_back(EntityChange::upsert(after));
             }
+            appendOrdinaryHostedDimensions(source,staged,command);
             return augmentAuthoredCommandForRegistry(command,source);
         }
         const auto plan=inspect_phase_structural_replacement_plan(source.entities(),request->seed_object_ids,
@@ -50490,23 +50534,9 @@ private:
         if (transforms.empty()) return ApplyEntityChanges{source.revision(), {}, {}, message};
         const auto request=phase_stair_replacement_request(source.entities(), transforms);
         if (!request) {
-            // Ordinary rigid/similarity moves share the complete host producer,
-            // including component-dimension consequences. Entered quantity
-            // receipts remain owned by their separate typed stair edit lane.
-            if (std::all_of(transforms.begin(),transforms.end(),[](const auto& transform) {
-                return transform.quantity_entries.is_null();
-            })) {
-                if (transforms.size()>maximum_architectural_group_targets)
-                    throw std::invalid_argument("Select a bounded stair or railing group.");
-                std::vector<ArchitecturalGroupTransformTarget> targets;
-                targets.reserve(transforms.size());
-                for (const auto& transform:transforms)
-                    targets.push_back({transform.object_id,transform.transform});
-                auto ordinary=architectural_group_transform_command(source,targets,
-                    new_id("stair-host-transform"),source.revision());
-                ordinary.message=message;
-                return augmentAuthoredCommandForRegistry(ordinary,source);
-            }
+            // Derive the complete typed stair candidate, including actual
+            // attached rail hosts and entered quantity receipts, before carrying
+            // dimensions from their physical component frames.
             const auto candidate=replay_stair_transform_entities(source.entities(), transforms);
             ApplyEntityChanges ordinary{source.revision(), {}, {}, message};
             for (const auto& [id, after]:candidate) {
@@ -50515,6 +50545,7 @@ private:
                     before.extensions.dump()!=after.extensions.dump())
                     ordinary.entity_changes.push_back(EntityChange::upsert(after));
             }
+            appendOrdinaryHostedDimensions(source,candidate,ordinary);
             return augmentAuthoredCommandForRegistry(ordinary, source);
         }
         const auto plan=inspect_phase_stair_replacement_plan(source.entities(), transforms,
@@ -51339,6 +51370,7 @@ private:
                     original.extensions.dump() != proposed.extensions.dump())
                     command.entity_changes.push_back(EntityChange::upsert(proposed));
             }
+            appendOrdinaryHostedDimensions(source,ordinary,command);
             (void)Document::preview_command(source, Command{command});
             return command;
         }
@@ -51428,20 +51460,8 @@ private:
         };
         if (empty(stair_command)) return other_command;
         if (empty(other_command)) return stair_command;
-        // A complete ordinary cohort stays in the ordinary producer. Repacking
-        // these moves as historical coordinated authoring would discard the
-        // dimension contributions now supplied by the stair host lane.
-        if (std::holds_alternative<ApplyEntityChanges>(stair_command) &&
-            std::holds_alternative<ApplyEntityChanges>(other_command) &&
-            std::all_of(other.begin(),other.end(),[&](const auto& target) {
-                const auto& type=source.entities().at(target.entity_id).type;
-                return type=="roof" || type=="slab";
-            })) {
-            auto ordinary=architectural_group_transform_command(source,targets,
-                new_id("stair-horizontal-host-transform"),source.revision());
-            ordinary.message=message;
-            return augmentAuthoredCommandForRegistry(ordinary,source);
-        }
+        // Current coordinated authoring carries dimensions from each actual
+        // ordinary family candidate, including indirectly moved rail hosts.
         ConstraintAuthoringIntent semantic; semantic.message=message;
         auto intent=make_phase_constraint_authoring_intent(source,semantic);
         json coordinated{{"version",4},{"wall_authoring",nullptr},{"roof_replacement",nullptr},
@@ -51480,17 +51500,18 @@ private:
                 coordinated.at("ordinary_roof_edits").push_back(encode_roof_edit_intent(edit));
         } else {
             const auto child=captured_phase(other_command);
-            if (!child.coordinated_replacements.is_null())
+            if (!child.coordinated_replacements.is_null()) {
+                const auto& body=phase_constraint_coordinated_authoring_body(child.coordinated_replacements);
                 for (const auto* key:{"roof_replacement","slab_replacement","structural_replacement", "ordinary_roof_edits",
                     "ordinary_slab_geometry","ordinary_structural_edits"})
-                    if (child.coordinated_replacements.contains(key)) coordinated.at(key)=child.coordinated_replacements.at(key);
-            else {
+                    if (body.contains(key)) coordinated.at(key)=body.at(key);
+            } else {
                 coordinated.at("roof_replacement")=child.roof_replacement;
                 coordinated.at("slab_replacement")=child.slab_replacement;
                 coordinated.at("structural_replacement")=child.structural_replacement;
             }
         }
-        intent.coordinated_replacements=std::move(coordinated);
+        intent.coordinated_replacements=withHostedDimensionAuthoring(std::move(coordinated));
         ApplyBoundaryConstraintChanges command;
         command.expected_revision=source.revision(); command.message=message;
         command.phase_constraint_authoring_completion=true;
@@ -51600,15 +51621,16 @@ private:
             }
         } else {
             const auto child = captured_phase(other_command);
-            if (!child.coordinated_replacements.is_null())
+            if (!child.coordinated_replacements.is_null()) {
+                const auto& body=phase_constraint_coordinated_authoring_body(child.coordinated_replacements);
                 for (const auto* key : {"roof_replacement", "slab_replacement", "ordinary_roof_edits", "ordinary_slab_geometry"})
-                    coordinated.at(key) = child.coordinated_replacements.at(key);
-            else {
+                    coordinated.at(key) = body.at(key);
+            } else {
                 coordinated.at("roof_replacement") = child.roof_replacement;
                 coordinated.at("slab_replacement") = child.slab_replacement;
             }
         }
-        intent.coordinated_replacements = std::move(coordinated);
+        intent.coordinated_replacements = withHostedDimensionAuthoring(std::move(coordinated));
         ApplyBoundaryConstraintChanges command;
         command.expected_revision = source.revision();
         command.message = message;
@@ -51705,15 +51727,16 @@ private:
         if (physical_phase) {
             const auto physical_intent = decode_phase_constraint_authoring_intent(physical_phase->phase_constraint_authoring_intent);
             if (!physical_intent.coordinated_replacements.is_null()) {
+                const auto& body=phase_constraint_coordinated_authoring_body(physical_intent.coordinated_replacements);
                 for (const auto* key : {"roof_replacement", "slab_replacement", "ordinary_roof_edits", "ordinary_slab_geometry"})
-                    coordinated.at(key) = physical_intent.coordinated_replacements.at(key);
-                if ((has_structural || has_stairs) && physical_intent.coordinated_replacements.contains("structural_replacement")) {
-                    coordinated.at("structural_replacement") = physical_intent.coordinated_replacements.at("structural_replacement");
-                    coordinated.at("ordinary_structural_edits") = physical_intent.coordinated_replacements.at("ordinary_structural_edits");
+                    coordinated.at(key) = body.at(key);
+                if ((has_structural || has_stairs) && body.contains("structural_replacement")) {
+                    coordinated.at("structural_replacement") = body.at("structural_replacement");
+                    coordinated.at("ordinary_structural_edits") = body.at("ordinary_structural_edits");
                 }
-                if (has_stairs && physical_intent.coordinated_replacements.contains("stair_replacement")) {
-                    coordinated.at("stair_replacement")=physical_intent.coordinated_replacements.at("stair_replacement");
-                    coordinated.at("ordinary_stair_transforms")=physical_intent.coordinated_replacements.at("ordinary_stair_transforms");
+                if (has_stairs && body.contains("stair_replacement")) {
+                    coordinated.at("stair_replacement")=body.at("stair_replacement");
+                    coordinated.at("ordinary_stair_transforms")=body.at("ordinary_stair_transforms");
                 }
             } else {
                 coordinated.at("roof_replacement") = physical_intent.roof_replacement;
@@ -51777,7 +51800,7 @@ private:
             (!has_structural || (coordinated.at("structural_replacement").is_null() && coordinated.at("ordinary_structural_edits").empty())) &&
             (!has_stairs || (coordinated.at("stair_replacement").is_null() && coordinated.at("ordinary_stair_transforms").empty())))
             return wall_proposal ? std::optional<Command>{phase_wall_replacement_authoring_command(wall_intent)} : std::nullopt;
-        intent.coordinated_replacements = std::move(coordinated);
+        intent.coordinated_replacements = withHostedDimensionAuthoring(std::move(coordinated));
         ApplyBoundaryConstraintChanges command;
         command.expected_revision = source.revision();
         command.message = message;
@@ -51874,7 +51897,7 @@ private:
         if (ordinary_slabs)
             for (const auto& edit : slabs) coordinated.at("ordinary_slab_geometry").push_back(encode_slab_geometry_edit_intent(edit));
         else coordinated.at("slab_replacement") = replacement(slab_command, "slab_replacement");
-        intent.coordinated_replacements = std::move(coordinated);
+        intent.coordinated_replacements = withHostedDimensionAuthoring(std::move(coordinated));
         ApplyBoundaryConstraintChanges command;
         command.expected_revision = source.revision();
         command.message = message;
@@ -52239,11 +52262,12 @@ private:
         auto intent=decode_phase_constraint_authoring_intent(constrained->phase_constraint_authoring_intent);
         if (!intent.coordinated_demolition.is_null()) return command;
         if (!intent.coordinated_replacements.is_null()) {
-            const auto wall = intent.coordinated_replacements.find("wall_authoring");
-            if (wall != intent.coordinated_replacements.end() && !wall->is_null() &&
+            const auto& body = phase_constraint_coordinated_authoring_body(intent.coordinated_replacements);
+            const auto wall = body.find("wall_authoring");
+            if (wall != body.end() && !wall->is_null() &&
                 !decode_phase_constraint_authoring_intent(*wall).wall_replacement.is_null())
                 return finishCoordinatedAlternativeWallEdit(authoringSnapshot(), intent, *constrained, proposed_ids);
-            if (review_ordinary_rooms && wall != intent.coordinated_replacements.end() && !wall->is_null()) {
+            if (review_ordinary_rooms && wall != body.end() && !wall->is_null()) {
                 const auto ordinary_wall = decode_phase_constraint_authoring_intent(*wall);
                 if (ordinary_wall.intent.wall_geometry_move && !ordinary_wall.intent.wall_geometry_move->targets.empty()) {
                     const auto source = authoringSnapshot();
@@ -52311,7 +52335,8 @@ private:
         const PhaseConstraintAuthoringIntent& intent, const ApplyBoundaryConstraintChanges& original,
         PhaseWallReplacementIdentityMap& proposed_ids, const std::function<void()>& additional_fence = {}) {
         if (additional_fence) additional_fence();
-        const auto wall = decode_phase_constraint_authoring_intent(intent.coordinated_replacements.at("wall_authoring"));
+        const auto wall = decode_phase_constraint_authoring_intent(
+            phase_constraint_coordinated_authoring_body(intent.coordinated_replacements).at("wall_authoring"));
         if (wall.wall_replacement.is_null())
             throw std::invalid_argument("The coordinated room review requires an actual wall replacement.");
         const auto wall_command = phase_wall_replacement_authoring_command(wall);
@@ -52322,7 +52347,8 @@ private:
         if (!completed_wall || !completed_wall->phase_constraint_authoring_completion)
             throw std::invalid_argument("The coordinated room review lost its actual wall authoring proof.");
         auto completed_intent = intent;
-        completed_intent.coordinated_replacements.at("wall_authoring") = completed_wall->phase_constraint_authoring_intent;
+        phase_constraint_coordinated_authoring_body(completed_intent.coordinated_replacements).at("wall_authoring") =
+            completed_wall->phase_constraint_authoring_intent;
         auto completed = original;
         completed.phase_constraint_authoring_intent = encode_phase_constraint_authoring_intent(completed_intent);
         const auto candidate = Document::preview_command(source, Command{completed});
@@ -70198,11 +70224,10 @@ public:
         if (!phase || !phase->phase_constraint_authoring_completion || phase->phase_constraint_authoring_intent.is_null())
             return std::nullopt;
         const auto intent = decode_phase_constraint_authoring_intent(phase->phase_constraint_authoring_intent);
-        if (intent.coordinated_replacements.is_null() ||
-            (intent.coordinated_replacements.at("version") != 2 && intent.coordinated_replacements.at("version") != 3 &&
-                intent.coordinated_replacements.at("version") != 4))
-            return std::nullopt;
-        const auto& encoded_wall = intent.coordinated_replacements.at("wall_authoring");
+        if (intent.coordinated_replacements.is_null()) return std::nullopt;
+        const auto& body=phase_constraint_coordinated_authoring_body(intent.coordinated_replacements);
+        if (body.at("version")!=2 && body.at("version")!=3 && body.at("version")!=4) return std::nullopt;
+        const auto& encoded_wall = body.at("wall_authoring");
         if (encoded_wall.is_null()) return std::nullopt;
         const auto wall = decode_phase_constraint_authoring_intent(encoded_wall);
         if (!wall.wall_replacement.is_null() || !wall.intent.wall_geometry_move ||

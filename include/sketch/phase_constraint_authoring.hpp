@@ -73,6 +73,16 @@ struct PhaseConstraintAuthoringIntent {
     // The optional stair leaf keeps its own closed v1/v2/v3 codec; the exclusive
     // ordinary list carries canonical StairTransformIntent v1/v2 rows. Every
     // family independently replays the same actual captured source.
+    // Dialect twenty-nine selects historical inner five, retaining qualified
+    // hosted wall replacement authority and its exact baseline protections.
+    // Dialect thirty-one alone pairs closed inner six: {version:6, authoring:
+    // <exact inner one through five>, complete_hosted_component_dimensions:true}.
+    // Wrappers cannot nest or add fields. The authored inner version keeps all
+    // historical family and replacement semantics. Only actual changed hosts
+    // from independently replayed ordinary roof/slab/structural/stair families
+    // (including producer-discovered attached rails) admit one final carry of
+    // existing supported component dimensions. Active/baseline dimension policy
+    // still applies; no replacement dimension copies or fresh IDs are admitted.
     nlohmann::json coordinated_replacements=nullptr;
     // Dialect nine: source-derived column/beam edits in one saved alternative.
     // Shared baseline owners remain exact; explicit structural intent alone
@@ -133,6 +143,15 @@ struct PhaseConstraintAuthoringIntent {
     const nlohmann::json& value);
 [[nodiscard]] nlohmann::json encode_phase_constraint_authoring_intent(
     const PhaseConstraintAuthoringIntent& intent);
+// Borrow the historical coordinated body from an already validated canonical
+// enclosing intent. Inner six's exact closed, literal-true, nonnested wrapper
+// is checked before unwrapping once; historical bodies return unchanged.
+// Mutation callers must re-encode the enclosing intent to validate completion.
+// This accessor grants no edit, replay, replacement or publication authority.
+[[nodiscard]] const nlohmann::json& phase_constraint_coordinated_authoring_body(
+    const nlohmann::json& coordinated_replacements);
+[[nodiscard]] nlohmann::json& phase_constraint_coordinated_authoring_body(
+    nlohmann::json& coordinated_replacements);
 // Historical identity/model guards enumerate the actual replacement leaves.
 // Standalone baseline scale retains its complete pair as one component.
 // Ordinary historical intents return themselves; coordinated ordinary lists
@@ -149,7 +168,8 @@ struct PhaseConstraintAuthoringIntent {
     bool complete_component_membership_work = false);
 [[nodiscard]] std::map<std::string,Entity,std::less<>> replay_phase_constraint_authoring(
     const std::map<std::string,Entity,std::less<>>& source, const nlohmann::json& proof);
-// Detached physical preview only for coordinated inner v2/v3/v4 wall replacements.
+// Detached physical preview for coordinated authored inner v2/v3/v4/v5 wall
+// replacements, including the exclusive v6 dimension wrapper when present.
 // Pending room decisions remain pending; this map is not publication authority.
 [[nodiscard]] PhaseWallReplacementAuthoringPreview inspect_phase_coordinated_authoring(
     const DocumentSnapshot& source,const PhaseConstraintAuthoringIntent& intent);
