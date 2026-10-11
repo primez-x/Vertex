@@ -1,9 +1,12 @@
 #include "sketch/phase_slab_profile_edit.hpp"
 
 #include "sketch/constraint_entity.hpp"
+#include "sketch/assembly_geometry.hpp"
+#include "sketch/assembly_model.hpp"
 #include "sketch/constraint_phase_scope.hpp"
 #include "sketch/document_solid.hpp"
 #include "sketch/project_organization.hpp"
+#include "sketch/site_frame.hpp"
 
 #include <algorithm>
 #include <array>
@@ -15,6 +18,8 @@
 #include <string_view>
 #include <system_error>
 #include <utility>
+
+#include <Standard_Failure.hxx>
 
 namespace sketch {
 namespace {
@@ -53,6 +58,9 @@ bool exact(const Entity& left, const Entity& right) {
 }
 bool version_one(const Json& value) {
     return (value.is_number_integer() || value.is_number_unsigned()) && value == 1;
+}
+bool version_three(const Json& value) {
+    return (value.is_number_integer() || value.is_number_unsigned()) && value == 3;
 }
 const char* unit_name(Unit unit) {
     switch (unit) {
@@ -243,6 +251,174 @@ bool retains_layer_thickness(const SlabProfileEditIntent& intent) {
         std::any_of(intent.layer_thicknesses->begin(), intent.layer_thicknesses->end(),
             [](const auto& layer) { return layer.retain_source_thickness; });
 }
+using Entities = std::map<std::string, Entity, std::less<>>;
+using Ids = std::set<std::string, std::less<>>;
+struct MapBudget {
+    std::size_t nodes{}, bytes{};
+    void text(const std::string& value) {
+        if (value.size() > 64 * 1024 * 1024 - bytes) invalid("Slab profile source string budget exceeded");
+        bytes += value.size();
+    }
+    void read(const Json& value, std::size_t depth = 0) {
+        if (depth > 64 || ++nodes > 4 * 1024 * 1024) invalid("Slab profile source node/nesting budget exceeded");
+        if (value.is_number_float() && !std::isfinite(value.get<double>())) invalid("Slab profile source has a nonfinite scalar");
+        if (value.is_string()) text(value.get_ref<const std::string&>());
+        else if (value.is_array()) for (const auto& child : value) read(child, depth + 1);
+        else if (value.is_object()) for (const auto& [key, child] : value.items()) {
+            text(key); read(child, depth + 1);
+        }
+    }
+};
+void bound_map(const Entities& source) {
+    if (source.size() > 65536) invalid("Slab profile source entity budget exceeded");
+    MapBudget budget;
+    for (const auto& [id, entity] : source) {
+        (void)identity(id);
+        if (entity.id != id) invalid("Slab profile source contains inconsistent live identities");
+        budget.text(id); budget.text(entity.type);
+        budget.read(entity.properties); budget.read(entity.extensions);
+    }
+}
+bool references_owner(const Json& value, const Ids& owners) {
+    if (value.is_string()) return owners.contains(value.get_ref<const std::string&>());
+    if (value.is_array()) {
+        for (const auto& child : value) if (references_owner(child, owners)) return true;
+    } else if (value.is_object()) {
+        for (const auto& [key, child] : value.items())
+            if (owners.contains(key) || references_owner(child, owners)) return true;
+    }
+    return false;
+}
+bool has_host_reference(const Json& value, const Ids& owners) {
+    if (value.is_array()) {
+        for (const auto& child : value) if (has_host_reference(child, owners)) return true;
+    } else if (value.is_object()) {
+        for (const auto& [key, child] : value.items())
+            if ((key == "host_entity_id" && references_owner(child, owners)) || has_host_reference(child, owners)) return true;
+    }
+    return false;
+}
+bool affected_catalog(const Json& model, const Ids& owners) {
+    if (has_host_reference(model, owners)) return true;
+    const auto schema = model.is_object() ? field(model, "schema") : nullptr;
+    const bool supported = schema && schema->is_string() &&
+        (*schema == "sketch.assemblies.v1" || *schema == "sketch.assemblies.v2" ||
+         *schema == "sketch.assemblies.v3" || *schema == "sketch.assemblies.v4" ||
+         *schema == "sketch.assemblies.v5" || *schema == "sketch.assemblies.v6" || *schema == "sketch.assemblies.v7");
+    if (!supported && references_owner(model, owners)) return true;
+    const auto rows = model.is_object() ? field(model, "instances") : nullptr;
+    if (!rows) return false;
+    if (!rows->is_array()) return references_owner(*rows, owners);
+    for (const auto& row : *rows) {
+        if (!row.is_object()) { if (references_owner(row, owners)) return true; continue; }
+        if (const auto placement = field(row, "placement"); placement && references_owner(*placement, owners)) return true;
+    }
+    return false;
+}
+void admit_coordinated_hosts(const Entities& entities, const Ids& owners) {
+    const auto organization = organize_project(entities);
+    std::map<std::string, AssemblyModel, std::less<>> catalogs;
+    const auto bind = [&](const WallLayerMaterial& reference) {
+        (void)identity(reference.catalog_id); (void)identity(reference.material_id);
+        const auto found = entities.find(reference.catalog_id);
+        if (found == entities.end() || found->second.type != "assembly_model" ||
+            !found->second.properties.is_object() || !found->second.properties.contains("model"))
+            invalid("Slab profile material requires its actual assembly catalog");
+        if (!catalogs.contains(reference.catalog_id)) catalogs.emplace(reference.catalog_id,
+            AssemblyModel::from_json(found->second.properties.at("model")));
+        const auto& materials = catalogs.at(reference.catalog_id).materials();
+        if (std::none_of(materials.begin(), materials.end(), [&](const auto& material) { return material.id == reference.material_id; }))
+            invalid("Slab profile material is absent from its actual catalog");
+    };
+    for (const auto& id : owners) {
+        const auto& entity = entities.at(id);
+        const bool scoped = entity.properties.contains("property_id") || entity.properties.contains("building_id") ||
+            entity.properties.contains("floor_id") || entity.properties.contains("layer_id") ||
+            entity.properties.contains("level_id") || entity.properties.contains("wall_id");
+        const auto node = organization.nodes.find(id);
+        if (scoped && (node == organization.nodes.end() || !node->second.issues.empty()))
+            invalid("Slab profile target has unresolved actual drawing context");
+        const auto resolved = native_slab(resolve_vertical_placement(entities, entity));
+        (void)make_slab(resolved);
+        if (const auto reference = field(entity.properties, "material_assignment")) {
+            if (!reference->is_object()) invalid("Slab profile material assignment must be an object");
+            const auto version = field(*reference, "version"), catalog = field(*reference, "catalog_id"), material = field(*reference, "material_id");
+            if (!version || !version_one(*version) || !catalog || !material) invalid("Slab profile material assignment is unsupported");
+            bind({identity(*catalog), identity(*material)});
+        }
+        for (const auto& layer : resolved.layers) if (layer.material) bind(*layer.material);
+    }
+}
+bool admit_hosted_instance(const AssemblyModel& model, const AssemblyInstance& instance,
+    const Entities& entities, AssemblyExpansionBudget& budget) try {
+    if (!instance.placement) invalid("Slab profile hosted instance has no actual placement");
+    const auto& placement = *instance.placement;
+    const auto host = entities.find(placement.host_entity_id);
+    if (host == entities.end() || host->second.type != "slab") invalid("Slab profile hosted instance has no actual slab host");
+    const auto expansion = model.expand(instance, budget);
+    if (!expansion.profiles.empty()) {
+        (void)make_assembly_geometry(expansion);
+        return true;
+    }
+    (void)transform_assembly_shape(make_slab(native_slab(resolve_vertical_placement(entities, host->second))),
+        {{placement.translation_m.x, placement.translation_m.y, placement.translation_z_m},
+            placement.rotation_radians, placement.scale, placement.mirrored_y, placement.vertical_scale});
+    return false;
+} catch (const Standard_Failure& error) {
+    throw std::invalid_argument(std::string("Slab profile hosted native admission failed: ") + error.what());
+}
+void coordinate_hosted_elevation(const Entities& source, Entities& result, const Ids& owners) {
+    if (owners.empty()) return;
+    admit_coordinated_hosts(source, owners);
+    admit_coordinated_hosts(result, owners);
+    const auto scope = constraint_phase_scope(source);
+    AssemblyExpansionBudget source_budget, final_budget;
+    std::size_t inventory = 0;
+    for (const auto& [id, entity] : source) {
+        if (entity.type != "assembly_model") continue;
+        const auto raw = entity.properties.is_object() ? field(entity.properties, "model") : nullptr;
+        if (!affected_catalog(raw ? *raw : entity.properties, owners)) continue;
+        if (scope.inactive_owner_ids.contains(id)) invalid("Slab profile affected catalog is inactive");
+        if (!raw) invalid("Slab profile affected catalog has no actual model");
+        for (const auto& [key, type] : std::array<std::pair<const char*, const char*>, 5>{{
+            {"property_id", "property"}, {"building_id", "building"}, {"floor_id", "floor"},
+            {"layer_id", "layer"}, {"wall_id", "wall"}}}) {
+            const auto binding = field(entity.properties, key);
+            if (!binding) continue;
+            const auto target = source.find(identity(*binding));
+            if (target == source.end() || target->second.type != type) invalid("Slab profile affected catalog context is unresolved");
+        }
+        for (const auto* key : {"materials", "types", "instances"}) {
+            const auto rows = raw->is_object() ? field(*raw, key) : nullptr;
+            if (!rows || !rows->is_array() || rows->size() > 65536 - inventory) invalid("Slab profile affected catalog inventory budget exceeded");
+            inventory += rows->size();
+        }
+        const auto model = AssemblyModel::from_json(*raw);
+        std::map<std::string, AssemblyTransform, std::less<>> transforms;
+        for (const auto& instance : model.instances()) {
+            if (!instance.placement || !owners.contains(instance.placement->host_entity_id)) continue;
+            const auto& host = instance.placement->host_entity_id;
+            // Raw local authority was admitted before replay. Retain vertical
+            // binding exactly and derive local displacement before resolved
+            // level coordinates can lose small differences through rounding.
+            const double delta = scalar(result.at(host), dimensions[1]) - scalar(source.at(host), dimensions[1]);
+            if (!std::isfinite(delta)) invalid("Slab profile hosted elevation displacement is not finite");
+            AssemblyTransform transform{{0, 0, delta}, 0, 1, false};
+            if (admit_hosted_instance(model, instance, source, source_budget)) {
+                const auto& frame = resolve_site_presentation(source, host).forward;
+                transform = conjugate_assembly_transform_through_rigid_frame(transform,
+                    {{frame.translation_m.x, frame.translation_m.y, frame.translation_m.z}, frame.rotation_radians, 1, false});
+            }
+            transforms.emplace(instance.id, transform);
+        }
+        if (transforms.empty()) invalid("Slab profile catalog has a host reference outside supported actual instances");
+        auto& candidate_raw = result.at(id).properties.at("model");
+        candidate_raw = transform_hosted_assembly_model(*raw, transforms, true);
+        const auto candidate = AssemblyModel::from_json(candidate_raw);
+        for (const auto& instance : candidate.instances()) if (transforms.contains(instance.id))
+            (void)admit_hosted_instance(candidate, instance, result, final_budget);
+    }
+}
 } // namespace
 
 nlohmann::json encode_slab_profile_edit_intent(const SlabProfileEditIntent& intent) {
@@ -251,10 +427,13 @@ nlohmann::json encode_slab_profile_edit_intent(const SlabProfileEditIntent& inte
         (intent.layer_thicknesses->empty() || intent.layer_thicknesses->size() > layer_limit))
         invalid("Slab profile layer inventory budget is invalid");
     if (!any(intent)) invalid("Slab profile edit requires an authored dimension");
-    Json result{{"version", retains_layer_thickness(intent) ? 2 : 1}, {"slab_id", intent.slab_id},
+    if (intent.coordinate_hosted_elevation && !intent.elevation)
+        invalid("Coordinated slab profile edit requires elevation");
+    Json result{{"version", intent.coordinate_hosted_elevation ? 3 : retains_layer_thickness(intent) ? 2 : 1}, {"slab_id", intent.slab_id},
         {"thickness", intent.thickness ? quantity(*intent.thickness, true) : Json(nullptr)},
         {"elevation", intent.elevation ? quantity(*intent.elevation, false) : Json(nullptr)},
         {"layer_thicknesses", nullptr}};
+    if (intent.coordinate_hosted_elevation) result["coordinate_hosted_elevation"] = true;
     if (intent.layer_thicknesses) {
         auto rows = Json::array();
         std::set<std::string, std::less<>> ids;
@@ -271,12 +450,18 @@ nlohmann::json encode_slab_profile_edit_intent(const SlabProfileEditIntent& inte
 
 SlabProfileEditIntent decode_slab_profile_edit_intent(const nlohmann::json& value) {
     if (value.dump().size() > proof_limit) invalid("Slab profile edit proof byte budget exceeded");
-    keys(value, {"version", "slab_id", "thickness", "elevation", "layer_thicknesses"});
+    const bool coordinated = value.is_object() && value.contains("version") && version_three(value.at("version"));
+    if (coordinated) {
+        keys(value, {"version", "slab_id", "thickness", "elevation", "layer_thicknesses", "coordinate_hosted_elevation"});
+        if (!value.at("coordinate_hosted_elevation").is_boolean() || value.at("coordinate_hosted_elevation") != true)
+            invalid("Coordinated slab profile flag must be boolean true");
+    } else keys(value, {"version", "slab_id", "thickness", "elevation", "layer_thicknesses"});
     const auto& version = value.at("version");
-    if ((!version.is_number_integer() && !version.is_number_unsigned()) || (version != 1 && version != 2))
+    if ((!version.is_number_integer() && !version.is_number_unsigned()) || (version != 1 && version != 2 && !coordinated))
         invalid("Slab profile edit version is unsupported");
     const bool retained_layers = version == 2;
     SlabProfileEditIntent result;
+    result.coordinate_hosted_elevation = coordinated;
     result.slab_id = identity(value.at("slab_id"));
     if (!value.at("thickness").is_null()) result.thickness = quantity(value.at("thickness"), true);
     if (!value.at("elevation").is_null()) result.elevation = quantity(value.at("elevation"), false);
@@ -288,7 +473,7 @@ SlabProfileEditIntent decode_slab_profile_edit_intent(const nlohmann::json& valu
         result.layer_thicknesses.emplace();
         for (const auto& row : layers) {
             keys(row, {"layer_id", "thickness"});
-            const bool retain = retained_layers && row.at("thickness").is_null();
+            const bool retain = (retained_layers || coordinated) && row.at("thickness").is_null();
             result.layer_thicknesses->push_back({identity(row.at("layer_id")),
                 retain ? Quantity{} : quantity(row.at("thickness"), true), retain});
         }
@@ -350,8 +535,11 @@ std::map<std::string, Entity, std::less<>> replay_slab_profile_entities(
     const std::vector<SlabProfileEditIntent>& intents) {
     if (intents.size() > collection_limit) invalid("Slab profile target budget exceeded");
     if (intents.empty()) return source;
+    if (std::any_of(intents.begin(), intents.end(), [](const auto& intent) { return intent.coordinate_hosted_elevation; }))
+        bound_map(source);
     const auto scope = constraint_phase_scope(source);
     std::set<std::string, std::less<>> targets;
+    Ids coordinated_owners;
     auto result = source;
     std::size_t proof_bytes = 0;
     for (const auto& intent : intents) {
@@ -368,9 +556,12 @@ std::map<std::string, Entity, std::less<>> replay_slab_profile_entities(
         // elevation, whose legacy alias intentionally remains unshifted.
         (void)make_slab(native_slab(resolve_vertical_placement(source, found->second)));
         result.at(intent.slab_id) = replay_slab_profile_entity(found->second, intent);
+        if (intent.coordinate_hosted_elevation && scalar(result.at(intent.slab_id), dimensions[1]) != scalar(found->second, dimensions[1]))
+            coordinated_owners.insert(intent.slab_id);
     }
     for (const auto& target : targets)
         (void)make_slab(native_slab(resolve_vertical_placement(result, result.at(target))));
+    coordinate_hosted_elevation(source, result, coordinated_owners);
     return result;
 }
 

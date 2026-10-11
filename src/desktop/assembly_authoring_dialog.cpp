@@ -18,6 +18,7 @@
 #include <QPushButton>
 #include <QSignalBlocker>
 #include <QSizePolicy>
+#include <QStackedWidget>
 #include <QTabWidget>
 #include <QTableWidget>
 #include <QTimer>
@@ -106,7 +107,7 @@ double scalar(const QString& text) {
     require(ok && std::isfinite(value),"Enter a finite numeric value"); return value;
 }
 double read_number(QLineEdit* input, bool metric, bool length=false, bool angle=false) {
-    if (input->text().trimmed()==input->property("initialText").toString().trimmed())
+    if (input->property("initialValue").isValid() && input->text().trimmed()==input->property("initialText").toString().trimmed())
         return input->property("initialValue").toDouble();
     if (length) return parse_quantity(input->text().toStdString(),metric ? Unit::metre : Unit::foot).metres;
     if (angle) {
@@ -388,28 +389,50 @@ protected:
             painter.setPen(palette().text().color());painter.drawText(rect().adjusted(12,12,-12,-12),Qt::AlignCenter|Qt::TextWordWrap,message_);return;
         }
         try {
-            const auto bounds=boundary_bounds(profile_.outer);
-            const auto width_m=bounds.maximum.x-bounds.minimum.x,height_m=bounds.maximum.y-bounds.minimum.y;
-            require(std::isfinite(width_m) && std::isfinite(height_m) && width_m>0 && height_m>0,"Preview extent is not representable");
+            std::optional<Bounds2> extent;
+            auto include=[&](Vec2 point) {
+                require(std::isfinite(point.x) && std::isfinite(point.y),"Preview coordinate is not representable");
+                if(!extent)extent=Bounds2{point,point};
+                else {extent->minimum.x=std::min(extent->minimum.x,point.x);extent->minimum.y=std::min(extent->minimum.y,point.y);
+                      extent->maximum.x=std::max(extent->maximum.x,point.x);extent->maximum.y=std::max(extent->maximum.y,point.y);}
+            };
+            auto include_boundary=[&](const Boundary& boundary) {
+                for(const auto& edge:boundary) {
+                    include(edge.start);include(edge.end);
+                    // Fit representable arc extents even in a boundary whose
+                    // topology is still invalid. Do not run topology solves
+                    // from the paint path.
+                    try {const auto bounds=segment_bounds(edge);include(bounds.minimum);include(bounds.maximum);}
+                    catch(const std::exception&) {}
+                }
+            };
+            include_boundary(profile_.outer);for(const auto& hole:profile_.holes)include_boundary(hole);
+            require(extent.has_value(),"Add vertices to preview the profile");
+            const auto bounds=*extent;
+            const auto width_m=std::max(bounds.maximum.x-bounds.minimum.x,.001),height_m=std::max(bounds.maximum.y-bounds.minimum.y,.001);
+            require(std::isfinite(width_m) && std::isfinite(height_m),"Preview extent is not representable");
             const auto scale=std::min((width()-40)/width_m,(height()-40)/height_m);
             require(std::isfinite(scale) && scale>0,"Preview extent is not representable");
             auto screen=[&](Vec2 point){return QPointF(width()*.5+((point.x-bounds.minimum.x)-width_m*.5)*scale,
                                                      height()*.5-((point.y-bounds.minimum.y)-height_m*.5)*scale);};
             auto path_for=[&](const Boundary& boundary) {
-                QPainterPath path;path.moveTo(screen(boundary.front().start));
+                QPainterPath path;if(boundary.empty())return path;path.moveTo(screen(boundary.front().start));
                 for(const auto& edge:boundary) {
                     if(edge.sweep_radians==0) {path.lineTo(screen(edge.end));continue;}
-                    const auto dx=edge.end.x-edge.start.x,dy=edge.end.y-edge.start.y;
-                    const auto chord=std::hypot(dx,dy);const auto half=edge.sweep_radians*.5;
-                    const auto semicircle=std::abs(edge.sweep_radians)==std::numbers::pi;
-                    const auto offset=semicircle ? 0.0 : chord/(2*std::tan(half));
-                    const Vec2 center{std::midpoint(edge.start.x,edge.end.x)-dy/chord*offset,
-                                      std::midpoint(edge.start.y,edge.end.y)+dx/chord*offset};
-                    const auto radius=chord/(2*(semicircle ? 1.0 : std::sin(std::abs(half))))*scale;
-                    const auto mapped=screen(center);
-                    require(std::isfinite(mapped.x()) && std::isfinite(mapped.y()) && std::isfinite(radius) && radius>0,"Preview arc is not representable");
-                    const auto angle=std::atan2(edge.start.y-center.y,edge.start.x-center.x)*180/std::numbers::pi;
-                    path.arcTo(QRectF(mapped.x()-radius,mapped.y()-radius,2*radius,2*radius),angle,edge.sweep_radians*180/std::numbers::pi);
+                    try {
+                        (void)arc_from_chord_angle(edge.start,edge.end,edge.sweep_radians);
+                        const auto dx=edge.end.x-edge.start.x,dy=edge.end.y-edge.start.y;
+                        const auto chord=std::hypot(dx,dy);const auto half=edge.sweep_radians*.5;
+                        const auto semicircle=std::abs(edge.sweep_radians)==std::numbers::pi;
+                        const auto offset=semicircle ? 0.0 : chord/(2*std::tan(half));
+                        const Vec2 center{std::midpoint(edge.start.x,edge.end.x)-dy/chord*offset,
+                                          std::midpoint(edge.start.y,edge.end.y)+dx/chord*offset};
+                        const auto radius=chord/(2*(semicircle ? 1.0 : std::sin(std::abs(half))))*scale;
+                        const auto mapped=screen(center);
+                        require(std::isfinite(mapped.x()) && std::isfinite(mapped.y()) && std::isfinite(2*radius) && radius>0,"Preview arc is not representable");
+                        const auto angle=std::atan2(edge.start.y-center.y,edge.start.x-center.x)*180/std::numbers::pi;
+                        path.arcTo(QRectF(mapped.x()-radius,mapped.y()-radius,2*radius,2*radius),angle,edge.sweep_radians*180/std::numbers::pi);
+                    } catch(const std::exception&) {path.lineTo(screen(edge.end));}
                 }
                 path.closeSubpath();return path;
             };
@@ -436,120 +459,244 @@ private:
     QString message_{"Enter valid profile geometry to preview."};
 };
 
-std::optional<Boundary> edit_profile_boundary(QWidget* parent,const AssemblyProfile& retained,
-                                             std::optional<std::size_t> hole,bool metric) {
-    const auto& original=hole ? retained.holes.at(*hole) : retained.outer;
-    std::size_t other_segments=hole ? retained.outer.size() : 0;
-    for(std::size_t i=0;i<retained.holes.size();++i)if(!hole || i!=*hole)other_segments+=retained.holes[i].size();
-    require(other_segments<=1024 && original.size()<=1024-other_segments,"Profile outer and cutouts exceed the segment limit");
-    QDialog dialog(parent);dialog.setObjectName("assemblyProfileGeometryDialog");
-    dialog.setWindowTitle(hole ? "Edit cutout geometry" : "Edit outline geometry");dialog.resize(900,590);
-    auto* layout=new QVBoxLayout(&dialog);
-    auto* note=new QLabel("Coordinates are local to this profile. Each vertex starts a segment ending at the next vertex; the last closes to the first. Zero sweep is straight; positive sweep turns counter-clockwise. Removing or moving a vertex reconnects segments and keeps each outgoing sweep with its vertex.",&dialog);
-    note->setWordWrap(true);layout->addWidget(note);
-    layout->addWidget(new QLabel(metric ? "Bare X/Y lengths use metres; unit suffixes are supported. Sweeps use degrees, deg or rad." : "Bare X/Y lengths use feet; unit suffixes are supported. Sweeps use degrees, deg or rad.",&dialog));
-    auto* body=new QHBoxLayout;auto* editor=new QWidget(&dialog);auto* editor_layout=new QVBoxLayout(editor);editor_layout->setContentsMargins(0,0,0,0);
-    auto* rows=table(editor,"assemblyProfileVertices",{"Vertex X","Vertex Y","Outgoing sweep (degrees)"});editor_layout->addWidget(rows,1);
-    rows->verticalHeader()->setSectionsMovable(true);
-    auto* preview=new ProfileGeometryPreview(&dialog);body->addWidget(editor,3);body->addWidget(preview,2);layout->addLayout(body,1);
-    auto add_vertex=[&](Vec2 point,double sweep,int source_index) {
-        const auto row=append_row(rows);
-        rows->setCellWidget(row,0,number(rows,{},point.x,true));rows->cellWidget(row,0)->setProperty("originalIndex",source_index);
-        rows->setCellWidget(row,1,number(rows,{},point.y,true));rows->setCellWidget(row,2,number(rows,{},sweep,false,true));
-        rows->cellWidget(row,2)->setToolTip("Outgoing signed sweep: 0 is straight, positive is counter-clockwise; magnitude must be less than 360 degrees.");
-        return row;
-    };
-    for(std::size_t i=0;i<original.size();++i)add_vertex(original[i].start,original[i].sweep_radians,static_cast<int>(i));
-    auto read=[&] {
-        require(rows->rowCount()>0,"Add vertices for a closed boundary");
-        require(static_cast<std::size_t>(rows->rowCount())<=1024-other_segments,"Profile outer and cutouts exceed the segment limit");
-        bool same_topology=static_cast<std::size_t>(rows->rowCount())==original.size();
+// Each boundary keeps its own text draft, including incomplete input, while
+// another boundary is edited. Only the complete dialog can accept geometry.
+class ProfileBoundaryEditor final : public QWidget {
+public:
+    QTableWidget* rows{};
+    ProfileBoundaryEditor(QWidget* parent,Boundary original,bool metric,
+                          std::function<void()> changed,std::function<void()> reserve_vertex,
+                          std::function<void(QString)> report)
+        : QWidget(parent),original_(std::move(original)),metric_(metric) {
+        auto* layout=new QVBoxLayout(this);layout->setContentsMargins(0,0,0,0);
+        rows=table(this,"assemblyProfileVertices",{"Vertex X","Vertex Y","Outgoing sweep (degrees)"});
+        rows->setAccessibleName("Selected boundary vertices");
+        rows->verticalHeader()->setSectionsMovable(true);layout->addWidget(rows,1);
+        for(std::size_t i=0;i<original_.size();++i)
+            append(original_[i].start,original_[i].sweep_radians,static_cast<int>(i),changed);
+        auto* controls=new QHBoxLayout;
+        auto* add=button(this,controls,"assemblyProfileVertexAdd","Add vertex");
+        add->setToolTip("Append a vertex with blank X and Y. Enter its local position; the outgoing sweep starts straight.");
+        QObject::connect(add,&QPushButton::clicked,this,[this,changed,reserve_vertex,report]{
+            try {reserve_vertex();const auto row=append(std::nullopt,0,-1,changed);rows->setCurrentCell(row,0);
+                 qobject_cast<QLineEdit*>(rows->cellWidget(row,0))->setFocus();changed();}
+            catch(const std::exception& e){report(q(e.what()));}
+        });
+        auto* split=button(this,controls,"assemblyProfileVertexSplit","Split segment");
+        split->setToolTip("Split the selected outgoing line or arc at its midpoint, retaining its circular sweep.");
+        QObject::connect(split,&QPushButton::clicked,this,[this,changed,reserve_vertex,report]{
+            try {
+                reserve_vertex();const auto boundary=read();require(!boundary.empty(),"Add vertex positions before splitting a segment");
+                const auto selected=rows->currentRow()<0 ? rows->rowCount()-1 : rows->verticalHeader()->visualIndex(rows->currentRow());
+                const auto& edge=boundary.at(selected);Vec2 point{std::midpoint(edge.start.x,edge.end.x),std::midpoint(edge.start.y,edge.end.y)};
+                if(edge.sweep_radians!=0) {
+                    (void)arc_from_chord_angle(edge.start,edge.end,edge.sweep_radians);
+                    const auto dx=edge.end.x-edge.start.x,dy=edge.end.y-edge.start.y;const auto chord=std::hypot(dx,dy);
+                    const auto sagitta=chord*.5*std::tan(edge.sweep_radians*.25);point.x+=dy/chord*sagitta;point.y-=dx/chord*sagitta;
+                }
+                require(std::isfinite(point.x) && std::isfinite(point.y),"Inserted vertex is not representable");
+                auto* sweep=qobject_cast<QLineEdit*>(rows->cellWidget(rows->verticalHeader()->logicalIndex(selected),2));
+                const auto new_row=append(point,edge.sweep_radians*.5,-1,changed);
+                const auto sweep_text=exact(edge.sweep_radians*.5*180/std::numbers::pi);
+                sweep->setText(sweep_text);sweep->setProperty("initialText",sweep_text);sweep->setProperty("initialValue",edge.sweep_radians*.5);
+                auto* header=rows->verticalHeader();header->moveSection(header->visualIndex(new_row),selected+1);
+                rows->setCurrentCell(new_row,0);changed();
+            } catch(const std::exception& e){report(q(e.what()));}
+        });
+        auto* remove=button(this,controls,"assemblyProfileVertexRemove","Remove vertex");
+        QObject::connect(remove,&QPushButton::clicked,this,[this,changed]{
+            if(rows->currentRow()>=0){rows->removeRow(rows->currentRow());changed();}
+        });
+        for(const auto& direction : {std::pair{"Up",-1},std::pair{"Down",1}}) {
+            auto* move=button(this,controls,QString("assemblyProfileVertex")+direction.first,direction.second<0 ? "Move up" : "Move down");
+            QObject::connect(move,&QPushButton::clicked,this,[this,changed,step=direction.second]{
+                if(rows->currentRow()<0)return;auto* header=rows->verticalHeader();const auto from=header->visualIndex(rows->currentRow()),to=from+step;
+                if(to>=0 && to<rows->rowCount()){header->moveSection(from,to);changed();}
+            });
+        }
+        layout->addLayout(controls);
+        QObject::connect(rows,&QTableWidget::currentCellChanged,this,[changed]{changed();});
+        QObject::connect(rows->verticalHeader(),&QHeaderView::sectionMoved,this,[changed]{changed();});
+        if(rows->rowCount())rows->setCurrentCell(0,0);
+    }
+    Boundary read() const {
+        bool same_topology=static_cast<std::size_t>(rows->rowCount())==original_.size();
         std::vector<Vec2> vertices;std::vector<double> sweeps;
         for(int visual=0;visual<rows->rowCount();++visual) {
             const auto row=rows->verticalHeader()->logicalIndex(visual);
             same_topology=same_topology && rows->cellWidget(row,0)->property("originalIndex").toInt()==visual;
-            vertices.push_back({read_number(qobject_cast<QLineEdit*>(rows->cellWidget(row,0)),metric,true),read_number(qobject_cast<QLineEdit*>(rows->cellWidget(row,1)),metric,true)});
-            sweeps.push_back(read_number(qobject_cast<QLineEdit*>(rows->cellWidget(row,2)),metric,false,true));
+            try {
+                vertices.push_back({read_number(qobject_cast<QLineEdit*>(rows->cellWidget(row,0)),metric_,true),
+                                    read_number(qobject_cast<QLineEdit*>(rows->cellWidget(row,1)),metric_,true)});
+                sweeps.push_back(read_number(qobject_cast<QLineEdit*>(rows->cellWidget(row,2)),metric_,false,true));
+            } catch(const std::exception& e){throw std::invalid_argument("Vertex "+std::to_string(visual+1)+": "+e.what());}
         }
-        // Tolerance-connected endpoints can differ from the next vertex. Keep
-        // their exact authored values for numeric-equivalent and sweep-only
-        // edits. Moving a vertex changes only its two incident endpoints.
+        // Preserve tolerance-connected authored endpoints for numeric-equivalent
+        // and sweep-only edits. A moved vertex changes its incident endpoints.
         if(same_topology) {
-            auto result=original;
+            auto result=original_;
             for(std::size_t i=0;i<vertices.size();++i) {
-                if(vertices[i].x!=original[i].start.x || vertices[i].y!=original[i].start.y) {
+                if(vertices[i].x!=original_[i].start.x || vertices[i].y!=original_[i].start.y) {
                     result[i].start=vertices[i];result[(i+vertices.size()-1)%vertices.size()].end=vertices[i];
                 }
-                if(sweeps[i]!=original[i].sweep_radians)result[i].sweep_radians=sweeps[i];
+                if(sweeps[i]!=original_[i].sweep_radians)result[i].sweep_radians=sweeps[i];
             }
             return result;
         }
-        // A changed roster/order explicitly authors new closed connectivity.
         Boundary result;result.reserve(vertices.size());
         for(std::size_t i=0;i<vertices.size();++i)result.push_back({vertices[i],vertices[(i+1)%vertices.size()],sweeps[i]});
         return result;
+    }
+    void label_vertices() {
+        for(int visual=0;visual<rows->rowCount();++visual) {
+            const auto row=rows->verticalHeader()->logicalIndex(visual);
+            rows->setVerticalHeaderItem(row,new QTableWidgetItem(QString::number(visual+1)));
+            for(int column=0;column<3;++column)rows->cellWidget(row,column)->setAccessibleName(
+                QString("Vertex %1 %2").arg(visual+1).arg(column==0 ? "X" : column==1 ? "Y" : "outgoing sweep"));
+        }
+    }
+private:
+    Boundary original_;
+    bool metric_;
+    int append(std::optional<Vec2> point,double sweep,int source_index,const std::function<void()>& changed) {
+        const auto row=append_row(rows);
+        rows->setCellWidget(row,0,point ? number(rows,{},point->x,true) : field(rows,{},{}));
+        rows->cellWidget(row,0)->setProperty("originalIndex",source_index);
+        rows->setCellWidget(row,1,point ? number(rows,{},point->y,true) : field(rows,{},{}));
+        rows->setCellWidget(row,2,number(rows,{},sweep,false,true));
+        rows->cellWidget(row,2)->setToolTip("Signed outgoing sweep: 0 is straight, positive is counter-clockwise; magnitude must be less than 360 degrees.");
+        for(int column=0;column<3;++column)QObject::connect(qobject_cast<QLineEdit*>(rows->cellWidget(row,column)),
+            &QLineEdit::textChanged,this,[changed]{changed();});
+        return row;
+    }
+};
+
+std::optional<AssemblyProfile> edit_profile_geometry(QWidget* parent,const AssemblyProfile& retained,
+        std::optional<std::size_t> initial_hole,bool metric,
+        const std::vector<std::pair<QString,std::string>>& imports,
+        const std::map<std::string,Boundary>& outlines,const std::map<std::string,std::vector<Boundary>>& holes) {
+    QDialog dialog(parent);dialog.setObjectName("assemblyProfileGeometryDialog");
+    dialog.setWindowTitle(retained.outer.empty() ? "Create profile geometry" : "Edit profile geometry");dialog.resize(1000,650);
+    auto* layout=new QVBoxLayout(&dialog);
+    auto* note=new QLabel("Edit the complete profile in local coordinates. Each vertex starts a segment ending at the next vertex; the last closes to the first. Zero sweep is straight; positive sweep turns counter-clockwise. Removing or reordering vertices reconnects segments and keeps each outgoing sweep with its vertex. Outer and cutout changes stay in this draft until the whole profile is valid and saved.",&dialog);
+    note->setWordWrap(true);layout->addWidget(note);
+    layout->addWidget(new QLabel(metric ? "Bare X/Y lengths use metres; unit suffixes are supported. Sweeps use degrees, deg or rad." : "Bare X/Y lengths use feet; unit suffixes are supported. Sweeps use degrees, deg or rad.",&dialog));
+    auto* boundary_bar=new QHBoxLayout;boundary_bar->addWidget(new QLabel("Boundary",&dialog));
+    auto* selection=new QComboBox(&dialog);selection->setObjectName("assemblyProfileBoundary");selection->setAccessibleName("Profile boundary");
+    boundary_bar->addWidget(selection,1);
+    auto* add_cutout=button(&dialog,boundary_bar,"assemblyProfileCutoutAdd","Add cutout");
+    auto* remove_cutout=button(&dialog,boundary_bar,"assemblyProfileCutoutRemove","Remove cutout");
+    auto* up=button(&dialog,boundary_bar,"assemblyProfileCutoutUp","Move up");
+    auto* down=button(&dialog,boundary_bar,"assemblyProfileCutoutDown","Move down");
+    layout->addLayout(boundary_bar);
+    auto* import_bar=new QHBoxLayout;auto* import_choice=new QComboBox(&dialog);
+    import_choice->setObjectName("assemblyProfileImportBoundary");import_choice->setAccessibleName("Captured drawing boundary");
+    import_choice->addItem("Choose captured boundary…",QString{});
+    for(const auto& [name,key]:imports)import_choice->addItem(name,q(key));
+    import_bar->addWidget(import_choice,1);
+    auto* import=button(&dialog,import_bar,"assemblyProfileImport","Import selected");
+    import->setEnabled(!imports.empty());import_choice->setEnabled(!imports.empty());
+    import->setToolTip("Replaces the selected boundary. Importing an outer also replaces its cutouts with the captured holes.");
+    layout->addLayout(import_bar);
+    auto* body=new QHBoxLayout;auto* stack=new QStackedWidget(&dialog);stack->setObjectName("assemblyProfileBoundaryEditors");
+    auto* preview=new ProfileGeometryPreview(&dialog);body->addWidget(stack,3);body->addWidget(preview,2);layout->addLayout(body,1);
+    QLabel* inline_error{};std::optional<AssemblyProfile> accepted;std::vector<ProfileBoundaryEditor*> editors;
+    auto* timer=new QTimer(&dialog);timer->setSingleShot(true);timer->setInterval(250);
+    auto changed=[timer]{timer->start();};
+    auto segment_count=[&]{std::size_t count=0;for(const auto* editor:editors)count+=editor->rows->rowCount();return count;};
+    auto reserve_vertex=[&]{require(segment_count()<1024,"Profile outer and cutouts exceed the segment limit");};
+    auto report=[&](QString message){inline_error->setText(std::move(message));};
+    auto add_boundary=[&](Boundary boundary) {
+        auto* editor=new ProfileBoundaryEditor(stack,std::move(boundary),metric,changed,reserve_vertex,report);
+        stack->addWidget(editor);editors.push_back(editor);
     };
-    auto profile_with=[&](const Boundary& boundary){auto result=retained;if(hole)result.holes.at(*hole)=boundary;else result.outer=boundary;return result;};
-    QLabel* inline_error{};std::optional<Boundary> accepted;
-    auto validate=[&] {
-        auto boundary=read();const auto diagnostics=validate_boundary(boundary);
-        if(!diagnostics.empty())throw std::invalid_argument("Segment "+std::to_string(diagnostics.front().segment_index+1)+": "+diagnostics.front().message);
-        auto profile=profile_with(boundary);validate_profile_geometry(profile);return std::pair{std::move(boundary),std::move(profile)};
+    auto select=[&](int index) {
+        if(index<0 || static_cast<std::size_t>(index)>=editors.size())return;
+        stack->setCurrentWidget(editors[index]);remove_cutout->setEnabled(index>0);up->setEnabled(index>1);
+        down->setEnabled(index>0 && static_cast<std::size_t>(index+1)<editors.size());changed();
+    };
+    auto roster=[&](int index) {
+        const QSignalBlocker blocked(selection);selection->clear();selection->addItem("Outer outline");
+        for(std::size_t i=1;i<editors.size();++i)selection->addItem(QString("Cutout %1").arg(i));
+        selection->setCurrentIndex(index);select(index);
+    };
+    auto read=[&] {
+        auto result=retained;result.holes.clear();
+        require(segment_count()<=1024,"Profile outer and cutouts exceed the segment limit");
+        for(std::size_t i=0;i<editors.size();++i) {
+            Boundary boundary;
+            try {boundary=editors[i]->read();}
+            catch(const std::exception& e){throw std::invalid_argument((i==0 ? std::string("Outer outline: ") : "Cutout "+std::to_string(i)+": ")+e.what());}
+            if(i==0)result.outer=std::move(boundary);else result.holes.push_back(std::move(boundary));
+        }
+        return result;
+    };
+    auto validate=[&](const AssemblyProfile& profile) {
+        auto validate_one=[](const Boundary& boundary,const std::string& name) {
+            const auto diagnostics=validate_boundary(boundary);
+            if(!diagnostics.empty())throw std::invalid_argument(name+", segment "+std::to_string(diagnostics.front().segment_index+1)+": "+diagnostics.front().message);
+        };
+        validate_one(profile.outer,"Outer outline");
+        for(std::size_t i=0;i<profile.holes.size();++i)validate_one(profile.holes[i],"Cutout "+std::to_string(i+1));
+        validate_profile_geometry(profile);
     };
     auto refresh=[&] {
-        for(int visual=0;visual<rows->rowCount();++visual)rows->setVerticalHeaderItem(rows->verticalHeader()->logicalIndex(visual),new QTableWidgetItem(QString::number(visual+1)));
+        for(auto* editor:editors)editor->label_vertices();
         try {
-            auto [boundary,profile]=validate();(void)boundary;inline_error->clear();
-            preview->show_profile(std::move(profile),hole,rows->currentRow()<0 ? -1 : rows->verticalHeader()->visualIndex(rows->currentRow()));
-        } catch(const std::exception& e){inline_error->setText(q(e.what()));preview->show_error("Invalid draft: "+q(e.what()));}
+            auto profile=read();const auto index=selection->currentIndex();const auto* rows=editors.at(index)->rows;
+            preview->show_profile(profile,index>0 ? std::optional<std::size_t>{static_cast<std::size_t>(index-1)} : std::nullopt,
+                rows->currentRow()<0 ? -1 : rows->verticalHeader()->visualIndex(rows->currentRow()));
+            try {validate(profile);inline_error->clear();}
+            catch(const std::exception& e){inline_error->setText("Invalid draft: "+q(e.what()));}
+        } catch(const std::exception& e){inline_error->setText(q(e.what()));preview->show_error("Incomplete draft: "+q(e.what()));}
     };
-    auto* timer=new QTimer(&dialog);timer->setSingleShot(true);timer->setInterval(250);
     QObject::connect(timer,&QTimer::timeout,&dialog,refresh);
-    auto connect_inputs=[&](int row){for(int column=0;column<3;++column)QObject::connect(qobject_cast<QLineEdit*>(rows->cellWidget(row,column)),&QLineEdit::textChanged,&dialog,[timer]{timer->start();});};
-    for(int row=0;row<rows->rowCount();++row)connect_inputs(row);
-    auto* controls=new QHBoxLayout;
-    auto* add=button(editor,controls,"assemblyProfileVertexAdd","Insert vertex");
-    add->setToolTip("Split the selected outgoing line or arc at its midpoint, retaining its circular sweep.");
-    QObject::connect(add,&QPushButton::clicked,&dialog,[&]{
+    QObject::connect(selection,&QComboBox::currentIndexChanged,&dialog,select);
+    QObject::connect(add_cutout,&QPushButton::clicked,&dialog,[&]{
+        try {require(editors.size()<1025,"Profile boundary limit reached");reserve_vertex();add_boundary({});roster(static_cast<int>(editors.size()-1));refresh();}
+        catch(const std::exception& e){report(q(e.what()));}
+    });
+    QObject::connect(remove_cutout,&QPushButton::clicked,&dialog,[&]{
+        const auto index=selection->currentIndex();if(index<=0)return;
+        auto* removed=editors.at(index);editors.erase(editors.begin()+index);stack->removeWidget(removed);delete removed;
+        roster(std::min(index,static_cast<int>(editors.size())-1));refresh();
+    });
+    auto move=[&](int step) {
+        const auto index=selection->currentIndex(),destination=index+step;
+        if(index<=0 || destination<=0 || destination>=static_cast<int>(editors.size()))return;
+        std::swap(editors[index],editors[destination]);roster(destination);refresh();
+    };
+    QObject::connect(up,&QPushButton::clicked,&dialog,[&]{move(-1);});
+    QObject::connect(down,&QPushButton::clicked,&dialog,[&]{move(1);});
+    QObject::connect(import,&QPushButton::clicked,&dialog,[&]{
         try {
-            require(static_cast<std::size_t>(rows->rowCount())<1024-other_segments,"Profile outer and cutouts exceed the segment limit");
-            const auto boundary=read();const auto selected=rows->currentRow()<0 ? rows->rowCount()-1 : rows->verticalHeader()->visualIndex(rows->currentRow());
-            const auto& edge=boundary.at(selected);Vec2 point{std::midpoint(edge.start.x,edge.end.x),std::midpoint(edge.start.y,edge.end.y)};
-            if(edge.sweep_radians!=0) {
-                (void)arc_from_chord_angle(edge.start,edge.end,edge.sweep_radians);
-                const auto dx=edge.end.x-edge.start.x,dy=edge.end.y-edge.start.y;const auto chord=std::hypot(dx,dy);
-                const auto sagitta=chord*.5*std::tan(edge.sweep_radians*.25);point.x+=dy/chord*sagitta;point.y-=dx/chord*sagitta;
+            require(import_choice->currentIndex()>0,"Choose a captured boundary to import");
+            const auto key=import_choice->currentData().toString().toStdString();const auto index=selection->currentIndex();
+            const auto& boundary=outlines.at(key);const auto& captured_cutouts=holes.at(key);
+            auto count=segment_count()-editors.at(index)->rows->rowCount();
+            if(index==0)count=0;
+            require(boundary.size()<=1024-count,"Profile outer and cutouts exceed the segment limit");count+=boundary.size();
+            if(index==0)for(const auto& hole:captured_cutouts){require(hole.size()<=1024-count,"Profile outer and cutouts exceed the segment limit");count+=hole.size();}
+            // No parsing is needed to replace incomplete draft text explicitly.
+            if(index==0) {
+                for(auto* editor:editors){stack->removeWidget(editor);delete editor;}editors.clear();
+                add_boundary(boundary);for(const auto& hole:captured_cutouts)add_boundary(hole);
+            } else {
+                auto* replacement=new ProfileBoundaryEditor(stack,boundary,metric,changed,reserve_vertex,report);
+                auto* previous=editors.at(index);editors[index]=replacement;stack->addWidget(replacement);stack->removeWidget(previous);delete previous;
             }
-            require(std::isfinite(point.x) && std::isfinite(point.y),"Inserted vertex is not representable");
-            auto* sweep=qobject_cast<QLineEdit*>(rows->cellWidget(rows->verticalHeader()->logicalIndex(selected),2));
-            const auto new_row=add_vertex(point,edge.sweep_radians*.5,-1);connect_inputs(new_row);
-            const auto sweep_text=exact(edge.sweep_radians*.5*180/std::numbers::pi);
-            sweep->setText(sweep_text);sweep->setProperty("initialText",sweep_text);sweep->setProperty("initialValue",edge.sweep_radians*.5);
-            auto* header=rows->verticalHeader();header->moveSection(header->visualIndex(new_row),selected+1);rows->setCurrentCell(new_row,0);refresh();
-        } catch(const std::exception& e){inline_error->setText(q(e.what()));}
+            roster(index==0 ? 0 : index);refresh();
+        } catch(const std::exception& e){report(q(e.what()));}
     });
-    auto* remove=button(editor,controls,"assemblyProfileVertexRemove","Remove selected");
-    QObject::connect(remove,&QPushButton::clicked,&dialog,[&]{
-        if(rows->currentRow()<0)return;
-        if(rows->rowCount()<=2){inline_error->setText("Keep at least two vertices; a circle can use two semicircular segments.");return;}
-        rows->removeRow(rows->currentRow());refresh();
-    });
-    for(const auto& direction : {std::pair{"Up",-1},std::pair{"Down",1}}) {
-        auto* move=button(editor,controls,QString("assemblyProfileVertex")+direction.first,direction.second<0 ? "Move up" : "Move down");
-        QObject::connect(move,&QPushButton::clicked,&dialog,[&,step=direction.second]{
-            if(rows->currentRow()<0)return;auto* header=rows->verticalHeader();const auto from=header->visualIndex(rows->currentRow()),to=from+step;
-            if(to>=0 && to<rows->rowCount()){header->moveSection(from,to);refresh();}
-        });
-    }
-    editor_layout->addLayout(controls);
-    QObject::connect(rows,&QTableWidget::currentCellChanged,&dialog,[timer]{timer->start();});
-    QObject::connect(rows->verticalHeader(),&QHeaderView::sectionMoved,&dialog,[timer]{timer->start();});
     finish_dialog(&dialog,layout,inline_error,[&]{
-        try {auto result=validate();accepted=std::move(result.first);dialog.accept();}
+        try {auto profile=read();validate(profile);accepted=std::move(profile);dialog.accept();}
         catch(const std::exception& e){inline_error->setText(q(e.what()));accepted.reset();}
     });
-    rows->setCurrentCell(0,0);refresh();
-    if(dialog.exec()==QDialog::Accepted)return accepted;
+    add_boundary(retained.outer);for(const auto& hole:retained.holes)add_boundary(hole);
+    roster(initial_hole && *initial_hole<retained.holes.size() ? static_cast<int>(*initial_hole+1) : 0);refresh();
+    const auto result=dialog.exec();timer->stop();
+    QObject::disconnect(timer,nullptr,&dialog,nullptr);
+    if(result==QDialog::Accepted)return accepted;
     return std::nullopt;
 }
 }
@@ -598,7 +745,7 @@ public:
         row_controls(profile_page,profile_layout,profiles,"assemblyProfile",[this]{guard([&]{add_profile(std::nullopt);});},true);
         profile_page->findChild<QPushButton*>("assemblyProfileAdd")->setObjectName("assemblyAddProfile");
         auto* profile_actions=new QHBoxLayout;
-        auto* outline=button(profile_page,profile_actions,"assemblyProfileEditOutline","Edit outline…");
+        auto* outline=button(profile_page,profile_actions,"assemblyProfileEditOutline","Edit profile…");
         QObject::connect(outline,&QPushButton::clicked,owner,[this]{guard([&]{edit_outline();});});
         auto* cutouts=button(profile_page,profile_actions,"assemblyProfileCutouts","Cutouts…");
         QObject::connect(cutouts,&QPushButton::clicked,owner,[this]{guard([&]{edit_cutouts();});});
@@ -628,21 +775,27 @@ public:
         try {action();error->clear();return true;} catch(const std::exception& e){error->setText(q(e.what()));candidate.reset();return false;}
     }
     void add_profile(std::optional<AssemblyProfile> value) {
-        if(!value)require(!outline_options.empty(),"Create a valid closed boundary before adding an assembly profile");
-        AssemblyProfile profile=value.value_or(AssemblyProfile{}); if(!value){profile.id=make_stable_id();profile.height_m=1;}
+        require(profiles->rowCount()<maximum_rows,"Assembly collection limit reached");
+        const bool creating=!value;
+        AssemblyProfile profile=value.value_or(AssemblyProfile{});
+        if(creating) {
+            profile.id=make_stable_id();profile.height_m=1;
+            auto accepted=edit_profile_geometry(owner,profile,std::nullopt,metric,outline_options,outlines,outline_holes);
+            if(!accepted)return;
+            profile=std::move(*accepted);
+        }
         auto row=append_row(profiles); auto* choice=new QComboBox(profiles);
         for(const auto& [text,id]:outline_options)choice->addItem(text,q(id));
-        if(value) {
-            auto key="stored:"+profile.id;while(outlines.contains(key))key+=':';outlines.emplace(key,profile.outer);
-            outline_holes.emplace(key,profile.holes);
-            choice->addItem(QString("Stored profile %1 (%2 edges)").arg(row+1).arg(profile.outer.size()),q(key)); choice->setCurrentIndex(choice->count()-1);
-        }
-        if(!value){profile.outer=outlines.at(choice->currentData().toString().toStdString());profile.holes=outline_holes.at(choice->currentData().toString().toStdString());}
+        auto key="stored:"+profile.id;while(outlines.contains(key))key+=':';outlines.emplace(key,profile.outer);
+        outline_holes.emplace(key,profile.holes);
+        choice->addItem(QString("Stored profile %1 (%2 edges)").arg(row+1).arg(profile.outer.size()),q(key)); choice->setCurrentIndex(choice->count()-1);
+        choice->setToolTip(QString("%1 edges; %2 local cutouts. Reimport restores the selected captured or stored boundary.").arg(profile.outer.size()).arg(profile.holes.size()));
         profile_drafts.emplace(profile.id,profile);
         choice->setProperty("stableId",q(profile.id)); profiles->setCellWidget(row,0,choice);
         profiles->setCellWidget(row,1,number(profiles,{},profile.height_m,true)); profiles->setCellWidget(row,2,number(profiles,{},profile.elevation_m,true));
         profiles->setCellWidget(row,3,field(profiles,{},profile.material_slot ? q(*profile.material_slot) : QString{}));
         QObject::connect(choice,&QComboBox::currentIndexChanged,owner,[this,choice]{guard([&]{import_profile(choice);});});
+        if(creating){profiles->setCurrentCell(row,0);invalidate_geometry_preview();}
     }
     void add_part(std::optional<AssemblyPart> value) {
         AssemblyPart part=value.value_or(AssemblyPart{}); if(!value)part.id=make_stable_id();
@@ -666,20 +819,21 @@ public:
     void invalidate_geometry_preview() {
         preview.reset();candidate.reset();impacts->setRowCount(0);
     }
-    void edit_outline() {
+    void edit_geometry(std::optional<std::size_t> initial_hole) {
         require(profiles->currentRow()>=0,"Select a profile first");
         auto* choice=qobject_cast<QComboBox*>(profiles->cellWidget(profiles->currentRow(),0));
         require(choice && choice->currentIndex()>=0,"Choose a profile first");
         auto& profile=profile_drafts.at(choice->property("stableId").toString().toStdString());
         const auto retained=profile;
-        if(auto boundary=edit_profile_boundary(owner,retained,std::nullopt,metric)) {
-            profile.outer=std::move(*boundary);
+        if(auto accepted=edit_profile_geometry(owner,retained,initial_hole,metric,outline_options,outlines,outline_holes)) {
+            profile=std::move(*accepted);
             if(profile!=retained) {
                 invalidate_geometry_preview();
                 choice->setToolTip(QString("Edited local geometry: %1 edges; %2 cutouts. Reimport replaces local edits with the selected boundary.").arg(profile.outer.size()).arg(profile.holes.size()));
             }
         }
     }
+    void edit_outline() {edit_geometry(std::nullopt);}
     void edit_part_overrides() {
         require(parts->currentRow()>=0,"Select a child part first");
         auto* choice=qobject_cast<QComboBox*>(parts->cellWidget(parts->currentRow(),0));require(choice && choice->currentIndex()>=0,"Choose a child type first");
@@ -705,60 +859,7 @@ public:
             choice->setToolTip(overrides(summary,model));
         }
     }
-    void edit_cutouts() {
-        require(profiles->currentRow()>=0,"Select a profile first");auto* profile_choice=qobject_cast<QComboBox*>(profiles->cellWidget(profiles->currentRow(),0));
-        require(profile_choice && profile_choice->currentIndex()>=0,"Choose a profile first");
-        const auto id=profile_choice->property("stableId").toString().toStdString();const auto retained=profile_drafts.at(id);
-        QDialog dialog(owner);dialog.setObjectName("assemblyProfileCutoutsDialog");dialog.setWindowTitle("Profile cutouts");dialog.resize(740,470);
-        auto* layout=new QVBoxLayout(&dialog);auto* note=new QLabel("Choose or edit closed cutouts in profile-local coordinates. Cutouts must lie strictly inside the outer boundary and remain disjoint. Save retains the roster and local geometry; Cancel preserves the profile.",&dialog);note->setWordWrap(true);layout->addWidget(note);
-        auto* rows=table(&dialog,"assemblyProfileCutoutRows",{"Closed cutout boundary","Local geometry"});layout->addWidget(rows,1);
-        std::map<std::string,Boundary> choices=outlines;
-        QLabel* inline_error{};std::optional<std::vector<Boundary>> accepted;
-        auto read_holes=[&] {
-            std::vector<Boundary> result;std::size_t segments=retained.outer.size();
-            require(segments<=1024,"Profile outer and cutouts exceed the segment limit");
-            for(int visual=0;visual<rows->rowCount();++visual) {
-                const auto row=rows->verticalHeader()->logicalIndex(visual);auto* choice=qobject_cast<QComboBox*>(rows->cellWidget(row,0));
-                require(choice && choice->currentIndex()>=0,"Choose a cutout boundary");const auto& boundary=choices.at(choice->currentData().toString().toStdString());
-                require(boundary.size()<=1024-segments,"Profile outer and cutouts exceed the segment limit");segments+=boundary.size();result.push_back(boundary);
-            }
-            return result;
-        };
-        auto add=[&](std::optional<Boundary> stored){
-            if(!stored)require(!outline_options.empty(),"Create a valid closed boundary before adding a cutout");
-            const auto row=append_row(rows);auto* choice=new QComboBox(rows);for(const auto& [name,key]:outline_options)choice->addItem(name,q(key));
-            if(stored){auto key="cutout:"+std::to_string(choices.size());while(choices.contains(key))key+=':';choices.emplace(key,*stored);choice->addItem(QString("Stored cutout %1 (%2 edges)").arg(row+1).arg(stored->size()),q(key));choice->setCurrentIndex(choice->count()-1);}
-            rows->setCellWidget(row,0,choice);
-            auto* edit=new QPushButton("Edit cutout…",rows);edit->setObjectName("assemblyProfileEditCutout");rows->setCellWidget(row,1,edit);
-            QObject::connect(edit,&QPushButton::clicked,&dialog,[&,choice]{
-                try {
-                    int selected=-1;
-                    for(int logical=0;logical<rows->rowCount();++logical)if(rows->cellWidget(logical,0)==choice){selected=rows->verticalHeader()->visualIndex(logical);break;}
-                    require(selected>=0,"Select a cutout first");auto profile=retained;profile.holes=read_holes();
-                    if(auto geometry=edit_profile_boundary(&dialog,profile,static_cast<std::size_t>(selected),metric)) {
-                        // A private row choice keeps other rows using the same
-                        // imported boundary independent, even after reordering.
-                        auto key="edited-cutout:"+std::to_string(choices.size());while(choices.contains(key))key+=':';
-                        choices.emplace(key,std::move(*geometry));choice->addItem(QString("Edited local cutout (%1 edges)").arg(choices.at(key).size()),q(key));choice->setCurrentIndex(choice->count()-1);
-                        inline_error->clear();
-                    }
-                } catch(const std::exception& e){inline_error->setText(q(e.what()));}
-            });
-        };
-        row_controls(&dialog,layout,rows,"assemblyProfileCutoutRows",[&]{add(std::nullopt);},true);
-        for(const auto& hole:retained.holes)add(hole);
-        finish_dialog(&dialog,layout,inline_error,[&]{
-            try {
-                auto profile=retained;profile.holes=read_holes();validate_profile_geometry(profile);
-                accepted=std::move(profile.holes);dialog.accept();
-            } catch(const std::exception& e){inline_error->setText(q(e.what()));accepted.reset();}
-        });
-        if(dialog.exec()==QDialog::Accepted && accepted) {
-            auto& profile=profile_drafts.at(id);profile.holes=std::move(*accepted);
-            if(profile!=retained)invalidate_geometry_preview();
-            profile_choice->setToolTip(QString("%1 edges; %2 local cutouts. Reimport replaces local edits with the selected boundary.").arg(profile.outer.size()).arg(profile.holes.size()));
-        }
-    }
+    void edit_cutouts() {edit_geometry(std::size_t{0});}
     AssemblyType read() const {
         auto result=original; result.name=name->text().trimmed().toStdString(); require(!result.name.empty(),"Enter an assembly type name");
         result.properties=defaults->read_properties(); result.materials=defaults->read_materials(); result.quantities=defaults->read_quantities(); result.profiles.clear(); result.parts.clear();

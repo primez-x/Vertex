@@ -3262,7 +3262,7 @@ static std::vector<nlohmann::json> phase_constraint_authoring_proofs(const Apply
         if (version==34) result.push_back(proof.at("phase_constraint_authoring_intent"));
         else if (version==52) {
             const auto& mixed=proof.at("mixed_selection_edit_intent");
-            if (mixed.at("version")!=5 && mixed.at("version")!=6 && mixed.at("version")!=7 && mixed.at("version")!=8 && mixed.at("version")!=9 && mixed.at("version")!=10 && mixed.at("version")!=11 && mixed.at("version")!=12) {
+            if (mixed.at("version")!=5 && mixed.at("version")!=6 && mixed.at("version")!=7 && mixed.at("version")!=8 && mixed.at("version")!=9 && mixed.at("version")!=10 && mixed.at("version")!=11 && mixed.at("version")!=12 && mixed.at("version")!=13) {
                 const auto& roof=mixed.at("roof_authoring");
                 if (!roof.is_null()) result.push_back(roof);
             }
@@ -3332,7 +3332,7 @@ static bool mixed_clipboard_placement_policy(const ApplyBoundaryConstraintChange
 
 static bool phase_constraint_authoring_preserves_registries(const ApplyBoundaryConstraintChanges& command) {
 #ifdef VERTEX_HAS_CONSTRAINT_AUTHORING
-    if (has_mixed_selection_edit(command) && (command.mixed_selection_edit_intent.at("version")==11 || command.mixed_selection_edit_intent.at("version")==12))
+    if (has_mixed_selection_edit(command) && (command.mixed_selection_edit_intent.at("version")==11 || command.mixed_selection_edit_intent.at("version")==12 || command.mixed_selection_edit_intent.at("version")==13))
         return !mixed_selection_edit_has_phase_replacements(command.mixed_selection_edit_intent);
 #endif
     const auto proofs=phase_constraint_authoring_proofs(command);
@@ -3715,7 +3715,7 @@ static PhaseConstraintLifetimeProofs phase_constraint_lifetime_proofs(const Appl
         const auto version=proof.at("version").get<int>();
         if (version==52) {
             const auto& mixed=proof.at("mixed_selection_edit_intent");
-            if (mixed.at("version")!=5 && mixed.at("version")!=6 && mixed.at("version")!=7 && mixed.at("version")!=8 && mixed.at("version")!=9 && mixed.at("version")!=10 && mixed.at("version")!=11 && mixed.at("version")!=12) {
+            if (mixed.at("version")!=5 && mixed.at("version")!=6 && mixed.at("version")!=7 && mixed.at("version")!=8 && mixed.at("version")!=9 && mixed.at("version")!=10 && mixed.at("version")!=11 && mixed.at("version")!=12 && mixed.at("version")!=13) {
                 const auto& roof=mixed.at("roof_authoring");
                 if (!roof.is_null()) result.phase_proofs.push_back(roof);
             }
@@ -5402,7 +5402,7 @@ static void validate_mixed_properties_replacement_lifetime(const nlohmann::json&
     const std::map<std::string,Entity,std::less<>>& candidate,
     const std::vector<RevisionRecord>& history,std::size_t preceding_records) {
     const auto mixed=validate_mixed_selection_edit_intent(encoded);
-    if (mixed.at("version")!=11 && mixed.at("version")!=12) return;
+    if (mixed.at("version")!=11 && mixed.at("version")!=12 && mixed.at("version")!=13) return;
     if (preceding_records>history.size()) throw std::invalid_argument("Properties identity history prefix is invalid");
     const auto phase=validate_phase_selection_property_edit_request(mixed.at("phase_request"));
     std::set<std::string,std::less<>> fresh;

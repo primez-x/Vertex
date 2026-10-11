@@ -14,6 +14,56 @@ changed source does not acquire runtime acceptance without later qualification.
 
 ## Current delivery state
 
+### October 10 complete component-profile drafts and wall/slab movement
+
+Wall elevation and native wall-cohort Z integration are committed and pushed as
+0194dbb7, with exact local and remote branch references matched. Current source
+work extends the same captured pure-Z gesture to selected walls and floor slabs.
+Each actual raw elevation receives the captured inverse-frame displacement;
+floor/level bindings remain stored. Explicit slab profile3/scalar5/phase4/mixed13
+authority derives ordinary edits and actual wall/slab alternative copies from
+one source. Slab replacement leaf7 pairs exclusively with phase outer27;
+historical enclosing wires refuse the new carry authority. Reader202/extraction200
+preserve direct, wrapped, retained and undone history.
+Slab allocation includes qualified hosted instance slots and alias reservation.
+Transient native correspondence admits selected actual slab copies alongside
+wall copies, without changing captured gesture or final publication authority.
+Complete source/phase room review and selected-member restoration still use the
+one mixed Properties command. Independent review identified a P2: scalar slab
+elevation left genuine hosted profiles behind and could double-transform legacy
+host copies. Complete-map replay now derives placement consequences from actual
+raw elevation differences, using existing type-aware hosted transforms. Proposed
+copies use those derived qualified placements while source rows stay exact.
+Mixed carry/noncarry slab profiles share one actual phase cohort; only flagged,
+changed hosts acquire carry consequences. Copied hosted render aliases now use
+sealed qualified binding redirects in the native candidate visibility roster.
+Independent correction review approved this bounded source integration with no
+remaining confirmed P1/P2 in the reviewed paths. Scoped whitespace checking
+passed. Roofs,
+structural objects, stairs, railings and components alongside walls remain a
+required mixed-family vertical integration gap.
+
+Shared component profile drafting is source-integrated and root-reviewed: direct
+local creation without a drawing boundary, blank explicit vertex input, signed
+circular sweeps, boundary/vertex add/remove/reorder and captured imports operate
+on one complete outer/cutout draft. Invalid intermediate coordinates/topology
+remain local. Save validates the complete profile and combined 1,024-segment
+budget. Unchanged same-topology endpoints/sweeps stay exact, and Cancel appends
+no new profile. The existing shared-type impact/source/publication path remains.
+U187 adds concrete creation, coordinated cutout editing and curved-profile
+user steps. Existing automated dialog selectors need later qualification updates
+for the new creation modal/unified editor. Compilation and interaction remain
+unverified.
+Builds, tests, probes, native jobs, launches, packaging and installation remain
+paused. The installed app is unchanged and all ten production gates remain open.
+
+Bounded source discovery confirmed that protected component instance editing has
+no standalone/qualified assembly-root phase replacement producer. Physical host
+replacement can copy hosted rows, but does not establish component-only
+replacement authority. Add that actual-source inventory, closed producer,
+qualified identity/phase/dependency completion and Properties/selection integration
+next; do not bypass the existing baseline protection with raw instance updates.
+
 ### October 10 wall elevation and native wall-cohort Z integration
 
 Shared profile editing and supported non-wall Z cohorts are committed and pushed

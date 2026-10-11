@@ -44,6 +44,8 @@ struct PhaseConstraintAuthoringIntent {
     nlohmann::json roof_replacement=nullptr;
     // Dialect five: source-derived horizontal assembly replacement. The
     // baseline and its actual entered dimensions remain retained verbatim.
+    // Dialect twenty-seven pairs exclusive leaf seven for explicit coordinated
+    // slab elevation and actual hosted component carry; five refuses that lane.
     nlohmann::json slab_replacement=nullptr;
     // Dialect six: registry-only demolition of actual shared baseline slabs.
     // No replacement identity or ordinary geometry authority accompanies it.

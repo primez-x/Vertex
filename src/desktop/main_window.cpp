@@ -49699,7 +49699,7 @@ private:
                     validate_mixed_clipboard_placement_intent(encoded.at("clipboard_placement_intent")) :
                     validate_mixed_selection_edit_intent(encoded.at("mixed_selection_edit_intent"));
                 const auto dialect=intent.at("version").get<int>();
-                if (version==52 && dialect>=5 && dialect<=12) {
+                if (version==52 && dialect>=5 && dialect<=13) {
                     // Properties dialects have no transform roof_authoring.
                     // Active-baseline redirects require independently replayed
                     // source authority rather than extracting supplied maps.
@@ -58615,11 +58615,11 @@ private:
                 if (value.mixed_selection_edit_completion || !value.mixed_selection_edit_intent.is_null()) {
                     mixed_edit=true;
                     const auto intent=validate_mixed_selection_edit_intent(value.mixed_selection_edit_intent);
-                    if (intent.at("version")==5 || intent.at("version")==6 || intent.at("version")==7 || intent.at("version")==8 || intent.at("version")==9 || intent.at("version")==10 || intent.at("version")==11 || intent.at("version")==12) {
+                    if (intent.at("version")==5 || intent.at("version")==6 || intent.at("version")==7 || intent.at("version")==8 || intent.at("version")==9 || intent.at("version")==10 || intent.at("version")==11 || intent.at("version")==12 || intent.at("version")==13) {
                         // Properties has its own typed lanes, including a null
                         // physical lane for annotation-only edits. Gesture
                         // ordinary_request codecs cannot decode this roster.
-                        const bool phased=intent.at("version")==11 || intent.at("version")==12;
+                        const bool phased=intent.at("version")==11 || intent.at("version")==12 || intent.at("version")==13;
                         const auto& physical=phased ? intent.at("phase_request").at("scalar_request") : intent.at("ordinary_request");
                         if (!physical.is_null()) for (const auto& target:physical.at("selected"))
                             targets.insert(target.at("entity_id").template get<std::string>());
@@ -68235,9 +68235,9 @@ private:
                         SelectionPropertyEditRequest properties;
                         properties.unchanged_policy=SelectionPropertyUnchangedPolicy::retain;
                         const auto quantity=[](double metres) {
-                            if (!std::isfinite(metres)) throw std::invalid_argument("The wall elevation is not finite.");
+                            if (!std::isfinite(metres)) throw std::invalid_argument("The elevation is not finite.");
                             const auto result=parse_quantity(json(metres).dump()+" m",Unit::metre);
-                            if (result.metres!=metres) throw std::invalid_argument("The wall elevation exceeds exact quantity precision.");
+                            if (result.metres!=metres) throw std::invalid_argument("The elevation exceeds exact quantity precision.");
                             return result;
                         };
                         for (const auto& id:capture.ordinary) {
@@ -68255,6 +68255,20 @@ private:
                                 intent.elevation=quantity(wall.elevation+delta.z);
                                 properties.selected.push_back({entity.id,SelectionPropertyFamily::wall});
                                 properties.walls.push_back(std::move(intent));
+                            } else if (entity.type=="slab") {
+                                Slab slab;std::string diagnostic;
+                                if (!read_document_slab(entity,slab,diagnostic)) throw std::invalid_argument(diagnostic);
+                                const auto placement=capture.ordinary_frames.find(id);
+                                if (placement==capture.ordinary_frames.end())
+                                    throw std::invalid_argument("The floor slab lost its captured source frame.");
+                                const auto delta=site_transform_delta({0.0,0.0,gesture.translation_world_m[2]},placement->second.inverse);
+                                if (delta.x!=0.0 || delta.y!=0.0)
+                                    throw std::invalid_argument("The floor slab frame does not support pure vertical movement.");
+                                SlabProfileEditIntent intent;intent.slab_id=entity.id;
+                                intent.elevation=quantity(slab.elevation+delta.z);
+                                intent.coordinate_hosted_elevation=true;
+                                properties.selected.push_back({entity.id,SelectionPropertyFamily::slab});
+                                properties.slabs.push_back(std::move(intent));
                             } else if (entity.type=="opening") {
                                 std::string host,diagnostic;
                                 if (!read_document_wall_id(entity,host,diagnostic) || !capture.ordinary.contains(id_from(host)))
@@ -68269,15 +68283,28 @@ private:
                                     throw std::invalid_argument("Select both corner-window walls to move the assembly vertically.");
                             } else throw std::invalid_argument("Move the wall cohort separately from unrelated 3D objects.");
                         }
-                        auto prepared=prepareWallElevationProperties(*capture.source,properties,"Move walls vertically in 3D");
+                        auto prepared=prepareWallElevationProperties(*capture.source,properties,
+                            properties.slabs.empty()?"Move walls vertically in 3D":"Move walls and floor slabs vertically in 3D");
                         if (cancellation.is_cancelled()) return RegenerationReceipt{capture.source->revision(),{}};
                         request.result->wall_vertical_preparation=std::make_shared<MixedSelectionPropertyEditPreparation>(std::move(prepared));
                         request.result->candidate=std::make_shared<DocumentSnapshot>(request.result->wall_vertical_preparation->preview_snapshot());
                         request.result->targets=capture.targets;
                         request.result->visible_ids.clear();
+                        auto visible_redirects=request.result->wall_vertical_preparation->original_to_proposed();
+                        if (!request.result->wall_vertical_preparation->hosted_binding_original_to_proposed().empty()) {
+                            const auto source_aliases=embedded_assembly_presentation_ids(capture.source->entities());
+                            const auto candidate_aliases=embedded_assembly_presentation_ids(request.result->candidate->entities());
+                            for (const auto& [original,proposed]:request.result->wall_vertical_preparation->hosted_binding_original_to_proposed()) {
+                                const auto& old_alias=source_aliases.at(original);
+                                const auto& new_alias=candidate_aliases.at(proposed);
+                                const auto [found,inserted]=visible_redirects.emplace(old_alias,new_alias);
+                                if (!inserted && found->second!=new_alias)
+                                    throw std::invalid_argument("The hosted component preview has conflicting replacement identities.");
+                            }
+                        }
                         for (const auto& id:capture.visible_ids) {
-                            const auto mapped=request.result->wall_vertical_preparation->original_to_proposed().find(id);
-                            request.result->visible_ids.insert(mapped==request.result->wall_vertical_preparation->original_to_proposed().end()?id:mapped->second);
+                            const auto mapped=visible_redirects.find(id);
+                            request.result->visible_ids.insert(mapped==visible_redirects.end()?id:mapped->second);
                         }
                         request.result->no_op=entity_map_digest(request.result->candidate->entities())==entity_map_digest(capture.source->entities());
                         return RegenerationReceipt{capture.source->revision(),{}};
@@ -69449,34 +69476,52 @@ public:
         // primary order stays in SourceEditAuthority for selection restoration.
         std::sort(request.selected.begin(),request.selected.end(),[](const auto& a,const auto& b) { return a.entity_id<b.entity_id; });
         std::sort(request.walls.begin(),request.walls.end(),[](const auto& a,const auto& b) { return a.wall_id<b.wall_id; });
+        std::sort(request.slabs.begin(),request.slabs.end(),[](const auto& a,const auto& b) { return a.slab_id<b.slab_id; });
         std::sort(request.hosted_openings.begin(),request.hosted_openings.end(),[](const auto& a,const auto& b) { return a.opening_id<b.opening_id; });
         if (request.walls.empty() || std::none_of(request.walls.begin(),request.walls.end(),[](const auto& wall) {
                 return wall.elevation.has_value();
             })) throw std::invalid_argument("Wall vertical movement requires its explicit elevation profiles.");
         if (std::any_of(request.selected.begin(),request.selected.end(),[](const auto& member) {
-                return member.family!=SelectionPropertyFamily::wall && member.family!=SelectionPropertyFamily::hosted_opening;
-            })) throw std::invalid_argument("This elevation workflow requires walls and their hosted openings.");
+                return member.family!=SelectionPropertyFamily::wall && member.family!=SelectionPropertyFamily::slab &&
+                    member.family!=SelectionPropertyFamily::hosted_opening;
+            })) throw std::invalid_argument("This elevation workflow requires walls, floor slabs and their hosted openings.");
         const auto inventory=inspect_phase_selection_property_edit(source,request,{});
         auto occupied=retainedSlabIdentityNames(source,true);
         std::vector<PhaseSelectionPropertyIdentityAllocation> allocations;
         for (const auto& cohort:inventory.replacements()) {
-            if (cohort.lane!=PhaseSelectionPropertyLane::walls)
+            if (cohort.lane!=PhaseSelectionPropertyLane::walls && cohort.lane!=PhaseSelectionPropertyLane::slabs)
                 throw std::invalid_argument("The wall elevation proposal has an unrelated replacement family.");
-            const auto& plan=std::get<PhaseWallReplacementPlan>(cohort.plan);
-            if (!plan.ready()) {
-                std::string reasons;
-                for (const auto& diagnostic:plan.diagnostics) if (diagnostic.blocking) {
-                    if (!reasons.empty()) reasons+='\n';reasons+=diagnostic.reason;
-                }
-                throw std::invalid_argument(reasons.empty()?"The wall replacement inventory is incomplete.":reasons);
-            }
             PhaseSelectionPropertyIdentityAllocation allocation;
             allocation.lane=cohort.lane;allocation.registry_id=cohort.registry_id;allocation.alternative_id=cohort.alternative_id;
-            for (const auto* roster:{&plan.required_entity_ids,&plan.required_child_ids})
-                for (const auto& id:*roster) if (!allocation.identities.contains(id)) {
-                    auto fresh=new_id("proposed");while (!occupied.insert(fresh).second) fresh=new_id("proposed");
-                    allocation.identities.emplace(id,std::move(fresh));
+            const auto fresh=[&](const char* kind) {
+                auto id=new_id(kind);while (!occupied.insert(id).second) id=new_id(kind);return id;
+            };
+            const auto allocate=[&](const auto& plan) {
+                if (!plan.ready()) {
+                    std::string reasons;
+                    for (const auto& diagnostic:plan.diagnostics) if (diagnostic.blocking) {
+                        if (!reasons.empty()) reasons+='\n';reasons+=diagnostic.reason;
+                    }
+                    throw std::invalid_argument(reasons.empty()?"The vertical replacement inventory is incomplete.":reasons);
                 }
+                for (const auto* roster:{&plan.required_entity_ids,&plan.required_child_ids})
+                    for (const auto& id:*roster) if (!allocation.identities.contains(id))
+                        allocation.identities.emplace(id,fresh("proposed"));
+            };
+            if (cohort.lane==PhaseSelectionPropertyLane::walls)
+                allocate(std::get<PhaseWallReplacementPlan>(cohort.plan));
+            else {
+                const auto& plan=std::get<PhaseSlabReplacementPlan>(cohort.plan);
+                allocate(plan);
+                for (const auto& key:plan.required_hosted_instance_ids) {
+                    auto id=fresh("proposed-component");
+                    auto alias=allocation.identities.at(key.first)+":instance:"+id;
+                    while (!occupied.insert(alias).second) {
+                        id=fresh("proposed-component");alias=allocation.identities.at(key.first)+":instance:"+id;
+                    }
+                    allocation.hosted_instance_identities.emplace(key,std::move(id));
+                }
+            }
             allocations.push_back(std::move(allocation));
         }
         return prepare_mixed_selection_property_edit(source,std::optional<SelectionPropertyEditRequest>{request},

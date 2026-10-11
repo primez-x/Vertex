@@ -968,7 +968,7 @@ public:
     // proxy, primary member, compatibility host IDs or a cached eligibility bit.
     // Typed children travel vertically only through an explicitly selected roof.
     // A wall cohort has its own scalar elevation publication path and admits
-    // only actual walls and their explicitly selected hosted dependents.
+    // actual walls, floor slabs and explicitly selected wall dependents.
     bool supports_coordinated_vertical_translation(const DocumentSnapshot& source,
         const QStringList& ordinary, const std::vector<NativeRoofOpeningTarget>& children) const {
         if (!source.is_editable() || ordinary.isEmpty()) return false;
@@ -987,7 +987,7 @@ public:
                 const auto id=selected.toStdString();
                 const auto found=source.entities().find(id);
                 if (found==source.entities().end() || !supports_coordinated_plan_member(id,source,ordinary)) return false;
-                if (found->second.type=="wall") continue;
+                if (found->second.type=="wall" || found->second.type=="slab") continue;
                 if (found->second.type=="opening") {
                     std::string wall_id,error;
                     if (!read_document_wall_id(found->second,wall_id,error) || !selected_wall(wall_id)) return false;
@@ -2381,7 +2381,7 @@ bool NativeModelView::completeRoofOpeningTransformPreview(
         for (const auto& id:candidate_selection) {
             const auto owner=original.entities().find(id.toStdString());
             if (owner==original.entities().end() || (owner->second.type!="wall" && owner->second.type!="opening" &&
-                owner->second.type!="corner_window")) return false;
+                owner->second.type!="corner_window" && owner->second.type!="slab")) return false;
             has_wall=has_wall || owner->second.type=="wall";
         }
         if (!has_wall) return false;
@@ -2391,7 +2391,8 @@ bool NativeModelView::completeRoofOpeningTransformPreview(
             const auto before=original.entities().find(source_id),after=candidate.entities().find(destination_id);
             const auto retained=candidate.entities().find(source_id);
             if (!candidate_selection.contains(id) || before==original.entities().end() ||
-                (before->second.type!="wall" && before->second.type!="opening" && before->second.type!="corner_window") ||
+                (before->second.type!="wall" && before->second.type!="opening" && before->second.type!="corner_window" &&
+                 before->second.type!="slab") ||
                 after==candidate.entities().end() || before->second.type!=after->second.type ||
                 source_id==destination_id || original.entities().contains(destination_id) ||
                 !destinations.insert(destination_id).second || retained==candidate.entities().end() ||

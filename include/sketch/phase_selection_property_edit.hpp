@@ -146,6 +146,10 @@ private:
 // roster. Empty allocation inventories remain ordinary/proposed scalar edits;
 // wall replacement cohorts with elevation use complete vertical leaf authority.
 // Historical V1/V2 reject scalar V4 and cannot acquire elevation authority.
+// V4 has V3's exact fields and requires scalar V5. Each actual replacement
+// cohort containing coordinated slab profiles uses explicit slab leaf V7;
+// ordinary carry retains complete original-source scalar replay. Historical
+// V1..V3 reject scalar V5 and cannot acquire hosted-elevation carry authority.
 [[nodiscard]] nlohmann::json encode_phase_selection_property_edit_request(
     const DocumentSnapshot&, const PhaseSelectionPropertyEditRequest&);
 [[nodiscard]] nlohmann::json validate_phase_selection_property_edit_request(const nlohmann::json&);

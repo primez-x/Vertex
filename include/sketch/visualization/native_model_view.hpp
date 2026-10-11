@@ -135,7 +135,7 @@ public:
     // Coordinated completion accepts the shell's sealed read-only drawing candidate;
     // original gesture authority stays with the editable published source and
     // both captured rosters must have complete visible candidate geometry.
-    // Pure wall Z proposals may supply selected-owner correspondence from the
+    // Pure wall/floor-slab Z proposals may supply selected-owner correspondence from the
     // sealed phase preparation. It identifies transient render geometry only;
     // it confers no edit, replacement or publication authority.
     [[nodiscard]] bool completeRoofOpeningTransformPreview(
@@ -164,7 +164,8 @@ public:
     // through the Z scale handle. Directional scaling stays hidden; Z movement
     // is available only for a complete cohort of supported physical 3D owners,
     // or actual walls plus hosted openings whose wall is explicitly selected
-    // and corner windows whose two walls are explicitly selected. Wall cohorts
+    // and corner windows whose two walls are explicitly selected. Floor slabs
+    // may join the wall cohort through their actual typed elevation profiles. Wall cohorts
     // exclude typed roof children and unrelated owners; their Z publication
     // requires the shell's separate wall elevation path, not raw XYZ transforms.
     // Changing this policy retires any captured gesture before controls rebuild.

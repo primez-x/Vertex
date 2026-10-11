@@ -17,10 +17,15 @@ struct SlabProfileEditIntent {
     std::optional<Quantity> thickness;
     std::optional<Quantity> elevation;
     std::optional<std::vector<SlabProfileLayerThickness>> layer_thicknesses;
+    // V3 derives hosted placement consequences from actual elevation changes.
+    // Historical v1/v2 preserve their scalar-only map replay semantics.
+    bool coordinate_hosted_elevation{false};
 };
 
-// Strict bounded versions 1/2; all three optional inputs have explicit nulls.
+// Strict bounded versions 1/2/3; all three optional inputs have explicit nulls.
 // Version 2 is inferred only for source-retained layer rows (null thickness).
+// Version 3 adds coordinate_hosted_elevation:true, requires elevation and
+// permits the same optional retained layer rows as version 2.
 // A retained inventory still requires an authored scalar or layer dimension.
 // Elevation admits exact signed/zero input; thicknesses must be positive.
 [[nodiscard]] nlohmann::json encode_slab_profile_edit_intent(const SlabProfileEditIntent& intent);
@@ -35,6 +40,8 @@ void validate_slab_profile_source_entity(const Entity& source);
 // Layers require the complete existing ordered inventory; no redistribution
 // or total thickness is inferred. Equal inputs retain the exact source.
 [[nodiscard]] Entity replay_slab_profile_entity(const Entity& source, const SlabProfileEditIntent& intent);
+// Complete-map v3 replay also admits actual hosted dependencies and derives
+// their placement from the actual raw before/after elevation displacement.
 [[nodiscard]] std::map<std::string, Entity, std::less<>> replay_slab_profile_entities(
     const std::map<std::string, Entity, std::less<>>& source,
     const std::vector<SlabProfileEditIntent>& intents);

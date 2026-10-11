@@ -205,7 +205,8 @@ Json scalar_wire(const DocumentSnapshot& source, const SelectionPropertyEditRequ
         request.slabs.size() > 1000 || request.hosted_openings.size() > 1000 || request.roofs.size() > 1000 ||
         request.structural_profiles.size() > 1000 || request.stair_profiles.size() > 1000) invalid("typed scalar target budget exceeded");
     const bool vertical = std::any_of(request.walls.begin(), request.walls.end(), [](const auto& wall) { return wall.elevation.has_value(); });
-    Json result{{"version", vertical ? 4 : !request.stair_profiles.empty() ? 3 : !request.structural_profiles.empty() ? 2 : 1},
+    const bool slab_carry = std::any_of(request.slabs.begin(), request.slabs.end(), [](const auto& slab) { return slab.coordinate_hosted_elevation; });
+    Json result{{"version", slab_carry ? 5 : vertical ? 4 : !request.stair_profiles.empty() ? 3 : !request.structural_profiles.empty() ? 2 : 1},
         {"expected_revision", source.revision()}, {"source_snapshot_digest", document_snapshot_digest(source)},
         {"source_authoring_digest", document_authoring_source_digest_v2(source)},
         {"source_entities_digest", entity_map_digest(source.entities())},
@@ -221,10 +222,10 @@ Json scalar_wire(const DocumentSnapshot& source, const SelectionPropertyEditRequ
     append(request.slabs, "slabs", encode_slab_profile_edit_intent);
     append(request.hosted_openings, "hosted_openings", encode_hosted_opening_profile_edit_intent);
     append(request.roofs, "roofs", encode_roof_profile_edit_intent);
-    if (vertical || !request.structural_profiles.empty() || !request.stair_profiles.empty()) {
+    if (vertical || slab_carry || !request.structural_profiles.empty() || !request.stair_profiles.empty()) {
         result["structural_profiles"] = Json::array(); append(request.structural_profiles, "structural_profiles", encode_structural_profile_edit_intent);
     }
-    if (vertical || !request.stair_profiles.empty()) {
+    if (vertical || slab_carry || !request.stair_profiles.empty()) {
         result["stair_profiles"] = Json::array(); append(request.stair_profiles, "stair_profiles", encode_stair_profile_edit_intent);
     }
     return validate_selection_property_edit_request(result);
@@ -337,7 +338,8 @@ std::vector<PhaseStairReplacementDependencyDisposition> decisions(const Json& ro
 PhaseSelectionPropertyEditRequest decode(const Json& wire) {
     bounds(wire);
     if (!wire.is_object() || !wire.contains("version") || !wire.at("version").is_number_integer()) invalid("unsupported request version");
-    const bool vertical = wire.at("version") == 3;
+    const bool slab_carry = wire.at("version") == 4;
+    const bool vertical = wire.at("version") == 3 || slab_carry;
     const bool composite = wire.at("version") == 2 || vertical;
     if (composite) fields(wire, {"version", "expected_revision", "source_snapshot_digest", "source_authoring_digest", "source_entities_digest",
         "source_saved_revision", "scalar_request", "allocations", "stair_dependency_dispositions", "message", "skylight_properties", "roof_opening_members"});
@@ -348,9 +350,9 @@ PhaseSelectionPropertyEditRequest decode(const Json& wire) {
     PhaseSelectionPropertyEditRequest result;
     if (!wire.at("scalar_request").is_null()) result.properties = scalar_request(wire.at("scalar_request"));
     else if (!composite) invalid("historical request requires scalar authority");
-    if (vertical ? (wire.at("scalar_request").is_null() || wire.at("scalar_request").at("version") != 4) :
-        (!wire.at("scalar_request").is_null() && wire.at("scalar_request").at("version") == 4))
-        invalid("wall elevation requires explicit phase request three and scalar request four");
+    if (vertical ? (wire.at("scalar_request").is_null() || wire.at("scalar_request").at("version") != (slab_carry ? 5 : 4)) :
+        (!wire.at("scalar_request").is_null() && (wire.at("scalar_request").at("version") == 4 || wire.at("scalar_request").at("version") == 5)))
+        invalid("wall elevation or hosted slab carry requires its explicit phase and scalar request dialects");
     if (composite) {
         const auto revision = [&](const Json& value) {
             if (!value.is_number_integer() || (value.is_number_unsigned() ? false : value.get<std::int64_t>() < 0)) invalid("invalid source revision");
@@ -475,7 +477,15 @@ PhaseSelectionPropertyEditInspection inspect_phase_selection_property_edit(const
         edited.emplace(found->first, found->second);
     }
     for (const auto& profile : request.walls) edited.at(profile.wall_id) = replay_wall_profile_entity(actual.at(profile.wall_id), profile);
-    for (const auto& profile : request.slabs) edited.at(profile.slab_id) = replay_slab_profile_entity(actual.at(profile.slab_id), profile);
+    const bool slab_carry = std::any_of(request.slabs.begin(), request.slabs.end(), [](const auto& slab) { return slab.coordinate_hosted_elevation; });
+    if (slab_carry) {
+        // Inspect the complete original-source consequence, including actual
+        // hosted placement rows. Only selected slab bodies enter this editor
+        // inventory; the full producer independently owns catalog changes.
+        const auto slab_candidate = replay_slab_profile_entities(actual, request.slabs);
+        for (const auto& profile : request.slabs) edited.at(profile.slab_id) = slab_candidate.at(profile.slab_id);
+    } else for (const auto& profile : request.slabs)
+        edited.at(profile.slab_id) = replay_slab_profile_entity(actual.at(profile.slab_id), profile);
     for (const auto& profile : request.hosted_openings) edited.at(profile.opening_id) = replay_hosted_opening_profile_entity(actual.at(profile.opening_id), profile);
     Ids invariant_roof_bodies;
     for (const auto& profile : request.roofs) {
@@ -611,9 +621,10 @@ Json encode_phase_selection_property_edit_request(const DocumentSnapshot& source
     if (request.properties.selected.empty() && (!request.roof_opening_properties || !request.properties.walls.empty() || !request.properties.slabs.empty() ||
         !request.properties.hosted_openings.empty() || !request.properties.roofs.empty() || !request.properties.structural_profiles.empty() || !request.properties.stair_profiles.empty())) invalid("empty physical roster requires child-only authority");
     const bool vertical = std::any_of(request.properties.walls.begin(), request.properties.walls.end(), [](const auto& wall) { return wall.elevation.has_value(); });
-    Json wire{{"version", vertical ? 3 : request.roof_opening_properties ? 2 : 1}, {"scalar_request", request.properties.selected.empty() ? Json(nullptr) : scalar_wire(source, request.properties)}, {"allocations", Json::array()},
+    const bool slab_carry = std::any_of(request.properties.slabs.begin(), request.properties.slabs.end(), [](const auto& slab) { return slab.coordinate_hosted_elevation; });
+    Json wire{{"version", slab_carry ? 4 : vertical ? 3 : request.roof_opening_properties ? 2 : 1}, {"scalar_request", request.properties.selected.empty() ? Json(nullptr) : scalar_wire(source, request.properties)}, {"allocations", Json::array()},
         {"stair_dependency_dispositions", decisions_wire(request.stair_dependency_dispositions)}, {"message", request.message}};
-    if (vertical || request.roof_opening_properties) {
+    if (vertical || slab_carry || request.roof_opening_properties) {
         const auto captured = source_fields(source); for (const auto* fence : source_fences) wire[fence] = captured.at(fence);
         wire["skylight_properties"] = request.roof_opening_properties ? skylight_wire(*request.roof_opening_properties) : Json(nullptr); wire["roof_opening_members"] = Json::array();
         if (request.roof_opening_properties) for (const auto& member : request.roof_opening_properties->members) wire["roof_opening_members"].push_back({{"roof_id", member.roof_id}, {"opening_id", member.opening_id}});
@@ -702,6 +713,7 @@ PhaseSelectionPropertyEditPreparation replay_phase_selection_property_edit_prepa
             PhaseSlabReplacementAuthoring leaf; leaf.registry_id = ids.registry_id; leaf.alternative_id = ids.alternative_id;
             leaf.seed_slab_ids = plan.seed_slab_ids; leaf.identities = ids.identities; leaf.hosted_instance_identities = ids.hosted_instance_identities;
             leaf.slab_profiles = selected_intents(request.properties.slabs, selected, [](const auto& p) { return p.slab_id; });
+            leaf.coordinate_hosted_profiles = std::any_of(leaf.slab_profiles.begin(), leaf.slab_profiles.end(), [](const auto& slab) { return slab.coordinate_hosted_elevation; });
             intent.slab_replacement = encode_phase_slab_replacement_authoring(leaf);
             merge_mapping(mapping, ids.identities, actual); break;
         }

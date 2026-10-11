@@ -74,7 +74,8 @@ struct PhaseSlabReplacementResult {
     const std::vector<SlabGeometryEditIntent>& slab_geometry = {},
     const std::vector<SlabGeometryEditIntent>& ordinary_geometry = {},
     const PhaseSlabReplacementHostedInstanceIdentityMap& hosted_instance_identities = {},
-    bool coordinate_ordinary_hosted_geometry = false);
+    bool coordinate_ordinary_hosted_geometry = false,
+    bool coordinate_hosted_profiles = false);
 
 struct PhaseSlabReplacementAuthoring {
     std::string registry_id;
@@ -90,6 +91,8 @@ struct PhaseSlabReplacementAuthoring {
     // ordinary members of a mixed geometry operation. Earlier retained wires
     // keep their original replay semantics.
     bool coordinate_ordinary_hosted_geometry{false};
+    // V7 opts into actual-source hosted elevation consequences for profiles.
+    bool coordinate_hosted_profiles{false};
 };
 
 // Exact v1 fields: version, registry_id, alternative_id, seed_slab_ids,
@@ -105,6 +108,9 @@ struct PhaseSlabReplacementAuthoring {
 // roster from actual source slots. V1-V4 retain their original encoding.
 // V6 adds coordinate_ordinary_hosted_geometry:true to the V5 envelope, allows
 // an empty hosted copy roster, and requires both geometry lists nonempty.
+// V7 adds coordinate_hosted_profiles:true to the V5 envelope, allows an empty
+// hosted copy roster, and requires only profiles with at least one leaf v3.
+// Other profiles in that same phase cohort retain historical placement semantics.
 [[nodiscard]] nlohmann::json encode_phase_slab_replacement_authoring(
     const PhaseSlabReplacementAuthoring& authoring);
 [[nodiscard]] PhaseSlabReplacementAuthoring decode_phase_slab_replacement_authoring(

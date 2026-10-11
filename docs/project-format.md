@@ -1,4 +1,13 @@
-# Vertex project formats v1 through v201
+# Vertex project formats v1 through v202
+
+Reader202 retains explicit slab elevation carry in profile leaf3, selected
+Properties request5, phase selection request4, slab replacement leaf7/phase
+outer27 and mixed Properties dialect13. The raw elevation change derives actual
+hosted placement consequences once for both genuine profiles and legacy host
+copies. Alternative source slabs and original hosted rows remain exact; fresh
+qualified slots carry the proposed placement. Historical profile and enclosing
+dialects refuse this authority and keep their original meanings. Native
+extraction emits200. Compilation, interaction and round trips remain unverified.
 
 Reader201 retains signed wall elevation in profile leaf4, selected Properties
 request4, phase selection request3, wall replacement leaf10/phase outer26 and

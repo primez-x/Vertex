@@ -1,5 +1,12 @@
 # Portable project extraction
 
+Exchange version200 requires native reader202 for coordinated slab elevation and
+actual hosted component carry in mixed Properties dialect13. Ordinary and phase
+contributions derive from the same original source; qualified proposed rows and
+original baseline placements retain their separate identities through history.
+Previous wire shapes keep their original authority. Runtime and round-trip
+qualification remain open.
+
 Exchange version199 requires native reader201 for explicit wall elevation
 profiles and reviewed mixed Properties dialect12. Source-bound phase copies,
 selected-owner correspondence and old/new effective room-plane decisions remain

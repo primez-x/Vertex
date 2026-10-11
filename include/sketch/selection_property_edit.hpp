@@ -84,6 +84,10 @@ private:
 // V4 explicitly admits wall elevation receipt v4 and requires at least one such
 // wall. It includes both structural_profiles and stair_profiles, either empty.
 // V1..V3 reject elevation leaves. Other nested codecs retain their versions.
+// V5 retains V4's exact fields and requires at least one slab receipt v3 with
+// explicit hosted-elevation carry. Wall elevation is optional and still uses
+// receipt v4. V1..V4 reject slab carry; V5 permits isolated slab carry without
+// granting arbitrary catalog, placement or candidate-map authoring.
 // Strict canonical round trips,
 // 1..1000 complete targets, 4 MiB wire, 100000 values, depth 64. Structural and
 // stair all-null intents explicitly retain their declared members. Historical typed

@@ -290,7 +290,9 @@ public:
     // for joint roof/skylight source admission and qualified child replacement.
     // v201 retains explicit wall elevation profiles, phase outer26 and mixed
     // Properties twelve without changing historical profile/phase meanings.
-    static constexpr std::uint32_t format_version = 201;
+    // v202 retains coordinated slab elevation/hosted carry, phase outer27 and
+    // mixed Properties thirteen without changing historical profile meanings.
+    static constexpr std::uint32_t format_version = 202;
     static constexpr std::uint32_t recovery_format_version = 4;
     [[nodiscard]] static std::uint32_t required_format_version(const DocumentSnapshot& snapshot);
     static constexpr std::uint64_t maximum_file_bytes = 4ULL * 1024ULL * 1024ULL * 1024ULL;

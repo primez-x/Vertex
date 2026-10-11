@@ -408,6 +408,8 @@ CoordinatedReplacements coordinated(const Json& value,const PhaseConstraintAutho
     if (!value.at("slab_replacement").is_null()) {
         const auto& leaf=value.at("slab_replacement");
         result.slab=decode_phase_slab_replacement_authoring(leaf);
+        if (result.slab->coordinate_hosted_profiles)
+            invalid("Coordinated replacement dialects cannot borrow slab elevation carry authority");
         if (result.slab->slab_geometry.empty() || !result.slab->slab_profiles.empty() || !result.slab->slab_stacks.empty() ||
             encode_phase_slab_replacement_authoring(*result.slab).dump()!=leaf.dump())
             invalid("Coordinated horizontal replacement requires canonical geometry authority");
@@ -1313,6 +1315,7 @@ nlohmann::json encode_phase_constraint_authoring_intent(const PhaseConstraintAut
         if (encode_intent(value.intent) != encode_intent(empty))
             invalid("Slab replacement cannot borrow geometry or relationship authority");
         result["slab_replacement"] = value.slab_replacement;
+        if (replacement.coordinate_hosted_profiles) result["version"] = 27;
     }
     if (!value.slab_demolition.is_null()) {
         const auto demolition = decode_slab_demolition_intent(value.slab_demolition);
@@ -1414,7 +1417,8 @@ PhaseConstraintAuthoringIntent decode_phase_constraint_authoring_intent(const Js
     const bool demolition=value.is_object() && value.contains("version") && value.at("version")==3;
     const bool roof_rotation=value.is_object() && value.contains("version") && value.at("version")==21;
     const bool roof=roof_rotation || (value.is_object() && value.contains("version") && value.at("version")==4);
-    const bool slab=value.is_object() && value.contains("version") && value.at("version")==5;
+    const bool vertical_slabs=value.is_object() && value.contains("version") && value.at("version")==27;
+    const bool slab=vertical_slabs || (value.is_object() && value.contains("version") && value.at("version")==5);
     const bool slab_demolition=value.is_object() && value.contains("version") && value.at("version")==6;
     const bool coordinated_replacements=value.is_object() && value.contains("version") &&
         (value.at("version")==7 || value.at("version")==8 || value.at("version")==10 || value.at("version")==14);
@@ -1458,7 +1462,7 @@ PhaseConstraintAuthoringIntent decode_phase_constraint_authoring_intent(const Js
         "source_entities_digest","source_saved_revision","phase_selections","intent","ordinary_roof_edits"});
     else keys(value,{"version","expected_revision","source_snapshot_digest","source_authoring_digest",
         "source_entities_digest","source_saved_revision","phase_selections","intent"});
-    if (!value.at("version").is_number_integer() || (value.at("version")!=1 && value.at("version")!=2 && value.at("version")!=3 && value.at("version")!=4 && value.at("version")!=5 && value.at("version")!=6 && value.at("version")!=7 && value.at("version")!=8 && value.at("version")!=9 && value.at("version")!=10 && value.at("version")!=11 && value.at("version")!=12 && value.at("version")!=13 && value.at("version")!=14 && value.at("version")!=15 && value.at("version")!=16 && value.at("version")!=17 && value.at("version")!=18 && value.at("version")!=19 && value.at("version")!=20 && value.at("version")!=21 && value.at("version")!=22 && value.at("version")!=23 && value.at("version")!=24 && value.at("version")!=25 && value.at("version")!=26) ||
+    if (!value.at("version").is_number_integer() || (value.at("version")!=1 && value.at("version")!=2 && value.at("version")!=3 && value.at("version")!=4 && value.at("version")!=5 && value.at("version")!=6 && value.at("version")!=7 && value.at("version")!=8 && value.at("version")!=9 && value.at("version")!=10 && value.at("version")!=11 && value.at("version")!=12 && value.at("version")!=13 && value.at("version")!=14 && value.at("version")!=15 && value.at("version")!=16 && value.at("version")!=17 && value.at("version")!=18 && value.at("version")!=19 && value.at("version")!=20 && value.at("version")!=21 && value.at("version")!=22 && value.at("version")!=23 && value.at("version")!=24 && value.at("version")!=25 && value.at("version")!=26 && value.at("version")!=27) ||
         !value.at("expected_revision").is_number_unsigned()) invalid("Phase constraint proof version or revision is invalid");
     if (!value.at("source_saved_revision").is_null() && !value.at("source_saved_revision").is_number_unsigned())
         invalid("Phase constraint saved revision is invalid");
@@ -1489,7 +1493,9 @@ PhaseConstraintAuthoringIntent decode_phase_constraint_authoring_intent(const Js
     if (slab) {
         result.slab_replacement = value.at("slab_replacement");
         if (result.slab_replacement.is_null()) invalid("Version five requires slab replacement decisions");
-        (void)decode_phase_slab_replacement_authoring(result.slab_replacement);
+        const auto leaf=decode_phase_slab_replacement_authoring(result.slab_replacement);
+        if (leaf.coordinate_hosted_profiles!=vertical_slabs)
+            invalid("Slab elevation carry outer and leaf versions do not match");
     }
     if (slab_demolition) {
         result.slab_demolition = value.at("slab_demolition");
@@ -2547,7 +2553,7 @@ Entities compose_phase_property_selection_edit_candidates(const DocumentSnapshot
             const auto leaf=decode_phase_structural_replacement_authoring(intent.structural_replacement);
             registry=leaf.registry_id;alternative=leaf.alternative_id;
             replay=replay_phase_constraint_authoring(actual,wire);
-        } else if (version==5) {
+        } else if (version==5 || version==27) {
             const auto leaf=decode_phase_slab_replacement_authoring(intent.slab_replacement);
             registry=leaf.registry_id;alternative=leaf.alternative_id;
             replay=replay_phase_constraint_authoring(actual,wire);
@@ -2566,7 +2572,7 @@ Entities compose_phase_property_selection_edit_candidates(const DocumentSnapshot
         } else invalid("Phase Properties contribution has unsupported replacement authority");
         // Historical scalar and vertical scalar dialects are the same family.
         // Different wire versions cannot split overlapping wall authority.
-        if (!groups.emplace(version==26 ? 23 : version,registry,alternative).second)
+        if (!groups.emplace(version==26 ? 23 : version==27 ? 5 : version,registry,alternative).second)
             invalid("Phase Properties repeats a family/registry/alternative contribution");
         collect(replay);merge(replay);
     }

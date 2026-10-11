@@ -36,6 +36,11 @@ namespace sketch {
 // explicit. Zero allocation cohorts permit ordinary elevation edits with the
 // same source-bound replay and mandatory source/destination room-plane review.
 // Historical dialects five through eleven reject the elevation authority.
+// Dialect thirteen retains twelve's exact fields and requires phase request
+// four with scalar request five for original-source hosted slab elevation
+// carry. Wall elevation remains optional; any affected walls retain twelve's
+// mandatory source/destination room-plane review. Historical dialects five
+// through twelve reject the new slab carry authority.
 // Each lane reads the same
 // complete immutable original snapshot. No supplied entity map, transform,
 // or caller-derived selected-object identity map is accepted. Historical
@@ -136,6 +141,8 @@ private:
     std::span<const AssemblyInstancePropertyEditIntent>,
     const std::optional<StairPropertyReviewRequest>& reviewed = std::nullopt);
 // Dialect eleven replaces ordinary_request with mandatory phase_request v1/v2.
+// This overload emits twelve for phase request v3 and thirteen for v4;
+// ordinary overloads also emit thirteen for explicit hosted slab carry.
 // Assembly request is nullable; stair review stays solely inside phase_request.
 // phase_room_reviews contains ordered {phase_authoring_index,wall_replacement}
 // rows: the completed wall leaf must preserve all captured scalar/allocation
