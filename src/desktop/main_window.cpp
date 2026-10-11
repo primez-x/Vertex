@@ -13781,12 +13781,25 @@ public:
                         const auto decoded=decode_boundary_dimension_entity(found->second);
                         if (!decoded.supported()) throw std::invalid_argument(decoded.unsupported_reason);
                         (void)resolve_current_boundary_dimension(*decoded.dimension, source);
+                        bool measured_owner_selected = selection.contains(id_from(decoded.dimension->boundary_id));
+                        if (decoded.dimension->assembly_target) {
+                            const auto& component = decoded.dimension->assembly_target->component;
+                            if (component.document_entity_id)
+                                measured_owner_selected = selection.contains(id_from(*component.document_entity_id));
+                            else {
+                                if (!selection_embedded_ids)
+                                    selection_embedded_ids = embedded_assembly_presentation_ids(source.entities());
+                                const auto alias = selection_embedded_ids->find({component.catalog_id, component.instance_id});
+                                measured_owner_selected = alias != selection_embedded_ids->end() &&
+                                    selection.contains(id_from(alias->second));
+                            }
+                        }
                         const bool room_callout=is_physical_wall_room(source.entities().at(decoded.dimension->boundary_id)) &&
                             std::any_of(selection.begin(),selection.end(),[&](const auto& selected) {
                                 const auto wall=source.entities().find(selected.toStdString());
                                 return wall!=source.entities().end() && wall->second.type=="wall";
                             });
-                        if ((!selection.contains(id_from(decoded.dimension->boundary_id)) && !room_callout) || !visible.contains(found->first))
+                        if ((!measured_owner_selected && !room_callout) || !visible.contains(found->first))
                             throw std::invalid_argument("Select the dimension's visible measured owner to transform them together, or drag the dimension on the canvas to adjust its placement.");
                         if (room_callout && !selection.contains(id_from(decoded.dimension->boundary_id))) {
                             independent_room_callout_selection=true;
@@ -14187,33 +14200,92 @@ public:
                             if (roof_copy_capture.intent && (roof_copy_capture.source_digest!=document_snapshot_digest(source) ||
                                     command_to_json(Command{copied}).dump()!=command_to_json(Command{*roof_copy_capture.intent}).dump()))
                                 throw std::invalid_argument("The component copy lost its admitted architectural source intent.");
+                            auto occupied = retainedSlabIdentityNames(source, true);
+                            std::set<std::string, std::less<>> existing_copy_destinations;
+                            for (const auto& [original_id, fresh_id] : candidate_copy_ids) {
+                                (void)original_id;
+                                if (existing_copy_destinations.insert(fresh_id).second && !occupied.insert(fresh_id).second)
+                                    throw std::invalid_argument("A selection copy identity is retained by project history or another copy.");
+                            }
                             for (auto& target : embedded_targets) {
                                 const auto alias=selection_embedded_ids->at({target.catalog_id,target.instance_id});
                                 std::string fresh;
-                                do { fresh=new_id("assembly_instance"); }
-                                while (source.entities().contains(fresh) || annotation_child_exists(source,fresh) ||
-                                    embeddedAssemblyChild(source,fresh) || std::any_of(candidate_copy_ids.begin(),candidate_copy_ids.end(),
-                                        [&](const auto& entry) { return entry.second==fresh; }));
+                                for (std::size_t attempt = 0; ; ++attempt) {
+                                    if (attempt == 64)
+                                        throw std::invalid_argument("Could not reserve a fresh embedded component copy identity.");
+                                    fresh = new_id("assembly_instance");
+                                    if (occupied.insert(fresh).second) break;
+                                }
                                 target.copy_instance_id=fresh;
                                 if (!candidate_copy_ids.emplace(alias,fresh).second)
                                     throw std::invalid_argument("A copied assembly alias collides with another selected owner.");
                             }
-                            const auto embedded=embedded_assembly_group_copy_command(source,embedded_targets,physical_transform,source.revision());
+                            std::set<std::pair<std::string, std::string>> copied_roots;
+                            for (const auto& target : embedded_targets)
+                                copied_roots.emplace(target.catalog_id, target.instance_id);
+                            std::map<std::string, std::string, std::less<>> dimension_copies;
+                            for (const auto& [id, entity] : source.entities()) {
+                                if (!can_recognize_boundary_dimension_entity_type(entity.type) ||
+                                    inspect_boundary_dimension_version(entity).format != BoundaryDimensionFormat::supported_v6)
+                                    continue;
+                                const auto dimension = decode_boundary_dimension_entity(entity);
+                                if (!dimension.supported() || !dimension.dimension->assembly_target)
+                                    throw std::invalid_argument("A copied component dimension has an unsupported contract.");
+                                const auto& root = dimension.dimension->assembly_target->component;
+                                if (root.document_entity_id || !copied_roots.contains({root.catalog_id, root.instance_id})) continue;
+                                if (dimension_copies.size() == 1000)
+                                    throw std::invalid_argument("The component copies have too many associated dimensions.");
+                                auto identity = candidate_copy_ids.find(id);
+                                if (identity == candidate_copy_ids.end()) {
+                                    std::string fresh;
+                                    for (std::size_t attempt = 0; ; ++attempt) {
+                                        if (attempt == 64)
+                                            throw std::invalid_argument("Could not reserve a fresh copied dimension identity.");
+                                        fresh = new_id("dimension");
+                                        if (occupied.insert(fresh).second) break;
+                                    }
+                                    identity = candidate_copy_ids.emplace(id, std::move(fresh)).first;
+                                }
+                                dimension_copies.emplace(id, identity->second);
+                            }
+                            // Explicitly selected callouts may already have an
+                            // identity copy. Replace that row with the owner's
+                            // exact detached consequence instead of copying twice.
+                            std::set<std::string, std::less<>> dimension_destinations;
+                            for (const auto& [id, fresh] : dimension_copies) {
+                                (void)id; dimension_destinations.insert(fresh);
+                            }
+                            std::erase_if(copied.entity_changes, [&](const auto& change) {
+                                if (change.kind != EntityChangeKind::upsert ||
+                                    !dimension_destinations.contains(change.entity.id)) return false;
+                                if (!can_recognize_boundary_dimension_entity_type(change.entity.type))
+                                    throw std::invalid_argument("A copied dimension identity overlaps a different object.");
+                                return true;
+                            });
+                            const auto embedded=embedded_assembly_group_copy_command(source,embedded_targets,physical_transform,
+                                source.revision(), dimension_copies);
                             if (embedded.expected_revision!=source.revision() || !embedded.asset_changes.empty())
                                 throw std::invalid_argument("An embedded assembly copy must retain its captured revision and shared assets.");
                             std::set<std::string,std::less<>> fresh_ids;
                             for (const auto& change : copied.entity_changes) fresh_ids.insert(change.entity.id);
                             for (const auto& change : embedded.entity_changes) {
-                                if (change.kind!=EntityChangeKind::upsert || source.entities().contains(change.entity.id) ||
-                                    !fresh_ids.insert(change.entity.id).second || change.entity.type!="assembly_instance" ||
-                                    std::none_of(embedded_targets.begin(),embedded_targets.end(),[&](const auto& target) {
+                                const bool component_root = change.entity.type == "assembly_instance" &&
+                                    std::any_of(embedded_targets.begin(),embedded_targets.end(),[&](const auto& target) {
                                         return target.copy_instance_id==change.entity.id;
-                                    })) throw std::invalid_argument("An embedded assembly copy requires exact fresh independent roots.");
+                                    });
+                                const bool component_dimension = can_recognize_boundary_dimension_entity_type(change.entity.type) &&
+                                    dimension_destinations.contains(change.entity.id);
+                                if (change.kind!=EntityChangeKind::upsert || source.entities().contains(change.entity.id) ||
+                                    !fresh_ids.insert(change.entity.id).second || (!component_root && !component_dimension))
+                                    throw std::invalid_argument("An embedded assembly copy requires exact fresh roots and dimensions.");
                                 copied.entity_changes.push_back(change);
                             }
                             for (const auto& target : embedded_targets)
                                 if (!fresh_ids.contains(*target.copy_instance_id))
                                     throw std::invalid_argument("An embedded assembly copy lost a selected root.");
+                            for (const auto& id : dimension_destinations)
+                                if (!fresh_ids.contains(id))
+                                    throw std::invalid_argument("An embedded assembly copy lost an associated dimension.");
                             // Copy only these roots' appearance. An explicitly
                             // selected annotation can already own a fresh subset;
                             // otherwise create an appearance-only container.

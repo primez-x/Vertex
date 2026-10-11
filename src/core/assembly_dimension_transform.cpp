@@ -252,14 +252,19 @@ std::vector<Entity> carry_requests(
         const auto& request = requests[i];
         const auto& source_root = request.source_root;
         const auto& destination_root = request.destination_root;
-        require(request.mode == AssemblyDimensionTransformMode::move || request.mode == AssemblyDimensionTransformMode::clone,
+        require(request.mode == AssemblyDimensionTransformMode::move || request.mode == AssemblyDimensionTransformMode::clone ||
+            request.mode == AssemblyDimensionTransformMode::detached_clone,
             "unknown carry mode");
         require(source_root.part_path.empty() && destination_root.part_path.empty(), "targets must be qualified roots");
         (void)encode_assembly_dimension_target({source_root, AssemblyDimensionAxis::width});
         (void)encode_assembly_dimension_target({destination_root, AssemblyDimensionAxis::width});
-        require(source_root.document_entity_id.has_value() == destination_root.document_entity_id.has_value(),
+        if (request.mode == AssemblyDimensionTransformMode::detached_clone)
+            require(!source_root.document_entity_id && destination_root.document_entity_id &&
+                source_root.catalog_id == destination_root.catalog_id,
+                "detached clone requires an embedded source and independent destination in the same catalog");
+        else require(source_root.document_entity_id.has_value() == destination_root.document_entity_id.has_value(),
             "carry cannot change root form");
-        const bool clone = request.mode == AssemblyDimensionTransformMode::clone;
+        const bool clone = request.mode != AssemblyDimensionTransformMode::move;
         require(clone ? source_root != destination_root : source_root == destination_root,
             "roots do not match the requested carry mode");
         require(request.fresh_dimension_ids.size() <= dimension_limit - mapping_count &&
@@ -292,7 +297,7 @@ std::vector<Entity> carry_requests(
         const auto* original_row = source_rows.find(source_root);
         const auto* destination_row = candidate_rows.find(destination_root);
         require(original_row && destination_row, "actual source or destination root is missing");
-        if (request.mode == AssemblyDimensionTransformMode::clone) {
+        if (request.mode != AssemblyDimensionTransformMode::move) {
             if (destination_root.document_entity_id)
                 require(!source.contains(*destination_root.document_entity_id), "cloned document root already exists in source");
             else require(!source_rows.find(destination_root), "cloned embedded root already exists in source");
@@ -301,6 +306,9 @@ std::vector<Entity> carry_requests(
             if (source_root.document_entity_id)
                 require(same_raw(source.at(*source_root.document_entity_id), candidate.at(*source_root.document_entity_id)),
                     "clone changed its original component envelope");
+            if (request.mode == AssemblyDimensionTransformMode::detached_clone)
+                require(same_raw(source.at(source_root.catalog_id), candidate.at(source_root.catalog_id)),
+                    "detached clone changed its original catalog envelope");
         }
     }
 
@@ -319,7 +327,7 @@ std::vector<Entity> carry_requests(
         if (owner == source_requests.end()) continue;
         const auto& request = requests[owner->second];
         const auto& destination_root = request.destination_root;
-        const bool clone = request.mode == AssemblyDimensionTransformMode::clone;
+        const bool clone = request.mode != AssemblyDimensionTransformMode::move;
         require(dimensions.size() < dimension_limit, "associated dimension count exceeds bound");
         const auto unchanged = candidate.find(id);
         require(unchanged != candidate.end() && same_raw(entity, unchanged->second),
@@ -346,7 +354,7 @@ std::vector<Entity> carry_requests(
         ++dimension_counts[owner->second];
     }
     for (std::size_t i = 0; i < requests.size(); ++i)
-        require(requests[i].mode != AssemblyDimensionTransformMode::clone ||
+        require(requests[i].mode == AssemblyDimensionTransformMode::move ||
             requests[i].fresh_dimension_ids.size() == dimension_counts[i], "clone has extraneous dimension identity mappings");
     if (dimensions.empty()) return {};
 
@@ -368,7 +376,7 @@ std::vector<Entity> carry_requests(
             if (!dimension.presentation) dimension.presentation.emplace();
             dimension.presentation->rotation_radians = angle;
         }
-        if (request.mode == AssemblyDimensionTransformMode::clone) {
+        if (request.mode != AssemblyDimensionTransformMode::move) {
             dimension.id = request.fresh_dimension_ids.at(dimension.id);
             dimension.assembly_target = new_targets[i];
             dimension.boundary_id = request.destination_root.document_entity_id.value_or(request.destination_root.catalog_id);

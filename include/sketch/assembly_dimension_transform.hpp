@@ -6,7 +6,7 @@
 
 namespace sketch {
 
-enum class AssemblyDimensionTransformMode { move, clone };
+enum class AssemblyDimensionTransformMode { move, clone, detached_clone };
 
 struct AssemblyDimensionTransformRequest {
     AssemblyInstancePropertyEditTarget source_root;
@@ -19,9 +19,11 @@ struct AssemblyDimensionTransformRequest {
 // clone. Both maps must be complete actual maps captured/derived by the caller;
 // neither map nor this result establishes command, phase or publication authority.
 // Roots are exact catalog/instance/document identities with empty part paths,
-// and must retain their embedded/independent form. Move requires equal roots
+// and retain their embedded/independent form for move/clone. Move requires equal roots
 // and no identity mappings. Clone requires distinct roots, a destination absent
 // from source, and the original component row retained exactly in candidate.
+// Detached clone alone admits an embedded source and fresh independent owner
+// in the same catalog, with that entire original catalog retained exactly.
 // Candidate must still contain every associated original dimension unchanged.
 //
 // Only supported v6 assembly extents on the exact source root are carried.

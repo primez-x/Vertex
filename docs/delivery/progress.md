@@ -14,6 +14,35 @@ changed source does not acquire runtime acceptance without later qualification.
 
 ## Current delivery state
 
+### October 11 embedded component group dimensions
+
+The preceding independent lifecycle batch is committed and pushed as 10e27ef1;
+the exact remote branch ref matches the local commit. The current source batch
+adds associated dimensions to embedded group moves and materialized independent
+copies. The latter has a separate pure detached-clone mode requiring the same
+actual catalog and its complete original envelope unchanged. One shared roster
+retains exact nested paths/axes, physical text frames, original dimensions and
+caller-supplied fresh IDs. Pure catalog pose staging remains unchanged.
+
+Current group-copy authoring reserves body/dimension IDs through retained
+history, reuses an explicitly selected callout's allocated copy identity and
+replaces that preliminary row with the owner's exact copied consequence once.
+Numeric selection resolves an embedded dimension's actual root to its admitted
+presentation alias instead of treating the entire catalog as its measured owner.
+
+Root call-site review found a historical compatibility issue: retained ordinary
+selection request versions one through four invoke the group producers. Those
+replay calls now explicitly retain their historical body-only consequences;
+current direct authoring retains dimension carry. A new retained mixed-request
+dialect is still needed to grant that carry to current mixed ordinary/skylight
+workflows without broadening existing stored meanings. Embedded retirement,
+host-driven carry, linked-view targets and protected replacements remain required.
+Independent integrated source review approved the frozen batch with no confirmed
+P1/P2 finding. Root scoped whitespace review passes; the batch is being committed
+and backed up. No builds/tests/jobs, app launches or packages ran. Compilation,
+runtime interaction/history/storage and complete
+production acceptance remain unverified; all ten production gates remain open.
+
 ### October 11 independent component dimension lifecycle
 
 The preceding status-only turn made no implementation progress. The current

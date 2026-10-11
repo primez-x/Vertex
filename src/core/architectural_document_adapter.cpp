@@ -2250,7 +2250,7 @@ EntityState stage_fresh_architectural_clipboard_translation(const DocumentSnapsh
 
 ApplyEntityChanges architectural_group_transform_command(const DocumentSnapshot& source,
     std::span<const std::string> entity_ids, const ArchitecturalGroupTransform& transform,
-    const std::string& transaction_id, Revision expected_revision) {
+    const std::string& transaction_id, Revision expected_revision, bool carry_assembly_dimensions) {
     if (source.revision()!=expected_revision)
         throw DocumentError(DocumentErrorCode::stale_revision,"The architectural group source changed.");
     if (!source.is_editable())
@@ -2260,12 +2260,12 @@ ApplyEntityChanges architectural_group_transform_command(const DocumentSnapshot&
     std::vector<ArchitecturalGroupTransformTarget> targets;
     targets.reserve(entity_ids.size());
     for (const auto& id : entity_ids) targets.push_back({id,transform});
-    return architectural_group_transform_command(source, targets, transaction_id, expected_revision);
+    return architectural_group_transform_command(source, targets, transaction_id, expected_revision, carry_assembly_dimensions);
 }
 
 ApplyEntityChanges architectural_group_transform_command(const DocumentSnapshot& source,
     std::span<const ArchitecturalGroupTransformTarget> requested_targets,
-    const std::string& transaction_id, Revision expected_revision) {
+    const std::string& transaction_id, Revision expected_revision, bool carry_assembly_dimensions) {
     if (source.revision()!=expected_revision)
         throw DocumentError(DocumentErrorCode::stale_revision,"The architectural group source changed.");
     if (!source.is_editable())
@@ -2540,7 +2540,7 @@ ApplyEntityChanges architectural_group_transform_command(const DocumentSnapshot&
     }
     // Only actual selected independent roots declare carry authority. Preserve
     // every original dimension until the complete cohort has been measured.
-    if (!dimension_transforms.empty()) {
+    if (carry_assembly_dimensions && !dimension_transforms.empty()) {
         auto dimensions = carry_assembly_dimension_transform_entities(
             source.entities(), candidate, dimension_transforms);
         std::vector<std::string> changed_dimension_ids;

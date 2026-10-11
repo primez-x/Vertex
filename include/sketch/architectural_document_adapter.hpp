@@ -200,10 +200,12 @@ inline constexpr std::size_t maximum_architectural_group_targets = 1000;
 // saved-design guards; shared-baseline replacement requires its qualified lane.
 // Equivalent identity intent validates targets/transaction identity and returns
 // no history edit. Walls, joins and embedded assembly members are not targets.
+// Current authoring carries qualified independent-component dimensions. Only
+// historical producer replay opts out to retain its saved body-only meaning.
 [[nodiscard]] ApplyEntityChanges architectural_group_transform_command(
     const DocumentSnapshot& source, std::span<const std::string> entity_ids,
     const ArchitecturalGroupTransform& transform, const std::string& transaction_id,
-    Revision expected_revision);
+    Revision expected_revision, bool carry_assembly_dimensions = true);
 
 // The same atomic admission with individually captured local pivots/operations.
 // Selected hosted railings require affine-equivalent intent to their selected
@@ -215,7 +217,8 @@ inline constexpr std::size_t maximum_architectural_group_targets = 1000;
 // another family's affine/level compensation never becomes slab edit intent.
 [[nodiscard]] ApplyEntityChanges architectural_group_transform_command(
     const DocumentSnapshot& source, std::span<const ArchitecturalGroupTransformTarget> targets,
-    const std::string& transaction_id, Revision expected_revision);
+    const std::string& transaction_id, Revision expected_revision,
+    bool carry_assembly_dimensions = true);
 
 // Admit changed physical wall/opening, slab, room, canonical beam and independent
 // straight-railing descriptors against the complete detached candidate.

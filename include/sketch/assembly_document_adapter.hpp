@@ -226,10 +226,17 @@ struct EmbeddedAssemblyGroupTarget {
 // retains the source pose representation. Identity targets retain their exact
 // raw pose even when other selected roots change. Metadata-only instances
 // are refused.
+// Changed roots carry their associated v6 dimensions in the same command.
+// Local row copies require an exact original dimension ID to caller-reserved
+// fresh document ID mapping; missing, extraneous or colliding mappings refuse.
 // Full canonical document admission precedes return; no snapshot is mutated.
+// Historical producer replay alone opts out of dimension carry to retain its
+// saved body-only meaning; this flag supplies no new editing permissions.
 [[nodiscard]] ApplyEntityChanges embedded_assembly_group_transform_command(
     const DocumentSnapshot& source, std::span<const EmbeddedAssemblyGroupTarget> targets,
-    const ArchitecturalGroupTransform& transform, Revision expected_revision);
+    const ArchitecturalGroupTransform& transform, Revision expected_revision,
+    const std::map<std::string, std::string, std::less<>>& copied_dimension_ids = {},
+    bool carry_assembly_dimensions = true);
 // Materialize each selected embedded root as a fresh independently editable
 // document instance sharing its immutable source catalog. Here copy_instance_id
 // is required and names a fresh document entity, not an appended catalog row.
@@ -238,7 +245,12 @@ struct EmbeddedAssemblyGroupTarget {
 // for its already world-authored pose. Per-target operators have the same
 // fallback meaning as transform. Callers register phase/page membership and
 // clone selected presentation through their complete authored command.
+// Associated v6 dimensions are copied to the exact fresh independent owner,
+// preserving their actual nested paths, axes, metadata and moved text frames.
+// An exact original dimension ID to caller-reserved fresh document ID mapping
+// is mandatory when associated dimensions exist; no IDs are allocated here.
 [[nodiscard]] ApplyEntityChanges embedded_assembly_group_copy_command(
     const DocumentSnapshot& source, std::span<const EmbeddedAssemblyGroupTarget> targets,
-    const ArchitecturalGroupTransform& transform, Revision expected_revision);
+    const ArchitecturalGroupTransform& transform, Revision expected_revision,
+    const std::map<std::string, std::string, std::less<>>& copied_dimension_ids = {});
 } // namespace sketch

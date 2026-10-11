@@ -1524,18 +1524,101 @@ ApplyEntityChanges prepare_embedded_assembly_group_transform(const DocumentSnaps
     }
     return command;
 }
+// Complete bodies/catalogs first while retaining the original dimensions in
+// the candidate. One shared carry batch then derives all movement and copies;
+// none of these detached contributions establish phase/page registration.
+void append_embedded_group_dimensions(const DocumentSnapshot& source,
+    std::span<const EmbeddedAssemblyGroupTarget> targets, bool detached_copy,
+    const std::map<std::string, std::string, std::less<>>& copied_dimension_ids,
+    ApplyEntityChanges& command) {
+    require(copied_dimension_ids.size() <= 1000,
+        "embedded assembly copy dimension identity roster exceeds bound");
+    if (command.entity_changes.empty()) {
+        require(copied_dimension_ids.empty(),
+            "embedded assembly copy has an extraneous dimension identity mapping");
+        return;
+    }
+    auto candidate = source.entities();
+    for (const auto& change : command.entity_changes) {
+        require(change.kind == EntityChangeKind::upsert,
+            "embedded assembly dimension candidate contains a removal");
+        candidate.insert_or_assign(change.entity.id, change.entity);
+    }
+    std::vector<AssemblyDimensionTransformRequest> requests;
+    requests.reserve(targets.size());
+    using Identity = std::pair<std::string, std::string>;
+    std::map<Identity, std::size_t> copied_roots;
+    const auto raw_row = [](const AssemblyDocumentEntities& actual, const EmbeddedAssemblyGroupTarget& target)
+        -> const nlohmann::json& {
+        const auto& rows = actual.at(target.catalog_id).properties.at("model").at("instances");
+        const auto found = std::find_if(rows.begin(), rows.end(),
+            [&](const auto& row) { return row.at("id") == target.instance_id; });
+        require(found != rows.end(), "embedded assembly dimension source row is missing");
+        return *found;
+    };
+    for (const auto& target : targets) {
+        const bool copy = target.copy_instance_id.has_value();
+        if (!copy && raw_row(source.entities(), target).dump() == raw_row(candidate, target).dump()) continue;
+        const AssemblyInstancePropertyEditTarget original{target.catalog_id, target.instance_id, std::nullopt, {}};
+        auto destination = original;
+        auto mode = AssemblyDimensionTransformMode::move;
+        if (copy) {
+            destination.instance_id = *target.copy_instance_id;
+            if (detached_copy) destination.document_entity_id = *target.copy_instance_id;
+            mode = detached_copy ? AssemblyDimensionTransformMode::detached_clone : AssemblyDimensionTransformMode::clone;
+            require(copied_roots.emplace(Identity{target.catalog_id, target.instance_id}, requests.size()).second,
+                "embedded assembly dimension copy root is duplicated");
+        }
+        requests.push_back({original, std::move(destination), mode, {}});
+    }
+    // Partition the global mapping once. Every supplied key must belong to an
+    // actual copied root; carry checks the complete associated roster for each
+    // request and shares fresh-ID collision admission across the whole batch.
+    for (const auto& [old_id, new_id] : copied_dimension_ids) {
+        identifier(old_id); identifier(new_id);
+        const auto found = source.entities().find(old_id);
+        require(found != source.entities().end() && can_recognize_boundary_dimension_entity_type(found->second.type) &&
+            inspect_boundary_dimension_version(found->second).format == BoundaryDimensionFormat::supported_v6,
+            "embedded assembly copy has an extraneous dimension identity mapping");
+        // Decode only the closed, allocation-bounded target here. Complete raw
+        // dimension envelopes are admitted by carry before their owning codec.
+        const auto dimension_target = decode_assembly_dimension_target(found->second.properties.at("target").at("assembly"));
+        const auto& component = dimension_target.component;
+        const auto owner = copied_roots.find({component.catalog_id, component.instance_id});
+        require(!component.document_entity_id && owner != copied_roots.end(),
+            "embedded assembly copy has an extraneous dimension identity mapping");
+        requests[owner->second].fresh_dimension_ids.emplace(old_id, new_id);
+    }
+    if (requests.empty()) return;
+    auto dimensions = carry_assembly_dimension_transform_entities(source.entities(), candidate, requests);
+    if (!detached_copy) {
+        std::vector<std::string> changed_ids;
+        changed_ids.reserve(dimensions.size());
+        for (const auto& dimension : dimensions)
+            if (source.entities().contains(dimension.id)) changed_ids.push_back(dimension.id);
+        validate_ordinary_assembly_dimension_changes(source.entities(), changed_ids);
+    }
+    for (auto& dimension : dimensions)
+        command.entity_changes.push_back(EntityChange::upsert(std::move(dimension)));
+}
 } // namespace
 ApplyEntityChanges embedded_assembly_group_transform_command(const DocumentSnapshot& source,
     std::span<const EmbeddedAssemblyGroupTarget> targets,
-    const ArchitecturalGroupTransform& transform, Revision expected_revision) {
+    const ArchitecturalGroupTransform& transform, Revision expected_revision,
+    const std::map<std::string, std::string, std::less<>>& copied_dimension_ids,
+    bool carry_assembly_dimensions) {
     auto command = prepare_embedded_assembly_group_transform(source, targets, transform, expected_revision);
+    if (carry_assembly_dimensions)
+        append_embedded_group_dimensions(source, targets, false, copied_dimension_ids, command);
+    else require(copied_dimension_ids.empty(), "historical embedded transform has no dimension-copy authority");
     if (command.entity_changes.empty()) (void)Document::fork(source);
     else (void)Document::preview_command(source, command);
     return command;
 }
 ApplyEntityChanges embedded_assembly_group_copy_command(const DocumentSnapshot& source,
     std::span<const EmbeddedAssemblyGroupTarget> targets,
-    const ArchitecturalGroupTransform& transform, Revision expected_revision) {
+    const ArchitecturalGroupTransform& transform, Revision expected_revision,
+    const std::map<std::string, std::string, std::less<>>& copied_dimension_ids) {
     revision(source, expected_revision);
     require(!targets.empty() && targets.size() <= maximum_architectural_group_targets,
         "an embedded assembly copy requires between 1 and 1000 roots");
@@ -1614,6 +1697,7 @@ ApplyEntityChanges embedded_assembly_group_copy_command(const DocumentSnapshot& 
         (void)decode_document_assembly_instance(copy);
         command.entity_changes.push_back(EntityChange::upsert(std::move(copy)));
     }
+    append_embedded_group_dimensions(source, targets, true, copied_dimension_ids, command);
     (void)Document::preview_command(source, command);
     return command;
 }

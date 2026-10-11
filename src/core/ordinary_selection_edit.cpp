@@ -429,11 +429,11 @@ ApplyEntityChanges replay_ordinary_producers(const DocumentSnapshot& source, con
         candidates.push_back(admitted.entities());
     };
     if (!architectural.empty()) admit(architectural_group_transform_command(source, architectural,
-        text(canonical, "transaction_id"), expected));
+        text(canonical, "transaction_id"), expected, false));
     // Every embedded row has an explicit operation and no copy identity. The
     // fallback can never replace per-row request authority.
     if (!embedded.empty()) admit(embedded_assembly_group_transform_command(source, embedded,
-        ArchitecturalGroupTransform{}, expected));
+        ArchitecturalGroupTransform{}, expected, {}, false));
     if (!annotations.empty() || !references.empty())
         admit(presentation_group_transform_command(source, annotations, references, expected));
     if (!annotation_similarities.empty() || !reference_similarities.empty())
