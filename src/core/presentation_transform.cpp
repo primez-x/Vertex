@@ -723,4 +723,136 @@ ApplyEntityChanges reference_transform_command(const DocumentSnapshot& source,
     return changed(expected_revision, std::move(candidate), "Transform reference");
 }
 
+ApplyEntityChanges presentation_group_similarity_command(const DocumentSnapshot& source,
+    std::span<const PresentationAnnotationSimilarityTarget> annotations,
+    std::span<const PresentationReferenceSimilarityTarget> references,
+    Revision expected_revision) {
+    check_source(source, expected_revision);
+    require(annotations.size() <= maximum_presentation_group_targets &&
+                references.size() <= maximum_presentation_group_targets - annotations.size() &&
+                (!annotations.empty() || !references.empty()),
+            "Presentation group selection must contain between one and 1000 targets.");
+
+    std::vector<PresentationAnnotationTransformTarget> rigid_annotations;
+    std::vector<PresentationReferenceTransformTarget> rigid_references;
+    rigid_annotations.reserve(annotations.size());
+    rigid_references.reserve(references.size());
+    std::map<std::string, AnnotationState> original_states;
+    std::set<std::pair<std::string, std::string>> unique_children;
+    std::set<std::string> unique_references;
+    std::vector<AnnotationChild> original_children;
+    std::vector<ReferencePlacement> original_references;
+    original_children.reserve(annotations.size());
+    original_references.reserve(references.size());
+
+    // Capture and validate the entire original roster before assembling edits.
+    // Child tokens are local to their structural annotation owner; retained
+    // token reuse across owners or a reference is not selection ambiguity.
+    for (const auto& request : annotations) {
+        factor(request.scale);
+        (void)rigid_identity(request.transform);
+        const auto& target = request.target;
+        require(!target.owner_id.empty() && target.owner_id.size() <= 256 &&
+                    !target.child_id.empty() && target.child_id.size() <= 256,
+                "Presentation target IDs must be bounded and nonempty.");
+        require(unique_children.emplace(target.owner_id, target.child_id).second,
+                "The presentation group contains a duplicate annotation target.");
+        auto state = original_states.find(target.owner_id);
+        if (state == original_states.end()) {
+            const auto& entity = owner(source, target.owner_id, kAnnotationEntityType);
+            require(entity.id == target.owner_id, "The annotation owner identity is inconsistent.");
+            state = original_states.emplace(target.owner_id, decode_annotation_entity(entity)).first;
+        }
+        const auto selected = child(state->second, target.child_id);
+        if (request.scale != 1.0) bounded_scale(selected.placement.scale * request.scale);
+        original_children.push_back(selected);
+        rigid_annotations.push_back({target, request.transform});
+    }
+    for (const auto& request : references) {
+        factor(request.scale);
+        (void)rigid_identity(request.transform);
+        const auto& id = request.reference_id;
+        require(!id.empty() && id.size() <= 256 && unique_references.insert(id).second,
+                "Reference target IDs must be bounded, nonempty and unique.");
+        require(!original_states.contains(id),
+                "The reference target aliases a selected annotation owner.");
+        const auto& entity = owner(source, id, "reference_asset");
+        require(entity.id == id, "The reference owner identity is inconsistent.");
+        original_references.push_back(reference_placement(source, entity));
+        if (request.scale != 1.0) bounded_scale(reference_number(entity, "scale", 1.0) * request.scale);
+        rigid_references.push_back({id, request.transform});
+    }
+
+    // Existing rigid authority supplies reflection/orientation and raw legacy
+    // promotion once for the complete group. Typed scaling also sees the same
+    // original source, never a sibling edit or a caller-provided replacement.
+    auto rigid = presentation_group_transform_command(source, rigid_annotations,
+                                                       rigid_references, expected_revision);
+    std::map<std::string, Entity> edits;
+    for (auto& change : rigid.entity_changes) {
+        const auto id = change.entity.id;
+        edits.emplace(id, std::move(change.entity));
+    }
+    const auto scaled_position = [](Vec2 original, const PlanarTransform& transform, double scale) {
+        const Vec2 displacement{scale * (original.x - transform.pivot.x),
+                                scale * (original.y - transform.pivot.y)};
+        const PlanarTransform linear{{}, transform.rotation_radians,
+                                    transform.flip_horizontal, transform.flip_vertical, {}};
+        const auto transformed = transform_point(displacement, linear);
+        const Vec2 result{transform.pivot.x + transformed.x + transform.offset.x,
+                          transform.pivot.y + transformed.y + transform.offset.y};
+        require(std::isfinite(result.x) && std::isfinite(result.y),
+                "The resulting presentation position must be finite.");
+        return result;
+    };
+    for (std::size_t i = 0; i < annotations.size(); ++i) {
+        const auto& request = annotations[i];
+        if (request.scale == 1.0) continue;
+        const auto& target = request.target;
+        const auto& selected = original_children[i];
+        const auto scale_command = annotation_transform_command(source, target.owner_id,
+            target.child_id, request.scale, 0.0, expected_revision);
+        const auto& scaled = scale_command.entity_changes.at(0).entity.properties.at("state")
+            .at(selected.collection).at(selected.index).at("placement").at("scale");
+        const auto position = scaled_position(selected.placement.position, request.transform, request.scale);
+        auto [edit, inserted] = edits.try_emplace(target.owner_id, source.entities().at(target.owner_id));
+        (void)inserted;
+        auto& placement = edit->second.properties.at("state").at(selected.collection)
+            .at(selected.index).at("placement");
+        if (scaled.get<double>() != selected.placement.scale) placement["scale"] = scaled;
+        // Restore original raw coordinates when scale and rigid movement cancel.
+        const auto& original = source.entities().at(target.owner_id).properties.at("state")
+            .at(selected.collection).at(selected.index).at("placement");
+        placement["x"] = position.x == selected.placement.position.x ? original.at("x") : nlohmann::json(position.x);
+        placement["y"] = position.y == selected.placement.position.y ? original.at("y") : nlohmann::json(position.y);
+    }
+    for (std::size_t i = 0; i < references.size(); ++i) {
+        const auto& request = references[i];
+        if (request.scale == 1.0) continue;
+        const auto& id = request.reference_id;
+        const auto scale_command = reference_transform_command(source, id, request.scale, 0.0, expected_revision);
+        const auto& scaled = scale_command.entity_changes.at(0).entity.properties.at("scale");
+        const auto& placement = original_references[i];
+        const auto position = scaled_position(placement.position, request.transform, request.scale);
+        auto [edit, inserted] = edits.try_emplace(id, source.entities().at(id));
+        (void)inserted;
+        if (scaled.get<double>() != reference_number(source.entities().at(id), "scale", 1.0))
+            edit->second.properties["scale"] = scaled;
+        auto& raw_position = edit->second.properties.at("position_m");
+        const auto& original = source.entities().at(id).properties.at("position_m");
+        raw_position[0] = position.x == placement.position.x ? original[0] : nlohmann::json(position.x);
+        raw_position[1] = position.y == placement.position.y ? original[1] : nlohmann::json(position.y);
+    }
+
+    ApplyEntityChanges command{expected_revision, {}, {}, "Transform presentation group"};
+    for (auto& [id, entity] : edits) {
+        if (entity.type == kAnnotationEntityType) validate_annotation_entity(entity);
+        else (void)reference_placement(source, entity);
+        if (entity != source.entities().at(id))
+            command.entity_changes.push_back(EntityChange::upsert(std::move(entity)));
+    }
+    if (command.entity_changes.empty()) return {expected_revision, {}, {}, {}};
+    return command;
+}
+
 }  // namespace sketch

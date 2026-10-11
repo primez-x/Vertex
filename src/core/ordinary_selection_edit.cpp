@@ -178,18 +178,25 @@ ArchitecturalGroupTransform model_transform(const Json& value) {
     return result;
 }
 
-PlanarTransform planar_transform(const Json& value) {
-    fields(value, {"pivot", "offset", "rotation_radians", "flip_horizontal", "flip_vertical"});
+PlanarTransform planar_transform(const Json& value, bool similarity = false) {
+    if (similarity)
+        fields(value, {"pivot", "offset", "rotation_radians", "flip_horizontal", "flip_vertical", "scale"});
+    else fields(value, {"pivot", "offset", "rotation_radians", "flip_horizontal", "flip_vertical"});
     PlanarTransform result;
     result.pivot = point2(value.at("pivot"));
     result.offset = point2(value.at("offset"));
     result.rotation_radians = number(value.at("rotation_radians"));
     result.flip_horizontal = flag(value.at("flip_horizontal"));
     result.flip_vertical = flag(value.at("flip_vertical"));
-    const Json encoded = {{"pivot", encoded_point(result.pivot, value.at("pivot"))},
+    Json encoded = {{"pivot", encoded_point(result.pivot, value.at("pivot"))},
         {"offset", encoded_point(result.offset, value.at("offset"))},
         {"rotation_radians", encoded_number(result.rotation_radians, value.at("rotation_radians"))},
         {"flip_horizontal", result.flip_horizontal}, {"flip_vertical", result.flip_vertical}};
+    if (similarity) {
+        const auto scale = number(value.at("scale"));
+        if (scale <= 0.0) reject("presentation scale must be positive");
+        encoded["scale"] = encoded_number(scale, value.at("scale"));
+    }
     if (encoded.dump() != value.dump()) reject("planar transform is not canonical");
     return result;
 }
@@ -199,8 +206,10 @@ void shape(const Json& request) {
     budget.json(request, 0);
     fields(request, {"version", "expected_revision", "transaction_id", "architectural", "embedded",
         "annotations", "references", "message"});
-    if (!request.at("version").is_number_integer() || request.at("version") != 1)
+    if (!request.at("version").is_number_integer() ||
+        (request.at("version") != 1 && request.at("version") != 2))
         reject("unsupported request version");
+    const bool similarity = request.at("version") == 2;
     if (revision(request.at("expected_revision")) == std::numeric_limits<Revision>::max())
         reject("source revision cannot advance");
     (void)identity(request.at("transaction_id"));
@@ -242,14 +251,14 @@ void shape(const Json& request) {
         if (objects.contains(owner) || catalogs.contains(owner)) reject("overlapping persisted annotation owner");
         annotation_owners.insert(owner);
         if (!annotations.emplace(owner, child).second) reject("repeated qualified annotation child");
-        (void)planar_transform(row.at("transform"));
+        (void)planar_transform(row.at("transform"), similarity);
     }
     for (const auto& row : request.at("references")) {
         fields(row, {"entity_id", "transform"});
         const auto& id = identity(row.at("entity_id"));
         if (objects.contains(id) || catalogs.contains(id) || annotation_owners.contains(id) ||
             !references.insert(id).second) reject("overlapping or repeated reference owner");
-        (void)planar_transform(row.at("transform"));
+        (void)planar_transform(row.at("transform"), similarity);
     }
 }
 
@@ -326,6 +335,9 @@ ApplyEntityChanges replay_ordinary_selection_edit(const DocumentSnapshot& source
     std::vector<EmbeddedAssemblyGroupTarget> embedded;
     std::vector<PresentationAnnotationTransformTarget> annotations;
     std::vector<PresentationReferenceTransformTarget> references;
+    std::vector<PresentationAnnotationSimilarityTarget> annotation_similarities;
+    std::vector<PresentationReferenceSimilarityTarget> reference_similarities;
+    const bool similarity = canonical.at("version") == 2;
     for (const auto& row : canonical.at("architectural")) {
         persisted_owner(source, text(row, "entity_id"));
         architectural.push_back({text(row, "entity_id"), model_transform(row.at("transform"))});
@@ -337,11 +349,17 @@ ApplyEntityChanges replay_ordinary_selection_edit(const DocumentSnapshot& source
     }
     for (const auto& row : canonical.at("annotations")) {
         persisted_owner(source, text(row, "owner_id"));
-        annotations.push_back({{text(row, "owner_id"), text(row, "child_id")}, planar_transform(row.at("transform"))});
+        const PresentationAnnotationTarget target{text(row, "owner_id"), text(row, "child_id")};
+        const auto transform = planar_transform(row.at("transform"), similarity);
+        if (similarity) annotation_similarities.push_back({target, transform, number(row.at("transform").at("scale"))});
+        else annotations.push_back({target, transform});
     }
     for (const auto& row : canonical.at("references")) {
         persisted_owner(source, text(row, "entity_id"));
-        references.push_back({text(row, "entity_id"), planar_transform(row.at("transform"))});
+        const auto transform = planar_transform(row.at("transform"), similarity);
+        if (similarity) reference_similarities.push_back({text(row, "entity_id"), transform,
+            number(row.at("transform").at("scale"))});
+        else references.push_back({text(row, "entity_id"), transform});
     }
 
     std::vector<Entities> candidates;
@@ -360,6 +378,8 @@ ApplyEntityChanges replay_ordinary_selection_edit(const DocumentSnapshot& source
         ArchitecturalGroupTransform{}, expected));
     if (!annotations.empty() || !references.empty())
         admit(presentation_group_transform_command(source, annotations, references, expected));
+    if (!annotation_similarities.empty() || !reference_similarities.empty())
+        admit(presentation_group_similarity_command(source, annotation_similarities, reference_similarities, expected));
 
     const auto composed = compose_mixed_selection_edit_candidates(source.entities(), candidates);
     ApplyEntityChanges result{expected, {}, {}, text(canonical, "message")};

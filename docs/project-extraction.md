@@ -1,5 +1,12 @@
 # Portable project extraction
 
+Exchange version186 requires native reader188 for envelope52 with paired mixed
+and ordinary edit dialect two. Every presentation transform explicitly carries
+uniform scale; its anchor and size derive from the actual original source.
+Nested, retained and undone history preserve the floor. Dialect one keeps
+exchange185/native187 and rigid presentation authority. Source integration does
+not establish round-trip acceptance.
+
 Exchange version185 requires native reader187 for closed mixed-selection edit
 envelope52. It retains the original snapshot/save bindings, closed ordinary
 transform request and qualified roof-child coverage. Direct, nested, retained

@@ -26,6 +26,18 @@ struct PresentationReferenceTransformTarget {
     PlanarTransform transform;
 };
 
+struct PresentationAnnotationSimilarityTarget {
+    PresentationAnnotationTarget target;
+    PlanarTransform transform;
+    double scale{1.0};
+};
+
+struct PresentationReferenceSimilarityTarget {
+    std::string reference_id;
+    PlanarTransform transform;
+    double scale{1.0};
+};
+
 inline constexpr std::size_t maximum_presentation_group_targets = 1000;
 // A 4096-entity numerical dependency graph can contain two generated role
 // callouts per area even when only its physical roots were explicitly selected.
@@ -86,6 +98,21 @@ struct AreaCalloutPlacement {
     const DocumentSnapshot& source,
     std::span<const PresentationAnnotationTransformTarget> annotations,
     std::span<const PresentationReferenceTransformTarget> references,
+    Revision expected_revision);
+
+// Original-source uniform similarity, with each captured operator conjugated
+// into the target's stored frame. Anchors follow pivot + linear(scale *
+// (source_position - pivot)) + offset; physical placement/reference scales
+// multiply their original values. The rigid producer's orientation, readable
+// text, raw preservation and required legacy reflection defaults still apply.
+// Every target, including identity, is authenticated; changed scales must stay
+// within the existing authoring bounds. Duplicate targets and child
+// aliases across selected owners are refused. One upsert per changed owner is
+// returned without partial admission; callers admit the final composed command.
+[[nodiscard]] ApplyEntityChanges presentation_group_similarity_command(
+    const DocumentSnapshot& source,
+    std::span<const PresentationAnnotationSimilarityTarget> annotations,
+    std::span<const PresentationReferenceSimilarityTarget> references,
     Revision expected_revision);
 
 // Detached presentation edits. The caller supplies source-plan anchors and

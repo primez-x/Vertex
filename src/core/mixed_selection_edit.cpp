@@ -159,7 +159,8 @@ void validate(const Json& value) {
     Budget budget; budget.json(value, 0);
     fields(value, {"version", "expected_revision", "source_snapshot_digest", "source_authoring_digest",
         "source_entities_digest", "source_saved_revision", "ordinary_request", "roof_authoring", "roof_opening_members", "message"});
-    if (!value.at("version").is_number_integer() || value.at("version") != 1) reject("unsupported intent version");
+    if (!value.at("version").is_number_integer() ||
+        (value.at("version") != 1 && value.at("version") != 2)) reject("unsupported intent version");
     const auto expected = revision(value.at("expected_revision"));
     if (expected == std::numeric_limits<Revision>::max()) reject("source revision cannot advance");
     for (const auto* key : {"source_snapshot_digest", "source_authoring_digest", "source_entities_digest"}) digest(value.at(key));
@@ -167,6 +168,7 @@ void validate(const Json& value) {
         reject("saved revision exceeds source head");
     message(value.at("message"));
     const auto ordinary = validate_ordinary_selection_edit_request(value.at("ordinary_request"));
+    if (ordinary.at("version") != value.at("version")) reject("ordinary request requires its matching mixed intent dialect");
     if (ordinary.dump() != value.at("ordinary_request").dump() || revision(ordinary.at("expected_revision")) != expected)
         reject("ordinary request is not canonical or binds another revision");
     const auto selected = members(value.at("roof_opening_members"));
@@ -364,7 +366,8 @@ Json make_mixed_selection_edit_intent(const DocumentSnapshot& source, const Json
     budget.json(ordinary_request, 1); budget.json(roof_authoring, 1); budget.json(roof_members, 1);
     budget.node(1); budget.quoted(text);
     if (text.size() > 1024 || text.find('\0') != std::string_view::npos) reject("invalid message");
-    Json value = {{"version", 1}, {"expected_revision", source.revision()},
+    const auto canonical_ordinary = validate_ordinary_selection_edit_request(ordinary_request);
+    Json value = {{"version", canonical_ordinary.at("version")}, {"expected_revision", source.revision()},
         {"source_snapshot_digest", document_snapshot_digest(source)},
         {"source_authoring_digest", document_authoring_source_digest_v2(source)},
         {"source_entities_digest", entity_map_digest(source.entities())},

@@ -14,6 +14,27 @@ changed source does not acquire runtime acceptance without later qualification.
 
 ## Current delivery state
 
+### October 10 mixed presentation scaling - source implementation
+
+The reviewed original-source mixed transform core is committed and pushed as
+ae9bf804, with exact local/remote ref verification. The next source batch adds
+uniform similarity for qualified annotations and reference images, using actual
+source anchors and the existing typed size/orientation producers. Ordinary and
+mixed edit dialect two are paired explicitly under unchanged envelope52;
+historical dialect one retains rigid authority. Reader188/extraction186 carry
+the distinction through nested, retained and undone history. Independent source
+review approves the corrected qualified child identity, original-anchor scaling,
+paired dialects and retained reader-floor scanning. Root reviewed the integrated
+source and historical meaning; runtime acceptance is absent.
+
+A separate worker is implementing the pure source-selected drawing/wall
+transform producer, replacing desktop-only root/dependency discovery. It must
+preserve connected locks and measured consequences and surface mandatory room
+review rather than synthesize approval. Full desktop capture, manufactured
+preview/release, selection restoration and closed Properties remain required.
+No builds, tests/new tests, scripts, probes, native jobs, launches, packages or
+installations run; the installed candidate and all ten open gates are unchanged.
+
 ### October 10 original-source mixed transform core - source integration
 
 The retained decoder correction is committed and pushed as 9b94fbfa. The next

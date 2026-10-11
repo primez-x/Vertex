@@ -6,7 +6,7 @@
 
 namespace sketch {
 
-// Closed v1 source-producer request. Exact envelope fields are version,
+// Closed v1/v2 source-producer request. Exact envelope fields are version,
 // expected_revision, transaction_id, architectural, embedded, annotations,
 // references and message. Each target carries its own explicit transform:
 // architectural {entity_id,transform}, embedded {catalog_id,instance_id,transform},
@@ -14,6 +14,9 @@ namespace sketch {
 // Architectural/embedded transforms have pivot/offset XYZ arrays,
 // rotation_z_radians, positive scale and both flip flags. Presentation transforms
 // have pivot/offset XY arrays, rotation_radians and both flip flags; no scale.
+// Version two additionally requires a positive scale in each presentation
+// transform, with source-relative uniform size and common-pivot anchor motion.
+// Version one retains its rigid-only exact fields and original meaning.
 // Canonicalization sorts structural target identities and retains losslessly
 // admitted numeric representations. There are 1..1000 total targets, with a
 // conservative 4 MiB compact-wire bound, 100000 values and maximum depth 64.

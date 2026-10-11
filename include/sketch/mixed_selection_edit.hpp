@@ -16,8 +16,10 @@ public:
     MixedSelectionEditReplayScope& operator=(const MixedSelectionEditReplayScope&) = delete;
 };
 
-// Version one composes explicit ordinary rigid selections with actual typed
+// Versions one/two compose explicit ordinary selections with actual typed
 // skylight children. Both complete leaves replay the original full snapshot.
+// The ordinary request must use the matching dialect. Version one is rigid
+// presentation only; version two grants explicit presentation uniform scale.
 // A carried child requires its explicitly transformed parent; an independent
 // child is authenticated by its original qualified ID, even under replacement.
 [[nodiscard]] nlohmann::json make_mixed_selection_edit_intent(

@@ -1,4 +1,27 @@
-# Vertex project formats v1 through v187
+# Vertex project formats v1 through v188
+
+## Mixed presentation uniform scaling (v188, source integration in progress)
+
+Envelope52 retains its exact outer fields. Mixed edit intent version two must
+contain ordinary request version two; version-one intents still require
+version-one requests. Both keep their existing exact field sets. In ordinary
+version two, every annotation and reference transform additionally contains
+positive finite `scale`. Version-one presentation transforms remain rigid and
+cannot borrow that field or its authority. Architectural and embedded request
+transforms retain their existing uniform-scale fields.
+
+The presentation similarity producer authenticates the complete source roster,
+retains original size/style/asset data and derives each scaled anchor from its
+actual source position about the captured pivot before rotation/reflection and
+translation. Its final complete candidate is independently admitted against
+the same original snapshot as every other ordinary lane. Identity requests
+validate their members without rewriting placements. This does not grant
+directional presentation scaling or arbitrary annotation/reference metadata.
+
+Reader188 and extraction186 apply to direct, nested, retained and undone mixed
+dialect-two commands. Historical dialect one retains reader187/extraction185
+and its meaning. Desktop routing and runtime/persistence qualification remain
+required.
 
 ## Original-source mixed transform request (v187, source integration in progress)
 
