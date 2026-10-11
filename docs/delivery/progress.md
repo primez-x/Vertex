@@ -14,6 +14,47 @@ changed source does not acquire runtime acceptance without later qualification.
 
 ## Current delivery state
 
+### October 11 component Copy presentation continuation
+
+The preceding alternative-editing batch is committed and pushed as c7241e01.
+The current source continuation adds complete supported presentation carry to
+catalog-local component Copy. Closed request3 derives the selected source roots,
+associated dimensions, annotation object overrides, saved-view selectors and
+appearance rows, and bound/detached overlays. Original records stay intact;
+exact fresh overlay allocations join retained and undone identity reservations.
+Detached overlays follow the same world-authored operator as embedded geometry
+in their actual saved-view projection, while bound dimensions regenerate from
+their copied owner. Requests1/2 retain their historical behavior. Reader247 and
+native extraction245 retain the new request, including recognized nested history.
+The controller allocates the actual overlay roster. Canonical embedded component
+appearance and the manufactured Copy preview now share object override styling.
+
+Root owns controller, Document/store and documentation integration; the bounded
+writer returned ownership of the presentation producer. Independent integrated
+source review proved a dimension preview/publication mismatch. The correction
+shares canonical ink styling, preserves override order and sticky hidden state,
+and suppresses hidden dimensions in both preview sides. Amended independent
+review approved the bounded source with no remaining proved P1/P2 finding. Root
+reviewed interfaces, actual world/view operator framing, original preservation,
+fresh allocations, retained history and format floors; scoped diff checks pass.
+No runtime acceptance is implied.
+
+Site Copy investigation proved that unhosting a copied root can lose its source
+floor/layer: no current assembly row stores separate drawing context. A second
+worker is adding a closed catalog-owned per-root layer roster and shared context
+resolution, distinct from geometry hosting, pose and phase authority. Existing
+catalog-local Site Copy remains disabled until context carry, all consumers,
+transport and retained format contracts are integrated. Checking only the active
+property does not establish full floor/layer continuity.
+
+Stable component profile-edge dimensions and mixed skylight/ordinary owner
+dimension retirement remain required source work. Broader behavior and external
+compatibility/device/standards/distribution inputs remain in the full plan.
+Source-only steering remains binding: no builds, tests, scripts, probes, native
+jobs, launches, packages or installations ran. The installed candidate is
+unchanged; compilation, runtime, Undo/reopen and user acceptance remain unverified.
+All ten production gates remain open. No overall percentage or ETA is supported.
+
 ### October 11 component alternative editing integration
 
 The previous status turn verified and pushed 21f85c8a; the exact remote branch

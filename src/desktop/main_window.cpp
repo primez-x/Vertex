@@ -8386,8 +8386,12 @@ public:
         std::map<std::string,std::string,std::less<>> memberships;
         for (const auto& registry:required_qualified_embedded_copy_membership_registries(source,targets))
             memberships.emplace(registry,fresh("requiredcompanion"));
+        std::map<std::string,std::string,std::less<>> presentation_overlays;
+        for (const auto& id:inspect_qualified_embedded_assembly_copy_presentation_overlay_ids(source.entities(),targets))
+            presentation_overlays.emplace(id,fresh("component-overlay"));
         validate_retained_authoring_fresh_identities(source.history(),source.history().size(),allocations);
-        auto prepared=prepare_qualified_embedded_assembly_copy(source,targets,transform,dimensions,memberships,message);
+        auto prepared=prepare_qualified_embedded_assembly_copy(source,targets,transform,dimensions,memberships,
+            presentation_overlays,message);
         // The generated presentation roster, rather than the raw local IDs,
         // controls preview and selection. Preparation independently reserves it.
         const auto aliases=embedded_assembly_presentation_ids(prepared.preview_entities());
@@ -8416,6 +8420,19 @@ public:
         AssemblyExpansionBudget budget;
         const auto add=[&](const AssemblyDocumentEntities& entities,bool selected) {
             const auto aliases=embedded_assembly_presentation_ids(entities);
+            std::map<std::string,PresentationOverride,std::less<>> appearance;
+            std::map<std::string,std::vector<PresentationOverride>,std::less<>> ordered_appearance;
+            std::set<std::string,std::less<>> hidden;
+            for (const auto& [id,entity]:entities) {
+                (void)id;
+                if (entity.type!=kAnnotationEntityType) continue;
+                const auto state=decode_annotation_entity(entity);
+                for (const auto& row:state.overrides) if (row.target_kind=="object") {
+                    appearance.insert_or_assign(row.target_id,row);
+                    ordered_appearance[row.target_id].push_back(row);
+                    if (!row.visible) hidden.insert(row.target_id);
+                }
+            }
             std::map<std::string,AssemblyModel,std::less<>> catalogs;
             for (const auto& [original,destination]:copy.destinations) {
                 auto root=destination;
@@ -8435,9 +8452,11 @@ public:
                 if (instance==model.instances().end()) throw std::invalid_argument("A component copy lost its catalog-local row.");
                 const auto expansion=model.expand(*instance,budget);
                 if (expansion.profiles.empty()) throw std::invalid_argument("A component copy has no geometric preview.");
+                if (hidden.contains(aliases.at(root))) continue;
                 for (const auto& profile:expansion.profiles) {
                     auto item=assemblyPlanProfile(id_from(aliases.at(root)),QString::fromStdString(
                         assembly_profile_presentation_key(root.first,*instance,profile).dump()),profile,model,selected);
+                    applySnapshotObjectAppearance(item,appearance);
                     if (!selected) { item.type=QStringLiteral("source"); item.stroke_color=QColor(140,148,158); }
                     geometry.push_back(std::move(item));
                 }
@@ -8454,10 +8473,15 @@ public:
                 resolve_current_assembly_boundary_dimensions(dimensions,entities);
             for (std::size_t index=0;index<dimensions.size();++index) {
                 const auto& dimension=dimensions[index];
+                if (hidden.contains(dimension.id)) continue;
                 auto projected=project_boundary_dimension_resolution(dimension,entities.at(dimension.boundary_id),
                     measurements.at(index),metric,selected);
                 projected.label.color=selected ? QColor(35,115,190) : QColor(140,148,158);
                 if (projected.line) {
+                    if (const auto presentation=ordered_appearance.find(dimension.id);
+                        presentation!=ordered_appearance.end())
+                        for (const auto& row:presentation->second)
+                            applyCanvasAppearanceOverride(*projected.line,row);
                     if (!selected) projected.line->type=QStringLiteral("source");
                     geometry.push_back(std::move(*projected.line));
                 }
@@ -58091,15 +58115,7 @@ private:
             command.asset_changes.push_back(AssetChange::upsert(asset));
         document.apply(command);candidate.document=std::move(document);
     }
-    static void applySnapshotObjectAppearance(CanvasEntity& entity,
-        const std::map<std::string, PresentationOverride, std::less<>>& object_appearance) {
-            // Projection creates new shapes later, and several physical strokes
-            // may share one source ID. Style each retained physical shape only;
-            // dimensions and other annotation children remain independent.
-            if (entity.type != QStringLiteral("window") && !supportsObjectAppearance(entity.type.toStdString())) return;
-            const auto found = object_appearance.find(entity.id.toStdString());
-            if (found == object_appearance.end() || found->second.inherit_appearance) return;
-            const auto& value = found->second;
+    static void applyCanvasAppearanceOverride(CanvasEntity& entity,const PresentationOverride& value) {
             entity.stroke_color = QColor(QString::fromStdString(value.style.stroke_color));
             entity.dark_stroke_color = QColor{};
             entity.stroke_width_metres = value.style.stroke_width_metres;
@@ -58113,6 +58129,16 @@ private:
             entity.hatch_pattern = QString::fromStdString(value.style.fill_pattern);
             if (value.hatch_scale) entity.hatch_scale = *value.hatch_scale;
             entity.filled = value.style.fill_pattern != "none" && entity.fill_color.isValid();
+    }
+    static void applySnapshotObjectAppearance(CanvasEntity& entity,
+        const std::map<std::string, PresentationOverride, std::less<>>& object_appearance) {
+        // Projection creates new shapes later, and several physical strokes
+        // may share one source ID. Style each retained physical shape only;
+        // dimensions and other annotation children remain independent.
+        if (entity.type != QStringLiteral("window") && !supportsObjectAppearance(entity.type.toStdString())) return;
+        const auto found = object_appearance.find(entity.id.toStdString());
+        if (found == object_appearance.end() || found->second.inherit_appearance) return;
+        applyCanvasAppearanceOverride(entity,found->second);
     }
     static SnapshotPlanScene projectSnapshotPlanScene(const DocumentSnapshot& snapshot,
         const SnapshotPlanSceneOptions& requested_options, PlanSceneCaches& caches) {
@@ -59007,7 +59033,8 @@ private:
                     if (override.target_kind == "wall_dimension") continue;
                     if (override.target_kind == "object") {
                         const auto target = snapshot.entities().find(override.target_id);
-                        if (target != snapshot.entities().end() && supportsObjectAppearance(target->second.type)) {
+                        if ((target != snapshot.entities().end() && supportsObjectAppearance(target->second.type)) ||
+                            (assembly_document_valid && embedded_render_ids.contains(id_from(override.target_id)))) {
                             object_appearance.insert_or_assign(override.target_id, override);
                             if (!override.visible) {
                                 object_hidden_ids.insert(override.target_id);
@@ -59044,23 +59071,7 @@ private:
                             return candidate.id.toStdString() == override.target_id;
                         });
                     if (found == all_geometry.end()) continue;
-                    found->stroke_color = QColor(QString::fromStdString(
-                        override.style.stroke_color));
-                    found->dark_stroke_color = QColor{};
-                    found->stroke_width_metres = override.style.stroke_width_metres;
-                    if (override.paper_line_width_mm) {
-                        found->output_stroke_width_mm = *override.paper_line_width_mm;
-                        found->paper_stroke_width_on_screen = true;
-                    }
-                    found->fill_color = QColor(QString::fromStdString(
-                        override.style.fill_color));
-                    found->fill_opacity=override.style.fill_opacity;
-                    found->line_pattern=QString::fromStdString(override.style.line_pattern);
-                    found->hatch_pattern = QString::fromStdString(
-                        override.style.fill_pattern);
-                    if (override.hatch_scale) found->hatch_scale = *override.hatch_scale;
-                    found->filled = override.style.fill_pattern != "none" &&
-                                    found->fill_color.isValid();
+                    applyCanvasAppearanceOverride(*found,override);
                 }
             } catch (const std::exception& error) {
                 append_geometry_error(QStringLiteral("Annotations %1: %2")

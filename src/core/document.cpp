@@ -4132,10 +4132,15 @@ static void validate_retained_authoring_receipt_identities(
             for (const auto& [original,copied]:request.at("copied_dimension_ids").items()) {
                 require_unused_id(original);require_unused_id(copied.get_ref<const std::string&>());
             }
-            if (request.at("version")==2)
+            if (request.at("version")>=2)
                 for (const auto& [registry,companion]:request.at("membership_entity_ids").items()) {
                     require_unused_id(registry);
                     require_unused_id(companion.get_ref<const std::string&>());
+                }
+            if (request.at("version")>=3)
+                for (const auto& [original,copied]:request.at("presentation_overlay_identities").items()) {
+                    require_unused_id(original);
+                    require_unused_id(copied.get_ref<const std::string&>());
                 }
         }
         for (const auto& request:historical_proofs.component_catalog_proofs) {

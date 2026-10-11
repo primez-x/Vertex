@@ -1,4 +1,21 @@
-# Vertex project formats v1 through v246
+# Vertex project formats v1 through v247
+
+Reader247 adds closed Copy request3 under exclusive command67. Request3 retains
+request2's captured source, targets, exact dimension and companion allocations,
+and adds `presentation_overlay_identities`, an exact original-overlay to fresh
+overlay mapping. The actual source root aliases and associated dimension owners
+determine saved-view selectors, appearance rows, supported object overrides and
+bound overlays to copy; caller-supplied candidate entities grant no authority.
+Original records remain intact. Opaque affected references refuse rather than
+being silently omitted. Fresh overlay identities remain reserved through
+retained and undone history, together with local rows, dimensions and companions.
+Request1 and request2 retain their historical meanings. Native extraction245
+follows reader247, including recognized nested retained commands.
+
+Request3 does not add per-row floor/layer context. Nonidentity embedded copying
+can remove placement, so preserving a hosted source's organization independently
+of geometry hosting requires a separate explicit context contract before the
+Site catalog-local Copy workflow is enabled.
 
 Reader246 adds foundation catalog request2. Its closed fields remain `version`,
 `source_entities_digest`, and `edits`; the original catalog and definition
