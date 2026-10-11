@@ -159,18 +159,23 @@ void validate_physical_wall_room_dimension_placements(
 // Explicit component membership completion grants closed v54: hosted/join,
 // opening-host, corner and catalog consequences are complete, with an actual
 // source-derived saved choice and exact required-companion pruning.
+// Explicit component dimension completion grants closed v63 with complete
+// host/join/opening/corner/catalog consequences. Component membership completion
+// remains a separate boolean; false requires a null saved choice.
 [[nodiscard]] ApplyEntityChanges prepare_physical_wall_deletion(
     const DocumentSnapshot& source,std::string_view wall_id,bool complete_hosted_removal=false,
     bool complete_join_removal=false,const PhysicalWallJoinRemovalAdditionalIdentities& additional_join_identities={});
 // Wall-only selections are sorted; duplicates and more than 128 roots refuse.
 // Legacy singleton commands retain their raw-v1 proof and message. Legacy
 // groups require explicit v31 qualification; complete consequences use v35.
+// Dimension completion requires the separately explicit catalog option below.
 [[nodiscard]] ApplyEntityChanges prepare_physical_walls_deletion(
     const DocumentSnapshot& source,const std::vector<std::string>& wall_ids,bool complete_hosted_removal=false,
     bool complete_join_removal=false,const PhysicalWallJoinRemovalAdditionalIdentities& additional_join_identities={},
     bool complete_opening_hosted_removal=false,bool complete_corner_window_consequences=false,
     bool complete_component_phase_memberships=false,
-    const std::optional<std::pair<std::string,std::string>>& required_component_phase_choice=std::nullopt);
+    const std::optional<std::pair<std::string,std::string>>& required_component_phase_choice=std::nullopt,
+    bool complete_component_dimensions=false,bool complete_hosted_catalog_consequences=false);
 // Analytical original-source authentication of the selected walls' saved
 // choice and every actual row in their complete hosted/corner retirement.
 // Reached catalogs, hosts and declared rows may establish the choice of unregistered walls. An
@@ -204,23 +209,28 @@ void validate_physical_wall_room_dimension_placements(
 // opening-host and catalog consequences. Required companions may change only
 // by exact source-derived pruning; an optional saved choice also binds every
 // physically retired declared row. Historical commands gain no authority.
+// Component dimension completion independently admits and retires supported
+// extents on the actual hosted rows; surviving independent owners remain exact.
 [[nodiscard]] std::map<std::string,Entity,std::less<>> replay_complete_physical_walls_deletion(
     const std::map<std::string,Entity,std::less<>>& actual,const std::vector<std::string>& wall_ids,
     const PhysicalWallJoinRemovalAdditionalIdentities& additional_join_identities={},
     bool complete_opening_hosted_removal=false,bool complete_hosted_catalog_consequences=false,
     bool complete_corner_window_consequences=false,bool complete_component_phase_memberships=false,
-    const std::optional<std::pair<std::string,std::string>>& required_component_phase_choice=std::nullopt);
+    const std::optional<std::pair<std::string,std::string>>& required_component_phase_choice=std::nullopt,
+    bool complete_component_dimensions=false);
 // Analytical aggregate admission before native join inspection. The caller
 // must first reserve fresh identities against the complete original snapshot.
 void preflight_physical_walls_deletion_join_inference(
     const std::map<std::string,Entity,std::less<>>& actual,const std::vector<std::string>& wall_ids,
     bool complete_opening_hosted_removal=false,bool complete_hosted_catalog_consequences=false,
     bool complete_corner_window_consequences=false,bool complete_component_phase_memberships=false,
-    const std::optional<std::pair<std::string,std::string>>& required_component_phase_choice=std::nullopt);
+    const std::optional<std::pair<std::string,std::string>>& required_component_phase_choice=std::nullopt,
+    bool complete_component_dimensions=false);
 [[nodiscard]] nlohmann::json encode_physical_wall_deletion_review_proof(
     const DocumentSnapshot& source,const Command& command,bool complete_component_phase_memberships=false,
-    const std::optional<std::pair<std::string,std::string>>& required_component_phase_choice=std::nullopt);
-// Accepts only bounded canonical grouped v31 or complete v35/v36/v38/v48/v54 envelopes and
+    const std::optional<std::pair<std::string,std::string>>& required_component_phase_choice=std::nullopt,
+    bool complete_component_dimensions=false);
+// Accepts only bounded canonical grouped v31 or complete v35/v36/v38/v48/v54/v63 envelopes and
 // returns their raw child. Actual source must validate all declared roots.
 [[nodiscard]] Command decode_physical_wall_deletion_review_proof(const nlohmann::json& proof);
 [[nodiscard]] bool is_physical_wall_room_deletion_review_command(const Command& command);

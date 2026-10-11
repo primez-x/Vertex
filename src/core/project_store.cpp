@@ -26,6 +26,7 @@
 #include <algorithm>
 #include <array>
 #include <charconv>
+#include <cctype>
 #include <cmath>
 #include <cstddef>
 #include <cstring>
@@ -437,6 +438,51 @@ std::uint32_t required_format_version_internal(const DocumentSnapshot& snapshot,
                         row.at("source").is_object() && row.at("destination_owner_id").is_string();
                 }))
                 floor=std::max(floor,value.at("version")==3 ? 224U : 216U);
+            const bool ordinary_wall_dimension_shape=
+                (closed_shape({"version","kind","expected_revision","message","wall_ids","proof",
+                    "complete_hosted_removal","complete_join_removal","additional_join_identities",
+                    "complete_opening_hosted_removal","complete_corner_window_consequences",
+                    "complete_hosted_catalog_consequences","complete_component_phase_memberships","component_phase_choice",
+                    "complete_component_dimensions"}) && value.at("kind")=="physical_wall_deletion" && value.at("version")==63 &&
+                    value.at("complete_hosted_removal")==true && value.at("complete_join_removal")==true &&
+                    value.at("complete_opening_hosted_removal")==true) ||
+                (closed_shape({"version","kind","expected_revision","message","intent","proof",
+                    "complete_opening_hosted_removal","complete_corner_window_consequences",
+                    "complete_hosted_catalog_consequences","complete_component_phase_memberships","component_phase_choice",
+                    "complete_component_dimensions"}) && value.at("kind")=="mixed_wall_deletion" && value.at("version")==64 &&
+                    value.at("complete_opening_hosted_removal")==true) ||
+                (closed_shape({"version","kind","expected_revision","message","intent","proof",
+                    "complete_corner_window_consequences","complete_hosted_catalog_consequences",
+                    "complete_component_phase_memberships","component_phase_choice","complete_component_dimensions"}) &&
+                    value.at("kind")=="mixed_wall_opening_deletion" && value.at("version")==65);
+            if (ordinary_wall_dimension_shape && value.at("version").is_number_integer() &&
+                value.at("complete_corner_window_consequences")==true &&
+                value.at("complete_hosted_catalog_consequences")==true && value.at("complete_component_dimensions")==true &&
+                value.at("complete_component_phase_memberships").is_boolean()) {
+                const auto& choice=value.at("component_phase_choice");
+                const auto phase_identity=[](const nlohmann::json& id) {
+                    if (!id.is_string()) return false;
+                    const auto& text=id.get_ref<const std::string&>();
+                    return !text.empty() && text.size()<=128 && std::all_of(text.begin(),text.end(),[](unsigned char c) {
+                        return (c>='a' && c<='z') || (c>='A' && c<='Z') || (c>='0' && c<='9') ||
+                            c=='-' || c=='_' || c=='.' || c==':';
+                    });
+                };
+                const auto local_identity=[&](const nlohmann::json& id) {
+                    if (!id.is_string()) return false;
+                    const auto& text=id.get_ref<const std::string&>();
+                    // Physical wall63 retains the existing phase alternative
+                    // grammar. Mixed64/65 use their stricter local-ID codec.
+                    if (value.at("version")==63)
+                        return !text.empty() && text.size()<=4096 &&
+                            text.find_first_not_of(" \t\r\n\f\v")!=std::string::npos;
+                    return !text.empty() && text.size()<=4096 && text.find('\0')==std::string::npos &&
+                        !std::all_of(text.begin(),text.end(),[](unsigned char c) { return std::isspace(c); });
+                };
+                if (choice.is_null() || (value.at("complete_component_phase_memberships")==true &&
+                    choice.is_array() && choice.size()==2 && phase_identity(choice[0]) && local_identity(choice[1])))
+                    floor=std::max(floor,227U);
+            }
             const bool ordinary_wall_membership_shape=
                 (closed_shape({"version","kind","expected_revision","message","wall_ids","proof",
                     "complete_hosted_removal","complete_join_removal","additional_join_identities",
@@ -875,9 +921,9 @@ std::uint32_t required_format_version_internal(const DocumentSnapshot& snapshot,
     };
     for (const auto& revision : snapshot.history()) {
         if (revision.phase_entity_import) required=std::max(required,160U);
-        if (required<226 && revision.boundary_geometry_edit)
+        if (required<227 && revision.boundary_geometry_edit)
             required=std::max(required,typed_edit_reader_floor(encode_boundary_geometry_edit(*revision.boundary_geometry_edit)));
-        if (required<226 && revision.boundary_constraint_changes)
+        if (required<227 && revision.boundary_constraint_changes)
             required=std::max(required,typed_edit_reader_floor(command_to_json(Command{*revision.boundary_constraint_changes})));
         if (required<122 && revision.boundary_geometry_edit)
             required=std::max(required,quantity_reader_floor(encode_boundary_geometry_edit(*revision.boundary_geometry_edit)));
@@ -3389,6 +3435,7 @@ bool verify_sqlite_schema(sqlite3* database, bool allow_recovery = false) {
          sqlite3_column_int(user_version.get(), 0) != 224 &&
          sqlite3_column_int(user_version.get(), 0) != 225 &&
          sqlite3_column_int(user_version.get(), 0) != 226 &&
+         sqlite3_column_int(user_version.get(), 0) != 227 &&
          sqlite3_column_int(user_version.get(), 0) != 207 &&
          sqlite3_column_int(user_version.get(), 0) != 202 &&
          sqlite3_column_int(user_version.get(), 0) != 200 &&
@@ -4114,6 +4161,8 @@ DocumentSnapshot read_snapshot(sqlite3* database, RecoveryLedger* recovery = nul
     // here and authenticate the manifest with its stored version below.
     const auto required_format = required_format_version_internal(snapshot, format_number < 28);
     if (required_format > format_number) {
+        if (required_format>=227)
+            storage_error(StorageErrorCode::unsupported_format,"This project requires reader 227 for wall deletion component dimensions");
         if (required_format>=226)
             storage_error(StorageErrorCode::unsupported_format,"This project requires reader 226 for qualified opening component dimensions");
         if (required_format>=225)

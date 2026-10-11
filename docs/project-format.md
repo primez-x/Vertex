@@ -1,4 +1,38 @@
-# Vertex project formats v1 through v226
+# Vertex project formats v1 through v227
+
+Reader227 retains qualified component dimension retirement in physical wall
+deletion63, mixed wall deletion64 and mixed wall/opening deletion65. Each closed
+proof retains its previous highest dialect's fields and adds literal
+`complete_component_dimensions:true`. Host, join, opening, corner and catalog
+consequences retain their explicit complete markers. Component phase membership
+completion remains an independently stored boolean; false requires a null
+`component_phase_choice`. Historical wall54/mixed55/mixed56 retain their original
+authority and do not acquire dimension retirement.
+
+The producer derives affected catalog rows from actual removed physical hosts.
+Supported v6 embedded assembly extents are qualified against the full original
+source before retirement. Same-tuple independent dimensions and their actual
+document owners remain exact. Only a validated closed target is masked during
+unqualified-reference scans; opaque sibling properties and extensions retain
+their refusal behavior. Required, inactive, shared-baseline and foreign-registry
+protections remain independent of dimension completion. An empty component
+closure does not require an architectural component-removal leaf.
+
+Room-review command envelopes retain the matching63/64/65 geometry dialect.
+Ordinary selection1 `wall_geometry`, completed ordinary1/2 under command46/57,
+and mixed removal3 can carry these independently versioned proofs without
+changing their own dialects. Actual membership completion selects the applicable
+completed-ordinary mode; dimension completion alone grants no membership or
+phase demolition authority. New mixed proofs supply dimension authority to their
+leaves rather than retaining unencoded nested intent flags. Whole original-source
+commands and candidates, reviewed room decisions and fresh identity lifetime
+remain independently admitted.
+
+Current, nested and undone proofs require reader227/extraction225. Current
+wall/mixed-wall Delete/Cut preparation opts in. Coordinated phase demolition,
+protected replacement copies and broader linked-view/path lifecycle work remain
+separate requirements. These source changes have not been compiled or exercised
+in runtime, history, storage or extraction under the source-only instruction.
 
 Reader226 retains ordinary selection2 exclusively for `kind:hosted_opening`.
 Its six exact fields are `version`, `kind`, `opening_ids`, `other`, `drawing`

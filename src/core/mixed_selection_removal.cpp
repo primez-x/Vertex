@@ -280,6 +280,7 @@ Command closed_ordinary_deletion_command(const Json& value,bool complete_opening
         (version!=27 && version!=30 && version!=31 && version!=35 && version!=36 && version!=37 &&
             version!=38 && version!=39 && version!=40 && version!=41 && version!=46 &&
             version!=48 && version!=49 && version!=50 && version!=54 && version!=55 && version!=56 && version!=57 &&
+            version!=63 && version!=64 && version!=65 &&
             !(complete_opening_dimensions && version==62)))
         reject("ordinary deletion requires a raw command or closed wall-deletion room review");
     if (version==46 || version==57 || version==62) {
@@ -531,7 +532,11 @@ Entities replay_mixed_selection_removal(const DocumentSnapshot& source,const Jso
         if (proof.is_object() &&
             ((proof.value("kind",Json())=="physical_wall_deletion" && proof.value("version",Json())==54) ||
              (proof.value("kind",Json())=="mixed_wall_deletion" && proof.value("version",Json())==55) ||
-             (proof.value("kind",Json())=="mixed_wall_opening_deletion" && proof.value("version",Json())==56))) {
+             (proof.value("kind",Json())=="mixed_wall_opening_deletion" && proof.value("version",Json())==56) ||
+             (((proof.value("kind",Json())=="physical_wall_deletion" && proof.value("version",Json())==63) ||
+               (proof.value("kind",Json())=="mixed_wall_deletion" && proof.value("version",Json())==64) ||
+               (proof.value("kind",Json())=="mixed_wall_opening_deletion" && proof.value("version",Json())==65)) &&
+              proof.at("complete_component_phase_memberships")==true))) {
             // The closed ordinary decoder owns this context. Full raw/catalog
             // admission precedes snapshot digests and any child roof decoding.
             const auto& raw_choice=proof.at("component_phase_choice");
@@ -662,7 +667,11 @@ std::vector<RoofOpeningGroupMember> mixed_selection_removal_remaining_children(c
     const bool component_memberships=proof.is_object() &&
         ((proof.value("kind",Json())=="physical_wall_deletion" && proof.value("version",Json())==54) ||
          (proof.value("kind",Json())=="mixed_wall_deletion" && proof.value("version",Json())==55) ||
-         (proof.value("kind",Json())=="mixed_wall_opening_deletion" && proof.value("version",Json())==56));
+         (proof.value("kind",Json())=="mixed_wall_opening_deletion" && proof.value("version",Json())==56) ||
+         (((proof.value("kind",Json())=="physical_wall_deletion" && proof.value("version",Json())==63) ||
+           (proof.value("kind",Json())=="mixed_wall_deletion" && proof.value("version",Json())==64) ||
+           (proof.value("kind",Json())=="mixed_wall_opening_deletion" && proof.value("version",Json())==65)) &&
+          proof.at("complete_component_phase_memberships")==true));
     if (!component_memberships)
         return mixed_selection_removal_remaining_children(source,authority.architectural,members);
     const auto& raw_choice=proof.at("component_phase_choice");

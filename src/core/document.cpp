@@ -3206,8 +3206,8 @@ static Command room_review_geometry_command(const ApplyBoundaryConstraintChanges
     const bool grouped_deletion=proof.at("kind")=="physical_wall_deletion";
     const bool mixed_deletion=proof.at("kind")=="mixed_wall_deletion";
     const bool mixed_opening_deletion=proof.at("kind")=="mixed_wall_opening_deletion";
-    if ((mixed_opening_deletion && version!=40 && version!=50 && version!=56) || (mixed_deletion && version!=37 && version!=39 && version!=49 && version!=55) ||
-        (grouped_deletion && version!=31 && version!=35 && version!=36 && version!=38 && version!=48 && version!=54) || (!grouped_deletion && !mixed_deletion && !mixed_opening_deletion &&
+    if ((mixed_opening_deletion && version!=40 && version!=50 && version!=56 && version!=65) || (mixed_deletion && version!=37 && version!=39 && version!=49 && version!=55 && version!=64) ||
+        (grouped_deletion && version!=31 && version!=35 && version!=36 && version!=38 && version!=48 && version!=54 && version!=63) || (!grouped_deletion && !mixed_deletion && !mixed_opening_deletion &&
         version!=1 && version!=10 && version!=17 && version!=19 && version!=21 && version!=22 && version!=23 && version!=34 && version!=43 && version!=51 && version!=58 && version!=61 && version!=53 && !ordinary_room_wall_proof_version(version)))
         throw std::invalid_argument("Room review cannot wrap another geometry intent");
     const auto decoded=[&]()->Command {
@@ -3746,9 +3746,9 @@ static bool has_complete_wall_join_deletion_proof(const ApplyBoundaryConstraintC
     const auto& proof=command.room_review_geometry_proof;
     return command.room_review_geometry_completion && proof.is_object() &&
         proof.contains("kind") && proof.contains("version") && proof.at("version").is_number_integer() &&
-        ((proof.at("kind")=="physical_wall_deletion" && (proof.at("version")==36 || proof.at("version")==38 || proof.at("version")==48 || proof.at("version")==54)) ||
-         (proof.at("kind")=="mixed_wall_deletion" && (proof.at("version")==37 || proof.at("version")==39 || proof.at("version")==49 || proof.at("version")==55)) ||
-         (proof.at("kind")=="mixed_wall_opening_deletion" && (proof.at("version")==40 || proof.at("version")==50 || proof.at("version")==56)));
+        ((proof.at("kind")=="physical_wall_deletion" && (proof.at("version")==36 || proof.at("version")==38 || proof.at("version")==48 || proof.at("version")==54 || proof.at("version")==63)) ||
+         (proof.at("kind")=="mixed_wall_deletion" && (proof.at("version")==37 || proof.at("version")==39 || proof.at("version")==49 || proof.at("version")==55 || proof.at("version")==64)) ||
+         (proof.at("kind")=="mixed_wall_opening_deletion" && (proof.at("version")==40 || proof.at("version")==50 || proof.at("version")==56 || proof.at("version")==65)));
 }
 static PhysicalWallJoinRemovalAdditionalIdentities complete_wall_join_deletion_destinations(
     const ApplyBoundaryConstraintChanges& command) {
@@ -9445,7 +9445,7 @@ Command command_from_json(const nlohmann::json& value,
     try {
         if (!value.is_object() || !value.contains("version") || !value.contains("kind") ||
             !value.at("version").is_number_integer() ||
-            (value.at("version")<1 || value.at("version")>62) ||
+            (value.at("version")<1 || value.at("version")>65) ||
             !value.at("kind").is_string()) {
             document_error(DocumentErrorCode::invalid_entity, "serialized command envelope is invalid");
         }
@@ -9883,7 +9883,7 @@ Command command_from_json(const nlohmann::json& value,
                 (void)command_to_json(Command{result});
                 return result;
             }
-            if (value.at("version")==18 || value.at("version")==24 || value.at("version")==25 || value.at("version")==26 || value.at("version")==27 || value.at("version")==28 || value.at("version")==29 || value.at("version")==30 || value.at("version")==31 || value.at("version")==32 || value.at("version")==35 || value.at("version")==36 || value.at("version")==37 || value.at("version")==38 || value.at("version")==39 || value.at("version")==40 || value.at("version")==44 || value.at("version")==48 || value.at("version")==49 || value.at("version")==50 || value.at("version")==54 || value.at("version")==55 || value.at("version")==56) {
+            if (value.at("version")==18 || value.at("version")==24 || value.at("version")==25 || value.at("version")==26 || value.at("version")==27 || value.at("version")==28 || value.at("version")==29 || value.at("version")==30 || value.at("version")==31 || value.at("version")==32 || value.at("version")==35 || value.at("version")==36 || value.at("version")==37 || value.at("version")==38 || value.at("version")==39 || value.at("version")==40 || value.at("version")==44 || value.at("version")==48 || value.at("version")==49 || value.at("version")==50 || value.at("version")==54 || value.at("version")==55 || value.at("version")==56 || value.at("version")==63 || value.at("version")==64 || value.at("version")==65) {
                 const bool geometry=value.at("version")!=18 && value.at("version")!=29;
                 const bool batch=value.at("version")==27;
                 if (batch)

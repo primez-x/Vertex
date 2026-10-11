@@ -14,6 +14,50 @@ changed source does not acquire runtime acceptance without later qualification.
 
 ## Current delivery state
 
+### October 11 wall and mixed wall/opening component dimension retirement
+
+The qualified opening batch is committed and pushed as a47ef65c, with the exact
+remote branch ref matching local HEAD. Current source work extends wall deletion
+and mixed wall/opening cohorts with explicit qualified dimension retirement.
+Actual physically removed wall, opening and corner hosts derive their affected
+catalog rows; supported embedded assembly extents are admitted against the full
+original source before joining dimension, constraint, phase and presentation
+cleanup. Same-tuple independent dimensions and actual document owners remain
+exact; target masking retains opaque sibling and extension refusal checks.
+Empty component closures keep ordinary wall deletion available.
+
+Closed physical wall63, mixed wall64 and mixed wall/opening65 store literal
+dimension completion separately from the explicit phase-membership boolean and
+saved choice. Historical dialects retain their original authority. Current
+Delete/Cut, roof identity capture, detached room review, ordinary completion,
+mixed ordinary/child removal, Document codecs and lifetime consumers retain the
+new leaf proofs. Reader227/extraction225 cover current, nested and undone proofs.
+Independent integrated source review found a reader-floor grammar mismatch for
+physical wall63's existing bounded nonblank alternative names. The floor detector
+now matches that accepted grammar while preserving mixed64/65's stricter local
+identity codec and historical54. No other P1/P2 was proved in the integrated
+source review. Root source inspection covers the narrow correction; scoped
+whitespace review passes. Git records the source backup identity. No runtime
+acceptance is claimed.
+
+Coordinated phase demolition, protected replacement copies, unresolved component
+profile/path edits, linked-view dimensions and remaining mixed-family editing
+remain required implementation work. The entire production plan remains active.
+No builds/tests/jobs, launches, packages or installations ran; the installed
+candidate is unchanged and all ten production gates remain open.
+
+Next source work is coordinated phase retirement in
+`phase_coordinated_demolition.cpp` and `phase_wall_demolition_authoring.cpp`.
+Their current inner8/inner6 complete component memberships but do not opt their
+ordinary removal/opening leaves into qualified dimension retirement. Add explicit
+new retained authority and exact producer-backed dimension consequences. Marking
+baseline components for demolition must keep original rows/dimensions; deleting
+actual proposed objects/rows may retire only their embedded dimensions.
+`assembly_component_phase_demolition.cpp` already preserves baseline catalogs
+and geometry; do not turn its membership-only action into physical deletion.
+Match `assembly_target` tuples and full typed targets rather than treating the
+dimension's `boundary_id` catalog carrier as its selected component identity.
+
 ### October 11 qualified opening component dimension retirement
 
 The physical-host deletion batch is committed and pushed as ec1b9f3e, with the

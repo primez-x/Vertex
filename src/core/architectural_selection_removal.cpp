@@ -139,8 +139,9 @@ Entities replay_architectural_selection_removal(const Entities& actual,
             reject("required component phase choice needs complete component memberships");
         if (complete_component_phase_memberships && !allow_manufactured_opening_hosts)
             reject("component membership retirement requires admitted component hosts");
-        if (allow_wide_component_local_ids && !complete_component_phase_memberships)
-            reject("wide local identities require explicit component membership retirement");
+        if (allow_wide_component_local_ids && !complete_component_phase_memberships &&
+            !intent.complete_component_dimensions && !intent.complete_hosted_component_dimensions)
+            reject("wide local identities require explicit component membership or dimension retirement");
         if (complete_roof_component_phase_memberships &&
             (!complete_component_phase_memberships || !complete_roof_hosted_catalog_consequences))
             reject("roof membership retirement requires complete component and roof catalog consequences");

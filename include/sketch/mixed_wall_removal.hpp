@@ -49,11 +49,15 @@ derive_mixed_wall_removal_component_phase_choice(const MixedWallRemovalEntities&
 // Corner completion additionally admits selected actual corner owners/managed
 // cuts and complete catalog consequences; every cut selection retires its full
 // owner aggregate or refuses. Wall-covered aggregates collapse only after replay.
+// Dimension completion requires complete opening/corner consequences and
+// forwards separate actual-host or component-only authority to each full-source
+// leaf. Membership completion remains independent; historical defaults are off.
 [[nodiscard]] MixedWallRemovalEntities replay_mixed_wall_removal(
     const MixedWallRemovalEntities& actual, const MixedWallRemovalIntent& intent,
     bool complete_opening_hosted_removal=false, bool complete_corner_window_consequences=false,
     bool complete_component_phase_memberships=false,
-    const std::optional<std::pair<std::string, std::string>>& required_component_phase_choice=std::nullopt);
+    const std::optional<std::pair<std::string, std::string>>& required_component_phase_choice=std::nullopt,
+    bool complete_component_dimensions=false);
 
 // Asset-free raw command, bound to the captured revision. Reserves wall and
 // roof destinations together against actual source, all history and assets.
@@ -62,7 +66,8 @@ derive_mixed_wall_removal_component_phase_choice(const MixedWallRemovalEntities&
     const DocumentSnapshot& source, const MixedWallRemovalIntent& intent,
     const std::string& message, bool complete_opening_hosted_removal=false,
     bool complete_corner_window_consequences=false, bool complete_component_phase_memberships=false,
-    const std::optional<std::pair<std::string, std::string>>& required_component_phase_choice=std::nullopt);
+    const std::optional<std::pair<std::string, std::string>>& required_component_phase_choice=std::nullopt,
+    bool complete_component_dimensions=false);
 
 struct DecodedMixedWallDeletionReviewProof {
     ApplyEntityChanges command;
@@ -71,6 +76,7 @@ struct DecodedMixedWallDeletionReviewProof {
     bool complete_corner_window_consequences{false};
     bool complete_component_phase_memberships{false};
     std::optional<std::pair<std::string, std::string>> component_phase_choice;
+    bool complete_component_dimensions{false};
 };
 
 // Explicit closed v37 authority by default; v39 alone enables opening-hosted
@@ -78,12 +84,15 @@ struct DecodedMixedWallDeletionReviewProof {
 // Closed v49 explicitly completes corner owners, both managed cuts and catalog
 // consequences. Selecting a managed cut grants only its complete owner removal.
 // Closed v55 additionally authenticates declared row retirement and exact
-// companion pruning in one actual saved choice; only v55 widens local row IDs.
+// companion pruning in one actual saved choice and widens local row IDs.
+// Closed v64 separately completes qualified retired-row dimensions. Membership
+// completion remains explicit and may be false, with a null saved choice.
 [[nodiscard]] nlohmann::json encode_mixed_wall_deletion_review_proof(
     const DocumentSnapshot& source, const MixedWallRemovalIntent& intent,
     const Command& command, bool complete_opening_hosted_removal=false,
     bool complete_corner_window_consequences=false, bool complete_component_phase_memberships=false,
-    const std::optional<std::pair<std::string, std::string>>& required_component_phase_choice=std::nullopt);
+    const std::optional<std::pair<std::string, std::string>>& required_component_phase_choice=std::nullopt,
+    bool complete_component_dimensions=false);
 [[nodiscard]] DecodedMixedWallDeletionReviewProof decode_mixed_wall_deletion_review_proof(
     const nlohmann::json& proof);
 

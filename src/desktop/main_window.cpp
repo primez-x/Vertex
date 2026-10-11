@@ -34583,9 +34583,12 @@ public:
                 derive_physical_walls_deletion_component_phase_choice(source.entities(),intent.wall_ids)) :
             std::optional<std::pair<std::string,std::string>>{};
         intent.other=captureArchitecturalSelectionRemoval(source,std::move(other_ids),std::move(components),
-            component_memberships,component_memberships,component_choice);
+            true,component_memberships,component_choice,!ordinary_roster.object_ids.empty());
+        // The mixed wall proof supplies dimension authority for every leaf.
+        // Roof identity capture uses it too, without adding a second intent flag.
+        intent.other.complete_hosted_component_dimensions=false;
         preflight_physical_walls_deletion_join_inference(source.entities(),intent.wall_ids,true,true,true,
-            component_memberships,component_choice);
+            component_memberships,component_choice,true);
         const auto joins=inspect_physical_wall_join_removal(source.entities(),intent.wall_ids);
         if (!joins.ready()) {
             for (const auto& diagnostic:joins.diagnostics) if (diagnostic.blocking)
@@ -34619,19 +34622,19 @@ public:
         Command command;
         json proof=nullptr;
         if (!opening_ids.empty()) {
-            command=prepare_mixed_wall_opening_removal(source,opening_intent,message,true,component_memberships,component_choice);
-            proof=encode_mixed_wall_opening_deletion_review_proof(source,opening_intent,command,true,component_memberships,component_choice);
+            command=prepare_mixed_wall_opening_removal(source,opening_intent,message,true,component_memberships,component_choice,true);
+            proof=encode_mixed_wall_opening_deletion_review_proof(source,opening_intent,command,true,component_memberships,component_choice,true);
         } else if (!intent.other.object_ids.empty() || !intent.other.components.empty()) {
-            command=prepare_mixed_wall_removal(source,intent,message,true,true,component_memberships,component_choice);
-            proof=encode_mixed_wall_deletion_review_proof(source,intent,command,true,true,component_memberships,component_choice);
+            command=prepare_mixed_wall_removal(source,intent,message,true,true,component_memberships,component_choice,true);
+            proof=encode_mixed_wall_deletion_review_proof(source,intent,command,true,true,component_memberships,component_choice,true);
         } else {
             auto prepared=prepare_physical_walls_deletion(source,intent.wall_ids,true,true,
-                intent.wall_additional_identities,true,true,component_memberships,component_choice);
+                intent.wall_additional_identities,true,true,component_memberships,component_choice,true,true);
             prepared.message=message;
             command=std::move(prepared);
         }
         const auto ordinary_geometry_proof=proof.is_null()
-            ? encode_physical_wall_deletion_review_proof(source,command,component_memberships,component_choice) : proof;
+            ? encode_physical_wall_deletion_review_proof(source,command,component_memberships,component_choice,true) : proof;
         const auto candidate=preview_physical_wall_room_review_geometry(source,command,ordinary_geometry_proof);
         const auto primary_wall=intent.wall_ids.front();
         const auto groups=affectedPhysicalWallRoomGroups(source,candidate.entities(),primary_wall,true);
@@ -34780,7 +34783,7 @@ public:
                 derive_physical_walls_deletion_component_phase_choice(source.entities(),wall_ids) :
                 std::optional<std::pair<std::string,std::string>>{};
             preflight_physical_walls_deletion_join_inference(source.entities(),wall_ids,true,true,true,
-                component_memberships,component_choice);
+                component_memberships,component_choice,true);
             const auto join_plan=inspect_physical_wall_join_removal(source.entities(),wall_ids);
             if (!join_plan.ready()) {
                 std::string reasons;
@@ -34806,10 +34809,10 @@ public:
             details.wall_intent=MixedWallRemovalIntent{wall_ids,additional,{}};
             std::sort(details.wall_intent->wall_ids.begin(),details.wall_intent->wall_ids.end());
             auto deletion=prepare_physical_walls_deletion(source,wall_ids,true,true,additional,true,true,
-                component_memberships,component_choice);
+                component_memberships,component_choice,true,true);
             if (cut) deletion.message = "Cut walls and attached objects";
             const Command command = std::move(deletion);
-            details.geometry_proof=encode_physical_wall_deletion_review_proof(source,command,component_memberships,component_choice);
+            details.geometry_proof=encode_physical_wall_deletion_review_proof(source,command,component_memberships,component_choice,true);
             const auto candidate = preview_physical_wall_room_review_geometry(source, command, details.geometry_proof);
             const auto primary_wall_id = authority.ordinary_selection.contains(authority.context.selected_id)
                 ? authority.context.selected_id.toStdString() : wall_ids.front();
