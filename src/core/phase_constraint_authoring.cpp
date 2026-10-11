@@ -33,6 +33,7 @@
 #include "sketch/stair_attachment_integrity.hpp"
 #include "sketch/stair_property_review.hpp"
 #include "sketch/assembly_instance_property_edit.hpp"
+#include "sketch/phase_assembly_instance_property_edit.hpp"
 #include "sketch/wall_measurement.hpp"
 
 #include <algorithm>
@@ -2087,13 +2088,19 @@ struct PhasePropertyCompositionRetirements {
     std::set<std::pair<std::string,std::string>> bindings;
 };
 
+struct AssemblyPropertyRowAdmission {
+    std::map<AssemblyPhaseRoot, Json> changed_rows;
+    std::set<std::string, std::less<>> catalogs;
+};
+
 Entities compose_mixed_selection_edit_candidates_impl(const Entities& actual,
     const std::vector<Entities>& independently_admitted_candidates,
     const std::set<std::string,std::less<>>* retired_rooms=nullptr,
     const std::set<std::string,std::less<>>* removed_annotation_targets=nullptr,
     const StairPropertyReviewPreparation* stair_review=nullptr,
     const std::set<std::string,std::less<>>* assembly_promoted_catalogs=nullptr,
-    const PhasePropertyCompositionRetirements* phase_properties=nullptr) {
+    const PhasePropertyCompositionRetirements* phase_properties=nullptr,
+    const AssemblyPropertyRowAdmission* assembly_row_edits=nullptr) {
     coordinated_map_budget(actual);
     if (independently_admitted_candidates.empty() || independently_admitted_candidates.size()>
         (phase_properties ? 2u : stair_review ? 6u : 5u))
@@ -2201,7 +2208,9 @@ Entities compose_mixed_selection_edit_candidates_impl(const Entities& actual,
             continue;
         }
         if (changes.empty()) continue;
-        if (((stair_review || phase_properties) && inactive.contains(key)) || (stair_review && original.required &&
+        if (((stair_review || phase_properties) && inactive.contains(key) &&
+             !(assembly_row_edits && original.type=="assembly_model" && assembly_row_edits->catalogs.contains(key))) ||
+            (stair_review && original.required &&
             original.type!="assembly_model" && original.type!=kAnnotationEntityType &&
             original.type!="model_phases" && original.type!=kSheetViewEntityType))
             invalid("Reviewed stair composition changed a required or inactive physical owner");
@@ -2254,6 +2263,19 @@ Entities compose_mixed_selection_edit_candidates_impl(const Entities& actual,
         for (std::size_t i=0;i<before.size();++i) if (before[i].contains("placement") &&
             (retained_baselines.contains(before[i].at("placement").at("host_entity_id").get<std::string>()) ||
              ((stair_review || phase_properties) && inactive.contains(before[i].at("placement").at("host_entity_id").get<std::string>())))) {
+            // Only the independently reconstructed component lane may edit a
+            // retained-host row. Its complete exact result must survive every
+            // other lane; no host visibility or supplied raw map grants this.
+            const AssemblyPhaseRoot binding{key,before[i].at("id").get<std::string>()};
+            if (assembly_row_edits && assembly_row_edits->changed_rows.contains(binding)) {
+                const auto expected=assembly_row_edits->changed_rows.find(binding);
+                const auto retained=std::find_if(after.begin(),after.end(),[&](const auto& row) {
+                    return row.at("id")==binding.second;
+                });
+                if (retained==after.end() || !exact_json(*retained,expected->second))
+                    invalid("Mixed edit changed an independently admitted component row");
+                continue;
+            }
             if (stair_review || phase_properties) {
                 const auto retained=retained_rows.find(before[i].at("id").get<std::string>());
                 if (retained==retained_rows.end() || !exact_json(before[i],*retained->second))
@@ -2261,6 +2283,12 @@ Entities compose_mixed_selection_edit_candidates_impl(const Entities& actual,
             } else if (i>=after.size() || !exact_json(before[i],after[i]))
                 invalid("Mixed edit changed an actual retained baseline hosted row");
         }
+    }
+    if (assembly_row_edits) for (const auto& [binding,expected]:assembly_row_edits->changed_rows) {
+        const auto& rows=result.at(binding.first).properties.at("model").at("instances");
+        const auto retained=std::find_if(rows.begin(),rows.end(),[&](const auto& row) { return row.at("id")==binding.second; });
+        if (retained==rows.end() || !exact_json(*retained,expected))
+            invalid("Mixed edit lost an independently admitted component row");
     }
     coordinated_map_budget(result);
     const auto final_aliases=embedded_assembly_presentation_ids(result);
@@ -2385,7 +2413,8 @@ namespace {
 Entities compose_stair_property_review_selection_edit_candidates_impl(const DocumentSnapshot& source,
     const StairPropertyReviewPreparation& reviewed,
     const std::vector<Entities>& independently_admitted_ordinary_candidates,
-    const std::set<std::string,std::less<>>* assembly_promoted_catalogs=nullptr) {
+    const std::set<std::string,std::less<>>* assembly_promoted_catalogs=nullptr,
+    const AssemblyPropertyRowAdmission* assembly_row_edits=nullptr) {
     const auto& actual=source.entities();
     coordinated_map_budget(actual);
     if (independently_admitted_ordinary_candidates.size()>5)
@@ -2428,7 +2457,8 @@ Entities compose_stair_property_review_selection_edit_candidates_impl(const Docu
     lanes.reserve(1+independently_admitted_ordinary_candidates.size());
     lanes.push_back(review);
     lanes.insert(lanes.end(),independently_admitted_ordinary_candidates.begin(),independently_admitted_ordinary_candidates.end());
-    auto result=compose_mixed_selection_edit_candidates_impl(actual,lanes,nullptr,&removed_targets,&replayed,assembly_promoted_catalogs);
+    auto result=compose_mixed_selection_edit_candidates_impl(actual,lanes,nullptr,&removed_targets,&replayed,
+        assembly_promoted_catalogs,nullptr,assembly_row_edits);
     for (const auto& [key,entity]:actual) {
         const auto expected=review.find(key);
         if (erased.contains(key)!=!result.contains(key))
@@ -2468,6 +2498,55 @@ Entities compose_assembly_property_selection_edit_candidates(const DocumentSnaps
     if (stair_review)
         return compose_stair_property_review_selection_edit_candidates_impl(source,*stair_review,leaves,&promoted);
     return compose_mixed_selection_edit_candidates_impl(source.entities(),leaves,nullptr,nullptr,nullptr,&promoted);
+}
+
+Entities compose_phase_assembly_property_selection_edit_candidates(const DocumentSnapshot& source,
+    const PhaseAssemblyInstancePropertyEditPreparation& assemblies,const std::vector<Entities>& ordinary,
+    const StairPropertyReviewPreparation* stair_review) {
+    if (ordinary.size()>4) invalid("Component alternative Properties composition exceeds its source lane budget");
+    const auto replayed=replay_phase_assembly_instance_property_edit_preparation(source,assemblies.request());
+    const auto& original=source.entities();
+    const auto& admitted=replayed.preview_entities();
+    AssemblyPropertyRowAdmission rows;
+    std::set<std::string,std::less<>> promoted;
+    for (const auto& [id,entity]:original) if (entity.type=="assembly_model") {
+        const auto& before=entity.properties.at("model");
+        const auto& after=admitted.at(id).properties.at("model");
+        if ((before.at("schema")=="sketch.assemblies.v1" || before.at("schema")=="sketch.assemblies.v2") &&
+            after.at("schema")=="sketch.assemblies.v7") promoted.insert(id);
+        std::map<std::string,const Json*,std::less<>> final_rows;
+        for (const auto& row:after.at("instances"))
+            if (!final_rows.emplace(row.at("id").get<std::string>(),&row).second)
+                invalid("Component alternative replay has duplicate catalog rows");
+        for (const auto& before_row:before.at("instances")) {
+            const auto instance=before_row.at("id").get<std::string>();
+            const auto found=final_rows.find(instance);
+            if (found==final_rows.end()) invalid("Component alternative replay removed an original catalog row");
+            if (!exact_json(before_row,*found->second)) {
+                rows.changed_rows.emplace(AssemblyPhaseRoot{id,instance},*found->second);
+                rows.catalogs.insert(id);
+            }
+        }
+    }
+    auto leaves=ordinary;
+    leaves.push_back(admitted);
+    auto result=stair_review
+        ? compose_stair_property_review_selection_edit_candidates_impl(source,*stair_review,leaves,&promoted,&rows)
+        : compose_mixed_selection_edit_candidates_impl(original,leaves,nullptr,nullptr,nullptr,&promoted,nullptr,&rows);
+    // Geometry and actual host dependencies must still hold after other lanes
+    // compose. Empty typed patches retain the exact proposed path roster while
+    // admitting the complete final map; they carry no replacement allocation.
+    std::vector<AssemblyInstancePropertyEditIntent> retained;
+    retained.reserve(replayed.result().original_to_proposed.size());
+    for (const auto& [before,after]:replayed.result().original_to_proposed) {
+        (void)before;
+        AssemblyInstancePropertyEditIntent intent;
+        intent.target=after;
+        retained.push_back(std::move(intent));
+    }
+    std::sort(retained.begin(),retained.end(),[](const auto& left,const auto& right) { return left.target<right.target; });
+    (void)replay_phase_assembly_instance_property_edits(result,retained,{});
+    return result;
 }
 
 Entities compose_phase_property_selection_edit_candidates(const DocumentSnapshot& source,

@@ -289,10 +289,16 @@ struct Derivation {
     EmbeddedAssemblyPresentationIds original_aliases;
     std::map<std::string, ArchitecturalGroupTransform, std::less<>> operations;
 };
+bool hosted_root_active(const Entities& actual, const ConstraintPhaseScope& scope,
+    const StairCloneHostedInstanceKey& root, const std::string& host) {
+    return !scope.assembly_memberships.owners.contains(root) ||
+        (!scope.assembly_memberships.inactive_roots.contains(root) &&
+            !assembly_host_inactive_in_phase(actual, scope.inactive_owner_ids, host));
+}
 // Bound complete copy and presentation inventories before the typed transform
 // producer enters physical codecs or native admission. Bare JSON text grants
 // no rewrite authority; discovery below still admits every exact qualified row.
-void closure_bounds(const Entities& actual, const Ids& owners) {
+void closure_bounds(const Entities& actual, const Ids& owners, const ConstraintPhaseScope& scope) {
     std::size_t identities = owners.size(), inventory{};
     const auto add = [&](std::size_t size) {
         if (size > identity_limit - identities) reject("combined copy identity budget exceeded before codec/native admission");
@@ -319,6 +325,7 @@ void closure_bounds(const Entities& actual, const Ids& owners) {
             const auto host = placement ? field(*placement, "host_entity_id") : nullptr;
             if (!host || !host->is_string() || !owners.contains(host->get_ref<const std::string&>())) continue;
             if (!name || !name->is_string()) reject("affected actual hosted row has no local identity");
+            if (!hosted_root_active(actual, scope, {id, name->get<std::string>()}, host->get_ref<const std::string&>())) continue;
             if (!selected.emplace(id, name->get<std::string>()).second) reject("affected actual hosted row has duplicate local identity");
             included = true; add(1);
         }
@@ -365,7 +372,7 @@ Derivation derive(const Entities& actual, const std::vector<StairTransformIntent
             result.owners.insert(id); result.operations[id] = result.operations.at(raw_host);
         }
         if (result.owners.size() > identity_limit) reject("physical closure identity budget exceeded");
-        closure_bounds(actual, result.owners);
+        closure_bounds(actual, result.owners, active);
         // O enforces selected hosted rails' actual selected host and equivalent
         // affine operator. It admits actual/candidate attachments and levels.
         result.physical = replay_stair_transform_entities(actual, transforms);
@@ -393,9 +400,14 @@ Derivation derive(const Entities& actual, const std::vector<StairTransformIntent
                 inventory += rows->size();
             }
             const auto catalog = AssemblyModel::from_json(raw); bool included = false;
-            for (const auto& row : catalog.instances()) if (row.placement && result.owners.contains(row.placement->host_entity_id)) { selected.emplace(id, row.id); included = true; }
+            for (const auto& row : catalog.instances()) {
+                if (!row.placement || !result.owners.contains(row.placement->host_entity_id) ||
+                    !hosted_root_active(actual, active, {id, row.id}, row.placement->host_entity_id)) continue;
+                if (active.inactive_owner_ids.contains(id) && !active.assembly_memberships.owners.contains({id, row.id}))
+                    reject("actual selected hosted catalog is inactive: " + id);
+                selected.emplace(id, row.id); included = true;
+            }
             if (!included) continue;
-            if (active.inactive_owner_ids.contains(id)) reject("actual selected hosted catalog is inactive: " + id);
             context(actual, organization, entity); result.catalogs.insert(id);
         }
         plan.required_hosted_instance_ids.assign(selected.begin(), selected.end());

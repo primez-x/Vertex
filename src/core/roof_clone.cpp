@@ -243,8 +243,16 @@ void admit_hosted_instance(const AssemblyModel& model, const AssemblyInstance& i
 } catch (const Standard_Failure& error) {
     reject(std::string("hosted assembly native admission failed: ") + error.what());
 }
+bool hosted_root_active(const RoofCloneEntities& source, const ConstraintPhaseScope& scope,
+    const RoofCloneHostedInstanceKey& root, const std::string& host) {
+    // Saved row activity is qualified by the actual catalog. Absent companion
+    // ownership preserves the previous profile and legacy host-copy behavior.
+    return !scope.assembly_memberships.owners.contains(root) ||
+        (!scope.assembly_memberships.inactive_roots.contains(root) &&
+            !assembly_host_inactive_in_phase(source, scope.inactive_owner_ids, host));
+}
 Ids discover_hosted_assemblies(RoofClonePlan& plan, const RoofCloneEntities& source, const Ids& roofs,
-    const Ids& inactive) {
+    const ConstraintPhaseScope& scope) {
     Ids catalogs;
     AssemblyExpansionBudget budget;
     std::size_t inventory = 0;
@@ -257,10 +265,12 @@ Ids discover_hosted_assemblies(RoofClonePlan& plan, const RoofCloneEntities& sou
         for (const auto& instance : *instances) {
             const auto placement = field(instance, "placement");
             const auto host = placement ? field(*placement, "host_entity_id") : nullptr;
+            const auto name = field(instance, "id");
+            if (name && name->is_string() && host && host->is_string() &&
+                !hosted_root_active(source, scope, {id, name->get<std::string>()}, host->get_ref<const std::string&>())) continue;
             if (host && host->is_string() && roofs.contains(host->get_ref<const std::string&>())) affected = true;
         }
         if (!affected) continue;
-        if (inactive.contains(id)) reject("affected hosted assembly catalog is inactive: " + id);
         for (const auto* key : {"materials", "types", "instances"}) {
             const auto rows = field(*model, key);
             if (!rows || !rows->is_array() || rows->size() > maximum_entities - inventory)
@@ -280,6 +290,11 @@ Ids discover_hosted_assemblies(RoofClonePlan& plan, const RoofCloneEntities& sou
         catalogs.insert(id);
         for (const auto& instance : parsed.instances()) {
             if (!instance.placement || !roofs.contains(instance.placement->host_entity_id)) continue;
+            if (!hosted_root_active(source, scope, {id, instance.id}, instance.placement->host_entity_id)) continue;
+            // Companion activity governs declared roots; historical catalog
+            // activity remains authoritative only for affected unlisted rows.
+            if (scope.inactive_owner_ids.contains(id) && !scope.assembly_memberships.owners.contains({id, instance.id}))
+                reject("affected hosted assembly catalog is inactive: " + id);
             // Authored local IDs follow AssemblyModel rules, not fresh document
             // identity rules, and remain qualified by their actual catalog.
             plan.required_hosted_instance_ids.emplace_back(id, instance.id);
@@ -403,7 +418,7 @@ Derivation derive(const RoofCloneEntities& source, const std::vector<std::string
             }
         }
         const auto catalogs = include_hosted_instances ?
-            discover_hosted_assemblies(plan, source, roofs, scope.inactive_owner_ids) : Ids{};
+            discover_hosted_assemblies(plan, source, roofs, scope) : Ids{};
         for (const auto& id : catalogs)
             admit_catalog_opaque_instance_references(source.at(id), plan.required_hosted_instance_ids);
         const auto embedded_presentations = include_hosted_instances ?
@@ -478,7 +493,9 @@ Derivation derive(const RoofCloneEntities& source, const std::vector<std::string
         Ids affected = presentation_owners; affected.insert(children.begin(), children.end());
         Ids native_affected = owners; native_affected.insert(children.begin(), children.end());
         for (const auto& [id, entity] : source) {
-            if (scope.inactive_owner_ids.contains(id)) continue;
+            // A catalog admitted through active declared roots still needs its
+            // copied opaque envelope checked even when its historical owner is inactive.
+            if (scope.inactive_owner_ids.contains(id) && !catalogs.contains(id)) continue;
             try {
                 // A known owner-only reference to a cut/overlay is not qualified
                 // merely because the surrounding presentation codec is known.
@@ -668,6 +685,7 @@ RoofCloneResult replay_roof_clone(const RoofCloneEntities& source, const RoofClo
                     const auto host = row.at("placement").at("host_entity_id").get<std::string>();
                     if (!roofs.contains(host)) continue;
                     const RoofCloneHostedInstanceKey key{id, row.at("id").get<std::string>()};
+                    if (!expected_instances.contains(key)) continue;
                     row.at("id") = hosted_instance_identities.at(key);
                     row.at("placement").at("host_entity_id") = identities.at(host);
                     rows.push_back(std::move(row));

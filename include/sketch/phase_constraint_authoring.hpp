@@ -11,6 +11,7 @@ struct PhaseWallReplacementAuthoringPreview;
 struct ReplayedPhysicalWallRoomReview;
 class StairPropertyReviewPreparation;
 class AssemblyInstancePropertyEditPreparation;
+class PhaseAssemblyInstancePropertyEditPreparation;
 
 // Collision fence for newly declared global identities against one retained
 // state, including known owned topology/children and render aliases. References
@@ -192,6 +193,16 @@ struct PhaseConstraintAuthoringIntent {
 [[nodiscard]] std::map<std::string,Entity,std::less<>> compose_assembly_property_selection_edit_candidates(
     const DocumentSnapshot& actual,
     const AssemblyInstancePropertyEditPreparation& assemblies,
+    const std::vector<std::map<std::string,Entity,std::less<>>>& independently_admitted_ordinary_candidates,
+    const StairPropertyReviewPreparation* stair_review = nullptr);
+
+// Reconstruct the closed component alternative contribution from the complete
+// captured source before composing other admitted lanes. Fresh destinations and
+// changed rows on retained hosts come only from that replay. This is detached
+// composition, not dependency completion or Document publication authority.
+[[nodiscard]] std::map<std::string,Entity,std::less<>> compose_phase_assembly_property_selection_edit_candidates(
+    const DocumentSnapshot& actual,
+    const PhaseAssemblyInstancePropertyEditPreparation& assemblies,
     const std::vector<std::map<std::string,Entity,std::less<>>>& independently_admitted_ordinary_candidates,
     const StairPropertyReviewPreparation* stair_review = nullptr);
 

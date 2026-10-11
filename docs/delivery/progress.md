@@ -14,6 +14,55 @@ changed source does not acquire runtime acceptance without later qualification.
 
 ## Current delivery state
 
+### October 10 component replacement producer and hosted-copy activity
+
+The preceding qualified-membership foundation is committed and pushed as
+ac2b6676, with exact local and remote branch references matched. This source
+batch implements a closed original-source component replacement producer:
+changed protected independent instances receive fresh actual owners; changed
+protected embedded instances receive private catalogs and qualified proposed
+rows. Actual saved registry choices determine the replacement cohorts. Exact
+no-ops and ordinary/proposed members retain their source identities. Original
+owners, selected baseline rows, definitions, materials and unrelated rows stay
+intact. The complete selected target map retains nested part paths.
+
+Bounded v1 mathematical requests carry exact allocations and full captured
+source fences. Detached preparation checks retained/undone entity maps, assets,
+catalog-local IDs and derived aliases. A typed composer reconstructs that
+preparation before merging independently admitted ordinary/stair contributions;
+only exact replay-derived changed rows may pass retained-host preservation.
+The selected destination paths and native geometry are admitted again against
+the combined result. CMake includes the new source. This does not yet create a
+Document publication command or expose the new producer through Properties.
+
+Slab, roof, stair and structural hosted-copy inventories now filter declared
+inactive qualified roots before native admission and exact materialization.
+Stair's intermediate transforms use the same activity. Declared active roots
+retain their own phase state even when historical catalog membership is
+inactive, while affected unlisted roots retain legacy catalog admission. Actual
+host activity, drawing context and opaque-reference checks still apply.
+
+Remaining work in this workflow: carry memberships through physical replacement
+and clone/clipboard correspondence; explicitly complete removals, remaps and
+shared-type consequences; complete annotations and references; reserve identities
+declared only by historical typed receipts; integrate mixed Properties history,
+Document lifetime/publication and selected-path restoration. Remove the
+companion-document read-only quarantine only with that dependency integration.
+Do not publish a companion-bearing project that becomes uneditable immediately
+after the first replacement.
+
+Independent source review approved the bounded detached producer/composer after
+an aggregate catalog-copy amplification correction: original destination
+catalogs and every private replica are charged before the first copy. It found
+no remaining confirmed P1/P2 within that scope; this is not approval of the
+unfinished publication workflow. Conservative transfer limits can refuse large
+otherwise-valid replacement cohorts. Root source review also checked the
+hosted-copy activity corrections. Source review and scoped whitespace checks
+are the available evidence. No
+builds, tests, scripts, probes, native jobs, launches, packages or installations
+run. Compilation, interaction, Undo/save/reopen and production acceptance remain
+unverified. The installed app is unchanged; all ten production gates are open.
+
 ### October 10 qualified component alternative foundations
 
 Complete component-profile drafts and wall/slab elevation integration are

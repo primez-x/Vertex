@@ -35,6 +35,14 @@ void identity(const std::string& id) {
 bool exact(const Entity& a, const Entity& b) {
     return a == b && a.properties.dump() == b.properties.dump() && a.extensions.dump() == b.extensions.dump();
 }
+bool hosted_root_active(const StructuralHostedEntities& actual, const ConstraintPhaseScope& scope,
+    const StructuralHostedInstanceKey& root, const std::string& host) {
+    // Actual companion ownership is the only row-membership authority. The
+    // host's saved activity remains a separate condition for declared rows.
+    return !scope.assembly_memberships.owners.contains(root) ||
+        (!scope.assembly_memberships.inactive_roots.contains(root) &&
+            !assembly_host_inactive_in_phase(actual, scope.inactive_owner_ids, host));
+}
 const Json* field(const Json& value, const char* key) {
     if (!value.is_object()) return nullptr;
     const auto found = value.find(key);
@@ -120,8 +128,7 @@ void catalog_bounds(const Json& raw, std::size_t& inventory) {
         inventory += rows->size();
     }
 }
-void catalog_context(const Entity& entity, const StructuralHostedEntities& actual, const Ids& inactive) {
-    if (inactive.contains(entity.id)) reject("affected catalog is inactive: " + entity.id);
+void catalog_context(const Entity& entity, const StructuralHostedEntities& actual) {
     struct Binding { const char* key; const char* type; };
     constexpr Binding bindings[]{{"property_id", "property"}, {"building_id", "building"},
         {"floor_id", "floor"}, {"layer_id", "layer"}, {"wall_id", "wall"}};
@@ -200,12 +207,13 @@ Ids changed_hosts(const StructuralHostedEntities& actual, const StructuralHosted
 }
 Json replay_catalog(const StructuralHostedEntities& actual, const Entity& actual_catalog,
     const AssemblyModel& model, const Ids& hosts,
-    const std::vector<StructuralObjectEditIntent>& edits) {
+    const std::vector<StructuralObjectEditIntent>& edits, const ConstraintPhaseScope& scope) {
     std::map<std::string, AssemblyTransform, std::less<>> transforms;
     std::map<std::string, AssemblyTransform, std::less<>> world_by_host;
     AssemblyExpansionBudget expansion_budget;
     for (const auto& instance : model.instances()) {
         if (!instance.placement || !hosts.contains(instance.placement->host_entity_id)) continue;
+        if (!hosted_root_active(actual, scope, {actual_catalog.id, instance.id}, instance.placement->host_entity_id)) continue;
         const auto edit = std::find_if(edits.begin(), edits.end(), [&](const auto& value) {
             return value.object_id == instance.placement->host_entity_id;
         });
@@ -299,21 +307,28 @@ StructuralHostedComponentPlan inspect_structural_hosted_components(
         for (const auto& [id, entity] : actual) {
             if (entity.type != "assembly_model" || !affected_catalog(entity, hosts)) continue;
             try {
-                catalog_context(entity, actual, scope.inactive_owner_ids);
+                catalog_context(entity, actual);
                 const auto& raw = entity.properties.at("model");
                 catalog_bounds(raw, inventory);
                 const auto model = AssemblyModel::from_json(raw);
                 const auto remainder = structural_hosted_catalog_opaque_remainder(entity);
                 if (touches(remainder.properties, hosts) || touches(remainder.extensions, hosts))
                     reject("affected host reference has no qualified hosted codec");
-                bool selected = false;
+                bool selected = false, hosted = false;
                 for (const auto& instance : model.instances()) {
                     if (!instance.placement || !hosts.contains(instance.placement->host_entity_id)) continue;
+                    hosted = true;
+                    if (!hosted_root_active(actual, scope, {id, instance.id}, instance.placement->host_entity_id)) continue;
+                    if (scope.inactive_owner_ids.contains(id) && !scope.assembly_memberships.owners.contains({id, instance.id}))
+                        reject("affected catalog is inactive: " + id);
                     selected = true;
                     admit_instance(model, instance, actual, budget);
                     plan.instance_ids.emplace_back(id, instance.id);
                 }
-                if (!selected) reject("affected binding is outside supported hosted instance slots");
+                if (!selected) {
+                    if (hosted) continue; // Every actual hosted row is declared inactive.
+                    reject("affected binding is outside supported hosted instance slots");
+                }
                 plan.catalog_ids.push_back(id);
             } catch (const std::exception& error) { plan.diagnostics.push_back({id, error.what(), true}); }
         }
@@ -339,10 +354,11 @@ StructuralHostedEntities replay_structural_hosted_component_geometry(
     if (hosts.empty()) return result;
     const auto plan = inspect_structural_hosted_components(actual, {hosts.begin(), hosts.end()});
     require_ready(plan);
+    const auto scope = constraint_phase_scope(actual);
     for (const auto& id : plan.catalog_ids) {
         const auto model = AssemblyModel::from_json(actual.at(id).properties.at("model"));
         auto& raw = result.at(id).properties.at("model");
-        raw = replay_catalog(actual,actual.at(id), model, hosts, edits);
+        raw = replay_catalog(actual,actual.at(id), model, hosts, edits, scope);
     }
     const auto final_plan = inspect_structural_hosted_components(result, plan.host_ids);
     require_ready(final_plan);
@@ -448,10 +464,11 @@ StructuralHostedComponentCopyResult copy_structural_hosted_components(
     const auto physical = replay_structural_object_edit_entities(actual, edits);
     auto hosts = changed_hosts(actual, physical, edits);
     if (include_unchanged_hosts) for (const auto& edit : edits) hosts.insert(edit.object_id);
+    const auto scope = constraint_phase_scope(actual);
     return copy_prepared_hosted_components(actual, physical, hosts, object_ids, catalog_ids,
         hosted_instance_ids, std::move(occupied), [&](const Entity& catalog) {
             const auto model = AssemblyModel::from_json(catalog.properties.at("model"));
-            return replay_catalog(actual, catalog, model, hosts, edits);
+            return replay_catalog(actual, catalog, model, hosts, edits, scope);
         });
 }
 

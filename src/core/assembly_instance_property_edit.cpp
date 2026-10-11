@@ -1,4 +1,7 @@
 #include "sketch/assembly_instance_property_edit.hpp"
+#include "sketch/phase_assembly_instance_property_edit.hpp"
+#include "sketch/assembly_phase_membership.hpp"
+#include "sketch/phase_constraint_authoring.hpp"
 
 #include "sketch/assembly_geometry.hpp"
 #include "sketch/building_entity.hpp"
@@ -17,6 +20,7 @@
 #include <cmath>
 #include <cstdint>
 #include <initializer_list>
+#include <iterator>
 #include <set>
 #include <stdexcept>
 #include <string_view>
@@ -557,17 +561,22 @@ void admit_geometry(const AssemblyDocumentEntities& actual, const Target& target
     (void)transform_assembly_shape(found->second, root_pose(expansion.source_instance));
 }
 void require_active_dependencies(const AssemblyDocumentEntities& actual, const Target& target,
-    const AssemblyInstance& instance, const ConstraintPhaseScope& scope) {
+    const AssemblyInstance& instance, const ConstraintPhaseScope& scope, bool qualified_membership_priority = false) {
     const auto& owner_id = target.document_entity_id ? *target.document_entity_id : target.catalog_id;
     if (!target.document_entity_id && scope.assembly_memberships.inactive_roots.contains({target.catalog_id, target.instance_id}))
         reject("selected embedded root is inactive in the saved design");
-    if (scope.inactive_owner_ids.contains(owner_id)) reject("selected source owner is inactive in the saved design");
+    const bool declared_row = !target.document_entity_id &&
+        scope.assembly_memberships.owners.contains({target.catalog_id, target.instance_id});
+    if (!(qualified_membership_priority && declared_row) && scope.inactive_owner_ids.contains(owner_id))
+        reject("selected source owner is inactive in the saved design");
     if (instance.placement) {
         const auto& host_id = instance.placement->host_entity_id;
         const auto host = actual.find(host_id);
         if (host == actual.end() || host->second.id != host_id || !is_complete_assembly_catalog_host_type(host->second.type))
             reject("embedded placement host is missing or has an unsupported source role");
-        if (scope.inactive_owner_ids.contains(host_id)) reject("embedded assembly host is inactive in the saved design");
+        if (scope.inactive_owner_ids.contains(host_id) ||
+            (qualified_membership_priority && assembly_host_inactive_in_phase(actual, scope.inactive_owner_ids, host_id)))
+            reject("embedded assembly host is inactive in the saved design");
         (void)resolve_vertical_placement(actual, host->second);
         (void)resolve_site_presentation(actual, host_id);
     }
@@ -609,9 +618,11 @@ struct PropertyEditSourceInspection {
     AssemblyExpansionBudget before_budget, after_budget;
     std::size_t opening_work{};
     std::map<std::string, TopoDS_Shape, std::less<>> host_cache;
+    bool qualified_membership_priority{};
 
-    PropertyEditSourceInspection(const AssemblyDocumentEntities& actual, std::span<const Intent> intents)
-        : original(actual) {
+    PropertyEditSourceInspection(const AssemblyDocumentEntities& actual, std::span<const Intent> intents,
+        bool qualified_priority = false)
+        : original(actual), qualified_membership_priority(qualified_priority) {
         (void)encode_intents(intents);
         AssemblyCatalogTransferBudget catalog_budget;
         // Admit every source catalog before any expensive semantic model decode.
@@ -651,7 +662,7 @@ struct PropertyEditSourceInspection {
             if (found == model.instances().end()) reject("actual embedded catalog row is missing");
             instance = *found;
         }
-        require_active_dependencies(original, target, instance, scope);
+        require_active_dependencies(original, target, instance, scope, qualified_membership_priority);
         const auto before = model.expand(instance, before_budget);
         admit_geometry(original, target, before, opening_work, host_cache);
         auto changed = change_instance(instance, before, model, rows);
@@ -724,6 +735,309 @@ std::vector<AssemblyInstancePropertyEditImpact> inspect_assembly_instance_proper
     }
     return result;
 }
+
+namespace {
+std::optional<std::string> replacement_registry(const PropertyEditSourceInspection& source, const Target& root) {
+    if (!root.document_entity_id) {
+        const AssemblyPhaseRoot qualified{root.catalog_id, root.instance_id};
+        const auto owner = source.scope.assembly_memberships.owners.find(qualified);
+        if (owner != source.scope.assembly_memberships.owners.end()) {
+            const auto& registry_id = owner->second.registry_id;
+            const auto registry = ModelPhases::from_json(source.original.at(registry_id).properties.at("model"));
+            const auto membership = AssemblyPhaseMembership::from_json(
+                source.original.at(owner->second.membership_entity_id).properties.at("model"));
+            if (registry.active_alternative() && std::find(membership.baseline_roots().begin(),
+                membership.baseline_roots().end(), qualified) != membership.baseline_roots().end()) return registry_id;
+            return std::nullopt;
+        }
+    }
+    const auto owners = source.baselines.registries_for(root.document_entity_id ? *root.document_entity_id : root.catalog_id);
+    if (owners.size() > 1) reject("selected root has overlapping active baseline registries");
+    return owners.empty() ? std::nullopt : std::optional<std::string>{owners.front()};
+}
+PhaseAssemblyInstancePropertyEditPlan phase_plan(PropertyEditSourceInspection& source) {
+    PhaseAssemblyInstancePropertyEditPlan result;
+    std::set<std::string, std::less<>> needs_membership;
+    for (const auto& [key, rows] : source.grouped) {
+        (void)key;
+        const auto root = source.inspect(rows);
+        source.admit_final_geometry(root);
+        if (root.changed == root.original) { result.unchanged_roots.push_back(root.target); continue; }
+        const auto registry_id = replacement_registry(source, root.target);
+        if (!registry_id) { result.ordinary_roots.push_back(root.target); continue; }
+        const auto registry = ModelPhases::from_json(source.original.at(*registry_id).properties.at("model"));
+        PhaseAssemblyInstanceReplacementRoot replacement{root.target, *registry_id, *registry.active_alternative(), std::nullopt};
+        if (!root.target.document_entity_id) {
+            const auto declared = source.scope.assembly_memberships.owners.find({root.target.catalog_id, root.target.instance_id});
+            if (declared != source.scope.assembly_memberships.owners.end())
+                replacement.membership_entity_id = declared->second.membership_entity_id;
+            else {
+                // Enroll an undeclared legacy baseline in an existing companion
+                // of this actual registry, or allocate exactly one new companion.
+                for (const auto& [id, entity] : source.original) if (entity.type == assembly_phase_membership_entity_type &&
+                    AssemblyPhaseMembership::from_json(entity.properties.at("model")).registry_id() == *registry_id) {
+                    replacement.membership_entity_id = id; break;
+                }
+                if (!replacement.membership_entity_id) needs_membership.insert(*registry_id);
+            }
+        }
+        result.replacement_roots.push_back(std::move(replacement));
+    }
+    result.required_membership_registry_ids.assign(needs_membership.begin(), needs_membership.end());
+    return result;
+}
+void fresh_id(const std::string& value) {
+    if (value.empty() || value.size() > 128 || !std::all_of(value.begin(), value.end(), [](unsigned char c) {
+        return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') ||
+            c == '-' || c == '_' || c == '.' || c == ':';
+    })) reject("fresh allocation requires a bounded document identity");
+}
+void patch_root(AssemblyDocumentEntities& result, const AssemblyDocumentEntities& original,
+    const InspectedRoot& root, const Target& destination) {
+    const auto& source_catalog = original.at(root.target.catalog_id).properties.at("model");
+    if (destination.document_entity_id) {
+        auto& raw = result.at(*destination.document_entity_id).properties.at("instance");
+        patch_instance(raw, root.original, root.changed, source_catalog);
+        const auto vertical = [](const Json& pose) { return pose.is_object() && pose.contains("vertical_scale"); };
+        if (vertical(raw.at("root_transform")) || std::any_of(raw.at("nested_overrides").begin(),
+            raw.at("nested_overrides").end(), [&](const Json& row) { return vertical(row.at("transform")); }))
+            raw["schema"] = "sketch.assembly-instance.v2";
+    } else {
+        auto& model = result.at(destination.catalog_id).properties.at("model");
+        auto& rows = model.at("instances");
+        const auto row = std::find_if(rows.begin(), rows.end(), [&](const Json& value) { return value.at("id") == destination.instance_id; });
+        if (row == rows.end()) reject("replayed actual destination row is missing");
+        patch_instance(*row, root.original, root.changed, source_catalog);
+        complete_row_envelope(*row);
+        if (needs_embedded_promotion(model, *row)) model["schema"] = "sketch.assemblies.v7";
+    }
+}
+} // namespace
+
+PhaseAssemblyInstancePropertyEditPlan inspect_phase_assembly_instance_property_edit_plan(
+    const AssemblyDocumentEntities& original, std::span<const Intent> intents) {
+    PropertyEditSourceInspection source(original, intents, true);
+    return phase_plan(source);
+}
+void validate_phase_assembly_instance_property_edit_fresh_identities(
+    const AssemblyDocumentEntities& retained, const std::vector<std::string>& identities) {
+    const std::set<std::string, std::less<>> fresh(identities.begin(), identities.end());
+    if (fresh.size() != identities.size()) reject("fresh identity inventory is not injective");
+    validate_selection_edit_fresh_identity_tokens(retained, fresh);
+    // Global children and actual render aliases use the common fence. Root row
+    // IDs also reserve their local spelling for this new producer's allocations.
+    // Model/source budget admission in the common fence precedes this scan.
+    const auto local_ids = [&](const auto& self, const Json& value) -> void {
+        if (value.is_object()) for (const auto& [key, child] : value.items()) {
+            if (key == "id" && child.is_string() && fresh.contains(child.get_ref<const std::string&>()))
+                reject("fresh identity reuses a retained catalog-local identity");
+            self(self, child);
+        } else if (value.is_array()) for (const auto& child : value) self(self, child);
+    };
+    for (const auto& [id, entity] : retained) {
+        (void)id;
+        if (entity.type == "assembly_model") local_ids(local_ids, entity.properties.at("model"));
+        else if (entity.type == "assembly_instance" &&
+            fresh.contains(entity.properties.at("instance").at("id").get<std::string>()))
+            reject("fresh identity reuses a retained independent root identity");
+    }
+}
+PhaseAssemblyInstancePropertyEditResult replay_phase_assembly_instance_property_edits(
+    const AssemblyDocumentEntities& original, std::span<const Intent> intents,
+    const PhaseAssemblyInstancePropertyEditAllocation& allocation) {
+    // Admit the closed typed allocation before source model decoding or copies.
+    if (intents.empty() || intents.size() > target_limit || allocation.roots.size() > target_limit ||
+        allocation.membership_entity_ids.size() > target_limit) reject("typed replacement count exceeds bound");
+    (void)encode_intents(intents); // Aggregate typed preflight precedes any intent copy.
+    (void)encode_phase_assembly_instance_property_edit_authoring({std::vector<Intent>(intents.begin(), intents.end()), allocation});
+    PropertyEditSourceInspection inspection(original, intents, true);
+    const auto plan = phase_plan(inspection);
+    if (allocation.roots.size() != plan.replacement_roots.size() ||
+        allocation.membership_entity_ids.size() != plan.required_membership_registry_ids.size())
+        reject("allocation differs from actual changed replacement inventory");
+    std::vector<std::string> fresh;
+    std::set<std::string, std::less<>> reserved;
+    const auto reserve = [&](const std::string& id) {
+        fresh_id(id);
+        if (!reserved.insert(id).second) reject("fresh replacement allocations collide");
+        fresh.push_back(id);
+    };
+    for (const auto& root : plan.replacement_roots) {
+        const auto found = allocation.roots.find(root.root);
+        if (found == allocation.roots.end()) reject("missing exact qualified root allocation");
+        const auto& ids = found->second;
+        if (root.root.document_entity_id) {
+            if (!ids.proposed_entity_id || ids.proposed_catalog_id) reject("independent allocation requires only fresh owner and instance");
+            if (*ids.proposed_entity_id != ids.proposed_instance_id) reject("independent owner and instance require the same fresh identity");
+            reserve(*ids.proposed_entity_id);
+        } else {
+            if (!ids.proposed_catalog_id || ids.proposed_entity_id) reject("embedded allocation requires only fresh private catalog and row");
+            reserve(*ids.proposed_catalog_id);
+            reserve(ids.proposed_instance_id);
+        }
+    }
+    for (const auto& registry_id : plan.required_membership_registry_ids) {
+        const auto found = allocation.membership_entity_ids.find(registry_id);
+        if (found == allocation.membership_entity_ids.end()) reject("missing fresh required membership companion");
+        reserve(found->second);
+    }
+    validate_phase_assembly_instance_property_edit_fresh_identities(original, fresh);
+    // Bound the destination envelope and repeated decode work before the first
+    // whole-map/private-catalog copy. A private catalog temporarily copies its
+    // complete source envelope before narrowing the instance roster, so charge
+    // that conservative upper bound for every replica, not once per source.
+    AssemblyCatalogTransferBudget destination_budget;
+    for (const auto& [id, entity] : original) {
+        (void)id;
+        if (entity.type == "assembly_model") admit_existing_assembly_catalog_work(entity, destination_budget);
+    }
+    for (const auto& replacement : plan.replacement_roots)
+        if (!replacement.root.document_entity_id)
+            admit_existing_assembly_catalog_work(original.at(replacement.root.catalog_id), destination_budget);
+    PhaseAssemblyInstancePropertyEditResult result{original, {}, {}};
+    std::map<Target, Target> destinations;
+    std::map<Target, InspectedRoot> inspected;
+    std::map<std::string, ModelPhases, std::less<>> registries;
+    std::map<std::string, AssemblyPhaseMembership, std::less<>> memberships;
+    for (const auto& replacement : plan.replacement_roots) {
+        const auto& source_root = replacement.root;
+        const auto& ids = allocation.roots.at(source_root);
+        Target destination{ids.proposed_catalog_id.value_or(source_root.catalog_id), ids.proposed_instance_id,
+            ids.proposed_entity_id, {}};
+        destinations.emplace(source_root, destination);
+        if (source_root.document_entity_id) {
+            auto copy = original.at(*source_root.document_entity_id);
+            copy.id = *ids.proposed_entity_id;
+            copy.properties.at("instance")["id"] = ids.proposed_instance_id;
+            result.entities.emplace(copy.id, std::move(copy));
+            if (!registries.contains(replacement.registry_id)) registries.emplace(replacement.registry_id,
+                ModelPhases::from_json(original.at(replacement.registry_id).properties.at("model")));
+            const auto& saved = registries.at(replacement.registry_id);
+            auto owners = saved.entity_ids(); auto alternatives = saved.alternatives();
+            owners.push_back(*ids.proposed_entity_id);
+            auto active = std::find_if(alternatives.begin(), alternatives.end(),
+                [&](const auto& row) { return row.id == replacement.alternative_id; });
+            if (active == alternatives.end()) reject("replacement has no actual registry alternative");
+            active->demolished_ids.push_back(*source_root.document_entity_id);
+            active->proposed_ids.push_back(*ids.proposed_entity_id);
+            registries.at(replacement.registry_id) = ModelPhases::create(std::move(owners), saved.baseline_ids(),
+                std::move(alternatives), saved.active_alternative());
+        } else {
+            auto copy = original.at(source_root.catalog_id);
+            copy.id = *ids.proposed_catalog_id;
+            auto& model = copy.properties.at("model");
+            const auto& rows = original.at(source_root.catalog_id).properties.at("model").at("instances");
+            const auto row = std::find_if(rows.begin(), rows.end(), [&](const Json& value) { return value.at("id") == source_root.instance_id; });
+            if (row == rows.end()) reject("actual selected private catalog source row is missing");
+            auto private_row = *row; private_row["id"] = ids.proposed_instance_id;
+            // Keep every raw definition, material and metadata field needed by
+            // the selected expansion. Unselected live instances stay at source.
+            model["instances"] = Json::array({std::move(private_row)});
+            result.entities.emplace(copy.id, std::move(copy));
+            const auto companion = replacement.membership_entity_id.value_or(
+                allocation.membership_entity_ids.contains(replacement.registry_id) ?
+                    allocation.membership_entity_ids.at(replacement.registry_id) : std::string{});
+            if (!memberships.contains(companion)) {
+                if (replacement.membership_entity_id) memberships.emplace(companion,
+                    AssemblyPhaseMembership::from_json(original.at(companion).properties.at("model")));
+                else memberships.emplace(companion, AssemblyPhaseMembership::create(replacement.registry_id, {}, {}, {}));
+            }
+            const auto& saved = memberships.at(companion);
+            auto roots = saved.roots(); auto baselines = saved.baseline_roots(); auto alternatives = saved.alternatives();
+            const AssemblyPhaseRoot old{source_root.catalog_id, source_root.instance_id};
+            const AssemblyPhaseRoot proposed{destination.catalog_id, destination.instance_id};
+            if (std::find(roots.begin(), roots.end(), old) == roots.end()) { roots.push_back(old); baselines.push_back(old); }
+            roots.push_back(proposed);
+            auto active = std::find_if(alternatives.begin(), alternatives.end(),
+                [&](const auto& row) { return row.alternative_id == replacement.alternative_id; });
+            if (active == alternatives.end()) {
+                alternatives.push_back({replacement.alternative_id, {}, {}}); active = std::prev(alternatives.end());
+            }
+            active->demolished_roots.push_back(old); active->proposed_roots.push_back(proposed);
+            memberships.at(companion) = AssemblyPhaseMembership::create(replacement.registry_id,
+                std::move(roots), std::move(baselines), std::move(alternatives));
+        }
+    }
+    // Reinspect using a fresh ledger rather than charging expansions repeatedly
+    // against the inspection API's ledger. Every patch still derives from source.
+    PropertyEditSourceInspection replay(original, intents, true);
+    for (const auto& [key, rows] : replay.grouped) {
+        (void)key;
+        auto root = replay.inspect(rows);
+        auto destination = destinations.contains(root.target) ? destinations.at(root.target) : root.target;
+        if (root.changed != root.original) patch_root(result.entities, original, root, destination);
+        for (const auto* intent : rows) {
+            auto selected = destination; selected.part_path = intent->target.part_path;
+            result.original_to_proposed.emplace(intent->target, std::move(selected));
+        }
+        inspected.emplace(std::move(destination), std::move(root));
+    }
+    for (const auto& [id, registry] : registries)
+        result.entities.at(id).properties["model"] = retain_model_phase_source(original.at(id).properties.at("model"), registry);
+    for (const auto& [id, membership] : memberships) {
+        if (original.contains(id)) result.entities.at(id).properties["model"] =
+            retain_assembly_phase_membership_source(original.at(id).properties.at("model"), membership);
+        else result.entities.emplace(id, Entity{id, std::string(assembly_phase_membership_entity_type),
+            Json{{"model", membership.to_json()}}, true});
+    }
+    validate_document_assembly_instances(result.entities);
+    validate_document_site_frames(result.entities);
+    if (const auto diagnostic = validate_active_phase_constraint_integrity(result.entities)) throw std::invalid_argument(*diagnostic);
+    const auto final_scope = constraint_phase_scope(result.entities);
+    AssemblyExpansionBudget final_budget;
+    std::map<std::string, AssemblyModel, std::less<>> final_models;
+    for (const auto& [destination, root] : inspected) {
+        if (!final_models.contains(destination.catalog_id)) final_models.emplace(destination.catalog_id,
+            AssemblyModel::from_json(result.entities.at(destination.catalog_id).properties.at("model")));
+        const auto& model = final_models.at(destination.catalog_id);
+        AssemblyInstance actual;
+        if (destination.document_entity_id) actual = decode_document_assembly_instance(result.entities.at(*destination.document_entity_id)).instance;
+        else {
+            const auto row = std::find_if(model.instances().begin(), model.instances().end(),
+                [&](const auto& value) { return value.id == destination.instance_id; });
+            if (row == model.instances().end()) reject("final private/ordinary row is missing");
+            actual = *row;
+        }
+        auto intended = root.changed; intended.id = destination.instance_id;
+        const auto sort_paths = [](auto& instance) { std::sort(instance.nested_overrides.begin(), instance.nested_overrides.end(),
+            [](const auto& a, const auto& b) { return a.part_path < b.part_path; }); };
+        sort_paths(intended); sort_paths(actual);
+        if (actual != intended) reject("actual destination differs from original-source typed intent");
+        require_active_dependencies(result.entities, destination, actual, final_scope, true);
+        admit_geometry(result.entities, destination, model.expand(actual, final_budget), replay.opening_work, replay.host_cache);
+    }
+    // Constructors and raw patches above never touch source replacement owners.
+    // Check this explicitly, including an embedded source's exact selected row.
+    for (const auto& replacement : plan.replacement_roots) {
+        const auto& root = replacement.root;
+        if (root.document_entity_id) {
+            if (!exact(original.at(*root.document_entity_id), result.entities.at(*root.document_entity_id)))
+                reject("replacement changed the protected independent original");
+        } else {
+            const auto row = [&](const AssemblyDocumentEntities& entities) -> const Json& {
+                const auto& rows = entities.at(root.catalog_id).properties.at("model").at("instances");
+                const auto found = std::find_if(rows.begin(), rows.end(), [&](const Json& value) { return value.at("id") == root.instance_id; });
+                if (found == rows.end()) reject("protected embedded source row disappeared");
+                return *found;
+            };
+            if (row(original).dump() != row(result.entities).dump()) reject("replacement changed protected embedded source row");
+        }
+    }
+    const auto aliases = embedded_assembly_presentation_ids(result.entities);
+    for (const auto& [binding, alias] : embedded_assembly_presentation_ids(original))
+        if (!aliases.contains(binding) || aliases.at(binding) != alias)
+            reject("private allocation changed a retained component presentation alias");
+    for (const auto& replacement : plan.replacement_roots) if (!replacement.root.document_entity_id) {
+        const auto& ids = allocation.roots.at(replacement.root);
+        const auto& alias = aliases.at({*ids.proposed_catalog_id, ids.proposed_instance_id});
+        if (!reserved.insert(alias).second) reject("fresh private presentation alias collides with fresh allocation");
+        fresh.push_back(alias);
+    }
+    validate_phase_assembly_instance_property_edit_fresh_identities(original, fresh);
+    std::sort(fresh.begin(), fresh.end()); result.fresh_identity_ids = std::move(fresh);
+    return result;
+}
+
 AssemblyDocumentEntities replay_assembly_instance_property_entities(const AssemblyDocumentEntities& original,
     std::span<const Intent> intents) {
     PropertyEditSourceInspection source(original, intents);

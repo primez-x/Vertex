@@ -38,6 +38,14 @@ const Json* field(const Json& value, const std::string& key) {
     const auto found=value.find(key);
     return found==value.end()?nullptr:&*found;
 }
+bool hosted_root_active(const Entities& source, const ConstraintPhaseScope& scope,
+    const AssemblyPhaseRoot& root, const std::string& host) {
+    // Row membership is exact and source-derived. Unlisted rows keep their
+    // historical profile/host-copy participation without inferred membership.
+    return !scope.assembly_memberships.owners.contains(root) ||
+        (!scope.assembly_memberships.inactive_roots.contains(root) &&
+            !assembly_host_inactive_in_phase(source, scope.inactive_owner_ids, host));
+}
 void keys(const Json& value, const Names& required) {
     if (!value.is_object() || value.size()!=required.size()) invalid("proof fields are not closed");
     for (const auto& name : required) if (!value.contains(name)) invalid("proof field is missing");
@@ -133,8 +141,7 @@ StairObjectEditIntent profile_intent(const Entity& entity) {
     }
     return {entity.id,std::move(profile),nullptr};
 }
-void catalog_context(const Entity& catalog, const Entities& source, const Names& inactive) {
-    if (inactive.contains(catalog.id)) invalid("affected catalog is inactive: "+catalog.id);
+void catalog_context(const Entity& catalog, const Entities& source) {
     struct Binding { const char* key; const char* type; };
     constexpr Binding bindings[]{{"property_id","property"},{"building_id","building"},
         {"floor_id","floor"},{"layer_id","layer"},{"wall_id","wall"}};
@@ -214,7 +221,7 @@ Entities coordinate_catalogs(const Entities& source, Entities result,
     AssemblyExpansionBudget source_budget,candidate_budget;
     for (const auto& [id,catalog] : source) {
         if (catalog.type!="assembly_model" || !affected_catalog(catalog,hosts)) continue;
-        catalog_context(catalog,source,scope.inactive_owner_ids);
+        catalog_context(catalog,source);
         const auto raw=field(catalog.properties,"model");
         if (!raw) invalid("affected catalog has no actual model");
         catalog_bounds(*raw,inventory);
@@ -230,9 +237,14 @@ Entities coordinate_catalogs(const Entities& source, Entities result,
             invalid("affected catalog contains unsupported host references: "+id);
         std::map<std::string,AssemblyTransform,std::less<>> transforms;
         Names affected;
+        bool hosted=false;
         for (const auto& instance : model.instances()) {
             if (!instance.placement || !hosts.contains(instance.placement->host_entity_id)) continue;
             const auto& host=instance.placement->host_entity_id;
+            hosted=true;
+            if (!hosted_root_active(source,scope,{id,instance.id},host)) continue;
+            if (scope.inactive_owner_ids.contains(id) && !scope.assembly_memberships.owners.contains({id,instance.id}))
+                invalid("affected catalog is inactive: "+id);
             const bool typed=admit_instance(model,instance,source,source_budget);
             affected.insert(instance.id);
             // Identity physical owners retain exact catalogs, even when another
@@ -245,7 +257,10 @@ Entities coordinate_catalogs(const Entities& source, Entities result,
             transforms.emplace(instance.id,typed?world_transform(source,host,operations.at(host)):
                 architectural_group_assembly_transform(operations.at(host)));
         }
-        if (affected.empty()) invalid("affected catalog binding is outside a supported hosted row: "+id);
+        if (affected.empty()) {
+            if (hosted) continue; // Declared inactive source rows stay exact.
+            invalid("affected catalog binding is outside a supported hosted row: "+id);
+        }
         auto& after=result.at(id);
         if (!transforms.empty()) after.properties["model"]=transform_hosted_assembly_model(*raw,transforms,true);
         const auto candidate=AssemblyModel::from_json(after.properties.at("model"));
@@ -326,7 +341,7 @@ Entities stair_transform_detail::coordinate_profile_hosted_geometry(
     AssemblyExpansionBudget discovery_budget;
     for (const auto& id : catalogs) {
         const auto& catalog=actual.at(id);
-        catalog_context(catalog,actual,scope.inactive_owner_ids);
+        catalog_context(catalog,actual);
         auto remainder=catalog;
         for (auto& row : remainder.properties.at("model").at("instances")) {
             row.erase("id");
@@ -335,14 +350,18 @@ Entities stair_transform_detail::coordinate_profile_hosted_geometry(
         if (touches(remainder.properties,hosts) || touches(remainder.extensions,hosts))
             invalid("affected profile catalog contains unsupported host references: "+id);
         const auto model=AssemblyModel::from_json(catalog.properties.at("model"));
-        bool participating=false;
+        bool participating=false, hosted=false;
         for (const auto& instance : model.instances()) {
             if (!instance.placement || !hosts.contains(instance.placement->host_entity_id)) continue;
+            hosted=true;
+            if (!hosted_root_active(actual,scope,{id,instance.id},instance.placement->host_entity_id)) continue;
+            if (scope.inactive_owner_ids.contains(id) && !scope.assembly_memberships.owners.contains({id,instance.id}))
+                invalid("affected catalog is inactive: "+id);
             participating=true;
             if (!model.expand(instance,discovery_budget).profiles.empty())
                 typed_hosts.insert(instance.placement->host_entity_id);
         }
-        if (!participating) invalid("affected profile catalog binding is outside a supported hosted row: "+id);
+        if (!participating && !hosted) invalid("affected profile catalog binding is outside a supported hosted row: "+id);
     }
     if (typed_hosts.empty()) {
         // Legacy rows require no placement rewrite, but their actual source and

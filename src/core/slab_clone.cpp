@@ -277,8 +277,16 @@ void admit_hosted_instance(const AssemblyModel& model, const AssemblyInstance& i
 } catch (const Standard_Failure& error) {
     reject(std::string("hosted assembly native admission failed: ") + error.what());
 }
+bool hosted_root_active(const SlabCloneEntities& source, const ConstraintPhaseScope& scope,
+    const SlabCloneHostedInstanceKey& root, const std::string& host) {
+    // Only declared qualified roots acquire companion activity. Unlisted rows
+    // retain their historical host-copy behavior, including legacy host copies.
+    return !scope.assembly_memberships.owners.contains(root) ||
+        (!scope.assembly_memberships.inactive_roots.contains(root) &&
+            !assembly_host_inactive_in_phase(source, scope.inactive_owner_ids, host));
+}
 Ids discover_hosted_assemblies(SlabClonePlan& plan, const SlabCloneEntities& source, const Ids& owners,
-    const Ids& inactive) {
+    const ConstraintPhaseScope& scope) {
     Ids catalogs;
     AssemblyExpansionBudget budget;
     std::size_t inventory = 0;
@@ -291,11 +299,13 @@ Ids discover_hosted_assemblies(SlabClonePlan& plan, const SlabCloneEntities& sou
         for (const auto& instance : *instances) {
             const auto placement = field(instance, "placement");
             const auto host = placement ? field(*placement, "host_entity_id") : nullptr;
+            const auto name = field(instance, "id");
+            if (name && name->is_string() && host && host->is_string() &&
+                !hosted_root_active(source, scope, {id, name->get<std::string>()}, host->get_ref<const std::string&>())) continue;
             if (host && host->is_string() && owners.contains(host->get_ref<const std::string&>()))
                 affected = true;
         }
         if (!affected) continue;
-        if (inactive.contains(id)) reject("affected hosted assembly catalog is inactive: " + id);
         // Preflight aggregate collections before invoking the closed codec.
         for (const auto* key : {"materials", "types", "instances"}) {
             const auto rows = field(*model, key);
@@ -316,6 +326,11 @@ Ids discover_hosted_assemblies(SlabClonePlan& plan, const SlabCloneEntities& sou
         catalogs.insert(id);
         for (const auto& instance : parsed.instances()) {
             if (!instance.placement || !owners.contains(instance.placement->host_entity_id)) continue;
+            if (!hosted_root_active(source, scope, {id, instance.id}, instance.placement->host_entity_id)) continue;
+            // Declared row activity supersedes historical catalog activity;
+            // an affected unlisted legacy row keeps the catalog-phase refusal.
+            if (scope.inactive_owner_ids.contains(id) && !scope.assembly_memberships.owners.contains({id, instance.id}))
+                reject("affected hosted assembly catalog is inactive: " + id);
             // Local source identities follow AssemblyModel's rules, which allow
             // arbitrary authored strings. Fresh identities follow document rules.
             plan.required_hosted_instance_ids.emplace_back(id, instance.id);
@@ -357,7 +372,7 @@ SlabClonePlan derive(const SlabCloneEntities& source, const std::vector<std::str
             }
         }
         admit_slabs(source, owners);
-        const auto catalogs = discover_hosted_assemblies(plan, source, owners, scope.inactive_owner_ids);
+        const auto catalogs = discover_hosted_assemblies(plan, source, owners, scope);
         for (const auto& id : catalogs) admit_catalog_opaque_instance_references(source.at(id), plan.required_hosted_instance_ids);
         std::map<std::string, std::size_t, std::less<>> declarations;
         // Historical slab_id/layer_id slots do not declare current children.
@@ -533,6 +548,7 @@ SlabCloneResult replay_slab_clone(const SlabCloneEntities& source, const SlabClo
                     const auto host = row.at("placement").at("host_entity_id").get<std::string>();
                     if (!owners.contains(host)) continue;
                     const SlabCloneHostedInstanceKey key{id, row.at("id").get<std::string>()};
+                    if (!expected_instances.contains(key)) continue;
                     row.at("id") = hosted_instance_identities.at(key);
                     row.at("placement").at("host_entity_id") = identities.at(host);
                     rows.push_back(std::move(row));
