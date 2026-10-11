@@ -247,6 +247,67 @@ void retirement_placement_host(const Entities& entities, const Phases& phases,
             "assembly phase retirement corner cut is absent from its actual owner");
     }
 }
+
+void retained_embedded_placement_host(const Entities& source, const Entities& candidate,
+    const Phases& phases, const std::string& host_id) {
+    std::set<std::string, std::less<>> reached;
+    const auto visit = [&](const auto& self, const std::string& id) -> void {
+        if (reached.contains(id)) return;
+        const auto host = source.find(id);
+        require(host != source.end() && (is_complete_assembly_catalog_host_type(host->second.type) ||
+            host->second.type == "corner_window"),
+            "embedded assembly phase transport requires an actual supported placement host");
+        require(reached.size() < 8, "embedded assembly phase transport host ancestry exceeds bound");
+        reached.insert(id);
+        const auto retained = candidate.find(id);
+        require(retained != candidate.end() && exact(host->second, retained->second),
+            "embedded assembly phase transport changed or removed a retained placement ancestor");
+        require(!phases.inactive.contains(id),
+            "embedded assembly phase transport source placement ancestry is inactive");
+        // These actual hosts are retained raw-exact. Their saved activity binds
+        // the copy read, but their registry does not confer or restrict the
+        // independently declared row's role in its own registry.
+        const auto& entity = host->second;
+        if (entity.type == "opening") {
+            require(entity.properties.is_object() && entity.properties.contains("wall_id") &&
+                entity.properties.at("wall_id").is_string(),
+                "embedded assembly phase transport opening has no actual wall");
+            const auto& wall_id = entity.properties.at("wall_id").get_ref<const std::string&>();
+            const auto wall = source.find(wall_id);
+            require(wall != source.end() && wall->second.type == "wall",
+                "embedded assembly phase transport opening wall is missing or mistyped");
+            self(self, wall_id);
+            if (!entity.properties.contains("corner_window_id")) return;
+            const auto& backlink = entity.properties.at("corner_window_id");
+            require(backlink.is_string(), "embedded assembly phase transport corner cut has no actual owner");
+            const auto& corner_id = backlink.get_ref<const std::string&>();
+            const auto corner_entity = source.find(corner_id);
+            require(corner_entity != source.end() && corner_entity->second.type == "corner_window",
+                "embedded assembly phase transport corner cut owner is missing or mistyped");
+            const auto corner = parse_corner_window(corner_entity->second);
+            require(std::find(corner.opening_ids.begin(), corner.opening_ids.end(), id) != corner.opening_ids.end(),
+                "embedded assembly phase transport corner cut is absent from its actual owner");
+            self(self, corner_id);
+        } else if (entity.type == "corner_window") {
+            const auto corner = parse_corner_window(entity);
+            for (std::size_t leg = 0; leg < corner.opening_ids.size(); ++leg) {
+                const auto cut = source.find(corner.opening_ids[leg]);
+                require(cut != source.end() && cut->second.type == "opening" &&
+                    cut->second.properties.is_object() &&
+                    cut->second.properties.contains("corner_window_id") &&
+                    cut->second.properties.at("corner_window_id") == id &&
+                    cut->second.properties.contains("corner_leg") &&
+                    cut->second.properties.at("corner_leg").is_number_integer() &&
+                    cut->second.properties.at("corner_leg") == leg &&
+                    cut->second.properties.contains("wall_id") &&
+                    cut->second.properties.at("wall_id") == corner.wall_ids[leg],
+                    "embedded assembly phase transport corner ancestry has inconsistent actual cuts");
+                self(self, corner.opening_ids[leg]);
+            }
+        }
+    };
+    visit(visit, host_id);
+}
 } // namespace
 
 void validate_assembly_phase_retirement_roots(const Entities& actual,
@@ -613,6 +674,149 @@ AssemblyPhaseTransportEntities transport_assembly_phase_memberships_for_independ
         return result;
     } catch (const Json::exception& error) {
         throw std::invalid_argument(std::string("invalid independent assembly phase copy transport: ") + error.what());
+    }
+}
+
+AssemblyPhaseTransportEntities transport_assembly_phase_memberships_for_embedded_copies(
+    const Entities& source, const Entities& candidate, const AssemblyPhaseCopiedRoots& copied_roots) {
+    try {
+        require(copied_roots.size() <= 1000, "embedded assembly phase transport copied root budget exceeded");
+        Budget budget;
+        std::map<std::string, std::set<std::string, std::less<>>, std::less<>> destinations;
+        std::set<AssemblyPhaseRoot> fresh_roots;
+        for (const auto& [from, to] : copied_roots) {
+            root_id(from); root_id(to);
+            budget.text(from.first); budget.text(from.second); budget.text(to.first); budget.text(to.second);
+            require(from.first == to.first,
+                "embedded assembly phase transport cross-catalog definitions are not independently qualified");
+            require(from != to && fresh_roots.insert(to).second && !copied_roots.contains(to),
+                "embedded assembly phase transport destination is aliased, duplicated or another source");
+            destinations[to.first].insert(to.second);
+        }
+        budget.entities(source); budget.entities(candidate);
+        // Reserve every catalog in both complete maps before any model/scope
+        // decoder, even when no selected row or companion reaches it.
+        std::set<std::string, std::less<>> source_catalog_ids, candidate_catalog_ids;
+        for (const auto& [id, entity] : source)
+            if (entity.type == "assembly_model") source_catalog_ids.insert(id);
+        for (const auto& [id, entity] : candidate)
+            if (entity.type == "assembly_model") candidate_catalog_ids.insert(id);
+        AssemblyCatalogTransferBudget catalog_budget;
+        admit_catalogs(source, source_catalog_ids, catalog_budget);
+        admit_catalogs(candidate, candidate_catalog_ids, catalog_budget);
+        const Phases source_phases(source), candidate_phases(candidate);
+        const auto source_scope = resolve_assembly_phase_memberships(source);
+        const auto candidate_scope = resolve_assembly_phase_memberships(candidate);
+        const auto source_catalogs = catalogs(source, source_catalog_ids);
+        const auto candidate_catalogs = catalogs(candidate, candidate_catalog_ids);
+        if (copied_roots.empty()) return candidate;
+        companions_exact(source, candidate, false);
+        for (const auto& [id, registry] : source_phases.registries) {
+            (void)registry;
+            const auto retained = candidate.find(id);
+            require(retained != candidate.end() && exact(source.at(id), retained->second),
+                "embedded assembly phase transport changed source registry roles or saved choice");
+        }
+        for (const auto& [id, registry_id] : candidate_phases.owners) {
+            if (!source.contains(id)) continue;
+            const auto owner = source_phases.owners.find(id);
+            require(owner != source_phases.owners.end() && owner->second == registry_id,
+                "embedded assembly phase transport changed an original physical owner's registry");
+        }
+        for (const auto& [id, added] : destinations) {
+            const auto original = source.find(id), proposed = candidate.find(id);
+            require(original != source.end() && proposed != candidate.end(),
+                "embedded assembly phase transport actual copied catalog is missing");
+            auto retained = proposed->second;
+            auto& rows = retained.properties.at("model").at("instances").get_ref<Json::array_t&>();
+            std::erase_if(rows, [&](const Json& row) {
+                return added.contains(row.at("id").get_ref<const std::string&>());
+            });
+            require(exact(original->second, retained),
+                "embedded assembly phase transport changed retained catalog rows, definitions, materials or envelope");
+        }
+
+        struct Additions {
+            std::vector<AssemblyPhaseRoot> baseline;
+            std::map<std::string, std::vector<AssemblyPhaseRoot>, std::less<>> proposed;
+            std::size_t count{};
+        };
+        std::map<std::string, Additions, std::less<>> edits;
+        for (const auto& [from, to] : copied_roots) {
+            const auto& original = instance(source_catalogs, from);
+            const auto& destination = instance(candidate_catalogs, to);
+            require(!source_catalogs.at(to.first).instances.contains(to.second),
+                "embedded assembly phase transport destination qualified identity is not fresh");
+            require(!candidate_scope.owners.contains(to),
+                "embedded assembly phase transport cannot overwrite or re-enroll destination membership");
+            // Retained raw catalog comparison also proves the source row exists
+            // unchanged, including its numeric representations and placement.
+            // The independently derived geometry producer materializes a moved
+            // hosted copy in world coordinates. Enrollment owns no pose
+            // authority, but must not require an obsolete placement descriptor.
+            // A retained placement still names the exact original host; a
+            // detached copy must supply an admitted explicit root transform.
+            require(destination.placement ?
+                original.placement && original.placement->host_entity_id == destination.placement->host_entity_id :
+                !original.placement || destination.root_transform.has_value(),
+                "embedded assembly phase transport destination has no valid retained-host or explicit world frame");
+            const auto owner = source_scope.owners.find(from);
+            std::optional<std::string> registry_id;
+            if (owner != source_scope.owners.end()) {
+                const auto state = source_scope.states.find(from);
+                require(state != source_scope.states.end() && state->second != ModelPhase::demolished &&
+                    !source_scope.inactive_roots.contains(from),
+                    "embedded assembly phase transport source row is inactive in its actual saved design");
+                registry_id = owner->second.registry_id;
+            } else {
+                require(!candidate_scope.owners.contains(from),
+                    "embedded assembly phase transport cannot infer membership for an unlisted source row");
+                require(!source_phases.inactive.contains(from.first),
+                    "embedded assembly phase transport unlisted source catalog is inactive");
+            }
+            if (original.placement)
+                retained_embedded_placement_host(source, candidate, source_phases,
+                    original.placement->host_entity_id);
+            if (!registry_id) continue; // Unlisted copies remain unlisted.
+            const auto& registry = source_phases.registries.at(*registry_id);
+            auto& edit = edits[owner->second.membership_entity_id];
+            ++edit.count;
+            if (registry.active_alternative()) edit.proposed[*registry.active_alternative()].push_back(to);
+            else edit.baseline.push_back(to);
+        }
+        auto result = candidate;
+        for (const auto& [id, edit] : edits) {
+            const auto& saved = model(source.at(id), assembly_phase_membership_entity_type);
+            const auto membership = AssemblyPhaseMembership::from_json(saved);
+            require(edit.count <= max_bindings - membership.roots().size(),
+                "embedded assembly phase transport resulting root budget exceeded");
+            auto roots = membership.roots();
+            auto baseline = membership.baseline_roots();
+            auto alternatives = membership.alternatives();
+            roots.insert(roots.end(), edit.baseline.begin(), edit.baseline.end());
+            baseline.insert(baseline.end(), edit.baseline.begin(), edit.baseline.end());
+            for (const auto& [alternative_id, additions] : edit.proposed) {
+                roots.insert(roots.end(), additions.begin(), additions.end());
+                auto alternative = std::find_if(alternatives.begin(), alternatives.end(),
+                    [&](const auto& row) { return row.alternative_id == alternative_id; });
+                if (alternative == alternatives.end()) {
+                    require(alternatives.size() < 1000,
+                        "embedded assembly phase transport resulting alternative budget exceeded");
+                    alternatives.push_back({alternative_id, {}, {}});
+                    alternative = std::prev(alternatives.end());
+                }
+                alternative->proposed_roots.insert(alternative->proposed_roots.end(), additions.begin(), additions.end());
+            }
+            const auto proposed = AssemblyPhaseMembership::create(membership.registry_id(), std::move(roots),
+                std::move(baseline), std::move(alternatives));
+            result.at(id).properties.at("model") = retain_assembly_phase_membership_source(saved, proposed);
+        }
+        Budget final_budget;
+        final_budget.entities(result);
+        (void)resolve_assembly_phase_memberships(result);
+        return result;
+    } catch (const Json::exception& error) {
+        throw std::invalid_argument(std::string("invalid embedded assembly phase copy transport: ") + error.what());
     }
 }
 

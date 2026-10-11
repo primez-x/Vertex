@@ -1449,6 +1449,7 @@ struct HistoryAdmission {
         read(value.mixed_selection_removal_intent); read(value.mixed_selection_edit_intent);
         read(value.clipboard_placement_intent); read(value.assembly_catalog_edit_intent);
         read(value.phase_assembly_catalog_edit_intent);
+        read(value.qualified_embedded_assembly_copy_intent);
         // These understood proof envelopes can retain region topology and
         // ordered geometry operations. Their opaque metadata stays linear.
         reserve_typed_replay(value.room_review_intent, budget);
@@ -1462,6 +1463,7 @@ struct HistoryAdmission {
         reserve_typed_replay(value.clipboard_placement_intent, budget);
         reserve_typed_replay(value.assembly_catalog_edit_intent, budget);
         reserve_typed_replay(value.phase_assembly_catalog_edit_intent, budget);
+        reserve_typed_replay(value.qualified_embedded_assembly_copy_intent, budget);
     }
 };
 void admit_destination_owners(const Owners& owners, NativeDxfWallSourceWorkBudget& budget,
@@ -1955,7 +1957,8 @@ void admit_native_dxf_phase_destination_snapshot(const DocumentSnapshot& destina
                     command.mixed_selection_removal_completion || !command.mixed_selection_removal_intent.is_null() ||
                     command.mixed_selection_edit_completion || !command.mixed_selection_edit_intent.is_null() ||
                     command.clipboard_placement_completion || !command.clipboard_placement_intent.is_null() ||
-                    command.phase_assembly_catalog_edit_completion || !command.phase_assembly_catalog_edit_intent.is_null()) {
+                    command.phase_assembly_catalog_edit_completion || !command.phase_assembly_catalog_edit_intent.is_null() ||
+                    command.qualified_embedded_assembly_copy_completion || !command.qualified_embedded_assembly_copy_intent.is_null()) {
                     // Restore's source-bound review reserializes/hashes the
                     // actual prefix for both authoring and snapshot digests.
                     // Two replay passes cover fork/preview; asset hex expansion

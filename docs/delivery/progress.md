@@ -14,6 +14,45 @@ changed source does not acquire runtime acceptance without later qualification.
 
 ## Current delivery state
 
+### October 11 source-bound embedded component copy integration
+
+The profile collection and qualified consumer batch is committed and pushed as
+6375e576; the exact remote branch matched that checkpoint. This continuation
+adds a pure same-catalog copy producer and sealed request, deriving actual
+geometry, nested overrides, associated v6 dimensions and saved-design membership
+from the complete source. An active baseline copy is proposed in the actual
+saved alternative without demolishing or modifying its original. Unlisted roots
+remain unlisted. Moved hosted copies use their actual world transform while
+original host ancestry remains active and raw-exact. Existing companions retain
+their raw partitions and source ordering; fresh dimensions join the actual row
+registry, or an unambiguous legacy cohort, after component enrollment.
+
+Exclusive command 67 carries copy request 1. Current and chronological replay
+authenticate snapshot, authoring history, entities and saved state before deriving
+the candidate. Retained and undone allocation reservations include local row
+identities, generated presentation aliases and copied dimensions. The complete
+assembly source budget and native DXF destination preflight account for the new
+proof. Reader 241 retains the new command; native extraction derives 239 from
+that reader floor. Historical copy/transform commands retain their authority.
+
+The companion read-only latch and embedded-baseline Properties refusal remain.
+Universal command-derived membership transition admission and controller
+replacement/copy composition are next; removing those guards before integration
+would permit legacy writers to create undeclared rows or rewrite membership.
+Profile/edge dimensions and the broader production gaps below remain required.
+Conflicting or ambiguous dimension cohorts, cross-catalog local copies and
+unsupported source dialect promotion are explicit gaps, not completed workflows.
+
+Independent integrated source review found no proved introduced P1/P2 in this
+batch. Root reviewed the interfaces, exclusive command dispatch, actual-source
+history replay, original-row preservation, dimension enrollment and reader-floor
+integration; scoped diff checks pass. This source evidence does not establish
+compilation or runtime behavior. No builds, tests, new tests, scripts, probes,
+jobs, launches, packages or installations ran. The installed candidate
+is unchanged; compilation, runtime interaction, Undo/reopen and user acceptance
+remain unverified. All ten production gates remain open. The preceding status
+turn changed no source; this continuation implements the next available work.
+
 ### October 11 profile collection and qualified component consumer continuation
 
 The individual geometry batch is committed and pushed as a5877762; its exact

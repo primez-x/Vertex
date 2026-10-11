@@ -59,6 +59,24 @@ transport_assembly_phase_memberships_for_independent_host_copies(
     const AssemblyPhaseCopiedRoots& copied_roots,
     const AssemblyPhaseCopiedHosts& copied_hosts);
 
+// A producer independently admits additive embedded copy geometry and fresh
+// qualified row identities. Mappings are same-catalog only and contain at most
+// 1000 roots. Source rows, definitions, materials and catalog envelopes remain
+// raw-exact; only the mapped fresh rows may be added. Actual retained hosts
+// and opening/corner ancestry remain active and unchanged. Declared source row
+// activity comes from its actual companion, never its shared catalog carrier.
+// Reuse that exact companion: the saved baseline choice appends baseline roots,
+// and a saved alternative appends proposed roots without source demolition.
+// Original registry roles, choices and all companion partitions remain exact.
+// Unlisted sources remain unlisted; no companion or geometry is synthesized.
+// Both complete maps are admitted before return, including empty mappings.
+// Supplies no allocation, physical admission or Document publication authority.
+[[nodiscard]] AssemblyPhaseTransportEntities
+transport_assembly_phase_memberships_for_embedded_copies(
+    const AssemblyPhaseTransportEntities& source,
+    const AssemblyPhaseTransportEntities& candidate,
+    const AssemblyPhaseCopiedRoots& copied_roots);
+
 // A removal producer may leave unchanged source companions referencing rows
 // now absent from its independently admitted candidate. Prune only those actual
 // absences from every partition; present inactive rows remain declared. Removing

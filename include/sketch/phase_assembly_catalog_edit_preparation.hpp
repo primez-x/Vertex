@@ -4,6 +4,12 @@
 
 namespace sketch {
 
+// Shared bounded admission for source-bound assembly authoring preparations.
+// Visits the complete retained and undone source, assets and typed replay work
+// before codecs, digests or copies; requires an editable actual snapshot.
+// This establishes resource/input admission, never publication authority.
+void admit_retained_assembly_authoring_source(const DocumentSnapshot&);
+
 // Detached, sealed source-derived contribution. No publication token or
 // fabricated Document snapshot; companion quarantine remains in force.
 class PhaseAssemblyCatalogEditPreparation final {

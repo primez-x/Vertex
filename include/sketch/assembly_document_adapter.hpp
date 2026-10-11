@@ -244,6 +244,23 @@ struct EmbeddedAssemblyGroupTarget {
     const ArchitecturalGroupTransform& transform, Revision expected_revision,
     const std::map<std::string, std::string, std::less<>>& copied_dimension_ids = {},
     bool carry_assembly_dimensions = true);
+// Pure preparation for sealed same-catalog embedded copies. Every target must
+// name a fresh copy_instance_id; actual saved row and host activity govern the
+// source read, including an active baseline source retained without mutation.
+// Geometry and exact associated v6 dimensions are derived from the actual
+// source, preserving original rows and raw overrides. Fresh local/document/
+// presentation identities are reserved through current and undone history and
+// typed allocations. Exact existing companions enroll declared copies in their
+// saved baseline or active proposed partition; unlisted copies remain unlisted.
+// Fresh associated dimensions join that actual row registry, or an unambiguous
+// legacy carrier/host registry, in its saved baseline/proposed partition. Source
+// dimensions registered in incompatible cohorts refuse; originals remain exact.
+// Returns the complete actual candidate map after model/membership admission.
+// Creates no Document, command publication, or phase-choice authority.
+[[nodiscard]] AssemblyDocumentEntities prepare_qualified_embedded_assembly_copy_entities(
+    const DocumentSnapshot& source, std::span<const EmbeddedAssemblyGroupTarget> targets,
+    const ArchitecturalGroupTransform& transform, Revision expected_revision,
+    const std::map<std::string, std::string, std::less<>>& copied_dimension_ids = {});
 // Materialize each selected embedded root as a fresh independently editable
 // document instance sharing its immutable source catalog. Here copy_instance_id
 // is required and names a fresh document entity, not an appended catalog row.

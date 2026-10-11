@@ -61,6 +61,7 @@
 #include "sketch/phase_constraint_authoring.hpp"
 #include "sketch/phase_selection_property_edit.hpp"
 #include "sketch/phase_assembly_catalog_edit_preparation.hpp"
+#include "sketch/qualified_embedded_assembly_copy.hpp"
 #include "sketch/phase_coordinated_demolition.hpp"
 #include "sketch/phase_opening_demolition.hpp"
 #include "sketch/phase_roof_replacement.hpp"
@@ -2669,6 +2670,10 @@ static bool has_phase_assembly_catalog_edit(const ApplyBoundaryConstraintChanges
     return command.phase_assembly_catalog_edit_completion || !command.phase_assembly_catalog_edit_intent.is_null();
 }
 
+static bool has_qualified_embedded_assembly_copy(const ApplyBoundaryConstraintChanges& command) {
+    return command.qualified_embedded_assembly_copy_completion || !command.qualified_embedded_assembly_copy_intent.is_null();
+}
+
 static bool has_phase_constraint_authoring(const ApplyBoundaryConstraintChanges& command) {
     return command.phase_constraint_authoring_completion || !command.phase_constraint_authoring_intent.is_null();
 }
@@ -2869,7 +2874,29 @@ static bool has_non_catalog_source_authoring_sibling_changes(const ApplyBoundary
 }
 
 static bool has_source_authoring_sibling_changes(const ApplyBoundaryConstraintChanges& command) {
-    return has_assembly_catalog_edit(command) || has_non_catalog_source_authoring_sibling_changes(command);
+    return has_qualified_embedded_assembly_copy(command) || has_assembly_catalog_edit(command) ||
+        has_non_catalog_source_authoring_sibling_changes(command);
+}
+
+static void validate_qualified_embedded_assembly_copy_mode(const ApplyBoundaryConstraintChanges& command) {
+    if (!command.qualified_embedded_assembly_copy_completion || command.qualified_embedded_assembly_copy_intent.is_null())
+        throw std::invalid_argument("Qualified embedded copying requires its exclusive captured-source request");
+#ifdef VERTEX_HAS_CONSTRAINT_AUTHORING
+    // Admit the raw request before the stripped-command copy or any codec.
+    const auto request=validate_qualified_embedded_assembly_copy_request(command.qualified_embedded_assembly_copy_intent);
+    if (request.at("expected_revision")!=command.expected_revision || request.at("message")!=command.message)
+        throw std::invalid_argument("Qualified embedded copying changed its command identity");
+#else
+    throw std::invalid_argument("Qualified embedded copying requires the production authoring engine");
+#endif
+    auto ordinary=command;
+    ordinary.qualified_embedded_assembly_copy_completion=false;
+    ordinary.qualified_embedded_assembly_copy_intent=nullptr;
+    const auto empty=nlohmann::json{{"version",1},{"kind","apply_boundary_constraint_changes"},
+        {"expected_revision",command.expected_revision},{"message",command.message},
+        {"entity_changes",nlohmann::json::array()},{"boundary_edits",nlohmann::json::array()}};
+    if (command_to_json(Command{ordinary})!=empty)
+        throw std::invalid_argument("Qualified embedded copying cannot borrow sibling geometry, payload or asset authority");
 }
 
 static void validate_assembly_catalog_edit_mode(const ApplyBoundaryConstraintChanges& command) {
@@ -3853,6 +3880,7 @@ struct PhaseConstraintLifetimeProofs {
     std::vector<nlohmann::json> room_proofs;
     std::vector<nlohmann::json> mixed_properties_proofs;
     std::vector<nlohmann::json> component_catalog_proofs;
+    std::vector<nlohmann::json> embedded_copy_proofs;
     std::vector<WallSplitIntent> wall_split_proofs;
     std::set<std::string,std::less<>> ordinary_roof_destinations;
 };
@@ -3881,7 +3909,9 @@ static PhaseConstraintLifetimeProofs phase_constraint_lifetime_proofs(const Appl
         if (proof.contains("room_review_additional_intents"))
             for (const auto& room:proof.at("room_review_additional_intents")) result.room_proofs.push_back(room);
         if (proof.contains("wall_split")) result.wall_split_proofs.push_back(decode_wall_split(proof.at("wall_split")));
-        if (version==60) result.component_catalog_proofs.push_back(
+        if (version==67) result.embedded_copy_proofs.push_back(
+            validate_qualified_embedded_assembly_copy_request(proof.at("qualified_embedded_assembly_copy_intent")));
+        else if (version==60) result.component_catalog_proofs.push_back(
             validate_phase_assembly_catalog_edit_request(proof.at("phase_assembly_catalog_edit_intent")));
         else if (version==52) {
             const auto& mixed=proof.at("mixed_selection_edit_intent");
@@ -4068,6 +4098,19 @@ static void validate_retained_authoring_receipt_identities(
         // identity in the recorded semantic operation. Undo cannot release it.
         const auto historical_proofs=record.boundary_constraint_changes
             ? phase_constraint_lifetime_proofs(*record.boundary_constraint_changes) : PhaseConstraintLifetimeProofs{};
+        for (const auto& request:historical_proofs.embedded_copy_proofs) {
+            for (const auto& target:request.at("targets")) {
+                const auto& catalog=target.at("catalog_id").get_ref<const std::string&>();
+                const auto& original=target.at("instance_id").get_ref<const std::string&>();
+                const auto& copied=target.at("copy_instance_id").get_ref<const std::string&>();
+                require_unused_id(catalog);require_unused_id(original);require_unused_id(copied);
+                require_unused_id(catalog+":instance:"+original);
+                require_unused_id(catalog+":instance:"+copied);
+            }
+            for (const auto& [original,copied]:request.at("copied_dimension_ids").items()) {
+                require_unused_id(original);require_unused_id(copied.get_ref<const std::string&>());
+            }
+        }
         for (const auto& request:historical_proofs.component_catalog_proofs) {
             const auto authoring=decode_phase_assembly_catalog_edit_authoring(request.at("authoring"));
             for (const auto& [root,identities]:authoring.allocation.roots) {
@@ -5155,6 +5198,13 @@ static std::map<std::string, Entity, std::less<>> replay_retained_wall_merge(
 void validate_completed_constraint_change(const std::map<std::string, Entity, std::less<>>& before,
     const std::map<std::string, Entity, std::less<>>& after,
     const ApplyBoundaryConstraintChanges& command, bool retained_replay = false) {
+    if (has_qualified_embedded_assembly_copy(command)) {
+        // Live and chronological replay own full source authentication and
+        // actual copy derivation. An entity map alone supplies no authority.
+        try { validate_qualified_embedded_assembly_copy_mode(command); }
+        catch (const std::exception& error) { document_error(DocumentErrorCode::constraint_violation,error.what()); }
+        return;
+    }
     if (has_phase_assembly_catalog_edit(command)) {
         // Only the snapshot-aware live/chronological replay below admits the
         // captured history, assets, save state and retained fresh identities.
@@ -6967,6 +7017,8 @@ std::map<std::string, Entity, std::less<>> completed_boundary_constraint_entitie
     const ApplyBoundaryConstraintChanges& command, bool retained_replay = false,
     bool active_phase_constraints = false,
     const std::map<std::string,Entity,std::less<>>* original_dimension_source = nullptr) {
+    if (has_qualified_embedded_assembly_copy(command))
+        document_error(DocumentErrorCode::invalid_entity,"Qualified embedded copying requires complete snapshot-aware replay");
     if (has_phase_assembly_catalog_edit(command))
         document_error(DocumentErrorCode::invalid_entity,"Phase-isolated assembly editing requires complete snapshot-aware replay");
     if (has_assembly_catalog_edit(command)) {
@@ -9082,6 +9134,17 @@ nlohmann::json command_to_json(const Command& command) {
             }
             return encoded;
         } else if constexpr (std::is_same_v<T, ApplyBoundaryConstraintChanges>) {
+            if (has_qualified_embedded_assembly_copy(typed)) {
+                try {
+                    validate_qualified_embedded_assembly_copy_mode(typed);
+                    validate_action(typed.message);
+                    return nlohmann::json{{"version",67},{"kind","apply_boundary_constraint_changes"},
+                        {"expected_revision",typed.expected_revision},{"message",typed.message},
+                        {"qualified_embedded_assembly_copy_completion",true},
+                        {"qualified_embedded_assembly_copy_intent",typed.qualified_embedded_assembly_copy_intent}};
+                } catch (const DocumentError&) { throw; }
+                catch (const std::exception& error) { document_error(DocumentErrorCode::invalid_entity,error.what()); }
+            }
             if (has_phase_assembly_catalog_edit(typed)) {
                 try {
                     validate_phase_assembly_catalog_edit_mode(typed);
@@ -9768,6 +9831,26 @@ Command command_from_json(const nlohmann::json& value,
             return result;
         }
         if (kind == "apply_boundary_constraint_changes") {
+            if (value.at("version")==67) {
+                command_exact_fields(value,{"version","kind","expected_revision","message",
+                    "qualified_embedded_assembly_copy_completion","qualified_embedded_assembly_copy_intent"},
+                    DocumentErrorCode::invalid_entity,"serialized qualified embedded copy");
+                if (!value.at("qualified_embedded_assembly_copy_completion").is_boolean() ||
+                    !value.at("qualified_embedded_assembly_copy_completion").get<bool>())
+                    throw std::invalid_argument("Qualified embedded copy completion is required");
+                ApplyBoundaryConstraintChanges result;
+                result.expected_revision=command_revision(value.at("expected_revision"),"Qualified embedded copy revision");
+                result.message=command_string(value.at("message"),"Qualified embedded copy message",1024);
+#ifdef VERTEX_HAS_CONSTRAINT_AUTHORING
+                result.qualified_embedded_assembly_copy_intent=validate_qualified_embedded_assembly_copy_request(
+                    value.at("qualified_embedded_assembly_copy_intent"));
+#else
+                throw std::invalid_argument("Qualified embedded copying requires the production authoring engine");
+#endif
+                result.qualified_embedded_assembly_copy_completion=true;
+                validate_qualified_embedded_assembly_copy_mode(result);
+                return result;
+            }
             if (value.at("version")==60) {
                 command_exact_fields(value,{"version","kind","expected_revision","message",
                     "phase_assembly_catalog_edit_completion","phase_assembly_catalog_edit_intent"},
@@ -11071,7 +11154,12 @@ Revision Document::apply(const Command& command) {
                 next.action = typed_command.message.empty()
                     ? "Apply boundary constraints" : typed_command.message;
                 validate_action(next.action);
-                if (has_phase_assembly_catalog_edit(typed_command)) {
+                if (has_qualified_embedded_assembly_copy(typed_command)) {
+                    (void)command_to_json(Command{typed_command});
+                    // Copy adds no constraints or replacement authority; the
+                    // existing source policy remains authoritative.
+                    next_active_policy=source_active_policy;
+                } else if (has_phase_assembly_catalog_edit(typed_command)) {
                     (void)command_to_json(Command{typed_command});
 #ifdef VERTEX_HAS_CONSTRAINT_AUTHORING
                     next_active_policy=source_active_policy || phase_assembly_catalog_edit_source_phase_policy(
@@ -11155,7 +11243,18 @@ Revision Document::apply(const Command& command) {
 #ifdef VERTEX_HAS_PHYSICAL_ROOM_REVIEW
                 dimension_source=room_dimension_original_source(history_,history_.size(),current.entities,typed_command);
 #endif
-                if (has_phase_assembly_catalog_edit(typed_command)) {
+                if (has_qualified_embedded_assembly_copy(typed_command)) {
+#ifdef VERTEX_HAS_CONSTRAINT_AUTHORING
+                    try {
+                        const auto prepared=replay_qualified_embedded_assembly_copy_preparation(
+                            snapshot(),typed_command.qualified_embedded_assembly_copy_intent);
+                        next.entities=prepared.preview_entities();
+                    } catch (const DocumentError&) { throw; }
+                    catch (const std::exception& error) { document_error(DocumentErrorCode::invalid_entity,error.what()); }
+#else
+                    document_error(DocumentErrorCode::invalid_entity,"Qualified embedded copying requires the production authoring engine");
+#endif
+                } else if (has_phase_assembly_catalog_edit(typed_command)) {
 #ifdef VERTEX_HAS_CONSTRAINT_AUTHORING
                     try {
                         const auto prepared=replay_phase_assembly_catalog_edit_preparation(
@@ -11482,6 +11581,7 @@ Document Document::restore(DocumentSnapshot snapshot) {
         // authority for replaying its source prefix.
         const bool mixed_edit_prefix = record.boundary_constraint_changes &&
             (has_mixed_selection_edit(*record.boundary_constraint_changes) ||
+                has_qualified_embedded_assembly_copy(*record.boundary_constraint_changes) ||
                 has_phase_assembly_catalog_edit(*record.boundary_constraint_changes));
         const auto prior_boundary_history = mixed_edit_prefix ?
             std::make_unique<BoundaryIdentityHistory>(identity_history) : nullptr;
@@ -11568,6 +11668,7 @@ Document Document::restore(DocumentSnapshot snapshot) {
             has_ordinary_selection_removal(*record.boundary_constraint_changes) ||
             has_mixed_selection_removal(*record.boundary_constraint_changes) ||
             has_mixed_selection_edit(*record.boundary_constraint_changes) ||
+            has_qualified_embedded_assembly_copy(*record.boundary_constraint_changes) ||
             has_phase_assembly_catalog_edit(*record.boundary_constraint_changes) ||
             has_wall_group_scale(*record.boundary_constraint_changes)))
             validate_completed_constraint_change(previous.entities, record.entities, *record.boundary_constraint_changes, true);
@@ -11792,7 +11893,31 @@ Document Document::restore(DocumentSnapshot snapshot) {
 #ifdef VERTEX_HAS_PHYSICAL_ROOM_REVIEW
                     dimension_source=room_dimension_original_source(snapshot.history(),index,previous.entities,proof);
 #endif
-                    if (has_phase_assembly_catalog_edit(proof)) {
+                    if (has_qualified_embedded_assembly_copy(proof)) {
+                        (void)command_to_json(Command{proof});
+#ifdef VERTEX_HAS_CONSTRAINT_AUTHORING
+                        auto prefix=snapshot;
+                        prefix.history_=std::make_shared<const std::vector<RevisionRecord>>(
+                            snapshot.history().begin(),snapshot.history().begin()+index);
+                        prefix.revision_=previous.revision;
+                        const auto& saved=proof.qualified_embedded_assembly_copy_intent.at("source_saved_revision");
+                        prefix.saved_revision_=saved.is_null() ? std::nullopt :
+                            std::optional<Revision>{command_revision(saved,"Qualified embedded copy source save revision")};
+                        if (prefix.saved_revision_ && *prefix.saved_revision_>prefix.revision_)
+                            throw std::invalid_argument("Qualified embedded copy save revision is outside its source prefix");
+                        prefix.named_revisions_=expected_names;
+                        prefix.editable_=true;
+                        prefix.read_only_reason_.clear();
+                        if (prefix.uses_active_phase_constraints()!=active_policies.at(index-1))
+                            throw std::invalid_argument("Qualified embedded copy source policy differs from admitted ancestry");
+                        seal_snapshot_admission(prefix,*prior_boundary_history,*prior_stair_history,prior_unsupported_history);
+                        const auto prepared=replay_qualified_embedded_assembly_copy_preparation(
+                            prefix,proof.qualified_embedded_assembly_copy_intent);
+                        expected.entities=prepared.preview_entities();
+#else
+                        throw std::invalid_argument("Qualified embedded copying requires the production authoring engine");
+#endif
+                    } else if (has_phase_assembly_catalog_edit(proof)) {
                         (void)command_to_json(Command{proof});
 #ifdef VERTEX_HAS_CONSTRAINT_AUTHORING
                         auto prefix=snapshot;
@@ -11945,7 +12070,7 @@ Document Document::restore(DocumentSnapshot snapshot) {
                     if (has_phase_selection_removal(proof) || has_ordinary_selection_removal(proof) || has_mixed_selection_removal(proof) || !phase_constraint_authoring_proofs(proof).empty() || !mixed_clipboard_placement_proofs(proof).empty() || has_complete_wall_join_deletion_proof(proof))
                         validate_phase_constraint_fresh_lifetime(previous.entities,expected.entities,snapshot.history(),index,proof);
 #endif
-                    if (!has_phase_selection_removal(proof) && !has_ordinary_selection_removal(proof) && !has_mixed_selection_removal(proof) && !has_mixed_selection_edit(proof) && !has_phase_assembly_catalog_edit(proof))
+                    if (!has_phase_selection_removal(proof) && !has_ordinary_selection_removal(proof) && !has_mixed_selection_removal(proof) && !has_mixed_selection_edit(proof) && !has_phase_assembly_catalog_edit(proof) && !has_qualified_embedded_assembly_copy(proof))
                         expected.assets = boundary_constraint_assets(previous.assets, proof);
                     validate_boundary_identity_transition(identity_history, proof.wall_split ?
                         wall_split_validation_source(previous.entities,expected.entities,*proof.wall_split) :

@@ -1,4 +1,23 @@
-# Vertex project formats v1 through v240
+# Vertex project formats v1 through v241
+
+Reader241 retains the exclusive source-bound qualified embedded assembly copy
+command67. Its closed envelope contains only `version`, `kind`,
+`expected_revision`, `message`, literal `qualified_embedded_assembly_copy_completion:true`
+and `qualified_embedded_assembly_copy_intent`. The closed request1 retains the
+source snapshot, authoring and entity digests, source and saved revisions,
+catalog/local source targets, fresh local copy identities, each full XYZ pivot
+and offset, Z rotation, positive uniform scale, both reflection flags, the exact
+source-to-fresh copied-dimension map and message. Actual source replay derives
+geometry and phase enrollment and reserves identities across current and undone
+history. Raw preview entities and opaque JSON grant no copy authority.
+
+Only actual canonical commands in recognized retained command slots supply this
+floor; historical wrappers retain their original permissions and refuse command67.
+Extraction239 follows reader241 through `src/core/project_exchange.cpp`'s native
+reader-floor mapping. Historical envelopes and raw source representations retain
+their original meaning, and companion-edit quarantine remains in force. This is
+source-only retention work; compilation, interaction, migration and save/reopen
+qualification remain unverified and no user workflow acceptance is claimed.
 
 Reader240 retains individual component geometry in catalog `sketch.assemblies.v8`
 and independent `sketch.assembly-instance.v3`. Both retain prior row framing and

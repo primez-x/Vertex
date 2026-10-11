@@ -856,6 +856,7 @@ if(SKETCH_BUILD_ARCHITECTURE OR SKETCH_BUILD_DESKTOP)
     src/core/phase_assembly_catalog_edit.cpp
     src/core/phase_assembly_catalog_edit_presentation.cpp
     src/core/phase_assembly_catalog_edit_preparation.cpp
+    src/core/qualified_embedded_assembly_copy.cpp
     src/core/assembly_phase_membership_transport.cpp
     src/core/assembly_component_phase_demolition.cpp
     src/core/phase_selection_property_edit.cpp

@@ -21,6 +21,7 @@
 #include "sketch/mixed_selection_property_edit.hpp"
 #include "sketch/mixed_selection_edit.hpp"
 #include "sketch/mixed_clipboard_command.hpp"
+#include "sketch/qualified_embedded_assembly_copy.hpp"
 
 #include <sqlite3.h>
 
@@ -380,6 +381,55 @@ std::uint32_t required_format_version_internal(const DocumentSnapshot& snapshot,
     };
     const auto typed_edit=[&](const BoundaryGeometryEdit& edit) {
         return (edit.arc_construction && edit.arc_construction->chord_input) || typed_authoring(edit.replacement_authoring);
+    };
+    const auto qualified_copy_reader_floor=[](const nlohmann::json& root) {
+        std::uint64_t nodes{};
+        const auto visit=[&](const auto& self,const nlohmann::json& value,unsigned depth)->bool {
+            if (++nodes>ProjectStore::maximum_json_values || depth>64)
+                storage_error(StorageErrorCode::resource_limit,"Qualified copy reader-floor scan exceeds its command budget");
+            if (!value.is_object() || value.value("kind",nlohmann::json())!="apply_boundary_constraint_changes" ||
+                !value.contains("version") || !value.at("version").is_number_integer()) return false;
+            // The general typed-edit scan walks opaque retained JSON. Copy
+            // authority belongs only to a canonical command in an actual known
+            // command slot, and never to copy-shaped source/extension metadata.
+            try {
+                const auto decoded=command_from_json(value);
+                const auto* command=std::get_if<ApplyBoundaryConstraintChanges>(&decoded);
+                if (!command || command_to_json(decoded).dump()!=value.dump()) return false;
+                const auto version=value.at("version").get<int>();
+                if (version==67) {
+                    if (!command->qualified_embedded_assembly_copy_completion ||
+                        command->qualified_embedded_assembly_copy_intent.is_null()) return false;
+                    (void)validate_qualified_embedded_assembly_copy_request(command->qualified_embedded_assembly_copy_intent);
+                    return true;
+                }
+                const auto child=[&](const nlohmann::json& owner,const char* name) {
+                    const auto found=owner.find(name);
+                    return found!=owner.end() && !found->is_null() && self(self,*found,depth+1);
+                };
+                if (version==19 || version==21 || version==22 || version==23 || version==41 || version==42)
+                    return child(value,"proof");
+                if (version==47)
+                    return child(value.at("phase_selection_removal_intent"),"base_command");
+                if (version==46 || version==57 || version==62)
+                    return child(value.at("ordinary_selection_removal_intent"),"base_command");
+                if (version==45) {
+                    const auto& intent=value.at("mixed_selection_removal_intent");
+                    return child(intent,"ordinary_command") || child(intent,"child_command");
+                }
+                // Canonical decoding above owns the historical room wrapper's
+                // exact dialect and permitted inner command. It still refuses
+                // outer67; this walk does not widen that permission.
+                if (command->room_review_geometry_completion)
+                    return child(value,"room_review_geometry_proof");
+            } catch (const DocumentError&) {
+                // Document restoration retains its existing semantic failure.
+            } catch (const std::invalid_argument&) {
+            } catch (const nlohmann::json::exception&) {
+            }
+            return false;
+        };
+        return visit(visit,root,0) ? 241U : 0U;
     };
     const auto typed_edit_reader_floor=[](const nlohmann::json& root) {
         std::uint64_t nodes{};
@@ -1461,6 +1511,8 @@ std::uint32_t required_format_version_internal(const DocumentSnapshot& snapshot,
     };
     for (const auto& revision : snapshot.history()) {
         if (revision.phase_entity_import) required=std::max(required,160U);
+        if (required<241 && revision.boundary_constraint_changes)
+            required=std::max(required,qualified_copy_reader_floor(command_to_json(Command{*revision.boundary_constraint_changes})));
         if (required<240 && revision.boundary_geometry_edit)
             required=std::max(required,typed_edit_reader_floor(encode_boundary_geometry_edit(*revision.boundary_geometry_edit)));
         if (required<240 && revision.boundary_constraint_changes)
@@ -4003,6 +4055,7 @@ bool verify_sqlite_schema(sqlite3* database, bool allow_recovery = false) {
          sqlite3_column_int(user_version.get(), 0) != 238 &&
          sqlite3_column_int(user_version.get(), 0) != 239 &&
          sqlite3_column_int(user_version.get(), 0) != 240 &&
+         sqlite3_column_int(user_version.get(), 0) != 241 &&
          sqlite3_column_int(user_version.get(), 0) != 207 &&
          sqlite3_column_int(user_version.get(), 0) != 202 &&
          sqlite3_column_int(user_version.get(), 0) != 200 &&
@@ -4728,6 +4781,8 @@ DocumentSnapshot read_snapshot(sqlite3* database, RecoveryLedger* recovery = nul
     // here and authenticate the manifest with its stored version below.
     const auto required_format = required_format_version_internal(snapshot, format_number < 28);
     if (required_format > format_number) {
+        if (required_format>=241)
+            storage_error(StorageErrorCode::unsupported_format,"This project requires reader 241 for source-bound qualified embedded assembly copies and their dimensions");
         if (required_format>=240)
             storage_error(StorageErrorCode::unsupported_format,"This project requires reader 240 for individual component profile geometry and Properties edits");
         if (required_format>=239)

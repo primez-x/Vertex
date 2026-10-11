@@ -273,6 +273,7 @@ struct SourceBudget {
         read(value.phase_constraint_authoring_intent); read(value.independent_drawing_removal_intent); read(value.phase_selection_removal_intent);
         read(value.ordinary_selection_removal_intent); read(value.mixed_selection_removal_intent); read(value.mixed_selection_edit_intent);
         read(value.clipboard_placement_intent); read(value.assembly_catalog_edit_intent); read(value.phase_assembly_catalog_edit_intent);
+        read(value.qualified_embedded_assembly_copy_intent);
     }
     void navigation(const std::vector<Revision>& values, std::size_t history_size) {
         if (values.size() > history_size) reject("retained navigation capacity exceeded");
@@ -293,7 +294,7 @@ std::size_t retained_prefix_uses(const RevisionRecord& record) {
         &proof.independent_drawing_removal_intent, &proof.phase_selection_removal_intent,
         &proof.ordinary_selection_removal_intent, &proof.mixed_selection_removal_intent,
         &proof.mixed_selection_edit_intent, &proof.clipboard_placement_intent,
-        &proof.phase_assembly_catalog_edit_intent})
+        &proof.phase_assembly_catalog_edit_intent, &proof.qualified_embedded_assembly_copy_intent})
         if (!intent->is_null()) ++count;
     return count;
 }
@@ -399,7 +400,7 @@ void admit_source(const DocumentSnapshot& source) {
                 &proof.phase_selection_removal_intent, &proof.ordinary_selection_removal_intent,
                 &proof.mixed_selection_removal_intent, &proof.mixed_selection_edit_intent,
                 &proof.clipboard_placement_intent, &proof.assembly_catalog_edit_intent,
-                &proof.phase_assembly_catalog_edit_intent})
+                &proof.phase_assembly_catalog_edit_intent, &proof.qualified_embedded_assembly_copy_intent})
                 reserve_retained_geometry_replay_work(*intent, geometry_product, false, 1);
             for (const auto& intent : proof.room_review_additional_intents)
                 reserve_retained_geometry_replay_work(intent, geometry_product, false, 1);
@@ -437,6 +438,10 @@ void decode_allocations(const Json& request) {
     (void)request.dump();
 }
 } // namespace
+
+void admit_retained_assembly_authoring_source(const DocumentSnapshot& source) {
+    admit_source(source);
+}
 
 PhaseAssemblyCatalogEditPreparation::PhaseAssemblyCatalogEditPreparation(Json request, PhaseAssemblyCatalogEditResult result)
     : request_(std::move(request)), result_(std::move(result)),

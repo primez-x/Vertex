@@ -539,6 +539,11 @@ struct ApplyBoundaryConstraintChanges {
     // typed reference carry and fresh lifetime identities from one snapshot.
     nlohmann::json phase_assembly_catalog_edit_intent=nullptr;
     bool phase_assembly_catalog_edit_completion{};
+    // Envelope sixty-seven derives fresh same-catalog component rows, their
+    // dimensions and saved-design membership from one complete actual source.
+    // Exclusive copy authority; no raw candidate or sibling completion fields.
+    nlohmann::json qualified_embedded_assembly_copy_intent=nullptr;
+    bool qualified_embedded_assembly_copy_completion{};
 };
 
 using Command = std::variant<ApplyEntityChanges, ImportPhaseEntities, NameRevision, TranslateBoundary,
