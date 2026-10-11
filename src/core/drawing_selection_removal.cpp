@@ -576,10 +576,20 @@ void local_reference_admission(const Entities& source, const Authority& selected
 // row and carrier field exactly. Ordinary known override retirement is allowed
 // only for an actual owner already retired by that independently admitted stage.
 void selected_stage(const Entities& actual, const Entities& stage, const Authority& selected,
-    const Entities* reconstructed_architectural_stage) {
+    const Entities* reconstructed_architectural_stage,
+    const ArchitecturalSelectionRemovalIntent* owner_dimension_retirement) {
     const auto stage_phase = phases(stage);
     for (const auto& id : selected.roots) {
         const auto before = selected.phase.owners.find(id), after = stage_phase.owners.find(id);
+        // Only the typed owner-dimension producer below can carry this proof.
+        // Actual drawing authority already checked this selected dimension's
+        // activity and removability. Its independently reconstructed retirement
+        // may have removed both the dimension and its original membership.
+        // A generic admitted review stage receives no such permission.
+        if (owner_dimension_retirement && owner_dimension_retirement->complete_owner_dimension_memberships &&
+            reconstructed_architectural_stage == &stage && !stage.contains(id) &&
+            can_recognize_boundary_dimension_entity_type(actual.at(id).type) &&
+            before != selected.phase.owners.end() && after == stage_phase.owners.end()) continue;
         if ((before == selected.phase.owners.end()) != (after == stage_phase.owners.end()) ||
             (before != selected.phase.owners.end() && before->second != after->second))
             reject("review stage changed selected drawing phase ownership: " + id);
@@ -707,7 +717,8 @@ void cleanup(Entity& entity, const Authority& selected) {
     }
 }
 Entities replay(const Entities& actual, const Entities& stage, const DrawingSelectionRemovalIntent& intent, bool active,
-    const Entities* reconstructed_architectural_stage = nullptr) {
+    const Entities* reconstructed_architectural_stage = nullptr,
+    const ArchitecturalSelectionRemovalIntent* owner_dimension_retirement = nullptr) {
     intent_bounds(intent); Budget budget; bounds(actual, budget);
     if (&actual != &stage) bounds(stage, budget);
     validate_constraints(actual, active);
@@ -721,7 +732,7 @@ Entities replay(const Entities& actual, const Entities& stage, const DrawingSele
         const auto scratch = remainder(entity, actual, selected.strokes);
         if (touches(scratch, selected.retired, budget)) reject("actual opaque reference requires a qualified removal codec: " + id);
     }
-    selected_stage(actual, stage, selected, reconstructed_architectural_stage);
+    selected_stage(actual, stage, selected, reconstructed_architectural_stage, owner_dimension_retirement);
     const auto original_aliases = embedded_assembly_presentation_ids(stage);
     Entities result = stage;
     for (const auto& id : selected.retired) {
@@ -851,7 +862,8 @@ DrawingSelectionRemovalEntities replay_drawing_selection_removal_with_architectu
             complete_component_phase_memberships || architectural.complete_hosted_component_dimensions,
             complete_component_phase_memberships || architectural.complete_hosted_component_dimensions, false,
             complete_component_phase_memberships, complete_roof_component_phase_memberships);
-        return replay(actual, stage, drawing, active_phase_constraints, &stage);
+        return replay(actual, stage, drawing, active_phase_constraints, &stage,
+            architectural.complete_owner_dimension_memberships ? &architectural : nullptr);
     } catch (const Json::exception& error) {
         reject(std::string("malformed actual/architectural source: ") + error.what());
     }

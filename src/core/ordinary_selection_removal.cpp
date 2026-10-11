@@ -158,6 +158,8 @@ WallAuthority wall_authority(const Json& proof,const std::vector<std::string>& c
     return result;
 }
 ArchitecturalDrawingRemovalIntent authority(const OrdinarySelectionRemovalIntent& intent) {
+    if (intent.openings && intent.openings->other.complete_owner_dimension_memberships)
+        reject("ordinary opening removal does not retain standalone owner dimension membership authority");
     if (intent.openings.has_value()==!intent.wall_geometry_proof.is_null()) reject("requires exactly one ordinary deletion mode");
     ArchitecturalDrawingRemovalIntent result;result.drawing=intent.drawing;
     bool component_memberships=false;

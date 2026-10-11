@@ -17,6 +17,9 @@ struct ArchitecturalSelectionRemovalIntent {
     // Separate physical-owner authority for dimensions on actual retired hosted
     // rows. Requires admitted hosts and is exclusive with component-only intent.
     bool complete_hosted_component_dimensions = false;
+    // Separate ordinary physical-owner authority for phase memberships of
+    // supported attached dimensions. Component-only selections cannot opt in.
+    bool complete_owner_dimension_memberships = false;
 };
 
 // Closed actual-selection producer. Roof and primitive/component lanes each
@@ -41,6 +44,8 @@ struct ArchitecturalSelectionRemovalIntent {
 // every leaf against this same complete actual source before native admission.
 // Hosted dimension completion requires actual selected owners and admitted
 // component hosts; it supplies no additional family or phase-demolition authority.
+// Owner dimension membership completion requires an actual ordinary physical
+// owner; roof, wall and corner authority remains independently declared.
 [[nodiscard]] RoofRemovalEntities replay_architectural_selection_removal(
     const RoofRemovalEntities& actual, const ArchitecturalSelectionRemovalIntent& intent,
     bool allow_manufactured_opening_hosts = false,

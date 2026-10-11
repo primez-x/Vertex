@@ -346,7 +346,9 @@ public:
     // v240 retains individual root/path profile geometry and its atomic Properties edits.
     // v241 retains source-bound additive embedded copies under exclusive command67.
     // v243 retains source-bound standalone component retirement under outer45.
-    static constexpr std::uint32_t format_version = 243;
+    // v244 retains explicit component Properties dimension carry under outer52.
+    // v245 retains attached physical-owner dimension membership retirement.
+    static constexpr std::uint32_t format_version = 245;
     static constexpr std::uint32_t recovery_format_version = 4;
     [[nodiscard]] static std::uint32_t required_format_version(const DocumentSnapshot& snapshot);
     static constexpr std::uint64_t maximum_file_bytes = 4ULL * 1024ULL * 1024ULL * 1024ULL;

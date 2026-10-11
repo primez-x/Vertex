@@ -249,6 +249,12 @@ private:
 // twenty-one, twenty-four or twenty-seven. Family dimension permissions come
 // only from that sealed base; the wrapper does not invent or repeat them.
 // Historical component requests and wrappers retain their original authority.
+// Closed dialect thirty-three uses the same source/reservation/presentation
+// fields as thirty-two, with complete_component_dimensions:true replacing
+// complete_instance_profile_geometry. It requires nongeometry component request
+// four, whose exact dimension allocations and presentation roster derive from
+// the complete original source. It accepts the same optional sealed base
+// roster as thirty-two; family permissions remain exclusively base-owned.
 //
 // Closed dialect seventeen retains Properties16's source/reservation fields plus
 // carry_component_presentation:true. It requires component request two, whose

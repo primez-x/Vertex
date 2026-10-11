@@ -3434,7 +3434,9 @@ CoordinatedComponentPropertyComposition compose_coordinated_component_property_d
     auto normalized=replayed.preview_entities();
     const auto allocated_aliases=embedded_assembly_presentation_ids(normalized);
     const auto authoring=decode_phase_assembly_instance_property_edit_authoring(replayed.request().at("authoring"));
-    const bool geometry_completion=replayed.request().at("version")==3;
+    // V3 geometry and explicit V4 Properties carry the same independently
+    // inventoried component dimensions. Older pose requests keep their meaning.
+    const bool geometry_completion=replayed.request().at("version")==3 || replayed.request().at("version")==4;
     std::map<std::string,std::string,std::less<>> base_dimension_ids;
     if (geometry_completion && (version==21 || version==24 || version==27))
         for (const auto& allocation:wire.at("phase_request").at("allocations"))

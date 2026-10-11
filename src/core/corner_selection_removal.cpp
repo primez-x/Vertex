@@ -44,6 +44,8 @@ bool other_present(const ArchitecturalDrawingRemovalIntent& intent) {
     return architectural(intent) || drawing(intent);
 }
 void bounded(const CornerSelectionRemovalIntent& intent) {
+    if (intent.other.architectural.complete_owner_dimension_memberships)
+        reject("corner removal does not retain standalone owner dimension membership authority");
     if (intent.complete_component_phase_memberships && !intent.complete_corner_catalog_hosts)
         reject("component membership retirement requires complete corner catalog hosts");
     if (!intent.complete_component_phase_memberships &&

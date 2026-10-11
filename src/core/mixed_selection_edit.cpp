@@ -36,7 +36,7 @@ bool properties_dialect(const Json& value) {
     const auto version = value.value("version", Json());
     return version == 5 || version == 6 || version == 7 || version == 8 || version == 9 || version == 10 || version == 11 || version == 12 || version == 13 || version == 15 || version == 16 || version == 17 ||
         version == 21 || version == 22 || version == 23 || version == 24 || version == 25 || version == 26 ||
-        version == 27 || version == 28 || version == 29 || version == 32;
+        version == 27 || version == 28 || version == 29 || version == 32 || version == 33;
 }
 bool phase_properties_dialect(const Json& value) {
     return properties_dialect(value) && value.at("version") >= 11;

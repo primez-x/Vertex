@@ -54,6 +54,9 @@ void validate_completed_architectural_retirement_references(
 // the exact actual embedded roots already retired above, including hosted rows.
 // All associated paths resolve together against the source; protected dimensions
 // and opaque references refuse. Other catalog rows retain their dimensions.
+// Owner-dimension membership completion requires an explicit ordinary physical
+// root and retires every admitted attached dimension from its actual registry.
+// It grants no new family, protected owner or phase-demolition authority.
 [[nodiscard]] std::map<std::string, Entity, std::less<>> replay_architectural_object_removal(
     const std::map<std::string, Entity, std::less<>>& actual,
     const std::vector<std::string>& selected_object_ids,
@@ -66,7 +69,8 @@ void validate_completed_architectural_retirement_references(
     bool complete_corner_catalog_hosts = false,
     bool complete_component_phase_memberships = false,
     const std::optional<std::pair<std::string, std::string>>& required_component_phase_choice = std::nullopt,
-    bool complete_component_dimensions = false);
+    bool complete_component_dimensions = false,
+    bool complete_owner_dimension_memberships = false);
 
 // Source-only analytical admission for the opt-in opening-host lane. Includes
 // both complete supported source/candidate inventories and component work in
@@ -82,7 +86,8 @@ void preflight_architectural_object_removal(
     bool complete_corner_catalog_hosts = false,
     bool complete_component_phase_memberships = false,
     const std::optional<std::pair<std::string, std::string>>& required_component_phase_choice = std::nullopt,
-    bool complete_component_dimensions = false);
+    bool complete_component_dimensions = false,
+    bool complete_owner_dimension_memberships = false);
 
 // Analytical protected-row eligibility for an already actual-source candidate.
 // Requires the real saved choice, an absent qualified row, exact raw carrier

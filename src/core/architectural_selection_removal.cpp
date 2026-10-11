@@ -185,6 +185,9 @@ Entities replay_architectural_selection_removal(const Entities& actual,
             if (!selected_components.insert(key).second) reject("duplicate qualified component selection");
         }
         std::sort(roofs.begin(), roofs.end()); std::sort(objects.begin(), objects.end());
+        if (intent.complete_owner_dimension_memberships && !std::any_of(objects.begin(), objects.end(), [&](const auto& id) {
+            return primitive(actual.at(id));
+        })) reject("owner dimension membership retirement requires an explicit ordinary physical-owner lane");
         if (complete_roof_component_phase_memberships && roofs.empty())
             reject("roof membership authority requires an actual selected roof owner");
         if (roofs.empty() && !intent.roof_additional_identities.empty())
@@ -208,7 +211,8 @@ Entities replay_architectural_selection_removal(const Entities& actual,
                     complete_generic_catalog,
                     complete_placed_catalog_consequences,complete_corner_window_removal,complete_corner_window_removal,
                     complete_component_phase_memberships,required_component_phase_choice,
-                    intent.complete_component_dimensions || intent.complete_hosted_component_dimensions);
+                    intent.complete_component_dimensions || intent.complete_hosted_component_dimensions,
+                    intent.complete_owner_dimension_memberships);
         }
         std::vector<Entities> candidates;
         if (!roofs.empty()) {
@@ -235,12 +239,14 @@ Entities replay_architectural_selection_removal(const Entities& actual,
                     complete_generic_catalog,
                     complete_placed_catalog_consequences,complete_corner_window_removal,complete_corner_window_removal,
                     complete_component_phase_memberships,required_component_phase_choice,
-                    intent.complete_component_dimensions || intent.complete_hosted_component_dimensions) :
+                    intent.complete_component_dimensions || intent.complete_hosted_component_dimensions,
+                    intent.complete_owner_dimension_memberships) :
                 replay_architectural_object_removal(actual, objects, components, false, 0,
                     complete_generic_catalog,
                     complete_placed_catalog_consequences,complete_corner_window_removal,complete_corner_window_removal,
                     complete_component_phase_memberships,required_component_phase_choice,
-                    intent.complete_component_dimensions || intent.complete_hosted_component_dimensions);
+                    intent.complete_component_dimensions || intent.complete_hosted_component_dimensions,
+                    intent.complete_owner_dimension_memberships);
             bounds(ordinary);
             candidates.push_back(std::move(ordinary));
         }

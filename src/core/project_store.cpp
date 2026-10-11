@@ -22,6 +22,7 @@
 #include "sketch/mixed_selection_edit.hpp"
 #include "sketch/mixed_clipboard_command.hpp"
 #include "sketch/qualified_embedded_assembly_copy.hpp"
+#include "sketch/architectural_drawing_removal.hpp"
 
 #include <sqlite3.h>
 
@@ -403,6 +404,11 @@ std::uint32_t required_format_version_internal(const DocumentSnapshot& snapshot,
                     const auto request=validate_qualified_embedded_assembly_copy_request(command->qualified_embedded_assembly_copy_intent);
                     return request.at("version")==2 ? 242U : 241U;
                 }
+                if (version==52 && command->mixed_selection_edit_completion &&
+                    !command->mixed_selection_edit_intent.is_null()) {
+                    const auto intent=validate_mixed_selection_property_edit_intent(command->mixed_selection_edit_intent);
+                    if (intent.at("version")==33) return 244U;
+                }
                 const auto child=[&](const nlohmann::json& owner,const char* name) {
                     const auto found=owner.find(name);
                     return found!=owner.end() && !found->is_null() ? self(self,*found,depth+1) : 0U;
@@ -416,6 +422,9 @@ std::uint32_t required_format_version_internal(const DocumentSnapshot& snapshot,
                 if (version==45) {
                     const auto& intent=value.at("mixed_selection_removal_intent");
                     const auto nested=std::max(child(intent,"ordinary_command"),child(intent,"child_command"));
+                    if (intent.at("version")==17 && intent.at("ordinary").at("kind")=="architectural_drawing" &&
+                        intent.at("ordinary").at("selection").at("version")==6)
+                        return std::max(nested,245U);
                     return intent.at("version")==17 ? std::max(nested,243U) : nested;
                 }
                 // Canonical decoding above owns the historical room wrapper's
@@ -453,6 +462,40 @@ std::uint32_t required_format_version_internal(const DocumentSnapshot& snapshot,
             const auto literal_true=[](const nlohmann::json& child,const char* field) {
                 return child.contains(field) && child.at(field).is_boolean() && child.at(field)==true;
             };
+            if (floor<245 && typed_shape(value,6,{"version","architectural","drawing",
+                    "allow_manufactured_opening_hosts","complete_component_phase_memberships",
+                    "complete_roof_component_phase_memberships","complete_component_dimensions",
+                    "complete_hosted_component_dimensions","complete_owner_dimension_memberships"})) {
+                try {
+                    (void)decode_architectural_drawing_removal_intent(value);
+                    floor=245U;
+                } catch (const std::invalid_argument&) {
+                } catch (const nlohmann::json::exception&) {
+                }
+            }
+            if (floor<244) {
+                const bool dimension_authoring=typed_shape(value,4,{"version","intents","allocation",
+                    "carry_presentation_references","presentation_overlay_identities",
+                    "complete_component_dimensions","dimension_identities"});
+                const bool dimension_phase_request=typed_shape(value,4,{"version","expected_revision",
+                    "source_snapshot_digest","source_authoring_digest","source_entities_digest",
+                    "source_saved_revision","authoring"});
+                const bool dimension_properties=typed_shape(value,33,{"version","expected_revision",
+                    "source_snapshot_digest","source_authoring_digest","source_entities_digest",
+                    "source_saved_revision","component_request","base_intent","room_reviews",
+                    "phase_room_reviews","message","coordinate_component_hosts",
+                    "component_identity_reservations","carry_component_presentation","complete_component_dimensions"});
+                if (dimension_authoring || dimension_phase_request || dimension_properties) {
+                    try {
+                        if (dimension_authoring) (void)decode_phase_assembly_instance_property_edit_authoring(value);
+                        else if (dimension_phase_request) (void)validate_phase_assembly_instance_property_edit_request(value);
+                        else (void)validate_mixed_selection_property_edit_intent(value);
+                        floor=244U;
+                    } catch (const std::invalid_argument&) {
+                    } catch (const nlohmann::json::exception&) {
+                    }
+                }
+            }
             if (floor<240) {
                 const bool geometry_intent=typed_shape(value,2,{"version","target","properties","materials",
                     "quantities","pose","profile_geometry"});
@@ -1512,11 +1555,11 @@ std::uint32_t required_format_version_internal(const DocumentSnapshot& snapshot,
     };
     for (const auto& revision : snapshot.history()) {
         if (revision.phase_entity_import) required=std::max(required,160U);
-        if (required<243 && revision.boundary_constraint_changes)
+        if (required<245 && revision.boundary_constraint_changes)
             required=std::max(required,retained_component_reader_floor(command_to_json(Command{*revision.boundary_constraint_changes})));
-        if (required<240 && revision.boundary_geometry_edit)
+        if (required<245 && revision.boundary_geometry_edit)
             required=std::max(required,typed_edit_reader_floor(encode_boundary_geometry_edit(*revision.boundary_geometry_edit)));
-        if (required<240 && revision.boundary_constraint_changes)
+        if (required<245 && revision.boundary_constraint_changes)
             required=std::max(required,typed_edit_reader_floor(command_to_json(Command{*revision.boundary_constraint_changes})));
         if (required<122 && revision.boundary_geometry_edit)
             required=std::max(required,quantity_reader_floor(encode_boundary_geometry_edit(*revision.boundary_geometry_edit)));
@@ -4058,6 +4101,8 @@ bool verify_sqlite_schema(sqlite3* database, bool allow_recovery = false) {
          sqlite3_column_int(user_version.get(), 0) != 240 &&
          sqlite3_column_int(user_version.get(), 0) != 241 &&
          sqlite3_column_int(user_version.get(), 0) != 243 &&
+         sqlite3_column_int(user_version.get(), 0) != 244 &&
+         sqlite3_column_int(user_version.get(), 0) != 245 &&
          sqlite3_column_int(user_version.get(), 0) != 242 &&
          sqlite3_column_int(user_version.get(), 0) != 207 &&
          sqlite3_column_int(user_version.get(), 0) != 202 &&
@@ -4784,6 +4829,10 @@ DocumentSnapshot read_snapshot(sqlite3* database, RecoveryLedger* recovery = nul
     // here and authenticate the manifest with its stored version below.
     const auto required_format = required_format_version_internal(snapshot, format_number < 28);
     if (required_format > format_number) {
+        if (required_format>=245)
+            storage_error(StorageErrorCode::unsupported_format,"This project requires reader 245 for attached physical-owner dimension membership retirement");
+        if (required_format>=244)
+            storage_error(StorageErrorCode::unsupported_format,"This project requires reader 244 for complete component Properties dimension carry");
         if (required_format>=243)
             storage_error(StorageErrorCode::unsupported_format,"This project requires reader 243 for source-bound standalone component retirement");
         if (required_format>=242)

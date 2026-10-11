@@ -14,6 +14,8 @@ namespace sketch {
 // for a component-only architectural lane; older versions retain their meaning.
 // Closed v5 instead records complete_hosted_component_dimensions with explicit
 // membership flags for actual selected architectural owners and their hosts.
+// Closed v6 records literal complete_owner_dimension_memberships with explicit
+// membership and both component-dimension flags for ordinary physical owners.
 struct ArchitecturalDrawingRemovalIntent {
     ArchitecturalSelectionRemovalIntent architectural;
     DrawingSelectionRemovalIntent drawing;

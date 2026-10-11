@@ -934,7 +934,8 @@ Entities derive(const Entities& source, const std::vector<std::string>& selectio
     bool complete_corner_catalog_hosts = false,
     bool complete_component_phase_memberships = false,
     const std::optional<std::pair<std::string, std::string>>& required_component_phase_choice = std::nullopt,
-    bool complete_component_dimensions = false) {
+    bool complete_component_dimensions = false,
+    bool complete_owner_dimension_memberships = false) {
     if (required_component_phase_choice && !complete_component_phase_memberships)
         reject("required component phase choice needs complete component memberships");
     if (complete_corner_catalog_hosts && !complete_corner_window_removal)
@@ -944,6 +945,10 @@ Entities derive(const Entities& source, const std::vector<std::string>& selectio
     bounds(source);
     if ((selection.empty() && components.empty()) || selection.size() > selection_limit || components.size() > closure_limit)
         reject("selection requires bounded actual physical roots or qualified components");
+    if (complete_owner_dimension_memberships && !std::any_of(selection.begin(), selection.end(), [&](const auto& id) {
+        const auto owner = source.find(id);
+        return owner != source.end() && physical(owner->second);
+    })) reject("owner dimension membership retirement requires an explicit ordinary physical root");
     AssemblyCatalogTransferBudget component_membership_catalog_budget;
     if (complete_component_phase_memberships) {
         // Reserve the entire source inventory before membership scope, assembly
@@ -1274,7 +1279,7 @@ Entities derive(const Entities& source, const std::vector<std::string>& selectio
         if (!decoded.supported()) reject("affected associative dimension has unsupported schema: " + id);
         if (names.contains(decoded.dimension->boundary_id)) {
             if (entity.required) reject("associative dimension owner is required: " + id);
-            if (complete_corner_window_removal) {
+            if (complete_corner_window_removal || complete_owner_dimension_memberships) {
                 removable(phase, id);
                 const auto member = phase.owners.find(id);
                 if (member != phase.owners.end() && selected_registry && member->second != *selected_registry)
@@ -1320,9 +1325,10 @@ Entities derive(const Entities& source, const std::vector<std::string>& selectio
         auto phase_retired = retired; phase_retired.insert(dimension_ids.begin(), dimension_ids.end());
         retire_phases(result, source, phase, phase_retired);
         demolish_corners(result, phase, corners);
-    } else if (complete_component_dimensions) {
+    } else if (complete_component_dimensions || complete_owner_dimension_memberships) {
         auto phase_retired = retired;
-        phase_retired.insert(component_dimension_ids.begin(), component_dimension_ids.end());
+        const auto& attached = complete_owner_dimension_memberships ? dimension_ids : component_dimension_ids;
+        phase_retired.insert(attached.begin(), attached.end());
         retire_phases(result, source, phase, phase_retired);
     } else retire_phases(result, source, phase, retired);
     for (const auto& id : component_dimension_ids) {
@@ -1657,11 +1663,11 @@ std::map<std::string, Entity, std::less<>> replay_architectural_object_removal(
     bool complete_proposed_opening_catalog_consequences, bool complete_corner_window_removal,
     bool complete_corner_catalog_hosts, bool complete_component_phase_memberships,
     const std::optional<std::pair<std::string, std::string>>& required_component_phase_choice,
-    bool complete_component_dimensions) {
+    bool complete_component_dimensions, bool complete_owner_dimension_memberships) {
     try { return derive(actual, selected_object_ids, explicit_components, allow_manufactured_opening_hosts,
         reserved_native_work, false, complete_hosted_catalog_consequences, complete_proposed_opening_catalog_consequences,
         complete_corner_window_removal, complete_corner_catalog_hosts, complete_component_phase_memberships,
-        required_component_phase_choice, complete_component_dimensions); }
+        required_component_phase_choice, complete_component_dimensions, complete_owner_dimension_memberships); }
     catch (const Json::exception& error) { reject(std::string("malformed actual source: ") + error.what()); }
     catch (const Standard_Failure& error) {
         const auto* message = error.GetMessageString();
@@ -1675,11 +1681,11 @@ void preflight_architectural_object_removal(const Entities& actual,
     bool complete_proposed_opening_catalog_consequences, bool complete_corner_window_removal,
     bool complete_corner_catalog_hosts, bool complete_component_phase_memberships,
     const std::optional<std::pair<std::string, std::string>>& required_component_phase_choice,
-    bool complete_component_dimensions) {
+    bool complete_component_dimensions, bool complete_owner_dimension_memberships) {
     try { (void)derive(actual, selected_object_ids, explicit_components, true, reserved_native_work, true,
         complete_hosted_catalog_consequences, complete_proposed_opening_catalog_consequences, complete_corner_window_removal,
         complete_corner_catalog_hosts, complete_component_phase_memberships, required_component_phase_choice,
-        complete_component_dimensions); }
+        complete_component_dimensions, complete_owner_dimension_memberships); }
     catch (const Json::exception& error) { reject(std::string("malformed actual source: ") + error.what()); }
 }
 std::vector<std::pair<std::string, std::string>> complete_proposed_opening_catalog_consequence_keys(

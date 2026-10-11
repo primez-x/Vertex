@@ -108,15 +108,22 @@ PhaseAssemblyInstancePropertyEditAuthoring decode_authoring(const Json& value) {
     // cannot force an unbounded dump or reach source model decoding.
     (void)value.dump();
     if (!value.is_object() || !value.contains("version") || !value.at("version").is_number_integer() ||
-        (value.at("version") != 1 && value.at("version") != 2 && value.at("version") != 3)) reject("unsupported authoring version");
+        (value.at("version") != 1 && value.at("version") != 2 && value.at("version") != 3 && value.at("version") != 4)) reject("unsupported authoring version");
     const bool geometry = value.at("version") == 3;
+    const bool complete_dimensions = value.at("version") == 4;
+    const bool dimensions = geometry || complete_dimensions;
     const bool carry = value.at("version") != 1;
     if (carry) {
-        if (geometry) fields(value, {"version", "intents", "allocation", "carry_presentation_references",
+        if (complete_dimensions) {
+            fields(value, {"version", "intents", "allocation", "carry_presentation_references",
+                "presentation_overlay_identities", "complete_component_dimensions", "dimension_identities"});
+            if (!value.at("complete_component_dimensions").is_boolean() || value.at("complete_component_dimensions") != true)
+                reject("v4 requires literal component dimension completion");
+        } else if (geometry) fields(value, {"version", "intents", "allocation", "carry_presentation_references",
             "presentation_overlay_identities", "dimension_identities"});
         else fields(value, {"version", "intents", "allocation", "carry_presentation_references", "presentation_overlay_identities"});
         if (!value.at("carry_presentation_references").is_boolean() || value.at("carry_presentation_references") != true)
-            reject("v2/v3 require literal presentation carry");
+            reject("v2/v3/v4 require literal presentation carry");
     } else fields(value, {"version", "intents", "allocation"});
     const auto& intents = value.at("intents");
     if (!intents.is_array() || intents.empty() || intents.size() > count_limit) reject("invalid intent count");
@@ -129,10 +136,10 @@ PhaseAssemblyInstancePropertyEditAuthoring decode_authoring(const Json& value) {
         if (!roots.is_array() || roots.size() > count_limit || !memberships.is_array() || memberships.size() > count_limit ||
             !overlays.is_array() || overlays.size() > presentation_identity_limit) reject("typed presentation request count exceeds bound");
         std::size_t fresh_count = memberships.size() + overlays.size();
-        if (geometry) {
-            const auto& dimensions = value.at("dimension_identities");
-            if (!dimensions.is_object() || dimensions.size() > count_limit) reject("invalid dimension allocation count");
-            fresh_count += dimensions.size();
+        if (dimensions) {
+            const auto& identities = value.at("dimension_identities");
+            if (!identities.is_object() || identities.size() > count_limit) reject("invalid dimension allocation count");
+            fresh_count += identities.size();
         }
         for (const auto& row : roots) {
             fields(row, {"root", "proposed_entity_id", "proposed_catalog_id", "proposed_instance_id"});
@@ -142,10 +149,11 @@ PhaseAssemblyInstancePropertyEditAuthoring decode_authoring(const Json& value) {
     }
     PhaseAssemblyInstancePropertyEditAuthoring result;
     result.carry_presentation_references = carry;
+    result.complete_component_dimensions = complete_dimensions;
     for (const auto& row : intents) {
         auto intent = decode_assembly_instance_property_edit_intent(row);
         if (!geometry && intent.profile_geometry.operation != AssemblyInstancePropertyPatchOperation::unchanged)
-            reject("historical authoring cannot carry profile geometry authority");
+            reject("nongeometry authoring cannot carry profile geometry authority");
         if (!result.intents.empty() && !(result.intents.back().target < intent.target)) reject("intent targets must be sorted unique");
         result.intents.push_back(std::move(intent));
     }
@@ -199,7 +207,7 @@ PhaseAssemblyInstancePropertyEditAuthoring decode_authoring(const Json& value) {
             previous_overlay = original;
             result.presentation_overlay_identities.emplace(std::move(original), reserve(row.at("proposed_overlay_id")));
         }
-        if (geometry) for (const auto& [source, destination] : value.at("dimension_identities").items()) {
+        if (dimensions) for (const auto& [source, destination] : value.at("dimension_identities").items()) {
             admit_identity(source);
             result.dimension_identities.emplace(source, reserve(destination));
         }
@@ -226,13 +234,13 @@ PhaseAssemblyInstancePropertyEditAuthoring decode_request(const Json& value) {
     WireBudget{}.visit(value);
     fields(value, {"version", "expected_revision", "source_snapshot_digest", "source_authoring_digest",
         "source_entities_digest", "source_saved_revision", "authoring"});
-    if (!value.at("version").is_number_integer() || (value.at("version") != 1 && value.at("version") != 2 && value.at("version") != 3))
+    if (!value.at("version").is_number_integer() || (value.at("version") != 1 && value.at("version") != 2 && value.at("version") != 3 && value.at("version") != 4))
         reject("unsupported request version");
     (void)revision(value.at("expected_revision"));
     for (const auto* name : {"source_snapshot_digest", "source_authoring_digest", "source_entities_digest"}) digest(value.at(name));
     if (!value.at("source_saved_revision").is_null()) (void)revision(value.at("source_saved_revision"));
     auto authoring = decode_authoring(value.at("authoring"));
-    if (value.at("version") != (has_geometry_intent(authoring) ? 3 : authoring.carry_presentation_references ? 2 : 1))
+    if (value.at("version") != (authoring.complete_component_dimensions ? 4 : has_geometry_intent(authoring) ? 3 : authoring.carry_presentation_references ? 2 : 1))
         reject("request and authoring versions differ");
     return authoring;
 }
@@ -553,8 +561,8 @@ void complete_presentation_carry(const AssemblyDocumentEntities& source,
     const PhaseAssemblyInstancePropertyEditAuthoring& authoring, PhaseAssemblyInstancePropertyEditResult& result) {
     const auto plan = inspect_phase_assembly_instance_property_edit_plan(source, authoring.intents);
     auto owners = replacement_presentation_owners(source, plan);
-    const bool geometry = has_geometry_intent(authoring);
-    const auto dimensions = geometry ? inspect_dimension_roster(source, plan, false) : DimensionRoster{};
+    const bool carry_dimensions = has_geometry_intent(authoring) || authoring.complete_component_dimensions;
+    const auto dimensions = carry_dimensions ? inspect_dimension_roster(source, plan, false) : DimensionRoster{};
     owners.insert(dimensions.copies.begin(), dimensions.copies.end());
     const auto overlays = presentation_overlay_ids(source, owners);
     if (overlays.size() != authoring.presentation_overlay_identities.size()) reject("overlay allocation differs from actual affected roster");
@@ -584,7 +592,7 @@ void complete_presentation_carry(const AssemblyDocumentEntities& source,
             proposed_aliases.at({destination->catalog_id, destination->instance_id});
         if (!mappings.emplace(old_id, new_id).second) reject("duplicate actual presentation owner mapping");
     }
-    if (geometry) for (const auto& id : dimensions.copies) {
+    if (carry_dimensions) for (const auto& id : dimensions.copies) {
         const auto found = authoring.dimension_identities.find(id);
         if (found == authoring.dimension_identities.end() || !result.entities.contains(found->second) ||
             !mappings.emplace(id, found->second).second) reject("missing actual dimension presentation destination");
@@ -593,7 +601,7 @@ void complete_presentation_carry(const AssemblyDocumentEntities& source,
     affected.insert(overlays.begin(), overlays.end());
     for (const auto& [id, entity] : source) {
         (void)id;
-        auto remainder = opaque_presentation_remainder(entity, geometry ? &dimensions : nullptr);
+        auto remainder = opaque_presentation_remainder(entity, carry_dimensions ? &dimensions : nullptr);
         if (touches_presentation_ids(remainder.properties, affected) || touches_presentation_ids(remainder.extensions, affected))
             reject("opaque source presentation reference cannot be carried safely");
     }
@@ -656,11 +664,12 @@ void complete_presentation_carry(const AssemblyDocumentEntities& source,
 } // namespace
 
 std::vector<std::string> inspect_phase_assembly_instance_property_presentation_overlay_ids(
-    const AssemblyDocumentEntities& source, std::span<const AssemblyInstancePropertyEditIntent> intents) {
+    const AssemblyDocumentEntities& source, std::span<const AssemblyInstancePropertyEditIntent> intents,
+    bool complete_component_dimensions) {
     admit_presentation_source(source);
     const auto plan = inspect_phase_assembly_instance_property_edit_plan(source, intents);
     auto owners = replacement_presentation_owners(source, plan);
-    if (std::any_of(intents.begin(), intents.end(), [](const auto& intent) {
+    if (complete_component_dimensions || std::any_of(intents.begin(), intents.end(), [](const auto& intent) {
         return intent.profile_geometry.operation != AssemblyInstancePropertyPatchOperation::unchanged;
     })) {
         const auto dimensions = inspect_dimension_roster(source, plan, true);
@@ -683,9 +692,11 @@ Json encode_phase_assembly_instance_property_edit_authoring(const PhaseAssemblyI
     if (authoring.intents.empty() || authoring.intents.size() > count_limit || authoring.allocation.roots.size() > count_limit ||
         authoring.allocation.membership_entity_ids.size() > count_limit) reject("typed request count exceeds bound");
     const bool geometry = has_geometry_intent(authoring);
-    if (geometry && !authoring.carry_presentation_references) reject("geometry authoring requires literal presentation carry");
-    if ((!geometry && !authoring.dimension_identities.empty()) || authoring.dimension_identities.size() > count_limit)
-        reject("dimension identities require geometry v3 and at most 1000 copies");
+    const bool dimensions = geometry || authoring.complete_component_dimensions;
+    if (geometry && authoring.complete_component_dimensions) reject("v4 component dimension completion excludes profile geometry");
+    if (dimensions && !authoring.carry_presentation_references) reject("dimension authoring requires literal presentation carry");
+    if ((!dimensions && !authoring.dimension_identities.empty()) || authoring.dimension_identities.size() > count_limit)
+        reject("dimension identities require geometry v3 or explicit v4 and at most 1000 copies");
     if (!authoring.carry_presentation_references && !authoring.presentation_overlay_identities.empty())
         reject("historical v1 cannot allocate presentation overlays");
     if (authoring.carry_presentation_references) {
@@ -722,20 +733,21 @@ Json encode_phase_assembly_instance_property_edit_authoring(const PhaseAssemblyI
         Json wire{{"original_overlay_id", original}, {"proposed_overlay_id", proposed}};
         budget.visit(wire); overlays.push_back(std::move(wire));
     }
-    Json result{{"version", geometry ? 3 : authoring.carry_presentation_references ? 2 : 1}, {"intents", std::move(intents)},
+    Json result{{"version", authoring.complete_component_dimensions ? 4 : geometry ? 3 : authoring.carry_presentation_references ? 2 : 1}, {"intents", std::move(intents)},
         {"allocation", {{"roots", std::move(roots)}, {"membership_entity_ids", std::move(memberships)}}}};
     if (authoring.carry_presentation_references) {
         result["carry_presentation_references"] = true;
         result["presentation_overlay_identities"] = std::move(overlays);
     }
-    if (geometry) {
-        auto dimensions = Json::object();
+    if (authoring.complete_component_dimensions) result["complete_component_dimensions"] = true;
+    if (dimensions) {
+        auto identities = Json::object();
         for (const auto& [source, destination] : authoring.dimension_identities) {
             admit_identity(source); admit_identity(destination);
             budget.string(source); budget.string(destination);
-            dimensions[source] = destination;
+            identities[source] = destination;
         }
-        result["dimension_identities"] = std::move(dimensions);
+        result["dimension_identities"] = std::move(identities);
     }
     (void)decode_authoring(result);
     return result;
@@ -770,7 +782,8 @@ PhaseAssemblyInstancePropertyEditPreparation replay_phase_assembly_instance_prop
     authenticate(source, request);
     (void)Document::fork(source); // Actual complete history/assets/read-only admission.
     auto result = replay_phase_assembly_instance_property_edits(source.entities(), authoring.intents, authoring.allocation);
-    if (has_geometry_intent(authoring)) complete_dimension_carry(source.entities(), authoring, result);
+    if (has_geometry_intent(authoring) || authoring.complete_component_dimensions)
+        complete_dimension_carry(source.entities(), authoring, result);
     if (authoring.carry_presentation_references) complete_presentation_carry(source.entities(), authoring, result);
     // Includes undone states. Every allocated ID becomes live in this dialect;
     // exact no-ops cannot carry speculative/unpublished allocations.

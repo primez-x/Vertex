@@ -67,6 +67,8 @@ void object_identity(const std::string& id) {
     })) reject("physical root requires an actual document identity");
 }
 ArchitecturalDrawingRemovalIntent authority(const PhaseSelectionRemovalIntent& intent) {
+    if (intent.architectural.complete_owner_dimension_memberships)
+        reject("phase deletion does not retain standalone owner dimension membership authority");
     if (intent.architectural.object_ids.empty() && intent.architectural.components.empty())
         reject("phase deletion requires explicit architectural roots/components");
     if (!intent.architectural.roof_additional_identities.empty()) reject("selection cannot supply destination authority");
@@ -105,7 +107,8 @@ ArchitecturalDrawingRemovalIntent authority(const PhaseSelectionRemovalIntent& i
 }
 bool exact(const ArchitecturalSelectionRemovalIntent& left,const ArchitecturalSelectionRemovalIntent& right) {
     return left.object_ids==right.object_ids && left.components==right.components &&
-        left.roof_additional_identities==right.roof_additional_identities;
+        left.roof_additional_identities==right.roof_additional_identities &&
+        left.complete_owner_dimension_memberships==right.complete_owner_dimension_memberships;
 }
 bool exact(const Entities& left,const Entities& right) {
     if (left.size()!=right.size()) return false;

@@ -14,6 +14,61 @@ changed source does not acquire runtime acceptance without later qualification.
 
 ## Current delivery state
 
+### October 11 component Properties and source-preserving deletion continuation
+
+The preceding status turn made no source changes. This continuation committed
+and pushed the independently reviewed Copy controller as f5dd0e9d; the remote
+branch matches that checkpoint. Work remains in the permanent checkout.
+
+Component Properties now uses complete associated v6 dimension and presentation
+carry for scalar/pose edits as well as profile geometry. New closed component
+authoring/request4 and mixed Properties33 explicitly opt nongeometry edits into
+source-derived dimension movement or exact replacement copies and overlay carry.
+Historical authoring1 through3 and Properties32 retain their meanings. Actual
+source/final geometry resolves every supported association; coordinated host
+edits carry it through actual surviving destinations and reserve elided identities.
+The controller allocates exact rosters, captures the displayed edit source before
+dialogs, and publishes the complete prepared command without a second alternative
+rewrite. Actual published aliases restore selection. Reader244/extraction242 and
+Document policy/lifetime dispatch retain these changes through undone history.
+
+Deletion now replaces supported generic candidates with the complete pure
+architectural/drawing producer. This avoids unnecessary saved-view normalization
+while retaining registry, deduction, dimension and presentation cleanup. An actual
+gap in primitive physical-owner deletion left erased dimensions registered;
+new explicit architectural/drawing6 retires their memberships after original
+source activity, registry and opaque-reference admission. Combined drawing
+selection can cover a dimension already retired by that same reconstructed
+architectural stage; generic stage maps cannot grant this permission. Standalone17
+retains the new selection under reader245/extraction243. Historical phase,
+opening/corner enclosures and mixed skylight selectors retain their authority.
+The controller enables the new lane only for standalone ordinary physical-owner
+selections and publishes the exact replacement raw base. Independent Properties
+source review approved the bounded batch with no proved introduced P1/P2 finding.
+It traced exact dimension/overlay allocations, original retention, coordinated
+destination carry, policy/lifetime/floor dispatch and captured publication.
+Independent deletion review proved an early-dispatch defect: mixed roof/primitive
+reconstruction ran before the controller enabled dimension membership completion.
+The corrected producer captures the same standalone authority before its first
+replay. Follow-up source review approved the correction with no remaining proved
+P1/P2 in the bounded scope, including all five publication callers, selected
+dimension overlap and retained/nested reader floors. Root reviewed the combined
+interfaces, default behavior, source-only flags and publication paths.
+
+Root owns integration, controller, Document/store and format docs; bounded workers
+owned the Properties producer/controller and owner-dimension deletion leaves.
+Manual source review and scoped diff checks are the available verification.
+No builds, tests, scripts, probes, native jobs, launches, packages or installations
+ran. Compilation, native interaction, Undo/reopen and user acceptance remain
+unverified; the installed application is unchanged and all ten gates remain open.
+
+Remaining component work includes phase-owned publication and Undo integration
+before removing the companion latch/current Copy/catalog/embedded replacement
+refusals, Site catalog-local Copy, stable profile-edge dimensions, and mixed
+skylight deletion with the new owner-dimension lane. Broader production behavior,
+external compatibility/device prerequisites and final qualification remain in
+the complete delivery plan; this checkpoint does not close a production package.
+
 ### October 11 catalog-local numeric Copy controller continuation
 
 The closed retirement batch is committed and pushed as 5a9f566f; its exact

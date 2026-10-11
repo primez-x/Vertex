@@ -1,4 +1,41 @@
-# Vertex project formats v1 through v243
+# Vertex project formats v1 through v245
+
+Reader245 adds architectural/drawing selection6 for standalone retirement17.
+Its exact fields are `version`, `architectural`, `drawing`,
+`allow_manufactured_opening_hosts`, `complete_component_phase_memberships`,
+`complete_roof_component_phase_memberships`, `complete_component_dimensions`,
+`complete_hosted_component_dimensions`, and literal
+`complete_owner_dimension_memberships:true`. All other permission fields are
+explicit Booleans. The architectural inventory remains exact selected object IDs,
+qualified component pairs and allocated roof destinations. This lane requires
+an actual ordinary physical owner (stair, railing, slab, column or beam).
+Attached supported dimensions receive source-derived phase/removability and
+opaque-reference admission before their registry memberships retire. Combined
+drawing selection can cover an associated dimension already retired by that
+same independently reconstructed architectural stage. Generic stage maps cannot
+supply that permission. Historical architectural/drawing1 through5 and mixed
+skylight selectors keep their meanings; phase, opening and corner enclosures do
+not acquire this standalone permission. Native extraction243 follows reader245.
+
+Reader244 adds explicit component Properties dimension carry. Closed component
+authoring/request4 requires nongeometry typed intents, literal presentation carry,
+literal `complete_component_dimensions:true`, exact overlay allocations and the
+required `dimension_identities` object (including an empty object when no copies
+are needed). Mixed Properties33 retains the complete source/save fences,
+component request4, optional sealed noncomponent base, reviewed room consequences
+and exact identity reservations. Its literal dimension marker replaces
+Properties32's profile-geometry marker. Actual-source supported v6 associations
+move with ordinary edits or clone with replacement roots; original dimension
+envelopes remain exact. Coordinated host edits carry dimensions to their actual
+final destinations while preserving reservation of elided allocations.
+Historical authoring1 through3 and Properties32 retain their distinct meanings.
+Native extraction242 follows reader244. Both floors apply to retained and undone
+history and recognized nested receipts without changing SQLite tables.
+
+Current controllers publish the exact prepared Properties command and use pure
+source-derived deletion cleanup instead of generic saved-view normalization.
+The component membership quarantine remains. These format contracts establish
+source behavior only; compilation, runtime and release qualification remain open.
 
 Reader243 adds standalone retirement dialect17 under the existing exclusive
 command45. Its eleven fields are `version`, `ordinary`, `ordinary_command`,

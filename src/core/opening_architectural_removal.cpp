@@ -34,6 +34,8 @@ template<class T> void canonical(const std::vector<T>& rows) {
         reject("selected identities/qualified pairs must be sorted and unique");
 }
 void intent_bound(const OpeningArchitecturalRemovalIntent& intent) {
+    if (intent.other.complete_owner_dimension_memberships)
+        reject("opening removal does not retain standalone owner dimension membership authority");
     if (intent.opening_ids.empty() || intent.opening_ids.size() > root_limit ||
         intent.other.object_ids.size() > root_limit - intent.opening_ids.size() ||
         intent.other.components.size() > root_limit - intent.opening_ids.size() - intent.other.object_ids.size() ||
