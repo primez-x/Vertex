@@ -50490,6 +50490,23 @@ private:
         if (transforms.empty()) return ApplyEntityChanges{source.revision(), {}, {}, message};
         const auto request=phase_stair_replacement_request(source.entities(), transforms);
         if (!request) {
+            // Ordinary rigid/similarity moves share the complete host producer,
+            // including component-dimension consequences. Entered quantity
+            // receipts remain owned by their separate typed stair edit lane.
+            if (std::all_of(transforms.begin(),transforms.end(),[](const auto& transform) {
+                return transform.quantity_entries.is_null();
+            })) {
+                if (transforms.size()>maximum_architectural_group_targets)
+                    throw std::invalid_argument("Select a bounded stair or railing group.");
+                std::vector<ArchitecturalGroupTransformTarget> targets;
+                targets.reserve(transforms.size());
+                for (const auto& transform:transforms)
+                    targets.push_back({transform.object_id,transform.transform});
+                auto ordinary=architectural_group_transform_command(source,targets,
+                    new_id("stair-host-transform"),source.revision());
+                ordinary.message=message;
+                return augmentAuthoredCommandForRegistry(ordinary,source);
+            }
             const auto candidate=replay_stair_transform_entities(source.entities(), transforms);
             ApplyEntityChanges ordinary{source.revision(), {}, {}, message};
             for (const auto& [id, after]:candidate) {
@@ -51411,6 +51428,20 @@ private:
         };
         if (empty(stair_command)) return other_command;
         if (empty(other_command)) return stair_command;
+        // A complete ordinary cohort stays in the ordinary producer. Repacking
+        // these moves as historical coordinated authoring would discard the
+        // dimension contributions now supplied by the stair host lane.
+        if (std::holds_alternative<ApplyEntityChanges>(stair_command) &&
+            std::holds_alternative<ApplyEntityChanges>(other_command) &&
+            std::all_of(other.begin(),other.end(),[&](const auto& target) {
+                const auto& type=source.entities().at(target.entity_id).type;
+                return type=="roof" || type=="slab";
+            })) {
+            auto ordinary=architectural_group_transform_command(source,targets,
+                new_id("stair-horizontal-host-transform"),source.revision());
+            ordinary.message=message;
+            return augmentAuthoredCommandForRegistry(ordinary,source);
+        }
         ConstraintAuthoringIntent semantic; semantic.message=message;
         auto intent=make_phase_constraint_authoring_intent(source,semantic);
         json coordinated{{"version",4},{"wall_authoring",nullptr},{"roof_replacement",nullptr},

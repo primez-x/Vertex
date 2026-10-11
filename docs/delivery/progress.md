@@ -14,6 +14,24 @@ changed source does not acquire runtime acceptance without later qualification.
 
 ## Current delivery state
 
+### October 11 direct ordinary stair movement
+
+The host-derived group batch is committed and pushed as 67388cfb; the exact
+remote branch ref matches local HEAD. Current controller work routes direct
+ordinary stair/railing rigid and similarity movement through that complete
+group producer, so canvas movement, numeric transforms, mirroring and Site
+movement no longer bypass its component-dimension consequences. Actual saved
+alternative replacement detection still runs first. An ordinary stair/railing
+cohort with roofs/slabs uses the same complete group command instead of losing
+its dimension rows when repacked as historical coordinated authoring.
+Entered quantity-receipt edits retain their typed stair lane; they and
+coordinated multi-family retained
+authoring still need their own dimension integration. Independent focused source
+review approved the controller batch with no proved P1/P2 finding; root scoped
+whitespace review passes. Git records the source backup identity.
+No builds/tests/jobs, launches, packages or installations ran. The installed
+candidate is unchanged; all ten production gates remain open.
+
 ### October 11 host-derived embedded component dimension carry
 
 The qualified retirement batch is committed and pushed as ca3c508b; the exact
