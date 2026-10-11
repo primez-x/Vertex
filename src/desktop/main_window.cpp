@@ -6121,6 +6121,8 @@ class MainWindow::Impl {
         std::shared_ptr<const DocumentSnapshot> source;
         std::shared_ptr<const SourceEditAuthority> authority;
         std::shared_ptr<const CanvasEditSourceCapture> edit_source;
+        std::map<QString,SitePresentationPlacement> site_frames;
+        std::uint64_t site_generation{};
         TransformViewportCapture viewport;
         std::optional<ArchitecturalViewContext> view;
         CanvasRoofOpeningTarget target;
@@ -26491,6 +26493,48 @@ public:
                             (host.type=="slab" ? placement.vertical_scale : 1.0);
                         if (captured_presentations.contains(presentation_identity(item)) || !proposed.segments.empty())
                             result.entities.push_back(std::move(proposed));
+                        continue;
+                    }
+                    if (typed_annotation && item.type==QStringLiteral("symbol")) {
+                        const auto& target=site_input->move_annotation_targets.at(item.id);
+                        const auto before=decode_annotation_entity(source.entities().at(target.owner_entity_id));
+                        const auto after=decode_annotation_entity(candidate.at(target.owner_entity_id));
+                        const auto a=std::find_if(before.symbols.begin(),before.symbols.end(),[&](const auto& value){return value.id==target.child_id;});
+                        const auto b=std::find_if(after.symbols.begin(),after.symbols.end(),[&](const auto& value){return value.id==target.child_id;});
+                        if (a==before.symbols.end() || b==after.symbols.end())
+                            throw std::invalid_argument("The Site component lost its captured annotation owner.");
+                        const auto angle=b->placement.rotation_radians-a->placement.rotation_radians;
+                        const auto ratio=b->placement.scale/a->placement.scale;
+                        if (!std::isfinite(angle) || !std::isfinite(ratio) || ratio<=0.0)
+                            throw std::invalid_argument("The Site component proposal has an invalid physical placement.");
+                        if (angle==0.0 && ratio==1.0 && a->placement.position.x==b->placement.position.x &&
+                            a->placement.position.y==b->placement.position.y) continue;
+                        auto proposed=item;
+                        if (ratio!=1.0) {
+                            const auto point=[&](Vec2& value){value.x*=ratio;value.y*=ratio;};
+                            const auto path=[&](Boundary& value){for (auto& edge:value){point(edge.start);point(edge.end);}};
+                            path(proposed.segments);path(proposed.snap_segments);path(proposed.hit_segments);
+                            path(proposed.drawing_alignment_segments);
+                            if (proposed.stroke_segments) path(*proposed.stroke_segments);
+                            for (auto& hole:proposed.holes) path(hole);
+                            for (auto& value:proposed.snap_points) point(value);
+                            for (auto& handle:proposed.vertex_handles) point(handle.position);
+                            if (proposed.resize_frame) {
+                                point(proposed.resize_frame->center);proposed.resize_frame->width_metres*=ratio;
+                                proposed.resize_frame->depth_metres*=ratio;
+                            }
+                            if (proposed.svg_symbol) {
+                                point(proposed.svg_symbol->position);proposed.svg_symbol->width_metres*=ratio;
+                                proposed.svg_symbol->depth_metres*=ratio;
+                            }
+                        }
+                        const auto c=std::cos(angle),s=std::sin(angle);
+                        const SitePresentationPlacement delta{{},SiteRigidTransform{{
+                            b->placement.position.x-ratio*(c*a->placement.position.x-s*a->placement.position.y),
+                            b->placement.position.y-ratio*(s*a->placement.position.x+c*a->placement.position.y),0.0},angle},{},{},{},{},{},0};
+                        // Keep this local until obstacle layout completes. The
+                        // caller presents all paths and labels exactly once.
+                        result.entities.push_back(site_presented_canvas_entity(proposed,delta));
                         continue;
                     }
                     const auto moved=annotation_deltas.find(item.id.toStdString());
@@ -56255,6 +56299,8 @@ private:
         std::vector<Bounds2> component_bounds;
         bool rotation{};
         Vec2 pivot;
+        std::shared_ptr<const SiteEndpointPreviewInput> site_input;
+        std::uint64_t site_generation{};
     };
     struct MixedPlanTransformResult {
         std::optional<MixedSelectionEditPreparation> preparation;
@@ -58356,9 +58402,21 @@ private:
     void requireSiteSelectionAdmission() const {
         if (!siteCanvas(m_architecturalCanvas) || m_selected_ids.isEmpty()) return;
         requireSitePublicationCurrent();
-        (void)admittedSiteSelectionFrames(*m_site_publication_source,m_site_plan_frames,
+        // Child roof owners belong to the internal selection union, not the
+        // ordinary canvas roster. Admit ordinary presentations and typed
+        // child mouths separately; neither grants selection of the other.
+        const auto ordinary=ordinarySelectionIDs();
+        if (!ordinary.isEmpty()) (void)admittedSiteSelectionFrames(*m_site_publication_source,m_site_plan_frames,
             m_architecturalCanvas->selectedEntityPresentations(),m_site_annotation_targets,
-            m_architecturalCanvas->selectedIds(),m_selected_ids);
+            m_architecturalCanvas->selectedIds(),ordinary);
+        for (const auto& child:m_selected_roof_openings) {
+            if (child.source_revision!=m_site_publication_source->revision())
+                throw std::invalid_argument("The selected Site skylight belongs to an older source.");
+            (void)roofCanvasChild(*m_site_publication_source,child);
+            const auto& controls=m_architecturalCanvas->roofOpeningControls();
+            if (std::none_of(controls.begin(),controls.end(),[&](const auto& item){return item.target==child;}))
+                throw std::invalid_argument("The selected Site skylight has no complete visible mouth.");
+        }
     }
 
     void requireSiteCommandAdmission(const Command& command) const {
@@ -63488,7 +63546,7 @@ private:
         const bool mixed_rigid=mixedSemanticSelection() && m_document->is_editable() && !hasPendingPlacementEdit();
         if (m_measurementCanvas) m_measurementCanvas->setMixedSelectionRigidTransformEnabled(mixed_rigid);
         if (m_architecturalCanvas) m_architecturalCanvas->setMixedSelectionRigidTransformEnabled(mixed_rigid &&
-            !siteCanvas(m_architecturalCanvas) && m_architectural_view_kind==BuildingViewKind::plan);
+            (siteCanvas(m_architecturalCanvas) || m_architectural_view_kind==BuildingViewKind::plan));
         if (mixed_rigid) rotate_selection=true;
         if (m_measurementCanvas) m_measurementCanvas->setSelectionAxisResizeEnabled(axis_resize);
         if (m_architecturalCanvas) m_architecturalCanvas->setSelectionAxisResizeEnabled(
@@ -64280,6 +64338,14 @@ private:
         },object);
     }
 
+    static CanvasRoofOpeningFrame siteRoofOpeningCanvasFrame(CanvasRoofOpeningFrame frame,
+        const SitePresentationPlacement& placement) {
+        frame.center=site_presented_plan_point(frame.center,placement);
+        frame.reference_along=site_presented_plan_delta(frame.reference_along,placement);
+        frame.reference_across=site_presented_plan_delta(frame.reference_across,placement);
+        return frame;
+    }
+
     void cancelRoofOpeningCanvasPreview() {
         m_roof_opening_capture.reset();
         m_pending_roof_opening_preview.reset();
@@ -64586,7 +64652,8 @@ private:
         for (auto* canvas:{m_measurementCanvas,m_architecturalCanvas}) {
             std::vector<CanvasRoofOpeningControls> controls;
             try {
-                if (!source.is_editable() || siteCanvas(canvas)) throw std::invalid_argument("Skylight controls need an editable floor plan.");
+                if (!source.is_editable()) throw std::invalid_argument("Skylight controls need an editable plan.");
+                const bool site=siteCanvas(canvas);
                 const auto view=boundaryVertexViewContext(canvas,source);
                 // A depth cut can expose a partial fill; don't present it as a
                 // complete editable rectangle. Properties remains available.
@@ -64600,8 +64667,11 @@ private:
                     for (const auto& id:roofs) {
                         if (!seen.insert(id).second) continue;
                         const auto& roof=source.entities().at(id);
-                        if (roof.type!="roof" || (roof.properties.at("version")!=3 && roof.properties.at("version")!=4) || !context ||
-                            read_string(roof.properties,"layer_id")!=std::optional{context->layer_id} ||
+                        if (roof.type!="roof" || (roof.properties.at("version")!=3 && roof.properties.at("version")!=4) || !context) continue;
+                        if (site) {
+                            const auto roof_context=organize_project(source).drawing_context(id);
+                            if (!roof_context || roof_context->property_id!=context->property_id) continue;
+                        } else if (read_string(roof.properties,"layer_id")!=std::optional{context->layer_id} ||
                             read_string(roof.properties,"floor_id")!=std::optional{context->floor_id}) continue;
                         const auto& p=roof.properties;
                         const auto yaw=p.at("orientation_rad").get<double>();
@@ -64633,7 +64703,8 @@ private:
                                 }
                                 if (!complete) continue;
                             }
-                            const auto frame=roofOpeningCanvasFrame(roof_object,row.at("id").get<std::string>(),view);
+                            auto frame=roofOpeningCanvasFrame(roof_object,row.at("id").get<std::string>(),view);
+                            if (site) frame=siteRoofOpeningCanvasFrame(frame,resolve_site_presentation(source,id));
                             controls.push_back({{id_from(id),QString::fromStdString(row.at("id").get<std::string>()),source.revision()},frame,ink.id});
                         }
                     }
@@ -64686,7 +64757,11 @@ private:
             if (!capture || capture!=m_roof_opening_capture || !capture->canvas || !capture->canvas->isVisible() ||
                 capture->canvas!=(m_workspace==Workspace::measurement ? m_measurementCanvas : m_architecturalCanvas) ||
                 !capture->source || !capture->authority || m_refreshing || !sourceEditAuthorityCurrent(*capture->authority) ||
-                siteCanvas(capture->canvas)) return false;
+                siteCanvas(capture->canvas)!=!capture->site_frames.empty()) return false;
+            if (!capture->site_frames.empty()) {
+                if (capture->placement || capture->site_generation!=m_site_publication_generation) return false;
+                requireSitePublicationCurrent();
+            }
             if (capture->placement) {
                 requirePlanOpeningPlacementCurrent();
                 if (m_pending_opening_kind!=QStringLiteral("skylight") || capture->configuration!=openingPlacementConfiguration() ||
@@ -64745,7 +64820,25 @@ private:
                             right.x*axis_c+up.x*axis_s);
                     }
                     transform.uniform_scale=gesture.uniform_scale;
-                    edits=prepare_roof_opening_group_transform(capture.source->entities(),transform);
+                    if (capture.site_frames.empty()) edits=prepare_roof_opening_group_transform(capture.source->entities(),transform);
+                    else {
+                        // A displayed Site group may span several building
+                        // placements. Each original roof receives the conjugate
+                        // of the same gesture; one composed command owns them all.
+                        std::map<QString,std::vector<RoofOpeningGroupMember>> owners;
+                        for (const auto& member:transform.members) owners[id_from(member.roof_id)].push_back(member);
+                        for (const auto& [owner,members]:owners) {
+                            const auto& placement=capture.site_frames.at(owner);
+                            auto local=transform;local.members=members;
+                            local.world_pivot=site_source_plan_point(transform.world_pivot,placement);
+                            local.world_translation=site_source_plan_delta(transform.world_translation,placement);
+                            const auto axis=site_source_plan_delta({std::cos(transform.axis_rotation_radians),
+                                std::sin(transform.axis_rotation_radians)},placement);
+                            local.axis_rotation_radians=std::atan2(axis.y,axis.x);
+                            auto leaf=prepare_roof_opening_group_transform(capture.source->entities(),local);
+                            edits.insert(edits.end(),std::make_move_iterator(leaf.begin()),std::make_move_iterator(leaf.end()));
+                        }
+                    }
                 }
                 const auto physical=edits.empty() ? capture.source->entities() : replay_roof_edit_entities(capture.source->entities(),edits);
                 auto actual=physical;
@@ -64768,7 +64861,9 @@ private:
                     if (cancellation.is_cancelled()) return RegenerationReceipt{capture.source->revision(),{}};
                     const auto& target=targets[index];
                     const auto roof=decode_roof_entity(resolve_vertical_placement(actual,actual.at(target.roof_id.toStdString())));
-                    const auto frame=roofOpeningCanvasFrame(roof,target.opening_id.toStdString(),capture.view);
+                    auto frame=roofOpeningCanvasFrame(roof,target.opening_id.toStdString(),capture.view);
+                    if (!capture.site_frames.empty()) frame=siteRoofOpeningCanvasFrame(frame,
+                        capture.site_frames.at(capture.targets[index].roof_id));
                     if (capture.view && capture.view->crop) {
                         const auto& crop=*capture.view->crop;
                         std::visit([&](const auto& object) {
@@ -64792,6 +64887,8 @@ private:
                     const auto shape=make_roof_skylight_shape(roof,target.opening_id.toStdString());
                     auto path=capture.view ? project_architectural_view_shape(shape,BuildingViewKind::plan,*capture.view).value_or(Boundary{})
                         : project_building_shape_plan(shape);
+                    if (!capture.site_frames.empty()) path=site_transform_boundary(path,
+                        capture.site_frames.at(capture.targets[index].roof_id).forward);
                     if (path.empty()) throw std::invalid_argument("A skylight is outside this plan's visible crop or depth.");
                     boundary.insert(boundary.end(),path.begin(),path.end());
                     if (!capture.placement) controls.push_back({capture.targets[index],frame,capture.initial_controls[index].presentation_owner_id});
@@ -64829,10 +64926,15 @@ private:
                 }
                 if (cancellation.is_cancelled()) return RegenerationReceipt{capture.source->revision(),{}};
                 const auto roof=decode_roof_entity(resolve_vertical_placement(actual,actual.at(target.roof_id.toStdString())));
-                if (!capture.placement) request.result->frame=roofOpeningCanvasFrame(roof,target.opening_id.toStdString(),capture.view);
+                if (!capture.placement) {
+                    auto frame=roofOpeningCanvasFrame(roof,target.opening_id.toStdString(),capture.view);
+                    if (!capture.site_frames.empty()) frame=siteRoofOpeningCanvasFrame(frame,capture.site_frames.at(capture.target.roof_id));
+                    request.result->frame=frame;
+                }
                 const auto shape=make_roof_skylight_shape(roof,target.opening_id.toStdString());
                 auto path=capture.view ? project_architectural_view_shape(shape,BuildingViewKind::plan,*capture.view).value_or(Boundary{})
                                        : project_building_shape_plan(shape);
+                if (!capture.site_frames.empty()) path=site_transform_boundary(path,capture.site_frames.at(capture.target.roof_id).forward);
                 if (path.empty()) throw std::invalid_argument("The skylight is outside this plan's visible crop or depth.");
                 if (!cancellation.is_cancelled()) { request.result->boundary=std::move(path); request.result->target=std::move(target); }
                 return RegenerationReceipt{capture.source->revision(),{}};
@@ -64915,6 +65017,11 @@ private:
         const auto source=captureCanvasGeometrySource(canvas,targets.front().source_revision);
         RoofOpeningCanvasCapture capture;
         capture.canvas=canvas; capture.source=source; capture.targets=targets; capture.group=true;
+        if (siteCanvas(canvas)) {
+            requireSitePublicationCurrent();capture.site_generation=m_site_publication_generation;
+            for (const auto& target:targets) capture.site_frames.try_emplace(target.roof_id,
+                resolve_site_presentation(*source,target.roof_id.toStdString()));
+        }
         capture.view=boundaryVertexViewContext(canvas,*source);
         if (capture.view && !std::isinf(capture.view->depth.far_depth_m))
             throw std::invalid_argument("Use an uncut horizontal plan for skylight group grips.");
@@ -64983,6 +65090,10 @@ private:
         if (m_selected_roof_opening!=std::optional{target}) throw std::invalid_argument("Select the skylight before dragging it.");
         RoofOpeningCanvasCapture capture;
         capture.canvas=canvas; capture.source=source; capture.target=target;
+        if (siteCanvas(canvas)) {
+            requireSitePublicationCurrent();capture.site_generation=m_site_publication_generation;
+            capture.site_frames.emplace(target.roof_id,resolve_site_presentation(*source,target.roof_id.toStdString()));
+        }
         const auto& controls=canvas->roofOpeningControls();
         const auto control=std::find_if(controls.begin(),controls.end(),[&](const auto& item){return item.target==target;});
         if (control==controls.end()) throw std::invalid_argument("The skylight controls changed. Select it again.");
@@ -65018,6 +65129,7 @@ private:
                  gesture.frame.rotation_radians!=capture->initial_frame.rotation_radians))
                 throw std::invalid_argument("Skylight resizing needs the captured opposite-side anchor.");
             Vec2 delta{gesture.frame.center.x-capture->initial_frame.center.x,gesture.frame.center.y-capture->initial_frame.center.y};
+            if (!capture->site_frames.empty()) delta=site_source_plan_delta(delta,capture->site_frames.at(gesture.target.roof_id));
             if (capture->view) {
                 const auto right=plan_view_right(capture->view->frame),up=plan_view_up(capture->view->frame);
                 delta={delta.x*right.x+delta.y*up.x,delta.x*right.y+delta.y*up.y};
@@ -69121,8 +69233,10 @@ public:
 
     void captureMixedPlanTransform(PlanCanvas* canvas,const QStringList& ids,bool rotation) {
         cancelMixedPlanTransformPreview();
-        if (!mixedSemanticSelection() || siteCanvas(canvas))
-            throw std::invalid_argument("Use Transform for a mixed selection in the Site view.");
+        if (!mixedSemanticSelection())
+            throw std::invalid_argument("Select ordinary objects and skylights before using the mixed grips.");
+        const bool site=siteCanvas(canvas);
+        if (site) captureSiteEdit(canvas);
         const auto source=captureCanvasGeometrySource(canvas);
         auto capture=std::make_shared<MixedPlanTransformCapture>();
         capture->source=source;capture->authority=std::make_shared<SourceEditAuthority>(captureSourceEditAuthority(*source));
@@ -69130,7 +69244,11 @@ public:
         if (ids!=capture->ordinary || ids.isEmpty() || capture->children.empty())
             throw std::invalid_argument("The mixed selection changed before the drag.");
         capture->edit_source=captureCanvasEditSource();capture->rotation=rotation;
-        capture->frame=canvasTransformPlanFrame(*source);
+        if (!site) capture->frame=canvasTransformPlanFrame(*source);
+        else {
+            capture->site_input=captureSitePlanPreviewInput(canvas,ids,true);
+            capture->site_generation=m_site_publication_generation;
+        }
         capture->view=boundaryVertexViewContext(canvas,*source);
         if (capture->view && (!horizontal_plan_frame(capture->view->frame) ||
             !std::isinf(capture->view->depth.far_depth_m)))
@@ -69181,8 +69299,12 @@ public:
             auto* canvas=capture->viewport.canvas.data();const auto& viewport=capture->viewport;
             const auto displayed=captureCanvasGeometrySource(canvas);
             if (canvas!=(m_workspace==Workspace::measurement ? m_measurementCanvas : m_architecturalCanvas) ||
-                siteCanvas(canvas) || (!displayed->shares_full_snapshot_with(*capture->source) &&
+                siteCanvas(canvas)!=static_cast<bool>(capture->site_input) || (!displayed->shares_full_snapshot_with(*capture->source) &&
                     fullSnapshotDigest(*displayed)!=capture->authority->source_digest)) return false;
+            if (capture->site_input) {
+                if (capture->site_generation!=m_site_publication_generation) return false;
+                requireSiteEditCurrent();
+            }
             const auto center=canvas->viewCenter();
             if (center.x!=viewport.center.x || center.y!=viewport.center.y || canvas->viewScale()!=viewport.zoom ||
                 canvas->size()!=viewport.size || canvas->devicePixelRatioF()!=viewport.dpr ||
@@ -69224,15 +69346,19 @@ public:
                 world.offset={request.delta.x*right.x+request.delta.y*up.x,request.delta.x*right.y+request.delta.y*up.y};
                 world.rotation_radians*=std::copysign(1.0,right.x*up.y-right.y*up.x);
             }
-            auto preparation=prepareMixedSelectionTransform(capture.source,capture.ordinary,capture.children,world,false,
-                capture.frame,{}, {}, {},"Transform complete mixed selection");
+            const auto* site=capture.site_input.get();
+            auto preparation=prepareMixedSelectionTransform(capture.source,capture.ordinary,capture.children,world,site!=nullptr,
+                capture.frame,site ? site->move_frames : std::map<QString,SitePresentationPlacement>{},
+                site ? site->frames : SiteCanvasPresentationFrames{},
+                site ? site->move_annotation_targets : std::map<QString,SiteAnnotationTarget>{},"Transform complete mixed selection");
             if (cancellation.is_cancelled()) return RegenerationReceipt{capture.source->revision(),{}};
             const auto& snapshot=preparation.preview_snapshot();
             QImage device(1,1,QImage::Format_ARGB32_Premultiplied);
             device.setDotsPerMeterX(static_cast<int>(std::lround(capture.viewport.dpi_x/0.0254)));
             device.setDotsPerMeterY(static_cast<int>(std::lround(capture.viewport.dpi_y/0.0254)));
             auto options=capture.options;options.label_device=&device;
-            PlanSceneCaches caches;auto scene=projectSnapshotPlanScene(snapshot,options,caches);
+            PlanSceneCaches caches;SnapshotPlanScene scene;
+            if (!site) scene=projectSnapshotPlanScene(snapshot,options,caches);
             if (capture.frame) {
                 for (auto& item:scene.geometry) {
                     if (item.type==QStringLiteral("symbol")) project_model_plan_symbol(item,*capture.frame);
@@ -69251,9 +69377,14 @@ public:
             // Physical proposals retain the exact captured view identities,
             // clipping, appearance and eligibility. A generic floor scene is
             // used only for explicitly selected annotation/reference values.
-            const auto physical=computeConstraintGeometryProjection(*capture.source,snapshot,capture.retained,capture.eligible,
-                capture.labels,capture.options.metric_units,capture.appraisal_area_ids,capture.label_footprints,
-                capture.component_bounds,capture.view,capture.viewport.font,nullptr,&capture.components);
+            const auto& retained_local=site ? site->geometry : capture.retained;
+            const auto& eligible_local=site ? site->geometry : capture.eligible;
+            const auto& labels_local=site ? site->labels : capture.labels;
+            auto physical=computeConstraintGeometryProjection(*capture.source,snapshot,retained_local,eligible_local,
+                labels_local,capture.options.metric_units,capture.appraisal_area_ids,
+                site ? site->label_footprints : capture.label_footprints,
+                site ? site->component_bounds : capture.component_bounds,capture.view,capture.viewport.font,site,
+                site ? nullptr : &capture.components);
             if (!physical) throw std::invalid_argument("The complete mixed geometry could not be projected in the captured view.");
             auto geometry=capture.retained;auto labels=capture.labels;auto references=capture.references;
             const auto merge_geometry=[&](const std::vector<CanvasEntity>& proposed) {
@@ -69272,15 +69403,44 @@ public:
                     if (retained==labels.end()) labels.push_back(item);else *retained=item;
                 }
             };
-            merge_geometry(physical->entities);merge_labels(physical->labels);
-            if (const auto replacements=computeReplacementPhysicalGeometryProjection(*capture.source,snapshot,
-                alternativeCommandReplacementIdentities(identities),capture.retained,capture.eligible,capture.labels,
-                capture.options.metric_units,capture.appraisal_area_ids,capture.label_footprints,capture.component_bounds,
-                capture.view,capture.viewport.font)) {
+            const auto present_projection=[&](VertexPreviewProjection& projection) {
+                if (!site) return;
+                std::erase_if(projection.entities,[&](const auto& item){return !site->frames.findGeometry(item);});
+                for (auto& item:projection.entities) item=site_presented_canvas_entity(item,site->frames.geometryAt(item));
+                std::erase_if(projection.labels,[&](const auto& item){return !site->frames.auxiliary.contains(item.id);});
+                for (auto& label:projection.labels) label=site_presented_canvas_label(label,site->frames.auxiliary.at(label.id));
+            };
+            present_projection(*physical);merge_geometry(physical->entities);merge_labels(physical->labels);
+            if (auto replacements=computeReplacementPhysicalGeometryProjection(*capture.source,snapshot,
+                alternativeCommandReplacementIdentities(identities),retained_local,eligible_local,labels_local,
+                capture.options.metric_units,capture.appraisal_area_ids,
+                site ? site->label_footprints : capture.label_footprints,
+                site ? site->component_bounds : capture.component_bounds,capture.view,capture.viewport.font,site)) {
+                present_projection(*replacements);
                 merge_geometry(replacements->entities);merge_labels(replacements->labels);
             }
             const auto& request=preparation.intent().at("ordinary_request");
             for (const auto& row:request.at("annotations")) {
+                if (site) {
+                    const SiteAnnotationTarget target{row.at("owner_id").get<std::string>(),row.at("child_id").get<std::string>()};
+                    const auto alias=std::find_if(site->move_annotation_targets.begin(),site->move_annotation_targets.end(),
+                        [&](const auto& value){return value.second==target && capture.ordinary.contains(value.first);});
+                    if (alias==site->move_annotation_targets.end())
+                        throw std::invalid_argument("The selected annotation lost its captured Site owner.");
+                    const auto after=decode_annotation_entity(snapshot.entities().at(target.owner_entity_id));
+                    // Symbol paths already use their complete local candidate
+                    // placement in the physical projector, before label layout.
+                    for (const auto& b:after.labels) if (b.id==target.child_id) {
+                        for (const auto& original:site->labels) if (original.id==alias->first) {
+                            auto proposed=original;
+                            proposed.position=b.placement.position;proposed.rotation_radians=b.placement.rotation_radians;
+                            proposed.scale=b.placement.scale;
+                            proposed=site_presented_canvas_label(proposed,site->frames.auxiliary.at(original.id));
+                            merge_labels({proposed});
+                        }
+                    }
+                    continue;
+                }
                 const auto child=id_from(row.at("child_id").get<std::string>());
                 for (auto& item:geometry) if (item.id==child) {
                     const auto fresh=std::find_if(scene.geometry.begin(),scene.geometry.end(),[&](const auto& value){return value.id==child;});
@@ -69300,6 +69460,19 @@ public:
             }
             for (const auto& row:request.at("references")) {
                 const auto id=id_from(row.at("entity_id").get<std::string>());
+                if (site) {
+                    const auto original=std::find_if(site->move_references.begin(),site->move_references.end(),[&](const auto& value){return value.id==id;});
+                    const auto retained=std::find_if(references.begin(),references.end(),[&](const auto& value){return value.id==id;});
+                    if (original==site->move_references.end() || retained==references.end())
+                        throw std::invalid_argument("The selected reference lost its captured Site presentation.");
+                    const auto& properties=snapshot.entities().at(id.toStdString()).properties;
+                    auto proposed=*original;
+                    proposed.position=read_point(properties.at("position_m")).value();
+                    proposed.scale=read_number(properties,"scale",1.0);
+                    proposed.rotation_degrees=read_number(properties,"rotation_degrees",0.0);
+                    *retained=site_presented_canvas_reference(proposed,site->frames.auxiliary.at(id));
+                    continue;
+                }
                 const auto fresh=std::find_if(scene.references.begin(),scene.references.end(),[&](const auto& value){return value.id==id;});
                 const auto original=std::find_if(references.begin(),references.end(),[&](const auto& value){return value.id==id;});
                 if (fresh==scene.references.end() || original==references.end())
@@ -69311,7 +69484,8 @@ public:
                 const auto roof_id=alternativeReplacementTargetID(identities,original.target.roof_id.toStdString());
                 const auto child_id=alternativeReplacementTargetID(identities,original.target.opening_id.toStdString());
                 const auto roof=decode_roof_entity(resolve_vertical_placement(snapshot,snapshot.entities().at(roof_id)));
-                const auto frame=roofOpeningCanvasFrame(roof,child_id,capture.view);
+                auto frame=roofOpeningCanvasFrame(roof,child_id,capture.view);
+                if (site) frame=siteRoofOpeningCanvasFrame(frame,resolve_site_presentation(*capture.source,original.target.roof_id.toStdString()));
                 if (capture.view && capture.view->crop) {
                     const auto& crop=*capture.view->crop;
                     const auto path=project_plan_path(project_building_shape_plan(make_roof_skylight_shape(roof,child_id)),capture.view->frame);
@@ -69418,8 +69592,12 @@ public:
         };
         refresh();QStringList restored;std::map<QString,QString> mapping;
         for (const auto& id:capture->ordinary) {
-            const auto mapped=id_from(alternativeReplacementTargetID(command,id.toStdString()));
-            if (!published->entities().contains(mapped.toStdString()) && !annotation_child_exists(*published,mapped.toStdString()) &&
+            auto mapped=id_from(alternativeReplacementTargetID(command,id.toStdString()));
+            if (capture->site_input && capture->site_input->move_annotation_targets.contains(id)) {
+                const auto aliases=remapSiteAnnotationSelection({id},capture->site_input->move_annotation_targets,m_site_annotation_targets);
+                if (aliases.size()!=1) continue;
+                mapped=aliases.front();
+            } else if (!published->entities().contains(mapped.toStdString()) && !annotation_child_exists(*published,mapped.toStdString()) &&
                 !embeddedAssemblyChild(*published,mapped.toStdString())) continue;
             restored.push_back(mapped);mapping.emplace(id,mapped);
         }

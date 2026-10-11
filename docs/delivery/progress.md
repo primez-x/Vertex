@@ -14,6 +14,36 @@ changed source does not acquire runtime acceptance without later qualification.
 
 ## Current delivery state
 
+### October 10 Site mixed and skylight canvas editing - source implementation
+
+The direct mixed body-move and common-pivot rotation route now captures actual
+Site local presentations, qualified annotation owners, per-object placements
+and publication generation. Physical proposals retain captured presentation
+identities and are placed into Site coordinates once. Symbol, text and
+reference previews preserve their actual typed source and qualified aliases;
+release restores the complete ordinary/child selection after one publication.
+
+Site skylight mouths now expose controls in visible property geometry. Individual
+movement, rotation and directional resizing invert the captured Site placement.
+Child groups conjugate one displayed gesture through each actual roof placement
+before composing one edit, including roofs in different buildings. Physical
+facet angles and dimensions remain distinct from presented control axes.
+
+Independent source review found and corrected two gaps: ordinary admission had
+incorrectly included incidental child-host roofs, and rotated symbol bounds
+were missing from label obstacle layout. Ordinary presentations and actual typed
+child mouths are now admitted separately. Symbol candidate geometry is computed
+locally before label layout, including rotation without translation. Independent
+re-review approves the desktop source integration; root source review and scoped
+whitespace checking are complete. Compilation and runtime remain unverified.
+
+Complete mixed scaling is being implemented separately across geometry,
+constraints, measured provenance and reviewed room callouts. Mixed Properties,
+native mixed gestures, broader reflections and alternative replacement remain
+implementation work. No builds, tests/new tests, probes, native jobs, launches,
+packages or installations ran. The installed app is unchanged; all ten production
+gates remain open.
+
 ### October 10 mixed plan gesture preparation and routing - source implementation
 
 The sealed original-source mixed preparation now derives complete physical,
