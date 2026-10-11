@@ -32,6 +32,8 @@ constexpr std::size_t maximum_contour_points = 256;
 constexpr std::size_t maximum_contour_holes = 15;
 constexpr std::size_t maximum_contour_total_points = 1024;
 constexpr std::size_t maximum_dimension_proposals = 64;
+constexpr std::size_t maximum_reference_label_proposals = 512;
+constexpr std::size_t maximum_reference_label_bytes = 4096;
 constexpr double minimum_metres_per_pixel = 1e-7;
 constexpr double maximum_metres_per_pixel = 1e3;
 
@@ -47,6 +49,53 @@ std::string trim_copy(std::string_view value) {
         value.remove_suffix(1);
     }
     return std::string(value);
+}
+
+std::optional<std::string> reference_label_content(std::string_view value) {
+    if (value.empty() || value.size() > maximum_reference_label_bytes) return std::nullopt;
+    std::size_t content_begin = value.size(), content_end = 0;
+    bool pending_control_whitespace = false;
+    for (std::size_t offset = 0; offset < value.size();) {
+        const auto begin = offset;
+        const auto leading = static_cast<unsigned char>(value[offset++]);
+        std::uint32_t codepoint = leading;
+        if (leading >= 0x80) {
+            const std::size_t tail = leading >= 0xc2 && leading <= 0xdf ? 1 :
+                leading >= 0xe0 && leading <= 0xef ? 2 :
+                leading >= 0xf0 && leading <= 0xf4 ? 3 : 0;
+            if (!tail || tail > value.size() - offset) return std::nullopt;
+            codepoint = leading & ((1U << (6 - tail)) - 1U);
+            for (std::size_t index = 0; index < tail; ++index) {
+                const auto byte = static_cast<unsigned char>(value[offset++]);
+                if (byte < 0x80 || byte > 0xbf) return std::nullopt;
+                codepoint = (codepoint << 6) | (byte & 0x3f);
+            }
+            if ((tail == 1 && codepoint < 0x80) ||
+                (tail == 2 && codepoint < 0x800) ||
+                (tail == 3 && codepoint < 0x10000) ||
+                (codepoint >= 0xd800 && codepoint <= 0xdfff) || codepoint > 0x10ffff)
+                return std::nullopt;
+        }
+        // Unicode White_Space; only surrounding whitespace is removed. A
+        // newline/tab inside a run cannot be assigned an invented line box.
+        const bool whitespace = (codepoint >= 0x09 && codepoint <= 0x0d) ||
+            codepoint == 0x20 || codepoint == 0x85 || codepoint == 0xa0 ||
+            codepoint == 0x1680 || (codepoint >= 0x2000 && codepoint <= 0x200a) ||
+            codepoint == 0x2028 || codepoint == 0x2029 || codepoint == 0x202f ||
+            codepoint == 0x205f || codepoint == 0x3000;
+        const bool control = codepoint < 0x20 ||
+            (codepoint >= 0x7f && codepoint <= 0x9f) ||
+            codepoint == 0x2028 || codepoint == 0x2029;
+        if (whitespace) {
+            if (content_end && control) pending_control_whitespace = true;
+            continue;
+        }
+        if (control || pending_control_whitespace) return std::nullopt;
+        if (content_begin == value.size()) content_begin = begin;
+        content_end = offset;
+    }
+    if (!content_end) return std::nullopt;
+    return std::string(value.substr(content_begin, content_end - content_begin));
 }
 
 std::string lowercase(std::string_view value) {
@@ -602,7 +651,7 @@ void validate_assistance_raster(const AssistanceRaster& raster) {
         invalid("assistance raster source text is oversized or contains a NUL");
     }
     if (raster.text_runs.size() > 512) invalid("assistance raster has too many text selections");
-    // Validate declarations even when no dimension token is recognized. The
+    // Validate declarations even when no recognized text is admitted. The
     // contract owns portable path, text, uniqueness and combined resource caps.
     if (raster.text_resources.size() > 62) invalid("assistance raster has too many text resources");
     if (!raster.text_resources.empty() || !raster.text_producer.empty()) {
@@ -913,6 +962,52 @@ std::vector<AssistanceProposal> extract_wall_dimensions(const AssistanceRaster& 
         value.preview.arguments.erase("target_boundary_id");
         value.preview.arguments["target_wall_id"] = target_wall_id;
         validate_assistance_proposal(value);
+    }
+    return result;
+}
+
+std::vector<AssistanceProposal> extract_reference_labels(const AssistanceRaster& raster,
+                                                       AssistanceEngineOptions options) {
+    validate_assistance_raster(raster);
+    validate_options(options);
+    const auto transform = reference_transform(raster, options);
+    std::set<std::tuple<std::string, double, double, double, double>> seen;
+    std::vector<AssistanceProposal> result;
+    result.reserve(std::min(raster.text_runs.size(), maximum_reference_label_proposals));
+    for (const auto& run : raster.text_runs) {
+        const auto original = std::string_view(raster.source_text).substr(run.offset, run.length);
+        const auto content = reference_label_content(original);
+        if (!content) continue;
+        const auto bounds = Json::array({run.x, run.y, run.width, run.height});
+        // Byte-range overlap is rejected by raster admission. Distinct lines
+        // may have overlapping boxes; only exact repeated observations collapse
+        // to the first source range, without altering its original provenance.
+        if (!seen.emplace(std::string(original), run.x, run.y, run.width, run.height).second) continue;
+        const auto id = stable_id("assist-reference-text-label",
+            Json::array({raster.reference_id, run.offset, run.length,
+                         std::string(original), bounds, transform}).dump());
+        const auto source_point = [&](double x, double y) {
+            return point_json(assistance_source_point_to_model(
+                {x * static_cast<double>(raster.width), y * static_cast<double>(raster.height)},
+                raster.width, raster.height, options));
+        };
+        Json args{{"annotation_id", id}, {"template_id", "note"}, {"content", *content},
+                  {"position", source_point(run.x + run.width * 0.5,
+                                            run.y + run.height * 0.5)},
+                  {"reference_text_label", true},
+                  {"source_confidence_available", run.confidence.has_value()},
+                  {"source_offset", run.offset}, {"source_length", run.length},
+                  {"reference_transform", transform},
+                  {"source_region_points", Json::array({source_point(run.x, run.y),
+                      source_point(run.x + run.width, run.y),
+                      source_point(run.x + run.width, run.y + run.height),
+                      source_point(run.x, run.y + run.height)})}};
+        result.push_back(proposal(
+            id, AssistanceKind::label_placement,
+            source_for(raster.reference_id, std::string(original),
+                       run.x, run.y, run.width, run.height, run.confidence.value_or(0.0)),
+            {"add_label", {id}, std::move(args)}, &raster));
+        if (result.size() == maximum_reference_label_proposals) break;
     }
     return result;
 }

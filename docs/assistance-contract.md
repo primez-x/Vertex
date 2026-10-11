@@ -6,7 +6,7 @@ optional text recognition uses a bundled English OCR model. Neither path needs
 a network client, account, activation check or hosted service.
 
 The engine accepts a bounded grayscale pixel buffer instead of a file path. It
-currently provides five proposal producers:
+currently provides six proposal producers:
 
 - **Tracing** finds a high-contrast dark-pixel envelope and proposes a closed
   analytical rectangle using the reference calibration. The source pixel
@@ -34,6 +34,18 @@ currently provides five proposal producers:
   provisional. Missing or invalid OCR resources refuse recognition rather than
   downloading a model or reading an alternative from the environment.
 - **Label placement** turns named document anchors into note-label proposals.
+- **Reference labels** turn actual OCR or embedded-PDF text-line selections into
+  editable note-label proposals. The text, byte range, normalized source box,
+  producer and recognition resources remain retained. Labels use the source
+  box centre after calibration, rotation, scale and flips. Review shows the
+  calibrated reference, highlighted source region and proposed label together;
+  the label remains unplaced until accepted. Observed OCR confidence is shown
+  as reported; embedded text without a confidence value displays "confidence
+  unavailable". Empty, unsafe or oversized lines are skipped, and exact repeated
+  text/region observations collapse to their first source range. The complete
+  admitted roster supports up to 512 text runs. Named-object labels keep their
+  existing separate workflow. No room name, measurement or classification is
+  inferred from recognized text.
 - **Natural language** supports the bounded commands `label <text> at x,y`,
   `set workspace measurement|architectural`, and `draw rectangle <width> x
   <height>`.

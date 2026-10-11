@@ -14,6 +14,53 @@ changed source does not acquire runtime acceptance without later qualification.
 
 ## Current delivery state
 
+### October 11 reference text labels and remaining component canvas gaps
+
+The reviewed profile redraw batch is committed and pushed as
+39095ca5663fed1978f541a6c1b24d938775f7aa; exact remote ref verification passed.
+That goal turn made authoritative source progress. The current D07 source
+continuation closes an observed missing producer: OCR and embedded-PDF text
+regions previously supplied dimension proposals, while labels used only authored
+object names. Actual recognized text now supplies separate label proposals with
+exact source text, byte ranges, normalized boxes, producer/resources and observed
+confidence availability. Safe labels use the transformed source box centre;
+unknown confidence displays as unavailable. Up to the complete admitted 512-run
+roster is considered. Unsafe/empty/oversized lines are skipped, exact repeated
+text/box observations collapse, and distinct overlapping boxes remain valid.
+
+The Assistance dialog exposes Extract labels from selected reference separately
+from named-object labels. It reuses isolated offline recognition and existing
+source/workspace/layer fences. Review shows the actual calibrated plan, source
+region and provisional label in one coordinate frame, including Site placement.
+Acceptance retains provenance through the normal typed annotation command;
+discarded suggestions publish nothing. Independent integrated source review found
+three presentation gaps, now corrected: source-region fitting also governs dialog
+resize/show; the dedicated reference copy is visible at readable opacity without
+changing document visibility; and the preview uses the same typed note defaults
+as acceptance and saved projection. Recognized literal percent placeholders also
+remain intact in review text. The bounded follow-up approved source integration
+with no additional actionable findings. Root reviewed the source and scoped diff
+checks passed; compilation and runtime behavior remain unverified.
+
+Bounded current-source component discovery confirms two further implementation
+gaps, rather than reopening already implemented topology/dimension workflows:
+independent roots lack plan corner resizing, and single-component native 3D
+rotation lacks the physical-angle snapping supplied by plan gestures. Independent
+corner resize needs the complete existing component Properties producer for
+ordinary and active-baseline replacement, carried dimensions/presentation,
+manufactured previews, candidate frames and selection redirection. It cannot be
+completed by enabling a handle or borrowing the rotation-only transaction.
+Define the plan base-elevation policy explicitly. Directional side resize also
+needs a separate bounded geometry contract: current XY scale is uniform and
+unequal scaling of arcs cannot silently produce circular geometry. Native 3D
+rotation must share one snapped proposal between preview and release, retaining
+physical frame/pivot and fine-input behavior. These remain next required work.
+
+No builds, tests, new tests, scripts, probes, native jobs, launches, packages or
+installations ran. The installed application, historical evidence and qualification states
+remain unchanged. All ten production gates and external compatibility prerequisites
+remain open; source integration is not production acceptance.
+
 ### October 11 reviewed component profile redraw and dimension decisions
 
 Initial identity authoring is committed and pushed as

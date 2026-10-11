@@ -432,16 +432,23 @@ auto runPincOperation(QWidget* owner, const std::shared_ptr<std::atomic_bool>& c
 // Fitting only at construction uses the widget's provisional size.
 class BoundaryPreviewFit final : public QObject {
 public:
-    explicit BoundaryPreviewFit(PlanCanvas* canvas) : QObject(canvas), m_canvas(canvas) {
+    explicit BoundaryPreviewFit(PlanCanvas* canvas,
+                                std::function<void(PlanCanvas*)> fit = {})
+        : QObject(canvas), m_canvas(canvas), m_fit(std::move(fit)) {
         canvas->installEventFilter(this);
+    }
+    void fit() {
+        if (m_fit) m_fit(m_canvas);
+        else m_canvas->fitView();
     }
 protected:
     bool eventFilter(QObject*, QEvent* event) override {
-        if(event->type()==QEvent::Resize || event->type()==QEvent::Show) m_canvas->fitView();
+        if(event->type()==QEvent::Resize || event->type()==QEvent::Show) fit();
         return false;
     }
 private:
     PlanCanvas* m_canvas;
+    std::function<void(PlanCanvas*)> m_fit;
 };
 
 using json = nlohmann::json;
@@ -21325,8 +21332,9 @@ public:
             const AssistanceEngineOptions options{calibration, origin, rotation, scale, true,
                 reference->second.properties.value("flip_horizontal", false),
                 reference->second.properties.value("flip_vertical", false)};
-            if (kind == AssistanceKind::dimension_extraction &&
-                (recognize_image_text || raster.source_text.empty())) {
+            if ((kind == AssistanceKind::dimension_extraction || kind == AssistanceKind::label_placement) &&
+                (recognize_image_text || raster.source_text.empty() ||
+                 (kind == AssistanceKind::label_placement && raster.text_runs.empty()))) {
                 const auto cancelled = std::make_shared<std::atomic_bool>(false);
                 const auto root = assistanceOcrApplicationRoot();
                 const auto binary_root = std::filesystem::path(QCoreApplication::applicationDirPath().toStdWString());
@@ -21372,6 +21380,7 @@ public:
                     target_boundary_id.trimmed().toStdString(), target_segment_id.trimmed().toStdString()));
             }
             case AssistanceKind::label_placement:
+                return retain_source(extract_reference_labels(raster, options));
             case AssistanceKind::natural_language:
                 throw std::invalid_argument("This assistance kind does not use a reference raster.");
             }
@@ -21438,7 +21447,11 @@ public:
                             const auto local = site_transform_point({point->x, point->y, 0.0}, source_to_destination);
                             value = json::array({local.x, local.y});
                         };
-                        if (command == "add_label") convert(proposal.preview.arguments.at("position"));
+                        if (command == "add_label") {
+                            convert(proposal.preview.arguments.at("position"));
+                            if (proposal.preview.arguments.value("reference_text_label", false))
+                                for (auto& point : proposal.preview.arguments.at("source_region_points")) convert(point);
+                        }
                         else {
                             for (auto& point : proposal.preview.arguments.at("points")) convert(point);
                             if (proposal.preview.arguments.contains("holes"))
@@ -48272,6 +48285,9 @@ public:
                       static_cast<int>(AssistanceKind::dimension_extraction));
         kind->addItem(QStringLiteral("Place labels on named objects"),
                       static_cast<int>(AssistanceKind::label_placement));
+        kind->addItem(QStringLiteral("Extract labels from selected reference"),
+                      static_cast<int>(AssistanceKind::label_placement));
+        kind->setItemData(kind->count()-1, true, Qt::UserRole+1);
         kind->addItem(QStringLiteral("Parse a command"),
                       static_cast<int>(AssistanceKind::natural_language));
         controls->addWidget(kind);
@@ -48356,8 +48372,10 @@ public:
         populate_segments();
         const auto show_reference_fields = [&] {
             const auto value = static_cast<AssistanceKind>(kind->currentData().toInt());
+            const bool reference_labels = value == AssistanceKind::label_placement &&
+                kind->currentData(Qt::UserRole+1).toBool();
             const bool uses_reference = value == AssistanceKind::tracing || value == AssistanceKind::edge_tracing ||
-                                        value == AssistanceKind::dimension_extraction;
+                                        value == AssistanceKind::dimension_extraction || reference_labels;
             const bool dimensions = value == AssistanceKind::dimension_extraction;
             const auto show = [source_form](QWidget* field, bool visible) {
                 field->setVisible(visible);
@@ -48367,7 +48385,7 @@ public:
             const auto target = snapshot.entities().find(target_choice->currentData().toString().toStdString());
             const bool wall_target = target != snapshot.entities().end() && target->second.type == "wall";
             show(reference_choice, uses_reference); show(target_choice, dimensions); show(segment_choice, dimensions && !wall_target);
-            image_text->setVisible(dimensions);
+            image_text->setVisible(dimensions || reference_labels);
         };
         QObject::connect(kind, &QComboBox::currentIndexChanged, &dialog, [&](int) { show_reference_fields(); });
         QObject::connect(target_choice, &QComboBox::currentIndexChanged, &dialog, [&](int) { show_reference_fields(); });
@@ -48386,7 +48404,18 @@ public:
         review_canvas->setOverviewMapEnabled(false);
         review_canvas->setSelectionTransformEnabled(false, false);
         review_canvas->setCanvasBackground(QColor("#ffffff"));
-        new BoundaryPreviewFit(review_canvas);
+        auto* review_fit = new BoundaryPreviewFit(review_canvas, [](PlanCanvas* canvas) {
+            if (!canvas->property("fitAssistanceReferenceRegion").toBool()) {
+                canvas->fitView();
+                return;
+            }
+            // Fit the observed region and label on first display and resize,
+            // retaining the calibrated reference beneath that same close-up.
+            auto references = canvas->references();
+            canvas->setReferences({});
+            canvas->fitView();
+            canvas->setReferences(std::move(references));
+        });
         layout->addWidget(review_canvas, 1);
         auto* review_details = new QLabel(&dialog);
         review_details->setObjectName(QStringLiteral("assistanceReviewDetails"));
@@ -48410,7 +48439,14 @@ public:
         layout->addLayout(buttons);
 
         std::vector<AssistanceProposal> proposals;
+        const auto confidence_text = [](const AssistanceProposal& proposal) {
+            if (proposal.preview.arguments.value("reference_text_label", false) &&
+                !proposal.preview.arguments.value("source_confidence_available", false))
+                return QStringLiteral("confidence unavailable");
+            return QStringLiteral("%1%").arg(proposal.source.confidence * 100.0, 0, 'f', 0);
+        };
         const auto show_proposal = [&] {
+            review_canvas->setProperty("fitAssistanceReferenceRegion", false);
             review_canvas->setReferences({}); review_canvas->setEntities({}); review_canvas->setLabels({});
             review_details->clear(); accept->setEnabled(false);
             const auto* row = list->currentItem();
@@ -48426,9 +48462,35 @@ public:
                 const auto& arguments = proposal.preview.arguments;
                 requireCurrentAssistanceSource(proposal, preview_source);
                 const auto& binding = m_assistance_sources.at(proposal.id);
+                const bool reference_label = arguments.value("reference_text_label", false);
                 const bool uses_reference = proposal.kind == AssistanceKind::tracing ||
                     proposal.kind == AssistanceKind::edge_tracing || proposal.kind == AssistanceKind::dimension_extraction;
-                if ((proposal.kind == AssistanceKind::tracing || proposal.kind == AssistanceKind::edge_tracing) &&
+                if (reference_label) {
+                    SnapshotPlanSceneOptions options;
+                    options.metric_units = m_metric_units;
+                    PlanSceneCaches caches;
+                    const auto scene = projectSnapshotPlanScene(preview_source, options, caches);
+                    const auto reference = std::find_if(scene.references.begin(), scene.references.end(),
+                        [&](const auto& image) { return image.id.toStdString() == proposal.source.reference_id; });
+                    if (reference == scene.references.end())
+                        throw std::invalid_argument("The reference preview is unavailable.");
+                    auto review_reference = binding.site_plan
+                        ? site_presented_canvas_reference(*reference,
+                            resolve_site_presentation(preview_source, proposal.source.reference_id)) : *reference;
+                    // Document visibility/opacity must not conceal the evidence
+                    // in this dedicated review; the source itself is unchanged.
+                    review_reference.visible = true;
+                    review_reference.intensity = 1.0;
+                    review_canvas->setReferences({std::move(review_reference)});
+                    CanvasEntity region{QStringLiteral("assistance-region"), QStringLiteral("boundary"),
+                        assistanceBoundary(arguments.at("source_region_points"))};
+                    region.stroke_color = QColor("#1671f5");
+                    region.filled = true;
+                    region.fill_color = QColor("#1671f5");
+                    region.fill_opacity = 0.08;
+                    if (binding.site_plan) region = site_presented_canvas_entity(region, binding.destination_frame);
+                    review_canvas->setEntities({region});
+                } else if ((proposal.kind == AssistanceKind::tracing || proposal.kind == AssistanceKind::edge_tracing) &&
                     !proposal.source.reference_id.empty()) {
                     SnapshotPlanSceneOptions options;
                     options.metric_units = m_metric_units;
@@ -48521,8 +48583,28 @@ public:
                     if (!position) throw std::invalid_argument("The proposed label position is invalid.");
                     CanvasLabel label{id_from(proposal.id), *position,
                         QString::fromStdString(arguments.at("content").get<std::string>())};
-                    label.color = QColor("#111111");
-                    label.paper_height_mm = 3.0;
+                    const auto templates = default_label_templates();
+                    const auto template_id = arguments.at("template_id").get<std::string>();
+                    const auto definition = std::find_if(templates.begin(), templates.end(),
+                        [&](const auto& candidate) { return candidate.id == template_id; });
+                    if (definition == templates.end())
+                        throw std::invalid_argument("Assisted label template is unknown.");
+                    const auto authored = instantiate_label(*definition, proposal.id);
+                    label.text_height_metres = authored.style.text_height_metres;
+                    label.rotation_radians = authored.placement.rotation_radians;
+                    label.scale = authored.placement.scale;
+                    label.text_alignment = QString::fromStdString(authored.style.text_alignment);
+                    const auto stroke = QString::fromStdString(authored.style.stroke_color);
+                    if (stroke.compare(QStringLiteral("#000000"), Qt::CaseInsensitive) != 0)
+                        label.color = QColor(stroke);
+                    label.bold = authored.style.bold;
+                    label.italic = authored.style.italic;
+                    label.font_family = QString::fromStdString(authored.style.font_family);
+                    label.model_plan = true;
+                    label.fill_color = QColor(QString::fromStdString(authored.style.fill_color));
+                    label.fill_opacity = authored.style.fill_opacity;
+                    label.fill_pattern = QString::fromStdString(authored.style.fill_pattern);
+                    label.show_background = authored.style.fill_pattern != "none";
                     if (binding.site_plan)
                         label = site_presented_canvas_label(label, binding.destination_frame);
                     review_canvas->setLabels({label});
@@ -48546,12 +48628,13 @@ public:
                         }
                         review_canvas->setEntities(std::move(scene.all_geometry));
                     }
-                    review_canvas->fitView();
-                    review_details->setText(QStringLiteral("Add label: %1\nModel position: %2, %3%4\nSource: %5 (%6%)")
+                    review_canvas->setProperty("fitAssistanceReferenceRegion", reference_label);
+                    review_fit->fit();
+                    review_details->setText(QStringLiteral("Add label: %1\nModel position: %2, %3%4\nSource: %5 (%6)")
                         .arg(label.text, format_length(position->x, m_metric_units),
                              format_length(position->y, m_metric_units), context,
-                             QString::fromStdString(proposal.source.original_text))
-                        .arg(proposal.source.confidence * 100.0, 0, 'f', 0));
+                             QString::fromStdString(proposal.source.original_text),
+                             confidence_text(proposal)));
                 } else if (proposal.kind == AssistanceKind::natural_language &&
                            proposal.preview.command_type == "add_boundary") {
                     const auto boundary = assistanceBoundary(arguments.at("points"));
@@ -48615,9 +48698,9 @@ public:
                         : owner->second.properties.value("name", item.source.reference_id);
                 }
                 auto* row = new QListWidgetItem(
-                    QStringLiteral("Unverified · %1 · %2 · %3%")
-                        .arg(kind_name(item.kind), QString::fromStdString(source_name))
-                        .arg(item.source.confidence * 100.0, 0, 'f', 0), list);
+                    QStringLiteral("Unverified · %1 · %2 · %3")
+                        .arg(kind_name(item.kind), QString::fromStdString(source_name),
+                             confidence_text(item)), list);
                 row->setData(Qt::UserRole, static_cast<int>(index));
                 row->setToolTip(QStringLiteral("Source: %1\nAffected: %2")
                     .arg(QString::fromStdString(source_name),
@@ -48658,7 +48741,7 @@ public:
             const auto value = static_cast<AssistanceKind>(kind->currentData().toInt());
             if (value == AssistanceKind::natural_language) {
                 proposals = parseAssistanceCommand(command->text());
-            } else if (value == AssistanceKind::label_placement) {
+            } else if (value == AssistanceKind::label_placement && !kind->currentData(Qt::UserRole+1).toBool()) {
                 proposals = suggestLabelAssistance();
             } else {
                 const auto reference = reference_choice->currentData().toString();

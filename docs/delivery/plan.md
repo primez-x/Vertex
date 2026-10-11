@@ -315,7 +315,13 @@ polling timeout does not permit restarting it.
    clipboard remains required work.
 10. Implement observed native/vendor/device adapters through existing workers;
     complete declared IFC/DXF/Pinc fidelity and independently consumed output.
-    Add offline OCR text regions/confidence feeding reviewed proposals. New
+    Qualify existing offline OCR dimensions and the October 11 source addition
+    for recognized-text label proposals, retaining text regions/confidence and
+    explicit review on the calibrated plan. Complete independent component plan
+    corner resizing through actual component Properties replacement/carry and
+    manufactured preview/publication, and single-component native 3D physical
+    angle snapping shared by preview and release. Directional assembly side
+    resizing requires a real supported geometry contract. New
     semantic forms and references require versioned format migration coverage.
 
 All retained interactions/preparations bind an actual captured snapshot.

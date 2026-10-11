@@ -9173,7 +9173,7 @@
         "binding": null
       },
       "qualification_history": [],
-      "delivery_notes": null,
+      "delivery_notes": "October 11 source continuation adds actual OCR/embedded-PDF text-line label proposals and a separate Extract labels from selected reference workflow. Exact recognized text, byte ranges, source regions, observed confidence availability, resources and producer are retained; transformed source regions and labels are reviewed on the calibrated plan before normal typed annotation acceptance. Named-object proposals remain separate. No build, runtime, Undo/reopen or user acceptance is claimed; historical evidence and acceptance states remain unchanged. See docs/delivery/progress.md and docs/assistance-contract.md.",
       "source_snapshot": {
         "id": "ASSIST-003",
         "area": "assisted_workflows",

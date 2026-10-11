@@ -78,6 +78,16 @@ void validate_assistance_raster(const AssistanceRaster&);
 [[nodiscard]] std::vector<AssistanceProposal> extract_wall_dimensions(
     const AssistanceRaster&, AssistanceEngineOptions options,
     std::string target_wall_id);
+// At most 512 editable labels from actual OCR/embedded-text line selections,
+// covering the complete admitted raster text-run roster.
+// Skip empty, unsafe UTF-8/control-containing, or over-4096-byte source lines;
+// collapse exact text/rectangle duplicates to their first admitted byte range.
+// Source text stays exact; content trims surrounding Unicode whitespace.
+// Missing observed confidence is encoded as zero with the preview flag
+// source_confidence_available=false, which review must display as unavailable.
+// Position and source_region_points are model coordinates before Site stamping.
+[[nodiscard]] std::vector<AssistanceProposal> extract_reference_labels(
+    const AssistanceRaster&, AssistanceEngineOptions options = {});
 [[nodiscard]] std::vector<AssistanceProposal> suggest_label_placements(
     std::span<const AssistanceAnchor>);
 [[nodiscard]] std::vector<AssistanceProposal> parse_natural_language(std::string_view command);
