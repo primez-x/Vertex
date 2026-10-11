@@ -5,6 +5,7 @@
 #include "sketch/document_solid.hpp"
 #include "sketch/document_wall.hpp"
 #include "sketch/phase_wall_profile_capture.hpp"
+#include "sketch/project_organization.hpp"
 #include "sketch/roof_entity_codec.hpp"
 
 #include <QComboBox>
@@ -133,11 +134,19 @@ std::optional<bool> visibility(QComboBox* field) {
     return !field || field->currentIndex() == 0 ? std::nullopt :
         std::optional<bool>{field->currentIndex() == 1};
 }
+std::optional<std::string> annotation_layer(QComboBox* field) {
+    return !field || !field->isEnabled() || field->currentIndex() == 0 ? std::nullopt :
+        std::optional<std::string>{field->currentData().toString().toStdString()};
+}
+bool same_annotation_floor(const DrawingContext& a, const DrawingContext& b) {
+    return std::tie(a.property_id, a.building_id, a.floor_id, a.level_id) ==
+           std::tie(b.property_id, b.building_id, b.floor_id, b.level_id);
+}
 struct Fields {
     QLineEdit *width{}, *depth{}, *height{}, *thickness{}, *elevation{}, *offset{}, *sill{},
         *rise{}, *overhang{}, *rotation{}, *outline{}, *surface{}, *content{}, *scale{},
         *intensity{}, *frame{}, *curb{}, *glazing{};
-    QComboBox* visible{};
+    QComboBox *visible{}, *layer{};
 };
 struct LayerInput {
     std::string id;
@@ -242,6 +251,103 @@ public:
         auto* item = new QTreeWidgetItem(selection, {label, family});
         item->setToolTip(0, identity);
         item->setToolTip(1, identity);
+    }
+    void annotation_layer_field(SelectionPresentationPropertyFamily family, QFormLayout* form,
+                                const ProjectOrganization& organization) {
+        auto* input = new QComboBox(owner);
+        input->setObjectName(family == SelectionPresentationPropertyFamily::symbol ?
+            "selectionSymbolLayer" : "selectionLabelLayer");
+        input->setAccessibleName(family == SelectionPresentationPropertyFamily::symbol ?
+            "Symbol layer" : "Text layer");
+        appearances.at(family).layer = input;
+        form->addRow("Layer", input);
+        const auto layer_context = [&](const std::string& id) -> std::optional<DrawingContext> {
+            const auto found = organization.nodes.find(id);
+            return found == organization.nodes.end() || found->second.type != "layer" ?
+                std::nullopt : organization.drawing_context(id);
+        };
+        const auto layer_name = [&](const std::string& id) -> QString {
+            if (id.empty()) return "No explicit layer";
+            const auto context = layer_context(id);
+            if (!context) return "Unresolved layer (" + q(id) + ")";
+            return q(organization.nodes.at(context->floor_id).name) + " / " +
+                   q(organization.nodes.at(id).name);
+        };
+        std::set<std::string> current_layers;
+        std::optional<DrawingContext> common_context;
+        QString unavailable;
+        for (const auto& value : presentation) {
+            if (value.target.family != family) continue;
+            const auto& placement = value.symbol ? value.symbol->placement : value.label->placement;
+            current_layers.insert(placement.layer_id);
+            if (!unavailable.isEmpty()) continue;
+            const auto& original = source.entities().at(value.target.owner_id);
+            const bool scoped = original.properties.contains("property_id") ||
+                original.properties.contains("building_id") || original.properties.contains("floor_id") ||
+                original.properties.contains("layer_id") || original.properties.contains("level_id");
+            auto context = organization.drawing_context(original.id);
+            // Derive choices only. Original-source preparation remains the final
+            // authority, including validation of retained members and identity edits.
+            if (scoped && (!context || (original.properties.contains("level_id") &&
+                original.properties.at("level_id") != context->level_id))) {
+                unavailable = "Layer assignment unavailable: a selected annotation's declared owner context is unresolved or contradictory.";
+                continue;
+            }
+            const auto child_context = layer_context(placement.layer_id);
+            if (!placement.layer_id.empty() && (!child_context ||
+                (context && !same_annotation_floor(*context, *child_context)))) {
+                unavailable = "Layer assignment unavailable: a selected annotation's current layer is unresolved or contradicts its owner floor.";
+                continue;
+            }
+            // Never infer a floor from the requested destination, or fall back
+            // from a declared but invalid owner to its child's layer.
+            if (!context && !scoped) context = child_context;
+            if (!context) {
+                unavailable = "Layer assignment unavailable: a selected annotation has no resolved original floor and layer context.";
+            } else if (common_context && !same_annotation_floor(*common_context, *context)) {
+                unavailable = "Layer assignment unavailable: the selected annotations do not share one property, building, floor and level. Edit each floor separately.";
+            } else {
+                common_context = context;
+            }
+        }
+        input->addItem(current_layers.size() == 1 ?
+            "Unchanged (" + layer_name(*current_layers.begin()) + ")" : "Unchanged (mixed layers)");
+        QString current_assignments;
+        for (const auto& id : current_layers) {
+            if (!current_assignments.isEmpty()) current_assignments += "\n";
+            current_assignments += layer_name(id) + (id.empty() ? QString{} : " [" + q(id) + "]");
+        }
+        input->setItemData(0, current_assignments, Qt::ToolTipRole);
+        if (unavailable.isEmpty() && common_context) {
+            std::vector<std::pair<QString, std::string>> choices;
+            for (const auto& [id, node] : organization.nodes) {
+                if (node.type != "layer") continue;
+                const auto context = organization.drawing_context(id);
+                if (context && same_annotation_floor(*common_context, *context))
+                    choices.emplace_back(layer_name(id), id);
+            }
+            std::sort(choices.begin(), choices.end());
+            for (const auto& [label, id] : choices) {
+                input->addItem(label, q(id));
+                input->setItemData(input->count() - 1, q(id), Qt::ToolTipRole);
+            }
+        }
+        if (unavailable.isEmpty() && input->count() == 1)
+            unavailable = "Layer assignment unavailable: no resolved layer is valid for every selected annotation.";
+        input->setCurrentIndex(0);
+        const auto explanation = unavailable.isEmpty() ?
+            QString("Choose a layer for every selected item on %1. Unchanged keeps each current assignment.")
+                .arg(q(organization.nodes.at(common_context->floor_id).name)) : unavailable;
+        input->setEnabled(unavailable.isEmpty());
+        input->setToolTip(explanation + "\nCurrent assignments:\n" + current_assignments);
+        input->setAccessibleDescription(input->itemText(0) + ". " + explanation);
+        if (!unavailable.isEmpty()) {
+            auto* note = new QLabel(explanation, owner);
+            note->setObjectName(family == SelectionPresentationPropertyFamily::symbol ?
+                "selectionSymbolLayerContext" : "selectionLabelLayerContext");
+            note->setWordWrap(true);
+            form->addRow(note);
+        }
     }
     template<class Layers>
     void layer_fields(OrdinarySource& target, const Layers& layers, QFormLayout* form, const Entity& original) {
@@ -417,7 +523,8 @@ public:
                     f.height = dimension(form, "Text size", "selectionLabelSize");
                     f.outline = field(form, "Text color", "selectionLabelColor", "#RRGGBB (unchanged)");
                 } else {
-                    f.scale = field(form, "Scale multiplier", "selectionReferenceScale");
+                    f.scale = field(form, "Scale", "selectionReferenceScale");
+                    f.scale->setToolTip("Absolute image scale relative to its calibrated source. Leave blank to retain each current scale.");
                     f.intensity = field(form, "Intensity (0–1)", "selectionReferenceIntensity");
                 }
                 f.rotation = field(form, "Rotation (degrees)", target.family == SelectionPresentationPropertyFamily::symbol ?
@@ -482,6 +589,13 @@ public:
                 }
             }
             presentation.push_back(std::move(value));
+        }
+        if (appearance_forms.contains(SelectionPresentationPropertyFamily::symbol) ||
+            appearance_forms.contains(SelectionPresentationPropertyFamily::label)) {
+            const auto organization = organize_project(source);
+            for (const auto& [family, form] : appearance_forms)
+                if (family != SelectionPresentationPropertyFamily::reference)
+                    annotation_layer_field(family, form, organization);
         }
 
         std::sort(skylights.begin(), skylights.end(), [](const auto& a, const auto& b) {
@@ -632,6 +746,7 @@ public:
             SelectionAnnotationPresentationPropertyEdit patch;
             patch.rotation_radians = angle(f.rotation);
             patch.visible = visibility(f.visible);
+            patch.layer_id = annotation_layer(f.layer);
             const auto outline = color(f.outline);
             if (target.family == SelectionPresentationPropertyFamily::symbol) {
                 SelectionSymbolPropertyEditIntent intent;

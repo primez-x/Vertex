@@ -16,6 +16,20 @@ changed source does not acquire runtime acceptance without later qualification.
 
 ### October 10 mixed selection Properties - source integration
 
+The integrated mixed Properties batch is committed and pushed as 4fa4ffec;
+exact local and remote branch references matched. The following source batch
+adds Symbols/Text layer selectors defaulting to unchanged current assignments.
+Real destination choices must share the original property/building/floor/level
+for every selected family member. Contradictory owners cannot fall back to a
+child layer; only context-free carriers can resolve their original child layer.
+Unavailable assignment explains the missing common context without disabling
+other fields. Labels use readable floor/layer names; identity details remain in
+tooltips. The existing original-source preparation validates submitted IDs.
+Reference image Scale now describes its existing absolute calibrated-source
+meaning. The reviewed deferred native selection restoration also applies to
+both mixed transform completion routes, preserving input publication fences.
+Root reviewed these additions against the retained source and codec contracts.
+
 The ordinary scalar-profile preparation is committed and pushed as f87c2e0f;
 its exact local and remote branch references matched. The current batch
 connects that preparation with qualified symbol/text/reference properties and
@@ -43,10 +57,17 @@ renews it after exact new scene publication on a starting interaction. The
 reviewer approved the correction. Root reviewed source interfaces, dispatch,
 reader floors and the integration. These are source reviews, not runtime proof.
 
-Complete Properties remains unfinished: annotation layer assignment controls,
-additional object families/fields, cross-context migration and active-baseline
-replacement are still required. Mixed-family clipboard, native mixed gesture
-transforms, directional resizing and broader reflections remain separate work.
+Complete Properties remains unfinished: additional object families/fields,
+cross-context migration and active-baseline
+replacement are still required. Native mixed gesture transforms and directional
+resizing remain implementation gaps. A focused source inventory confirms that
+ordinary-plus-skylight Copy/Cut/Paste/Duplicate already routes through complete
+mixed capture, typed transfer, destination preparation and atomic command
+completion. That path requires runtime qualification; the older blanket
+"mixed-family clipboard" remaining-work wording does not establish a missing
+implementation. Mixed plan move/rotate and numeric uniform scale likewise
+bypass older ordinary-helper refusal guards. Broader family/cohort combinations
+and reflection behavior remain to be audited and qualified.
 The installed app is unchanged. No builds, tests/new tests, probes, native jobs,
 launches, packages or installations have run; all ten production gates remain
 open. Compilation, rendering, save/reopen and interaction qualification remain

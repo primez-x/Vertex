@@ -69810,7 +69810,8 @@ public:
             else member.ordinary_id.clear();
         std::erase_if(order,[&](const auto& member){return !member.child && !restored.contains(member.ordinary_id);});
         (void)adoptSemanticSelection(published,std::move(restored),std::move(children),capture->authority->native_roof_opening_selection,
-            capture->authority->primary_roof_opening ? std::optional{remap(*capture->authority->primary_roof_opening)} : std::nullopt,false,std::move(order));
+            capture->authority->primary_roof_opening ? std::optional{remap(*capture->authority->primary_roof_opening)} : std::nullopt,false,std::move(order),
+            capture->authority->native_roof_opening_selection);
         clearError();return true;
     }
 
@@ -70070,7 +70071,8 @@ public:
                         else member.ordinary_id.clear();
                     std::erase_if(order,[&](const auto& member){return !member.child && !restored.contains(member.ordinary_id);});
                     (void)adoptSemanticSelection(published,std::move(restored),std::move(restored_children),authority.native_roof_opening_selection,
-                        authority.primary_roof_opening ? std::optional{remap_child(*authority.primary_roof_opening)} : std::nullopt,false,std::move(order));
+                        authority.primary_roof_opening ? std::optional{remap_child(*authority.primary_roof_opening)} : std::nullopt,false,std::move(order),
+                        authority.native_roof_opening_selection);
                     clearError();dialog.accept();
                 } catch (const std::exception& error) { invalidate();status->setText(QString::fromUtf8(error.what())); }
             });
