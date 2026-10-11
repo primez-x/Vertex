@@ -1,4 +1,28 @@
-# Vertex project formats v1 through v238
+# Vertex project formats v1 through v239
+
+Reader239 retains mixed transform30 through composite command52. Transform30
+has transform20's exact fields and requires ordinary request6 plus nonnull
+standalone roof phase38, canonical complete non-demolition leaf11 and matching
+`roof_edit_version:4` or `21`. Earlier transforms retain their original authority;
+transform20 remains the phase32 lane. Properties receipts5..29 retain their
+distinct dispatch and cannot supply transform30 authority.
+
+After exact source-derived leaf composition, replay independently rediscovers
+the original roof replacement roots and associated dimensions, verifies exact
+qualified destination maps and preserves every copied original dimension. It
+checks copied and admitted ordinary dimension contributions against the final
+component graph using one source-to-final carry with a shared 1000 association
+bound. Roof copy destinations share a 4096 allocation bound. A conflicting
+contribution refuses; this verifier does not rewrite a candidate or grant
+additional dimension merge authority. Ordinary room reviews retain request6's
+requirements, and this opening-only roof lane supplies no phase room reviews.
+
+Canvas mixed transforms request complete roof component dimensions. Source,
+registry, policy, current/undone lifetime and preview replacement walks consume
+the actual roof proof while keeping transform30 outside Properties. Canonical
+direct, nested and undone proofs require reader239/extraction237 even with empty
+dimension maps. Extraction derives from the native reader floor. Compilation
+and interaction remain unverified under the current source-only instruction.
 
 Reader238 retains mixed clipboard placement4 through composite command66.
 Placement4 has placement2/3's exact fields, including mandatory

@@ -2,6 +2,7 @@
 #include "sketch/mixed_selection_property_edit.hpp"
 
 #include "sketch/boundary_dimension.hpp"
+#include "sketch/assembly_dimension_transform.hpp"
 #include "sketch/constraint_phase_scope.hpp"
 #include "sketch/document_digest.hpp"
 #include "sketch/ordinary_selection_edit.hpp"
@@ -190,11 +191,14 @@ std::set<std::string, std::less<>> explicit_parents(const Json& ordinary) {
 }
 std::vector<RoofEditIntent> roof_edits(const Json& roof, const Json& enclosing) {
     const bool complete_dimensions = enclosing.at("version") == 20;
+    const bool copied_dimensions = enclosing.at("version") == 30;
     if (complete_dimensions && (roof.is_null() || !roof.is_object() || roof.value("version", Json()) != 32))
         reject("mixed dialect twenty requires standalone roof phase dialect thirty-two");
+    if (copied_dimensions && (roof.is_null() || !roof.is_object() || roof.value("version", Json()) != 38))
+        reject("mixed dialect thirty requires standalone roof phase dialect thirty-eight");
     if (roof.is_null()) return {};
     if (!roof.is_object() || !roof.contains("version") || !roof.at("version").is_number_integer() ||
-        (complete_dimensions ? roof.at("version") != 32 :
+        (copied_dimensions ? roof.at("version") != 38 : complete_dimensions ? roof.at("version") != 32 :
             (roof.at("version") != 4 && roof.at("version") != 17 && roof.at("version") != 20 && roof.at("version") != 21)))
         reject("requires a matching standalone roof phase dialect");
     const auto decoded = decode_phase_constraint_authoring_intent(roof);
@@ -210,11 +214,16 @@ std::vector<RoofEditIntent> roof_edits(const Json& roof, const Json& enclosing) 
     std::vector<RoofEditIntent> result;
     if (!decoded.roof_replacement.is_null()) {
         const auto replacement = decode_phase_roof_replacement_authoring(decoded.roof_replacement);
+        if (copied_dimensions && (!replacement.complete_component_dimensions || !replacement.include_hosted_instances ||
+            decoded.roof_replacement.at("version") != 11 ||
+            (roof.at("roof_edit_version") != 4 && roof.at("roof_edit_version") != 21)))
+            reject("mixed dialect thirty requires canonical complete roof replacement leaf eleven");
         if (replacement.demolition || !replacement.roof_profiles.empty() || !replacement.roof_opening_edits.empty() ||
             replacement.roof_edits.empty()) reject("replacement requires combined opening edits without legacy slices or demolition");
         result = replacement.roof_edits;
         result.insert(result.end(), replacement.ordinary_roof_edits.begin(), replacement.ordinary_roof_edits.end());
     } else {
+        if (copied_dimensions) reject("mixed dialect thirty requires an actual roof replacement");
         if (!decoded.ordinary_roof_edits.is_array() || decoded.ordinary_roof_edits.empty()) reject("roof edit leaf is empty");
         for (const auto& row : decoded.ordinary_roof_edits) result.push_back(decode_roof_edit_intent(row));
     }
@@ -224,7 +233,7 @@ void validate(const Json& value) {
     Budget budget; budget.json(value, 0);
     const bool identity_dialect = value.is_object() && value.contains("version") &&
         value.at("version").is_number_integer() &&
-        (value.at("version") == 4 || value.at("version") == 18 || value.at("version") == 19 || value.at("version") == 20);
+        (value.at("version") == 4 || value.at("version") == 18 || value.at("version") == 19 || value.at("version") == 20 || value.at("version") == 30);
     if (identity_dialect)
         fields(value, {"version", "expected_revision", "source_snapshot_digest", "source_authoring_digest",
             "source_entities_digest", "source_saved_revision", "ordinary_request", "roof_authoring", "roof_opening_members",
@@ -242,7 +251,7 @@ void validate(const Json& value) {
         reject("saved revision exceeds source head");
     message(value.at("message"));
     const auto ordinary = validate_ordinary_selection_edit_request(value.at("ordinary_request"));
-    const Json ordinary_version = (value.at("version") == 19 || value.at("version") == 20) ? Json(6) :
+    const Json ordinary_version = (value.at("version") == 19 || value.at("version") == 20 || value.at("version") == 30) ? Json(6) :
         value.at("version") == 18 ? Json(5) : value.at("version");
     if (ordinary.at("version") != ordinary_version)
         reject("ordinary request requires its matching mixed intent dialect");
@@ -402,14 +411,14 @@ bool mixed_selection_edit_active_phase_policy(const Json& value) {
         return mixed_selection_property_edit_active_phase_policy(value);
     validate(value);
     return !value.at("roof_authoring").is_null() ||
-        ((value.at("version") == 4 || value.at("version") == 18 || value.at("version") == 19 || value.at("version") == 20) &&
+        ((value.at("version") == 4 || value.at("version") == 18 || value.at("version") == 19 || value.at("version") == 20 || value.at("version") == 30) &&
             !value.at("roof_identity_requests").empty());
 }
 bool mixed_selection_edit_has_geometry(const Json& value) {
     if (properties_dialect(value))
         return mixed_selection_property_edit_has_geometry(value);
     validate(value);
-    return (value.at("version") == 3 || value.at("version") == 4 || value.at("version") == 18 || value.at("version") == 19 || value.at("version") == 20) &&
+    return (value.at("version") == 3 || value.at("version") == 4 || value.at("version") == 18 || value.at("version") == 19 || value.at("version") == 20 || value.at("version") == 30) &&
         !value.at("ordinary_request").at("geometry").is_null();
 }
 std::vector<Json> mixed_selection_edit_room_reviews(const Json& value) {
@@ -441,11 +450,164 @@ std::string authenticate_source(const DocumentSnapshot& source, const Json& valu
     return source_digest;
 }
 
+void verify_final_component_dimensions(const Entities& source, const Json& value,
+    const std::vector<Entities>& leaves, const Entities& result) {
+    if (value.at("version") != 30) return;
+    const auto phase = decode_phase_constraint_authoring_intent(value.at("roof_authoring"));
+    const auto roof = decode_phase_roof_replacement_authoring(phase.roof_replacement);
+    // Reconstruct copied roots from the actual original replacement inventory.
+    // Declared dimension mappings cannot establish an association or root.
+    const auto plan = inspect_phase_roof_replacement_plan(source, roof.seed_roof_ids,
+        roof.registry_id, roof.alternative_id, roof.phase_qualified_joins,
+        roof.include_hosted_instances, roof.complete_component_dimensions);
+    if (!plan.ready() || !plan.complete_component_dimensions ||
+        plan.required_hosted_instance_ids.size() != roof.hosted_instance_identities.size())
+        reject("final roof dimensions require the complete actual replacement inventory");
+    if (roof.identities.size() > 4096 || roof.hosted_instance_identities.size() > 4096 - roof.identities.size() ||
+        roof.dimension_identities.size() > 4096 - roof.identities.size() - roof.hosted_instance_identities.size())
+        reject("combined roof copy identities exceed 4096");
+    const auto copies = inspect_embedded_assembly_dimension_clone_roster(source, plan.required_hosted_instance_ids);
+    const std::set<std::string, std::less<>> expected(plan.required_dimension_ids.begin(), plan.required_dimension_ids.end());
+    if (copies.size() != expected.size() || copies.size() != roof.dimension_identities.size())
+        reject("final roof dimension identities differ from the actual source roster");
+
+    using Root = AssemblyInstancePropertyEditTarget;
+    const auto root_of = [](Root target) { target.part_path.clear(); return target; };
+    std::map<Root, Root> destinations;
+    for (const auto& binding : plan.required_hosted_instance_ids) {
+        if (!roof.identities.contains(binding.first) || !roof.hosted_instance_identities.contains(binding))
+            reject("copied component destination lacks its actual qualified source root");
+        destinations.emplace(Root{binding.first, binding.second, std::nullopt, {}},
+            Root{roof.identities.at(binding.first), roof.hosted_instance_identities.at(binding), std::nullopt, {}});
+    }
+    std::set<Root> move_roots;
+    const auto& ordinary = value.at("ordinary_request");
+    for (const auto& row : ordinary.at("embedded"))
+        move_roots.insert({row.at("catalog_id").get<std::string>(), row.at("instance_id").get<std::string>(), std::nullopt, {}});
+    for (const auto& row : ordinary.at("architectural")) {
+        const auto& entity = source.at(row.at("entity_id").get<std::string>());
+        if (entity.type == "assembly_instance") {
+            const auto instance = decode_document_assembly_instance(entity);
+            move_roots.insert({instance.assembly_catalog_id, instance.instance.id, entity.id, {}});
+        }
+    }
+    // Existing ordinary contributions already have independent producer proof.
+    // Count every association on their actual roots, including unchanged siblings,
+    // and check the saved carriers against the final graph without adding authority.
+    std::set<Root> associated_roots;
+    std::map<std::string, Root, std::less<>> associated_dimensions;
+    for (const auto& [id, entity] : source) {
+        if (!can_recognize_boundary_dimension_entity_type(entity.type) ||
+            inspect_boundary_dimension_version(entity).format != BoundaryDimensionFormat::supported_v6) continue;
+        const auto dimension = decode_boundary_dimension_entity(entity);
+        if (!dimension.dimension || !dimension.dimension->assembly_target) continue;
+        const auto root = root_of(dimension.dimension->assembly_target->component);
+        associated_roots.insert(root);
+        associated_dimensions.emplace(id, root);
+        if (std::any_of(leaves.begin(), leaves.end(), [&](const auto& leaf) {
+            const auto found = leaf.find(id);
+            return found != leaf.end() && !exact(entity, found->second);
+        })) move_roots.insert(root_of(dimension.dimension->assembly_target->component));
+    }
+    // The roof leaf's host carry counts unchanged frames too. Discover those
+    // actual embedded roots from original placement, never from proposed copies.
+    std::set<std::string, std::less<>> ordinary_roof_hosts;
+    for (const auto& edit : roof.ordinary_roof_edits) ordinary_roof_hosts.insert(edit.roof_id);
+    const auto selected_hosts = explicit_parents(ordinary);
+    std::vector<std::pair<std::string, std::string>> embedded_moves;
+    for (const auto& [catalog, entity] : source) if (entity.type == "assembly_model") {
+        std::vector<std::map<std::string, const Json*, std::less<>>> candidate_rows;
+        for (const auto& leaf : leaves) {
+            const auto current = leaf.find(catalog);
+            if (current == leaf.end() || exact(entity, current->second)) continue;
+            std::map<std::string, const Json*, std::less<>> rows;
+            for (const auto& row : current->second.properties.at("model").at("instances"))
+                rows.emplace(row.at("id").get<std::string>(), &row);
+            candidate_rows.push_back(std::move(rows));
+        }
+        for (const auto& row : entity.properties.at("model").at("instances")) {
+            if (!row.contains("placement")) continue;
+            const Root root{catalog, row.at("id").get<std::string>(), std::nullopt, {}};
+            if (!associated_roots.contains(root)) continue;
+            const auto host = row.at("placement").at("host_entity_id").get<std::string>();
+            bool carried = ordinary_roof_hosts.contains(host);
+            if (!carried && selected_hosts.contains(host))
+                carried = std::any_of(candidate_rows.begin(), candidate_rows.end(), [&](const auto& rows) {
+                    const auto found = rows.find(root.instance_id);
+                    return found != rows.end() && found->second->contains("placement") &&
+                        !exact(row.at("placement"), found->second->at("placement"));
+                });
+            if (carried) move_roots.insert(root);
+        }
+    }
+    std::size_t association_count = copies.size();
+    for (const auto& [id, root] : associated_dimensions)
+        if (move_roots.contains(root) && !copies.contains(id) && ++association_count > 1000)
+            reject("mixed copied and ordinary source dimension associations exceed 1000");
+    for (const auto& root : move_roots) if (!root.document_entity_id)
+        embedded_moves.emplace_back(root.catalog_id, root.instance_id);
+    const auto move_roster = inspect_embedded_assembly_dimension_clone_roster(source, embedded_moves);
+
+    auto framed = result;
+    std::map<Root, std::size_t> requests_by_root;
+    std::vector<AssemblyDimensionTransformRequest> requests;
+    for (const auto& [original, target] : copies) {
+        if (!expected.contains(original) || !roof.dimension_identities.contains(original) ||
+            !result.contains(original) || !exact(source.at(original), result.at(original)))
+            reject("final roof copies must retain every actual original dimension exactly");
+        const auto& proposed = roof.dimension_identities.at(original);
+        if (source.contains(proposed) || !framed.erase(proposed))
+            reject("final roof dimension copy is absent or not fresh");
+        const auto root = root_of(target);
+        const auto [request, inserted] = requests_by_root.emplace(root, requests.size());
+        if (inserted) requests.push_back({root, destinations.at(root), AssemblyDimensionTransformMode::clone, {}});
+        requests.at(request->second).fresh_dimension_ids.emplace(original, proposed);
+    }
+    std::set<std::string, std::less<>> moved_dimensions;
+    for (const auto& [id, entity] : source) {
+        if (!can_recognize_boundary_dimension_entity_type(entity.type) ||
+            inspect_boundary_dimension_version(entity).format != BoundaryDimensionFormat::supported_v6) continue;
+        const auto dimension = decode_boundary_dimension_entity(entity);
+        if (!dimension.dimension || !dimension.dimension->assembly_target) continue;
+        const auto root = root_of(dimension.dimension->assembly_target->component);
+        if (!move_roots.contains(root)) continue;
+        if (!root.document_entity_id && !move_roster.contains(id))
+            reject("final ordinary dimension differs from its actual qualified root roster");
+        // A copied baseline root may also be explicitly selected as a no-op.
+        // Its clone request already counts the association and retains it exactly.
+        if (copies.contains(id)) continue;
+        if (!result.contains(id)) reject("mixed transform lost an original component dimension");
+        if (requests_by_root.emplace(root, requests.size()).second)
+            requests.push_back({root, root, AssemblyDimensionTransformMode::move, {}});
+        framed.at(id) = entity;
+        moved_dimensions.insert(id);
+    }
+    // One pure measurement shares the 1000 actual-source association bound
+    // across copied and ordinary roots. No Document or synthetic source is used.
+    const auto carried = requests.empty() ? std::vector<Entity>{} :
+        carry_assembly_dimension_transform_entities(source, framed, requests);
+    std::set<std::string, std::less<>> verified_copies;
+    std::vector<std::string> changed_ordinary;
+    for (const auto& dimension : carried) {
+        const auto found = result.find(dimension.id);
+        if (found == result.end() || !exact(dimension, found->second))
+            reject("mixed dimension contribution differs from its actual source-to-final component frame");
+        if (source.contains(dimension.id)) {
+            if (!moved_dimensions.erase(dimension.id)) reject("final dimension carry changed an unadmitted source root");
+            changed_ordinary.push_back(dimension.id);
+        } else verified_copies.insert(dimension.id);
+    }
+    if (verified_copies.size() != copies.size()) reject("final roof copy contribution lost a source association");
+    for (const auto& id : moved_dimensions)
+        if (!exact(source.at(id), result.at(id))) reject("final identity component frame has a changed saved dimension");
+    validate_ordinary_assembly_dimension_changes(source, changed_ordinary);
+}
+
 // Internal mode is available only to the sealed preparation factory. Historical
 // full replay always passes null and therefore always performs mandatory review.
 Entities derive_mixed_selection_edit(const DocumentSnapshot& source, const Json& value,
     std::optional<SelectionGeometryTransformPreparation>* unreviewed_geometry) {
-    const bool identity_dialect = value.at("version") == 4 || value.at("version") == 18 || value.at("version") == 19 || value.at("version") == 20;
+    const bool identity_dialect = value.at("version") == 4 || value.at("version") == 18 || value.at("version") == 19 || value.at("version") == 20 || value.at("version") == 30;
     const auto selected = members(value.at("roof_opening_members"),value.at("version") == 3 || identity_dialect,identity_dialect);
     for (const auto& member : selected) (void)child_row(source.entities(), member.key);
     if (identity_dialect && !value.at("roof_identity_requests").empty()) {
@@ -540,6 +702,7 @@ Entities derive_mixed_selection_edit(const DocumentSnapshot& source, const Json&
         result = compose_mixed_selection_edit_candidates(source.entities(), leaves);
         preserve_wall_lane(source.entities(), result);
     }
+    verify_final_component_dimensions(source.entities(), value, leaves, result);
     if (identity_dialect && !value.at("roof_identity_requests").empty()) {
         const auto final_scope = constraint_phase_scope(result);
         for (const auto& member : selected) if (member.invariant) {
@@ -569,13 +732,14 @@ Json mixed_intent(const DocumentSnapshot& source, const Json& ordinary_request,
     if (text.size() > 1024 || text.find('\0') != std::string_view::npos) reject("invalid message");
     const auto canonical_ordinary = validate_ordinary_selection_edit_request(ordinary_request);
     const bool complete_roof_dimensions = roof_authoring.is_object() && roof_authoring.value("version", Json()) == 32;
-    if (complete_roof_dimensions && canonical_ordinary.at("version") != 6)
-        reject("standalone roof phase dialect thirty-two requires ordinary request six");
+    const bool copied_roof_dimensions = roof_authoring.is_object() && roof_authoring.value("version", Json()) == 38;
+    if ((complete_roof_dimensions || copied_roof_dimensions) && canonical_ordinary.at("version") != 6)
+        reject("complete standalone roof dimensions require ordinary request six");
     const bool dimension_carry = canonical_ordinary.at("version") == 5 || canonical_ordinary.at("version") == 6;
     if (dimension_carry && roof_identity_requests.is_null())
         reject("dimension carry requires an explicit identity roster");
     Json value = {{"version", dimension_carry ?
-            (canonical_ordinary.at("version") == 6 ? (complete_roof_dimensions ? Json(20) : Json(19)) : Json(18)) :
+            (canonical_ordinary.at("version") == 6 ? (copied_roof_dimensions ? Json(30) : complete_roof_dimensions ? Json(20) : Json(19)) : Json(18)) :
             (roof_identity_requests.is_null() ? canonical_ordinary.at("version") : Json(4))},
         {"expected_revision", source.revision()},
         {"source_snapshot_digest", document_snapshot_digest(source)},
@@ -614,7 +778,8 @@ bool mixed_selection_edit_retires_dependencies(const Json& value) {
 
 bool mixed_selection_edit_has_phase_replacements(const Json& value) {
     (void)validate_mixed_selection_edit_intent(value);
-    return phase_properties_dialect(value) && mixed_selection_property_edit_has_phase_replacements(value);
+    return value.at("version") == 30 ||
+        (phase_properties_dialect(value) && mixed_selection_property_edit_has_phase_replacements(value));
 }
 
 std::vector<Json> mixed_selection_edit_phase_room_reviews(const Json& value) {

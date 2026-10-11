@@ -19,6 +19,7 @@
 #include "sketch/phase_wall_replacement_command.hpp"
 #include "sketch/phase_selection_property_edit.hpp"
 #include "sketch/mixed_selection_property_edit.hpp"
+#include "sketch/mixed_selection_edit.hpp"
 #include "sketch/mixed_clipboard_command.hpp"
 
 #include <sqlite3.h>
@@ -869,6 +870,19 @@ std::uint32_t required_format_version_internal(const DocumentSnapshot& snapshot,
                 value.at("assembly_catalog_edit_completion")==true &&
                 value.at("assembly_catalog_edit_intent").is_object())
                 floor=std::max(floor,217U);
+            if (floor<239 && typed_shape(value,30,{"version","expected_revision","source_snapshot_digest",
+                    "source_authoring_digest","source_entities_digest","source_saved_revision","ordinary_request",
+                    "roof_authoring","roof_opening_members","roof_identity_requests","message"})) {
+                try {
+                    // Canonical validation distinguishes transform30 from
+                    // Properties receipts and requires actual phase38/leaf11,
+                    // even when the source-derived dimension maps are empty.
+                    (void)validate_mixed_selection_edit_intent(value);
+                    floor=239U;
+                } catch (const std::invalid_argument&) {
+                } catch (const nlohmann::json::exception&) {
+                }
+            }
             if (floor<238 && typed_shape(value,4,{"version","expected_revision","source_snapshot_digest",
                     "source_authoring_digest","source_entities_digest","source_saved_revision","roof_authoring",
                     "additions","selected_registry_id","message","detached_components"})) {
@@ -1195,6 +1209,8 @@ std::uint32_t required_format_version_internal(const DocumentSnapshot& snapshot,
                 value.contains("mixed_selection_edit_completion") && value.contains("mixed_selection_edit_intent")) {
                 floor=std::max(floor,187U);
                 const auto& intent=value.at("mixed_selection_edit_intent");
+                if (intent.is_object() && intent.value("version",nlohmann::json())==30)
+                    floor=std::max(floor,239U);
                 if (intent.is_object() && intent.value("version",nlohmann::json())==20)
                     floor=std::max(floor,224U);
                 if (intent.is_object() && intent.value("version",nlohmann::json())==19)
@@ -1416,9 +1432,9 @@ std::uint32_t required_format_version_internal(const DocumentSnapshot& snapshot,
     };
     for (const auto& revision : snapshot.history()) {
         if (revision.phase_entity_import) required=std::max(required,160U);
-        if (required<238 && revision.boundary_geometry_edit)
+        if (required<239 && revision.boundary_geometry_edit)
             required=std::max(required,typed_edit_reader_floor(encode_boundary_geometry_edit(*revision.boundary_geometry_edit)));
-        if (required<238 && revision.boundary_constraint_changes)
+        if (required<239 && revision.boundary_constraint_changes)
             required=std::max(required,typed_edit_reader_floor(command_to_json(Command{*revision.boundary_constraint_changes})));
         if (required<122 && revision.boundary_geometry_edit)
             required=std::max(required,quantity_reader_floor(encode_boundary_geometry_edit(*revision.boundary_geometry_edit)));
@@ -1431,6 +1447,9 @@ std::uint32_t required_format_version_internal(const DocumentSnapshot& snapshot,
             const auto& edits=*revision.boundary_constraint_changes;
             if (edits.mixed_selection_edit_completion || !edits.mixed_selection_edit_intent.is_null()) {
                 required=std::max(required,187U);
+                if (edits.mixed_selection_edit_intent.is_object() &&
+                    edits.mixed_selection_edit_intent.value("version",nlohmann::json())==30)
+                    required=std::max(required,239U);
                 if (edits.mixed_selection_edit_intent.is_object() &&
                     edits.mixed_selection_edit_intent.value("version",nlohmann::json())==20)
                     required=std::max(required,224U);
@@ -3944,6 +3963,7 @@ bool verify_sqlite_schema(sqlite3* database, bool allow_recovery = false) {
          sqlite3_column_int(user_version.get(), 0) != 236 &&
          sqlite3_column_int(user_version.get(), 0) != 237 &&
          sqlite3_column_int(user_version.get(), 0) != 238 &&
+         sqlite3_column_int(user_version.get(), 0) != 239 &&
          sqlite3_column_int(user_version.get(), 0) != 207 &&
          sqlite3_column_int(user_version.get(), 0) != 202 &&
          sqlite3_column_int(user_version.get(), 0) != 200 &&
@@ -4669,6 +4689,8 @@ DocumentSnapshot read_snapshot(sqlite3* database, RecoveryLedger* recovery = nul
     // here and authenticate the manifest with its stored version below.
     const auto required_format = required_format_version_internal(snapshot, format_number < 28);
     if (required_format > format_number) {
+        if (required_format>=239)
+            storage_error(StorageErrorCode::unsupported_format,"This project requires reader 239 for complete proposed roof component dimensions in mixed transforms");
         if (required_format>=238)
             storage_error(StorageErrorCode::unsupported_format,"This project requires reader 238 for complete proposed roof component dimensions in mixed clipboard placement");
         if (required_format>=237)

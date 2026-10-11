@@ -524,7 +524,9 @@ struct ApplyBoundaryConstraintChanges {
     nlohmann::json clipboard_placement_intent=nullptr;
     bool clipboard_placement_completion{};
     // Envelope fifty-two independently reconstructs ordinary selected edits
-    // and roof-child edits against the same full original snapshot. Neither
+    // and roof-child edits against the same full original snapshot. Transform
+    // thirty keeps complete roof replacement authority distinct from Properties
+    // receipts five through twenty-nine. Neither
     // raw payloads nor an intermediate candidate can lend this authority.
     nlohmann::json mixed_selection_edit_intent=nullptr;
     bool mixed_selection_edit_completion{};

@@ -3324,6 +3324,8 @@ static int room_review_geometry_dialect(const ApplyBoundaryConstraintChanges& co
 
 static bool mixed_properties_dialect(const nlohmann::json& intent) {
     const auto version=intent.at("version").get<int>();
+    // Transform30 remains outside Properties: its actual roof phase38 is
+    // traversed by the same source, registry and lifetime proof walks as20.
     return (version>=5 && version<=13) || (version>=15 && version<=17) || (version>=21 && version<=29);
 }
 static bool mixed_phase_properties_dialect(const nlohmann::json& intent) {

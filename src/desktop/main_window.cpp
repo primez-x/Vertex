@@ -71633,7 +71633,7 @@ public:
                 std::pair{b.at("roof_id").template get<std::string>(),b.at("opening_id").template get<std::string>()}; });
         if (!roof_edits.empty()) {
             const auto physical=replay_roof_edit_entities(source->entities(),roof_edits);
-            const auto leaf=sourceDerivedRoofMathEditCommand(*source,physical,roof_edits,message,nullptr,true,false);
+            const auto leaf=sourceDerivedRoofMathEditCommand(*source,physical,roof_edits,message,nullptr,true,true);
             const auto* typed=std::get_if<ApplyBoundaryConstraintChanges>(&leaf);
             if (!typed || !typed->phase_constraint_authoring_completion)
                 throw std::invalid_argument("The complete skylight transform has no typed source authority.");

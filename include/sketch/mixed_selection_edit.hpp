@@ -47,7 +47,8 @@ private:
 };
 
 // Accepts ordinary four/mixed four, five/eighteen or six/nineteen (six/twenty
-// when the independent roof leaf is phase thirty-two), with
+// when the independent roof leaf is phase thirty-two, or six/thirty when it
+// is phase thirty-eight), with
 // geometry.room_reviews empty. Five/eighteen grants selected-root component
 // dimension carry; six/nineteen additionally grants host-derived carry.
 // Historical dialects retain their original consequences.
@@ -116,6 +117,19 @@ private:
 // complete maps under the same exact overlap rules. It retains version
 // nineteen's geometry, room review, text-baseline and invariant-child authority;
 // earlier mixed dialects cannot admit roof phase dialect thirty-two.
+// Version thirty is a separate closed transform dialect with exactly version
+// twenty's fields. It requires ordinary six and a nonnull standalone roof phase
+// thirty-eight with roof_edit_version four/twenty-one, canonical replacement
+// leaf eleven, complete hosted component dimensions and no demolition. Versions
+// five through twenty-nine retain their Properties/transform meanings; older
+// transforms cannot borrow this copy authority, and twenty still requires only
+// phase thirty-two. Preparation, reviewed geometry, text baselines and invariant
+// children retain nineteen's rules. After exact leaf composition, the actual
+// original replacement inventory and qualified identity maps independently
+// prove copied extent targets and presentation against the final component graph.
+// Copied originals remain exact; ordinary and copied associations share a 1000
+// source-target bound and roof copies retain their combined 4096 fresh-ID bound.
+// Conflicting leaf frames refuse rather than gaining dimension merge authority.
 [[nodiscard]] nlohmann::json make_mixed_selection_edit_intent(
     const DocumentSnapshot& source, const nlohmann::json& ordinary_request,
     const nlohmann::json& roof_authoring, const nlohmann::json& roof_members,

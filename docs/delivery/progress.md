@@ -33,9 +33,21 @@ catalog locals remain uncharged. Review of the correction found no remaining
 proved introduced P1/P2 in the examined clipboard batch. Compilation and
 runtime remain unverified.
 
-A separate owner is implementing mixed transform30 for ordinary6 plus actual
-roof phase38, including final combined dimension frames. This work has not yet
-been integrated or reviewed. Source discovery additionally confirms that placed
+The clipboard source checkpoint is committed and pushed as 94c6ac63; its exact
+remote branch matched local HEAD. Mixed transform30 for ordinary6 plus actual
+roof phase38 is now integrated in source. Its final verifier independently
+reconstructs original replacement roots/maps, preserves copied originals and
+checks copied and ordinary dimensions against the final composed component
+graph under shared association/allocation limits. Controller, reader239,
+extraction237 and current/undone history recognition retain the new lane;
+historical transforms and Properties remain distinct. Independent integrated
+source review found no proved introduced P1/P2 in the examined mixed-transform
+batch. Root review confirms the closed dispatch, actual-source final-frame
+verification, history reservations, controller and native-reader-derived
+extraction. The placement-equality concern did not establish an introduced
+defect: ordinary6 uses the same producer roster, and supported extent targets
+require actual expanded profiles. Scoped whitespace inspection passes.
+Compilation and runtime remain unverified. Source discovery confirms that placed
 root/path Properties supports pose and declared metadata but has no per-instance
 profile geometry override. Actual outline/cutout/extrusion editing exists at
 shared assembly-type scope, already accessible through selected component type
