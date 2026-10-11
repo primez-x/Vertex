@@ -51347,7 +51347,7 @@ private:
                     validate_mixed_clipboard_placement_intent(encoded.at("clipboard_placement_intent")) :
                     validate_mixed_selection_edit_intent(encoded.at("mixed_selection_edit_intent"));
                 const auto dialect=intent.at("version").get<int>();
-                if (version==52 && ((dialect>=5 && dialect<=13) || (dialect>=15 && dialect<=17) || (dialect>=21 && dialect<=29) || dialect==32 || dialect==33 || dialect==34 || dialect==35)) {
+                if (version==52 && ((dialect>=5 && dialect<=13) || (dialect>=15 && dialect<=17) || (dialect>=21 && dialect<=29) || dialect==32 || dialect==33 || dialect==34 || dialect==35 || dialect==36)) {
                     // Properties dialects have no transform roof_authoring.
                     // Active-baseline redirects require independently replayed
                     // source authority rather than extracting supplied maps.
@@ -60408,11 +60408,11 @@ private:
                     mixed_edit=true;
                     const auto intent=validate_mixed_selection_edit_intent(value.mixed_selection_edit_intent);
                     const auto properties_dialect=intent.at("version").get<int>();
-                    if ((properties_dialect>=5 && properties_dialect<=13) || (properties_dialect>=15 && properties_dialect<=17) || (properties_dialect>=21 && properties_dialect<=29) || properties_dialect==32 || properties_dialect==33 || properties_dialect==34 || properties_dialect==35) {
+                    if ((properties_dialect>=5 && properties_dialect<=13) || (properties_dialect>=15 && properties_dialect<=17) || (properties_dialect>=21 && properties_dialect<=29) || properties_dialect==32 || properties_dialect==33 || properties_dialect==34 || properties_dialect==35 || properties_dialect==36) {
                         // Properties has its own typed lanes, including a null
                         // physical lane for annotation-only edits. Gesture
                         // ordinary_request codecs cannot decode this roster.
-                        const bool component_properties=properties_dialect==16 || properties_dialect==17 || properties_dialect==22 || properties_dialect==23 || properties_dialect==25 || properties_dialect==26 || properties_dialect==28 || properties_dialect==29 || properties_dialect==32 || properties_dialect==33 || properties_dialect==34 || properties_dialect==35;
+                        const bool component_properties=properties_dialect==16 || properties_dialect==17 || properties_dialect==22 || properties_dialect==23 || properties_dialect==25 || properties_dialect==26 || properties_dialect==28 || properties_dialect==29 || properties_dialect==32 || properties_dialect==33 || properties_dialect==34 || properties_dialect==35 || properties_dialect==36;
                         const auto& selection_properties=component_properties ? intent.at("base_intent") : intent;
                         const bool phased=!selection_properties.is_null() &&
                             (selection_properties.at("version")==11 || selection_properties.at("version")==12 || selection_properties.at("version")==13 || selection_properties.at("version")==15 || selection_properties.at("version")==21 || selection_properties.at("version")==24 || selection_properties.at("version")==27);
@@ -60463,7 +60463,7 @@ private:
                     }
                     // Qualified children never promote their compatibility host
                     // IDs into ordinary presented-object selection authority.
-                    const auto& roof_selection=(intent.at("version")==16 || intent.at("version")==17 || intent.at("version")==22 || intent.at("version")==23 || intent.at("version")==25 || intent.at("version")==26 || intent.at("version")==28 || intent.at("version")==29 || intent.at("version")==32 || intent.at("version")==33 || intent.at("version")==34 || intent.at("version")==35)
+                    const auto& roof_selection=(intent.at("version")==16 || intent.at("version")==17 || intent.at("version")==22 || intent.at("version")==23 || intent.at("version")==25 || intent.at("version")==26 || intent.at("version")==28 || intent.at("version")==29 || intent.at("version")==32 || intent.at("version")==33 || intent.at("version")==34 || intent.at("version")==35 || intent.at("version")==36)
                         ? intent.at("base_intent") : intent;
                     if (!roof_selection.is_null()) for (const auto& child:roof_selection.at("roof_opening_members"))
                         targets.insert(child.at("opening_id").template get<std::string>());
@@ -71312,6 +71312,225 @@ public:
         fence();return reviews;
     }
 
+    std::optional<std::map<std::string,std::optional<AssemblyProfileDimensionTarget>,std::less<>>>
+    reviewComponentProfileDimensions(const DocumentSnapshot& source,
+        const PhaseAssemblyInstancePropertyEditAuthoring& authoring,QWidget* parent,
+        const std::function<void()>& fence,bool metric) {
+        const auto roster=inspect_phase_assembly_instance_profile_dimension_review_roster(source.entities(),authoring.intents);
+        std::map<std::string,std::optional<AssemblyProfileDimensionTarget>,std::less<>> decisions;
+        if(roster.empty())return decisions;
+        fence();
+        // This body is derived from the captured source and typed allocations.
+        // It is neither a publishable Document nor a substitute for final carry.
+        const auto body=replay_phase_assembly_instance_property_edits(source.entities(),authoring.intents,authoring.allocation);
+        std::map<AssemblyInstancePropertyEditTarget,AssemblyExpansion> expansions;
+        std::map<std::string,AssemblyModel,std::less<>> models;
+        AssemblyExpansionBudget budget;
+        std::vector<std::string> ids;
+        std::vector<AssemblyDimensionTarget> old_targets;
+        for(const auto& [id,target]:roster) {
+            ids.push_back(id);old_targets.push_back(target);
+            auto destination=body.original_to_proposed.at(target.component);
+            destination.part_path.clear();
+            if(expansions.contains(destination))continue;
+            const auto& catalog=body.entities.at(destination.catalog_id);
+            auto model=models.find(destination.catalog_id);
+            if(model==models.end())model=models.emplace(destination.catalog_id,
+                AssemblyModel::from_json(catalog.properties.at("model"))).first;
+            AssemblyInstance instance;
+            if(destination.document_entity_id)instance=decode_document_assembly_instance(
+                body.entities.at(*destination.document_entity_id)).instance;
+            else {
+                const auto row=std::find_if(model->second.instances().begin(),model->second.instances().end(),
+                    [&](const auto& value){return value.id==destination.instance_id;});
+                if(row==model->second.instances().end())throw std::invalid_argument("The edited component is missing.");
+                instance=*row;
+            }
+            expansions.emplace(destination,model->second.expand(instance,budget));
+        }
+        const auto original_measurements=resolve_assembly_dimensions(source.entities(),old_targets);
+        QDialog dialog(parent);dialog.setWindowTitle(QStringLiteral("Review component dimensions"));
+        dialog.resize(820,520);
+        auto* layout=new QVBoxLayout(&dialog);
+        auto* explanation=new QLabel(QStringLiteral("Choose a new target or remove each affected dimension. "
+            "Dimensions on the original design remain intact when editing an alternative."),&dialog);
+        explanation->setWordWrap(true);layout->addWidget(explanation);
+        auto* splitter=new QSplitter(Qt::Horizontal,&dialog);layout->addWidget(splitter,1);
+        auto* list=new QListWidget(splitter);
+        for(std::size_t i=0;i<ids.size();++i) {
+            auto* item=new QListWidgetItem(QStringLiteral("Dimension %1 · %2 · needs review")
+                .arg(static_cast<qulonglong>(i+1)).arg(format_boundary_length(original_measurements[i].span_metres,metric,false)),list);
+            item->setToolTip(QString::fromStdString(ids[i]));
+        }
+        auto* editor=new QWidget(splitter);auto* form=new QFormLayout(editor);
+        auto* original=new QLabel(editor);original->setWordWrap(true);
+        auto* profiles=new QComboBox(editor);auto* rings=new QComboBox(editor);
+        auto* first=new QComboBox(editor);auto* second=new QComboBox(editor);
+        auto* first_label=new QLabel(editor);auto* second_label=new QLabel(QStringLiteral("To vertex"),editor);
+        auto* preview=new QLabel(editor);preview->setWordWrap(true);
+        auto* use=new QPushButton(QStringLiteral("Use this target"),editor);
+        auto* retire=new QPushButton(QStringLiteral("Remove dimension"),editor);
+        form->addRow(QStringLiteral("Current dimension"),original);
+        form->addRow(QStringLiteral("Profile"),profiles);form->addRow(QStringLiteral("Boundary"),rings);
+        form->addRow(first_label,first);form->addRow(second_label,second);
+        form->addRow(QStringLiteral("New measurement"),preview);form->addRow(use);form->addRow(retire);
+        auto* error=new QLabel(&dialog);error->setWordWrap(true);layout->addWidget(error);
+        auto* buttons=new QDialogButtonBox(QDialogButtonBox::Ok|QDialogButtonBox::Cancel,&dialog);
+        buttons->button(QDialogButtonBox::Ok)->setText(QStringLiteral("Apply reviewed dimensions"));
+        buttons->button(QDialogButtonBox::Ok)->setEnabled(false);layout->addWidget(buttons);
+        std::vector<const AssemblyExpandedProfile*> own_profiles;
+        std::optional<AssemblyProfileDimensionTarget> draft;
+        const auto selected_ring=[&]() -> const AssemblyProfileRingIdentity* {
+            if(profiles->currentIndex()<0 || rings->currentIndex()<0)return nullptr;
+            const auto& profile=own_profiles.at(static_cast<std::size_t>(profiles->currentIndex()))->profile;
+            return rings->currentIndex()==0 ? &profile.topology->outer :
+                &profile.topology->holes.at(static_cast<std::size_t>(rings->currentIndex()-1));
+        };
+        const auto update=[&] {
+            draft.reset();use->setEnabled(false);
+            try {
+                fence();
+                const auto row=list->currentRow();
+                if(row<0)return;
+                const auto* ring=selected_ring();
+                if(!ring || first->currentIndex()<0)throw std::invalid_argument("Choose an identified profile target, or remove this dimension.");
+                auto target=old_targets.at(static_cast<std::size_t>(row));
+                target.component=body.original_to_proposed.at(target.component);
+                AssemblyProfileDimensionTarget selector;
+                selector.profile_id=own_profiles.at(static_cast<std::size_t>(profiles->currentIndex()))->profile.id;
+                selector.ring_id=ring->ring_id;selector.measurement=target.profile->measurement;
+                if(selector.measurement==AssemblyProfileDimensionMeasurement::edge_length)
+                    selector.segment_id=ring->segment_ids.at(static_cast<std::size_t>(first->currentIndex()));
+                else {
+                    if(second->currentIndex()<0)throw std::invalid_argument("Choose two distinct vertices.");
+                    selector.start_vertex_id=ring->vertex_ids.at(static_cast<std::size_t>(first->currentIndex()));
+                    selector.end_vertex_id=ring->vertex_ids.at(static_cast<std::size_t>(second->currentIndex()));
+                }
+                target.profile=selector;
+                const auto measurement=resolve_assembly_dimension(body.entities,target);
+                preview->setText(format_boundary_length(measurement.span_metres,metric,false));
+                draft=std::move(selector);use->setEnabled(true);
+            } catch(const std::exception& failure){preview->setText(QString::fromUtf8(failure.what()));}
+        };
+        const auto reload_features=[&] {
+            const QSignalBlocker first_block(first),second_block(second);
+            first->clear();second->clear();
+            const auto row=list->currentRow();const auto* ring=selected_ring();
+            if(row<0 || !ring){update();return;}
+            const bool edge=old_targets.at(static_cast<std::size_t>(row)).profile->measurement==
+                AssemblyProfileDimensionMeasurement::edge_length;
+            const auto& profile=own_profiles.at(static_cast<std::size_t>(profiles->currentIndex()))->profile;
+            const auto& boundary=rings->currentIndex()==0 ? profile.outer :
+                profile.holes.at(static_cast<std::size_t>(rings->currentIndex()-1));
+            first_label->setText(edge ? QStringLiteral("Edge") : QStringLiteral("From vertex"));
+            second_label->setVisible(!edge);second->setVisible(!edge);
+            for(std::size_t i=0;i<boundary.size();++i) {
+                const auto& point=boundary[i].start;
+                const auto position=QStringLiteral("(%1, %2)")
+                    .arg(format_length(point.x,metric),format_length(point.y,metric));
+                if(edge)first->addItem(QStringLiteral("Edge %1 · from %2")
+                    .arg(static_cast<qulonglong>(i+1)).arg(position));
+                else {
+                    const auto label=QStringLiteral("Vertex %1 · %2").arg(static_cast<qulonglong>(i+1)).arg(position);
+                    first->addItem(label);second->addItem(label);
+                }
+            }
+            if(!edge && second->count()>1)second->setCurrentIndex(1);
+            update();
+        };
+        const auto reload_rings=[&] {
+            const QSignalBlocker blocker(rings);rings->clear();
+            if(profiles->currentIndex()>=0) {
+                const auto& profile=own_profiles.at(static_cast<std::size_t>(profiles->currentIndex()))->profile;
+                rings->addItem(QStringLiteral("Outer boundary"));
+                for(std::size_t i=0;i<profile.holes.size();++i)
+                    rings->addItem(QStringLiteral("Cutout %1").arg(static_cast<qulonglong>(i+1)));
+            }
+            reload_features();
+        };
+        const auto reload_dimension=[&] {
+            const QSignalBlocker blocker(profiles);profiles->clear();own_profiles.clear();
+            const auto row=list->currentRow();if(row<0)return;
+            const auto& target=old_targets.at(static_cast<std::size_t>(row));
+            auto destination=body.original_to_proposed.at(target.component);const auto path=destination.part_path;
+            destination.part_path.clear();
+            for(const auto& profile:expansions.at(destination).profiles)if(profile.part_path==path && profile.profile.topology) {
+                own_profiles.push_back(&profile);
+                profiles->addItem(QString::fromStdString(profile.profile.id));
+            }
+            const auto& measurement=original_measurements.at(static_cast<std::size_t>(row));
+            const auto& geometry=*measurement.profile_geometry;
+            original->setText(QStringLiteral("%1\nFrom (%2, %3) to (%4, %5)")
+                .arg(format_boundary_length(measurement.span_metres,metric,false),
+                    format_length(geometry.start_profile_m.x,metric),format_length(geometry.start_profile_m.y,metric),
+                    format_length(geometry.end_profile_m.x,metric),format_length(geometry.end_profile_m.y,metric)));
+            reload_rings();
+            // Restore an explicitly saved decision by its identities. A row's
+            // display order is never correspondence between old and new edges.
+            const auto saved=decisions.find(ids.at(static_cast<std::size_t>(row)));
+            if(saved!=decisions.end() && saved->second) {
+                const auto& selector=*saved->second;
+                const auto profile=std::find_if(own_profiles.begin(),own_profiles.end(),
+                    [&](const auto* value){return value->profile.id==selector.profile_id;});
+                if(profile==own_profiles.end())throw std::invalid_argument("The reviewed profile target disappeared.");
+                profiles->setCurrentIndex(static_cast<int>(profile-own_profiles.begin()));
+                reload_rings();
+                const auto& topology=*(*profile)->profile.topology;
+                if(topology.outer.ring_id==selector.ring_id)rings->setCurrentIndex(0);
+                else {
+                    const auto hole=std::find_if(topology.holes.begin(),topology.holes.end(),
+                        [&](const auto& value){return value.ring_id==selector.ring_id;});
+                    if(hole==topology.holes.end())throw std::invalid_argument("The reviewed boundary target disappeared.");
+                    rings->setCurrentIndex(static_cast<int>(hole-topology.holes.begin()+1));
+                }
+                reload_features();
+                const auto* identity=selected_ring();
+                const auto choose=[&](QComboBox* field,const std::vector<std::string>& values,const std::string& id) {
+                    const auto found=std::find(values.begin(),values.end(),id);
+                    if(found==values.end())throw std::invalid_argument("The reviewed feature target disappeared.");
+                    field->setCurrentIndex(static_cast<int>(found-values.begin()));
+                };
+                if(selector.segment_id)choose(first,identity->segment_ids,*selector.segment_id);
+                else {
+                    choose(first,identity->vertex_ids,*selector.start_vertex_id);
+                    choose(second,identity->vertex_ids,*selector.end_vertex_id);
+                }
+                update();
+            }
+        };
+        const auto record=[&](std::optional<AssemblyProfileDimensionTarget> selector) {
+            try {
+                fence();const auto row=list->currentRow();if(row<0)return;
+                const auto index=static_cast<std::size_t>(row);
+                decisions.insert_or_assign(ids[index],selector);
+                list->item(row)->setText(QStringLiteral("Dimension %1 · %2")
+                    .arg(static_cast<qulonglong>(index+1))
+                    .arg(selector ? QStringLiteral("map to ")+preview->text() : QStringLiteral("remove")));
+                error->clear();buttons->button(QDialogButtonBox::Ok)->setEnabled(decisions.size()==ids.size());
+                for(std::size_t next=0;next<ids.size();++next)if(!decisions.contains(ids[next])) {
+                    list->setCurrentRow(static_cast<int>(next));break;
+                }
+            } catch(const std::exception& failure){error->setText(QString::fromUtf8(failure.what()));}
+        };
+        connect(list,&QListWidget::currentRowChanged,&dialog,[&](int){reload_dimension();});
+        connect(profiles,&QComboBox::currentIndexChanged,&dialog,[&](int){reload_rings();});
+        connect(rings,&QComboBox::currentIndexChanged,&dialog,[&](int){reload_features();});
+        connect(first,&QComboBox::currentIndexChanged,&dialog,[&](int){update();});
+        connect(second,&QComboBox::currentIndexChanged,&dialog,[&](int){update();});
+        connect(use,&QPushButton::clicked,&dialog,[&]{if(draft)record(draft);});
+        connect(retire,&QPushButton::clicked,&dialog,[&]{record(std::nullopt);});
+        connect(buttons,&QDialogButtonBox::accepted,&dialog,[&]{
+            try {
+                fence();if(decisions.size()!=ids.size())throw std::invalid_argument("Review every affected dimension first.");
+                dialog.accept();
+            } catch(const std::exception& failure){error->setText(QString::fromUtf8(failure.what()));}
+        });
+        connect(buttons,&QDialogButtonBox::rejected,&dialog,&QDialog::reject);
+        list->setCurrentRow(0);styleDialog(dialog);
+        if(dialog.exec()!=QDialog::Accepted)return std::nullopt;
+        fence();return decisions;
+    }
+
     static MixedSelectionPropertyEditPreparation prepareWallElevationProperties(
         const DocumentSnapshot& source,const SelectionPropertyEditRequest& input,const std::string& message) {
         auto request=input;
@@ -71524,6 +71743,9 @@ public:
             SelectionPropertiesDialog dialog(*source,std::move(presentation),std::move(physical),std::move(skylights),
                 std::move(assemblies),authority.context.metric_units,owner);
             styleDialog(dialog);
+            struct ComponentDimensionReviewCancelled {};
+            for(;;) {
+            try {
             if (dialog.exec()!=QDialog::Accepted) return;
             fence();
             const std::string message="Edit selection properties";
@@ -71735,10 +71957,16 @@ public:
                     }
                     for (const auto& registry_id:component_plan.required_membership_registry_ids)
                         authoring.allocation.membership_entity_ids.emplace(registry_id,fresh("requiredcompanion"));
+                    if(std::any_of(assembly_intents.begin(),assembly_intents.end(),[](const auto& intent){return intent.review_profile_topology;})) {
+                        const auto decisions=reviewComponentProfileDimensions(*source,authoring,owner,fence,authority.context.metric_units);
+                        if(!decisions)throw ComponentDimensionReviewCancelled{};
+                        authoring.profile_dimension_decisions=*decisions;
+                    }
                     for (const auto& id:inspect_phase_assembly_instance_property_presentation_overlay_ids(
-                            source->entities(),assembly_intents,authoring.complete_component_dimensions))
+                            source->entities(),assembly_intents,authoring.complete_component_dimensions,authoring.profile_dimension_decisions))
                         authoring.presentation_overlay_identities.emplace(id,fresh("proposed-component-dimension"));
-                    for (const auto& [id,target]:inspect_phase_assembly_instance_property_dimension_clone_roster(source->entities(),assembly_intents)) {
+                    for (const auto& [id,target]:inspect_phase_assembly_instance_property_dimension_clone_roster(
+                            source->entities(),assembly_intents,authoring.profile_dimension_decisions)) {
                         (void)target;
                         authoring.dimension_identities.emplace(id,fresh("proposed-component-dimension"));
                     }
@@ -71860,6 +72088,13 @@ public:
             if (primary) primary->source_revision=published->revision();
             (void)adoptSemanticSelection(published,std::move(restored),std::move(restored_children),native,primary,false,std::move(order),native);
             clearError();
+            return;
+            } catch(const ComponentDimensionReviewCancelled&) {
+                // Reopen the same Properties draft. No command or partial
+                // dimension decision has been published or reused.
+                fence();
+            }
+            }
         } catch (const std::exception& error) { setError(QStringLiteral("Selection properties: %1").arg(QString::fromUtf8(error.what()))); }
     }
 

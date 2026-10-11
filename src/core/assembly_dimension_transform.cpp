@@ -153,6 +153,7 @@ struct RequestView {
     const Root& destination_root;
     AssemblyDimensionTransformMode mode;
     const std::map<std::string, std::string, std::less<>>& fresh_dimension_ids;
+    const AssemblyDimensionReviewedTransformRequest* reviewed{};
 };
 
 double finite(double value) {
@@ -209,7 +210,7 @@ double carry_rotation(double angle, const TextOperator& op) {
 }
 
 Entity encode_carried(const Entity& original, const BoundaryDimension& before,
-    const BoundaryDimension& after) {
+    const BoundaryDimension& after, bool reviewed_selectors = false) {
     // The owning codec requires matching IDs. Encode changed typed values over
     // the real original first; cloning only assigns the explicitly supplied ID.
     auto same_id = after; same_id.id = before.id;
@@ -217,8 +218,8 @@ Entity encode_carried(const Entity& original, const BoundaryDimension& before,
     result.id = after.id;
     if (before.assembly_target != after.assembly_target) {
         // The closed target was admitted by both codecs. Retain raw version,
-        // form, path and extent/profile selectors; only changed identity slots
-        // come from the owning encoder's canonical result.
+        // form, path and unchanged extent/profile selectors. Changed identity
+        // slots and explicitly reviewed selector fields use the owning encoder.
         const auto& encoded = result.properties.at("target").at("assembly");
         auto retained = original.properties.at("target").at("assembly");
         const auto& old_root = before.assembly_target->component;
@@ -227,6 +228,21 @@ Entity encode_carried(const Entity& original, const BoundaryDimension& before,
         if (old_root.instance_id != new_root.instance_id) retained["instance_id"] = encoded.at("instance_id");
         if (old_root.document_entity_id != new_root.document_entity_id)
             retained["document_entity_id"] = encoded.at("document_entity_id");
+        if (reviewed_selectors && before.assembly_target->profile != after.assembly_target->profile) {
+            require(before.assembly_target->profile && after.assembly_target->profile,
+                "reviewed carry cannot change target kind");
+            const auto& old_profile = *before.assembly_target->profile;
+            const auto& new_profile = *after.assembly_target->profile;
+            require(old_profile.measurement == new_profile.measurement,
+                "reviewed carry cannot change measurement kind");
+            if (old_profile.profile_id != new_profile.profile_id) retained["profile_id"] = encoded.at("profile_id");
+            if (old_profile.ring_id != new_profile.ring_id) retained["ring_id"] = encoded.at("ring_id");
+            if (old_profile.segment_id != new_profile.segment_id) retained["segment_id"] = encoded.at("segment_id");
+            if (old_profile.start_vertex_id != new_profile.start_vertex_id)
+                retained["start_vertex_id"] = encoded.at("start_vertex_id");
+            if (old_profile.end_vertex_id != new_profile.end_vertex_id)
+                retained["end_vertex_id"] = encoded.at("end_vertex_id");
+        }
         result.properties.at("target").at("assembly") = std::move(retained);
     }
     // Retain each unchanged numeric field even when another field in its owning
@@ -245,7 +261,80 @@ Entity encode_carried(const Entity& original, const BoundaryDimension& before,
     }
     return result;
 }
-std::vector<Entity> carry_requests(
+
+struct NodeFrame {
+    std::string type_id;
+    AssemblyTransform transform;
+};
+// Retirement releases measurement identity only. Expand the complete actual
+// body under one shared document budget and retain the exact destination node
+// frame, without looking up its retired profile/ring/edge/vertex selectors.
+std::map<Root, NodeFrame> retired_destination_frames(const AssemblyDocumentEntities& actual,
+    const std::vector<AssemblyDimensionTarget>& targets, const std::vector<bool>& retired,
+    RawBudget& raw) {
+    std::map<Root, NodeFrame> result;
+    std::map<RootKey, std::vector<std::size_t>> wanted;
+    std::vector<std::string> owners;
+    for (std::size_t i = 0; i < targets.size(); ++i) if (retired[i]) {
+        wanted[root_key(targets[i].component)].push_back(i);
+        if (targets[i].component.document_entity_id) owners.push_back(*targets[i].component.document_entity_id);
+    }
+    if (wanted.empty()) return result;
+    std::map<std::string, AssemblyModel, std::less<>> models;
+    for (const auto& [id, entity] : actual) if (entity.type == "assembly_model")
+        models.emplace(id, AssemblyModel::from_json(entity.properties.at("model")));
+    AssemblyExpansionBudget budget;
+    std::set<RootKey> found;
+    const auto expand = [&](const Root& identity, const AssemblyModel& model, const AssemblyInstance& instance) {
+        if (instance.placement) {
+            const auto host = actual.find(instance.placement->host_entity_id);
+            require(host != actual.end() && host->second.id == instance.placement->host_entity_id &&
+                is_complete_assembly_catalog_host_type(host->second.type), "retired destination placement host is invalid");
+        }
+        const auto expansion = model.expand(instance, budget);
+        const auto selected = wanted.find(root_key(identity));
+        if (selected == wanted.end()) return;
+        // Store the stable borrowed target key, never the loop-local identity.
+        require(found.insert(selected->first).second, "retired destination root is duplicated");
+        for (const auto i : selected->second) {
+            const auto& component = targets[i].component;
+            if (result.contains(component)) continue;
+            const auto node = std::find_if(expansion.nodes.begin(), expansion.nodes.end(), [&](const auto& value) {
+                return value.part_path == component.part_path;
+            });
+            require(node != expansion.nodes.end(), "retired destination node is missing");
+            raw.reserve(32 + component.part_path.size());
+            raw.text(component.catalog_id); raw.text(component.instance_id); raw.text(node->type_id);
+            if (component.document_entity_id) raw.text(*component.document_entity_id);
+            for (const auto& part : component.part_path) raw.text(part);
+            (void)encode_assembly_transform(node->transform);
+            result.emplace(component, NodeFrame{node->type_id, node->transform});
+        }
+    };
+    for (const auto& [id, model] : models) for (const auto& instance : model.instances())
+        expand({id, instance.id, std::nullopt, {}}, model, instance);
+    for (const auto& [id, entity] : actual) if (entity.type == "assembly_instance") {
+        const auto value = decode_document_assembly_instance(entity);
+        const auto model = models.find(value.assembly_catalog_id);
+        require(model != models.end(), "independent destination references a missing catalog");
+        expand({value.assembly_catalog_id, value.instance.id, id, {}}, model->second, value.instance);
+    }
+    require(found.size() == wanted.size(), "retired destination root is missing");
+    std::sort(owners.begin(), owners.end()); owners.erase(std::unique(owners.begin(), owners.end()), owners.end());
+    if (!owners.empty()) {
+        (void)resolve_vertical_placements(actual, owners);
+        const auto presentations = resolve_site_presentations(actual, owners);
+        for (const auto& [component, frame] : result) if (component.document_entity_id) {
+            const auto& pose = presentations.at(*component.document_entity_id).forward;
+            (void)compose_assembly_transform(
+                {{pose.translation_m.x, pose.translation_m.y, pose.translation_m.z}, pose.rotation_radians, 1.0},
+                frame.transform);
+        }
+    }
+    return result;
+}
+
+AssemblyDimensionReviewedCarryResult carry_requests(
     const AssemblyDocumentEntities& source, const AssemblyDocumentEntities& candidate,
     std::span<const RequestView> requests) {
     require(!requests.empty() && requests.size() <= dimension_limit, "request count exceeds bound or is empty");
@@ -294,6 +383,38 @@ std::vector<Entity> carry_requests(
         (void)id;
         if (value.type == "assembly_model") admit_existing_assembly_catalog_work(value, catalogs);
     }
+    std::size_t reviewed_node_count{}, decision_count{};
+    bool reviewed_batch = false;
+    for (const auto& request : requests) if (request.reviewed) {
+        reviewed_batch = true;
+        const auto& reviewed = *request.reviewed;
+        require(reviewed.reviewed_profile_nodes.size() <= dimension_limit - reviewed_node_count,
+            "reviewed node count exceeds bound");
+        reviewed_node_count += reviewed.reviewed_profile_nodes.size();
+        require(reviewed.profile_dimension_decisions.size() <= dimension_limit - decision_count,
+            "reviewed decision count exceeds bound");
+        decision_count += reviewed.profile_dimension_decisions.size();
+        const Root* previous = nullptr;
+        for (const auto& node : reviewed.reviewed_profile_nodes) {
+            require(root_key(node) == root_key(request.source_root) && (!previous || *previous < node),
+                "reviewed nodes must be sorted unique exact nodes under their source root");
+            raw.reserve(16 + node.part_path.size()); raw.text(node.catalog_id); raw.text(node.instance_id);
+            if (node.document_entity_id) raw.text(*node.document_entity_id);
+            for (const auto& part : node.part_path) raw.text(part);
+            (void)encode_assembly_dimension_target({node, AssemblyDimensionAxis::width});
+            previous = &node;
+        }
+        for (const auto& [id, profile] : reviewed.profile_dimension_decisions) {
+            document_id(id); raw.text(id); raw.reserve(16);
+            if (!profile) continue;
+            raw.text(profile->profile_id); raw.text(profile->ring_id);
+            if (profile->segment_id) raw.text(*profile->segment_id);
+            if (profile->start_vertex_id) raw.text(*profile->start_vertex_id);
+            if (profile->end_vertex_id) raw.text(*profile->end_vertex_id);
+            (void)encode_assembly_dimension_target({request.source_root, AssemblyDimensionAxis::width, profile});
+        }
+    }
+    require(!reviewed_batch || reviewed_node_count > 0, "reviewed carry requires at least one reviewed node");
     RootRows source_rows(source), candidate_rows(candidate);
     for (const auto& request : requests) {
         const auto& source_root = request.source_root;
@@ -318,8 +439,10 @@ std::vector<Entity> carry_requests(
 
     std::vector<BoundaryDimension> dimensions;
     std::vector<AssemblyDimensionTarget> old_targets, new_targets;
+    std::vector<bool> retired;
     std::vector<std::size_t> dimension_requests;
     std::vector<std::size_t> dimension_counts(requests.size());
+    std::vector<std::size_t> decision_counts(requests.size());
     for (const auto& [id, entity] : source) {
         if (!can_recognize_boundary_dimension_entity_type(entity.type)) continue;
         const auto version = inspect_boundary_dimension_version(entity);
@@ -332,49 +455,102 @@ std::vector<Entity> carry_requests(
         const auto& request = requests[owner->second];
         const auto& destination_root = request.destination_root;
         const bool clone = request.mode != AssemblyDimensionTransformMode::move;
+        const auto& old_target = *dimension.assembly_target;
+        const std::optional<AssemblyProfileDimensionTarget>* decision = nullptr;
+        if (request.reviewed && old_target.profile && std::binary_search(
+            request.reviewed->reviewed_profile_nodes.begin(), request.reviewed->reviewed_profile_nodes.end(),
+            old_target.component)) {
+            const auto found = request.reviewed->profile_dimension_decisions.find(id);
+            require(found != request.reviewed->profile_dimension_decisions.end(),
+                "reviewed profile dimension is missing its explicit decision");
+            decision = &found->second;
+            ++decision_counts[owner->second];
+            require(!*decision || (*decision)->measurement == old_target.profile->measurement,
+                "reviewed profile decision changes measurement kind");
+        }
+        const bool retire = decision && !*decision;
         require(dimensions.size() < dimension_limit, "associated dimension count exceeds bound");
         const auto unchanged = candidate.find(id);
         require(unchanged != candidate.end() && same_raw(entity, unchanged->second),
             "candidate must retain associated original dimensions unchanged");
-        require(!clone || request.fresh_dimension_ids.contains(id), "clone is missing a dimension identity mapping");
+        require(!clone || retire || request.fresh_dimension_ids.contains(id), "clone is missing a dimension identity mapping");
         // Admit the complete raw output carrier before copying it for encoding.
         raw.entity(entity);
         // Reserve a possible new default presentation and longer destination
         // identity slots without first constructing their owning JSON values.
         raw.reserve(32);
         if (clone) {
-            raw.text(request.fresh_dimension_ids.at(id)); raw.text(destination_root.catalog_id);
+            if (!retire) raw.text(request.fresh_dimension_ids.at(id));
+            raw.text(destination_root.catalog_id);
             raw.text(destination_root.instance_id);
             if (destination_root.document_entity_id) raw.text(*destination_root.document_entity_id);
         }
-        old_targets.push_back(*dimension.assembly_target);
-        auto target = *dimension.assembly_target;
+        old_targets.push_back(old_target);
+        auto target = old_target;
         target.component.catalog_id = destination_root.catalog_id;
         target.component.instance_id = destination_root.instance_id;
         target.component.document_entity_id = destination_root.document_entity_id;
-        // This is a source-derived root transfer. Own profile/ring/edge/vertex
-        // identities and nested part paths stay exact; topology edits require
-        // their separate explicit mapping authority.
+        // Only this opt-in review may replace the selector. Component and
+        // complete nested path are still derived from the source root transfer.
+        if (decision && *decision) target.profile = **decision;
         new_targets.push_back(std::move(target));
+        retired.push_back(retire);
         dimensions.push_back(std::move(dimension));
         dimension_requests.push_back(owner->second);
-        ++dimension_counts[owner->second];
+        if (!retire) ++dimension_counts[owner->second];
     }
-    for (std::size_t i = 0; i < requests.size(); ++i)
+    for (std::size_t i = 0; i < requests.size(); ++i) {
         require(requests[i].mode == AssemblyDimensionTransformMode::move ||
             requests[i].fresh_dimension_ids.size() == dimension_counts[i], "clone has extraneous dimension identity mappings");
+        require(!requests[i].reviewed ||
+            requests[i].reviewed->profile_dimension_decisions.size() == decision_counts[i],
+            "reviewed carry has extraneous profile decisions");
+    }
     if (dimensions.empty()) return {};
 
     const auto before = resolve_assembly_dimensions(source, old_targets);
-    const auto after = resolve_assembly_dimensions(candidate, new_targets);
+    std::vector<AssemblyDimensionTarget> surviving_targets;
+    if (reviewed_batch) {
+        surviving_targets.reserve(new_targets.size());
+        for (std::size_t i = 0; i < new_targets.size(); ++i) if (!retired[i]) {
+            const auto& target = new_targets[i];
+            const auto& component = target.component;
+            // The filtered owning batch is additional to the historical exact
+            // target roster. Admit its complete selector copies before copying.
+            raw.reserve(16 + component.part_path.size());
+            raw.text(component.catalog_id); raw.text(component.instance_id);
+            if (component.document_entity_id) raw.text(*component.document_entity_id);
+            for (const auto& part : component.part_path) raw.text(part);
+            if (target.profile) {
+                const auto& profile = *target.profile;
+                raw.text(profile.profile_id); raw.text(profile.ring_id);
+                if (profile.segment_id) raw.text(*profile.segment_id);
+                if (profile.start_vertex_id) raw.text(*profile.start_vertex_id);
+                if (profile.end_vertex_id) raw.text(*profile.end_vertex_id);
+            }
+            surviving_targets.push_back(target);
+        }
+    }
+    const auto after = reviewed_batch ? (surviving_targets.empty() ? std::vector<AssemblyDimensionResolution>{} :
+        resolve_assembly_dimensions(candidate, surviving_targets)) : resolve_assembly_dimensions(candidate, new_targets);
+    const auto retirement_frames = retired_destination_frames(candidate, new_targets, retired, raw);
     std::vector<BoundaryDimension> carried; carried.reserve(dimensions.size());
+    std::size_t after_index{};
     for (std::size_t i = 0; i < dimensions.size(); ++i) {
         const auto& request = requests[dimension_requests[i]];
-        require(before[i].selected_node.type_id == after[i].selected_node.type_id,
+        if (retired[i]) {
+            const auto& destination = retirement_frames.at(new_targets[i].component);
+            require(before[i].selected_node.type_id == destination.type_id,
+                "retirement replaced the selected component type");
+            (void)text_operator(before[i].selected_node.transform, destination.transform);
+            continue;
+        }
+        const auto& resolved = after[after_index++];
+        require(before[i].selected_node.type_id == resolved.selected_node.type_id,
             "carry replaced the selected component type");
         auto dimension = dimensions[i];
         const auto& old_frame = before[i].selected_node.transform;
-        const auto& new_frame = after[i].selected_node.transform;
+        const auto& new_frame = resolved.selected_node.transform;
         const auto op = text_operator(old_frame, new_frame);
         dimension.text_position = carry_position(dimension.text_position, old_frame, new_frame, op);
         const auto old_angle = dimension.presentation ? dimension.presentation->rotation_radians : 0.0;
@@ -388,14 +564,25 @@ std::vector<Entity> carry_requests(
             dimension.assembly_target = new_targets[i];
             dimension.boundary_id = request.destination_root.document_entity_id.value_or(request.destination_root.catalog_id);
         }
+        else if (request.reviewed) dimension.assembly_target = new_targets[i];
         carried.push_back(std::move(dimension));
     }
     // Every actual path, mapping and arithmetic result has succeeded before the
     // first owning entity copy. Publication remains the enclosing caller's job.
-    std::vector<Entity> result; result.reserve(carried.size());
-    for (std::size_t i = 0; i < carried.size(); ++i) {
-        if (requests[dimension_requests[i]].mode == AssemblyDimensionTransformMode::move && carried[i] == dimensions[i]) continue;
-        result.push_back(encode_carried(source.at(dimensions[i].id), dimensions[i], carried[i]));
+    AssemblyDimensionReviewedCarryResult result;
+    result.upserts.reserve(carried.size());
+    std::size_t carried_index{};
+    for (std::size_t i = 0; i < dimensions.size(); ++i) {
+        const auto& request = requests[dimension_requests[i]];
+        if (retired[i]) {
+            if (request.mode == AssemblyDimensionTransformMode::move)
+                result.retired_source_dimension_ids.push_back(dimensions[i].id);
+            continue;
+        }
+        const auto& dimension = carried[carried_index++];
+        if (request.mode == AssemblyDimensionTransformMode::move && dimension == dimensions[i]) continue;
+        result.upserts.push_back(encode_carried(source.at(dimensions[i].id), dimensions[i], dimension,
+            request.reviewed != nullptr));
     }
     return result;
 }
@@ -495,7 +682,7 @@ std::vector<Entity> carry_assembly_dimension_transform_entities(
     const Root& source_root, const Root& destination_root, AssemblyDimensionTransformMode mode,
     const std::map<std::string, std::string, std::less<>>& fresh_dimension_ids) {
     const RequestView request{source_root, destination_root, mode, fresh_dimension_ids};
-    return carry_requests(source, candidate, std::span<const RequestView>(&request, 1));
+    return carry_requests(source, candidate, std::span<const RequestView>(&request, 1)).upserts;
 }
 
 std::vector<Entity> carry_assembly_dimension_transform_entities(
@@ -506,6 +693,19 @@ std::vector<Entity> carry_assembly_dimension_transform_entities(
     views.reserve(requests.size());
     for (const auto& request : requests)
         views.push_back({request.source_root, request.destination_root, request.mode, request.fresh_dimension_ids});
+    return carry_requests(source, candidate, views).upserts;
+}
+
+AssemblyDimensionReviewedCarryResult carry_reviewed_assembly_dimension_transform_entities(
+    const AssemblyDocumentEntities& source, const AssemblyDocumentEntities& candidate,
+    std::span<const AssemblyDimensionReviewedTransformRequest> requests) {
+    require(!requests.empty() && requests.size() <= dimension_limit, "request count exceeds bound or is empty");
+    std::vector<RequestView> views;
+    views.reserve(requests.size());
+    for (const auto& reviewed : requests) {
+        const auto& request = reviewed.transform;
+        views.push_back({request.source_root, request.destination_root, request.mode, request.fresh_dimension_ids, &reviewed});
+    }
     return carry_requests(source, candidate, views);
 }
 

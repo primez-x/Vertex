@@ -266,6 +266,10 @@ private:
 // sealed base, host coordination and final room review. Producers prefer it
 // whenever initial topology is authored; historical wrappers retain their
 // exact component request authority and reject initial topology.
+// Closed dialect thirty-six retains thirty-five's exact fields and requires
+// component request seven with at least one reviewed-topology leaf intent five.
+// Explicit source profile-dimension decisions own remap/retirement authority;
+// producers prefer thirty-six whenever profile topology review is authored.
 //
 // Closed dialect seventeen retains Properties16's source/reservation fields plus
 // carry_component_presentation:true. It requires component request two, whose

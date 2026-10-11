@@ -181,7 +181,7 @@ bool has_identified_profiles(const std::vector<AssemblyProfile>& profiles) {
     return std::any_of(profiles.begin(), profiles.end(), [](const auto& profile) { return profile.topology.has_value(); });
 }
 bool topology_preserving_geometry(const Intent& intent) {
-    return !intent.initialize_profile_topology &&
+    return !intent.initialize_profile_topology && !intent.review_profile_topology &&
         intent.profile_geometry.operation == Operation::set && intent.profile_geometry.value &&
         has_identified_profiles(*intent.profile_geometry.value);
 }
@@ -216,6 +216,10 @@ void preflight_intent(const Intent& intent, Budget& budget) {
     const auto& geometry = intent.profile_geometry;
     (void)operation_name(geometry.operation);
     if ((geometry.operation == Operation::set) != geometry.value.has_value()) reject("only profile set may carry a value");
+    if (intent.initialize_profile_topology && intent.review_profile_topology)
+        reject("initial and reviewed profile topology authority are exclusive");
+    if (intent.review_profile_topology && geometry.operation == Operation::unchanged)
+        reject("reviewed topology requires profile Set or Clear");
     if (intent.initialize_profile_topology &&
         (geometry.operation != Operation::set || !geometry.value || !has_identified_profiles(*geometry.value)))
         reject("initial topology authoring requires identified profile Set");
@@ -276,7 +280,7 @@ Json encode_intent(const Intent& intent) {
     const auto& p = intent.pose;
     const auto string_value = [](const std::string& value) { return Json(text(Json(value), 4096, false)); };
     const auto material = [](const std::string& value) { return Json(text(Json(value), 1024, true)); };
-    Json result{{"version", intent.initialize_profile_topology ? 4 : intent.profile_geometry.operation == Operation::unchanged ? 1 :
+    Json result{{"version", intent.review_profile_topology ? 5 : intent.initialize_profile_topology ? 4 : intent.profile_geometry.operation == Operation::unchanged ? 1 :
             topology_preserving_geometry(intent) ? 3 : 2},
         {"target", {{"catalog_id", t.catalog_id}, {"instance_id", t.instance_id},
             {"document_entity_id", optional(t.document_entity_id)}, {"part_path", t.part_path}}},
@@ -291,20 +295,30 @@ Json encode_intent(const Intent& intent) {
         result["profile_geometry"] = {{"operation", operation_name(intent.profile_geometry.operation)},
             {"value", intent.profile_geometry.value ? encode_assembly_profiles(*intent.profile_geometry.value) : Json(nullptr)}};
     if (intent.initialize_profile_topology) result["initialize_profile_topology"] = true;
+    if (intent.review_profile_topology) result["review_profile_topology"] = true;
     return result;
 }
 Intent decode_intent(const Json& value) {
     if (!value.is_object() || !value.contains("version") || !value.at("version").is_number_integer() ||
-        (value.at("version") != 1 && value.at("version") != 2 && value.at("version") != 3 && value.at("version") != 4))
+        (value.at("version") != 1 && value.at("version") != 2 && value.at("version") != 3 && value.at("version") != 4 &&
+            value.at("version") != 5))
         reject("unsupported intent version");
+    const bool review = value.at("version") == 5;
     const bool initialize = value.at("version") == 4;
     const bool topology = value.at("version") == 3 || initialize;
     const bool geometry = value.at("version") != 1;
-    if (initialize) fields(value, {"version", "target", "properties", "materials", "quantities", "pose", "profile_geometry",
+    if (review) fields(value, {"version", "target", "properties", "materials", "quantities", "pose", "profile_geometry",
+        "review_profile_topology"});
+    else if (initialize) fields(value, {"version", "target", "properties", "materials", "quantities", "pose", "profile_geometry",
         "initialize_profile_topology"});
     else if (geometry) fields(value, {"version", "target", "properties", "materials", "quantities", "pose", "profile_geometry"});
     else fields(value, {"version", "target", "properties", "materials", "quantities", "pose"});
     Intent result;
+    if (review) {
+        if (!value.at("review_profile_topology").is_boolean() || !value.at("review_profile_topology").get<bool>())
+            reject("v5 requires literal review_profile_topology:true");
+        result.review_profile_topology = true;
+    }
     if (initialize) {
         if (!value.at("initialize_profile_topology").is_boolean() || !value.at("initialize_profile_topology").get<bool>())
             reject("v4 requires literal initialize_profile_topology:true");
@@ -333,7 +347,7 @@ Intent decode_intent(const Json& value) {
         if (result.profile_geometry.operation == Operation::set) {
             // The shared profile codec admits both dialects. Historical intent
             // authority remains anonymous regardless of that decoder's growth.
-            if (!topology && patch.at("value").is_array()) for (const auto& profile : patch.at("value"))
+            if (!topology && !review && patch.at("value").is_array()) for (const auto& profile : patch.at("value"))
                 if (profile.is_object() && (profile.contains("topology") || profile.contains("version")))
                     reject("v2 profile Set requires anonymous historical geometry");
             result.profile_geometry.value = decode_assembly_profiles(patch.at("value"));
@@ -495,17 +509,65 @@ void require_initial_profile_topology(const std::vector<AssemblyProfile>& source
     }
     if (!assigned) reject("initial topology authoring requires an actual anonymous profile identity assignment");
 }
+void require_reviewed_profile_topology(const std::vector<AssemblyProfile>& source,
+    const std::vector<AssemblyProfile>& proposed, const std::vector<AssemblyProfile>& type_profiles) {
+    if (!has_identified_profiles(source)) reject("reviewed geometry requires actual identified own-source profiles");
+    for (const auto& next : proposed) {
+        const auto old = std::find_if(source.begin(), source.end(),
+            [&](const auto& profile) { return profile.id == next.id; });
+        if (old != source.end() && same_boundary(old->outer, next.outer) && old->holes.size() == next.holes.size() &&
+            std::equal(old->holes.begin(), old->holes.end(), next.holes.begin(), same_boundary)) {
+            // A mixed source can retain anonymous rows, but review is not an
+            // alternative route for assigning identity to unchanged geometry.
+            if (old->topology != next.topology)
+                reject("reviewed unchanged geometry must retain exact source topology");
+            continue;
+        }
+        if (!next.topology) reject("reviewed new or redrawn profile must be identified");
+        validate_assembly_profile_topology(next);
+        std::set<std::string_view> rings, segments, vertices;
+        const auto reserve = [&](const AssemblyProfile& profile) {
+            if (!profile.topology) return;
+            const auto ring = [&](const AssemblyProfileRingIdentity& ids) {
+                rings.insert(ids.ring_id);
+                for (const auto& id : ids.segment_ids) segments.insert(id);
+                for (const auto& id : ids.vertex_ids) vertices.insert(id);
+            };
+            ring(profile.topology->outer);
+            for (const auto& hole : profile.topology->holes) ring(hole);
+        };
+        if (old != source.end()) reserve(*old);
+        const auto inherited = std::find_if(type_profiles.begin(), type_profiles.end(),
+            [&](const auto& profile) { return profile.id == next.id; });
+        if (inherited != type_profiles.end()) reserve(*inherited);
+        // IDs belong to separate namespaces within each actual profile. Even
+        // equal-count redraws replace every ring, segment and vertex identity.
+        const auto fresh = [&](const AssemblyProfileRingIdentity& ids) {
+            if (rings.contains(ids.ring_id)) reject("reviewed ring identity borrows actual same-profile topology");
+            for (const auto& id : ids.segment_ids) if (segments.contains(id))
+                reject("reviewed segment identity borrows actual same-profile topology");
+            for (const auto& id : ids.vertex_ids) if (vertices.contains(id))
+                reject("reviewed vertex identity borrows actual same-profile topology");
+        };
+        fresh(next.topology->outer);
+        for (const auto& hole : next.topology->holes) fresh(hole);
+    }
+}
 void change_maps(auto& source, const AssemblyExpandedNode& node, const AssemblyType& type,
     const AssemblyModel& model, const Intent& intent) {
     const auto& geometry = intent.profile_geometry;
     // Own local profiles only. A path follows its actual path override or its
     // resolved type; descendant profiles and world transforms grant no authority.
     const auto& resolved = source.profile_overrides ? *source.profile_overrides : type.profiles;
-    if (geometry.operation == Operation::clear &&
+    if (intent.review_profile_topology && !has_identified_profiles(resolved) &&
+        !(geometry.operation == Operation::clear && has_identified_profiles(type.profiles)))
+        reject("reviewed geometry requires actual identified own-source profiles");
+    if (!intent.review_profile_topology && geometry.operation == Operation::clear &&
         (has_identified_profiles(resolved) || (source.profile_overrides && has_identified_profiles(type.profiles))))
         reject("clearing identified source profiles requires reviewed identity mapping/removal");
     if (geometry.operation == Operation::set) {
-        if (intent.initialize_profile_topology) require_initial_profile_topology(resolved, *geometry.value, type.profiles);
+        if (intent.review_profile_topology) require_reviewed_profile_topology(resolved, *geometry.value, type.profiles);
+        else if (intent.initialize_profile_topology) require_initial_profile_topology(resolved, *geometry.value, type.profiles);
         else if (topology_preserving_geometry(intent)) require_preserved_profile_topology(resolved, *geometry.value);
         else if (has_identified_profiles(resolved))
             reject("historical profile Set cannot redraw identified source profiles");
@@ -601,7 +663,8 @@ template<class T> void patch_map(Json& raw, const std::map<std::string, T>& befo
         if (old == before.end() || old->second != value) raw[key] = encode(value);
     }
 }
-void patch_maps(Json& raw, const auto& before, const auto& after, const Json* inherited_profiles = nullptr) {
+void patch_maps(Json& raw, const auto& before, const auto& after, const Json* inherited_profiles = nullptr,
+    bool reviewed_profiles = false) {
     patch_map(raw.at("property_overrides"), before.property_overrides, after.property_overrides,
         [](const std::string& value) { return Json(value); });
     patch_map(raw.at("material_overrides"), before.material_overrides, after.material_overrides,
@@ -613,7 +676,7 @@ void patch_maps(Json& raw, const auto& before, const auto& after, const Json* in
         std::vector<AssemblyProfile> inherited;
         const auto* previous_profiles = before.profile_overrides ? &*before.profile_overrides : nullptr;
         const Json* previous_raw = before.profile_overrides ? &raw.at("profile_overrides") : nullptr;
-        if (!previous_profiles && has_identified_profiles(*after.profile_overrides)) {
+        if (!previous_profiles && (reviewed_profiles || has_identified_profiles(*after.profile_overrides))) {
             if (!inherited_profiles) reject("identified override materialization has no actual source profiles");
             inherited = decode_assembly_profiles(*inherited_profiles);
             previous_profiles = &inherited;
@@ -649,16 +712,24 @@ void patch_maps(Json& raw, const auto& before, const auto& after, const Json* in
                     profile["topology"] = retained.at("topology");
                 }
             }
-            if (has_identified_profiles(*after.profile_overrides)) {
-                // The identified lane preserves the complete roster, including
-                // its raw source order, even when one profile scalar changes.
+            if (reviewed_profiles || has_identified_profiles(*after.profile_overrides)) {
+                // Historical identified edits preserve the complete roster;
+                // reviewed edits preserve the source order of surviving rows.
                 auto retained_order = Json::array();
                 for (const auto& profile : *previous_raw) {
                     const auto found = std::find_if(encoded.begin(), encoded.end(),
                         [&](const Json& row) { return row.at("id") == profile.at("id"); });
-                    if (found == encoded.end()) reject("identified raw profile roster changed");
+                    if (found == encoded.end()) {
+                        if (reviewed_profiles) continue; // Explicit retirement.
+                        reject("identified raw profile roster changed");
+                    }
                     retained_order.push_back(*found);
                 }
+                // The reviewed roster retains actual raw source order first,
+                // then adds every genuinely new row in canonical ID order.
+                if (reviewed_profiles) for (const auto& profile : encoded)
+                    if (!previous.contains(profile.at("id").template get<std::string>()))
+                        retained_order.push_back(profile);
                 encoded = std::move(retained_order);
             }
         }
@@ -719,13 +790,15 @@ Json new_path_pose(const Json& catalog, const AssemblyInstance& source, const As
     patch_pose(pose, before, *changed.transform, false);
     return pose;
 }
-void patch_instance(Json& raw, const AssemblyInstance& before, const AssemblyInstance& after, const Json& catalog) {
+void patch_instance(Json& raw, const AssemblyInstance& before, const AssemblyInstance& after, const Json& catalog,
+    const std::set<Path>& reviewed_paths = {}) {
     const auto inherited_profiles = [&](const Path& path, const auto& old, const auto& changed) -> const Json* {
-        if (old.profile_overrides || !changed.profile_overrides || !has_identified_profiles(*changed.profile_overrides))
+        if (old.profile_overrides || !changed.profile_overrides ||
+            (!reviewed_paths.contains(path) && !has_identified_profiles(*changed.profile_overrides)))
             return nullptr;
         return source_type_profiles(catalog, before.type_id, path);
     };
-    patch_maps(raw, before, after, inherited_profiles({}, before, after));
+    patch_maps(raw, before, after, inherited_profiles({}, before, after), reviewed_paths.contains(Path{}));
     if (before.placement) patch_pose(raw.at("placement"), root_pose(before), root_pose(after), true);
     else if (before.root_transform && after.root_transform)
         patch_pose(raw.at("root_transform"), *before.root_transform, *after.root_transform, false);
@@ -744,13 +817,15 @@ void patch_instance(Json& raw, const AssemblyInstance& before, const AssemblyIns
                 AssemblyPathOverride empty;
                 empty.part_path = changed.part_path;
                 auto added = encode_path(empty);
-                patch_maps(added, empty, changed, inherited_profiles(changed.part_path, empty, changed));
+                patch_maps(added, empty, changed, inherited_profiles(changed.part_path, empty, changed),
+                    reviewed_paths.contains(changed.part_path));
                 if (changed.transform) added["transform"] = new_path_pose(catalog, before, changed);
                 rows.push_back(std::move(added));
             }
             else {
                 if (row == rows.end()) reject("saved path override is missing");
-                patch_maps(*row, *old, changed, inherited_profiles(changed.part_path, *old, changed));
+                patch_maps(*row, *old, changed, inherited_profiles(changed.part_path, *old, changed),
+                    reviewed_paths.contains(changed.part_path));
                 if (old->transform && changed.transform) patch_pose(row->at("transform"), *old->transform, *changed.transform, false);
                 else if (old->transform != changed.transform)
                     (*row)["transform"] = changed.transform ? new_path_pose(catalog, before, changed) : Json(nullptr);
@@ -912,6 +987,7 @@ struct InspectedRoot {
     AssemblyInstance original;
     AssemblyInstance changed;
     AssemblyExpansion final_expansion;
+    std::set<Path> reviewed_profile_paths;
 };
 struct PropertyEditSourceInspection;
 std::optional<std::string> replacement_registry(const PropertyEditSourceInspection&, const InspectedRoot&);
@@ -982,7 +1058,10 @@ struct PropertyEditSourceInspection {
                 });
         }))
             reject("profile Set suppresses the last actual solid; legacy host-copy is not replacement geometry");
-        return {std::move(target), std::move(instance), std::move(changed), std::move(after)};
+        std::set<Path> reviewed_paths;
+        for (const auto* intent : rows) if (intent->review_profile_topology)
+            reviewed_paths.insert(intent->target.part_path);
+        return {std::move(target), std::move(instance), std::move(changed), std::move(after), std::move(reviewed_paths)};
     }
 
     void admit_final_geometry(const InspectedRoot& root) {
@@ -1006,7 +1085,8 @@ std::vector<Intent> decode_request(const Json& request) {
     fields(request, {"version", "expected_revision", "source_snapshot_digest", "source_authoring_digest",
         "source_entities_digest", "source_saved_revision", "intents"});
     if (!request.at("version").is_number_integer() ||
-        (request.at("version") != 1 && request.at("version") != 2 && request.at("version") != 3 && request.at("version") != 4))
+        (request.at("version") != 1 && request.at("version") != 2 && request.at("version") != 3 && request.at("version") != 4 &&
+            request.at("version") != 5))
         reject("unsupported request version");
     (void)revision(request.at("expected_revision"));
     for (const auto* name : {"source_snapshot_digest", "source_authoring_digest", "source_entities_digest"}) digest(request.at(name));
@@ -1016,14 +1096,20 @@ std::vector<Intent> decode_request(const Json& request) {
         return intent.profile_geometry.operation != Operation::unchanged;
     });
     if (request.at("version") == 1 && geometry) reject("v1 request cannot carry profile geometry authority");
+    const bool review = std::any_of(intents.begin(), intents.end(), [](const Intent& intent) {
+        return intent.review_profile_topology;
+    });
+    if (request.at("version") != 5 && review) reject("reviewed profile topology requires request v5");
+    if (request.at("version") == 5 && !review) reject("v5 request requires reviewed profile topology");
     const bool initialize = std::any_of(intents.begin(), intents.end(), [](const Intent& intent) {
         return intent.initialize_profile_topology;
     });
-    if (request.at("version") != 4 && initialize) reject("initial topology authoring requires request v4");
+    if (request.at("version") != 4 && request.at("version") != 5 && initialize)
+        reject("initial topology authoring requires request v4/v5");
     if (request.at("version") == 4 && !initialize) reject("v4 request requires initial topology authoring");
     const bool topology = std::any_of(intents.begin(), intents.end(), topology_preserving_geometry);
-    if (request.at("version") != 3 && request.at("version") != 4 && topology)
-        reject("identified profile Set requires request v3/v4");
+    if (request.at("version") != 3 && request.at("version") != 4 && request.at("version") != 5 && topology)
+        reject("identified profile Set requires request v3/v4/v5");
     if (request.at("version") == 3 && !topology) reject("v3 request requires topology-preserving profile Set");
     return intents;
 }
@@ -1176,14 +1262,14 @@ void patch_root(AssemblyDocumentEntities& result, const AssemblyDocumentEntities
     const auto& source_catalog = original.at(root.target.catalog_id).properties.at("model");
     if (destination.document_entity_id) {
         auto& raw = result.at(*destination.document_entity_id).properties.at("instance");
-        patch_instance(raw, root.original, root.changed, source_catalog);
+        patch_instance(raw, root.original, root.changed, source_catalog, root.reviewed_profile_paths);
         promote_independent(raw);
     } else {
         auto& model = result.at(destination.catalog_id).properties.at("model");
         auto& rows = model.at("instances");
         const auto row = std::find_if(rows.begin(), rows.end(), [&](const Json& value) { return value.at("id") == destination.instance_id; });
         if (row == rows.end()) reject("replayed actual destination row is missing");
-        patch_instance(*row, root.original, root.changed, source_catalog);
+        patch_instance(*row, root.original, root.changed, source_catalog, root.reviewed_profile_paths);
         complete_row_envelope(*row);
         promote_embedded(model, *row);
     }
@@ -1410,7 +1496,7 @@ AssemblyDocumentEntities detail::calculate_carried_assembly_instance_property_en
         // onto the carried pose. Never translate original->changed deltas.
         auto changed = change_instance(carried, authority, source.models.at(root.target.catalog_id), rows);
         auto expansion = model.expand(changed, carried_after_budget);
-        InspectedRoot carried_root{destination, carried, changed, std::move(expansion)};
+        InspectedRoot carried_root{destination, carried, changed, std::move(expansion), root.reviewed_profile_paths};
         if (changed != carried) patch_root(result, derived_carried, carried_root, destination);
         expected.emplace(destination, std::move(carried_root));
     }
@@ -1702,7 +1788,7 @@ AssemblyDocumentEntities replay_assembly_instance_property_entities(const Assemb
         if (target.document_entity_id) {
             auto& owner = result.at(owner_id);
             auto& raw = owner.properties.at("instance");
-            patch_instance(raw, instance, changed, catalog.properties.at("model"));
+            patch_instance(raw, instance, changed, catalog.properties.at("model"), root.reviewed_profile_paths);
             promote_independent(raw);
         } else {
             auto& raw_model = result.at(owner_id).properties.at("model");
@@ -1710,7 +1796,7 @@ AssemblyDocumentEntities replay_assembly_instance_property_entities(const Assemb
             const auto row = std::find_if(raw_rows.begin(), raw_rows.end(),
                 [&](const Json& value) { return value.at("id") == target.instance_id; });
             if (row == raw_rows.end()) reject("actual embedded raw row is missing");
-            patch_instance(*row, instance, changed, catalog.properties.at("model"));
+            patch_instance(*row, instance, changed, catalog.properties.at("model"), root.reviewed_profile_paths);
             complete_row_envelope(*row);
             promote_embedded(raw_model, *row);
         }
@@ -1792,10 +1878,11 @@ Json validate_assembly_instance_property_edit_request(const Json& request) {
 AssemblyInstancePropertyEditPreparation prepare_assembly_instance_property_edit(const DocumentSnapshot& source,
     std::span<const Intent> intents) {
     auto wire = encode_intents(intents);
+    const bool review = std::any_of(wire.begin(), wire.end(), [](const Json& intent) { return intent.at("version") == 5; });
     const bool initialize = std::any_of(wire.begin(), wire.end(), [](const Json& intent) { return intent.at("version") == 4; });
     const bool topology = std::any_of(wire.begin(), wire.end(), [](const Json& intent) { return intent.at("version") == 3; });
     const bool geometry = std::any_of(wire.begin(), wire.end(), [](const Json& intent) { return intent.at("version") != 1; });
-    Json request{{"version", initialize ? 4 : topology ? 3 : geometry ? 2 : 1}, {"expected_revision", source.revision()},
+    Json request{{"version", review ? 5 : initialize ? 4 : topology ? 3 : geometry ? 2 : 1}, {"expected_revision", source.revision()},
         {"source_snapshot_digest", document_snapshot_digest(source)},
         {"source_authoring_digest", document_authoring_source_digest_v2(source)},
         {"source_entities_digest", entity_map_digest(source.entities())},

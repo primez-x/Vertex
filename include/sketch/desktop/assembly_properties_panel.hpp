@@ -32,8 +32,14 @@ public:
     // Enable edge dimensions initializes only unchanged anonymous own-source
     // profiles. That pending Set freezes profile edits and dimensions until
     // applied; its explicit initialization flag survives intent collection.
-    // Existing edge identities permit local extrusion/material-slot edits;
-    // redraw, roster, XY resize and clear-to-type await reviewed mapping.
+    // Identified own sources author explicit reviewed Set/Clear geometry.
+    // After all dimensions resize the final draft, unchanged same-ID XY/holes
+    // retain exact topology, including anonymous profiles in a mixed source;
+    // changed/new profiles receive fresh ring/edge/vertex identities reserved
+    // against actual own and hidden same-ID type topology. Clear restores exact
+    // type geometry without generating identities. Anonymous Set sources keep
+    // their historical workflow. The enclosing workflow reviews affected
+    // dimensions against the collected final intent before applying it.
     [[nodiscard]] std::vector<AssemblyInstancePropertyEditIntent> intents() const;
     [[nodiscard]] QString lastError() const;
 

@@ -56,8 +56,8 @@ struct AssemblyInstancePropertyEditIntent {
     // require anonymous source geometry. Identified Set retains the complete
     // actual own-source profile roster, rings/edges and topology; only profile
     // material_slot/elevation_m/height_m may change. It may materialize an own
-    // override from the resolved type. Identified redraw/clear requires a
-    // separate reviewed mapping/removal workflow and currently refuses.
+    // override from the resolved type. These historical lanes refuse identified
+    // redraw/clear; explicit reviewed geometry below supplies separate authority.
     AssemblyInstancePropertyPatch<std::vector<AssemblyProfile>> profile_geometry;
     // Explicit initial identity authoring only: Set must retain the complete
     // actual own-source roster and every geometry/scalar/material field, keep
@@ -66,21 +66,35 @@ struct AssemblyInstancePropertyEditIntent {
     // shared type's topology is reserved even when an anonymous override hides it.
     // This does not authorize redraw, additions, removals or clear-to-type.
     bool initialize_profile_topology{false};
+    // Explicit geometry authority for an actual identified own-profile source.
+    // Set supplies the complete final roster; unchanged same-ID XY and holes
+    // retain exact topology, including anonymous rows in a mixed source, while
+    // redraw/new rows are identified and require entirely
+    // fresh profile-local ring/segment/vertex identities. Clear returns to the
+    // exact selected type, which may be anonymous. Clear also admits an
+    // anonymous own override hiding actual identified type profiles.
+    // Mutually exclusive with
+    // initial identity authoring. Enclosing reviewed workflows own dimension
+    // correspondence/removal, dependencies and publication.
+    bool review_profile_topology{false};
 };
 
-// Closed canonical v1/v2/v3/v4 codec. V2 adds anonymous profile_geometry and is
+// Closed canonical v1/v2/v3/v4/v5 codec. V2 adds anonymous profile_geometry and is
 // emitted for a non-unchanged anonymous profile operation. V3 requires Set
 // containing identified profiles and explicit topology-preserving authority;
 // source replay checks the exact selected node's own geometry. V4 requires the
 // literal initialize_profile_topology:true field and identified Set; actual
 // source replay admits only initial identity authoring as specified above.
-// Historical dialects reject that field and cannot acquire V4 authority. V1
+// V5 requires literal review_profile_topology:true and non-unchanged geometry;
+// actual source replay admits only the reviewed geometry authority above.
+// Historical dialects reject the new flags and cannot acquire their authority. V1
 // rejects the geometry field; historical V2 rejects identified profiles. All
 // operations are explicit; set carries a value and unchanged/clear carry null.
 // Pose fields are always present (unsupplied components are null). Values are
 // finite, scales positive, counts
 // integral/nonnegative; property strings <=4096 bytes and local keys <=1024.
-// No shared type/host/context/root or child identity creation/deletion authority.
+// No shared type/host/context/root or assembly-child identity creation/deletion
+// authority; v5 changes only the selected node's own profile geometry.
 [[nodiscard]] nlohmann::json encode_assembly_instance_property_edit_intent(
     const AssemblyInstancePropertyEditIntent&);
 [[nodiscard]] AssemblyInstancePropertyEditIntent decode_assembly_instance_property_edit_intent(
@@ -142,7 +156,9 @@ private:
         const DocumentSnapshot&, const nlohmann::json&);
 };
 [[nodiscard]] nlohmann::json validate_assembly_instance_property_edit_request(const nlohmann::json&);
-// Request v4 requires at least one intent v4 and permits compatible intents
+// Request v5 requires at least one intent v5 and permits compatible intents
+// v1..v4. Earlier request dialects reject intent v5. Request v4 requires at
+// least one intent v4 and permits compatible intents
 // v1/v2/v3. Request v3 is manufactured only when an intent v3 is present and no
 // intent v4 is present. Requests v1/v2 retain historical authority and reject
 // intent v3; requests v1/v2/v3 reject intent v4. Every request dialect uses

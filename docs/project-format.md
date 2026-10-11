@@ -1,4 +1,32 @@
-# Vertex project formats v1 through v253
+# Vertex project formats v1 through v254
+
+Reader254 adds explicit reviewed own-profile geometry edits under component
+intent/request5, phase authoring/request7 and mixed Properties36. The literal
+review_profile_topology flag is distinct from initial identity assignment.
+Unchanged same-ID profile geometry retains its exact topology, including
+anonymous rows in a mixed source. New or independently redrawn geometry has
+fresh ring/edge/vertex identities, even when its segment count is unchanged;
+identities cannot borrow actual same-profile own or shared-type topology.
+Set supplies the complete final roster, allowing additions and retirements.
+Clear resolves the actual shared type, including an anonymous own override
+that hides identified type geometry. Historical dialects retain their authority.
+
+Phase7 adds closed profile_dimension_decisions for every actual supported
+own-profile dimension on a reviewed selected node. Each source dimension gets
+an explicit same-kind destination selector or retirement; selectors never infer
+correspondence from edge indices, winding, point proximity or matching counts.
+Surviving targets resolve against the typed final geometry. Ordinary retirement
+removes the actual dimension and its understood drawing references atomically.
+Alternative retirement preserves the baseline dimension and withholds its
+proposed dimension and dependent overlay copies. Allocations match surviving
+copies exactly, while existing source/history/phase fences remain mandatory.
+Coordinated physical/component Properties can withhold an exact unpublished
+dimension copy allocated by its independently replayed physical base, including
+a required copy. Source originals remain exact and protected. Known reference
+and phase cleanup applies only to those admitted fresh copies; retained base
+allocations remain reserved in history even when absent from the final result.
+Reader254/native extraction252 retains direct and nested authoring. These
+formats establish no compile, runtime, interoperability or production acceptance.
 
 Reader253 adds explicit initial component profile topology authoring under
 property intent/request4, phase authoring/request6 and mixed Properties35.

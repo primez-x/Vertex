@@ -15,6 +15,7 @@
 #include "sketch/constraint_integrity.hpp"
 #include "sketch/constraint_wall_edit.hpp"
 #include "sketch/document_digest.hpp"
+#include "sketch/drawing_selection_removal.hpp"
 #include "sketch/joint_translation_replay.hpp"
 #include "sketch/phase_opening_demolition.hpp"
 #include "sketch/phase_coordinated_demolition.hpp"
@@ -3444,7 +3445,8 @@ CoordinatedComponentPropertyComposition compose_coordinated_component_property_d
         invalid("Coordinated component Properties requires an unreviewed noncomponent base");
     const auto historical=replay_mixed_selection_property_edit_preparation(source,wire);
     const auto& actual=source.entities();
-    const auto& carried=historical.preview_snapshot().entities();
+    const auto& physical_base=historical.preview_snapshot().entities();
+    auto carried=physical_base;
     coordinated_map_budget(actual);
     // Check complete independently replayed allocations BEFORE eliding a copy.
     // An elided destination cannot hide an allocation/alias collision.
@@ -3453,15 +3455,80 @@ CoordinatedComponentPropertyComposition compose_coordinated_component_property_d
     auto normalized=replayed.preview_entities();
     const auto allocated_aliases=embedded_assembly_presentation_ids(normalized);
     const auto authoring=decode_phase_assembly_instance_property_edit_authoring(replayed.request().at("authoring"));
-    // V3 geometry and explicit V4 Properties carry the same independently
-    // inventoried component dimensions. Older pose requests keep their meaning.
-    const bool geometry_completion=replayed.request().at("version")==3 || replayed.request().at("version")==4;
+    // Geometry and explicit complete Properties use the same independently
+    // inventoried dimensions. Historical pose requests keep their meaning.
+    const auto component_version=replayed.request().at("version").get<int>();
+    const bool geometry_completion=component_version>=3 && component_version<=7;
+    const bool reviewed_topology=component_version==7;
+    std::set<ComponentTarget> reviewed_nodes;
+    if (reviewed_topology) for (const auto& intent:authoring.intents)
+        if (intent.review_profile_topology) reviewed_nodes.insert(intent.target);
     std::map<std::string,std::string,std::less<>> base_dimension_ids;
     if (geometry_completion && (version==21 || version==24 || version==27))
         for (const auto& allocation:wire.at("phase_request").at("allocations"))
             for (const auto& [original,proposed]:allocation.at("dimension_identities").items())
                 if (!base_dimension_ids.emplace(original,proposed.get<std::string>()).second)
                     invalid("Coordinated component Properties repeats a base dimension allocation");
+    // The physical lane was independently replayed and its complete fresh
+    // inventory checked above. Elide only its exact allocated copies for actual
+    // reviewed retirements. Typed removal retains raw surviving rows and refuses
+    // opaque references; this does not retire their protected source originals.
+    std::vector<std::string> retired_base_copies;
+    for (const auto& [original,selector]:authoring.profile_dimension_decisions) if (!selector) {
+        const auto copied=base_dimension_ids.find(original);
+        if (copied==base_dimension_ids.end()) continue;
+        if (actual.contains(copied->second) || !carried.contains(copied->second) ||
+            !exact(actual.at(original),carried.at(original)))
+            invalid("Coordinated reviewed retirement lacks an exact fresh base dimension copy");
+        retired_base_copies.push_back(copied->second);
+    }
+    if (!retired_base_copies.empty()) {
+        std::sort(retired_base_copies.begin(),retired_base_copies.end());
+        // Separate actual registry cohorts retain their existing removal
+        // admission. No cross-registry selection authority is inferred here.
+        std::map<std::string,std::string,std::less<>> copy_registries;
+        for (const auto& [key,entity]:carried) if (entity.type=="model_phases") {
+            const auto phases=ModelPhases::from_json(entity.properties.at("model"));
+            for (const auto& owner:phases.entity_ids())
+                if (std::binary_search(retired_base_copies.begin(),retired_base_copies.end(),owner) &&
+                    !copy_registries.emplace(owner,key).second)
+                    invalid("Coordinated reviewed base copy belongs to overlapping registries");
+        }
+        std::map<std::string,std::vector<std::string>,std::less<>> retirement_cohorts;
+        for (const auto& owner:retired_base_copies) {
+            const auto registry=copy_registries.find(owner);
+            retirement_cohorts[registry==copy_registries.end() ? std::string{} : registry->second].push_back(owner);
+        }
+        auto retained=carried;
+        for (const auto& [registry,owners]:retirement_cohorts) {
+            (void)registry;
+            std::map<std::string,std::string,std::less<>> fresh_copies;
+            for (const auto& [original,proposed]:base_dimension_ids)
+                if (std::binary_search(owners.begin(),owners.end(),proposed))
+                    fresh_copies.emplace(original,proposed);
+            if (fresh_copies.size()!=owners.size())
+                invalid("Coordinated reviewed elision lost its exact base allocation roster");
+            retained=replay_unpublished_assembly_dimension_copy_elision(
+                actual,retained,fresh_copies,true);
+        }
+        for (const auto& [key,entity]:carried) {
+            (void)entity;
+            if (!retained.contains(key) && !std::binary_search(retired_base_copies.begin(),retired_base_copies.end(),key))
+                invalid("Coordinated reviewed base elision removed an unallocated owner");
+        }
+        for (const auto& [key,entity]:actual) {
+            const auto before=carried.find(key);
+            if (before==carried.end()) continue;
+            const auto after=retained.find(key);
+            if (after==retained.end() || ((exact(entity,before->second) ||
+                can_recognize_boundary_dimension_entity_type(entity.type)) && !exact(before->second,after->second)))
+                invalid("Coordinated reviewed base elision changed an unaffected actual owner");
+        }
+        for (const auto& [original,selector]:authoring.profile_dimension_decisions)
+            if (!selector && base_dimension_ids.contains(original) && !exact(actual.at(original),retained.at(original)))
+                invalid("Coordinated reviewed base elision changed a protected source dimension");
+        carried=retained;
+    }
     CoordinatedComponentPropertyComposition result;
     result.original_to_proposed=replayed.result().original_to_proposed;
     result.reserved_component_identity_ids=replayed.result().fresh_identity_ids;
@@ -3574,12 +3641,19 @@ CoordinatedComponentPropertyComposition compose_coordinated_component_property_d
                 !is_assembly_boundary_dimension_format(inspect_boundary_dimension_version(entity).format)) continue;
             const auto decoded=decode_boundary_dimension_entity(entity);
             if (decoded.dimension && decoded.dimension->assembly_target &&
-                geometry_move_roots.contains(component_root(decoded.dimension->assembly_target->component)))
-                normalized.at(id)=entity;
+                geometry_move_roots.contains(component_root(decoded.dimension->assembly_target->component))) {
+                // A reviewed ordinary retirement stays absent. Neutralize only
+                // the base's intermediate move so it cannot overlap that removal.
+                if (normalized.contains(id)) normalized.at(id)=entity;
+                else if (std::binary_search(replayed.result().retired_dimension_ids.begin(),
+                    replayed.result().retired_dimension_ids.end(),id)) carried.insert_or_assign(id,entity);
+                else invalid("Coordinated geometry lost an unretired ordinary dimension");
+            }
         }
     }
     PhasePropertyCompositionRetirements retirements;
     for (const auto& [id,entity]:actual) { (void)entity; if (!carried.contains(id)) retirements.erased.insert(id); }
+    retirements.erased.insert(replayed.result().retired_dimension_ids.begin(),replayed.result().retired_dimension_ids.end());
     const auto carried_aliases=embedded_assembly_presentation_ids(carried);
     for (const auto& [binding,alias]:embedded_assembly_presentation_ids(actual)) {
         const auto retained=carried_aliases.find(binding);
@@ -3610,6 +3684,9 @@ CoordinatedComponentPropertyComposition compose_coordinated_component_property_d
         std::map<ComponentTarget,std::size_t> requests_by_root;
         std::vector<AssemblyDimensionTransformRequest> requests;
         std::map<std::string,std::string,std::less<>> dimension_ids;
+        std::map<std::string,AssemblyDimensionTarget,std::less<>> profile_review_roster;
+        if (reviewed_topology) profile_review_roster=
+            inspect_phase_assembly_instance_profile_dimension_review_roster(actual,authoring.intents);
         for (std::size_t index=0;phase && index<phase->inspection().replacements().size();++index) {
             const auto& inventory=phase->inspection().replacements().at(index);
             const auto& allocation=phase->validated_identity_allocations().at(index);
@@ -3639,8 +3716,11 @@ CoordinatedComponentPropertyComposition compose_coordinated_component_property_d
         auto roster=inspect_embedded_assembly_dimension_clone_roster(actual,roots);
         if (roster.size()!=dimension_ids.size())
             invalid("Coordinated component Properties dimension map differs from its actual source roster");
+        for (const auto& [original,selector]:authoring.profile_dimension_decisions)
+            if (!selector) dimension_ids.erase(original);
         if (geometry_completion) {
-            const auto component_roster=inspect_phase_assembly_instance_property_dimension_clone_roster(actual,authoring.intents);
+            const auto component_roster=inspect_phase_assembly_instance_property_dimension_clone_roster(
+                actual,authoring.intents,authoring.profile_dimension_decisions);
             if (component_roster.size()!=authoring.dimension_identities.size())
                 invalid("Coordinated geometry dimension allocations differ from their actual source roster");
             for (const auto& [original,target]:component_roster) {
@@ -3662,17 +3742,41 @@ CoordinatedComponentPropertyComposition compose_coordinated_component_property_d
                 if (!dimension_ids.emplace(original,authoring.dimension_identities.at(original)).second)
                     invalid("Coordinated geometry dimension allocation overlaps another source");
             }
+            // Clone inspection deliberately excludes reviewed retirements from
+            // allocation. They still belong to the complete carry roster, with
+            // their actual selected node and clone/move destination authority.
+            if (reviewed_topology) for (const auto& [original,target]:profile_review_roster) {
+                const auto root=component_root(target.component);
+                const auto selected=std::find_if(result.original_to_proposed.begin(),result.original_to_proposed.end(),
+                    [&](const auto& pair) { return component_root(pair.first)==root; });
+                if (selected==result.original_to_proposed.end())
+                    invalid("Coordinated reviewed dimension has no actual selected source root");
+                const auto destination=component_root(selected->second);
+                if (destination==root) continue;
+                const auto [existing,inserted]=clone_destinations.emplace(root,destination);
+                if (!inserted && existing->second!=destination)
+                    invalid("Coordinated reviewed dimension copies have different final survivors");
+                const auto [entry,added]=roster.emplace(original,target.component);
+                if (!added && entry->second!=target.component)
+                    invalid("Coordinated reviewed dimension differs from its actual source association");
+            }
         }
         auto framed=result.entities;
         for (const auto& [original,target]:roster) {
-            if (!dimension_ids.contains(original) || !exact(actual.at(original),result.entities.at(original)))
+            const bool retired=authoring.profile_dimension_decisions.contains(original) &&
+                !authoring.profile_dimension_decisions.at(original);
+            const auto retained=result.entities.find(original);
+            if ((!retired && !dimension_ids.contains(original)) || retained==result.entities.end() ||
+                !exact(actual.at(original),retained->second))
                 invalid("Coordinated component Properties must preserve each original copied dimension");
-            const auto& proposed=dimension_ids.at(original);
-            if (!framed.erase(proposed)) invalid("Coordinated component Properties lost its actual copied dimension");
+            if (!retired) {
+                const auto& proposed=dimension_ids.at(original);
+                if (!framed.erase(proposed)) invalid("Coordinated component Properties lost its actual copied dimension");
+            }
             const auto root=component_root(target);
             const auto [request,inserted]=requests_by_root.emplace(root,requests.size());
             if (inserted) requests.push_back({root,clone_destinations.at(root),AssemblyDimensionTransformMode::clone,{}});
-            requests.at(request->second).fresh_dimension_ids.emplace(original,proposed);
+            if (!retired) requests.at(request->second).fresh_dimension_ids.emplace(original,dimension_ids.at(original));
         }
         std::set<ComponentTarget> move_roots;
         if (geometry_completion) {
@@ -3695,22 +3799,61 @@ CoordinatedComponentPropertyComposition compose_coordinated_component_property_d
             if (!move_roots.contains(root)) continue;
             if (requests_by_root.emplace(root,requests.size()).second)
                 requests.push_back({root,root,AssemblyDimensionTransformMode::move,{}});
-            if (!exact(carried.at(key),result.entities.at(key)))
+            const bool retired=authoring.profile_dimension_decisions.contains(key) &&
+                !authoring.profile_dimension_decisions.at(key);
+            const auto retained=result.entities.find(key);
+            if (retired ? retained!=result.entities.end() :
+                retained==result.entities.end() || !exact(physical_base.at(key),retained->second))
                 invalid("Coordinated component Properties has an unproved ordinary dimension contribution");
-            framed.at(key)=entity;
+            framed.insert_or_assign(key,entity);
             // Move carry emits only changes from source. A final frame equal
             // to source must also discard the base's intermediate label move.
-            result.entities.at(key)=entity;
+            if (!retired) result.entities.at(key)=entity;
         }
-        const auto dimensions=requests.empty() ? std::vector<Entity>{} :
-            carry_assembly_dimension_transform_entities(actual,framed,requests);
+        AssemblyDimensionReviewedCarryResult dimensions;
+        if (!requests.empty()) {
+            if (reviewed_topology) {
+                std::vector<AssemblyDimensionReviewedTransformRequest> reviewed_requests;
+                for (const auto& request:requests) {
+                    AssemblyDimensionReviewedTransformRequest reviewed;
+                    reviewed.transform=request;
+                    reviewed_requests.push_back(std::move(reviewed));
+                }
+                bool has_reviewed_request=false;
+                for (const auto& node:reviewed_nodes) {
+                    const auto request=requests_by_root.find(component_root(node));
+                    if (request==requests_by_root.end()) continue;
+                    reviewed_requests.at(request->second).reviewed_profile_nodes.push_back(node);
+                    has_reviewed_request=true;
+                }
+                for (const auto& [key,decision]:authoring.profile_dimension_decisions) {
+                    const auto association=profile_review_roster.find(key);
+                    if (association==profile_review_roster.end())
+                        invalid("Coordinated reviewed decision lost its actual source association");
+                    const auto request=requests_by_root.find(component_root(association->second.component));
+                    if (request==requests_by_root.end())
+                        invalid("Coordinated reviewed decision lost its final carry request");
+                    reviewed_requests.at(request->second).profile_dimension_decisions.emplace(key,decision);
+                }
+                if (has_reviewed_request)
+                    dimensions=carry_reviewed_assembly_dimension_transform_entities(actual,framed,reviewed_requests);
+                else dimensions.upserts=carry_assembly_dimension_transform_entities(actual,framed,requests);
+            } else dimensions.upserts=carry_assembly_dimension_transform_entities(actual,framed,requests);
+        }
+        if (dimensions.retired_source_dimension_ids!=replayed.result().retired_dimension_ids)
+            invalid("Coordinated reviewed carry changed the exact ordinary retirement roster");
         std::vector<std::string> changed;
-        for (const auto& dimension:dimensions)
+        for (const auto& dimension:dimensions.upserts)
             if (actual.contains(dimension.id)) changed.push_back(dimension.id);
+        changed.insert(changed.end(),dimensions.retired_source_dimension_ids.begin(),dimensions.retired_source_dimension_ids.end());
+        std::sort(changed.begin(),changed.end());
         validate_ordinary_assembly_dimension_changes(actual,changed);
-        for (const auto& dimension:dimensions) result.entities.at(dimension.id)=dimension;
-        for (const auto& [original,proposed]:dimension_ids) {
-            (void)proposed;
+        for (const auto& dimension:dimensions.upserts) result.entities.at(dimension.id)=dimension;
+        for (const auto& original:dimensions.retired_source_dimension_ids)
+            if (result.entities.contains(original))
+                invalid("Coordinated reviewed carry restored a retired ordinary dimension");
+        for (const auto& [original,target]:roster) {
+            (void)target;
             if (!exact(actual.at(original),result.entities.at(original)))
                 invalid("Coordinated component Properties changed a protected copied source dimension");
         }

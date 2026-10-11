@@ -407,7 +407,8 @@ struct Authority {
     OverlayChildren overlays;
     Phases phase;
 };
-Authority authority(const Entities& actual, const DrawingSelectionRemovalIntent& intent, Budget& budget) {
+Authority authority(const Entities& actual, const DrawingSelectionRemovalIntent& intent, Budget& budget,
+    const Ids* admitted_unpublished_dimensions = nullptr) {
     Authority result; result.phase = phases(actual);
     std::optional<std::string> registry;
     for (const auto& id : intent.owner_ids) {
@@ -417,7 +418,13 @@ Authority authority(const Entities& actual, const DrawingSelectionRemovalIntent&
         // Existing ordinary removal treats required supported measured strokes
         // as authored geometry: the flag requires reader support, rather than
         // protecting their lifetime. Other required roots remain protected.
-        if (entity.required && entity.type != "measurement_linework") reject("selected actual owner is required: " + id);
+        // Only the dedicated fresh-copy helper supplies this exact roster after
+        // checking its actual originals and independently admitted physical base.
+        const bool unpublished_dimension = admitted_unpublished_dimensions &&
+            admitted_unpublished_dimensions->contains(id) &&
+            can_recognize_boundary_dimension_entity_type(entity.type);
+        if (entity.required && entity.type != "measurement_linework" && !unpublished_dimension)
+            reject("selected actual owner is required: " + id);
         if (entity.type == "boundary" || entity.type == "measurement_boundary") boundary_admission(entity);
         else if (entity.type == "measurement_linework") {
             if (entity.extensions.contains("physical_wall_room") || entity.properties.contains("physical_wall_room") ||
@@ -718,11 +725,12 @@ void cleanup(Entity& entity, const Authority& selected) {
 }
 Entities replay(const Entities& actual, const Entities& stage, const DrawingSelectionRemovalIntent& intent, bool active,
     const Entities* reconstructed_architectural_stage = nullptr,
-    const ArchitecturalSelectionRemovalIntent* owner_dimension_retirement = nullptr) {
+    const ArchitecturalSelectionRemovalIntent* owner_dimension_retirement = nullptr,
+    const Ids* admitted_unpublished_dimensions = nullptr) {
     intent_bounds(intent); Budget budget; bounds(actual, budget);
     if (&actual != &stage) bounds(stage, budget);
     validate_constraints(actual, active);
-    auto selected = authority(actual, intent, budget);
+    auto selected = authority(actual, intent, budget, admitted_unpublished_dimensions);
     collect_overlays(actual, selected, budget);
     if (&actual != &stage) collect_overlays(stage, selected, budget);
     local_reference_admission(actual, selected, budget);
@@ -838,6 +846,74 @@ DrawingSelectionRemovalEntities replay_drawing_selection_removal_after_review(co
     const DrawingSelectionRemovalEntities& admitted_review_stage, const DrawingSelectionRemovalIntent& intent, bool active_phase_constraints) {
     try { return replay(actual, admitted_review_stage, intent, active_phase_constraints); }
     catch (const Json::exception& error) { reject(std::string("malformed actual/review source: ") + error.what()); }
+}
+DrawingSelectionRemovalEntities replay_unpublished_assembly_dimension_copy_elision(
+    const DrawingSelectionRemovalEntities& actual,
+    const DrawingSelectionRemovalEntities& admitted_physical_base,
+    const std::map<std::string, std::string, std::less<>>& source_dimension_fresh_ids,
+    bool active_phase_constraints) {
+    try {
+        // Bound both complete envelopes before any selected-dimension codec or
+        // raw equality serialization, including opaque retained entities.
+        Budget budget; bounds(actual, budget); bounds(admitted_physical_base, budget);
+        if (source_dimension_fresh_ids.empty() || source_dimension_fresh_ids.size() > target_limit)
+            reject("unpublished dimension elision requires 1..1000 exact allocations");
+        Ids fresh_ids;
+        for (const auto& [source_id, fresh_id] : source_dimension_fresh_ids) {
+            identity(source_id); identity(fresh_id);
+            budget.text(source_id); budget.text(fresh_id);
+            if (actual.contains(fresh_id) || !fresh_ids.insert(fresh_id).second)
+                reject("unpublished dimension allocation is not a unique fresh actual identity: " + fresh_id);
+        }
+        for (const auto& [source_id, fresh_id] : source_dimension_fresh_ids) {
+            const auto original = actual.find(source_id);
+            if (original == actual.end()) reject("unpublished dimension allocation lacks actual original: " + source_id);
+            const auto retained = admitted_physical_base.find(source_id);
+            if (retained == admitted_physical_base.end() || !exact(original->second, retained->second))
+                reject("physical base must retain the exact original dimension: " + source_id);
+            const auto fresh = admitted_physical_base.find(fresh_id);
+            if (fresh == admitted_physical_base.end()) reject("physical base lacks allocated dimension copy: " + fresh_id);
+            const auto source_dimension = decode_boundary_dimension_entity(original->second);
+            const auto fresh_dimension = decode_boundary_dimension_entity(fresh->second);
+            if (!source_dimension.supported() || !fresh_dimension.supported() ||
+                (source_dimension.version != 6 && source_dimension.version != 7) ||
+                fresh_dimension.version != source_dimension.version ||
+                !is_assembly_boundary_dimension_kind(source_dimension.dimension->kind) ||
+                fresh_dimension.dimension->kind != source_dimension.dimension->kind ||
+                !source_dimension.dimension->assembly_target || !fresh_dimension.dimension->assembly_target ||
+                fresh->second.type != original->second.type || fresh->second.required != original->second.required)
+                reject("unpublished copy must retain supported assembly dimension kind and required flag: " + fresh_id);
+            const auto& source_target = *source_dimension.dimension->assembly_target;
+            const auto& fresh_target = *fresh_dimension.dimension->assembly_target;
+            // The typed physical replay owns root remapping. Local measurement
+            // identity must remain exact even if later profile editing retires
+            // that selector; resolving it against edited geometry would deny
+            // the very reviewed elision this helper supplies.
+            if (source_target.component.part_path != fresh_target.component.part_path ||
+                source_target.axis != fresh_target.axis || source_target.profile != fresh_target.profile)
+                reject("unpublished copy changed the source dimension's local target/path: " + fresh_id);
+        }
+        validate_constraints(actual, active_phase_constraints);
+        DrawingSelectionRemovalIntent elision;
+        elision.owner_ids.assign(fresh_ids.begin(), fresh_ids.end());
+        auto result = replay(admitted_physical_base, admitted_physical_base, elision,
+            active_phase_constraints, nullptr, nullptr, &fresh_ids);
+        for (const auto& [id, entity] : admitted_physical_base) {
+            (void)entity;
+            if (!result.contains(id) && !fresh_ids.contains(id))
+                reject("unpublished dimension elision unexpectedly erased another owner: " + id);
+        }
+        for (const auto& [id, original] : actual) {
+            const auto retained = admitted_physical_base.find(id);
+            if (retained == admitted_physical_base.end() || !exact(original, retained->second)) continue;
+            const auto after = result.find(id);
+            if (after == result.end() || !exact(original, after->second))
+                reject("unpublished dimension elision changed an unchanged actual owner: " + id);
+        }
+        return result;
+    } catch (const Json::exception& error) {
+        reject(std::string("malformed actual/physical dimension-copy source: ") + error.what());
+    }
 }
 DrawingSelectionRemovalEntities replay_drawing_selection_removal_with_architectural(
     const DrawingSelectionRemovalEntities& actual, const DrawingSelectionRemovalIntent& drawing,

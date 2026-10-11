@@ -16,6 +16,23 @@ struct AssemblyDimensionTransformRequest {
     std::map<std::string, std::string, std::less<>> fresh_dimension_ids;
 };
 
+struct AssemblyDimensionReviewedTransformRequest {
+    AssemblyDimensionTransformRequest transform;
+    // Sorted unique exact source nodes, including their complete part paths.
+    std::vector<AssemblyInstancePropertyEditTarget> reviewed_profile_nodes;
+    // Every v7 dimension on those nodes requires an explicit decision. Null
+    // retires its contribution; a value retains/remaps its own profile selector.
+    std::map<std::string, std::optional<AssemblyProfileDimensionTarget>, std::less<>>
+        profile_dimension_decisions;
+};
+
+struct AssemblyDimensionReviewedCarryResult {
+    std::vector<Entity> upserts;
+    // Actual source removals for move requests only. Clone retirements preserve
+    // their originals and contribute neither an upsert nor a removal ID.
+    std::vector<std::string> retired_source_dimension_ids;
+};
+
 // Source-only inventory for exact embedded catalog/instance roots (at most
 // 4096). Complete raw/catalog admission precedes discovery; affected malformed,
 // unsupported or future targets refuse. Independent owners remain untouched.
@@ -86,6 +103,29 @@ inspect_embedded_assembly_dimension_clone_roster(
     const AssemblyDocumentEntities& source,
     const AssemblyDocumentEntities& candidate,
     std::span<const AssemblyDimensionTransformRequest> requests);
+
+// Separate opt-in topology review contribution; historical carry overloads
+// retain their exact-selector contracts. Each reviewed node belongs to its
+// request's source root, with 1..1000 reviewed nodes across the batch. Decisions
+// cover exactly all associated v7 dimensions on those nodes, preserving their
+// measurement kind and component/path. Explicit unchanged selectors are valid;
+// surviving selectors must resolve in the complete final body candidate.
+// Other v6/v7 targets keep their original selectors. The complete association
+// roster, including retirements, is bounded to 1000 and measured in source.
+// Retired destination nodes retain their actual root/path/type and valid pose
+// without requiring the removed selector to measure. Original dimensions must
+// still be present unchanged in candidate before this contribution is applied.
+// Move callers remove returned retired source IDs at atomic publication. Clone
+// callers preserve those originals, receive no removal ID and allocate no clone for a retirement;
+// fresh_dimension_ids covers exactly surviving associated dimensions. Upserts
+// and retired IDs are in source-ID order, with no partial result on refusal.
+// This supplies no geometry-edit authority: enclosing reviewed property/phase
+// producers must bind these nodes to their explicit topology-edit authority.
+[[nodiscard]] AssemblyDimensionReviewedCarryResult
+carry_reviewed_assembly_dimension_transform_entities(
+    const AssemblyDocumentEntities& source,
+    const AssemblyDocumentEntities& candidate,
+    std::span<const AssemblyDimensionReviewedTransformRequest> requests);
 
 // Pure contribution for embedded roots hosted by an already admitted physical
 // dependency roster in a complete, already derived body candidate. Host IDs are

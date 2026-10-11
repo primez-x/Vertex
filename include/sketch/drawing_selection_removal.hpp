@@ -61,6 +61,23 @@ struct DrawingSelectionRemovalIntent {
     const DrawingSelectionRemovalEntities& admitted_review_stage,
     const DrawingSelectionRemovalIntent& intent, bool active_phase_constraints);
 
+// Elides only unpublished v6/v7 assembly dimension copies, including required
+// copies, from an independently replayed physical base. The caller proves that
+// this complete base and the exact source-dimension -> fresh-copy allocations
+// came from the captured actual source's typed physical replay; this helper
+// confers no provenance on a supplied stage or copied root identity. It checks
+// exact retained originals, fresh identity, required flags and local selectors.
+// Root/catalog/instance remapping is owned by that independently admitted replay.
+// Typed reference cleanup and saved-registry refusal remain in force. No other
+// owner may be erased, and actual owners left unchanged by the base stay exact.
+// The caller partitions registry cohorts, reserves allocations across retained
+// history even when elided, and owns final complete Document preview/admission.
+[[nodiscard]] DrawingSelectionRemovalEntities replay_unpublished_assembly_dimension_copy_elision(
+    const DrawingSelectionRemovalEntities& actual,
+    const DrawingSelectionRemovalEntities& admitted_physical_base,
+    const std::map<std::string, std::string, std::less<>>& source_dimension_fresh_ids,
+    bool active_phase_constraints);
+
 // Reconstructs the architectural stage from actual selection authority itself.
 // Only that stage's exact annotation override consequences may compose with
 // independent selected rows. The generic reviewed-stage contract is unchanged.

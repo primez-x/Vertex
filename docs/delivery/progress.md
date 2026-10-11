@@ -14,6 +14,47 @@ changed source does not acquire runtime acceptance without later qualification.
 
 ## Current delivery state
 
+### October 11 reviewed component profile redraw and dimension decisions
+
+Initial identity authoring is committed and pushed as
+98860222e9cc9424587e03b0bcf1b45e74d4c976; the exact remote ref matched local HEAD.
+The current source continuation adds reviewed own-profile Set/Clear under leaf5,
+phase7 and mixed Properties36. It permits redraw/cutout editing, profile addition
+and retirement, and return to actual type geometry. Unchanged profiles retain
+their topology and raw representations; changed/new profiles receive fresh
+profile-local identities rather than inheriting old ordinal references.
+
+Every affected own-profile dimension has an explicit same-kind destination or
+retirement. The separate reviewed carry measures actual source associations,
+resolves surviving final targets and retains historical exact-selector carry.
+Ordinary retirement derives known reference cleanup; alternative retirement
+preserves originals and excludes proposed dimension/overlay allocations.
+Reader254/extraction252 retains the new direct/nested dialects. Properties now
+authors those drafts and the controller reviews final affected dimensions;
+cancellation reopens the same Properties draft without publication.
+
+Leaf/carry/wrapper/Properties writers returned ownership. Root owns controller,
+Document/store/docs and integrated review. Coordinated physical/component
+Properties now uses the same final remap/retirement decisions in source. Its
+writer returned ownership. Independent source review found that historical
+drawing removal could not elide a required unpublished physical-base dimension
+copy. A dedicated helper now checks exact retained actual originals, fresh base
+allocations, local selectors and required flags before typed reference/phase
+cleanup. Historical required-owner protection remains unchanged. The coordinator
+derives the roster from its independently replayed base proof; absent final base
+allocations remain reserved through retained history. The prior review found no
+additional proved P1/P2 findings. Fresh independent review approved the narrow
+helper and coordinator integration with no demonstrated actionable findings.
+Root reviewed the integrated source contracts and scoped diff checks passed.
+This record and the source form one scoped backup batch; source review does not
+establish compilation, runtime cleanup, Undo or save/reopen behavior.
+
+Source-only steering remains binding: no builds, tests, new tests, scripts,
+probes, native jobs, launches, packages or installations ran. The installed
+application is unchanged. Compilation, interactions, Undo/reopen, output and
+user acceptance remain unverified. All ten broad production gates and external
+compatibility prerequisites remain open; this batch does not replace that scope.
+
 ### October 11 initial component profile identity authoring
 
 The preceding identified-dimension/mixed-deletion batch is committed and pushed
