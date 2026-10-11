@@ -4,6 +4,7 @@
 
 #include <cstddef>
 #include <map>
+#include <optional>
 #include <span>
 #include <string>
 #include <vector>
@@ -30,6 +31,10 @@ struct PresentationAnnotationSimilarityTarget {
     PresentationAnnotationTarget target;
     PlanarTransform transform;
     double scale{1.0};
+    // Only an actual model_plan label may separate its view-relative baseline
+    // from the model-XY anchor operator. This operator is linear only: its
+    // pivot and offset must be zero. Null retains the historical shared frame.
+    std::optional<PlanarTransform> text_baseline{std::nullopt};
 };
 
 struct PresentationReferenceSimilarityTarget {
@@ -105,6 +110,8 @@ struct AreaCalloutPlacement {
 // (source_position - pivot)) + offset; physical placement/reference scales
 // multiply their original values. The rigid producer's orientation, readable
 // text, raw preservation and required legacy reflection defaults still apply.
+// An explicit text_baseline derives readable label rotation independently from
+// the original source angle, while transform and scale still own its anchor.
 // Every target, including identity, is authenticated; changed scales must stay
 // within the existing authoring bounds. Duplicate targets and child
 // aliases across selected owners are refused. One upsert per changed owner is

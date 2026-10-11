@@ -28,10 +28,19 @@ public:
 // edits the same typed publication path. Versions one/two still require children.
 // A carried child requires its explicitly transformed parent; an independent
 // child is authenticated by its original qualified ID, even under replacement.
+// Version four pairs ordinary dialect four with explicit text-baseline and invariant-child
+// proof. A nonnull roof_identity_requests array selects this version, including
+// an empty array. Its sorted unique rows are {roof_id, transform, opening_ids};
+// transform uses the canonical rigid selection-geometry root encoding, and
+// opening_ids is the sorted complete roster of that roof's selected identity
+// children. Those children use coverage:"identity", have no ordinary parent,
+// replay their own actual-source operator to an exactly unchanged full map,
+// and require their entire owner unchanged in the final composed result.
+// This conveys neither changed-child nor phase replacement authority.
 [[nodiscard]] nlohmann::json make_mixed_selection_edit_intent(
     const DocumentSnapshot& source, const nlohmann::json& ordinary_request,
     const nlohmann::json& roof_authoring, const nlohmann::json& roof_members,
-    std::string_view message);
+    std::string_view message, const nlohmann::json& roof_identity_requests = nullptr);
 [[nodiscard]] nlohmann::json validate_mixed_selection_edit_intent(const nlohmann::json& value);
 [[nodiscard]] std::map<std::string, Entity, std::less<>> replay_mixed_selection_edit(
     const DocumentSnapshot& source, const nlohmann::json& value);

@@ -202,18 +202,33 @@ PlanarTransform planar_transform(const Json& value, bool similarity = false) {
     return result;
 }
 
+std::optional<PlanarTransform> text_baseline_transform(const Json& value) {
+    if (value.is_null()) return std::nullopt;
+    fields(value, {"rotation_radians", "flip_horizontal", "flip_vertical"});
+    PlanarTransform result;
+    result.rotation_radians = number(value.at("rotation_radians"));
+    result.flip_horizontal = flag(value.at("flip_horizontal"));
+    result.flip_vertical = flag(value.at("flip_vertical"));
+    const Json encoded = {{"rotation_radians", encoded_number(result.rotation_radians, value.at("rotation_radians"))},
+        {"flip_horizontal", result.flip_horizontal}, {"flip_vertical", result.flip_vertical}};
+    if (encoded.dump() != value.dump()) reject("text baseline must use its canonical linear encoding");
+    return result;
+}
+
 void shape(const Json& request) {
     Budget budget;
     budget.json(request, 0);
     const bool geometry_dialect = request.is_object() && request.contains("version") &&
-        request.at("version").is_number_integer() && request.at("version") == 3;
+        request.at("version").is_number_integer() &&
+        (request.at("version") == 3 || request.at("version") == 4);
     if (geometry_dialect)
         fields(request, {"version", "expected_revision", "transaction_id", "architectural", "embedded",
             "annotations", "references", "message", "geometry"});
     else fields(request, {"version", "expected_revision", "transaction_id", "architectural", "embedded",
         "annotations", "references", "message"});
     if (!request.at("version").is_number_integer() ||
-        (request.at("version") != 1 && request.at("version") != 2 && request.at("version") != 3))
+        (request.at("version") != 1 && request.at("version") != 2 &&
+            request.at("version") != 3 && request.at("version") != 4))
         reject("unsupported request version");
     const bool similarity = request.at("version") != 1;
     if (revision(request.at("expected_revision")) == std::numeric_limits<Revision>::max())
@@ -274,7 +289,10 @@ void shape(const Json& request) {
         (void)model_transform(row.at("transform"));
     }
     for (const auto& row : request.at("annotations")) {
-        fields(row, {"owner_id", "child_id", "transform"});
+        if (request.at("version") == 4) {
+            fields(row, {"owner_id", "child_id", "transform", "text_baseline"});
+            (void)text_baseline_transform(row.at("text_baseline"));
+        } else fields(row, {"owner_id", "child_id", "transform"});
         const auto& owner = identity(row.at("owner_id"));
         const auto& child = identity(row.at("child_id"));
         if (objects.contains(owner) || catalogs.contains(owner)) reject("overlapping persisted annotation owner");
@@ -348,7 +366,7 @@ Json ordinary_selection_edit_semantic_targets(const Json& request) {
         roster.push_back({{"kind", "annotation"}, {"owner_id", row.at("owner_id")}, {"child_id", row.at("child_id")}});
     for (const auto& row : canonical.at("embedded"))
         roster.push_back({{"kind", "embedded"}, {"catalog_id", row.at("catalog_id")}, {"instance_id", row.at("instance_id")}});
-    if (canonical.at("version") == 3 && !canonical.at("geometry").is_null())
+    if ((canonical.at("version") == 3 || canonical.at("version") == 4) && !canonical.at("geometry").is_null())
         for (const auto& root : canonical.at("geometry").at("request").at("roots"))
             roster.push_back({{"kind", "geometry"}, {"entity_id", root.at("root_id")}});
     for (const auto& row : canonical.at("architectural"))
@@ -358,10 +376,10 @@ Json ordinary_selection_edit_semantic_targets(const Json& request) {
     return roster;
 }
 
-ApplyEntityChanges replay_ordinary_selection_edit(const DocumentSnapshot& source, const Json& request) {
-    const auto canonical = validate_ordinary_selection_edit_request(request);
-    if (canonical.at("version") == 3)
-        reject("version three requires typed candidate replay, not raw entity-change authority");
+namespace {
+// Internal nongeometry replay keeps the complete validated dialect, including
+// v4 baseline authority. Only the public historical API is restricted to v1/v2.
+ApplyEntityChanges replay_ordinary_producers(const DocumentSnapshot& source, const Json& canonical) {
     const auto expected = revision(canonical.at("expected_revision"));
     if (source.revision() != expected)
         throw DocumentError(DocumentErrorCode::stale_revision, "The ordinary selection edit source changed.");
@@ -374,7 +392,7 @@ ApplyEntityChanges replay_ordinary_selection_edit(const DocumentSnapshot& source
     std::vector<PresentationReferenceTransformTarget> references;
     std::vector<PresentationAnnotationSimilarityTarget> annotation_similarities;
     std::vector<PresentationReferenceSimilarityTarget> reference_similarities;
-    const bool similarity = canonical.at("version") == 2;
+    const bool similarity = canonical.at("version") != 1;
     for (const auto& row : canonical.at("architectural")) {
         persisted_owner(source, text(row, "entity_id"));
         architectural.push_back({text(row, "entity_id"), model_transform(row.at("transform"))});
@@ -388,7 +406,8 @@ ApplyEntityChanges replay_ordinary_selection_edit(const DocumentSnapshot& source
         persisted_owner(source, text(row, "owner_id"));
         const PresentationAnnotationTarget target{text(row, "owner_id"), text(row, "child_id")};
         const auto transform = planar_transform(row.at("transform"), similarity);
-        if (similarity) annotation_similarities.push_back({target, transform, number(row.at("transform").at("scale"))});
+        if (similarity) annotation_similarities.push_back({target, transform, number(row.at("transform").at("scale")),
+            canonical.at("version") == 4 ? text_baseline_transform(row.at("text_baseline")) : std::nullopt});
         else annotations.push_back({target, transform});
     }
     for (const auto& row : canonical.at("references")) {
@@ -445,10 +464,18 @@ ApplyEntityChanges replay_ordinary_selection_edit(const DocumentSnapshot& source
     }
     return result;
 }
+} // namespace
+
+ApplyEntityChanges replay_ordinary_selection_edit(const DocumentSnapshot& source, const Json& request) {
+    const auto canonical = validate_ordinary_selection_edit_request(request);
+    if (canonical.at("version") != 1 && canonical.at("version") != 2)
+        reject("versions three and four require typed candidate replay, not raw entity-change authority");
+    return replay_ordinary_producers(source, canonical);
+}
 
 std::vector<Json> ordinary_selection_edit_room_reviews(const Json& request) {
     const auto canonical = validate_ordinary_selection_edit_request(request);
-    if (canonical.at("version") != 3 || canonical.at("geometry").is_null()) return {};
+    if ((canonical.at("version") != 3 && canonical.at("version") != 4) || canonical.at("geometry").is_null()) return {};
     return canonical.at("geometry").at("room_reviews").get<std::vector<Json>>();
 }
 
@@ -460,24 +487,21 @@ Entities replay_ordinary_selection_edit_candidate(const DocumentSnapshot& source
     if (!source.is_editable())
         throw DocumentError(DocumentErrorCode::read_only, "The ordinary selection edit source is read-only.");
     const auto admit_ordinary = [&](const Json& ordinary) {
-        const auto command = replay_ordinary_selection_edit(source, ordinary);
+        const auto command = replay_ordinary_producers(source, ordinary);
         const auto admitted = Document::preview_command(source, command);
         unchanged_assets(source, admitted);
         return Entities(admitted.entities());
     };
-    if (canonical.at("version") != 3) return admit_ordinary(canonical);
+    if (canonical.at("version") != 3 && canonical.at("version") != 4) return admit_ordinary(canonical);
 
     std::vector<Entities> candidates;
     const bool has_ordinary_targets = !canonical.at("architectural").empty() ||
         !canonical.at("embedded").empty() || !canonical.at("annotations").empty() ||
         !canonical.at("references").empty();
     if (has_ordinary_targets) {
-        auto ordinary = canonical;
-        ordinary.erase("geometry");
-        ordinary["version"] = 2;
         // All producer leaves remain independently admitted against this same
         // original, never the geometry stage or a preceding leaf's candidate.
-        candidates.push_back(admit_ordinary(ordinary));
+        candidates.push_back(admit_ordinary(canonical));
     }
     if (canonical.at("geometry").is_null()) return candidates.front();
 

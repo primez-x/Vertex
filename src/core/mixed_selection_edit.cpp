@@ -1,6 +1,7 @@
 #include "sketch/mixed_selection_edit.hpp"
 
 #include "sketch/boundary_dimension.hpp"
+#include "sketch/constraint_phase_scope.hpp"
 #include "sketch/document_digest.hpp"
 #include "sketch/ordinary_selection_edit.hpp"
 #include "sketch/phase_constraint_authoring.hpp"
@@ -107,8 +108,9 @@ void message(const Json& value) {
 struct Member {
     MemberKey key;
     bool carried{};
+    bool invariant{};
 };
-std::vector<Member> members(const Json& value,bool allow_empty=false) {
+std::vector<Member> members(const Json& value,bool allow_empty=false,bool allow_identity=false) {
     if (!value.is_array() || (!allow_empty && value.empty()) || value.size() > 1000)
         reject("requires a supported bounded roof-child roster");
     std::vector<Member> result;
@@ -116,11 +118,56 @@ std::vector<Member> members(const Json& value,bool allow_empty=false) {
     for (const auto& row : value) {
         fields(row, {"roof_id", "opening_id", "coverage"});
         identity(row.at("roof_id")); identity(row.at("opening_id"));
-        if (row.at("coverage") != "independent" && row.at("coverage") != "carried") reject("unsupported child coverage");
+        if (row.at("coverage") != "independent" && row.at("coverage") != "carried" &&
+            !(allow_identity && row.at("coverage") == "identity")) reject("unsupported child coverage");
         MemberKey key{row.at("roof_id").get<std::string>(), row.at("opening_id").get<std::string>()};
         if (previous && !(key > *previous)) reject("roof children must be sorted and unique");
         previous = key;
-        result.push_back({std::move(key), row.at("coverage") == "carried"});
+        result.push_back({std::move(key), row.at("coverage") == "carried", row.at("coverage") == "identity"});
+    }
+    return result;
+}
+std::vector<RoofOpeningGroupTransform> identity_requests(const Json& value, Revision expected) {
+    if (!value.is_array() || value.size() > 1000) reject("requires a bounded identity request array");
+    std::vector<RoofOpeningGroupTransform> result;
+    std::optional<std::string> previous_roof;
+    std::size_t count{};
+    for (const auto& row : value) {
+        fields(row, {"roof_id", "transform", "opening_ids"});
+        identity(row.at("roof_id"));
+        const auto roof_id = row.at("roof_id").get<std::string>();
+        if (previous_roof && !(roof_id > *previous_roof)) reject("identity roots must be sorted and unique");
+        previous_roof = roof_id;
+        const auto& openings = row.at("opening_ids");
+        if (!openings.is_array() || openings.empty() || openings.size() > 1000 - count)
+            reject("identity requests require bounded nonempty child rosters");
+        count += openings.size();
+        // Reuse the closed rigid codec, without deriving any geometric-root
+        // selection authority. The enclosing budget has already admitted these
+        // borrowed values before construction or codec serialization.
+        const Json rigid{{"version", 1}, {"expected_revision", expected},
+            {"roots", Json::array({Json{{"root_id", roof_id}, {"transform", row.at("transform")}}})},
+            {"message", "Authenticate invariant roof children"}};
+        const auto decoded = decode_selection_geometry_transform_request(rigid);
+        if (encode_selection_geometry_transform_request(decoded).dump() != rigid.dump())
+            reject("identity transform must use exact canonical rigid encoding");
+        const auto& transform = decoded.roots.front().transform;
+        RoofOpeningGroupTransform request;
+        request.world_pivot = transform.pivot;
+        request.world_translation = transform.offset;
+        request.rotation_radians = transform.rotation_radians;
+        request.flip_horizontal = transform.flip_horizontal;
+        request.flip_vertical = transform.flip_vertical;
+        request.retain_invariant_members = true;
+        std::optional<std::string> previous_opening;
+        for (const auto& opening : openings) {
+            identity(opening);
+            const auto opening_id = opening.get<std::string>();
+            if (previous_opening && !(opening_id > *previous_opening)) reject("identity children must be sorted and unique");
+            previous_opening = opening_id;
+            request.members.push_back({roof_id, opening_id});
+        }
+        result.push_back(std::move(request));
     }
     return result;
 }
@@ -159,10 +206,18 @@ std::vector<RoofEditIntent> roof_edits(const Json& roof, const Json& enclosing) 
 }
 void validate(const Json& value) {
     Budget budget; budget.json(value, 0);
-    fields(value, {"version", "expected_revision", "source_snapshot_digest", "source_authoring_digest",
-        "source_entities_digest", "source_saved_revision", "ordinary_request", "roof_authoring", "roof_opening_members", "message"});
+    const bool identity_dialect = value.is_object() && value.contains("version") &&
+        value.at("version").is_number_integer() && value.at("version") == 4;
+    if (identity_dialect)
+        fields(value, {"version", "expected_revision", "source_snapshot_digest", "source_authoring_digest",
+            "source_entities_digest", "source_saved_revision", "ordinary_request", "roof_authoring", "roof_opening_members",
+            "roof_identity_requests", "message"});
+    else
+        fields(value, {"version", "expected_revision", "source_snapshot_digest", "source_authoring_digest",
+            "source_entities_digest", "source_saved_revision", "ordinary_request", "roof_authoring", "roof_opening_members", "message"});
     if (!value.at("version").is_number_integer() ||
-        (value.at("version") != 1 && value.at("version") != 2 && value.at("version") != 3)) reject("unsupported intent version");
+        (value.at("version") != 1 && value.at("version") != 2 && value.at("version") != 3 && !identity_dialect))
+        reject("unsupported intent version");
     const auto expected = revision(value.at("expected_revision"));
     if (expected == std::numeric_limits<Revision>::max()) reject("source revision cannot advance");
     for (const auto* key : {"source_snapshot_digest", "source_authoring_digest", "source_entities_digest"}) digest(value.at(key));
@@ -170,20 +225,38 @@ void validate(const Json& value) {
         reject("saved revision exceeds source head");
     message(value.at("message"));
     const auto ordinary = validate_ordinary_selection_edit_request(value.at("ordinary_request"));
-    if (ordinary.at("version") != value.at("version")) reject("ordinary request requires its matching mixed intent dialect");
+    if (ordinary.at("version") != value.at("version"))
+        reject("ordinary request requires its matching mixed intent dialect");
     if (ordinary.dump() != value.at("ordinary_request").dump() || revision(ordinary.at("expected_revision")) != expected)
         reject("ordinary request is not canonical or binds another revision");
-    const auto selected = members(value.at("roof_opening_members"),value.at("version") == 3);
+    const auto selected = members(value.at("roof_opening_members"),value.at("version") == 3 || identity_dialect,identity_dialect);
     std::size_t count = selected.size();
     for (const auto* lane : {"architectural", "embedded", "annotations", "references"}) count += ordinary.at(lane).size();
-    if (ordinary.at("version") == 3 && !ordinary.at("geometry").is_null())
+    if (ordinary.at("version") >= 3 && !ordinary.at("geometry").is_null())
         count += ordinary.at("geometry").at("request").at("roots").size();
     if (count > 1000) reject("aggregate selection exceeds 1000 members");
     const auto parents = explicit_parents(ordinary);
-    std::set<MemberKey> independent;
+    std::set<MemberKey> independent, invariant;
     for (const auto& member : selected) {
         if (member.carried != parents.contains(member.key.first)) reject("carried children require selected parent; independent children cannot share one");
-        if (!member.carried) independent.insert(member.key);
+        if (member.invariant) invariant.insert(member.key);
+        else if (!member.carried) independent.insert(member.key);
+    }
+    if (identity_dialect) {
+        std::set<MemberKey> authenticated;
+        for (const auto& request : identity_requests(value.at("roof_identity_requests"), expected))
+            for (const auto& member : request.members)
+                if (!invariant.contains({member.roof_id, member.opening_id}) ||
+                    !authenticated.emplace(member.roof_id, member.opening_id).second)
+                    reject("identity proof is not one unique selected invariant child");
+        if (authenticated != invariant) reject("identity proofs must cover the full invariant roster");
+        // An identity roof has no changed-owner admission. Refuse mixing a
+        // changed child on that owner with invariant claims until there is an
+        // explicit contract for the complete combined host consequence.
+        for (const auto& member : selected)
+            if (!member.invariant && std::any_of(invariant.begin(), invariant.end(), [&](const auto& key) {
+                return key.first == member.key.first;
+            })) reject("identity proof cannot share a changed or carried roof owner");
     }
     if (value.at("roof_authoring").is_null() != independent.empty()) reject("roof leaf must cover exactly the independent children");
     std::set<MemberKey> covered;
@@ -200,6 +273,9 @@ void validate(const Json& value) {
 }
 bool exact(const Entity& left, const Entity& right) {
     return left == right && left.properties.dump() == right.properties.dump() && left.extensions.dump() == right.extensions.dump();
+}
+bool exact(const Json& left, const Json& right) {
+    return left == right && left.dump() == right.dump();
 }
 bool exact(const Entities& left, const Entities& right) {
     if (left.size() != right.size()) return false;
@@ -301,11 +377,14 @@ Json validate_mixed_selection_edit_intent(const Json& value) {
     catch (const Json::exception&) { reject("malformed intent"); }
 }
 bool mixed_selection_edit_active_phase_policy(const Json& value) {
-    validate(value); return !value.at("roof_authoring").is_null();
+    validate(value);
+    return !value.at("roof_authoring").is_null() ||
+        (value.at("version") == 4 && !value.at("roof_identity_requests").empty());
 }
 bool mixed_selection_edit_has_geometry(const Json& value) {
     validate(value);
-    return value.at("version") == 3 && !value.at("ordinary_request").at("geometry").is_null();
+    return (value.at("version") == 3 || value.at("version") == 4) &&
+        !value.at("ordinary_request").at("geometry").is_null();
 }
 std::vector<Json> mixed_selection_edit_room_reviews(const Json& value) {
     validate(value);
@@ -333,13 +412,37 @@ Entities replay_mixed_selection_edit(const DocumentSnapshot& source, const Json&
     const auto key = std::pair{source_digest, value.dump()};
     if (const auto found = replay_memo->results.find(key); found != replay_memo->results.end()) return found->second;
     Replaying replaying(key);
-    const auto selected = members(value.at("roof_opening_members"),value.at("version") == 3);
+    const bool identity_dialect = value.at("version") == 4;
+    const auto selected = members(value.at("roof_opening_members"),value.at("version") == 3 || identity_dialect,identity_dialect);
     for (const auto& member : selected) (void)child_row(source.entities(), member.key);
+    if (identity_dialect && !value.at("roof_identity_requests").empty()) {
+        const auto scope = constraint_phase_scope(source.entities());
+        for (const auto& request : identity_requests(value.at("roof_identity_requests"), source.revision())) {
+            for (const auto& member : request.members)
+                if (scope.inactive_owner_ids.contains(member.roof_id) || scope.inactive_owner_ids.contains(member.opening_id))
+                    reject("identity proof requires an active actual source child and owner");
+            const auto edits = prepare_roof_opening_group_transform(source.entities(), request);
+            // Retention prevents producer no-op filtering from hiding a lost
+            // roster. Each selected child must survive in its own typed proof.
+            std::set<MemberKey> covered;
+            for (const auto& edit : edits) {
+                if (!edit.openings) reject("identity producer lost typed child authority");
+                for (const auto& upsert : edit.openings->upserts)
+                    if (!covered.emplace(edit.roof_id, upsert.opening_id).second)
+                        reject("identity producer duplicated a child");
+            }
+            std::set<MemberKey> expected;
+            for (const auto& member : request.members) expected.emplace(member.roof_id, member.opening_id);
+            if (covered != expected) reject("identity producer lost the complete selected child roster");
+            if (!exact(source.entities(), replay_roof_edit_entities(source.entities(), edits)))
+                reject("identity operator changed its complete actual-source map");
+        }
+    }
 
     // Complete closed producers and previews use ORIGINAL source. Neither
     // detached result is ever supplied as authority to the other leaf.
     auto ordinary_request = value.at("ordinary_request");
-    const bool reviewed_geometry = ordinary_request.at("version") == 3 && !ordinary_request.at("geometry").is_null();
+    const bool reviewed_geometry = ordinary_request.at("version") >= 3 && !ordinary_request.at("geometry").is_null();
     if (ordinary_request.at("version") == 3) {
         ordinary_request.erase("geometry");
         ordinary_request["version"] = 2;
@@ -348,10 +451,19 @@ Entities replay_mixed_selection_edit(const DocumentSnapshot& source, const Json&
         ordinary_request.at("embedded").empty() && ordinary_request.at("annotations").empty() &&
         ordinary_request.at("references").empty();
     auto ordinary_stage = source;
+    Entities ordinary_entities=source.entities();
     if (!ordinary_empty) {
-        const auto ordinary = replay_ordinary_selection_edit(source, ordinary_request);
-        if (ordinary.expected_revision != source.revision() || !ordinary.asset_changes.empty()) reject("ordinary leaf changed revision or assets");
-        ordinary_stage = Document::preview_command(source, Command{ordinary});
+        if (ordinary_request.at("version") == 4) {
+            // Keep explicit text-baseline authority inside the closed candidate
+            // producer. Geometry review composes below from the same source.
+            ordinary_request["geometry"]=nullptr;
+            ordinary_entities=replay_ordinary_selection_edit_candidate(source,ordinary_request);
+        } else {
+            const auto ordinary = replay_ordinary_selection_edit(source, ordinary_request);
+            if (ordinary.expected_revision != source.revision() || !ordinary.asset_changes.empty()) reject("ordinary leaf changed revision or assets");
+            ordinary_stage = Document::preview_command(source, Command{ordinary});
+            ordinary_entities=ordinary_stage.entities();
+        }
     }
     metadata(source, ordinary_stage);
     // The closed architectural producer above owns rigid reflection and uniform
@@ -359,8 +471,8 @@ Entities replay_mixed_selection_edit(const DocumentSnapshot& source, const Json&
     // change local scalar/angle rows. Admit the same actual qualified child in
     // its complete result, rather than inventing unchanged-row carry semantics.
     for (const auto& member : selected) if (member.carried)
-        (void)child_row(ordinary_stage.entities(), member.key);
-    std::vector<Entities> leaves{ordinary_stage.entities()};
+        (void)child_row(ordinary_entities, member.key);
+    std::vector<Entities> leaves{std::move(ordinary_entities)};
     if (!value.at("roof_authoring").is_null()) {
         const auto expected = replay_phase_constraint_authoring(source.entities(), value.at("roof_authoring"));
         ApplyBoundaryConstraintChanges command;
@@ -385,28 +497,43 @@ Entities replay_mixed_selection_edit(const DocumentSnapshot& source, const Json&
         result = compose_mixed_selection_edit_candidates(source.entities(), leaves);
         preserve_wall_lane(source.entities(), result);
     }
+    if (identity_dialect && !value.at("roof_identity_requests").empty()) {
+        const auto final_scope = constraint_phase_scope(result);
+        for (const auto& member : selected) if (member.invariant) {
+            const auto owner = result.find(member.key.first);
+            if (owner == result.end() || !exact(source.entities().at(member.key.first), owner->second) ||
+                !exact(child_row(source.entities(), member.key), child_row(result, member.key)))
+                reject("invariant child or its owner changed in the composed result");
+            if (final_scope.inactive_owner_ids.contains(member.key.first) ||
+                final_scope.inactive_owner_ids.contains(member.key.second))
+                reject("invariant child or its owner became inactive in the composed result");
+        }
+    }
     // Document owns complete final geometry, phase policy and retained-history
     // identity validation, followed by the only live publication.
     remember(key, result);
     return result;
 }
 Json make_mixed_selection_edit_intent(const DocumentSnapshot& source, const Json& ordinary_request,
-    const Json& roof_authoring, const Json& roof_members, std::string_view text) {
+    const Json& roof_authoring, const Json& roof_members, std::string_view text, const Json& roof_identity_requests) {
     // Account borrowed inputs together before constructing the compound JSON.
     Budget budget; budget.node(0); budget.add(1024);
     // Scalar fields synthesized below still consume the shared node budget.
     for (std::size_t i = 0; i < 6; ++i) budget.node(1);
     budget.json(ordinary_request, 1); budget.json(roof_authoring, 1); budget.json(roof_members, 1);
+    if (!roof_identity_requests.is_null()) budget.json(roof_identity_requests, 1);
     budget.node(1); budget.quoted(text);
     if (text.size() > 1024 || text.find('\0') != std::string_view::npos) reject("invalid message");
     const auto canonical_ordinary = validate_ordinary_selection_edit_request(ordinary_request);
-    Json value = {{"version", canonical_ordinary.at("version")}, {"expected_revision", source.revision()},
+    Json value = {{"version", roof_identity_requests.is_null() ? canonical_ordinary.at("version") : Json(4)},
+        {"expected_revision", source.revision()},
         {"source_snapshot_digest", document_snapshot_digest(source)},
         {"source_authoring_digest", document_authoring_source_digest_v2(source)},
         {"source_entities_digest", entity_map_digest(source.entities())},
         {"source_saved_revision", source.saved_revision_optional() ? Json(*source.saved_revision_optional()) : Json(nullptr)},
         {"ordinary_request", ordinary_request}, {"roof_authoring", roof_authoring},
         {"roof_opening_members", roof_members}, {"message", std::string(text)}};
+    if (!roof_identity_requests.is_null()) value["roof_identity_requests"] = roof_identity_requests;
     (void)replay_mixed_selection_edit(source, value);
     return value;
 }

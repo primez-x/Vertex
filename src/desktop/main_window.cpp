@@ -83,6 +83,8 @@
 #include "sketch/corner_selection_removal.hpp"
 #include "sketch/mixed_selection_removal.hpp"
 #include "sketch/ordinary_selection_removal.hpp"
+#include "sketch/mixed_selection_edit.hpp"
+#include "sketch/ordinary_selection_edit.hpp"
 #include "sketch/phase_removal_selection.hpp"
 #include "sketch/phase_selection_removal.hpp"
 #include "sketch/architectural_object_removal.hpp"
@@ -13321,7 +13323,7 @@ public:
     }
 
     void showBoundaryTransformEditor() {
-        if (rejectMixedSelectionCommand(QStringLiteral("Transform"))) return;
+        if (mixedSemanticSelection()) { showMixedSelectionTransformEditor(); return; }
         if (!m_selected_roof_openings.empty()) { showRoofOpeningQuickProperties(); return; }
         const auto selection = m_selected_ids;
         const auto primary_render_id = m_selected_id;
@@ -48864,7 +48866,8 @@ private:
     static Command sourceDerivedRoofMathEditCommand(const DocumentSnapshot& source,
         const std::map<std::string, Entity, std::less<>>& physical,
         std::vector<RoofEditIntent> edits, const std::string& message,
-        std::set<std::string,std::less<>>* shared_reservation=nullptr) {
+        std::set<std::string,std::less<>>* shared_reservation=nullptr,
+        bool retain_typed_ordinary_authority=false) {
         if (edits.empty()) return ApplyEntityChanges{source.revision(), {}, {}, message};
         const auto partition = partition_phase_roof_geometry_edits(source.entities(), edits);
         const auto& request = partition.replacement;
@@ -48878,7 +48881,7 @@ private:
                     std::any_of(edit.openings->upserts.begin(),edit.openings->upserts.end(),
                         [](const auto& row) { return row.clone_source.has_value() || row.rotation_radians.has_value(); }));
             });
-            if (transfer) {
+            if (transfer || retain_typed_ordinary_authority) {
                 ConstraintAuthoringIntent semantic; semantic.message=message;
                 auto intent=make_phase_constraint_authoring_intent(source,semantic);
                 intent.ordinary_roof_edits=json::array();
@@ -49517,8 +49520,10 @@ private:
                     if (!inserted && found->second != proposed)
                         throw std::invalid_argument("The reviewed alternative edit has conflicting proposed identities.");
                 }
-            } else if (version == 51) {
-                const auto intent=validate_mixed_clipboard_placement_intent(encoded.at("clipboard_placement_intent"));
+            } else if (version == 51 || version == 52) {
+                const auto intent=version==51 ?
+                    validate_mixed_clipboard_placement_intent(encoded.at("clipboard_placement_intent")) :
+                    validate_mixed_selection_edit_intent(encoded.at("mixed_selection_edit_intent"));
                 if (!intent.at("roof_authoring").is_null()) {
                     ApplyBoundaryConstraintChanges leaf;
                     leaf.expected_revision=encoded.at("expected_revision").get<Revision>();
@@ -58290,6 +58295,7 @@ private:
         // and newly authored objects remain available with any selection.
         std::set<std::string,std::less<>> targets;
         const auto source=authoringSnapshot();
+        bool mixed_edit{};
         const auto constraint_owners=[&](const Entity& entity) {
             if (entity.type!="constraint") return;
             const auto decoded=decode_constraint_entity(entity);
@@ -58317,6 +58323,24 @@ private:
             if constexpr (requires { value.transformations; })
                 for (const auto& edit:value.transformations) targets.insert(edit.boundary_id);
             if constexpr (requires { value.boundary_edits; }) {
+                if (value.mixed_selection_edit_completion || !value.mixed_selection_edit_intent.is_null()) {
+                    mixed_edit=true;
+                    const auto intent=validate_mixed_selection_edit_intent(value.mixed_selection_edit_intent);
+                    const auto aliases=embedded_assembly_presentation_ids(source.entities());
+                    for (const auto& target:ordinary_selection_edit_semantic_targets(intent.at("ordinary_request"))) {
+                        if (target.at("kind")=="embedded") {
+                            const auto key=std::pair{target.at("catalog_id").template get<std::string>(),
+                                target.at("instance_id").template get<std::string>()};
+                            targets.insert(aliases.at(key));
+                        } else if (target.at("kind")=="annotation") {
+                            targets.insert(target.at("owner_id").template get<std::string>());
+                        } else targets.insert(target.at("entity_id").template get<std::string>());
+                    }
+                    // Qualified children never promote their compatibility host
+                    // IDs into ordinary presented-object selection authority.
+                    for (const auto& child:intent.at("roof_opening_members"))
+                        targets.insert(child.at("opening_id").template get<std::string>());
+                }
                 if (value.mixed_selection_removal_completion || !value.mixed_selection_removal_intent.is_null()) {
                     const auto intent=validate_mixed_selection_removal_intent(value.mixed_selection_removal_intent);
                     const auto aliases=embedded_assembly_presentation_ids(source.entities());
@@ -58633,7 +58657,7 @@ private:
         if (targets.empty()) return;
         QStringList requested;
         const auto selected_presentations=m_architecturalCanvas->selectedIds();
-        for (const auto& id:m_selected_ids) {
+        for (const auto& id:(mixed_edit ? ordinarySelectionIDs() : m_selected_ids)) {
             // Tree-selected structural owners have no canvas presentation.
             // This fence concerns presented object editing, not project setup.
             if (!selected_presentations.contains(id)) continue;
@@ -68859,6 +68883,387 @@ public:
         (void)replay_selection_geometry_review(source,prepared.request(),reviews);
         current_source();
         return reviews;
+    }
+
+    void showMixedSelectionTransformEditor() {
+        try {
+            const auto source=selectedRoofOpeningCohortSource(false);
+            if (!source->is_editable()) throw std::invalid_argument("This project is read-only.");
+            if (hasPendingPlacementEdit() || m_boundary_session || m_text_placement_context || m_plan_label_context)
+                throw std::invalid_argument("Finish or cancel the active drawing or placement first.");
+            const auto authority=captureSourceEditAuthority(*source);
+            const auto ordinary=authority.ordinary_selection;
+            const auto children=authority.roof_opening_cohort;
+            if (ordinary.isEmpty() || children.empty() || ordinary.size()+children.size()>1000)
+                throw std::invalid_argument("Select a supported group of at most 1000 objects and skylights.");
+            auto* canvas=m_workspace==Workspace::measurement ? m_measurementCanvas : m_architecturalCanvas;
+            const auto font=canvas->font();
+            const auto dpi_x=canvas->logicalDpiX(),dpi_y=canvas->logicalDpiY();
+            const auto presentations=canvas->selectedEntityPresentations();
+            const auto selected_labels=canvas->selectedLabelPresentations();
+            const bool site=siteCanvas(canvas);
+            const auto site_generation=m_site_publication_generation;
+            if (site) requireSitePublicationCurrent();
+            std::map<QString,SitePresentationPlacement> ordinary_site_frames;
+            if (site) ordinary_site_frames=admittedSiteSelectionFrames(*source,m_site_plan_frames,
+                presentations,m_site_annotation_targets,canvas->selectedIds(),ordinary);
+            const auto frame=site ? std::optional<BuildingViewFrame>{} :
+                canvasTransformPlanFrame(*source);
+            SnapshotPlanSceneOptions options;
+            options.metric_units=authority.context.metric_units; options.visibility=authority.visibility;
+            options.interactive=true; options.label_font=font; options.label_device=canvas;
+            if (!site) options.active_context=projectOrganization(*source)->drawing_context(authority.context.layer_id.toStdString());
+            SiteCanvasPresentationFrames source_frames;
+            PlanSceneCaches source_caches;
+            const auto original_scene=site ? sitePlanScene(*source,source_frames,true,true) :
+                projectSnapshotPlanScene(*source,options,source_caches);
+            const auto fence=[&] {
+                if (!sourceEditAuthorityUnchanged(authority) || hasPendingPlacementEdit() || m_boundary_session ||
+                    m_text_placement_context || m_plan_label_context || canvas->font()!=font ||
+                    canvas->logicalDpiX()!=dpi_x || canvas->logicalDpiY()!=dpi_y ||
+                    canvas->selectedEntityPresentations()!=presentations || canvas->selectedLabelPresentations()!=selected_labels)
+                    throw std::invalid_argument("The project, selected presentations or workspace changed. Reopen Transform.");
+                const auto displayed=selectedRoofOpeningCohortSource(false);
+                if (fullSnapshotDigest(*displayed)!=authority.source_digest)
+                    throw std::invalid_argument("The displayed selected source changed. Reopen Transform.");
+                if (site) {
+                    requireSitePublicationCurrent();
+                    if (site_generation!=m_site_publication_generation)
+                        throw std::invalid_argument("The Site presentation changed. Reopen Transform.");
+                }
+            };
+            const auto overlay_world_point=[&](Vec2 point) { return frame ? unproject_plan_point(point,*frame) : point; };
+            const auto child_path=[&](const DocumentSnapshot& snapshot,const CanvasRoofOpeningTarget& child) {
+                (void)roofCanvasChild(snapshot,child);
+                const auto roof=decode_roof_entity(resolve_vertical_placement(snapshot,
+                    snapshot.entities().at(child.roof_id.toStdString())));
+                auto path=project_building_shape_plan(make_roof_skylight_shape(roof,child.opening_id.toStdString()));
+                if (site) path=site_transform_boundary(path,resolve_site_presentation(snapshot,child.roof_id.toStdString()).forward);
+                if (path.empty()) throw std::invalid_argument("A selected skylight has no actual plan geometry.");
+                return path;
+            };
+            Boundary extents;
+            for (const auto& id:ordinary) {
+                bool found=false;
+                for (const auto& item:original_scene.geometry) if (item.id==id) {
+                    for (auto edge:item.segments) {
+                        if (!site && item.type==QStringLiteral("symbol") && !item.model_plan) {
+                            edge.start=overlay_world_point(edge.start); edge.end=overlay_world_point(edge.end);
+                            if (frame) {
+                                const auto right=plan_view_right(*frame),up=plan_view_up(*frame);
+                                edge.sweep_radians*=right.x*up.y-right.y*up.x;
+                            }
+                        }
+                        extents.push_back(edge);
+                    }
+                    found=found || !item.segments.empty();
+                }
+                for (const auto& label:original_scene.labels) if (label.id==id) {
+                    const auto persisted=source->entities().find(id.toStdString());
+                    const bool model=label.plan_only || label.model_plan ||
+                        (persisted!=source->entities().end() && persisted->second.type=="dimension");
+                    const auto point=site || model ? label.position : overlay_world_point(label.position);
+                    extents.push_back({point,point,0.0}); found=true;
+                }
+                for (const auto& reference:original_scene.references) if (reference.id==id && reference.visible && !reference.image.isNull()) {
+                    const auto width=reference.image.width()*reference.metres_per_source_unit*reference.scale;
+                    const auto depth=reference.image.height()*reference.metres_per_source_unit*reference.scale;
+                    for (const auto x:{-.5,.5}) for (const auto y:{-.5,.5}) {
+                        const auto point=overlay_world_point(transform_point({x*width,y*depth},PlanarTransform{{},
+                            reference.rotation_degrees*std::numbers::pi/180.0,false,false,reference.position}));
+                        extents.push_back({point,point,0.0});
+                    }
+                    found=true;
+                }
+                if (!found) throw std::invalid_argument("A selected object has no visible canonical presentation: "+id.toStdString());
+            }
+            for (const auto& child:children) {
+                const auto path=child_path(*source,child); extents.insert(extents.end(),path.begin(),path.end());
+            }
+            const auto bounds=boundary_bounds(extents);
+            const Vec2 pivot{std::midpoint(bounds.minimum.x,bounds.maximum.x),std::midpoint(bounds.minimum.y,bounds.maximum.y)};
+            fence();
+            QDialog dialog(owner); styleDialog(dialog); dialog.setWindowTitle(QStringLiteral("Transform selection"));
+            dialog.setObjectName(QStringLiteral("mixedSelectionTransformDialog")); dialog.resize(560,560);
+            auto* layout=new QVBoxLayout(&dialog);
+            auto* form=new QFormLayout;
+            auto* rotation=new QLineEdit(QStringLiteral("0"),&dialog);
+            auto* offset_x=new QLineEdit(QStringLiteral("0"),&dialog);
+            auto* offset_y=new QLineEdit(QStringLiteral("0"),&dialog);
+            rotation->setObjectName(QStringLiteral("mixedSelectionRotationDegrees"));
+            offset_x->setObjectName(QStringLiteral("mixedSelectionOffsetX")); offset_y->setObjectName(QStringLiteral("mixedSelectionOffsetY"));
+            form->addRow(QStringLiteral("Rotation (degrees)"),rotation);
+            form->addRow(QStringLiteral("Offset X"),offset_x); form->addRow(QStringLiteral("Offset Y"),offset_y); layout->addLayout(form);
+            auto* horizontal=new QCheckBox(QStringLiteral("Flip horizontally"),&dialog);
+            auto* vertical=new QCheckBox(QStringLiteral("Flip vertically"),&dialog);
+            layout->addWidget(horizontal); layout->addWidget(vertical);
+            auto* preview=new PlanCanvas(&dialog);
+            preview->setMetricUnits(authority.context.metric_units); preview->setSelectionControlsVisible(false);
+            preview->setOverviewMapEnabled(false); preview->setGridEnabled(false); preview->setMinimumHeight(240);
+            layout->addWidget(preview,1);
+            auto* status=new QLabel(&dialog); status->setWordWrap(true); status->setTextFormat(Qt::PlainText); layout->addWidget(status);
+            auto* buttons=new QDialogButtonBox(QDialogButtonBox::Apply|QDialogButtonBox::Cancel,&dialog);
+            auto* review_button=buttons->addButton(QStringLiteral("Preview"),QDialogButtonBox::ActionRole);
+            auto* apply_button=buttons->button(QDialogButtonBox::Apply); apply_button->setEnabled(false); layout->addWidget(buttons);
+            std::optional<Command> prepared_command;
+            std::optional<DocumentSnapshot> prepared_snapshot;
+            std::uint64_t generation{}; bool reviewing{};
+            const auto values=[&] { return QStringList{rotation->text(),offset_x->text(),offset_y->text(),
+                QString::number(horizontal->isChecked()),QString::number(vertical->isChecked())}; };
+            const auto draw=[&](const DocumentSnapshot& snapshot,const Command* command) {
+                PlanSceneCaches caches; SiteCanvasPresentationFrames frames;
+                auto scene=site ? sitePlanScene(snapshot,frames,true,true) : projectSnapshotPlanScene(snapshot,options,caches);
+                if (frame) {
+                    for (auto& item:scene.geometry) {
+                        if (item.type==QStringLiteral("symbol")) project_model_plan_symbol(item,*frame);
+                        else {
+                            item.segments=project_plan_path(std::move(item.segments),*frame);
+                            if (item.stroke_segments) *item.stroke_segments=project_plan_path(std::move(*item.stroke_segments),*frame);
+                            item.hit_segments=project_plan_path(std::move(item.hit_segments),*frame);
+                            for (auto& hole:item.holes) hole=project_plan_path(std::move(hole),*frame);
+                        }
+                    }
+                    project_plan_model_labels(scene.labels,snapshot,*frame);
+                }
+                for (auto& item:scene.geometry) item.selected=false;
+                for (const auto& captured:children) {
+                    auto child=captured;
+                    if (command) {
+                        child.roof_id=id_from(alternativeReplacementTargetID(*command,child.roof_id.toStdString()));
+                        child.opening_id=id_from(alternativeReplacementTargetID(*command,child.opening_id.toStdString()));
+                    }
+                    child.source_revision=snapshot.revision();
+                    auto path=child_path(snapshot,child);
+                    if (frame) for (auto& edge:path) { edge.start=project_plan_point(edge.start,*frame);edge.end=project_plan_point(edge.end,*frame); }
+                    CanvasEntity item; item.id=child.roof_id+QStringLiteral(":")+child.opening_id;
+                    item.type=QStringLiteral("symbol"); item.segments=std::move(path);
+                    item.stroke_color=QColor(35,115,190); scene.geometry.push_back(std::move(item));
+                }
+                preview->setEntities(std::move(scene.geometry)); preview->setLabels(std::move(scene.labels));
+                preview->setReferences(std::move(scene.references)); preview->fitView();
+            };
+            draw(*source,nullptr);
+            const auto invalidate=[&] { ++generation;prepared_command.reset();prepared_snapshot.reset();apply_button->setEnabled(false); };
+            for (auto* field:{rotation,offset_x,offset_y}) QObject::connect(field,&QLineEdit::textChanged,&dialog,invalidate);
+            for (auto* field:{horizontal,vertical}) QObject::connect(field,&QCheckBox::toggled,&dialog,invalidate);
+            QObject::connect(review_button,&QPushButton::clicked,&dialog,[&] {
+                if (reviewing) return;
+                invalidate();
+                try {
+                    fence(); const auto entered=values(); const auto serial=generation;
+                    const auto input_fence=[&] { fence();if (serial!=generation || entered!=values())
+                        throw std::invalid_argument("The entered transform changed. Preview it again."); };
+                    bool valid{};const auto degrees=rotation->text().trimmed().toDouble(&valid);
+                    if (!valid || !std::isfinite(degrees) || std::abs(degrees)>360000)
+                        throw std::invalid_argument("Enter a finite rotation between -360000 and 360000 degrees.");
+                    const auto quantity=[&](const QString& text) { return text.trimmed().isEmpty() ? 0.0 :
+                        parse_quantity(text.trimmed().toStdString(),authority.context.metric_units ? Unit::metre : Unit::foot).metres; };
+                    PlanarTransform world{pivot,std::remainder(degrees,360.0)*std::numbers::pi/180.0,
+                        horizontal->isChecked(),vertical->isChecked(),{quantity(offset_x->text()),quantity(offset_y->text())}};
+                    if (!std::isfinite(world.offset.x) || !std::isfinite(world.offset.y)) throw std::invalid_argument("Enter finite offsets.");
+                    // A half-turn and both reflections are an exact identity.
+                    // Normalize before frame conjugation; trigonometric residue
+                    // must not rotate text or move otherwise unchanged geometry.
+                    if (world.flip_horizontal && world.flip_vertical && std::abs(world.rotation_radians)==std::numbers::pi) {
+                        world.rotation_radians=0.0;world.flip_horizontal=false;world.flip_vertical=false;
+                    }
+                    if (world.rotation_radians==0 && !world.flip_horizontal && !world.flip_vertical && world.offset.x==0 && world.offset.y==0) {
+                        status->setText(QStringLiteral("Enter a movement, rotation or reflection.")); return;
+                    }
+                    const std::string message="Transform complete mixed selection";
+                    json request={{"version",4},{"expected_revision",source->revision()},{"transaction_id",new_id("mixed-transform")},
+                        {"architectural",json::array()},{"embedded",json::array()},{"annotations",json::array()},
+                        {"references",json::array()},{"geometry",nullptr},{"message",message}};
+                    const auto planar_json=[](const PlanarTransform& t,bool presentation) {
+                        json value={{"pivot",json::array({t.pivot.x,t.pivot.y})},{"offset",json::array({t.offset.x,t.offset.y})},
+                            {"rotation_radians",t.rotation_radians},{"flip_horizontal",t.flip_horizontal},{"flip_vertical",t.flip_vertical}};
+                        if (presentation) value["scale"]=1.0;return value;
+                    };
+                    const auto model_json=[](const PlanarTransform& t) { return json{{"pivot",json::array({t.pivot.x,t.pivot.y,0.0})},
+                        {"offset",json::array({t.offset.x,t.offset.y,0.0})},{"rotation_z_radians",t.rotation_radians},
+                        {"scale",1.0},{"flip_horizontal",t.flip_horizontal},{"flip_vertical",t.flip_vertical}}; };
+                    const auto operation=[&](const QString& id) {
+                        if (!site) return world;
+                        if (const auto captured=ordinary_site_frames.find(id);captured!=ordinary_site_frames.end())
+                            return siteLocalPlanTransform(world,captured->second);
+                        if (const auto auxiliary=source_frames.auxiliary.find(id);auxiliary!=source_frames.auxiliary.end())
+                            return siteLocalPlanTransform(world,auxiliary->second);
+                        return siteLocalPlanTransform(world,resolve_site_presentation(*source,id.toStdString()));
+                    };
+                    auto overlay=world;
+                    if (frame) {
+                        const auto right=plan_view_right(*frame),up=plan_view_up(*frame);
+                        overlay={project_plan_point(pivot,*frame),0.0,false,false,
+                            {world.offset.x*right.x+world.offset.y*right.y,world.offset.x*up.x+world.offset.y*up.y}};
+                        if (world.rotation_radians!=0.0 || world.flip_horizontal || world.flip_vertical) {
+                            const auto x=transform_point(right,PlanarTransform{{},world.rotation_radians,world.flip_horizontal,world.flip_vertical,{}});
+                            const bool reflected=world.flip_horizontal!=world.flip_vertical;
+                            const Vec2 view_x{x.x*right.x+x.y*right.y,x.x*up.x+x.y*up.y};
+                            overlay.rotation_radians=std::atan2(reflected ? -view_x.y : view_x.y,view_x.x);
+                            overlay.flip_vertical=reflected;
+                        }
+                    }
+                    SelectionGeometryTransformRequest geometry; geometry.expected_revision=source->revision();geometry.message=message;
+                    const auto annotation_owners=site ? std::map<std::string,std::string,std::less<>>{} : annotation_selection_owners(*source,ordinary);
+                    std::set<std::string,std::less<>> parents;
+                    for (const auto& id:ordinary) {
+                        const auto persisted=source->entities().find(id.toStdString());
+                        const auto embedded=embeddedAssemblyChild(*source,id.toStdString());
+                        std::optional<PresentationAnnotationTarget> annotation;
+                        if (site) {
+                            const auto found=original_scene.annotation_targets.find(id);
+                            if (found!=original_scene.annotation_targets.end()) annotation={{found->second.owner_entity_id,found->second.child_id}};
+                        } else if (const auto found=annotation_owners.find(id.toStdString());found!=annotation_owners.end()) annotation={{found->second,id.toStdString()}};
+                        if (embedded && (persisted!=source->entities().end() || annotation))
+                            throw std::invalid_argument("A selected component identity has conflicting owners.");
+                        if (embedded) { request["embedded"].push_back({{"catalog_id",embedded->assembly_catalog_id},
+                            {"instance_id",embedded->instance.id},{"transform",model_json(operation(id))}});continue; }
+                        if (annotation) {
+                            const auto state=decode_annotation_entity(source->entities().at(annotation->owner_id));
+                            const auto symbol=std::find_if(state.symbols.begin(),state.symbols.end(),[&](const auto& item){return item.id==annotation->child_id;});
+                            const auto label=std::find_if(state.labels.begin(),state.labels.end(),[&](const auto& item){return item.id==annotation->child_id;});
+                            if ((symbol!=state.symbols.end())==(label!=state.labels.end())) throw std::invalid_argument("The selected annotation is missing or ambiguous.");
+                            const bool model=symbol!=state.symbols.end() ? symbol->model_plan : label->model_plan;
+                            request["annotations"].push_back({{"owner_id",annotation->owner_id},{"child_id",annotation->child_id},
+                                {"transform",planar_json(site ? operation(id) : (model ? world : overlay),true)},
+                                {"text_baseline",!site && model && label!=state.labels.end()
+                                    ? json{{"rotation_radians",overlay.rotation_radians},{"flip_horizontal",overlay.flip_horizontal},
+                                        {"flip_vertical",overlay.flip_vertical}} : json(nullptr)}});continue;
+                        }
+                        if (persisted==source->entities().end()) throw std::invalid_argument("A selected source object is missing.");
+                        const auto& entity=persisted->second;
+                        if (entity.type=="reference_asset") { request["references"].push_back({{"entity_id",entity.id},
+                            {"transform",planar_json(site ? operation(id) : overlay,true)}});continue; }
+                        if (entity.type=="wall" || entity.type=="measurement_linework" || is_closed_boundary_entity(entity.type)) {
+                            geometry.roots.push_back({entity.id,operation(id)});continue;
+                        }
+                        if (can_recognize_boundary_dimension_entity_type(entity.type)) {
+                            const auto dimension=decode_boundary_dimension_entity(entity);
+                            if (!dimension.supported() || !ordinary.contains(id_from(dimension.dimension->boundary_id)))
+                                throw std::invalid_argument("Select a dimension's measured owner to transform it together.");
+                            (void)resolve_current_boundary_dimension(*dimension.dimension,*source);continue;
+                        }
+                        if (entity.type=="opening") {
+                            std::string host,error;if (!read_document_wall_id(entity,host,error) || !ordinary.contains(id_from(host)))
+                                throw std::invalid_argument("Select an opening's host wall to transform it together.");continue;
+                        }
+                        if (entity.type=="corner_window") {
+                            const auto corner=parse_corner_window(entity);
+                            if (!ordinary.contains(id_from(corner.wall_ids[0])) || !ordinary.contains(id_from(corner.wall_ids[1])))
+                                throw std::invalid_argument("Select both corner-window walls to transform the assembly together.");continue;
+                        }
+                        parents.insert(entity.id);
+                        request["architectural"].push_back({{"entity_id",entity.id},{"transform",model_json(operation(id))}});
+                    }
+                    std::optional<SelectionGeometryTransformPreparation> prepared_geometry;
+                    if (!geometry.roots.empty()) {
+                        prepared_geometry=prepare_selection_geometry_transform(*source,geometry);
+                        reviewing=true;
+                        const auto reviews=reviewSelectionGeometryRoomIntents(*source,*prepared_geometry,authority,&dialog,input_fence);
+                        reviewing=false;if (!reviews) { status->setText(QStringLiteral("Room review cancelled."));return; }
+                        request["geometry"]={{"request",encode_selection_geometry_transform_request(prepared_geometry->request())},{"room_reviews",*reviews}};
+                    }
+                    request=validate_ordinary_selection_edit_request(request);
+                    json roster=json::array(),roof_authoring=nullptr,roof_identity_requests=json::array();
+                    std::map<std::string,std::vector<RoofOpeningGroupMember>,std::less<>> independent;
+                    for (const auto& child:children) {
+                        const auto roof=child.roof_id.toStdString();const bool carried=parents.contains(roof);
+                        roster.push_back({{"roof_id",roof},{"opening_id",child.opening_id.toStdString()},{"coverage",carried ? "carried" : "independent"}});
+                        if (!carried) independent[roof].push_back({roof,child.opening_id.toStdString()});
+                    }
+                    std::vector<RoofEditIntent> roof_edits;
+                    for (const auto& [roof,members]:independent) {
+                        const auto local=operation(id_from(roof));RoofOpeningGroupTransform transform;
+                        transform.members=members;transform.world_pivot=local.pivot;transform.world_translation=local.offset;
+                        transform.rotation_radians=local.rotation_radians;transform.flip_horizontal=local.flip_horizontal;transform.flip_vertical=local.flip_vertical;
+                        transform.retain_invariant_members=true;
+                        const auto edits=prepare_roof_opening_group_transform(source->entities(),transform);
+                        const auto candidate=replay_roof_edit_entities(source->entities(),edits);
+                        const bool invariant=candidate.size()==source->entities().size() &&
+                            std::all_of(candidate.begin(),candidate.end(),[&](const auto& entry) {
+                                const auto original=source->entities().find(entry.first);
+                                return original!=source->entities().end() && entry.second==original->second &&
+                                    entry.second.properties.dump()==original->second.properties.dump() &&
+                                    entry.second.extensions.dump()==original->second.extensions.dump();
+                            });
+                        if (invariant) {
+                            SelectionGeometryTransformRequest identity;
+                            identity.expected_revision=source->revision();identity.message="Authenticate invariant roof children";
+                            identity.roots.push_back({roof,local});
+                            json ids=json::array();for (const auto& member:members) ids.push_back(member.opening_id);
+                            std::sort(ids.begin(),ids.end());
+                            roof_identity_requests.push_back({{"roof_id",roof},
+                                {"transform",encode_selection_geometry_transform_request(identity).at("roots").at(0).at("transform")},
+                                {"opening_ids",std::move(ids)}});
+                            for (auto& row:roster) if (row.at("roof_id")==roof) row["coverage"]="identity";
+                        } else roof_edits.insert(roof_edits.end(),edits.begin(),edits.end());
+                    }
+                    std::sort(roster.begin(),roster.end(),[](const auto& a,const auto& b) {
+                        return std::pair{a.at("roof_id").template get<std::string>(),a.at("opening_id").template get<std::string>()} <
+                            std::pair{b.at("roof_id").template get<std::string>(),b.at("opening_id").template get<std::string>()}; });
+                    if (!roof_edits.empty()) {
+                        const auto physical=replay_roof_edit_entities(source->entities(),roof_edits);
+                        const auto leaf=sourceDerivedRoofMathEditCommand(*source,physical,roof_edits,message,nullptr,true);
+                        const auto* typed=std::get_if<ApplyBoundaryConstraintChanges>(&leaf);
+                        if (!typed || !typed->phase_constraint_authoring_completion)
+                            throw std::invalid_argument("The complete skylight transform has no typed source authority.");
+                        roof_authoring=typed->phase_constraint_authoring_intent;
+                    }
+                    input_fence();ApplyBoundaryConstraintChanges command;
+                    command.expected_revision=source->revision();command.message=message;command.mixed_selection_edit_completion=true;
+                    command.mixed_selection_edit_intent=make_mixed_selection_edit_intent(*source,request,roof_authoring,roster,message,roof_identity_requests);
+                    const Command complete{command};const auto admitted=Document::preview_command(*source,complete);
+                    input_fence();draw(admitted,&complete);prepared_command=complete;prepared_snapshot=admitted;
+                    status->clear();apply_button->setEnabled(true);
+                } catch (const std::exception& error) {
+                    reviewing=false;invalidate();status->setText(QString::fromUtf8(error.what()));
+                }
+            });
+            QObject::connect(apply_button,&QPushButton::clicked,&dialog,[&] {
+                if (reviewing || !prepared_command || !prepared_snapshot) return;
+                try {
+                    fence();const auto command=*prepared_command;
+                    if (fullSnapshotDigest(Document::preview_command(*source,command))!=fullSnapshotDigest(*prepared_snapshot))
+                        throw std::invalid_argument("The complete transform differs from its reviewed preview.");
+                    if (!applyAuthoredCommand(command)) return;
+                    const auto published=std::make_shared<DocumentSnapshot>(authoringSnapshot());
+                    const auto remap_child=[&](CanvasRoofOpeningTarget child) {
+                        child.roof_id=id_from(alternativeReplacementTargetID(command,child.roof_id.toStdString()));
+                        child.opening_id=id_from(alternativeReplacementTargetID(command,child.opening_id.toStdString()));
+                        child.source_revision=published->revision();return child;
+                    };
+                    // Refresh publishes canonical Site annotation aliases.
+                    // Their render strings are not persisted child identities.
+                    refresh();
+                    std::map<QString,QString> restored_ids;
+                    QStringList restored;
+                    for (const auto& id:ordinary) {
+                        auto mapped=id_from(alternativeReplacementTargetID(command,id.toStdString()));
+                        if (site && original_scene.annotation_targets.contains(id)) {
+                            const auto aliases=remapSiteAnnotationSelection({id},original_scene.annotation_targets,m_site_annotation_targets);
+                            if (aliases.size()!=1) continue;
+                            mapped=aliases.front();
+                        } else if (!published->entities().contains(mapped.toStdString()) &&
+                            !annotation_child_exists(*published,mapped.toStdString()) && !embeddedAssemblyChild(*published,mapped.toStdString())) continue;
+                        restored_ids.emplace(id,mapped);restored.push_back(mapped);
+                    }
+                    auto restored_children=children;for (auto& child:restored_children) child=remap_child(child);
+                    auto order=authority.semantic_selection_order;
+                    for (auto& member:order) if (member.child) member.child=remap_child(*member.child);
+                        else if (const auto mapped=restored_ids.find(member.ordinary_id);mapped!=restored_ids.end()) member.ordinary_id=mapped->second;
+                        else member.ordinary_id.clear();
+                    std::erase_if(order,[&](const auto& member){return !member.child && !restored.contains(member.ordinary_id);});
+                    (void)adoptSemanticSelection(published,std::move(restored),std::move(restored_children),authority.native_roof_opening_selection,
+                        authority.primary_roof_opening ? std::optional{remap_child(*authority.primary_roof_opening)} : std::nullopt,false,std::move(order));
+                    clearError();dialog.accept();
+                } catch (const std::exception& error) { invalidate();status->setText(QString::fromUtf8(error.what())); }
+            });
+            QObject::connect(buttons,&QDialogButtonBox::rejected,&dialog,&QDialog::reject);
+            QTimer guard(&dialog);guard.setInterval(100);
+            QObject::connect(&guard,&QTimer::timeout,&dialog,[&] { try { fence(); } catch (const std::exception& error) {
+                invalidate();status->setText(QString::fromUtf8(error.what()));review_button->setEnabled(false); } });
+            guard.start();dialog.exec();
+        } catch (const std::exception& error) { setError(QString::fromUtf8(error.what())); }
     }
 
     void showConstraintEditor(const QString& initial_length = {}) {

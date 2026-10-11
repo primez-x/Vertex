@@ -1,4 +1,38 @@
-# Vertex project formats v1 through v190
+# Vertex project formats v1 through v191
+
+## Mixed text frames and invariant roof children (v191, source integration)
+
+Envelope52 adds mixed intent dialect four paired with ordinary request dialect
+four. Historical dialects one through three retain their exact fields and
+meaning. Ordinary four keeps three's typed geometry and room-review fields.
+Its annotation rows add required `text_baseline`, either null or exactly
+`{rotation_radians,flip_horizontal,flip_vertical}`. A nonnull linear operator
+is authenticated against an actual model-plan label only: its anchor follows
+the model operator while its original stored text direction follows this
+separate view-basis operator. It grants no new pivot, translation, scale,
+symbol or arbitrary candidate authority. Explicit identity preserves the
+original stored angle even when the anchor moves.
+
+Mixed four adds required `roof_identity_requests`, a bounded array with sorted
+unique rows exactly `{roof_id,transform,opening_ids}`. `transform` uses the
+canonical rigid selected-geometry encoding, with object-shaped XY pivot and
+offset, rotation and reflection flags. Each sorted unique `opening_ids` roster
+must exactly cover that actual roof's selected `coverage:"identity"` children.
+The source roof-opening producer retains every admitted member and replay must
+leave the entire original entity map exactly unchanged. Final composition must
+retain that exact owner and child, both active. An identity roof cannot share
+changed/carried members or acquire parent/replacement authority. Changed roofs
+keep full independent upsert coverage, including locally invariant members.
+An explicitly selected parent supplies carried-child authority separately.
+
+The desktop numeric Transform route captures full source and selection,
+derives actual opening bounds, reviews every required room context, caches the
+complete preview and applies that exact command once. Site and named-plan
+coordinate frames and qualified selection restoration remain explicit adapter
+responsibilities. Reader191/extraction189 apply to direct, nested, retained
+and undone commands. Source integration is not compilation, interaction or
+production acceptance. Mixed canvas gestures, resizing and Properties remain
+required extensions.
 
 ## Mixed reviewed geometry edits (v190, source integration)
 

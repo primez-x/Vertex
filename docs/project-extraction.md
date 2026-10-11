@@ -1,5 +1,13 @@
 # Portable project extraction
 
+Exchange version189 requires native reader191 for mixed edit dialect four and
+paired ordinary four. It retains explicit model-plan text-baseline operators,
+separate from model anchors, and complete actual-source invariant roof-child
+proofs. Final owners/children remain exact and active without new replacement
+authority. Direct, nested, retained and undone histories preserve the floor.
+Earlier dialects keep their original meanings. Runtime and round-trip
+qualification remain open.
+
 Exchange version188 requires native reader190 for mixed edit dialect three and
 its paired ordinary selected-geometry request with complete typed room review.
 Exact original-source replay, room identity lifetimes and acknowledged callout

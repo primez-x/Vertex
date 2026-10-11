@@ -764,9 +764,21 @@ ApplyEntityChanges presentation_group_similarity_command(const DocumentSnapshot&
             state = original_states.emplace(target.owner_id, decode_annotation_entity(entity)).first;
         }
         const auto selected = child(state->second, target.child_id);
+        if (request.text_baseline) {
+            const auto& baseline = *request.text_baseline;
+            (void)rigid_identity(baseline);
+            require(baseline.pivot.x == 0.0 && baseline.pivot.y == 0.0 &&
+                        baseline.offset.x == 0.0 && baseline.offset.y == 0.0,
+                    "The text baseline operator must be linear with zero pivot and offset.");
+            require(std::string_view(selected.collection) == "labels" &&
+                        state->second.labels.at(selected.index).model_plan,
+                    "An independent text baseline requires an actual model-plan label.");
+        }
         if (request.scale != 1.0) bounded_scale(selected.placement.scale * request.scale);
         original_children.push_back(selected);
-        rigid_annotations.push_back({target, request.transform});
+        // Mixed-frame labels never pass their model operator to the rigid text
+        // producer. Their anchor and source-relative baseline are derived below.
+        if (!request.text_baseline) rigid_annotations.push_back({target, request.transform});
     }
     for (const auto& request : references) {
         factor(request.scale);
@@ -786,12 +798,35 @@ ApplyEntityChanges presentation_group_similarity_command(const DocumentSnapshot&
     // Existing rigid authority supplies reflection/orientation and raw legacy
     // promotion once for the complete group. Typed scaling also sees the same
     // original source, never a sibling edit or a caller-provided replacement.
-    auto rigid = presentation_group_transform_command(source, rigid_annotations,
-                                                       rigid_references, expected_revision);
     std::map<std::string, Entity> edits;
-    for (auto& change : rigid.entity_changes) {
-        const auto id = change.entity.id;
-        edits.emplace(id, std::move(change.entity));
+    if (!rigid_annotations.empty() || !rigid_references.empty()) {
+        auto rigid = presentation_group_transform_command(source, rigid_annotations,
+                                                           rigid_references, expected_revision);
+        for (auto& change : rigid.entity_changes) {
+            const auto id = change.entity.id;
+            edits.emplace(id, std::move(change.entity));
+        }
+    }
+    for (std::size_t i = 0; i < annotations.size(); ++i) {
+        const auto& request = annotations[i];
+        if (!request.text_baseline) continue;
+        const auto& selected = original_children[i];
+        const auto position = rigid_identity(request.transform) ? selected.placement.position :
+            transform_point(selected.placement.position, request.transform);
+        require(std::isfinite(position.x) && std::isfinite(position.y),
+                "The resulting annotation position must be finite.");
+        const auto rotation = rigid_identity(*request.text_baseline) ? selected.placement.rotation_radians :
+            rigid_orientation(selected.placement.rotation_radians, *request.text_baseline);
+        if (position.x == selected.placement.position.x && position.y == selected.placement.position.y &&
+            rotation == selected.placement.rotation_radians) continue;
+        auto [edit, inserted] = edits.try_emplace(request.target.owner_id,
+                                                source.entities().at(request.target.owner_id));
+        (void)inserted;
+        auto& placement = edit->second.properties.at("state").at(selected.collection)
+            .at(selected.index).at("placement");
+        if (position.x != selected.placement.position.x) placement["x"] = position.x;
+        if (position.y != selected.placement.position.y) placement["y"] = position.y;
+        if (rotation != selected.placement.rotation_radians) placement["rotation_radians"] = rotation;
     }
     const auto scaled_position = [](Vec2 original, const PlanarTransform& transform, double scale) {
         const Vec2 displacement{scale * (original.x - transform.pivot.x),

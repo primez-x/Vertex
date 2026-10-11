@@ -6,6 +6,7 @@
 #include <array>
 #include <charconv>
 #include <cmath>
+#include <limits>
 #include <numbers>
 #include <set>
 #include <stdexcept>
@@ -98,6 +99,44 @@ Vec2 world_direction(const Host& owner, Vec2 direction) {
     const auto c = std::cos(owner.yaw), s = std::sin(owner.yaw);
     const Vec2 result{c * direction.x - s * direction.y, s * direction.x + c * direction.y};
     finite(result); return result;
+}
+Vec2 reflected_direction(Vec2 direction, double c, double s, bool horizontal, bool vertical) {
+    const Vec2 result{(horizontal ? -1.0 : 1.0) * (c * direction.x - s * direction.y),
+        (vertical ? -1.0 : 1.0) * (s * direction.x + c * direction.y)};
+    finite(result); return result;
+}
+double reflected_rotation(const Host& owner, const RoofOpening& source,
+    const RoofOpeningPlanFrame& frame, Vec2 final_scales, double c, double s,
+    bool horizontal, bool vertical) {
+    const auto physical_axis = [&](Vec2 direction) {
+        const auto projected = local_delta(owner,
+            reflected_direction(world_direction(owner, direction), c, s, horizontal, vertical));
+        const Vec2 result{projected.x * final_scales.x, projected.y * final_scales.y};
+        finite(result); return result;
+    };
+    auto along = physical_axis(frame.along), across = physical_axis(frame.across);
+    const auto width = std::hypot(along.x, along.y), depth = std::hypot(across.x, across.y);
+    if (!std::isfinite(width) || !std::isfinite(depth) || width <= 0.0 || depth <= 0.0)
+        invalid("Skylight reflection has invalid physical facet axes");
+    // This is a rounding allowance for an isometry, not permission to discard
+    // affine shear or resize a fixed profile while calling it a reflection.
+    constexpr auto rounding = 128.0 * std::numeric_limits<double>::epsilon();
+    if (std::abs(width / frame.width_surface_scale - 1.0) > rounding ||
+        std::abs(depth / frame.depth_surface_scale - 1.0) > rounding)
+        invalid("Skylight reflection cannot preserve physical dimensions on the final facet");
+    along = {along.x / width, along.y / width};
+    across = {across.x / depth, across.y / depth};
+    if (std::abs(along.x * across.x + along.y * across.y) > rounding)
+        invalid("Skylight reflection cannot represent perpendicular axes on the final facet");
+    // The strict version-one fixed frame/curb/glazing profile is symmetric
+    // about both axes. Its reflected depth axis can reverse without a handing
+    // field. Retain exact source angles for equivalent rectangular frames.
+    const auto old_c = std::cos(source.rotation_radians), old_s = std::sin(source.rotation_radians);
+    if (std::abs(old_c * along.y - old_s * along.x) <= rounding)
+        return source.rotation_radians;
+    const auto angle = std::atan2(along.y, along.x);
+    return std::remainder(source.rotation_radians +
+        std::remainder(angle - source.rotation_radians, std::numbers::pi), 2.0 * std::numbers::pi);
 }
 struct AxisResize {
     Vec2 scale;
@@ -271,10 +310,15 @@ std::vector<RoofEditIntent> prepare_roof_opening_group_transform(const Entities&
     const AxisResize axes{request.axis_scale, axis_angle == 0.0 ? 1.0 : std::cos(axis_angle),
         axis_angle == 0.0 ? 0.0 : std::sin(axis_angle)};
     const auto angle = std::remainder(request.rotation_radians, 2.0 * std::numbers::pi);
-    const bool translation_only = !directional && angle == 0.0 && uniform_scale == 1.0;
+    const bool reflected = request.flip_horizontal || request.flip_vertical;
+    const bool linear_identity = (!reflected && angle == 0.0) ||
+        (request.flip_horizontal && request.flip_vertical && std::abs(angle) == std::numbers::pi);
+    const bool translation_only = !directional && linear_identity && uniform_scale == 1.0;
     const bool identity = translation_only &&
         request.world_translation.x == 0.0 && request.world_translation.y == 0.0;
-    const auto c = angle == 0.0 ? 1.0 : std::cos(angle), s = angle == 0.0 ? 0.0 : std::sin(angle);
+    const bool reflected_half_turn = reflected && std::abs(angle) == std::numbers::pi;
+    const auto c = angle == 0.0 ? 1.0 : reflected_half_turn ? -1.0 : std::cos(angle);
+    const auto s = angle == 0.0 || reflected_half_turn ? 0.0 : std::sin(angle);
     Hosts hosts;
     MemberIds ids;
     std::map<std::string, RoofOpeningEditIntent, std::less<>> grouped;
@@ -294,8 +338,10 @@ std::vector<RoofEditIntent> prepare_roof_opening_group_transform(const Entities&
                 Vec2 delta{old_world.x - request.world_pivot.x, old_world.y - request.world_pivot.y};
                 finite(delta);
                 if (directional) delta = axes.apply(delta);
-                new_world = {request.world_pivot.x + uniform_scale * (c * delta.x - s * delta.y) + request.world_translation.x,
-                    request.world_pivot.y + uniform_scale * (s * delta.x + c * delta.y) + request.world_translation.y};
+                new_world = {request.world_pivot.x + (request.flip_horizontal ? -1.0 : 1.0) *
+                        uniform_scale * (c * delta.x - s * delta.y) + request.world_translation.x,
+                    request.world_pivot.y + (request.flip_vertical ? -1.0 : 1.0) *
+                        uniform_scale * (s * delta.x + c * delta.y) + request.world_translation.y};
             }
             finite(new_world);
             // Apply displacement to the actual local centre. Inverting an
@@ -321,8 +367,11 @@ std::vector<RoofEditIntent> prepare_roof_opening_group_transform(const Entities&
             if (y != source.y) row.y = quantity(y);
             if (size.x != source.width) row.width = quantity(size.x);
             if (size.y != source.depth) row.depth = quantity(size.y);
-            const auto rotation = angle == 0.0 ? source.rotation_radians :
-                std::remainder(source.rotation_radians + angle, 2.0 * std::numbers::pi);
+            const auto rotation = reflected && !translation_only
+                ? reflected_rotation(owner, source, plan_frame(owner, source), scales(owner, new_center),
+                    c, s, request.flip_horizontal, request.flip_vertical)
+                : linear_identity ? source.rotation_radians
+                    : std::remainder(source.rotation_radians + angle, 2.0 * std::numbers::pi);
             if (rotation != source.rotation_radians) {
                 row.rotation_radians = rotation;
                 entry->second.uses_rotation_schema = true;
@@ -336,7 +385,8 @@ std::vector<RoofEditIntent> prepare_roof_opening_group_transform(const Entities&
     const auto admitted = replay_roof_edit_entities(actual, result);
     // Retained-only intents validate every requested source, including identity
     // operations. They never become authored edits or promote an unchanged roof.
-    std::erase_if(result, [&](const auto& edit) { return admitted.at(edit.roof_id) == actual.at(edit.roof_id); });
+    if (!request.retain_invariant_members)
+        std::erase_if(result, [&](const auto& edit) { return admitted.at(edit.roof_id) == actual.at(edit.roof_id); });
     return result;
 }
 

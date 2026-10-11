@@ -272,7 +272,8 @@ public:
     // v188 retains paired mixed/ordinary dialect two presentation similarity.
     // v189 retains explicit rigid two-host corner-window callout completion.
     // v190 retains mixed selected geometry with complete typed room review.
-    static constexpr std::uint32_t format_version = 190;
+    // v191 retains separate model-label baselines and invariant roof-child proofs.
+    static constexpr std::uint32_t format_version = 191;
     static constexpr std::uint32_t recovery_format_version = 4;
     [[nodiscard]] static std::uint32_t required_format_version(const DocumentSnapshot& snapshot);
     static constexpr std::uint64_t maximum_file_bytes = 4ULL * 1024ULL * 1024ULL * 1024ULL;

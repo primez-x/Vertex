@@ -17,6 +17,9 @@ struct RoofOpeningGroupTransform {
     double uniform_scale{1.0};
     Vec2 axis_scale{1.0, 1.0};
     double axis_rotation_radians{};
+    bool flip_horizontal{false};
+    bool flip_vertical{false};
+    bool retain_invariant_members{false};
 };
 
 struct RoofOpeningGroupClone {
@@ -44,15 +47,24 @@ struct RoofOpeningGroupClonePlacement {
 
 // In world XY, A = R(axis_rotation) diag(axis_scale) R(-axis_rotation).
 // Transform each actual reference centre about the common pivot by
-// uniform_scale * R(rotation) * A, then translate. Keep each rectangular mouth
+// uniform_scale * F * R(rotation) * A, then translate, where F negates world X
+// for flip_horizontal and world Y for flip_vertical. Keep each rectangular mouth
 // and its host; scale each physical facet dimension by uniform_scale times
 // |A p| / |p| for its actual projected world width/depth direction p. Preserve
-// its physical facet angle except for the common rotation, and rebase physical
-// dimensions using the final centre's facet scales. This is a parametric
+// its physical facet angle except for the common rotation when F is identity.
+// Reflection derives both actual projected axes through F * R(rotation) and
+// the final facet metric. It requires an isometry of those physical axes;
+// a nonrectangular or physically stretched mirror refuses the whole cohort.
+// The supported fixed profile is symmetric, so reversing an axis carries no
+// handing state; equivalent half-turns retain the closest source angle.
+// Rebase physical dimensions using the final centre's facet scales. This is a parametric
 // rectangular resize; the mouth itself does not undergo an affine shear.
 // Only changed scalars receive exact quantity inputs. Complete actual-map
 // replay admits the entire source/final cohort before any intent is returned.
-// Identity operations return an empty vector, without schema promotion.
+// Identity operations return an empty vector, without schema promotion, unless
+// retain_invariant_members is explicitly requested. That preparation mode keeps
+// admitted unchanged-child upserts for complete mixed-roster proof; it grants no
+// publication or host authority and still preserves exact unchanged roof data.
 [[nodiscard]] std::vector<RoofEditIntent> prepare_roof_opening_group_transform(
     const std::map<std::string, Entity, std::less<>>& actual,
     const RoofOpeningGroupTransform& request);
