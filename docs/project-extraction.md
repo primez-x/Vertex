@@ -1,5 +1,12 @@
 # Portable project extraction
 
+Exchange version185 requires native reader187 for closed mixed-selection edit
+envelope52. It retains the original snapshot/save bindings, closed ordinary
+transform request and qualified roof-child coverage. Direct, nested, retained
+and undone history preserve the floor; older commands keep their meanings.
+The initial source contract excludes wall/drawing and Properties edits and is
+not runtime, migration or round-trip acceptance.
+
 Exchange version184 requires native reader186 for mixed-removal dialect eight
 and explicit managed corner-cut selection under closed corner inner4. The wire
 retains actual selected cut IDs and explicit owners separately; replay derives

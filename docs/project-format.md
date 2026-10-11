@@ -1,4 +1,62 @@
-# Vertex project formats v1 through v186
+# Vertex project formats v1 through v187
+
+## Original-source mixed transform request (v187, source integration in progress)
+
+Closed `apply_boundary_constraint_changes` envelope52 contains exactly
+`version`, `kind`, `expected_revision`, `message`,
+`mixed_selection_edit_completion:true` and `mixed_selection_edit_intent`.
+It cannot carry sibling raw entity/asset changes or another geometry authority.
+The intent version one contains exactly `version`, `expected_revision`,
+`source_snapshot_digest`, `source_authoring_digest`, `source_entities_digest`,
+`source_saved_revision`, `ordinary_request`, `roof_authoring`,
+`roof_opening_members` and `message`. The three digests bind the captured full
+snapshot, authoring source and entity map; saved revision is explicit or null.
+
+The ordinary request version one contains `version`, `expected_revision`,
+`transaction_id`, `architectural`, `embedded`, `annotations`, `references` and
+`message`. Each target carries its explicit typed transform. Persisted object,
+qualified catalog/instance, qualified annotation owner/child and reference
+targets are unique and structurally sorted. Rigid presentation transforms do
+not grant annotation scaling or arbitrary metadata authority. Every producer
+is independently admitted against the same original snapshot; an intermediate
+candidate is never the source for a sibling producer.
+
+Architectural rows contain `entity_id` and `transform`; embedded rows contain
+`catalog_id`, `instance_id` and `transform`. Their transform contains exactly
+`pivot:[x,y,z]`, `offset:[x,y,z]`, `rotation_z_radians`, positive `scale`,
+`flip_horizontal` and `flip_vertical`. Annotation rows contain `owner_id`,
+`child_id` and `transform`; reference rows contain `entity_id` and `transform`.
+Their transform contains exactly `pivot:[x,y]`, `offset:[x,y]`,
+`rotation_radians`, `flip_horizontal` and `flip_vertical`. Numeric inputs must
+round-trip losslessly through the typed producer; display rounding grants no
+new geometry authority.
+
+Sorted roof members contain exactly `roof_id`, `opening_id` and `coverage`,
+either `independent` or `carried`. Each authenticates a real, profiled source
+skylight. An explicitly transformed parent carries its selected children once.
+Independent children use canonical roof phase dialect4/17/20/21 with existing
+child upserts only; no parent profile edit, clone, deletion or unrelated child
+can borrow that authority. Null roof authority requires every child to be
+carried. Aggregate selected targets are bounded to 1000, and the closed input
+has bounded bytes, JSON nodes, depth and portable finite values.
+
+Composition preserves complete original-source leaves, exact raw unrelated
+data, protected baselines, known registry consequences and identity ownership.
+Conflicting consequences refuse the entire command. The initial request keeps
+walls, physical-wall-derived rooms, constraints and wall/room dimensions
+unchanged. Wall/drawing transforms, Properties edits and desktop routing remain
+required implementation work; this format does not certify them.
+
+Reader187 and extraction185 apply to direct, nested, retained and undone
+envelope52 history. Existing command dialects retain their meanings and floors.
+Compilation, interaction, history replay and migration remain unqualified.
+
+Detached previews can reuse a private in-memory admission certificate issued
+only for an already-admitted head or chronological source prefix. It binds the
+immutable history identity and all snapshot metadata and retains the prior
+identity ledgers. Uncertified or changed snapshots still require full restore.
+The certificate is not serialized, does not replace retained command replay,
+and cannot authorize a later live publication without its source fence.
 
 ## Explicit managed corner-cut selection (v186, source integration)
 

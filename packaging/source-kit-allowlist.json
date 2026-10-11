@@ -3683,6 +3683,10 @@
     },
     {
       "category": "source",
+      "path": "include/sketch/mixed_selection_edit.hpp"
+    },
+    {
+      "category": "source",
       "path": "include/sketch/mixed_wall_opening_removal.hpp"
     },
     {
@@ -3716,6 +3720,10 @@
     {
       "category": "source",
       "path": "include/sketch/ordinary_selection_removal.hpp"
+    },
+    {
+      "category": "source",
+      "path": "include/sketch/ordinary_selection_edit.hpp"
     },
     {
       "category": "source",
@@ -5023,6 +5031,10 @@
     },
     {
       "category": "source",
+      "path": "src/core/mixed_selection_edit.cpp"
+    },
+    {
+      "category": "source",
       "path": "src/core/mixed_wall_opening_removal.cpp"
     },
     {
@@ -5052,6 +5064,10 @@
     {
       "category": "source",
       "path": "src/core/ordinary_selection_removal.cpp"
+    },
+    {
+      "category": "source",
+      "path": "src/core/ordinary_selection_edit.cpp"
     },
     {
       "category": "source",

@@ -54,6 +54,7 @@
 #include "sketch/ordinary_selection_removal.hpp"
 #include "sketch/phase_selection_removal.hpp"
 #include "sketch/mixed_clipboard_command.hpp"
+#include "sketch/mixed_selection_edit.hpp"
 #include "sketch/phase_constraint_authoring.hpp"
 #include "sketch/phase_coordinated_demolition.hpp"
 #include "sketch/phase_opening_demolition.hpp"
@@ -2636,6 +2637,29 @@ static bool has_wall_group_scale(const ApplyBoundaryConstraintChanges& command) 
 static bool has_mixed_selection_removal(const ApplyBoundaryConstraintChanges& command) {
     return command.mixed_selection_removal_completion || !command.mixed_selection_removal_intent.is_null();
 }
+static bool has_mixed_selection_edit(const ApplyBoundaryConstraintChanges& command) {
+    return command.mixed_selection_edit_completion || !command.mixed_selection_edit_intent.is_null();
+}
+static void validate_mixed_selection_edit_mode(const ApplyBoundaryConstraintChanges& command) {
+    if (!command.mixed_selection_edit_completion || command.mixed_selection_edit_intent.is_null())
+        throw std::invalid_argument("Mixed selection edit requires its retained source request");
+    auto ordinary=command;
+    ordinary.mixed_selection_edit_completion=false;
+    ordinary.mixed_selection_edit_intent=nullptr;
+    const auto empty=nlohmann::json{{"version",1},{"kind","apply_boundary_constraint_changes"},
+        {"expected_revision",command.expected_revision},{"message",command.message},
+        {"entity_changes",nlohmann::json::array()},{"boundary_edits",nlohmann::json::array()}};
+    if (command_to_json(Command{ordinary})!=empty)
+        throw std::invalid_argument("Mixed selection edit cannot borrow sibling geometry, raw payload or asset authority");
+#ifdef VERTEX_HAS_CONSTRAINT_AUTHORING
+    const auto canonical=validate_mixed_selection_edit_intent(command.mixed_selection_edit_intent);
+    if (canonical.dump()!=command.mixed_selection_edit_intent.dump() ||
+        canonical.at("expected_revision")!=command.expected_revision || canonical.at("message")!=command.message)
+        throw std::invalid_argument("Mixed selection edit requires a matching canonical original-source request");
+#else
+    throw std::invalid_argument("Mixed selection edit requires the production authoring engine");
+#endif
+}
 static bool has_ordinary_selection_removal(const ApplyBoundaryConstraintChanges& command) {
     return command.ordinary_selection_removal_completion || !command.ordinary_selection_removal_intent.is_null();
 }
@@ -2787,7 +2811,7 @@ static bool has_source_authoring_sibling_changes(const ApplyBoundaryConstraintCh
         has_phase_room_review_completion(command) || command.wall_dimension_completion ||
         command.curve_construction_completion || has_disto_measurement_completion(command) ||
         has_wall_group_scale(command) || has_phase_selection_removal(command) ||
-        has_ordinary_selection_removal(command) || has_mixed_selection_removal(command);
+        has_ordinary_selection_removal(command) || has_mixed_selection_removal(command) || has_mixed_selection_edit(command);
 }
 
 static void validate_phase_constraint_authoring_mode(const ApplyBoundaryConstraintChanges& command) {
@@ -3154,6 +3178,10 @@ static std::vector<nlohmann::json> phase_constraint_authoring_proofs(const Apply
         if (proof.at("kind")!="apply_boundary_constraint_changes") return;
         const auto version=proof.at("version").get<int>();
         if (version==34) result.push_back(proof.at("phase_constraint_authoring_intent"));
+        else if (version==52) {
+            const auto& roof=proof.at("mixed_selection_edit_intent").at("roof_authoring");
+            if (!roof.is_null()) result.push_back(roof);
+        }
         else if (version==51) {
             const auto& roof=proof.at("clipboard_placement_intent").at("roof_authoring");
             if (!roof.is_null()) result.push_back(roof);
@@ -3590,7 +3618,11 @@ static PhaseConstraintLifetimeProofs phase_constraint_lifetime_proofs(const Appl
         if (depth>2) throw std::invalid_argument("Retained identity proof wrapper depth is invalid");
         if (proof.at("kind")!="apply_boundary_constraint_changes") return;
         const auto version=proof.at("version").get<int>();
-        if (version==51) {
+        if (version==52) {
+            const auto& roof=proof.at("mixed_selection_edit_intent").at("roof_authoring");
+            if (!roof.is_null()) result.phase_proofs.push_back(roof);
+        }
+        else if (version==51) {
             const auto& roof=proof.at("clipboard_placement_intent").at("roof_authoring");
             if (!roof.is_null()) result.phase_proofs.push_back(roof);
         }
@@ -4572,6 +4604,13 @@ static std::map<std::string, Entity, std::less<>> replay_retained_wall_merge(
 void validate_completed_constraint_change(const std::map<std::string, Entity, std::less<>>& before,
     const std::map<std::string, Entity, std::less<>>& after,
     const ApplyBoundaryConstraintChanges& command, bool retained_replay = false) {
+    if (has_mixed_selection_edit(command)) {
+        // Only live/retained full-snapshot replay supplies the two independently
+        // admitted leaves. Entity-map-only validation grants no replay authority.
+        try { validate_mixed_selection_edit_mode(command); }
+        catch (const std::exception& error) { document_error(DocumentErrorCode::constraint_violation,error.what()); }
+        return;
+    }
     if (has_phase_selection_removal(command)) {
         try { validate_phase_selection_removal_mode(command); }
         catch (const std::exception& error) { document_error(DocumentErrorCode::constraint_violation,error.what()); }
@@ -6257,6 +6296,8 @@ std::map<std::string, Entity, std::less<>> completed_boundary_constraint_entitie
     const ApplyBoundaryConstraintChanges& command, bool retained_replay = false,
     bool active_phase_constraints = false,
     const std::map<std::string,Entity,std::less<>>* original_dimension_source = nullptr) {
+    if (has_mixed_selection_edit(command))
+        document_error(DocumentErrorCode::invalid_entity,"Mixed selection edit requires complete snapshot-aware replay");
     if (has_mixed_clipboard_placement(command)) {
         try {
             validate_mixed_clipboard_placement_mode(command);
@@ -8176,6 +8217,17 @@ nlohmann::json command_to_json(const Command& command) {
             }
             return encoded;
         } else if constexpr (std::is_same_v<T, ApplyBoundaryConstraintChanges>) {
+            if (has_mixed_selection_edit(typed)) {
+                try {
+                    validate_mixed_selection_edit_mode(typed);
+                    validate_action(typed.message);
+                    return nlohmann::json{{"version",52},{"kind","apply_boundary_constraint_changes"},
+                        {"expected_revision",typed.expected_revision},{"message",typed.message},
+                        {"mixed_selection_edit_completion",true},
+                        {"mixed_selection_edit_intent",typed.mixed_selection_edit_intent}};
+                } catch (const DocumentError&) { throw; }
+                catch (const std::exception& error) { document_error(DocumentErrorCode::invalid_entity,error.what()); }
+            }
             if (has_mixed_clipboard_placement(typed)) {
                 try {
                     validate_mixed_clipboard_placement_mode(typed);
@@ -8692,7 +8744,7 @@ Command command_from_json(const nlohmann::json& value,
     try {
         if (!value.is_object() || !value.contains("version") || !value.contains("kind") ||
             !value.at("version").is_number_integer() ||
-            (value.at("version")<1 || value.at("version")>51) ||
+            (value.at("version")<1 || value.at("version")>52) ||
             !value.at("kind").is_string()) {
             document_error(DocumentErrorCode::invalid_entity, "serialized command envelope is invalid");
         }
@@ -8813,6 +8865,25 @@ Command command_from_json(const nlohmann::json& value,
             return result;
         }
         if (kind == "apply_boundary_constraint_changes") {
+            if (value.at("version")==52) {
+                command_exact_fields(value,{"version","kind","expected_revision","message",
+                    "mixed_selection_edit_completion","mixed_selection_edit_intent"},
+                    DocumentErrorCode::invalid_entity,"serialized mixed selection edit");
+                if (!value.at("mixed_selection_edit_completion").is_boolean() ||
+                    !value.at("mixed_selection_edit_completion").get<bool>())
+                    throw std::invalid_argument("Mixed selection edit mode is invalid");
+                ApplyBoundaryConstraintChanges result;
+                result.expected_revision=command_revision(value.at("expected_revision"),"Mixed selection edit revision");
+                result.message=command_string(value.at("message"),"Mixed selection edit message",1024);
+#ifdef VERTEX_HAS_CONSTRAINT_AUTHORING
+                result.mixed_selection_edit_intent=validate_mixed_selection_edit_intent(value.at("mixed_selection_edit_intent"));
+#else
+                throw std::invalid_argument("Mixed selection edit requires the production authoring engine");
+#endif
+                result.mixed_selection_edit_completion=true;
+                validate_mixed_selection_edit_mode(result);
+                return result;
+            }
             if (value.at("version")==51) {
                 command_exact_fields(value,{"version","kind","expected_revision","message",
                     "clipboard_placement_completion","clipboard_placement_intent"},
@@ -9595,6 +9666,41 @@ AssetChange AssetChange::erase(std::string asset_id) {
     return AssetChange{AssetChangeKind::erase, {}, std::move(asset_id)};
 }
 
+struct DocumentSnapshot::Admission {
+    std::string document_id;
+    Revision revision{};
+    std::optional<Revision> saved_revision;
+    bool editable{};
+    std::string read_only_reason;
+    std::shared_ptr<const std::vector<RevisionRecord>> history;
+    std::map<std::string, Revision, std::less<>> named_revisions;
+    BoundaryIdentityHistory boundary_history;
+    StairIdentityHistory stair_history;
+    std::optional<std::string> unsupported_history;
+
+    Admission(const DocumentSnapshot& source, const BoundaryIdentityHistory& boundaries,
+        const StairIdentityHistory& stairs, const std::optional<std::string>& unsupported)
+        : document_id(source.document_id_), revision(source.revision_),
+          saved_revision(source.saved_revision_), editable(source.editable_),
+          read_only_reason(source.read_only_reason_), history(source.history_),
+          named_revisions(source.named_revisions_), boundary_history(boundaries),
+          stair_history(stairs), unsupported_history(unsupported) {}
+
+    bool matches(const DocumentSnapshot& source) const {
+        return history && history == source.history_ && document_id == source.document_id_ &&
+            revision == source.revision_ && saved_revision == source.saved_revision_ &&
+            editable == source.editable_ && read_only_reason == source.read_only_reason_ &&
+            named_revisions == source.named_revisions_;
+    }
+};
+
+void Document::seal_snapshot_admission(DocumentSnapshot& snapshot,
+    const BoundaryIdentityHistory& boundary_history, const StairIdentityHistory& stair_history,
+    const std::optional<std::string>& unsupported_history) {
+    snapshot.admission_ = std::make_shared<const DocumentSnapshot::Admission>(
+        snapshot, boundary_history, stair_history, unsupported_history);
+}
+
 const std::string& DocumentSnapshot::document_id() const noexcept { return document_id_; }
 Revision DocumentSnapshot::revision() const noexcept { return revision_; }
 std::optional<Revision> DocumentSnapshot::saved_revision_optional() const noexcept {
@@ -9707,6 +9813,8 @@ DocumentSnapshot Document::snapshot() const {
         snapshot_history_cache_ = std::make_shared<const std::vector<RevisionRecord>>(history_);
     snapshot.history_ = snapshot_history_cache_;
     snapshot.named_revisions_ = named_revisions_;
+    seal_snapshot_admission(snapshot, boundary_identity_history_, stair_identity_history_,
+        unsupported_constraint_history_reason_);
     return snapshot;
 }
 
@@ -9717,7 +9825,26 @@ bool Document::shares_authoring_source_with(const DocumentSnapshot& source) cons
 }
 
 Document Document::fork(const DocumentSnapshot& source) {
-    return restore(source);
+    if (!source.admission_ || !source.admission_->matches(source)) return restore(source);
+    // Only a live admitted head or an already validated chronological prefix
+    // can issue this exact private certificate. Reusing its immutable history
+    // avoids recursively re-admitting ancestry for every detached leaf preview.
+    const auto& admission = *source.admission_;
+    Document document(source.document_id_);
+    document.head_revision_ = source.revision_;
+    document.saved_revision_ = source.saved_revision_;
+    document.history_ = source.history();
+    document.snapshot_history_cache_ = source.history_;
+    document.named_revisions_ = source.named_revisions_;
+    document.unsupported_constraint_history_reason_ = admission.unsupported_history;
+    document.boundary_identity_history_ = admission.boundary_history;
+    document.stair_identity_history_ = admission.stair_history;
+    if (!source.editable_ && !source.read_only_reason_.empty())
+        document.session_read_only_reason_ = source.read_only_reason_;
+    document.update_editability();
+    if (document.editable_ != source.editable_ || document.read_only_reason_ != source.read_only_reason_)
+        document_error(DocumentErrorCode::invalid_history, "admitted snapshot editability is inconsistent");
+    return document;
 }
 
 Document Document::fork_at_revision(const DocumentSnapshot& source, Revision revision) {
@@ -9875,6 +10002,7 @@ Revision Document::apply(const Command& command) {
     PhaseSelectionRemovalReplayScope phase_selection_removal_replay_scope;
     OrdinarySelectionRemovalReplayScope ordinary_selection_removal_replay_scope;
     MixedSelectionRemovalReplayScope mixed_selection_removal_replay_scope;
+    MixedSelectionEditReplayScope mixed_selection_edit_replay_scope;
 #endif
     if (!editable_) {
         document_error(DocumentErrorCode::read_only, read_only_reason_);
@@ -9982,7 +10110,14 @@ Revision Document::apply(const Command& command) {
                 next.action = typed_command.message.empty()
                     ? "Apply boundary constraints" : typed_command.message;
                 validate_action(next.action);
-                if (has_mixed_clipboard_placement(typed_command)) {
+                if (has_mixed_selection_edit(typed_command)) {
+                    (void)command_to_json(Command{typed_command});
+#ifdef VERTEX_HAS_CONSTRAINT_AUTHORING
+                    next_active_policy=source_active_policy || mixed_selection_edit_active_phase_policy(typed_command.mixed_selection_edit_intent);
+#else
+                    document_error(DocumentErrorCode::invalid_entity,"Mixed selection edit requires the production authoring engine");
+#endif
+                } else if (has_mixed_clipboard_placement(typed_command)) {
                     (void)command_to_json(Command{typed_command});
 #ifdef VERTEX_HAS_CONSTRAINT_AUTHORING
                     validate_mixed_clipboard_placement_source(snapshot(),typed_command.clipboard_placement_intent);
@@ -10047,7 +10182,18 @@ Revision Document::apply(const Command& command) {
 #ifdef VERTEX_HAS_PHYSICAL_ROOM_REVIEW
                 dimension_source=room_dimension_original_source(history_,history_.size(),current.entities,typed_command);
 #endif
-                if (has_phase_selection_removal(typed_command)) {
+                if (has_mixed_selection_edit(typed_command)) {
+#ifdef VERTEX_HAS_CONSTRAINT_AUTHORING
+                    try {
+                        next.entities=replay_mixed_selection_edit(snapshot(),typed_command.mixed_selection_edit_intent);
+                        validate_active_design_preserved_dependents(current.entities,next.entities,
+                            phase_constraint_authoring_preserves_registries(typed_command),false);
+                    } catch (const DocumentError&) { throw; }
+                    catch (const std::exception& error) { document_error(DocumentErrorCode::invalid_entity,error.what()); }
+#else
+                    document_error(DocumentErrorCode::invalid_entity,"Mixed selection edit requires the production authoring engine");
+#endif
+                } else if (has_phase_selection_removal(typed_command)) {
 #ifdef VERTEX_HAS_CONSTRAINT_AUTHORING
                     try { next.entities=checked_phase_selection_removal_replay(snapshot(),typed_command.phase_selection_removal_intent); }
                     catch (const DocumentError&) { throw; }
@@ -10298,6 +10444,7 @@ Document Document::restore(DocumentSnapshot snapshot) {
     PhaseSelectionRemovalReplayScope phase_selection_removal_replay_scope;
     OrdinarySelectionRemovalReplayScope ordinary_selection_removal_replay_scope;
     MixedSelectionRemovalReplayScope mixed_selection_removal_replay_scope;
+    MixedSelectionEditReplayScope mixed_selection_edit_replay_scope;
 #endif
     if (!is_valid_identifier(snapshot.document_id_)) {
         document_error(DocumentErrorCode::invalid_history, "stored document id is invalid");
@@ -10316,6 +10463,16 @@ Document Document::restore(DocumentSnapshot snapshot) {
     const auto active_policies=active_constraint_history_policies(snapshot.history());
     for (std::size_t index = 0; index < snapshot.history().size(); ++index) {
         const auto& record = snapshot.history()[index];
+        // Capture prior lifetime ledgers before processing this record. The
+        // current record's stair initialization and later reservations are not
+        // authority for replaying its source prefix.
+        const bool mixed_edit_prefix = record.boundary_constraint_changes &&
+            has_mixed_selection_edit(*record.boundary_constraint_changes);
+        const auto prior_boundary_history = mixed_edit_prefix ?
+            std::make_unique<BoundaryIdentityHistory>(identity_history) : nullptr;
+        const auto prior_stair_history = mixed_edit_prefix ?
+            std::make_unique<StairIdentityHistory>(stair_identity_history) : nullptr;
+        const auto prior_unsupported_history = unsupported_constraint_history;
         validate_action(record.action);
         if (record.revision != index) {
             document_error(DocumentErrorCode::invalid_history, "stored revisions are not contiguous");
@@ -10395,6 +10552,7 @@ Document Document::restore(DocumentSnapshot snapshot) {
             has_phase_selection_removal(*record.boundary_constraint_changes) ||
             has_ordinary_selection_removal(*record.boundary_constraint_changes) ||
             has_mixed_selection_removal(*record.boundary_constraint_changes) ||
+            has_mixed_selection_edit(*record.boundary_constraint_changes) ||
             has_wall_group_scale(*record.boundary_constraint_changes)))
             validate_completed_constraint_change(previous.entities, record.entities, *record.boundary_constraint_changes, true);
         else validate_constraint_change(previous.entities, record.entities,
@@ -10618,7 +10776,32 @@ Document Document::restore(DocumentSnapshot snapshot) {
 #ifdef VERTEX_HAS_PHYSICAL_ROOM_REVIEW
                     dimension_source=room_dimension_original_source(snapshot.history(),index,previous.entities,proof);
 #endif
-                    if (has_mixed_clipboard_placement(proof)) {
+                    if (has_mixed_selection_edit(proof)) {
+                        (void)command_to_json(Command{proof});
+#ifdef VERTEX_HAS_CONSTRAINT_AUTHORING
+                        // Replay against the admitted source prefix, never the
+                        // future event or a synthetic entity-only snapshot.
+                        auto prefix=snapshot;
+                        prefix.history_=std::make_shared<const std::vector<RevisionRecord>>(
+                            snapshot.history().begin(),snapshot.history().begin()+index);
+                        prefix.revision_=previous.revision;
+                        prefix.saved_revision_=mixed_selection_edit_source_saved_revision(proof.mixed_selection_edit_intent);
+                        if (prefix.saved_revision_ && *prefix.saved_revision_>prefix.revision_)
+                            throw std::invalid_argument("Mixed selection edit captured save revision is outside its source prefix");
+                        prefix.named_revisions_=expected_names;
+                        prefix.editable_=true;
+                        prefix.read_only_reason_.clear();
+                        if (prefix.uses_active_phase_constraints()!=active_policies.at(index-1))
+                            throw std::invalid_argument("Mixed selection edit source policy differs from admitted ancestry");
+                        seal_snapshot_admission(prefix,*prior_boundary_history,*prior_stair_history,
+                            prior_unsupported_history);
+                        expected.entities=replay_mixed_selection_edit(prefix,proof.mixed_selection_edit_intent);
+                        validate_active_design_preserved_dependents(previous.entities,expected.entities,
+                            phase_constraint_authoring_preserves_registries(proof),false);
+#else
+                        throw std::invalid_argument("Mixed selection edit requires the production authoring engine");
+#endif
+                    } else if (has_mixed_clipboard_placement(proof)) {
                         (void)command_to_json(Command{proof});
 #ifdef VERTEX_HAS_CONSTRAINT_AUTHORING
                         auto prefix=snapshot;
@@ -10706,7 +10889,7 @@ Document Document::restore(DocumentSnapshot snapshot) {
                     if (has_phase_selection_removal(proof) || has_ordinary_selection_removal(proof) || has_mixed_selection_removal(proof) || !phase_constraint_authoring_proofs(proof).empty() || !mixed_clipboard_placement_proofs(proof).empty() || has_complete_wall_join_deletion_proof(proof))
                         validate_phase_constraint_fresh_lifetime(previous.entities,expected.entities,snapshot.history(),index,proof);
 #endif
-                    if (!has_phase_selection_removal(proof) && !has_ordinary_selection_removal(proof) && !has_mixed_selection_removal(proof))
+                    if (!has_phase_selection_removal(proof) && !has_ordinary_selection_removal(proof) && !has_mixed_selection_removal(proof) && !has_mixed_selection_edit(proof))
                         expected.assets = boundary_constraint_assets(previous.assets, proof);
                     validate_boundary_identity_transition(identity_history, proof.wall_split ?
                         wall_split_validation_source(previous.entities,expected.entities,*proof.wall_split) :

@@ -130,6 +130,17 @@ struct PhaseConstraintAuthoringIntent {
     const std::map<std::string,Entity,std::less<>>& source,
     const std::vector<std::map<std::string,Entity,std::less<>>>& candidates);
 
+// Compose one to five complete edit maps independently admitted against the
+// same actual source. Exact shared consequences coalesce; fresh destinations
+// remain disjoint. Only codec-known source rows and admitted complete assembly
+// instance rows/suffixes may merge. Legacy annotation axes may promote to state
+// v3 using only required missing symbol defaults, preserving other raw fields.
+// Protected baselines and their hosted rows stay exact. This grants neither
+// leaf admission, captured-snapshot authority nor publication authority.
+[[nodiscard]] std::map<std::string,Entity,std::less<>> compose_mixed_selection_edit_candidates(
+    const std::map<std::string,Entity,std::less<>>& actual,
+    const std::vector<std::map<std::string,Entity,std::less<>>>& independently_admitted_candidates);
+
 // Internal composition of independently admitted demolition leaves. Complete
 // typed leaf replay owns removals and fresh destinations; overlapping changes
 // compose only through codec-known phase/presentation rows and catalog removals.

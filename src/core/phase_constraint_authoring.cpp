@@ -2,6 +2,8 @@
 
 #include "sketch/boundary_transform.hpp"
 #include "sketch/boundary_dimension.hpp"
+#include "sketch/boundary_entity.hpp"
+#include "sketch/boundary_receipt.hpp"
 #include "sketch/constraint_entity.hpp"
 #include "sketch/annotation_entity_codec.hpp"
 #include "sketch/assembly_document_adapter.hpp"
@@ -22,6 +24,7 @@
 #include "sketch/phase_wall_replacement_command.hpp"
 #include "sketch/phase_wall_demolition_authoring.hpp"
 #include "sketch/model_phases.hpp"
+#include "sketch/measurement_linework.hpp"
 #include "sketch/roof_join_phase_ownership.hpp"
 #include "sketch/sheet_view_entity_codec.hpp"
 #include "sketch/slab_hosted_geometry_edit.hpp"
@@ -586,7 +589,8 @@ Entity merge_append_container(const Entity& source,const Entity& roof,const Enti
 // removal); all other source rows keep their exact order and bytes. Fresh rows
 // remain disjoint suffixes in wall/roof/horizontal order.
 Entity merge_source_row_container(const Entity& source,const std::vector<const Entity*>& candidates,
-    bool ordinary_removal_rosters=false,bool allow_shared_reference_retirement=false) {
+    bool ordinary_removal_rosters=false,bool allow_shared_reference_retirement=false,
+    bool coalesce_exact_consequences=false) {
     auto paths=append_paths(source,ordinary_removal_rosters);
     if (source.type==kAnnotationEntityType) {
         paths.push_back({Json::json_pointer("/state/labels"),"id"});
@@ -653,6 +657,8 @@ Entity merge_source_row_container(const Entity& source,const std::vector<const E
                 const Json* next=found==lane.end()?nullptr:found->second;
                 if (next && exact_json(original,*next)) continue;
                 if (changed) {
+                    if (coalesce_exact_consequences && ((!consequence && !next) ||
+                        (consequence && next && exact_json(*consequence,*next)))) continue;
                     if (allow_shared_reference_retirement && !consequence && !next &&
                         (source.type==kAnnotationEntityType || source.type==kSheetViewEntityType)) continue;
                     invalid("Coordinated families change the same retained source row");
@@ -661,11 +667,17 @@ Entity merge_source_row_container(const Entity& source,const std::vector<const E
             }
             if (consequence) rows.push_back(*consequence);
         }
-        std::set<RowIdentity> destinations;
-        for (const auto& [identity,index]:source_rows) { (void)index; destinations.insert(identity); }
+        std::map<RowIdentity,const Json*> destinations;
+        for (const auto& [identity,index]:source_rows) destinations.emplace(identity,&retained[index]);
         for (const auto& suffix:additions) for (const auto* row:suffix) {
-            if (!destinations.insert(destination(*row)).second)
+            const auto [found,inserted]=destinations.emplace(destination(*row),row);
+            if (!inserted) {
+                // Membership/target references can have one exact shared
+                // consequence. Newly owned child IDs never gain that exception.
+                if (coalesce_exact_consequences && (!allowed.identity_key ||
+                    std::string_view(allowed.identity_key)!="id") && exact_json(*found->second,*row)) continue;
                 invalid("Coordinated fresh presentation or registry rows overlap");
+            }
             rows.push_back(*row);
         }
         merged.properties.at(allowed.path)=std::move(rows);
@@ -1642,6 +1654,368 @@ Entities compose_architectural_family_candidates(const Entities& source,const st
         if (final_aliases.at(key)!=alias) invalid("Ordinary family composition changed an actual source render alias");
     for (const auto& candidate:candidates) for (const auto& [key,alias]:embedded_assembly_presentation_ids(candidate))
         if (final_aliases.at(key)!=alias) invalid("Ordinary family composition changed a candidate render alias");
+    validate_document_assembly_instances(result);
+    return result;
+}
+
+namespace {
+// Reflection promotes legacy annotation axes for the whole state. Compare
+// independently admitted rows against the same codec-owned promoted baseline,
+// so required sibling defaults are not mistaken for competing row edits.
+// Only the state version and six absent symbol fields owned by upgrade_axes in
+// presentation_transform change; encoding never replaces a row or envelope.
+Entity promote_mixed_annotation_axes(Entity entity) {
+    const auto state=decode_annotation_entity(entity);
+    auto& raw=entity.properties.at("state");
+    if (raw.at("version").get<int>()>=3) return entity;
+    const auto encoded=encode_annotation_state(state,default_symbol_catalog());
+    auto& symbols=raw.at("symbols");
+    for (std::size_t i=0;i<symbols.size();++i)
+        for (const auto* field:{"definition","pinned_svg","width_scale","depth_scale",
+                               "flip_horizontal","flip_vertical"})
+            if (!symbols[i].contains(field)) symbols[i][field]=encoded.at("symbols")[i].at(field);
+    raw.at("version")=3;
+    validate_annotation_entity(entity);
+    return entity;
+}
+
+Entity merge_mixed_edit_annotation_rows(const Entity& source,const std::vector<const Entity*>& candidates) {
+    validate_annotation_entity(source);
+    const auto& version=source.properties.at("state").at("version");
+    bool promoted=false;
+    for (const auto* candidate:candidates) {
+        validate_annotation_entity(*candidate);
+        const auto& next=candidate->properties.at("state").at("version");
+        if (exact_json(version,next)) continue;
+        if ((version!=1 && version!=2) || next!=3)
+            invalid("Mixed edit annotation has an unsupported state promotion");
+        promoted=true;
+    }
+    if (!promoted) return merge_source_row_container(source,candidates,false,false,true);
+
+    const auto baseline=promote_mixed_annotation_axes(source);
+    std::vector<Entity> normalized;
+    normalized.reserve(candidates.size());
+    for (const auto* candidate:candidates) normalized.push_back(promote_mixed_annotation_axes(*candidate));
+    std::vector<const Entity*> rows;
+    rows.reserve(normalized.size());
+    for (const auto& candidate:normalized) rows.push_back(&candidate);
+    return merge_source_row_container(baseline,rows,false,false,true);
+}
+
+// Mixed edit maps have already passed their own typed row admission. Unlike
+// historical hosted placement composition, their authority can include an
+// independent root pose, parameters and complete raw instance suffixes.
+Entity merge_mixed_edit_instance_rows(const Entity& source,const std::vector<const Entity*>& candidates) {
+    const auto& original=source.properties.at("model");
+    (void)AssemblyModel::from_json(original);
+    const auto& retained=original.at("instances");
+    auto rows=retained;
+    std::set<std::string,std::less<>> retained_ids,changed,suffix_ids;
+    for (const auto& row:retained) retained_ids.insert(row.at("id").get<std::string>());
+    Json suffix=Json::array();
+    bool promoted=false;
+    for (const auto* candidate:candidates) {
+        const auto& model=candidate->properties.at("model");
+        (void)AssemblyModel::from_json(model);
+        auto envelope=*candidate;
+        auto& normalized=envelope.properties.at("model");
+        const bool promotion=!exact_json(model.at("schema"),original.at("schema"));
+        if (promotion) {
+            const auto before=original.at("schema").get<std::string>();
+            const auto after=model.at("schema").get<std::string>();
+            if (!((before=="sketch.assemblies.v3" || before=="sketch.assemblies.v4") &&
+                    (after=="sketch.assemblies.v5" || after=="sketch.assemblies.v6" || after=="sketch.assemblies.v7")) &&
+                !(before=="sketch.assemblies.v5" && (after=="sketch.assemblies.v6" || after=="sketch.assemblies.v7")) &&
+                !(before=="sketch.assemblies.v6" && after=="sketch.assemblies.v7"))
+                invalid("Mixed edit catalog has an unsupported dialect change");
+            promoted=true;
+            normalized.at("schema")=original.at("schema");
+            auto& types=normalized.at("types");
+            const auto& source_types=original.at("types");
+            if (types.size()!=source_types.size()) invalid("Mixed edit changed catalog type definitions");
+            for (std::size_t i=0;i<types.size();++i) for (const auto* field:{"profiles","parts"})
+                if (!source_types[i].contains(field) && types[i].contains(field) &&
+                    types[i].at(field).is_array() && types[i].at(field).empty()) types[i].erase(field);
+        }
+        const auto& instances=model.at("instances");
+        if (instances.size()<retained.size()) invalid("Mixed edit cannot erase actual catalog instance rows");
+        for (std::size_t i=0;i<retained.size();++i) {
+            const auto& before=retained[i];
+            auto row=instances[i];
+            const auto local_id=before.at("id").get<std::string>();
+            if (row.at("id")!=before.at("id")) invalid("Mixed edit changed retained catalog instance identities or order");
+            // Exactly the defaults recognized by historical catalog promotion.
+            // Genuine independent root transforms and row parameters remain
+            // complete typed consequences of the independently admitted leaf.
+            if (promotion && !before.contains("root_transform") && row.contains("root_transform") &&
+                row.at("root_transform").is_null() && row.contains("nested_overrides") &&
+                row.at("nested_overrides").is_array() && row.at("nested_overrides").empty()) {
+                row.erase("root_transform"); row.erase("nested_overrides");
+            }
+            if (promotion && before.contains("placement") && row.contains("placement")) {
+                auto& placed=row.at("placement");
+                const auto& placement=before.at("placement");
+                if (!placement.contains("vertical_scale") && placed.contains("vertical_scale") &&
+                    placed.at("vertical_scale")==1.0) placed.erase("vertical_scale");
+                if (placement.at("translation_m").size()==2 && placed.at("translation_m").size()==3 &&
+                    placed.at("translation_m")[2]==0.0) placed.at("translation_m").erase(placed.at("translation_m").begin()+2);
+            }
+            if (exact_json(before,row)) continue;
+            if (!changed.insert(local_id).second && !exact_json(rows[i],row))
+                invalid("Mixed edit leaves have conflicting consequences for one catalog instance row");
+            rows[i]=std::move(row);
+        }
+        for (std::size_t i=retained.size();i<instances.size();++i) {
+            const auto& row=instances[i];
+            const auto local_id=row.at("id").get<std::string>();
+            if (retained_ids.contains(local_id) || !suffix_ids.insert(local_id).second)
+                invalid("Mixed edit catalog suffix repeats or reorders an instance identity");
+            suffix.push_back(row);
+        }
+        normalized.at("instances")=retained;
+        if (!exact(source,envelope)) invalid("Mixed edit changed catalog definitions or its retained envelope");
+    }
+    for (const auto& row:suffix) rows.push_back(row);
+    auto result=source;
+    result.properties.at("model").at("instances")=std::move(rows);
+    if (promoted && (!changed.empty() || !suffix.empty())) result.properties.at("model").at("schema")="sketch.assemblies.v7";
+    (void)AssemblyModel::from_json(result.properties.at("model"));
+    return result;
+}
+
+using MixedEditIdentityOwners=std::map<std::string,std::set<std::string,std::less<>>,std::less<>>;
+
+// Inventory only owned slots, never registry membership or presentation target
+// references. Structural owner keys avoid delimiter aliases between views and
+// children. Catalog instance bindings use their separate qualified namespace.
+// This is a collision fence, not identity creation authority.
+MixedEditIdentityOwners mixed_edit_identity_owners(const Entities& entities) {
+    MixedEditIdentityOwners owners;
+    const auto reserve=[&](const Json& token,const Json& owner) {
+        if (!token.is_string() || token.get_ref<const std::string&>().empty())
+            invalid("Mixed edit has an invalid owned identity");
+        owners[token.get<std::string>()].insert(owner.dump());
+    };
+    for (const auto& [key,entity]:entities) {
+        reserve(key,Json::array({key,"entity"}));
+        const auto rows=[&](const Json& values,const Json& owner) {
+            if (!values.is_array()) invalid("Mixed edit owned child collection must be an array");
+            for (const auto& row:values) reserve(row.at("id"),owner);
+        };
+        const auto& p=entity.properties;
+        // Catalog instance IDs have their own qualified (catalog, instance)
+        // namespace, inventoried separately through the presentation bindings.
+        if (entity.type==kAnnotationEntityType) {
+            for (const auto* slot:{"labels","symbols"}) rows(p.at("state").at(slot),Json::array({key,slot}));
+        } else if (entity.type==kSheetViewEntityType) {
+            for (const auto& view:p.at("model").at("views")) if (view.contains("overlays"))
+                rows(view.at("overlays"),Json::array({key,"overlays",view.at("id")}));
+        } else if (entity.type=="roof" && p.contains("roof_openings"))
+            rows(p.at("roof_openings"),Json::array({key,"roof_openings"}));
+        else if ((entity.type=="wall" || entity.type=="slab") && p.contains("layers"))
+            rows(p.at("layers"),Json::array({key,"layers"}));
+        else if (entity.type=="stair") {
+            for (const auto* slot:{"flights","landings"}) if (p.contains(slot)) rows(p.at(slot),Json::array({key,slot}));
+        }
+        if (can_recognize_boundary_entity_type(entity.type) || entity.type=="measurement_linework") {
+            const auto topology_owner=Json::array({key,"topology"});
+            const auto topology=[&](const Json& segments) {
+                if (!segments.is_array()) invalid("Mixed edit retained topology must be an array");
+                for (const auto& edge:segments) for (const auto* slot:{"segment_id","start_vertex_id","end_vertex_id"})
+                    reserve(edge.at(slot),topology_owner);
+            };
+            const auto authoring=[&](const Json& value) {
+                const auto decoded=decode_boundary_receipt_envelope(value);
+                if (!decoded.supported()) invalid("Mixed edit retained construction topology is unsupported");
+                for (const auto& edge:decoded.record->edges) {
+                    reserve(edge.segment_id,topology_owner); reserve(edge.start_vertex_id,topology_owner);
+                    reserve(edge.end_vertex_id,topology_owner);
+                }
+            };
+            const auto edit=[&](const Json& value) {
+                const auto decoded=decode_boundary_geometry_edit(value);
+                if (decoded.kind!=BoundaryGeometryEditKind::redefine_boundary) reserve(decoded.target_id,topology_owner);
+                if (!decoded.new_vertex_id.empty()) reserve(decoded.new_vertex_id,topology_owner);
+                if (!decoded.new_segment_id.empty()) reserve(decoded.new_segment_id,topology_owner);
+                if (decoded.kind==BoundaryGeometryEditKind::redefine_boundary) {
+                    topology(decoded.replacement_segments);
+                    if (!decoded.replacement_authoring.is_null()) authoring(decoded.replacement_authoring);
+                    for (const auto& [group,mapping]:decoded.replacement_child_mapping.items()) {
+                        (void)group;
+                        for (const auto& [before,after]:mapping.items()) {
+                            reserve(before,topology_owner); reserve(after,topology_owner);
+                        }
+                    }
+                }
+                // replacement_linework_sources, physical room descriptors,
+                // dimensions and retired references refer to other owners.
+            };
+            if (entity.type=="measurement_linework") {
+                const auto& model=p.at("model");
+                const auto inspected=inspect_measurement_linework_model(model);
+                if (inspected.format==MeasurementLineworkFormat::supported_v1 ||
+                    inspected.format==MeasurementLineworkFormat::supported_v2 ||
+                    inspected.format==MeasurementLineworkFormat::supported_v3 ||
+                    inspected.format==MeasurementLineworkFormat::supported_v4 ||
+                    inspected.format==MeasurementLineworkFormat::supported_v5) {
+                    topology(model.at("segments"));
+                    if (model.contains("operations")) for (const auto& operation:model.at("operations")) {
+                        if (operation.at("type")=="edit") edit(operation.at("edit"));
+                        else if (operation.at("type")=="vertex_batch")
+                            for (const auto& value:operation.at("edits")) edit(value);
+                    }
+                }
+            } else {
+                if (inspect_boundary_entity_version(entity).format==BoundaryEntityFormat::identified_v1)
+                    topology(p.at("segments"));
+                if (p.contains("boundary_authoring")) authoring(p.at("boundary_authoring"));
+                const auto found=entity.extensions.find("boundary_geometry_derivation");
+                if (found!=entity.extensions.end() && found->is_object() && found->contains("version") &&
+                    (found->at("version")==1 || found->at("version")==2)) {
+                    const auto& derivation=*found;
+                    if (derivation.at("version")==1) authoring(derivation.at("source_boundary_authoring"));
+                    else topology(derivation.at("source_boundary").at("segments"));
+                    for (const auto& operation:derivation.at("operations")) {
+                        const auto& kind=operation.at("kind");
+                        const auto& value=operation.at("value");
+                        if (kind=="geometry_edit") edit(value);
+                        else if (kind=="vertex_batch") for (const auto& row:value) edit(row);
+                        else if (kind=="wall_merge") {
+                            topology(value.at("segments")); reserve(value.at("vertex_id"),topology_owner);
+                        } else if (kind=="physical_room_wall_merge") {
+                            topology(value.at("segments"));
+                            for (const auto& vertex:value.at("seam_vertex_ids")) reserve(vertex,topology_owner);
+                        } else if (kind=="physical_room_wall_split") {
+                            topology(value.at("segments"));
+                            for (const auto& insertion:value.at("insertions"))
+                                for (const auto* slot:{"segment_id","new_vertex_id","new_segment_id"})
+                                    reserve(insertion.at(slot),topology_owner);
+                        }
+                    }
+                }
+            }
+            // No recursive scan of properties or extensions: measured source
+            // lineage/group segment IDs and opaque metadata are references,
+            // not children owned by this boundary or stroke.
+        }
+    }
+    return owners;
+}
+} // namespace
+
+Entities compose_mixed_selection_edit_candidates(const Entities& actual,
+    const std::vector<Entities>& independently_admitted_candidates) {
+    coordinated_map_budget(actual);
+    if (independently_admitted_candidates.empty() || independently_admitted_candidates.size()>5)
+        invalid("Mixed edit composition requires one to five independently admitted actual-source candidates");
+    for (const auto& candidate:independently_admitted_candidates) coordinated_map_budget(candidate);
+    const auto original_owners=mixed_edit_identity_owners(actual);
+    const auto original_aliases=embedded_assembly_presentation_ids(actual);
+    std::set<std::string,std::less<>> source_aliases;
+    for (const auto& [key,alias]:original_aliases) { (void)key; source_aliases.insert(alias); }
+    std::set<std::string,std::less<>> fresh;
+    std::set<std::pair<std::string,std::string>> fresh_instances;
+    for (const auto& candidate:independently_admitted_candidates) {
+        std::set<std::string,std::less<>> lane_fresh;
+        for (const auto& [token,owners]:mixed_edit_identity_owners(candidate)) {
+            const auto found=original_owners.find(token);
+            if (found!=original_owners.end()) {
+                for (const auto& owner:owners) if (!found->second.contains(owner))
+                    invalid("Mixed edit reuses an actual owned identity for a different owner");
+                continue;
+            }
+            if (owners.size()!=1 || source_aliases.contains(token))
+                invalid("Mixed edit fresh identity is ambiguous or reuses an actual render alias");
+            lane_fresh.insert(token);
+        }
+        for (const auto& [binding,alias]:embedded_assembly_presentation_ids(candidate)) {
+            if (original_aliases.contains(binding)) continue;
+            if (!fresh_instances.insert(binding).second)
+                invalid("Mixed edit fresh qualified catalog instance destinations overlap between leaves");
+            if (fresh_instances.size()+fresh.size()>4096) invalid("Mixed edit fresh identity budget exceeded");
+            if (source_aliases.contains(alias) || original_owners.contains(alias) || lane_fresh.contains(alias))
+                invalid("Mixed edit fresh render alias collides with an owned identity");
+            lane_fresh.insert(alias);
+        }
+        for (const auto& token:lane_fresh) {
+            if (!fresh.insert(token).second) invalid("Mixed edit fresh destinations overlap between leaves");
+            if (fresh.size()+fresh_instances.size()>4096) invalid("Mixed edit fresh identity budget exceeded");
+        }
+    }
+    std::set<std::string,std::less<>> retained_baselines;
+    for (const auto& [key,entity]:actual) if (entity.type=="model_phases") {
+        (void)key;
+        const auto model=ModelPhases::from_json(entity.properties.at("model"));
+        if (model.active_alternative()) retained_baselines.insert(model.baseline_ids().begin(),model.baseline_ids().end());
+    }
+    auto result=actual;
+    for (const auto& [key,original]:actual) {
+        std::vector<const Entity*> changes;
+        std::size_t erased{};
+        for (const auto& candidate:independently_admitted_candidates) {
+            const auto found=candidate.find(key);
+            if (found==candidate.end()) ++erased;
+            else if (!exact(original,found->second) && std::none_of(changes.begin(),changes.end(),
+                [&](const auto* previous) { return exact(*previous,found->second); })) changes.push_back(&found->second);
+        }
+        if (erased) {
+            if (original.required || retained_baselines.contains(key) || !changes.empty())
+                invalid("Mixed edit erased a required or baseline owner, or overlaps an upsert");
+            const bool dimension=can_recognize_boundary_dimension_entity_type(original.type) &&
+                decode_boundary_dimension_entity(original).supported();
+            const bool constraint=original.type=="constraint" && decode_constraint_entity(original).supported();
+            const bool annotation=original.type==kAnnotationEntityType;
+            if (annotation) validate_annotation_entity(original);
+            if (!dimension && !constraint && !annotation)
+                invalid("Mixed edit erasure lacks a supported reference-cleanup owner");
+            result.erase(key);
+            continue;
+        }
+        if (changes.empty()) continue;
+        if (retained_baselines.contains(key) && original.type!="assembly_model")
+            invalid("Mixed edit changed an actual retained baseline owner");
+        if (original.type=="assembly_model")
+            result.at(key)=merge_mixed_edit_instance_rows(original,changes);
+        else if (original.type==kAnnotationEntityType)
+            result.at(key)=merge_mixed_edit_annotation_rows(original,changes);
+        else if (original.type=="model_phases" || original.type==kSheetViewEntityType)
+            result.at(key)=merge_source_row_container(original,changes,false,false,true);
+        else if (changes.size()==1) result.at(key)=*changes.front();
+        else invalid("Mixed edit leaves have conflicting consequences for one physical owner");
+    }
+    for (const auto& candidate:independently_admitted_candidates) for (const auto& [key,entity]:candidate)
+        if (!actual.contains(key) && !result.emplace(key,entity).second)
+            invalid("Mixed edit fresh physical owners overlap");
+    for (const auto& [key,entity]:actual) if (entity.type=="assembly_model") {
+        const auto& before=entity.properties.at("model").at("instances");
+        const auto& after=result.at(key).properties.at("model").at("instances");
+        for (std::size_t i=0;i<before.size();++i) if (before[i].contains("placement") &&
+            retained_baselines.contains(before[i].at("placement").at("host_entity_id").get<std::string>()) &&
+            (i>=after.size() || !exact_json(before[i],after[i])))
+            invalid("Mixed edit changed an actual retained baseline hosted row");
+    }
+    coordinated_map_budget(result);
+    const auto final_aliases=embedded_assembly_presentation_ids(result);
+    const auto preserve_aliases=[&](const auto& aliases) {
+        for (const auto& [binding,alias]:aliases) {
+            const auto found=final_aliases.find(binding);
+            if (found==final_aliases.end() || found->second!=alias)
+                invalid("Mixed edit changed a source or independently admitted leaf render alias");
+        }
+    };
+    preserve_aliases(original_aliases);
+    for (const auto& candidate:independently_admitted_candidates)
+        preserve_aliases(embedded_assembly_presentation_ids(candidate));
+    std::set<std::string,std::less<>> members;
+    for (const auto& [key,entity]:result) if (entity.type=="model_phases") {
+        (void)key;
+        const auto model=ModelPhases::from_json(entity.properties.at("model"));
+        for (const auto& member:model.entity_ids())
+            if (!result.contains(member) || !is_model_phase_entity_type(result.at(member).type) || !members.insert(member).second)
+                invalid("Mixed edit phase membership is missing, unsupported or overlapping");
+    }
+    (void)constraint_phase_scope(result);
     validate_document_assembly_instances(result);
     return result;
 }

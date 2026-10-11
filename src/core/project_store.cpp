@@ -377,6 +377,10 @@ std::uint32_t required_format_version_internal(const DocumentSnapshot& snapshot,
             const auto& value=*pending.back(); pending.pop_back();
             if (++nodes>ProjectStore::maximum_json_values)
                 storage_error(StorageErrorCode::resource_limit,"Typed edit reader-floor scan exceeds its JSON budget");
+            if (value.is_object() && value.value("kind",nlohmann::json())=="apply_boundary_constraint_changes" &&
+                value.value("version",nlohmann::json())==52 &&
+                value.contains("mixed_selection_edit_completion") && value.contains("mixed_selection_edit_intent"))
+                floor=std::max(floor,187U);
             if (value.is_object() && value.value("kind",nlohmann::json())=="corner_removal" &&
                 value.value("version",nlohmann::json())==4 && value.contains("selected_cut_ids"))
                 floor=std::max(floor,186U);
@@ -561,9 +565,9 @@ std::uint32_t required_format_version_internal(const DocumentSnapshot& snapshot,
     };
     for (const auto& revision : snapshot.history()) {
         if (revision.phase_entity_import) required=std::max(required,160U);
-        if (required<186 && revision.boundary_geometry_edit)
+        if (required<187 && revision.boundary_geometry_edit)
             required=std::max(required,typed_edit_reader_floor(encode_boundary_geometry_edit(*revision.boundary_geometry_edit)));
-        if (required<186 && revision.boundary_constraint_changes)
+        if (required<187 && revision.boundary_constraint_changes)
             required=std::max(required,typed_edit_reader_floor(command_to_json(Command{*revision.boundary_constraint_changes})));
         if (required<122 && revision.boundary_geometry_edit)
             required=std::max(required,quantity_reader_floor(encode_boundary_geometry_edit(*revision.boundary_geometry_edit)));
@@ -574,6 +578,8 @@ std::uint32_t required_format_version_internal(const DocumentSnapshot& snapshot,
             required = std::max(required, 53U);
         if (revision.boundary_constraint_changes) {
             const auto& edits=*revision.boundary_constraint_changes;
+            if (edits.mixed_selection_edit_completion || !edits.mixed_selection_edit_intent.is_null())
+                required=std::max(required,187U);
             if (edits.wall_group_scale_completion || edits.wall_group_scale)
                 required=std::max(required,173U);
             if (std::any_of(edits.boundary_edits.begin(), edits.boundary_edits.end(), [](const auto& edit) { return edit.wall_source_translation.has_value(); }) ||
@@ -2965,6 +2971,7 @@ bool verify_sqlite_schema(sqlite3* database, bool allow_recovery = false) {
          sqlite3_column_int(user_version.get(), 0) != 184 &&
          sqlite3_column_int(user_version.get(), 0) != 185 &&
          sqlite3_column_int(user_version.get(), 0) != 186 &&
+         sqlite3_column_int(user_version.get(), 0) != 187 &&
          sqlite3_column_int(user_version.get(), 0) != 174 &&
          sqlite3_column_int(user_version.get(), 0) != 169 &&
          sqlite3_column_int(user_version.get(), 0) != 163 &&
@@ -3687,6 +3694,8 @@ DocumentSnapshot read_snapshot(sqlite3* database, RecoveryLedger* recovery = nul
     // here and authenticate the manifest with its stored version below.
     const auto required_format = required_format_version_internal(snapshot, format_number < 28);
     if (required_format > format_number) {
+        if (required_format>=187)
+            storage_error(StorageErrorCode::unsupported_format,"This project requires reader 187 for source-reconstructed mixed edits and retained history");
         if (required_format>=186)
             storage_error(StorageErrorCode::unsupported_format,"This project requires reader 186 for explicit managed corner-cut selection and retained history");
         if (required_format>=185)

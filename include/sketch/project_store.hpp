@@ -268,7 +268,8 @@ public:
     // v184 fences actual phase corner cohorts, including explicit corner roots.
     // v185 retains atomic mixed clipboard placement and its original-source proof.
     // v186 retains explicit managed corner-cut selection without owner promotion.
-    static constexpr std::uint32_t format_version = 186;
+    // v187 retains source-reconstructed mixed ordinary and roof-child editing.
+    static constexpr std::uint32_t format_version = 187;
     static constexpr std::uint32_t recovery_format_version = 4;
     [[nodiscard]] static std::uint32_t required_format_version(const DocumentSnapshot& snapshot);
     static constexpr std::uint64_t maximum_file_bytes = 4ULL * 1024ULL * 1024ULL * 1024ULL;

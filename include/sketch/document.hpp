@@ -501,6 +501,11 @@ struct ApplyBoundaryConstraintChanges {
     // One captured source owns the complete placement and retained Undo proof.
     nlohmann::json clipboard_placement_intent=nullptr;
     bool clipboard_placement_completion{};
+    // Envelope fifty-two independently reconstructs ordinary selected edits
+    // and roof-child edits against the same full original snapshot. Neither
+    // raw payloads nor an intermediate candidate can lend this authority.
+    nlohmann::json mixed_selection_edit_intent=nullptr;
+    bool mixed_selection_edit_completion{};
 };
 
 using Command = std::variant<ApplyEntityChanges, ImportPhaseEntities, NameRevision, TranslateBoundary,
@@ -607,6 +612,11 @@ private:
     std::string read_only_reason_;
     std::shared_ptr<const std::vector<RevisionRecord>> history_;
     std::map<std::string, Revision, std::less<>> named_revisions_;
+    // Private, in-memory authority for this exact already-admitted snapshot.
+    // Storage and detached snapshot edits cannot reuse it after changing any
+    // history pointer or metadata. Never serialized or supplied by a caller.
+    struct Admission;
+    std::shared_ptr<const Admission> admission_;
 };
 
 // A sealed command admitted against one complete captured source. Prepare and
@@ -665,15 +675,16 @@ public:
     [[nodiscard]] bool shares_authoring_source_with(const DocumentSnapshot& source) const noexcept;
 
     // A private working copy with the same identity and complete validated
-    // history. This is not an independent project copy or a way around
-    // read-only/history rules; workspace publication still requires its CAS.
+    // history. Exact privately admitted snapshots retain their admission;
+    // storage/detached snapshots require full restore. This is not an independent
+    // project copy; workspace publication still requires its CAS.
     [[nodiscard]] static Document fork(const DocumentSnapshot& source);
     // Validates the complete source, then reconstructs a private retained prefix
     // with its original identity, navigation, names and derived editability.
     // A later save marker is omitted. This does not rebind any live workspace.
     [[nodiscard]] static Document fork_at_revision(const DocumentSnapshot& source, Revision revision);
 
-    // Revalidates the complete captured history, then applies the command to
+    // Admits the complete captured history, then applies the command to
     // a private document. Neither the source nor any live document is changed.
     // The result is a preview, not authorization to bypass a later revision
     // or source-snapshot check when committing to a live document.
@@ -713,6 +724,10 @@ private:
     friend class ProjectStoreAccess;
 
     static Document restore(DocumentSnapshot snapshot);
+    static void seal_snapshot_admission(DocumentSnapshot& snapshot,
+        const BoundaryIdentityHistory& boundary_history,
+        const StairIdentityHistory& stair_history,
+        const std::optional<std::string>& unsupported_history);
     explicit Document(std::string document_id);
 
     [[nodiscard]] const RevisionRecord& head_record() const;

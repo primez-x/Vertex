@@ -14,6 +14,46 @@ changed source does not acquire runtime acceptance without later qualification.
 
 ## Current delivery state
 
+### October 10 original-source mixed transform core - source integration
+
+The retained decoder correction is committed and pushed as 9b94fbfa. The next
+source batch adds a closed ordinary transform request and one original-source
+mixed edit command under envelope52, reader187 and extraction185. Architectural
+roots, qualified embedded instances, rigid annotation/reference transforms and
+actual independent/carried skylight children receive explicit source-producer
+authority. Every leaf uses the same original snapshot; raw candidates and
+incidental roof hosts cannot grant selected-operation authority. The pure
+composer coalesces exact consequences and preserves unrelated raw data,
+identity ownership and protected baselines.
+
+Independent review found a replay recursion defect and a legacy annotation
+promotion refusal. The replay correction uses private exact-snapshot admission
+for already-admitted heads and prior chronological prefixes, retaining prior
+identity ledgers and unsupported-state authority. Changed or storage-created
+snapshots still undergo full restore. Bounded independent source re-review
+approves that correction. Digest serialization and history/ledger copies remain
+performance qualification work. The annotation correction admits only the
+existing codec's state1/2-to3 promotion and its six missing symbol defaults.
+Independent source re-review approves that correction, retaining exact raw
+unrelated fields and row-conflict checks. Root inspected closed request/replay,
+certificate trust and chronological lifetime capture, command decoding, reader
+floors, source-kit membership and documented wire fields; source whitespace is
+clean. The source-kit allowlist also parses as JSON.
+
+The core request is not complete mixed editing: drawing/wall transforms and
+their mandatory room consequences, presentation scaling, ordinary phase
+replacement, directional scaling, independent skylight reflection, closed
+Properties inputs and full plan/native desktop routing remain required. A
+read-only integration discovery identified the actual capture, preview/release,
+typed identity-child and selection-restoration paths; guards alone cannot expose
+a complete operation. The next batch must connect complete supported rosters
+and extend missing typed producers without silently editing subsets.
+
+No builds, tests/new tests, scripts, probes, native jobs, launches, packages or
+installations run. The installed candidate remains unchanged. Compilation,
+interaction, history/save/reopen, migration and all ten production gates remain
+unqualified; this source checkpoint does not establish product acceptance.
+
 ### October 10 retained-command decoder correction
 
 Native directional group resizing is committed and pushed as 64e3bef6, with
