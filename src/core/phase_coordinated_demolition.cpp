@@ -243,6 +243,7 @@ struct Decoded {
     bool complete_roof_hosted_catalog_consequences{false};
     bool complete_placed_catalog_consequences{false};
     bool complete_component_phase_memberships{false};
+    bool complete_component_dimensions{false};
 };
 
 Decoded components(const Json& value, const PhaseConstraintAuthoringIntent& enclosing) {
@@ -252,7 +253,8 @@ Decoded components(const Json& value, const PhaseConstraintAuthoringIntent& encl
     if (!value.is_object() || !value.contains("version") || !value.at("version").is_number_integer())
         invalid("inner demolition requires a known integer version");
     const bool roof_selection = value.at("version") == 3;
-    const bool component_memberships = value.at("version") == 8;
+    const bool component_dimensions = value.at("version") == 9;
+    const bool component_memberships = value.at("version") == 8 || component_dimensions;
     const bool complete_placed = value.at("version") == 7 || component_memberships;
     const bool complete_roof = value.at("version") == 6 || complete_placed;
     const bool independent_openings = value.at("version") == 5 || complete_roof;
@@ -260,7 +262,7 @@ Decoded components(const Json& value, const PhaseConstraintAuthoringIntent& encl
     const bool mixed = value.at("version") == 2 || roof_selection;
     if ((!mixed && !complete && (value.at("version") != 1 || value.size() != 6)) ||
         (mixed && (value.size() != 7 || !value.contains("ordinary_removal"))) ||
-        (complete && (value.size() != (component_memberships ? 11u : independent_openings ? 9u : 8u) || !value.contains("ordinary_removal") ||
+        (complete && (value.size() != (component_dimensions ? 12u : component_memberships ? 11u : independent_openings ? 9u : 8u) || !value.contains("ordinary_removal") ||
             !value.contains("complete_hosted_catalog_consequences") ||
             !value.at("complete_hosted_catalog_consequences").is_boolean() ||
             value.at("complete_hosted_catalog_consequences") != true ||
@@ -268,15 +270,20 @@ Decoded components(const Json& value, const PhaseConstraintAuthoringIntent& encl
             (component_memberships && (!value.contains("component_authoring") ||
                 !value.contains("complete_component_phase_memberships") ||
                 !value.at("complete_component_phase_memberships").is_boolean() ||
-                value.at("complete_component_phase_memberships") != true)))))
-        invalid(component_memberships ? "inner v8 requires exactly the nine v7 fields, nullable component_authoring and complete_component_phase_memberships:true" :
+                value.at("complete_component_phase_memberships") != true)) ||
+            (component_dimensions && (!value.contains("complete_component_dimensions") ||
+                !value.at("complete_component_dimensions").is_boolean() ||
+                value.at("complete_component_dimensions") != true)))))
+        invalid(component_dimensions ? "inner v9 requires exactly the eleven v8 fields and complete_component_dimensions:true" :
+            component_memberships ? "inner v8 requires exactly the nine v7 fields, nullable component_authoring and complete_component_phase_memberships:true" :
             independent_openings ? "inner v5/v6/v7 requires exactly the eight v4 fields and ordinary_opening_ids" :
             complete ? "inner v4 requires exactly version, five family fields, nullable ordinary_removal and complete_hosted_catalog_consequences:true" :
             "inner demolition requires exactly version, five family fields and v2/v3 ordinary_removal");
     for (const auto* key : families) if (!value.contains(key)) invalid("required family field is missing");
     message_only(enclosing.intent);
     if (component_memberships && enclosing.intent.wall_group_scale)
-        invalid("inner v8 permits only a semantic message without wall group geometry authority");
+        invalid(component_dimensions ? "inner v9 permits only a semantic message without wall group geometry authority" :
+            "inner v8 permits only a semantic message without wall group geometry authority");
     // Root enforces outer exclusivity too; this public codec cannot validate a
     // mixed enclosure by ignoring a separately supplied historical operation.
     if (!enclosing.wall_replacement.is_null() || !enclosing.opening_demolition.is_null() ||
@@ -298,6 +305,7 @@ Decoded components(const Json& value, const PhaseConstraintAuthoringIntent& encl
     result.complete_roof_hosted_catalog_consequences = complete_roof;
     result.complete_placed_catalog_consequences = complete_placed;
     result.complete_component_phase_memberships = component_memberships;
+    result.complete_component_dimensions = component_dimensions;
     if (independent_openings) {
         const auto& ids = value.at("ordinary_opening_ids");
         if (!ids.is_array() || (!complete_roof && ids.empty()) || ids.size() > 1000)
@@ -392,7 +400,8 @@ Decoded components(const Json& value, const PhaseConstraintAuthoringIntent& encl
         if (result.component_roots.size() > 4096 - targets.size() - ordinary_count - result.ordinary_opening_ids.size())
             invalid("aggregate demolition root/component/opening budget exceeded");
         if (result.leaves.empty() && !result.component && !result.ordinary && result.ordinary_opening_ids.empty())
-            invalid("inner v8 requires at least one actual demolition lane");
+            invalid(component_dimensions ? "inner v9 requires at least one actual demolition lane" :
+                "inner v8 requires at least one actual demolition lane");
     }
     if (saved_choice) result.saved_choice = *saved_choice;
     return result;
@@ -1187,7 +1196,7 @@ Entities replay_complete(const Entities& source, const PhaseConstraintAuthoringI
         auto candidate = decoded.complete_component_phase_memberships && !leaf.stair_demolition_retirement.is_null() ?
             replay_phase_stair_demolition_retirement_entities(source,
                 decode_stair_demolition_retirement_intent(leaf.stair_demolition_retirement),true,
-                std::optional{decoded.saved_choice}) :
+                std::optional{decoded.saved_choice},decoded.complete_component_dimensions) :
             replay_phase_constraint_authoring(source, encode_phase_constraint_authoring_intent(leaf));
         if (decoded.complete_component_phase_memberships)
             charge_component_catalog_growth(source, candidate, component_catalog_budget);
@@ -1206,7 +1215,8 @@ Entities replay_complete(const Entities& source, const PhaseConstraintAuthoringI
     if (!decoded.ordinary_opening_ids.empty()) {
         auto candidate = replay_hosted_opening_removal(source, decoded.ordinary_opening_ids, true, true,
             decoded.complete_component_phase_memberships,
-            decoded.complete_component_phase_memberships ? std::optional{decoded.saved_choice} : std::nullopt);
+            decoded.complete_component_phase_memberships ? std::optional{decoded.saved_choice} : std::nullopt,
+            decoded.complete_component_dimensions);
         if (!candidate) invalid("independent ordinary openings were not admitted by their actual source producer");
         if (decoded.complete_component_phase_memberships)
             charge_component_catalog_growth(source, *candidate, component_catalog_budget);
@@ -1224,8 +1234,14 @@ Entities replay_complete(const Entities& source, const PhaseConstraintAuthoringI
             if (roof_selection && std::none_of(selection.object_ids.begin(), selection.object_ids.end(),
                 [&](const auto& id) { return source.at(id).type == "roof"; }))
                 invalid("ordinary child v2 requires an actual selected roof root");
+            // Only the closed coordinated version supplies these flags. The
+            // decoded ordinary child carries no unencoded dimension authority.
+            ArchitecturalSelectionRemovalIntent ordinary_intent{
+                selection.object_ids, selection.components, selection.roof_additional_identities};
+            ordinary_intent.complete_component_dimensions = decoded.complete_component_dimensions && selection.object_ids.empty();
+            ordinary_intent.complete_hosted_component_dimensions = decoded.complete_component_dimensions && !selection.object_ids.empty();
             auto candidate = decoded.complete_placed_catalog_consequences ? replay_architectural_selection_removal(source,
-                ArchitecturalSelectionRemovalIntent{selection.object_ids, selection.components, selection.roof_additional_identities},
+                ordinary_intent,
                 true, true, true, true, false, decoded.complete_component_phase_memberships,
                 decoded.complete_component_phase_memberships && roof_selection,
                 decoded.complete_component_phase_memberships,
@@ -1364,6 +1380,15 @@ bool phase_coordinated_demolition_complete_component_phase_memberships(
     const Json& value, const PhaseConstraintAuthoringIntent& enclosing) {
     try {
         return components(value, enclosing).complete_component_phase_memberships;
+    } catch (const Json::exception& error) {
+        invalid(std::string("malformed proof: ") + error.what());
+    }
+}
+
+bool phase_coordinated_demolition_complete_component_dimensions(
+    const Json& value, const PhaseConstraintAuthoringIntent& enclosing) {
+    try {
+        return components(value, enclosing).complete_component_dimensions;
     } catch (const Json::exception& error) {
         invalid(std::string("malformed proof: ") + error.what());
     }

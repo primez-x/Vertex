@@ -14,6 +14,39 @@ changed source does not acquire runtime acceptance without later qualification.
 
 ## Current delivery state
 
+### October 11 coordinated phase component dimension retirement
+
+The wall/mixed wall-opening batch is committed and pushed as f10dfe6f; the exact
+remote ref matched local HEAD. Current source work adds closed coordinated9 and
+wall7 proofs with literal dimension completion, retaining historical authority.
+Current Delete/Cut requests these new proofs, including projects without existing
+component membership rows. Actual physically retired proposed hosts/rows derive
+their qualified embedded extent consequences. Same-tuple independent dimensions
+and owners remain exact; marking baseline objects/components for demolition keeps
+their original geometry, rows and dimensions. Proposed stair-rail and corner
+retirement forward the new permission through their original-source producers.
+Known dimension phase/presentation references are pruned together; opaque and
+unsupported constraint dependencies remain visible implementation work.
+
+Shared phase-selection preflight, existing selection3/4 and mixed9/10 retain the
+versioned inner proofs. Document fresh identity reservation and the Site roof
+inspector retain the new authority. Reader228/extraction226 cover current,
+nested and undone proofs. Root source inspection corrected the mixed-wall
+handler's duplicate membership declaration and kept ordinary non-component
+dimension retirement under its existing policy. Independent integrated source
+review proved that normal single-family Cut/Delete still bypassed coordinated9
+and entered the historical stair-retirement producer. Both current callers now
+request the complete single-family path. The reviewer proved no other P1/P2;
+root source inspection confirms that narrow correction, and scoped whitespace
+review passes. Git records the source backup identity. The source batch is not
+runtime accepted or production complete.
+
+No builds/tests/jobs, launches, packages or installations ran. The installed
+candidate is unchanged and all ten production gates remain open. Protected
+replacement copies, component profile/path changes, linked-view dimensions and
+remaining mixed-family editing still require implementation. The complete
+production plan remains active.
+
 ### October 11 wall and mixed wall/opening component dimension retirement
 
 The qualified opening batch is committed and pushed as a47ef65c, with the exact

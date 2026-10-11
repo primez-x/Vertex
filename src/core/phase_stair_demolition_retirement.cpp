@@ -3,7 +3,9 @@
 #include "sketch/annotation_entity_codec.hpp"
 #include "sketch/assembly_document_adapter.hpp"
 #include "sketch/assembly_geometry.hpp"
+#include "sketch/assembly_dimension_transform.hpp"
 #include "sketch/assembly_phase_membership_transport.hpp"
+#include "sketch/boundary_dimension.hpp"
 #include "sketch/building_entity.hpp"
 #include "sketch/constraint_phase_scope.hpp"
 #include "sketch/model_phases.hpp"
@@ -195,6 +197,8 @@ struct Derivation {
     Entities retired;
     InstanceKeys instances;
     Ids rails;
+    Ids dimensions;
+    Ids independent_dimensions;
 };
 enum class RetirementMode { demolition_closure, selected_proposals };
 
@@ -348,17 +352,19 @@ StairDemolitionRetirementIntent discover_selected_proposals(const Entities& sour
 void retire_registry(Derivation& derived, const Entities& source) {
     const auto& intent = derived.plan.intent;
     const auto phases = ModelPhases::from_json(source.at(intent.registry_id).properties.at("model"));
+    auto retired = derived.rails;
+    retired.insert(derived.dimensions.begin(), derived.dimensions.end());
     auto members = phases.entity_ids();
-    std::erase_if(members, [&](const auto& id) { return derived.rails.contains(id); });
+    std::erase_if(members, [&](const auto& id) { return retired.contains(id); });
     auto alternatives = phases.alternatives();
     for (auto& row : alternatives) if (row.id == intent.alternative_id)
-        std::erase_if(row.proposed_ids, [&](const auto& id) { return derived.rails.contains(id); });
+        std::erase_if(row.proposed_ids, [&](const auto& id) { return retired.contains(id); });
     const auto expected = ModelPhases::create(std::move(members), phases.baseline_ids(),
         std::move(alternatives), phases.active_alternative()).to_json();
     auto raw = source.at(intent.registry_id).properties.at("model");
-    remove_ids(raw.at("entity_ids"), derived.rails);
+    remove_ids(raw.at("entity_ids"), retired);
     for (auto& row : raw.at("alternatives")) if (row.at("id") == intent.alternative_id)
-        remove_ids(row.at("proposed_ids"), derived.rails);
+        remove_ids(row.at("proposed_ids"), retired);
     if (ModelPhases::from_json(raw).to_json() != expected)
         invalid("raw proposal retirement differs from typed preserved registry");
     derived.retired.at(intent.registry_id).properties.at("model") = std::move(raw);
@@ -378,7 +384,7 @@ void catalog_context(const Entities& source, const Entity& entity) {
 
 // The inspection scratch removes only admitted slots. It never becomes a
 // candidate or grants opaque text a rewrite/deletion meaning.
-Entity reference_remainder(Entity entity) {
+Entity reference_remainder(Entity entity, const Ids& dimension_ids = {}) {
     auto& p = entity.properties;
     if (entity.type == "assembly_model") {
         const auto model = field(p, "model");
@@ -411,7 +417,10 @@ Entity reference_remainder(Entity entity) {
         }
     } else if (entity.type == kAnnotationEntityType) {
         validate_annotation_entity(entity);
-        for (auto& row : p.at("state").at("overrides")) if (row.at("target_kind") == "object") row.erase("target_id");
+        for (auto& row : p.at("state").at("overrides"))
+            if (row.at("target_kind") == "object" ||
+                (row.at("target_kind") == "wall_dimension" && dimension_ids.contains(row.at("target_id").get<std::string>())))
+                row.erase("target_id");
     }
     return entity;
 }
@@ -456,9 +465,10 @@ bool touches_qualified_instance(const Json& root, const InstanceKeys& instances)
 
 void retire_presentations(Derivation& derived, const Entities& source, const Ids& names, Ids& overlays) {
     for (const auto& [id, original] : source) {
-        if (derived.rails.contains(id) || (!touches(original.properties, names) && !touches(original.extensions, names))) continue;
+        if (derived.rails.contains(id) || derived.dimensions.contains(id) ||
+            (!touches(original.properties, names) && !touches(original.extensions, names))) continue;
         try {
-            const auto scratch = reference_remainder(original);
+            const auto scratch = reference_remainder(original, derived.dimensions);
             if (touches(scratch.properties, names) || touches(scratch.extensions, names))
                 diagnostic(derived.plan, id, "affected opaque/reference data has no qualified retirement codec");
             auto& changed = derived.retired.at(id);
@@ -481,7 +491,9 @@ void retire_presentations(Derivation& derived, const Entities& source, const Ids
                 validate_sheet_view_entity(changed);
             } else if (original.type == kAnnotationEntityType) {
                 filter(changed.properties.at("state").at("overrides"), [&](const Json& row) {
-                    return row.at("target_kind") != "object" || !names.contains(row.at("target_id").get<std::string>());
+                    const auto target = row.at("target_id").get<std::string>();
+                    return !((row.at("target_kind") == "object" && names.contains(target)) ||
+                        (row.at("target_kind") == "wall_dimension" && derived.dimensions.contains(target)));
                 });
                 validate_annotation_entity(changed);
             }
@@ -491,9 +503,63 @@ void retire_presentations(Derivation& derived, const Entities& source, const Ids
     }
 }
 
+void derive_component_dimensions(Derivation& derived, const Entities& source) {
+    if (derived.instances.empty()) return;
+    const auto& intent = derived.plan.intent;
+    const auto scope = constraint_phase_scope(source);
+    const auto phases = ModelPhases::from_json(source.at(intent.registry_id).properties.at("model"));
+    std::map<std::string, std::string, std::less<>> owners;
+    for (const auto& registry : scope.registries) for (const auto& id : registry.registered_entity_ids)
+        if (!owners.emplace(id, registry.registry_id).second) invalid("overlapping actual phase ownership: " + id);
+    std::vector<AssemblyDimensionTarget> targets;
+    for (const auto& [id, entity] : source) {
+        if (!can_recognize_boundary_dimension_entity_type(entity.type)) continue;
+        const auto target = field(entity.properties, "target"), assembly = target ? field(*target, "assembly") : nullptr;
+        const auto catalog = assembly ? field(*assembly, "catalog_id") : nullptr;
+        const auto instance = assembly ? field(*assembly, "instance_id") : nullptr;
+        if (!catalog || !catalog->is_string() || !instance || !instance->is_string() ||
+            !derived.instances.contains({catalog->get<std::string>(), instance->get<std::string>()})) continue;
+        // A carrier boundary or local spelling alone grants no component
+        // identity. The exact affected tuple discovers all embedded and
+        // independent targets, whose closed codecs and paths resolve together.
+        const auto decoded = decode_boundary_dimension_entity(entity);
+        if (!decoded.supported() || decoded.version != 6 ||
+            decoded.dimension->kind != BoundaryDimensionKind::assembly_extent || !decoded.dimension->assembly_target)
+            invalid("affected component dimension requires a supported extent target: " + id);
+        if (targets.size() >= target_limit) invalid("associated component dimension budget exceeded");
+        targets.push_back(*decoded.dimension->assembly_target);
+        if (decoded.dimension->assembly_target->component.document_entity_id) {
+            derived.independent_dimensions.insert(id);
+            continue;
+        }
+        if (entity.required) invalid("associative component dimension is required: " + id);
+        const auto member = owners.find(id);
+        if (member != owners.end()) {
+            if (member->second != intent.registry_id) invalid("component dimension belongs to a foreign registry: " + id);
+            if (baseline(phases, id)) invalid("component dimension is a protected baseline owner: " + id);
+            std::size_t proposals{};
+            for (const auto& alternative : phases.alternatives()) {
+                if (std::find(alternative.demolished_ids.begin(), alternative.demolished_ids.end(), id) !=
+                    alternative.demolished_ids.end()) invalid("component dimension has retained demolition membership: " + id);
+                if (std::find(alternative.proposed_ids.begin(), alternative.proposed_ids.end(), id) ==
+                    alternative.proposed_ids.end()) continue;
+                if (alternative.id != intent.alternative_id) invalid("component dimension is shared with another alternative: " + id);
+                ++proposals;
+            }
+            if (proposals != 1) invalid("component dimension requires sole saved active proposal membership: " + id);
+        }
+        derived.dimensions.insert(id);
+    }
+    if (!targets.empty()) (void)resolve_assembly_dimensions(source, targets);
+    derived.plan.retired_dimension_ids.assign(derived.dimensions.begin(), derived.dimensions.end());
+    validate_ordinary_assembly_dimension_changes(source, derived.plan.retired_dimension_ids);
+    retire_registry(derived, source);
+}
+
 Derivation derive(const Entities& source, const StairDemolitionRetirementIntent& intent, RetirementMode mode,
     ComponentAdmission* component_admission = nullptr,
-    const std::optional<std::pair<std::string, std::string>>& required_choice = std::nullopt) {
+    const std::optional<std::pair<std::string, std::string>>& required_choice = std::nullopt,
+    bool complete_dimensions = false, bool complete_memberships = false) {
     (void)encode_stair_demolition_retirement_intent(intent);
     if (component_admission) component_admission->admit(source);
     if (mode == RetirementMode::demolition_closure) {
@@ -550,15 +616,18 @@ Derivation derive(const Entities& source, const StairDemolitionRetirementIntent&
             diagnostic(result.plan, id, "affected catalog contains an opaque reference to a retired local instance");
     }
     result.plan.retired_hosted_instances.assign(result.instances.begin(), result.instances.end());
-    if (component_admission)
+    if (complete_memberships)
         validate_assembly_phase_retirement_roots(source, result.plan.retired_hosted_instances,
             intent.registry_id, intent.alternative_id);
+    if (complete_dimensions) derive_component_dimensions(result, source);
     std::sort(result.plan.retired_presentation_ids.begin(), result.plan.retired_presentation_ids.end());
     Ids names = result.rails;
     names.insert(result.plan.retired_presentation_ids.begin(), result.plan.retired_presentation_ids.end());
+    names.insert(result.dimensions.begin(), result.dimensions.end());
     Ids overlays;
     retire_presentations(result, source, names, overlays);
     for (const auto& id : result.rails) result.retired.erase(id);
+    for (const auto& id : result.dimensions) result.retired.erase(id);
     if (component_admission) {
         component_admission->admit(result.retired);
         for (const auto& id : changed_catalogs)
@@ -577,8 +646,23 @@ Derivation derive(const Entities& source, const StairDemolitionRetirementIntent&
     // Exact retired overlay child references are unsupported too; do not strand
     // an external/local binding after removing its source-bound overlay.
     names.insert(overlays.begin(), overlays.end());
+    for (const auto& id : result.dimensions) {
+        auto scratch = source.at(id); scratch.properties.erase("target");
+        if (touches(scratch.properties, names) || touches(scratch.extensions, names) ||
+            touches_qualified_instance(scratch.properties, result.instances) || touches_qualified_instance(scratch.extensions, result.instances))
+            diagnostic(result.plan, id, "retired component dimension has an opaque retired reference");
+    }
     for (const auto& [id, entity] : result.retired) {
-        const auto scratch = entity.type == assembly_phase_membership_entity_type ? reference_remainder(entity) : entity;
+        auto scratch = entity.type == assembly_phase_membership_entity_type ? reference_remainder(entity) : entity;
+        if (result.independent_dimensions.contains(id)) {
+            if (!exact(entity, source.at(id))) invalid("surviving independent dimension changed: " + id);
+            const auto decoded = decode_boundary_dimension_entity(entity);
+            const auto& owner_id = *decoded.dimension->assembly_target->component.document_entity_id;
+            const auto owner = result.retired.find(owner_id);
+            if (owner == result.retired.end() || !source.contains(owner_id) || !exact(owner->second, source.at(owner_id)))
+                invalid("surviving independent dimension owner changed: " + id);
+            scratch.properties.erase("target");
+        }
         if (touches(scratch.properties, names) || touches(scratch.extensions, names) ||
             touches_qualified_instance(scratch.properties, result.instances) || touches_qualified_instance(scratch.extensions, result.instances))
             diagnostic(result.plan, id, "retained reference to retired owner/component/overlay requires an explicit qualified codec");
@@ -807,16 +891,18 @@ std::optional<StairDemolitionRetirementIntent> phase_stair_demolition_retirement
 StairDemolitionRetirementPlan inspect_phase_stair_demolition_retirement_plan(
     const Entities& source, const StairDemolitionRetirementIntent& intent,
     bool complete_component_phase_memberships,
-    const std::optional<std::pair<std::string, std::string>>& required_component_phase_choice) {
+    const std::optional<std::pair<std::string, std::string>>& required_component_phase_choice,
+    bool complete_component_dimensions) {
     try {
         component_options(complete_component_phase_memberships, required_component_phase_choice);
         ComponentAdmission admission;
         auto derived = derive(source, intent, RetirementMode::demolition_closure,
-            complete_component_phase_memberships ? &admission : nullptr, required_component_phase_choice);
+            (complete_component_phase_memberships || complete_component_dimensions) ? &admission : nullptr,
+            required_component_phase_choice, complete_component_dimensions, complete_component_phase_memberships);
         if (derived.plan.ready()) {
-            if (complete_component_phase_memberships) {
+            if (complete_component_phase_memberships || complete_component_dimensions) {
                 const auto projection = baseline_demolition_projection(derived, admission);
-                (void)prove_pruned_companions(source, projection, intent);
+                if (complete_component_phase_memberships) (void)prove_pruned_companions(source, projection, intent);
             }
             try { (void)prepare_retired_geometry(source, derived); }
             catch (const std::exception& error) {
@@ -833,21 +919,23 @@ StairDemolitionRetirementPlan inspect_phase_stair_demolition_retirement_plan(
 Entities replay_phase_stair_demolition_retirement_entities(const Entities& source,
     const StairDemolitionRetirementIntent& intent,
     bool complete_component_phase_memberships,
-    const std::optional<std::pair<std::string, std::string>>& required_component_phase_choice) {
+    const std::optional<std::pair<std::string, std::string>>& required_component_phase_choice,
+    bool complete_component_dimensions) {
     try {
         component_options(complete_component_phase_memberships, required_component_phase_choice);
         ComponentAdmission admission;
         auto derived = derive(source, intent, RetirementMode::demolition_closure,
-            complete_component_phase_memberships ? &admission : nullptr, required_component_phase_choice);
+            (complete_component_phase_memberships || complete_component_dimensions) ? &admission : nullptr,
+            required_component_phase_choice, complete_component_dimensions, complete_component_phase_memberships);
         if (!derived.plan.ready()) {
             const auto& diagnostic = derived.plan.diagnostics.front();
             invalid("blocked at " + diagnostic.entity_id + ": " + diagnostic.reason);
         }
         std::optional<Entities> projection;
         Ids proved_companions;
-        if (complete_component_phase_memberships) {
+        if (complete_component_phase_memberships || complete_component_dimensions) {
             projection = baseline_demolition_projection(derived, admission);
-            proved_companions = prove_pruned_companions(source, *projection, intent);
+            if (complete_component_phase_memberships) proved_companions = prove_pruned_companions(source, *projection, intent);
         }
         const auto prepared = prepare_retired_geometry(source, derived);
         auto result = replay_phase_stair_demolition_entities(derived.retired,
@@ -875,7 +963,7 @@ Entities replay_phase_stair_demolition_retirement_entities(const Entities& sourc
             if (!exact(remaining, entity))
                 invalid("baseline/other retained physical envelope changed: " + id);
         }
-        for (const auto& [id, entity] : source) if (id != intent.registry_id && !derived.rails.contains(id) &&
+        for (const auto& [id, entity] : source) if (id != intent.registry_id && !derived.rails.contains(id) && !derived.dimensions.contains(id) &&
             entity.type != "assembly_model" && entity.type != kSheetViewEntityType && entity.type != kAnnotationEntityType &&
             !proved_companions.contains(id))
             if (!exact(result.at(id), entity)) invalid("unrelated organization/property/level envelope changed: " + id);

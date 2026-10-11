@@ -34405,9 +34405,9 @@ public:
             if (std::none_of(graph.begin(),graph.end(),[&](const auto& entity){return entity.id==id && entity.type=="opening";}))
                 throw std::invalid_argument("The mixed selection no longer contains its actual opening roots.");
         const std::string message=cut ? "Cut selected walls and objects" : "Delete selected walls and objects";
-        const bool component_memberships=hasComponentPhaseMemberships(source);
         if (const auto wall_selection=inspect_phase_wall_demolition_selection(source.entities(),intent.wall_ids,true,
-                component_memberships)) {
+                true,std::nullopt,true)) {
+            const bool component_memberships=true;
             const PhysicalWallPhaseSelection destination{wall_selection->baseline.registry_id,wall_selection->baseline.alternative_id};
             if (!destination.alternative_id)
                 throw std::invalid_argument("The active wall demolition design changed. Select the objects again.");
@@ -34431,6 +34431,7 @@ public:
             demolition.complete_corner_window_consequences=true;
             demolition.complete_actual_corner_window_cohorts=true;
             demolition.complete_component_phase_memberships=component_memberships;
+            demolition.complete_component_dimensions=true;
             const auto required_component_choice=component_memberships ?
                 std::optional{std::pair{destination.registry_id,*destination.alternative_id}} : std::nullopt;
             std::vector<AssemblyPhaseRoot> baseline_components,ordinary_components;
@@ -34487,7 +34488,10 @@ public:
             }
             demolition.ordinary=captureArchitecturalSelectionRemoval(source,std::move(ordinary_ids),
                 std::move(ordinary_components),demolition.complete_hosted_catalog_consequences,
-                component_memberships,required_component_choice);
+                component_memberships,required_component_choice,true);
+            // The closed wall demolition proof owns dimension authority. Roof
+            // identity capture uses it without persisting a second leaf flag.
+            demolition.ordinary.complete_hosted_component_dimensions=false;
             // All declared slots, including omitted historical copies, reserve
             // their names before independently allocated ordinary roof splits.
             auto occupied=retainedSlabIdentityNames(source,true);
@@ -34500,7 +34504,7 @@ public:
                 "phase_selection_removal_intent","phase_deletion","object_ids","components","selection","base_command",
                 "source_snapshot_digest","source_authoring_digest","source_entities_digest","source_saved_revision",
                 "architectural","drawing","component_authoring","complete_component_phase_memberships",
-                "complete_wall_component_phase_memberships"}) occupied.insert(token);
+                "complete_wall_component_phase_memberships","complete_component_dimensions"}) occupied.insert(token);
             std::vector<const json*> pending{&demolition.other_authoring,&demolition.component_authoring};
             while (!pending.empty()) {
                 const auto& value=*pending.back();pending.pop_back();
@@ -34517,7 +34521,7 @@ public:
                 require_current();
                 preflight_physical_walls_deletion_join_inference(source.entities(),demolition.ordinary_wall_ids,true,
                     demolition.complete_hosted_catalog_consequences,demolition.complete_corner_window_consequences,
-                    component_memberships,required_component_choice);
+                    component_memberships,required_component_choice,demolition.complete_component_dimensions);
                 const auto joins=inspect_physical_wall_join_removal(source.entities(),demolition.ordinary_wall_ids);
                 if (!joins.ready()) {
                     std::string reasons;
@@ -34742,7 +34746,7 @@ public:
         }
         // Every baseline wall selection uses the complete typed room stage,
         // including wall-only cohorts with no affected rooms or ordinary walls.
-        if (inspect_phase_wall_demolition_selection(source.entities(),wall_ids,true,hasComponentPhaseMemberships(source)))
+        if (inspect_phase_wall_demolition_selection(source.entities(),wall_ids,true,true,std::nullopt,true))
             return removeSelectedMixedPhysicalWalls(source,cut,prepared);
         const bool site = siteCanvas(m_architecturalCanvas);
         const auto site_generation = m_site_publication_generation;
@@ -34934,7 +34938,7 @@ public:
             std::vector<std::string> selected_ids;
             selected_ids.reserve(m_selected_ids.size());
             for (const auto& id : m_selected_ids) selected_ids.push_back(id.toStdString());
-            auto demolition = coordinatedDemolitionCommand(source, selected_ids, "Cut selected architectural objects");
+            auto demolition = coordinatedDemolitionCommand(source, selected_ids, "Cut selected architectural objects",true);
             if (!demolition && hasMixedHostedOpeningSelection(source)) return removeSelectedMixedHostedOpenings(source,true);
             if (!demolition) demolition = structuralDemolitionCommand(source, selected_ids, "Cut selected structural objects");
             if (!demolition) demolition = stairDemolitionCommand(source, selected_ids, "Cut selected stairs and railings");
@@ -37017,7 +37021,7 @@ public:
             selected_ids.reserve(ordinarySelectionIDs().size());
             for (const auto& id : ordinarySelectionIDs()) selected_ids.push_back(id.toStdString());
             PreparedSelectionRemoval demolition_details;
-            auto demolition=coordinatedDemolitionCommand(source,selected_ids,"Demolish selected architectural objects");
+            auto demolition=coordinatedDemolitionCommand(source,selected_ids,"Demolish selected architectural objects",true);
             if (!demolition && hasMixedHostedOpeningSelection(source)) {
                 removeSelectedMixedHostedOpenings(source,false,&prepared);
                 return finish_preparation();
@@ -50288,9 +50292,10 @@ private:
         std::vector<std::string> ordinary_openings;
         std::vector<std::pair<std::string,std::string>> ordinary_components;
         std::vector<AssemblyPhaseRoot> baseline_components;
-        const bool component_memberships=hasComponentPhaseMemberships(source);
-        const auto membership_scope=component_memberships ? resolve_assembly_phase_memberships(source.entities())
-            : AssemblyPhaseMembershipScope{};
+        // The current closed proof declares complete membership and dimension
+        // consequences even when no companion rows currently exist.
+        const bool component_memberships=true;
+        const auto membership_scope=resolve_assembly_phase_memberships(source.entities());
         std::optional<PhysicalWallPhaseSelection> destination;
         const auto scope=constraint_phase_scope(source.entities());
         std::map<std::string,const PhysicalWallPhaseState*,std::less<>> owners;
@@ -50427,33 +50432,19 @@ private:
                 throw std::invalid_argument("The selected objects do not share one actual saved design.");
             destination=removal_choice;
         }
-        if (!component_memberships && families.size()==1 && baseline_components.empty() &&
-            ordinary_roots.empty() && ordinary_components.empty() && ordinary_openings.empty()) {
-            (void)Document::preview_command(source,Command{*captured});
-            return Command{std::move(*captured)};
-        }
-        auto children=json{{"version",4},{"opening_authoring",nullptr},{"roof_authoring",nullptr},
+        std::sort(ordinary_openings.begin(),ordinary_openings.end());
+        auto children=json{{"version",9},{"opening_authoring",nullptr},{"roof_authoring",nullptr},
             {"slab_authoring",nullptr},{"structural_authoring",nullptr},{"stair_authoring",nullptr},
-            {"ordinary_removal",nullptr},{"complete_hosted_catalog_consequences",true}};
-        if (!ordinary_openings.empty() || ordinary_roofs || !ordinary_components.empty()) {
-            std::sort(ordinary_openings.begin(),ordinary_openings.end());
-            children["version"]=!ordinary_components.empty() ? 7 : ordinary_roofs ? 6 : 5;
-            children["ordinary_opening_ids"]=ordinary_openings;
-        }
-        if (component_memberships) {
-            children["version"]=8;
-            std::sort(ordinary_openings.begin(),ordinary_openings.end());
-            children["ordinary_opening_ids"]=ordinary_openings;
-            children["component_authoring"]=nullptr;
-            children["complete_component_phase_memberships"]=true;
-            if (!baseline_components.empty()) {
-                std::sort(baseline_components.begin(),baseline_components.end());
-                AssemblyComponentPhaseDemolitionIntent demolition;
-                demolition.components=baseline_components;
-                children["component_authoring"]=encode_phase_constraint_authoring_intent(
-                    make_phase_constraint_authoring_intent(source,semantic,
-                        encode_assembly_component_phase_demolition_intent(demolition),true));
-            }
+            {"ordinary_removal",nullptr},{"complete_hosted_catalog_consequences",true},
+            {"ordinary_opening_ids",ordinary_openings},{"component_authoring",nullptr},
+            {"complete_component_phase_memberships",true},{"complete_component_dimensions",true}};
+        if (!baseline_components.empty()) {
+            std::sort(baseline_components.begin(),baseline_components.end());
+            AssemblyComponentPhaseDemolitionIntent demolition;
+            demolition.components=baseline_components;
+            children["component_authoring"]=encode_phase_constraint_authoring_intent(
+                make_phase_constraint_authoring_intent(source,semantic,
+                    encode_assembly_component_phase_demolition_intent(demolition),true));
         }
         if (families.size()>1) {
             for (const auto* family:{"opening_authoring","roof_authoring","slab_authoring","structural_authoring","stair_authoring"})
@@ -50471,7 +50462,7 @@ private:
             if (ordinary_roofs) {
                 auto ordinary=captureArchitecturalSelectionRemoval(source,ordinary_roots,ordinary_components,true,
                     component_memberships,component_memberships ?
-                        std::optional{std::pair{destination->registry_id,*destination->alternative_id}} : std::nullopt);
+                        std::optional{std::pair{destination->registry_id,*destination->alternative_id}} : std::nullopt,true);
                 auto occupied=retainedSlabIdentityNames(source,true);
                 std::vector<const json*> pending{&children};
                 while (!pending.empty()) {
@@ -50488,7 +50479,8 @@ private:
                     "source_entities_digest","source_saved_revision","architectural","drawing"})
                     occupied.insert(token);
                 if (component_memberships) for (const auto* token:{"component_authoring",
-                    "complete_component_phase_memberships","complete_coordinated_component_phase_memberships"})
+                    "complete_component_phase_memberships","complete_coordinated_component_phase_memberships",
+                    "complete_component_dimensions"})
                     occupied.insert(token);
                 for (auto& [original,destinations]:ordinary.roof_additional_identities) {
                     (void)original;
@@ -60064,6 +60056,8 @@ private:
                                     phase_coordinated_demolition_complete_roof_hosted_catalog_consequences(
                                         historical_demolition.coordinated_demolition,historical_demolition),
                                     phase_coordinated_demolition_complete_component_phase_memberships(
+                                        historical_demolition.coordinated_demolition,historical_demolition),std::nullopt,
+                                    phase_coordinated_demolition_complete_component_dimensions(
                                         historical_demolition.coordinated_demolition,historical_demolition));
                                 if (!removal.ready())
                                     throw std::invalid_argument("The coordinated roof removal no longer has complete source authority.");

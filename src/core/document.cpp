@@ -4262,6 +4262,7 @@ static void validate_phase_constraint_fresh_lifetime(const std::map<std::string,
     bool complete_wall_component_demolition=false;
     bool complete_hosted_demolition=false;
     bool complete_opening_demolition=false;
+    bool complete_component_dimension_demolition=false;
     for (const auto& [id,entity] : candidate) {
         (void)entity;
         if (!source.contains(id)) fresh.insert(id);
@@ -4297,6 +4298,7 @@ static void validate_phase_constraint_fresh_lifetime(const std::map<std::string,
             complete_wall_corner_demolition=complete_wall_corner_demolition || demolition.complete_corner_window_consequences;
             complete_actual_wall_corner_demolition=complete_actual_wall_corner_demolition || demolition.complete_actual_corner_window_cohorts;
             complete_wall_component_demolition=complete_wall_component_demolition || demolition.complete_component_phase_memberships;
+            complete_component_dimension_demolition=complete_component_dimension_demolition || demolition.complete_component_dimensions;
             complete_ordinary_wall_demolition=complete_ordinary_wall_demolition ||
                 !demolition.ordinary_wall_ids.empty() || demolition.complete_hosted_catalog_consequences;
             for (const auto& [original,ids]:demolition.wall_additional_identities) {
@@ -4331,13 +4333,17 @@ static void validate_phase_constraint_fresh_lifetime(const std::map<std::string,
         }
         if (!root_intent.coordinated_demolition.is_null()) {
             complete_envelope_reservation=true;
+            complete_component_dimension_demolition=complete_component_dimension_demolition ||
+                phase_coordinated_demolition_complete_component_dimensions(root_intent.coordinated_demolition,root_intent);
             if (phase_coordinated_demolition_complete_hosted_catalog_consequences(
                     root_intent.coordinated_demolition,root_intent)) {
                 complete_hosted_demolition=true;
                 complete_opening_demolition=complete_opening_demolition ||
                     root_intent.coordinated_demolition.value("version",0)==5 ||
                     root_intent.coordinated_demolition.value("version",0)==6 ||
-                    root_intent.coordinated_demolition.value("version",0)==7;
+                    root_intent.coordinated_demolition.value("version",0)==7 ||
+                    root_intent.coordinated_demolition.value("version",0)==8 ||
+                    root_intent.coordinated_demolition.value("version",0)==9;
                 structural_asset_reservation=true;
                 structural_hosted_alias_reservation=true;
             }
@@ -4596,6 +4602,8 @@ static void validate_phase_constraint_fresh_lifetime(const std::map<std::string,
                 throw std::invalid_argument("A fresh wall demolition destination borrows a component phase proof field");
     if (complete_opening_demolition && fresh.contains("ordinary_opening_ids"))
         throw std::invalid_argument("A fresh architectural demolition destination borrows the ordinary opening proof field");
+    if (complete_component_dimension_demolition && fresh.contains("complete_component_dimensions"))
+        throw std::invalid_argument("A fresh architectural demolition destination borrows the component dimension proof field");
     if (phase_drawing_enclosure) {
         // The complete new enclosure reserves every resulting or declared
         // destination against both stage vocabularies, even for older phase

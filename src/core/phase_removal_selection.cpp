@@ -166,7 +166,7 @@ void preflight_selection(const Json& proof, std::size_t& count, std::size_t dept
     } else if (version == 15) {
         const auto& coordinated = field(proof, "coordinated_demolition");
         const auto& inner_version = field(coordinated, "version");
-        if (!inner_version.is_number_integer() || inner_version < 1 || inner_version > 8)
+        if (!inner_version.is_number_integer() || inner_version < 1 || inner_version > 9)
             invalid("unsupported coordinated demolition version");
         for (const auto* family : {"opening_authoring", "roof_authoring", "slab_authoring", "structural_authoring", "stair_authoring"}) {
             const auto& child = field(coordinated, family);
@@ -177,7 +177,14 @@ void preflight_selection(const Json& proof, std::size_t& count, std::size_t dept
             if (!ordinary.is_null()) preflight_ordinary(ordinary, count);
         }
         if (inner_version >= 5) preflight_ids(field(coordinated, "ordinary_opening_ids"), count);
-        if (inner_version == 8) {
+        if (inner_version == 9) {
+            if (coordinated.size() != 12)
+                invalid("coordinated component dimensions require the closed inner9 field set");
+            const auto& complete = field(coordinated, "complete_component_dimensions");
+            if (!complete.is_boolean() || complete != true)
+                invalid("coordinated component dimensions require literal completion authority");
+        }
+        if (inner_version == 8 || inner_version == 9) {
             const auto& complete = field(coordinated, "complete_component_phase_memberships");
             if (!complete.is_boolean() || complete != true)
                 invalid("coordinated component memberships require literal completion authority");
@@ -191,11 +198,16 @@ void preflight_selection(const Json& proof, std::size_t& count, std::size_t dept
     } else if (version == 16) {
         const auto& wall = field(proof, "wall_demolition");
         const auto& inner_version = field(wall, "version");
-        if (!inner_version.is_number_integer() || inner_version < 1 || inner_version > 6)
+        if (!inner_version.is_number_integer() || inner_version < 1 || inner_version > 7)
             invalid("unsupported wall demolition version");
-        if (inner_version == 6) {
-            if (!wall.is_object() || wall.size()!=14)
-                invalid("wall component memberships require the closed inner6 field set");
+        if (inner_version == 6 || inner_version == 7) {
+            if (!wall.is_object() || wall.size()!=(inner_version == 7 ? 15 : 14))
+                invalid("wall component memberships require the closed inner6/inner7 field set");
+            if (inner_version == 7) {
+                const auto& complete=field(wall,"complete_component_dimensions");
+                if (!complete.is_boolean() || complete!=true)
+                    invalid("wall component dimensions require literal completion authority");
+            }
             for (const auto* flag : {"complete_hosted_catalog_consequences", "complete_corner_window_consequences",
                     "complete_actual_corner_window_cohorts", "complete_component_phase_memberships"}) {
                 const auto& complete=field(wall,flag);
@@ -213,9 +225,14 @@ void preflight_selection(const Json& proof, std::size_t& count, std::size_t dept
         if (inner_version != 1) preflight_ids(field(wall, "ordinary_wall_ids"), count);
         preflight_ordinary(field(wall, "ordinary"), count);
         preflight_ids(field(wall, "opening_ids"), count);
-        if (inner_version == 5 || inner_version == 6) preflight_ids(field(wall, "explicit_corner_window_ids"), count);
+        if (inner_version >= 5) preflight_ids(field(wall, "explicit_corner_window_ids"), count);
         const auto& other = field(wall, "other_authoring");
-        if (!other.is_null()) preflight_selection(other, count, depth + 1);
+        if (!other.is_null()) {
+            if (inner_version != 7 && field(other, "version") == 15 &&
+                field(field(other, "coordinated_demolition"), "version") == 9)
+                invalid("coordinated component dimensions require wall inner7 authority");
+            preflight_selection(other, count, depth + 1);
+        }
     } else {
         invalid("unsupported phase selection leaf; requires explicit demolition authority");
     }
@@ -325,6 +342,8 @@ ArchitecturalSelectionRemovalIntent phase_removal_selection_authority(
         phase_wall_demolition_complete_component_phase_memberships(proof.wall_demolition);
     // Reserve all catalogs before actual phase/model resolution, including
     // those needed by a nested coordinator. This admission grants no roots.
+    if (coordinated_memberships)
+        preflight_phase_coordinated_demolition_component_catalogs(source.entities(),proof.coordinated_demolition,proof);
     if (wall_memberships)
         preflight_phase_wall_demolition_component_catalogs(source.entities(),proof.wall_demolition,proof);
     const bool component_memberships = coordinated_memberships || wall_memberships;

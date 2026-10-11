@@ -107,11 +107,14 @@ void admit_catalogs(const Entities& entities, AssemblyCatalogTransferBudget& bud
     }
 }
 void membership_options(bool complete_corners, bool complete_memberships,
-    const std::optional<std::pair<std::string,std::string>>& required_choice) {
+    const std::optional<std::pair<std::string,std::string>>& required_choice,
+    bool complete_dimensions=false) {
     if (complete_memberships && !complete_corners)
         reject("complete component memberships require complete actual corner cohorts");
     if (required_choice && !complete_memberships)
         reject("required component phase choice needs complete component memberships");
+    if (complete_dimensions && !complete_corners)
+        reject("complete component dimensions require complete actual corner cohorts");
     if (required_choice) { identity(required_choice->first); identity(required_choice->second); }
 }
 bool contains(const std::vector<std::string>& ids, const std::string& id) {
@@ -155,8 +158,9 @@ void append_missing(Json& rows, const Ids& additions) {
 std::optional<Entity> prepare_registry(const Entities& entities,const std::vector<std::string>& selected_wall_ids,
     bool complete_corners=false,std::vector<std::string>* corner_owner_ids=nullptr,
     bool complete_memberships=false,
-    const std::optional<std::pair<std::string,std::string>>& required_choice=std::nullopt) {
-    membership_options(complete_corners,complete_memberships,required_choice);
+    const std::optional<std::pair<std::string,std::string>>& required_choice=std::nullopt,
+    bool complete_dimensions=false) {
+    membership_options(complete_corners,complete_memberships,required_choice,complete_dimensions);
     if (selected_wall_ids.size() > root_limit) reject("selected wall count exceeds 128");
     if (selected_wall_ids.empty()) return std::nullopt;
     try {
@@ -273,7 +277,7 @@ std::optional<Entity> prepare_registry(const Entities& entities,const std::vecto
             // use these same checks without manufacturing an interim snapshot.
             validate_mixed_wall_removal_source_admission(entities,true,true);
             if (!corners.empty()) preflight_architectural_object_removal(
-                entities,corners,{},0,true,false,true,true,complete_memberships,component_choice);
+                entities,corners,{},0,true,false,true,true,complete_memberships,component_choice,complete_dimensions);
         }
         std::map<std::string, std::vector<const Entity*>, std::less<>> openings;
         for (const auto& [id, entity] : entities) {
@@ -414,9 +418,10 @@ PhaseWallDemolitionIntent decode_phase_wall_demolition_intent(const Json& value)
 std::optional<PhaseWallDemolitionSelection> inspect_phase_wall_demolition_selection(
     const Entities& actual,const std::vector<std::string>& selected_wall_ids,bool complete_actual_corner_window_cohorts,
     bool complete_component_phase_memberships,
-    const std::optional<std::pair<std::string,std::string>>& required_component_phase_choice) {
+    const std::optional<std::pair<std::string,std::string>>& required_component_phase_choice,
+    bool complete_component_dimensions) {
     membership_options(complete_actual_corner_window_cohorts,complete_component_phase_memberships,
-        required_component_phase_choice);
+        required_component_phase_choice,complete_component_dimensions);
     if (selected_wall_ids.empty()) return std::nullopt;
     if (selected_wall_ids.size()>root_limit) reject("selected wall count exceeds 128");
     bounds(actual);
@@ -442,7 +447,7 @@ std::optional<PhaseWallDemolitionSelection> inspect_phase_wall_demolition_select
     if (baseline.empty()) return std::nullopt;
     std::vector<std::string> baseline_ids(baseline.begin(),baseline.end());
     const auto registry=prepare_registry(actual,baseline_ids,complete_actual_corner_window_cohorts,nullptr,
-        complete_component_phase_memberships,required_component_phase_choice);
+        complete_component_phase_memberships,required_component_phase_choice,complete_component_dimensions);
     if (!registry) reject("baseline selection no longer has an actual saved choice");
     const auto model=ModelPhases::from_json(registry->properties.at("model"));
     if (!model.active_alternative()) reject("baseline selection no longer has an active alternative");
@@ -453,9 +458,10 @@ std::optional<PhaseWallDemolitionSelection> inspect_phase_wall_demolition_select
 
 Entities replay_phase_wall_demolition_entities(const Entities& actual,const PhaseWallDemolitionIntent& intent,
     bool complete_component_phase_memberships,
-    const std::optional<std::pair<std::string,std::string>>& required_component_phase_choice) {
+    const std::optional<std::pair<std::string,std::string>>& required_component_phase_choice,
+    bool complete_component_dimensions) {
     membership_options(intent.complete_actual_corner_window_cohorts,complete_component_phase_memberships,
-        required_component_phase_choice);
+        required_component_phase_choice,complete_component_dimensions);
     (void)encode_phase_wall_demolition_intent(intent);
     AssemblyCatalogTransferBudget membership_catalog_budget;
     if (complete_component_phase_memberships) {
@@ -464,7 +470,7 @@ Entities replay_phase_wall_demolition_entities(const Entities& actual,const Phas
     }
     std::vector<std::string> corners;
     const auto registry=prepare_registry(actual,intent.wall_ids,intent.complete_actual_corner_window_cohorts,&corners,
-        complete_component_phase_memberships,required_component_phase_choice);
+        complete_component_phase_memberships,required_component_phase_choice,complete_component_dimensions);
     if (!registry || registry->id!=intent.registry_id)
         reject("semantic wall selection differs from its actual saved registry");
     const auto phases=ModelPhases::from_json(registry->properties.at("model"));
@@ -478,7 +484,7 @@ Entities replay_phase_wall_demolition_entities(const Entities& actual,const Phas
         // Corner replay owns exact retirement, dependents, catalogs and phase
         // filtering; never grant it the partially parked wall source.
         result=replay_architectural_object_removal(actual,corners,{},true,0,true,false,true,true,
-            complete_component_phase_memberships,component_choice);
+            complete_component_phase_memberships,component_choice,complete_component_dimensions);
         if (complete_component_phase_memberships) {
             bounds(result);
             admit_catalogs(result,membership_catalog_budget);

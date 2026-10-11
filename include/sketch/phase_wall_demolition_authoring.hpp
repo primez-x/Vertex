@@ -22,6 +22,7 @@ struct PhaseWallDemolitionAuthoring {
     std::vector<std::string> explicit_corner_window_ids;
     bool complete_component_phase_memberships{false};
     nlohmann::json component_authoring=nullptr;
+    bool complete_component_dimensions{false};
 };
 
 // Closed inner one retains its exact six-field authority. Closed inner two
@@ -38,11 +39,17 @@ struct PhaseWallDemolitionAuthoring {
 // Closed inner six separately completes qualified component memberships.
 // Its nullable full phase-thirty child adds baseline demolition membership;
 // physical leaves prune only their independently proved retired proposed rows.
+// Closed inner seven separately completes qualified dimensions on those actual
+// physically retired rows. Baseline semantic demolition retains rows/dimensions;
+// independent owners sharing the local tuple remain exact. Historical inner
+// one through six retain their authority and cannot nest coordinated inner nine.
 [[nodiscard]] nlohmann::json encode_phase_wall_demolition_authoring(
     const PhaseWallDemolitionAuthoring& intent);
 [[nodiscard]] PhaseWallDemolitionAuthoring decode_phase_wall_demolition_authoring(
     const nlohmann::json& value);
 [[nodiscard]] bool phase_wall_demolition_complete_component_phase_memberships(
+    const nlohmann::json& value);
+[[nodiscard]] bool phase_wall_demolition_complete_component_dimensions(
     const nlohmann::json& value);
 // Reserve complete source catalogs cumulatively before phase/scope resolution.
 void preflight_phase_wall_demolition_component_catalogs(

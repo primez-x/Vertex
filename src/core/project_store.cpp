@@ -510,6 +510,34 @@ std::uint32_t required_format_version_internal(const DocumentSnapshot& snapshot,
             if (closed_shape({"version","wall_demolition","other_authoring","ordinary","opening_ids","room_review_intent",
                     "ordinary_wall_ids","wall_additional_identities","complete_hosted_catalog_consequences",
                     "complete_corner_window_consequences","complete_actual_corner_window_cohorts","explicit_corner_window_ids",
+                    "component_authoring","complete_component_phase_memberships","complete_component_dimensions"}) &&
+                value.at("version").is_number_integer() && value.at("version")==7 &&
+                value.at("complete_hosted_catalog_consequences").is_boolean() &&
+                value.at("complete_hosted_catalog_consequences")==true &&
+                value.at("complete_corner_window_consequences").is_boolean() &&
+                value.at("complete_corner_window_consequences")==true &&
+                value.at("complete_actual_corner_window_cohorts").is_boolean() &&
+                value.at("complete_actual_corner_window_cohorts")==true &&
+                value.at("complete_component_phase_memberships").is_boolean() &&
+                value.at("complete_component_phase_memberships")==true &&
+                value.at("complete_component_dimensions").is_boolean() &&
+                value.at("complete_component_dimensions")==true)
+                floor=std::max(floor,228U);
+            if (closed_shape({"version","opening_authoring","roof_authoring","slab_authoring",
+                    "structural_authoring","stair_authoring","ordinary_removal",
+                    "complete_hosted_catalog_consequences","ordinary_opening_ids","component_authoring",
+                    "complete_component_phase_memberships","complete_component_dimensions"}) &&
+                value.at("version").is_number_integer() && value.at("version")==9 &&
+                value.at("complete_hosted_catalog_consequences").is_boolean() &&
+                value.at("complete_hosted_catalog_consequences")==true &&
+                value.at("complete_component_phase_memberships").is_boolean() &&
+                value.at("complete_component_phase_memberships")==true &&
+                value.at("complete_component_dimensions").is_boolean() &&
+                value.at("complete_component_dimensions")==true)
+                floor=std::max(floor,228U);
+            if (closed_shape({"version","wall_demolition","other_authoring","ordinary","opening_ids","room_review_intent",
+                    "ordinary_wall_ids","wall_additional_identities","complete_hosted_catalog_consequences",
+                    "complete_corner_window_consequences","complete_actual_corner_window_cohorts","explicit_corner_window_ids",
                     "component_authoring","complete_component_phase_memberships"}) && value.at("version")==6 &&
                 value.at("complete_hosted_catalog_consequences").is_boolean() &&
                 value.at("complete_hosted_catalog_consequences")==true &&
@@ -921,9 +949,9 @@ std::uint32_t required_format_version_internal(const DocumentSnapshot& snapshot,
     };
     for (const auto& revision : snapshot.history()) {
         if (revision.phase_entity_import) required=std::max(required,160U);
-        if (required<227 && revision.boundary_geometry_edit)
+        if (required<228 && revision.boundary_geometry_edit)
             required=std::max(required,typed_edit_reader_floor(encode_boundary_geometry_edit(*revision.boundary_geometry_edit)));
-        if (required<227 && revision.boundary_constraint_changes)
+        if (required<228 && revision.boundary_constraint_changes)
             required=std::max(required,typed_edit_reader_floor(command_to_json(Command{*revision.boundary_constraint_changes})));
         if (required<122 && revision.boundary_geometry_edit)
             required=std::max(required,quantity_reader_floor(encode_boundary_geometry_edit(*revision.boundary_geometry_edit)));
@@ -3436,6 +3464,7 @@ bool verify_sqlite_schema(sqlite3* database, bool allow_recovery = false) {
          sqlite3_column_int(user_version.get(), 0) != 225 &&
          sqlite3_column_int(user_version.get(), 0) != 226 &&
          sqlite3_column_int(user_version.get(), 0) != 227 &&
+         sqlite3_column_int(user_version.get(), 0) != 228 &&
          sqlite3_column_int(user_version.get(), 0) != 207 &&
          sqlite3_column_int(user_version.get(), 0) != 202 &&
          sqlite3_column_int(user_version.get(), 0) != 200 &&
@@ -4161,6 +4190,8 @@ DocumentSnapshot read_snapshot(sqlite3* database, RecoveryLedger* recovery = nul
     // here and authenticate the manifest with its stored version below.
     const auto required_format = required_format_version_internal(snapshot, format_number < 28);
     if (required_format > format_number) {
+        if (required_format>=228)
+            storage_error(StorageErrorCode::unsupported_format,"This project requires reader 228 for phase demolition component dimensions");
         if (required_format>=227)
             storage_error(StorageErrorCode::unsupported_format,"This project requires reader 227 for wall deletion component dimensions");
         if (required_format>=226)

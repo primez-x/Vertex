@@ -1,4 +1,40 @@
-# Vertex project formats v1 through v227
+# Vertex project formats v1 through v228
+
+Reader228 retains coordinated demolition inner9 and wall demolition inner7
+under unchanged outer phase authoring15/16 and command34. Each new inner proof
+has exactly its previous highest dialect's fields plus literal
+`complete_component_dimensions:true`. Coordinated9 retains eleven inner8 fields
+plus that marker; wall7 retains fourteen inner6 fields plus that marker. Complete
+catalog, corner/cohort and component-membership markers remain independently
+mandatory. Historical inner1..8/inner1..6 retain their original authority; wall6
+cannot nest coordinated9. Wall7 may nest coordinated9 under the existing null
+nested-component-slot restriction, with any explicit baseline component action
+remaining in wall7's own `component_authoring` slot.
+
+Current phase Delete/Cut requests this complete proof even when no component
+membership rows exist. Physical leaves derive qualified catalog rows from actual
+removed proposed hosts, resolve supported v6 extents against the full original
+source, and retire only embedded dimensions. Same-tuple independent dimensions
+and actual document owners remain exact. Existing ordinary wall/opening dimension
+cleanup keeps its own typed policy. Baseline semantic demolition preserves
+original physical objects, catalog rows and dimensions; it changes saved-design
+membership rather than physically deleting those originals.
+
+Stair demolition's proposed-rail retirement also derives bounded embedded extent
+owners and prunes their known phase, saved-view, overlay and annotation references.
+Wall demolition passes its explicit authority into proposed corner retirement,
+ordinary walls, independent openings and ordinary object/component leaves. Only
+validated closed targets are masked during opaque-reference scans. Required,
+inactive, baseline, shared-alternative and foreign-registry protection remain.
+Unsupported constraints and opaque dependencies still refuse rather than being
+silently removed; their remaining lifecycle work is not certified by this change.
+
+Existing phase selection3/4 and mixed removal9/10 retain these versioned inner
+proofs without new container dialects. Fresh identity reservation includes the
+new marker. Current, nested and undone proofs require reader228/extraction226.
+Protected replacement copies and broader linked-view/path lifecycle remain
+separate requirements. Compilation and runtime/history/storage/extraction
+behavior remain unverified under the source-only instruction.
 
 Reader227 retains qualified component dimension retirement in physical wall
 deletion63, mixed wall deletion64 and mixed wall/opening deletion65. Each closed

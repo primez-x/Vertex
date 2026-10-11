@@ -333,12 +333,14 @@ struct Historical {
     std::optional<PhaseCoordinatedOrdinaryRemoval> ordinary;
     std::vector<std::string> opening_ids;
 };
-void reserve_historical_corner_proof_names(const Historical& other,bool actual_cohorts=false,bool component_memberships=false) {
+void reserve_historical_corner_proof_names(const Historical& other,bool actual_cohorts=false,bool component_memberships=false,
+    bool component_dimensions=false) {
     const auto reserve=[&](const std::string& destination) {
         if (destination=="complete_corner_window_consequences" ||
             (actual_cohorts && (destination=="complete_actual_corner_window_cohorts" ||
                 destination=="explicit_corner_window_ids")) ||
-            (component_memberships && (destination=="component_authoring" || destination=="complete_component_phase_memberships")))
+            (component_memberships && (destination=="component_authoring" || destination=="complete_component_phase_memberships")) ||
+            (component_dimensions && destination=="complete_component_dimensions"))
             invalid("historical fresh destination borrows the enclosing corner consequence proof field");
     };
     if (other.ordinary)
@@ -354,7 +356,7 @@ void reserve_historical_corner_proof_names(const Historical& other,bool actual_c
     }
 }
 Historical historical(const Json& wire,const PhaseWallDemolitionIntent& wall,
-    const PhaseConstraintAuthoringIntent* root=nullptr,bool component_memberships=false) {
+    const PhaseConstraintAuthoringIntent* root=nullptr,bool component_memberships=false,bool component_dimensions=false) {
     if (wire.is_null()) return {};
     proof_bound(wire);
     if (!wire.is_object() || !wire.contains("version") || !wire.at("version").is_number_integer() ||
@@ -367,6 +369,8 @@ Historical historical(const Json& wire,const PhaseWallDemolitionIntent& wall,
             !coordinated->at("version").is_number_integer() ||
             (coordinated->at("version")!=1 && coordinated->at("version")!=2 && coordinated->at("version")!=3 &&
                 !(component_memberships && coordinated->at("version")==8 &&
+                    coordinated->contains("component_authoring") && coordinated->at("component_authoring").is_null()) &&
+                !(component_dimensions && coordinated->at("version")==9 &&
                     coordinated->contains("component_authoring") && coordinated->at("component_authoring").is_null())))
             invalid("wall demolition permits only historical coordinated inner versions one through three");
     }
@@ -379,7 +383,8 @@ Historical historical(const Json& wire,const PhaseWallDemolitionIntent& wall,
         // demolition rows before this new dialect's order adapter can run.
         result.leaves=phase_coordinated_demolition_components(child.coordinated_demolition,child);
         result.ordinary=phase_coordinated_demolition_ordinary_removal(child.coordinated_demolition,child);
-        if (component_memberships && child.coordinated_demolition.at("version")==8)
+        if (component_memberships && (child.coordinated_demolition.at("version")==8 ||
+            (component_dimensions && child.coordinated_demolition.at("version")==9)))
             result.opening_ids=phase_coordinated_demolition_ordinary_openings(child.coordinated_demolition,child);
     } else result.leaves.push_back(std::move(child));
     for (const auto& leaf:result.leaves) {leaf_choice(leaf,wall);if (root) same_binding(*root,leaf);}
@@ -400,7 +405,7 @@ std::optional<PhaseConstraintAuthoringIntent> component_child(const PhaseWallDem
     for (const auto& key:roots)
         if (std::binary_search(edit.ordinary.components.begin(),edit.ordinary.components.end(),key))
             invalid("baseline and ordinary component roots overlap");
-    const auto other=historical(edit.other_authoring,edit.wall_demolition,enclosing,true);
+    const auto other=historical(edit.other_authoring,edit.wall_demolition,enclosing,true,edit.complete_component_dimensions);
     if (other.ordinary) for (const auto& key:roots)
         if (std::binary_search(other.ordinary->components.begin(),other.ordinary->components.end(),key))
             invalid("baseline and historical ordinary component roots overlap");
@@ -414,7 +419,7 @@ void admit_component_catalogs(const Entities& entities,AssemblyCatalogTransferBu
 AssemblyCatalogTransferBudget reserve_component_catalogs(const Entities& source,
     const PhaseWallDemolitionAuthoring& edit,const PhaseConstraintAuthoringIntent& root) {
     AssemblyCatalogTransferBudget budget;
-    const auto other=historical(edit.other_authoring,edit.wall_demolition,&root,true);
+    const auto other=historical(edit.other_authoring,edit.wall_demolition,&root,true,edit.complete_component_dimensions);
     (void)component_child(edit,&root);
     // Source and final map, wall, ordinary walls, independent corners,
     // opening, both ordinary lanes and the explicit component child. Reserve
@@ -561,9 +566,62 @@ void retain_registry_order(const Entities& actual,Entities& candidate,const Phas
             invalid("order adapter changed typed phase semantics");
     }
 }
+// Each caller supplies an already independently replayed full-source leaf.
+// Row absence comes from actual catalog/local keys, never boundary_id. The
+// leaf's dimension batch owns path/geometry/protection admission; this proof
+// only verifies its exact retirement delta and same-tuple independent survivors.
+Ids prove_component_dimension_retirements(const Entities& actual,const Entities& candidate) {
+    std::set<AssemblyPhaseRoot> retired;
+    for (const auto& [id,entity]:actual) if (entity.type=="assembly_model") {
+        const auto next=candidate.find(id);
+        if (next==candidate.end() || next->second.type!="assembly_model") invalid("dimension proof lost its actual catalog carrier");
+        Ids remaining;
+        for (const auto& row:next->second.properties.at("model").at("instances"))
+            remaining.insert(row.at("id").get<std::string>());
+        for (const auto& row:entity.properties.at("model").at("instances")) {
+            const auto local=row.at("id").get<std::string>();
+            if (!remaining.contains(local)) retired.emplace(id,local);
+        }
+    }
+    Ids proof;
+    for (const auto& [id,entity]:actual) {
+        if (!can_recognize_boundary_dimension_entity_type(entity.type)) continue;
+        const auto target=entity.properties.find("target");
+        if (target==entity.properties.end() || !target->is_object()) continue;
+        const auto assembly=target->find("assembly");
+        if (assembly==target->end() || !assembly->is_object()) continue;
+        const auto catalog=assembly->find("catalog_id"),instance=assembly->find("instance_id");
+        const bool affected=catalog!=assembly->end() && catalog->is_string() &&
+            instance!=assembly->end() && instance->is_string() &&
+            retired.contains({catalog->get<std::string>(),instance->get<std::string>()});
+        const auto next=candidate.find(id);
+        const bool changed=next==candidate.end() || !exact(entity,next->second);
+        if (!affected && !changed) continue;
+        const auto decoded=decode_boundary_dimension_entity(entity);
+        // Ordinary wall/opening producers also retire their non-component
+        // dimensions. Their existing typed policy owns those consequences;
+        // this additional proof authenticates assembly extents only.
+        if (!affected && decoded.supported() &&
+            decoded.dimension->kind!=BoundaryDimensionKind::assembly_extent) continue;
+        if (!decoded.supported() || decoded.version!=6 ||
+            decoded.dimension->kind!=BoundaryDimensionKind::assembly_extent || !decoded.dimension->assembly_target)
+            invalid("affected component dimension requires its supported qualified extent: "+id);
+        const auto& component=decoded.dimension->assembly_target->component;
+        if (component.document_entity_id) {
+            const auto owner=actual.find(*component.document_entity_id),survivor=candidate.find(*component.document_entity_id);
+            if (changed || owner==actual.end() || survivor==candidate.end() || !exact(owner->second,survivor->second))
+                invalid("component retirement changed a same-tuple independent dimension or owner: "+id);
+        } else {
+            if (!retired.contains({component.catalog_id,component.instance_id}) || next!=candidate.end())
+                invalid("component dimension differs from its actual retired-row producer: "+id);
+            proof.insert(id);
+        }
+    }
+    return proof;
+}
 void protected_source(const Entities& actual,const Entities& result,const PhaseWallDemolitionIntent& wall,
     bool complete=false,const Ids& retired_independent_openings={},const Entities* companion_proof=nullptr,
-    const std::set<AssemblyPhaseRoot>& placed_retirements={}) {
+    const std::set<AssemblyPhaseRoot>& placed_retirements={},const Ids* dimension_retirements=nullptr) {
     source_bound(result);
     Ids baseline,other_proposals;
     for (const auto& [id,entity]:actual) if (entity.type=="model_phases") {
@@ -579,6 +637,13 @@ void protected_source(const Entities& actual,const Entities& result,const PhaseW
     }
     const auto scope=constraint_phase_scope(actual);
     for (const auto& [id,entity]:actual) {
+        if (dimension_retirements && !result.contains(id) && can_recognize_boundary_dimension_entity_type(entity.type)) {
+            const auto decoded=decode_boundary_dimension_entity(entity);
+            if (decoded.supported() && decoded.dimension->kind==BoundaryDimensionKind::assembly_extent &&
+                (!decoded.dimension->assembly_target || decoded.dimension->assembly_target->component.document_entity_id ||
+                    !dimension_retirements->contains(id)))
+                invalid("erased extent dimension lacks its actual embedded-row producer proof: "+id);
+        }
         if (companion_proof && entity.type==assembly_phase_membership_entity_type) {
             const auto expected=companion_proof->find(id),supplied=result.find(id);
             if ((expected==companion_proof->end())!=(supplied==result.end()) ||
@@ -635,7 +700,7 @@ void protected_source(const Entities& actual,const Entities& result,const PhaseW
 }
 void ordinary_authority(const Entities& actual,const Entities& result,const PhaseWallDemolitionIntent& wall,
     bool complete=false,const Ids& retired_independent_openings={},const Entities* companion_proof=nullptr,
-    const std::set<AssemblyPhaseRoot>& placed_retirements={}) {
+    const std::set<AssemblyPhaseRoot>& placed_retirements={},const Ids* dimension_retirements=nullptr) {
     const auto scope=constraint_phase_scope(actual);
     const auto compatible=[&](const std::string& id) {
         if (!actual.contains(id) || scope.inactive_owner_ids.contains(id)) invalid("ordinary consequence has an absent/inactive host or carrier");
@@ -676,7 +741,7 @@ void ordinary_authority(const Entities& actual,const Entities& result,const Phas
             for (const auto& roof:join.roof_ids) compatible(roof);
         }
     }
-    protected_source(actual,result,wall,complete,retired_independent_openings,companion_proof,placed_retirements);
+    protected_source(actual,result,wall,complete,retired_independent_openings,companion_proof,placed_retirements,dimension_retirements);
 }
 void exclusive_root(const PhaseConstraintAuthoringIntent& intent) {
     message_only(intent.intent);
@@ -693,13 +758,20 @@ void exclusive_root(const PhaseConstraintAuthoringIntent& intent) {
 }
 Entities physical_stage(const Entities& actual,const PhaseConstraintAuthoringIntent& root,
     const PhaseWallDemolitionAuthoring& edit,Ids* admitted_openings=nullptr,Entities* admitted_companions=nullptr,
-    std::set<AssemblyPhaseRoot>* admitted_placed_rows=nullptr) {
+    std::set<AssemblyPhaseRoot>* admitted_placed_rows=nullptr,Ids* admitted_dimensions=nullptr) {
     source_bound(actual);exclusive_root(root);
     AssemblyCatalogTransferBudget component_budget;
     if (edit.complete_component_phase_memberships) component_budget=reserve_component_catalogs(actual,edit,root);
     const auto required_choice=edit.complete_component_phase_memberships ?
         std::optional{std::pair{edit.wall_demolition.registry_id,edit.wall_demolition.alternative_id}} : std::nullopt;
     std::set<AssemblyPhaseRoot> placed_retirements;
+    Ids dimension_retirements;
+    const auto admit_dimensions=[&](const Entities& candidate) -> std::optional<Ids> {
+        if (!edit.complete_component_dimensions) return std::nullopt;
+        auto proof=prove_component_dimension_retirements(actual,candidate);
+        dimension_retirements.insert(proof.begin(),proof.end());
+        return proof;
+    };
     const auto admit_candidate=[&](const Entities& candidate) -> std::optional<Entities> {
         if (!edit.complete_component_phase_memberships) return std::nullopt;
         charge_component_catalog_growth(actual,candidate,component_budget);
@@ -707,7 +779,9 @@ Entities physical_stage(const Entities& actual,const PhaseConstraintAuthoringInt
     };
     const auto ordinary_admission=[&](const Entities& candidate,bool complete,const Ids& openings=Ids{}) {
         const auto proof=admit_candidate(candidate);
-        ordinary_authority(actual,candidate,edit.wall_demolition,complete,openings,proof ? &*proof : nullptr,placed_retirements);
+        const auto dimensions=admit_dimensions(candidate);
+        ordinary_authority(actual,candidate,edit.wall_demolition,complete,openings,proof ? &*proof : nullptr,placed_retirements,
+            dimensions ? &*dimensions : nullptr);
     };
     if (root.source_entities_digest!=entity_map_digest(actual) ||
         !exact_json(root.phase_selections,phase_constraint_authoring_selections(actual))) invalid("actual source or saved choices changed");
@@ -874,9 +948,10 @@ Entities physical_stage(const Entities& actual,const PhaseConstraintAuthoringInt
     if (edit.complete_hosted_catalog_consequences) {
         // Authenticate the complete explicit selection on the original source
         // before historical leaves or ordinary producers can invoke native work.
-        other=historical(edit.other_authoring,edit.wall_demolition,&root,edit.complete_component_phase_memberships);
+        other=historical(edit.other_authoring,edit.wall_demolition,&root,edit.complete_component_phase_memberships,edit.complete_component_dimensions);
         if (edit.complete_corner_window_consequences)
-            reserve_historical_corner_proof_names(other,edit.complete_actual_corner_window_cohorts,edit.complete_component_phase_memberships);
+            reserve_historical_corner_proof_names(other,edit.complete_actual_corner_window_cohorts,edit.complete_component_phase_memberships,
+                edit.complete_component_dimensions);
         const auto selected=std::find_if(source_scope.registries.begin(),source_scope.registries.end(),[&](const auto& registry) {
             return registry.registry_id==edit.wall_demolition.registry_id;
         });
@@ -1006,11 +1081,13 @@ Entities physical_stage(const Entities& actual,const PhaseConstraintAuthoringInt
         }
     }
     auto wall_candidate=replay_phase_wall_demolition_entities(actual,edit.wall_demolition,
-        edit.complete_component_phase_memberships,required_choice);
+        edit.complete_component_phase_memberships,required_choice,edit.complete_component_dimensions);
     const auto wall_proof=admit_candidate(wall_candidate);
+    const auto wall_dimensions=admit_dimensions(wall_candidate);
     if (edit.complete_actual_corner_window_cohorts) {
         retain_registry_order(actual,wall_candidate,edit.wall_demolition);
-        ordinary_authority(actual,wall_candidate,edit.wall_demolition,true,retired_corner_cuts,wall_proof ? &*wall_proof : nullptr);
+        ordinary_authority(actual,wall_candidate,edit.wall_demolition,true,retired_corner_cuts,wall_proof ? &*wall_proof : nullptr,{},
+            wall_dimensions ? &*wall_dimensions : nullptr);
         const auto phase=constraint_phase_scope(wall_candidate);
         for (const auto& owner:wall_corner_owners) {
             const auto corner=parse_corner_window(actual.at(owner));
@@ -1027,7 +1104,7 @@ Entities physical_stage(const Entities& actual,const PhaseConstraintAuthoringInt
     candidates.push_back(wall_candidate);
     if (!independent_corner_owners.empty()) {
         auto candidate=replay_architectural_object_removal(actual,independent_corner_owners,{},true,0,true,false,true,true,
-            edit.complete_component_phase_memberships,required_choice);
+            edit.complete_component_phase_memberships,required_choice,edit.complete_component_dimensions);
         retain_registry_order(actual,candidate,edit.wall_demolition);
         ordinary_admission(candidate,true,retired_corner_cuts);
         const auto phase=constraint_phase_scope(candidate);
@@ -1047,7 +1124,7 @@ Entities physical_stage(const Entities& actual,const PhaseConstraintAuthoringInt
         // actual entities. Neither the partially demolished wall map nor a
         // fabricated snapshot can become corner-removal authority.
         auto candidate=replay_architectural_object_removal(actual,baseline_corner_owners,{},true,0,true,false,true,true,
-            edit.complete_component_phase_memberships,required_choice);
+            edit.complete_component_phase_memberships,required_choice,edit.complete_component_dimensions);
         retain_registry_order(actual,candidate,edit.wall_demolition);
         ordinary_admission(candidate,true);
         const auto scope=constraint_phase_scope(candidate);
@@ -1069,10 +1146,10 @@ Entities physical_stage(const Entities& actual,const PhaseConstraintAuthoringInt
     if (!edit.ordinary_wall_ids.empty()) {
         preflight_physical_walls_deletion_join_inference(
             actual,edit.ordinary_wall_ids,true,edit.complete_hosted_catalog_consequences,edit.complete_corner_window_consequences,
-            edit.complete_component_phase_memberships,required_choice);
+            edit.complete_component_phase_memberships,required_choice,edit.complete_component_dimensions);
         auto candidate=replay_complete_physical_walls_deletion(
             actual,edit.ordinary_wall_ids,edit.wall_additional_identities,true,edit.complete_hosted_catalog_consequences,
-            edit.complete_corner_window_consequences,edit.complete_component_phase_memberships,required_choice);
+            edit.complete_corner_window_consequences,edit.complete_component_phase_memberships,required_choice,edit.complete_component_dimensions);
         retain_registry_order(actual,candidate,edit.wall_demolition);
         ordinary_admission(candidate,edit.complete_hosted_catalog_consequences,retired_corner_cuts);
         const auto& required_retirement=edit.complete_actual_corner_window_cohorts ? ordinary_wall_corner_closure : ordinary_corner_closure;
@@ -1087,7 +1164,7 @@ Entities physical_stage(const Entities& actual,const PhaseConstraintAuthoringInt
     for (const auto& leaf:other.leaves) {
         auto candidate=edit.complete_component_phase_memberships && !leaf.stair_demolition_retirement.is_null() ?
             replay_phase_stair_demolition_retirement_entities(actual,
-                decode_stair_demolition_retirement_intent(leaf.stair_demolition_retirement),true,required_choice) :
+                decode_stair_demolition_retirement_intent(leaf.stair_demolition_retirement),true,required_choice,edit.complete_component_dimensions) :
             replay_phase_constraint_authoring(actual,encode_phase_constraint_authoring_intent(leaf));
         retain_registry_order(actual,candidate,edit.wall_demolition);
         if (!leaf.opening_demolition.is_null()) {
@@ -1106,7 +1183,9 @@ Entities physical_stage(const Entities& actual,const PhaseConstraintAuthoringInt
             }
         }
         const auto proof=admit_candidate(candidate);
-        protected_source(actual,candidate,edit.wall_demolition,edit.complete_hosted_catalog_consequences,{},proof ? &*proof : nullptr);
+        const auto dimensions=admit_dimensions(candidate);
+        protected_source(actual,candidate,edit.wall_demolition,edit.complete_hosted_catalog_consequences,{},proof ? &*proof : nullptr,{},
+            dimensions ? &*dimensions : nullptr);
         for (const auto& [id,entity]:actual) if (!candidate.contains(id) &&
             (entity.type=="stair" || entity.type=="railing" || entity.type=="slab" ||
              entity.type=="column" || entity.type=="beam" || entity.type=="roof")) historical_retired_owners.insert(id);
@@ -1135,7 +1214,7 @@ Entities physical_stage(const Entities& actual,const PhaseConstraintAuthoringInt
     Ids retired_independent_openings=retired_corner_cuts;
     if (!independent.empty()) {
         auto opening=replay_hosted_opening_removal(actual,independent,true,edit.complete_hosted_catalog_consequences,
-            edit.complete_component_phase_memberships,required_choice);
+            edit.complete_component_phase_memberships,required_choice,edit.complete_component_dimensions);
         if (!opening) invalid("independent opening selection was not admitted");
         if (edit.complete_hosted_catalog_consequences) for (const auto& id:independent) {
             if (opening->contains(id)) invalid("complete independent opening producer did not physically retire its selection");
@@ -1222,6 +1301,12 @@ Entities physical_stage(const Entities& actual,const PhaseConstraintAuthoringInt
             if (found==actual.end() || found->second.type=="wall" || found->second.type=="opening" ||
                 found->second.type=="room" || found->second.type=="boundary") invalid("ordinary root requires its dedicated authoring lane");
         }
+        if (edit.complete_component_dimensions) {
+            // Decide after authenticated closure collapse. An actual host lane
+            // and a component-only lane have separate, exclusive authority.
+            selection.complete_component_dimensions=selection.object_ids.empty();
+            selection.complete_hosted_component_dimensions=!selection.object_ids.empty();
+        }
         auto candidate=historical_primitive && !edit.complete_corner_window_consequences ?
             replay_architectural_object_removal(actual,selection.object_ids,selection.components) :
             replay_architectural_selection_removal(actual,selection,true,edit.complete_hosted_catalog_consequences,
@@ -1279,7 +1364,11 @@ Entities physical_stage(const Entities& actual,const PhaseConstraintAuthoringInt
                 bool bound=false;
                 if (can_recognize_boundary_dimension_entity_type(entity.type)) {
                     const auto decoded=decode_boundary_dimension_entity(entity);
-                    bound=decoded.supported() && shared_aggregate.contains(decoded.dimension->boundary_id);
+                    bound=decoded.supported() &&
+                        (decoded.dimension->kind==BoundaryDimensionKind::assembly_extent ?
+                            edit.complete_component_dimensions && dimension_retirements.contains(id) &&
+                                decoded.dimension->assembly_target && !decoded.dimension->assembly_target->component.document_entity_id :
+                            shared_aggregate.contains(decoded.dimension->boundary_id));
                 } else if (entity.type=="constraint") {
                     const auto decoded=decode_constraint_entity(entity);
                     bound=decoded.supported() && std::any_of(decoded.constraint->bindings.begin(),decoded.constraint->bindings.end(),
@@ -1347,7 +1436,8 @@ Entities physical_stage(const Entities& actual,const PhaseConstraintAuthoringInt
         }
     }
     protected_source(actual,result,edit.wall_demolition,edit.complete_hosted_catalog_consequences,retired_independent_openings,
-        companion_proof ? &*companion_proof : nullptr,placed_retirements);
+        companion_proof ? &*companion_proof : nullptr,placed_retirements,
+        edit.complete_component_dimensions ? &dimension_retirements : nullptr);
     if (embedded_assembly_presentation_ids(result)!=expected_aliases) invalid("composition changed complete surviving alias inventory");
     if (constraint_phase_scope(result).inactive_owner_ids!=expected_inactive) invalid("composition changed independently admitted inactive ownership");
     if (edit.complete_corner_window_consequences) {
@@ -1360,6 +1450,7 @@ Entities physical_stage(const Entities& actual,const PhaseConstraintAuthoringInt
     if (admitted_openings) *admitted_openings=std::move(retired_independent_openings);
     if (admitted_companions && companion_proof) *admitted_companions=std::move(*companion_proof);
     if (admitted_placed_rows) *admitted_placed_rows=std::move(placed_retirements);
+    if (admitted_dimensions) *admitted_dimensions=std::move(dimension_retirements);
     return result;
 }
 PhysicalWallRoomPhaseReviewIntent room_binding(const PhaseConstraintAuthoringIntent& root,
@@ -1401,6 +1492,8 @@ void validate_room_binding(const PhaseConstraintAuthoringIntent& root,const Phas
 } // namespace
 
 Json encode_phase_wall_demolition_authoring(const PhaseWallDemolitionAuthoring& intent) {
+    if (intent.complete_component_dimensions && !intent.complete_component_phase_memberships)
+        invalid("inner seven requires complete component memberships and all inner six consequences");
     if (intent.complete_component_phase_memberships && !intent.complete_actual_corner_window_cohorts)
         invalid("inner six requires complete actual corner cohorts");
     if (!intent.complete_component_phase_memberships && !intent.component_authoring.is_null())
@@ -1424,14 +1517,17 @@ Json encode_phase_wall_demolition_authoring(const PhaseWallDemolitionAuthoring& 
                         (intent.complete_actual_corner_window_cohorts &&
                             (destination=="complete_actual_corner_window_cohorts" || destination=="explicit_corner_window_ids")) ||
                         (intent.complete_component_phase_memberships &&
-                            (destination=="component_authoring" || destination=="complete_component_phase_memberships")))
+                            (destination=="component_authoring" || destination=="complete_component_phase_memberships")) ||
+                        (intent.complete_component_dimensions && destination=="complete_component_dimensions"))
                         invalid("fresh destination borrows the corner consequence proof field");
             }
     proof_bound(intent.other_authoring);proof_bound(intent.room_review_intent);proof_bound(intent.component_authoring);
-    const auto other=historical(intent.other_authoring,intent.wall_demolition,nullptr,intent.complete_component_phase_memberships);
+    const auto other=historical(intent.other_authoring,intent.wall_demolition,nullptr,intent.complete_component_phase_memberships,
+        intent.complete_component_dimensions);
     (void)component_child(intent);
     if (intent.complete_corner_window_consequences)
-        reserve_historical_corner_proof_names(other,intent.complete_actual_corner_window_cohorts,intent.complete_component_phase_memberships);
+        reserve_historical_corner_proof_names(other,intent.complete_actual_corner_window_cohorts,intent.complete_component_phase_memberships,
+            intent.complete_component_dimensions);
     sorted_ids(intent.opening_ids,1000);
     auto wall_additional=wall_destinations_wire(intent);
     if (!intent.room_review_intent.is_null()) {
@@ -1461,25 +1557,36 @@ Json encode_phase_wall_demolition_authoring(const PhaseWallDemolitionAuthoring& 
         result["component_authoring"]=intent.component_authoring;
         result["complete_component_phase_memberships"]=true;
     }
+    if (intent.complete_component_dimensions) {
+        result["version"]=7;
+        result["complete_component_dimensions"]=true;
+    }
     proof_bound(result);return result;
 }
 PhaseWallDemolitionAuthoring decode_phase_wall_demolition_authoring(const Json& value) try {
     proof_bound(value);
     if (!value.is_object() || !value.contains("version") || !value.at("version").is_number_integer() ||
-        (value.at("version")!=1 && value.at("version")!=2 && value.at("version")!=3 && value.at("version")!=4 && value.at("version")!=5 && value.at("version")!=6))
+        (value.at("version")!=1 && value.at("version")!=2 && value.at("version")!=3 && value.at("version")!=4 && value.at("version")!=5 && value.at("version")!=6 && value.at("version")!=7))
         invalid("unsupported inner demolition version");
-    const bool members=value.at("version")==6;
+    const bool dimensions=value.at("version")==7;
+    const bool members=value.at("version")==6 || dimensions;
     const bool actual_cohorts=value.at("version")==5 || members;
     const bool corners=value.at("version")==4 || actual_cohorts;
     const bool complete=value.at("version")==3 || corners;
     const bool ordinary_walls=value.at("version")!=1;
     if (members) {
-        keys(value,{"version","wall_demolition","other_authoring","ordinary","opening_ids","room_review_intent",
+        if (dimensions) keys(value,{"version","wall_demolition","other_authoring","ordinary","opening_ids","room_review_intent",
+            "ordinary_wall_ids","wall_additional_identities","complete_hosted_catalog_consequences","complete_corner_window_consequences",
+            "complete_actual_corner_window_cohorts","explicit_corner_window_ids","component_authoring","complete_component_phase_memberships",
+            "complete_component_dimensions"});
+        else keys(value,{"version","wall_demolition","other_authoring","ordinary","opening_ids","room_review_intent",
             "ordinary_wall_ids","wall_additional_identities","complete_hosted_catalog_consequences","complete_corner_window_consequences",
             "complete_actual_corner_window_cohorts","explicit_corner_window_ids","component_authoring","complete_component_phase_memberships"});
         for (const auto* flag:{"complete_hosted_catalog_consequences","complete_corner_window_consequences",
                 "complete_actual_corner_window_cohorts","complete_component_phase_memberships"})
             if (!value.at(flag).is_boolean() || value.at(flag)!=true) invalid("inner six requires all complete consequence markers");
+        if (dimensions && (!value.at("complete_component_dimensions").is_boolean() || value.at("complete_component_dimensions")!=true))
+            invalid("inner seven requires its literal complete component dimensions marker");
         if (!value.at("explicit_corner_window_ids").is_array() || value.at("explicit_corner_window_ids").size()>1000)
             invalid("invalid explicit actual corner inventory");
     } else if (actual_cohorts) {
@@ -1514,6 +1621,7 @@ PhaseWallDemolitionAuthoring decode_phase_wall_demolition_authoring(const Json& 
     result.complete_corner_window_consequences=corners;
     result.complete_actual_corner_window_cohorts=actual_cohorts;
     result.complete_component_phase_memberships=members;
+    result.complete_component_dimensions=dimensions;
     if (members) result.component_authoring=value.at("component_authoring");
     if (actual_cohorts) for (const auto& row:value.at("explicit_corner_window_ids")) {
         if (!row.is_string()) invalid("explicit corner identity must be a string");
@@ -1551,6 +1659,9 @@ PhaseWallDemolitionAuthoring decode_phase_wall_demolition_authoring(const Json& 
 bool phase_wall_demolition_complete_component_phase_memberships(const Json& value) {
     return decode_phase_wall_demolition_authoring(value).complete_component_phase_memberships;
 }
+bool phase_wall_demolition_complete_component_dimensions(const Json& value) {
+    return decode_phase_wall_demolition_authoring(value).complete_component_dimensions;
+}
 void preflight_phase_wall_demolition_component_catalogs(const Entities& source,const Json& value,
     const PhaseConstraintAuthoringIntent& enclosing) {
     source_bound(source);
@@ -1582,7 +1693,8 @@ Entities replay_phase_wall_demolition_authoring(const Entities& actual,const Pha
     Ids admitted_openings;
     Entities admitted_companions;
     std::set<AssemblyPhaseRoot> admitted_placed_rows;
-    auto stage=physical_stage(actual,intent,edit,&admitted_openings,&admitted_companions,&admitted_placed_rows);
+    Ids admitted_dimensions;
+    auto stage=physical_stage(actual,intent,edit,&admitted_openings,&admitted_companions,&admitted_placed_rows,&admitted_dimensions);
     const auto inventory=inspect_physical_wall_phase_room_review_entities(stage,room_binding(intent,edit,stage));
     if (edit.room_review_intent.is_null()) {
         if (requires_rooms(inventory)) invalid("explicit complete room decisions are required");
@@ -1592,7 +1704,8 @@ Entities replay_phase_wall_demolition_authoring(const Entities& actual,const Pha
         stage=replay_physical_wall_phase_room_review(stage,edit.room_review_intent,true).entities;
     }
     protected_source(actual,stage,edit.wall_demolition,edit.complete_hosted_catalog_consequences,admitted_openings,
-        edit.complete_component_phase_memberships ? &admitted_companions : nullptr,admitted_placed_rows);
+        edit.complete_component_phase_memberships ? &admitted_companions : nullptr,admitted_placed_rows,
+        edit.complete_component_dimensions ? &admitted_dimensions : nullptr);
     if (edit.complete_corner_window_consequences) validate_corner_window_state(stage);
     if (!edit.ordinary_wall_ids.empty()) validate_stair_attachment_state(stage);
     if (const auto error=validate_active_phase_constraint_integrity(stage)) invalid(*error);

@@ -241,7 +241,7 @@ void component_binding(const PhaseSelectionRemovalIntent& selection,const Json& 
         }
     }
     if (coordinated!=selection.complete_coordinated_component_phase_memberships)
-        reject("coordinated memberships require selection three and pure phase15/inner8 authority");
+        reject("coordinated memberships require selection three and pure phase15/inner8 or inner9 authority");
     bool wall=false;
     if (wire.at("version")==34 && wire.at("phase_constraint_authoring_intent").at("version")==16) {
         const auto proof=decode_phase_constraint_authoring_intent(wire.at("phase_constraint_authoring_intent"));
@@ -258,7 +258,7 @@ void component_binding(const PhaseSelectionRemovalIntent& selection,const Json& 
         }
     }
     if (wall!=selection.complete_wall_component_phase_memberships)
-        reject("wall memberships require selection four and pure phase16/inner6 authority");
+        reject("wall memberships require selection four and pure phase16/inner6 or inner7 authority");
 }
 void digest(const Json& value) {
     if (!value.is_string()) reject("source binding must be a digest");

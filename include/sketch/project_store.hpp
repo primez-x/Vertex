@@ -331,7 +331,8 @@ public:
     // v225 retains physical-host component dimension retirement under removal5/mixed15.
     // v226 retains qualified opening component dimensions under command62/mixed16.
     // v227 retains physical/mixed wall deletion component dimensions under proofs63/64/65.
-    static constexpr std::uint32_t format_version = 227;
+    // v228 retains coordinated/wall phase demolition component dimensions under inner proofs9/7.
+    static constexpr std::uint32_t format_version = 228;
     static constexpr std::uint32_t recovery_format_version = 4;
     [[nodiscard]] static std::uint32_t required_format_version(const DocumentSnapshot& snapshot);
     static constexpr std::uint64_t maximum_file_bytes = 4ULL * 1024ULL * 1024ULL * 1024ULL;

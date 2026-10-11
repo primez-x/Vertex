@@ -28,7 +28,8 @@ struct PhaseWallDemolitionSelection {
     const std::vector<std::string>& selected_wall_ids,
     bool complete_actual_corner_window_cohorts=false,
     bool complete_component_phase_memberships=false,
-    const std::optional<std::pair<std::string,std::string>>& required_component_phase_choice=std::nullopt);
+    const std::optional<std::pair<std::string,std::string>>& required_component_phase_choice=std::nullopt,
+    bool complete_component_dimensions=false);
 
 // Closed semantic selection: the actual saved registry/alternative and an
 // ascending unique inventory of retained baseline walls. No entity payloads
@@ -51,10 +52,14 @@ struct PhaseWallDemolitionSelection {
 // and permits only typed companion pruning; parked baseline rows remain exact.
 // A supplied choice must match that actual registry/alternative. These options
 // add no intent fields, component demolition or historical producer authority.
+// Separate dimension completion forwards original-source corner retirement's
+// qualified extent cleanup. It requires complete corner cohorts and preserves
+// every parked baseline component/dimension; the enclosing proof owns this flag.
 [[nodiscard]] std::map<std::string,Entity,std::less<>> replay_phase_wall_demolition_entities(
     const std::map<std::string,Entity,std::less<>>& actual,const PhaseWallDemolitionIntent& intent,
     bool complete_component_phase_memberships=false,
-    const std::optional<std::pair<std::string,std::string>>& required_component_phase_choice=std::nullopt);
+    const std::optional<std::pair<std::string,std::string>>& required_component_phase_choice=std::nullopt,
+    bool complete_component_dimensions=false);
 
 // Prepare one raw, asset-free registry upsert for the existing phase-room
 // review. No shared-baseline selection returns nullopt. Once any selected wall

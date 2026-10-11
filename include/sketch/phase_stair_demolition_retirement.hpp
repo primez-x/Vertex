@@ -30,6 +30,9 @@ struct StairDemolitionRetirementPlan {
     std::vector<std::pair<std::string, std::string>> retired_hosted_instances;
     std::vector<std::string> retired_presentation_ids;
     std::vector<StairDemolitionRetirementDiagnostic> diagnostics;
+    // Supported embedded extent owners derived from the original source only
+    // when the enclosing caller explicitly completes component dimensions.
+    std::vector<std::string> retired_dimension_ids;
     [[nodiscard]] bool ready() const noexcept { return diagnostics.empty(); }
 };
 
@@ -49,7 +52,8 @@ phase_stair_demolition_retirement_request(
     const std::map<std::string, Entity, std::less<>>& source,
     const StairDemolitionRetirementIntent& intent,
     bool complete_component_phase_memberships = false,
-    const std::optional<std::pair<std::string, std::string>>& required_component_phase_choice = std::nullopt);
+    const std::optional<std::pair<std::string, std::string>>& required_component_phase_choice = std::nullopt,
+    bool complete_component_dimensions = false);
 
 // Re-derive every retired owner/row/reference from actual source, retire only
 // active-only proposed attached rails, then compose ordinary baseline demolition.
@@ -59,12 +63,18 @@ phase_stair_demolition_retirement_request(
 // the intent's saved choice before geometry admission and proves companions by
 // exact source pruning. A supplied choice must match that actual choice and
 // requires completion; neither option extends the closed v1 intent grammar.
+// Separate dimension completion qualifies supported v6 extents against the
+// actual retired hosted rows, including same-tuple independent targets. Only
+// embedded extents retire; independent owners/dimensions and baseline extents
+// remain exact. Protected, foreign or opaque dependencies refuse. This flag
+// belongs to the enclosing proof, and does not change the standalone intent.
 [[nodiscard]] std::map<std::string, Entity, std::less<>>
 replay_phase_stair_demolition_retirement_entities(
     const std::map<std::string, Entity, std::less<>>& source,
     const StairDemolitionRetirementIntent& intent,
     bool complete_component_phase_memberships = false,
-    const std::optional<std::pair<std::string, std::string>>& required_component_phase_choice = std::nullopt);
+    const std::optional<std::pair<std::string, std::string>>& required_component_phase_choice = std::nullopt,
+    bool complete_component_dimensions = false);
 
 // Explicit selective lane for stair replacement. rail_ids is a nonempty,
 // bounded, sorted unique subset of actual active-only proposed attached rails
