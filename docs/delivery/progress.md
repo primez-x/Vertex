@@ -35,12 +35,17 @@ geometry, fresh room identities are checked against all explicitly owned tokens
 in retained and undone states, and room cleanup preserves baseline registry
 membership and an emptied saved view's restriction. Historical dialects retain
 their original behavior. Root reviewed the integrated source; runtime evidence
-is absent.
+is absent. The complete reviewed core is committed and pushed as fcda0f49 with
+exact local/remote ref verification.
 
 The desktop room-dialog adapter is written but not yet connected to complete
 mixed transform publication. It collects every mandatory context/plane and
 permits explicit removal of selected dimensions only in the new opt-in route.
-That separate source batch is under bounded review; it is not installed.
+Bounded source review approves that separate adapter: stage entity digests and
+decisions stay intact, original metadata is rebound only after the displayed
+source fence, and final replay checks every context and sequential transition.
+The helper still requires connection to complete desktop publication; it is not
+installed and does not establish a working user workflow.
 Complete mixed Properties, plan/native preview and release, ordinary phase
 replacement, geometry scaling and independent child reflection remain required.
 No builds, tests/new tests, probes, native jobs, launches, packages or

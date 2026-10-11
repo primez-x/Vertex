@@ -146,6 +146,7 @@
 #include "sketch/plan_axis_resize.hpp"
 #include "sketch/presentation_transform.hpp"
 #include "sketch/selection_geometry_transform.hpp"
+#include "sketch/selection_geometry_review.hpp"
 #include "sketch/hosted_opening_resize.hpp"
 #include "sketch/hosted_opening_geometry.hpp"
 #include "sketch/document_wall_plan.hpp"
@@ -68793,6 +68794,71 @@ public:
             throw std::invalid_argument("The atomic wall and room review differs from the complete staged decisions.");
         (void)current_source();
         return prepared.command;
+    }
+
+    std::optional<std::vector<json>> reviewSelectionGeometryRoomIntents(
+        const DocumentSnapshot& source,const SelectionGeometryTransformPreparation& prepared,
+        const SourceEditAuthority& authority,QWidget* parent,
+        const std::function<void()>& additional_fence={}) {
+        if (prepared.source_snapshot_digest()!=authority.source_digest ||
+            fullSnapshotDigest(source)!=authority.source_digest)
+            throw std::invalid_argument("The room proposal does not belong to the captured project.");
+        for (const auto& root:prepared.request().roots)
+            if (!authority.ordinary_selection.contains(QString::fromStdString(root.root_id)))
+                throw std::invalid_argument("The room proposal lost its explicit selected geometry source.");
+        const auto current_source=[&] {
+            if (!sourceEditAuthorityUnchanged(authority) || hasPendingPlacementEdit() ||
+                m_text_placement_context || m_plan_label_context || m_armed_area_class)
+                throw std::invalid_argument("The project, selection or workspace changed. Reopen the transform.");
+            if (additional_fence) additional_fence();
+            if (fullSnapshotDigest(authoringSnapshot())!=authority.source_digest)
+                throw std::invalid_argument("The captured project changed during room review.");
+        };
+        current_source();
+        const auto& requirements=prepared.required_room_reviews();
+        if (requirements.size()>32)
+            throw std::invalid_argument("The transform exceeds thirty-two room review contexts and planes.");
+        auto stage=prepared.geometry_snapshot();
+        std::vector<json> reviews;
+        reviews.reserve(requirements.size());
+        for (std::size_t index=0;index<requirements.size();++index) {
+            const auto& requirement=requirements[index];
+            const auto captured_stage=stage;
+            const auto current_stage=[&] { current_source();return captured_stage; };
+            PhysicalWallRoomReviewDialog dialog(captured_stage,requirement.context,
+                requirement.effective_elevation_m,authority.context.metric_units,current_stage,parent);
+            styleDialog(dialog);
+            if (!requirement.dimension_placements.empty())
+                dialog.setSelectedDimensionPlacements(source,requirement.dimension_placements,true);
+            dialog.setWindowTitle(QStringLiteral("Review rooms %1 of %2")
+                .arg(static_cast<qulonglong>(index+1)).arg(static_cast<qulonglong>(requirements.size())));
+            if (auto* choice=dialog.findChild<QComboBox*>(QStringLiteral("physicalRoomReviewSource")))
+                choice->setEnabled(false);
+            if (dialog.exec()!=QDialog::Accepted) return std::nullopt;
+            current_source();
+            if (!dialog.acceptedCommand())
+                throw std::invalid_argument("The room review has no accepted decisions.");
+            const auto& command=*dialog.acceptedCommand();
+            auto intent=decode_physical_wall_room_review_intent(command.room_review_intent);
+            if (!intent.context_plane_selection || !intent.selected_wall_id.empty() ||
+                intent.context!=requirement.context || intent.effective_elevation_m!=requirement.effective_elevation_m)
+                throw std::invalid_argument("The room review changed its captured context or plane.");
+            // The dialog admits a detached stage, while the complete command
+            // binds the unchanged displayed original. Retain its exact stage
+            // entity digest and decisions; only original snapshot metadata is
+            // rebound after the full displayed-source fence above.
+            stage=Document::preview_command(captured_stage,Command{command});
+            intent.source_snapshot_digest=prepared.source_snapshot_digest();
+            intent.source_authoring_digest=document_authoring_source_digest_v2(source);
+            intent.source_saved_revision=source.saved_revision_optional();
+            reviews.push_back(encode_physical_wall_room_review_intent(intent));
+        }
+        // Reconstruct the complete selection from original source once more.
+        // This checks exact coverage, placements, removals and sequential stage
+        // digests; the dialog's candidate never becomes command authority.
+        (void)replay_selection_geometry_review(source,prepared.request(),reviews);
+        current_source();
+        return reviews;
     }
 
     void showConstraintEditor(const QString& initial_length = {}) {

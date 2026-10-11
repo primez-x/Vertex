@@ -106,6 +106,7 @@ public:
     std::optional<DocumentSnapshot> candidate_snapshot;
     std::optional<DocumentSnapshot> dimension_source;
     std::vector<PhysicalWallRoomDimensionPlacement> selected_dimension_placements;
+    bool allow_selected_dimension_removal{};
     QString error;
     bool rebuilding{};
     bool invalidated{};
@@ -235,7 +236,7 @@ public:
             [&](const auto& placement){return placement.dimension_id==id;});
     }
     void set_selected_dimension_placements(const DocumentSnapshot& original,
-        const std::vector<PhysicalWallRoomDimensionPlacement>& placements) {
+        const std::vector<PhysicalWallRoomDimensionPlacement>& placements,bool allow_reviewed_removal) {
         require_current();
         if (dimension_source) throw std::invalid_argument("Selected dimension placements are already captured.");
         if (!report || original.document_id()!=original_source.document_id() || !original.is_editable())
@@ -251,6 +252,7 @@ public:
                 throw std::invalid_argument("Selected dimensions must belong to affected rooms and match their original saved source.");
         }
         dimension_source=original;selected_dimension_placements=placements;
+        allow_selected_dimension_removal=allow_reviewed_removal;
         // Reclassify in place so room assignments, graph acknowledgements and
         // unrelated reference choices survive the owner's pre-exec setter.
         rebuilding=true;
@@ -573,9 +575,10 @@ public:
         }
         for (const auto& r:references) {
             const auto action=value(r.decision);if (action.empty()) throw std::invalid_argument("Choose Keep or Remove for every attached reference.");
-            if (selected_dimension(r.id) && action!="keep")
+            if (selected_dimension(r.id) && action!="keep" && !allow_selected_dimension_removal)
                 throw std::invalid_argument("A selected dimension placement requires explicit Keep; it cannot be removed.");
-            if (selected_dimension(r.id) && std::any_of(r.owners.begin(),r.owners.end(),[&](const auto& owner){return retiring.contains(owner);}))
+            if (selected_dimension(r.id) && !allow_selected_dimension_removal &&
+                std::any_of(r.owners.begin(),r.owners.end(),[&](const auto& owner){return retiring.contains(owner);}))
                 throw std::invalid_argument("A room owning a selected dimension placement must retain its identity.");
             if (action=="remove") {result.removed_reference_ids.push_back(r.id);continue;}
             if (std::any_of(r.owners.begin(),r.owners.end(),[&](const auto& owner){return retiring.contains(owner);}))
@@ -594,6 +597,12 @@ public:
                 decision->child_mapping[vertex?"vertices":"segments"][old_id]=value(found->second);
             }
         }
+        if (allow_selected_dimension_removal)
+            result.selected_dimension_placements.erase(std::remove_if(result.selected_dimension_placements.begin(),
+                result.selected_dimension_placements.end(),[&](const auto& placement) {
+                    return std::find(result.removed_reference_ids.begin(),result.removed_reference_ids.end(),
+                        placement.dimension_id)!=result.removed_reference_ids.end();
+                }),result.selected_dimension_placements.end());
         std::set<std::string> destinations;
         for (const auto& room:result.fresh) if (room.disposition!=PhysicalWallRoomFreshDisposition::unclassified && !retiring.contains(room.room_id))
             destinations.insert(room.room_id);
@@ -732,8 +741,8 @@ void PhysicalWallRoomReviewDialog::setDeletionConsequences(const DocumentSnapsho
     m_impl->set_deletion_consequences(original,deletion);
 }
 void PhysicalWallRoomReviewDialog::setSelectedDimensionPlacements(const DocumentSnapshot& original,
-    const std::vector<PhysicalWallRoomDimensionPlacement>& placements) {
-    m_impl->set_selected_dimension_placements(original,placements);
+    const std::vector<PhysicalWallRoomDimensionPlacement>& placements,bool allow_reviewed_removal) {
+    m_impl->set_selected_dimension_placements(original,placements,allow_reviewed_removal);
 }
 void PhysicalWallRoomReviewDialog::accept() {if (m_impl->submit()) QDialog::accept();}
 void PhysicalWallRoomReviewDialog::reject() {m_impl->accepted.reset();m_impl->candidate.reset();m_impl->candidate_snapshot.reset();QDialog::reject();}

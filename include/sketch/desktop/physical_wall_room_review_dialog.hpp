@@ -27,7 +27,8 @@ public:
     // dialog reviews a later detached stage in a multi-context batch.
     void setDeletionConsequences(const DocumentSnapshot& original,const ApplyEntityChanges& deletion);
     void setSelectedDimensionPlacements(const DocumentSnapshot& original,
-        const std::vector<PhysicalWallRoomDimensionPlacement>& placements);
+        const std::vector<PhysicalWallRoomDimensionPlacement>& placements,
+        bool allow_reviewed_removal=false);
     void accept() override;
     void reject() override;
 private:
