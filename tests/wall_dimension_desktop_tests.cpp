@@ -340,7 +340,7 @@ void named_horizontal_wall_measurement_placement() {
         auto& drawing=canvas(window,"architecturalPlanCanvas");drawing.setOverviewMapEnabled(false);drawing.setSnapEnabled(false);drawing.fitView();QApplication::processEvents();
         const auto automatic=label(drawing,wall);
         require(automatic && automatic->automatic_linear_placement &&
-            std::abs(automatic->rotation_radians)<=std::numbers::pi/2+1e-12 && !automatic->wall_dimension_manual_rotation,
+            std::abs(automatic->rotation_radians)<=std::numbers::pi/2+1e-12 && !automatic->derived_label_manual_rotation,
             "automatic wall measurements must stay upright with projected baselines in rotated/reflected named plans");
         const auto projected_start=automatic->automatic_linear_placement->anchor.start;
         require(std::abs(projected_start.x-(-direction_z*(-10*std::cos(angle)+4*std::sin(angle))))<1e-8 &&
@@ -360,7 +360,7 @@ void named_horizontal_wall_measurement_placement() {
             QStringLiteral("#123456"),false,false,true,QStringLiteral("45")),"authored wall rotation must remain editable in named plans");
         const auto authored=label(drawing,wall);
         const auto expected_angle=std::atan2(std::sin(std::numbers::pi/4-angle),-direction_z*std::cos(std::numbers::pi/4-angle));
-        require(authored && authored->wall_dimension_manual_rotation && std::abs(authored->rotation_radians-expected_angle)<1e-10,
+        require(authored && authored->derived_label_manual_rotation && std::abs(authored->rotation_radians-expected_angle)<1e-10,
             "explicit wall text angles must be projected faithfully instead of being upright-normalized");
     }
 }
@@ -406,7 +406,7 @@ void curved_outline_selection_preserves_wall_and_exterior_callouts() {
     require(baseline_before.text==QStringLiteral("6.283 m") &&
         std::abs(baseline_before.position.x)<1e-9 && std::abs(baseline_before.position.y+2.8)<1e-9 &&
         baseline_before.paper_height_mm==5.5 && baseline_before.color==QColor(QStringLiteral("#A12B34")) &&
-        baseline_before.bold && baseline_before.italic && baseline_before.wall_dimension_manual_rotation &&
+        baseline_before.bold && baseline_before.italic && baseline_before.derived_label_manual_rotation &&
         std::abs(baseline_before.rotation_radians-32.0*std::numbers::pi/180.0)<1e-12 &&
         !baseline_before.automatic_linear_placement,
         "the source-wall callout shows its derived arc length and custom manual paper typography");

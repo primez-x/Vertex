@@ -18,7 +18,8 @@
 namespace sketch {
 std::map<std::string, Entity, std::less<>> boundary_constraint_entities(
     const std::map<std::string, Entity, std::less<>>& source,
-    const ApplyBoundaryConstraintChanges& command, bool retained_replay = false);
+    const ApplyBoundaryConstraintChanges& command, bool retained_replay = false, bool prepared_rigid_geometry = false,
+    const JointTranslationIntent* rigid_joint_intent = nullptr);
 }
 
 namespace {
