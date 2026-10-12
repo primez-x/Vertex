@@ -1,6 +1,7 @@
 #pragma once
 
 #include "sketch/assembly_dimension.hpp"
+#include "sketch/slab_geometry_edit.hpp"
 
 #include <cstddef>
 #include <span>
@@ -155,6 +156,29 @@ carry_reviewed_assembly_dimension_transform_entities(
     const AssemblyDocumentEntities& candidate,
     std::span<const std::string> actual_host_ids,
     std::size_t maximum_associated_dimensions);
+
+// Separate opt-in contribution for actual slab edits containing at least one
+// coordinated v4 directional resize. The 1..4096 typed intents are replayed
+// together once from source with hosted geometry before association. Replay
+// authenticates unique actual targets, including unit directional members;
+// every candidate target host must match that independently derived entity.
+// Only changed target hosts and authenticated v4 unit hosts supply the roster.
+// Dimension-bearing original embedded roots retain their exact qualified row
+// from replay, including host binding, profiles, topology and poses. Their
+// catalog envelope, definitions/materials and ordered row identities also match
+// replay; unrelated phase copies under other catalog identities remain allowed.
+// Complete raw maps/catalog work share admission before target indexing. At
+// most maximum_associated_dimensions (0..1000) targets use the existing carry's
+// single source/candidate measurement batches with unchanged path/selectors and
+// original dimension envelopes. No fresh topology, remapping, Properties or
+// phase authority is inferred. Unit/no-association work returns no upserts after
+// replay and framing; associated unit targets still consume the shared budget.
+// Historical hosted overloads retain their original placement-only contracts.
+[[nodiscard]] std::vector<Entity> carry_hosted_assembly_directional_resize_dimension_entities(
+    const AssemblyDocumentEntities& source,
+    const AssemblyDocumentEntities& candidate,
+    std::span<const SlabGeometryEditIntent> actual_intents,
+    std::size_t maximum_associated_dimensions = 1000);
 
 // Same bounded contribution for actual wall/opening hosts after an admitted
 // wall edit. Openings may retain raw local station fields while their parent

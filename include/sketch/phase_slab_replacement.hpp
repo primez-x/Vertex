@@ -67,7 +67,8 @@ struct PhaseSlabReplacementResult {
 // Hosted catalogs gain exact selected-instance copies. Their originals stay
 // live and exact; only seed slabs acquire demolition membership. Model XYZ
 // similarities and rigid plan transforms also transform copied placement.
-// Hosted nonunit plan scaling refuses until an XY-only physical codec exists.
+// Directional plan resizing requires the separate v9 authority and preserves
+// hosted Z, placement and type definitions through actual-source replay.
 // The enclosing Document reserves fresh identities across retained history.
 [[nodiscard]] PhaseSlabReplacementResult replay_phase_slab_replacement(
     const PhaseSlabReplacementEntities& source, const PhaseSlabReplacementPlan& plan,
@@ -79,7 +80,8 @@ struct PhaseSlabReplacementResult {
     const PhaseSlabReplacementHostedInstanceIdentityMap& hosted_instance_identities = {},
     bool coordinate_ordinary_hosted_geometry = false,
     bool coordinate_hosted_profiles = false,
-    const PhaseSlabReplacementIdentityMap& dimension_identities = {});
+    const PhaseSlabReplacementIdentityMap& dimension_identities = {},
+    bool coordinate_hosted_directional_geometry = false);
 
 struct PhaseSlabReplacementAuthoring {
     std::string registry_id;
@@ -101,6 +103,9 @@ struct PhaseSlabReplacementAuthoring {
     // the complete historical physical/catalog candidate has been derived.
     bool complete_component_dimensions{false};
     PhaseSlabReplacementIdentityMap dimension_identities;
+    // V9 admits actual-source directional hosted geometry; V10 encloses its
+    // complete component dimension copies. Historical envelopes refuse it.
+    bool coordinate_hosted_directional_geometry{false};
 };
 
 // Exact v1 fields: version, registry_id, alternative_id, seed_slab_ids,
@@ -121,6 +126,13 @@ struct PhaseSlabReplacementAuthoring {
 // Other profiles in that same phase cohort retain historical placement semantics.
 // V8 is a closed wrapper: version, authoring (canonical historical v1..v7),
 // complete_component_dimensions:true and dimension_identities. It cannot nest.
+// V9 has exactly twelve fields: the V5 fields plus
+// coordinate_hosted_directional_geometry:true and
+// coordinate_ordinary_hosted_geometry (exactly !ordinary_geometry.empty()).
+// Geometry is the exclusive primary family and at least one geometry leaf is
+// v4 resize_plan. Its qualified hosted roster may be empty. Historical v1..v8
+// cannot enclose leaf v4. V10 has V8's exact four keys and enforces a canonical
+// v9 body only; neither dimension wrapper can nest.
 [[nodiscard]] nlohmann::json encode_phase_slab_replacement_authoring(
     const PhaseSlabReplacementAuthoring& authoring);
 [[nodiscard]] PhaseSlabReplacementAuthoring decode_phase_slab_replacement_authoring(

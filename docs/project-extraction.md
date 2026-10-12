@@ -1,5 +1,12 @@
 # Portable project extraction
 
+Exchange version256 requires native reader258 for coordinated slab directional
+leaf4/archive4, slab replacement9/dimension wrapper10 and outer phase42/43.
+It retains actual source profile maps, topology, placements, qualified proposed
+copies and associated dimension/history authority. Historical slab wires keep
+their meanings. The existing extraction manifest derives this exchange version
+from the required native reader; no extraction or migration execution is claimed.
+
 Exchange version224 requires native reader226 for ordinary hosted-opening
 selection2, completed ordinary3 under command62 and mixed removal16. Actual
 qualified component targets enter the original-source dimension retirement

@@ -482,6 +482,8 @@ CoordinatedReplacements coordinated(const Json& value,const PhaseConstraintAutho
             invalid("Coordinated slab component dimension copies require matching explicit authority");
         if (result.slab->coordinate_hosted_profiles)
             invalid("Coordinated replacement dialects cannot borrow slab elevation carry authority");
+        if (result.slab->coordinate_hosted_directional_geometry)
+            invalid("Historical coordinated replacement dialects cannot borrow directional slab geometry authority");
         if (result.slab->slab_geometry.empty() || !result.slab->slab_profiles.empty() || !result.slab->slab_stacks.empty() ||
             encode_phase_slab_replacement_authoring(*result.slab).dump()!=leaf.dump())
             invalid("Coordinated horizontal replacement requires canonical geometry authority");
@@ -520,6 +522,8 @@ CoordinatedReplacements coordinated(const Json& value,const PhaseConstraintAutho
     }
     for (const auto& row:value.at("ordinary_slab_geometry")) {
         auto edit=decode_slab_geometry_edit_intent(row);
+        if (edit.kind == SlabGeometryEditKind::resize_plan && edit.coordinate_world_hosted_geometry)
+            invalid("Historical coordinated ordinary slabs cannot borrow directional geometry authority");
         if (encode_slab_geometry_edit_intent(edit).dump()!=row.dump() || !slab_targets.insert(edit.slab_id).second)
             invalid("Coordinated ordinary slabs require unique canonical typed geometry");
         result.ordinary_slabs.push_back(std::move(edit));
@@ -1730,9 +1734,10 @@ nlohmann::json encode_phase_constraint_authoring_intent(const PhaseConstraintAut
             invalid("Slab replacement cannot borrow geometry or relationship authority");
         result["slab_replacement"] = value.slab_replacement;
         if (replacement.coordinate_hosted_profiles) result["version"] = 27;
+        if (replacement.coordinate_hosted_directional_geometry) result["version"] = 42;
         if (replacement.complete_component_dimensions) {
             result["slab_edit_version"]=result.at("version");
-            result["version"]=39;
+            result["version"]=replacement.coordinate_hosted_directional_geometry ? 43 : 39;
         }
     }
     if (!value.slab_demolition.is_null()) {
@@ -1859,13 +1864,19 @@ PhaseConstraintAuthoringIntent decode_phase_constraint_authoring_intent(const Js
     const bool roof_rotation=roof_dimensions ? value.at("roof_edit_version")==21 :
         value.is_object() && value.contains("version") && value.at("version")==21;
     const bool roof=roof_dimensions || roof_rotation || (value.is_object() && value.contains("version") && value.at("version")==4);
-    const bool slab_dimensions=value.is_object() && value.contains("version") && value.at("version")==39;
+    const bool directional_slab_dimensions=value.is_object() && value.contains("version") && value.at("version")==43;
+    const bool slab_dimensions=directional_slab_dimensions ||
+        (value.is_object() && value.contains("version") && value.at("version")==39);
     if (slab_dimensions && (!value.contains("slab_edit_version") || !value.at("slab_edit_version").is_number_integer() ||
-        (value.at("slab_edit_version")!=5 && value.at("slab_edit_version")!=27)))
-        invalid("Slab dimension copies require an explicit historical slab edit lane");
+        (directional_slab_dimensions ? value.at("slab_edit_version")!=42 :
+            (value.at("slab_edit_version")!=5 && value.at("slab_edit_version")!=27))))
+        invalid("Slab dimension copies require their exact historical or directional slab edit lane");
     const bool vertical_slabs=slab_dimensions ? value.at("slab_edit_version")==27 :
         value.is_object() && value.contains("version") && value.at("version")==27;
-    const bool slab=slab_dimensions || vertical_slabs || (value.is_object() && value.contains("version") && value.at("version")==5);
+    const bool directional_slabs=directional_slab_dimensions ||
+        (value.is_object() && value.contains("version") && value.at("version")==42);
+    const bool slab=slab_dimensions || vertical_slabs || directional_slabs ||
+        (value.is_object() && value.contains("version") && value.at("version")==5);
     const bool slab_demolition=value.is_object() && value.contains("version") && value.at("version")==6;
     const bool coordinated_replacements=value.is_object() && value.contains("version") &&
         (value.at("version")==7 || value.at("version")==8 || value.at("version")==10 || value.at("version")==14 || value.at("version")==29 || value.at("version")==31 || value.at("version")==34 || value.at("version")==37 || value.at("version")==41);
@@ -1933,7 +1944,7 @@ PhaseConstraintAuthoringIntent decode_phase_constraint_authoring_intent(const Js
         "source_entities_digest","source_saved_revision","phase_selections","intent","ordinary_roof_edits"});
     else keys(value,{"version","expected_revision","source_snapshot_digest","source_authoring_digest",
         "source_entities_digest","source_saved_revision","phase_selections","intent"});
-    if (!value.at("version").is_number_integer() || value.at("version")<1 || value.at("version")>41 ||
+    if (!value.at("version").is_number_integer() || value.at("version")<1 || value.at("version")>43 ||
         !value.at("expected_revision").is_number_unsigned()) invalid("Phase constraint proof version or revision is invalid");
     if (!value.at("source_saved_revision").is_null() && !value.at("source_saved_revision").is_number_unsigned())
         invalid("Phase constraint saved revision is invalid");
@@ -1972,8 +1983,9 @@ PhaseConstraintAuthoringIntent decode_phase_constraint_authoring_intent(const Js
         result.slab_replacement = value.at("slab_replacement");
         if (result.slab_replacement.is_null()) invalid("Version five requires slab replacement decisions");
         const auto leaf=decode_phase_slab_replacement_authoring(result.slab_replacement);
-        if (leaf.complete_component_dimensions!=slab_dimensions || leaf.coordinate_hosted_profiles!=vertical_slabs)
-            invalid("Slab elevation carry outer and leaf versions do not match");
+        if (leaf.complete_component_dimensions!=slab_dimensions || leaf.coordinate_hosted_profiles!=vertical_slabs ||
+            leaf.coordinate_hosted_directional_geometry!=directional_slabs)
+            invalid("Slab outer and geometry/profile/dimension leaf versions do not match");
     }
     if (slab_demolition) {
         result.slab_demolition = value.at("slab_demolition");

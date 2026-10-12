@@ -41,15 +41,18 @@ struct SlabGeometryEditIntent {
     // transform_model only: positive physical scale and model-space XYZ move,
     // Z yaw and plan reflections. The legacy plan scale remains exactly one.
     std::optional<SlabModelTransform> model_transform;
-    // v3 rigid plan/model edits coordinate type-owned world profiles through
-    // the actual Site frame. False retains historical v1/v2 hosted semantics.
+    // v3 plan/model and v4 directional plan resize edits coordinate type-owned
+    // world profiles through the actual Site frame. False retains historical
+    // v1/v2 hosted semantics and the historical v1 resize arithmetic.
     bool coordinate_world_hosted_geometry{false};
 };
 
 inline constexpr std::string_view slab_geometry_derivations_key = "slab_geometry_derivations";
 
 // Closed bounded v1 plan operation or v2 model operation, with the same six
-// wire fields, or v3 plan/model with coordinate_world_hosted_geometry:true.
+// wire fields, v3 plan/model or v4 resize_plan with
+// coordinate_world_hosted_geometry:true. v4 exclusively uses resize_plan;
+// v3 exclusively uses transform_plan/transform_model.
 // Exactly the selected operation is present;
 // coordinates and scales are mathematical intent, never entered quantities.
 [[nodiscard]] nlohmann::json encode_slab_geometry_edit_intent(const SlabGeometryEditIntent& intent);
@@ -65,6 +68,11 @@ void validate_slab_geometry_derivation(const Entity& source);
 // materials. Only model transforms scale physical profile/layer thickness.
 // Straight rings permit positive axis scaling in a rotated local frame;
 // circular arcs require equal scales. Reflections retain signed arc semantics.
+// v4 uses a + R*diag(scale_x,scale_y)*R^-1*(p-a), with the actual binary64
+// assembly_rotation_components(frame_rotation_radians) basis and its exact
+// squared-norm inverse. Matrix fields round once before anchored endpoint
+// evaluation, matching assembly directional resize. v1 retains R*diag*R^T.
+// Directional plan resizing never changes Z, layers, materials or ring topology.
 // Changed understood geometry receipts retire verbatim into the bounded
 // archive. Unknown affected bindings refuse. Exact no-ops return the source.
 // Understood receipt pointers are /boundary/I/start/0|1, /boundary/I/end/0|1,
@@ -76,6 +84,10 @@ void validate_slab_geometry_derivation(const Entity& source);
 // Model archives use version 2 and may retain earlier unchanged v1 records.
 // Coordinated archives use version 3, require at least one v3 operation, and
 // retain earlier unchanged plan/model records and their original frame policy.
+// Directional coordinated archives use version 4, require at least one v4
+// resize_plan operation, and retain unchanged v1/v2/v3 records. Earlier archive
+// versions cannot contain v4 operations; appending an earlier operation never
+// downgrades a v4 archive. Its resize frames remain {boundary,holes} only.
 // Model frames additionally contain profile (canonical/alias thickness and
 // elevation, null for absent fields, and null or ordered numeric layers) and
 // elevation_shift_m from actual resolved placement. Layer IDs are not frames.

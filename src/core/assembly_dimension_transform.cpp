@@ -2,6 +2,7 @@
 #include "sketch/boundary_dimension.hpp"
 #include "sketch/constraint_phase_scope.hpp"
 #include "sketch/model_phases.hpp"
+#include "sketch/slab_hosted_geometry_edit.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -719,7 +720,8 @@ std::vector<Entity> carry_hosted_assembly_dimension_transform_entities(
 static std::vector<Entity> carry_hosted_dimension_contribution(
     const AssemblyDocumentEntities& source, const AssemblyDocumentEntities& candidate,
     std::span<const std::string> actual_host_ids, std::size_t maximum_associated_dimensions,
-    bool wall_opening_hosts) {
+    bool wall_opening_hosts, const AssemblyDocumentEntities* expected_replay = nullptr,
+    std::span<const SlabGeometryEditIntent> replayed_intents = {}) {
     require(maximum_associated_dimensions<=dimension_limit, "hosted dimension association budget exceeds bound");
     require(actual_host_ids.size() <= 100000, "actual host roster exceeds entity bound");
     // Admit both complete raw inputs and all catalog work before indexing rows
@@ -729,6 +731,14 @@ static std::vector<Entity> carry_hosted_dimension_contribution(
     for (const auto* actual : {&source, &candidate}) for (const auto& [id, entity] : *actual) {
         (void)id;
         if (entity.type == "assembly_model") admit_existing_assembly_catalog_work(entity, catalogs);
+    }
+    if (expected_replay) for (const auto& intent : replayed_intents) {
+        const auto original = source.find(intent.slab_id), current = candidate.find(intent.slab_id);
+        const auto expected = expected_replay->find(intent.slab_id);
+        require(original != source.end() && current != candidate.end() && expected != expected_replay->end() &&
+            original->second.type == "slab" && expected->second.type == "slab" &&
+            same_raw(current->second, expected->second),
+            "directional hosted carry candidate host differs from actual-source replay");
     }
     std::set<std::string_view> hosts;
     for (const auto& id : actual_host_ids) {
@@ -746,6 +756,39 @@ static std::vector<Entity> carry_hosted_dimension_contribution(
 
     if (hosts.empty()) return {};
     RootRows source_rows(source), candidate_rows(candidate);
+    RootRows expected_rows(expected_replay ? *expected_replay : source);
+    std::set<std::string_view> admitted_catalogs;
+    const auto admit_replayed_catalog = [&](std::string_view catalog_id) {
+        if (!admitted_catalogs.insert(catalog_id).second) return;
+        const auto current = candidate.find(catalog_id), expected = expected_replay->find(catalog_id);
+        require(current != candidate.end() && expected != expected_replay->end() &&
+            current->second.id == expected->second.id && current->second.type == expected->second.type &&
+            current->second.required == expected->second.required &&
+            current->second.extensions.dump() == expected->second.extensions.dump(),
+            "directional hosted carry changed its replayed catalog envelope");
+        const auto& proposed_properties = current->second.properties;
+        const auto& expected_properties = expected->second.properties;
+        require(proposed_properties.size() == expected_properties.size(),
+            "directional hosted carry changed its replayed catalog properties");
+        for (const auto& [field, value] : expected_properties.items()) if (field != "model")
+            require(proposed_properties.contains(field) && proposed_properties.at(field).dump() == value.dump(),
+                "directional hosted carry changed its replayed catalog properties");
+        const auto& proposed_model = proposed_properties.at("model");
+        const auto& expected_model = expected_properties.at("model");
+        require(proposed_model.is_object() && proposed_model.size() == expected_model.size(),
+            "directional hosted carry changed its replayed catalog model framing");
+        for (const auto& [field, value] : expected_model.items()) if (field != "instances")
+            require(proposed_model.contains(field) && proposed_model.at(field).dump() == value.dump(),
+                "directional hosted carry changed replayed definitions or materials");
+        const auto& proposed_instances = proposed_model.at("instances");
+        const auto& expected_instances = expected_model.at("instances");
+        require(proposed_instances.is_array() && proposed_instances.size() == expected_instances.size(),
+            "directional hosted carry changed its replayed catalog row inventory");
+        for (std::size_t i = 0; i < expected_instances.size(); ++i)
+            require(proposed_instances[i].is_object() && proposed_instances[i].contains("id") &&
+                proposed_instances[i].at("id").dump() == expected_instances[i].at("id").dump(),
+                "directional hosted carry changed its replayed ordered row identities");
+    };
     std::map<RootKey, bool> hosted_roots;
     std::vector<AssemblyDimensionTransformRequest> requests;
     std::size_t associated_count{};
@@ -776,6 +819,13 @@ static std::vector<Entity> carry_hosted_dimension_contribution(
             const auto& host = placement->at("host_entity_id").get_ref<const std::string&>();
             if (!hosts.contains(host)) return false;
             const auto* current = candidate_rows.find(key);
+            if (expected_replay) {
+                admit_replayed_catalog(std::get<0>(key));
+                const auto* expected = expected_rows.find(key);
+                require(current && expected && current->dump() == expected->dump(),
+                    "directional hosted carry root differs from actual-source replay");
+                return true;
+            }
             require(current && original->size() == current->size() && current->contains("placement"),
                 "hosted carry changed its qualified root framing");
             const auto& proposed_placement = current->at("placement");
@@ -808,6 +858,32 @@ std::vector<Entity> carry_hosted_assembly_dimension_transform_entities(
     const AssemblyDocumentEntities& source, const AssemblyDocumentEntities& candidate,
     std::span<const std::string> actual_host_ids, std::size_t maximum_associated_dimensions) {
     return carry_hosted_dimension_contribution(source,candidate,actual_host_ids,maximum_associated_dimensions,false);
+}
+
+std::vector<Entity> carry_hosted_assembly_directional_resize_dimension_entities(
+    const AssemblyDocumentEntities& source, const AssemblyDocumentEntities& candidate,
+    std::span<const SlabGeometryEditIntent> actual_intents, std::size_t maximum_associated_dimensions) {
+    require(maximum_associated_dimensions <= dimension_limit, "hosted dimension association budget exceeds bound");
+    require(!actual_intents.empty() && actual_intents.size() <= 4096,
+        "directional hosted carry requires a bounded actual slab intent roster");
+    bool directional = false;
+    // Bound the only owning string in each typed intent before copying the
+    // vector. The replayer validates the complete closed intent and uniqueness.
+    for (const auto& intent : actual_intents) {
+        document_id(intent.slab_id);
+        directional = directional || (intent.kind == SlabGeometryEditKind::resize_plan &&
+            intent.coordinate_world_hosted_geometry);
+    }
+    require(directional, "directional hosted carry requires at least one v4 slab resize");
+    const std::vector<SlabGeometryEditIntent> intents(actual_intents.begin(), actual_intents.end());
+    const auto expected = replay_slab_geometry_with_hosted_entities(source, intents);
+    std::vector<std::string> hosts;
+    hosts.reserve(intents.size());
+    for (const auto& intent : intents) if (!same_raw(source.at(intent.slab_id), expected.at(intent.slab_id)) ||
+        (intent.kind == SlabGeometryEditKind::resize_plan && intent.coordinate_world_hosted_geometry))
+        hosts.push_back(intent.slab_id);
+    return carry_hosted_dimension_contribution(source, candidate, hosts, maximum_associated_dimensions,
+        false, &expected, intents);
 }
 
 std::vector<Entity> carry_wall_hosted_assembly_dimension_transform_entities(

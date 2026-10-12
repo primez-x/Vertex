@@ -1586,6 +1586,157 @@ nlohmann::json merge_disjoint_hosted_assembly_models(const nlohmann::json& actua
     (void)AssemblyModel::from_json(result);
     return result;
 }
+nlohmann::json merge_disjoint_directionally_resized_hosted_assembly_models(
+    const nlohmann::json& actual_model, const nlohmann::json& accumulated_model,
+    const nlohmann::json& incoming_model) {
+    const auto exact_json=[](const nlohmann::json& a,const nlohmann::json& b) {
+        return a==b && a.dump()==b.dump();
+    };
+    const auto remainder=[](nlohmann::json value) {
+        value.erase("schema"); value.erase("instances"); return value;
+    };
+    const auto actual=AssemblyModel::from_json(actual_model);
+    const auto accumulated=AssemblyModel::from_json(accumulated_model);
+    const auto incoming=AssemblyModel::from_json(incoming_model);
+    const auto index=[](const AssemblyModel& model) {
+        std::map<std::string,const AssemblyInstance*,std::less<>> result;
+        for(const auto& instance:model.instances())result.emplace(instance.id,&instance);
+        return result;
+    };
+    const auto actual_instances=index(actual),accumulated_instances=index(accumulated),incoming_instances=index(incoming);
+    require(exact_json(remainder(actual_model),remainder(accumulated_model)) &&
+        exact_json(remainder(actual_model),remainder(incoming_model)),
+        "directional hosted composition changed catalog definitions");
+    for(const auto* model:{&accumulated_model,&incoming_model})
+        require(model->at("schema")==actual_model.at("schema") ||
+            model->at("schema")=="sketch.assemblies.v9" ||
+            (actual_model.at("schema")!="sketch.assemblies.v8" &&
+                actual_model.at("schema")!="sketch.assemblies.v9" && model->at("schema")=="sketch.assemblies.v7"),
+            "directional hosted composition requires the actual or mapped row-local dialect");
+    const auto& rows=actual_model.at("instances");
+    require(accumulated_model.at("instances").size()==rows.size() &&
+        incoming_model.at("instances").size()==rows.size(),
+        "directional hosted composition changed the instance inventory");
+    AssemblyExpansionBudget actual_work, accumulated_work, incoming_work;
+    bool needs_mapped=false, needs_xyz=false, needs_vertical=false;
+    const auto admit_row=[&](const AssemblyModel& model,const AssemblyInstance& before,
+        const AssemblyInstance& after,const nlohmann::json& raw_before,const nlohmann::json& raw_after,
+        const AssemblyExpansion& source,AssemblyExpansionBudget& work) {
+        auto placement_only=after;placement_only.placement=before.placement;
+        if(placement_only==before) {
+            require(before.placement && after.placement &&
+                before.placement->host_entity_id==after.placement->host_entity_id,
+                "historical directional-cohort placement lost its actual host");
+            auto retained=raw_after;retained["placement"]=raw_before.at("placement");
+            for(const auto* key:{"root_transform","nested_overrides"})
+                if(!raw_before.contains(key))retained.erase(key);
+            require(exact_json(retained,raw_before),
+                "historical directional-cohort placement changed retained row fields");
+            (void)model.expand(after,work);
+            needs_xyz=needs_xyz || after.placement->translation_z_m!=0;
+            needs_vertical=needs_vertical || after.placement->vertical_scale!=1;
+            return;
+        }
+        require(before.placement && after.placement==before.placement &&
+            after.id==before.id && after.type_id==before.type_id &&
+            after.root_transform==before.root_transform &&
+            after.property_overrides==before.property_overrides &&
+            after.material_overrides==before.material_overrides &&
+            after.quantity_overrides==before.quantity_overrides,
+            "directional hosted composition changed nongeometry instance authority");
+        auto retained=raw_after;
+        for(const auto* key:{"profile_overrides","nested_overrides","root_transform"}) {
+            if(raw_before.contains(key))retained[key]=raw_before.at(key);else retained.erase(key);
+        }
+        require(exact_json(retained,raw_before),
+            "directional hosted composition changed retained instance fields");
+        std::map<std::vector<std::string>,const AssemblyPathOverride*> paths;
+        for(const auto& path:before.nested_overrides)paths.emplace(path.part_path,&path);
+        std::map<std::vector<std::string>,const nlohmann::json*> raw_paths;
+        if(raw_before.contains("nested_overrides"))for(const auto& path:raw_before.at("nested_overrides"))
+            raw_paths.emplace(path.at("part_path").get<std::vector<std::string>>(),&path);
+        if(raw_after.contains("nested_overrides"))for(const auto& path:raw_after.at("nested_overrides")) {
+            const auto found=raw_paths.find(path.at("part_path").get<std::vector<std::string>>());
+            if(found==raw_paths.end())continue;
+            auto unchanged=path;
+            if(found->second->contains("profile_overrides"))unchanged["profile_overrides"]=found->second->at("profile_overrides");
+            else unchanged.erase("profile_overrides");
+            require(exact_json(unchanged,*found->second),
+                "directional hosted composition changed retained path fields");
+        }
+        for(const auto& path:after.nested_overrides) {
+            const auto found=paths.find(path.part_path);
+            if(found==paths.end())
+                require(!path.transform && path.property_overrides.empty() && path.material_overrides.empty() &&
+                    path.quantity_overrides.empty() && path.profile_overrides.has_value(),
+                    "directional hosted composition added nongeometry path authority");
+            else {
+                const auto& original=*found->second;
+                require(path.transform==original.transform && path.property_overrides==original.property_overrides &&
+                    path.material_overrides==original.material_overrides && path.quantity_overrides==original.quantity_overrides,
+                    "directional hosted composition changed a path pose or overrides");
+                paths.erase(found);
+            }
+        }
+        require(paths.empty(),"directional hosted composition removed an actual path override");
+        const auto candidate=model.expand(after,work);
+        require(candidate.nodes.size()==source.nodes.size(),"directional hosted composition changed node inventory");
+        for(std::size_t i=0;i<source.nodes.size();++i)
+            require(source.nodes[i].part_path==candidate.nodes[i].part_path &&
+                source.nodes[i].type_id==candidate.nodes[i].type_id &&
+                source.nodes[i].transform==candidate.nodes[i].transform,
+                "directional hosted composition changed an actual node frame");
+        if(source.profiles.empty()) {
+            require(candidate.profiles.size()==1 && candidate.profiles.front().part_path.empty() &&
+                !candidate.profiles.front().profile.topology,
+                "borrowed-host directional composition requires one anonymous root profile");
+        } else {
+            require(candidate.profiles.size()==source.profiles.size(),
+                "directional hosted composition changed the own-profile inventory");
+            for(std::size_t i=0;i<source.profiles.size();++i) {
+                const auto& old=source.profiles[i];const auto& next=candidate.profiles[i];
+                auto profile=next.profile;profile.planar_affine=old.profile.planar_affine;
+                require(old.part_path==next.part_path && old.type_id==next.type_id &&
+                    old.transform==next.transform && profile==old.profile,
+                    "directional hosted composition changed source rings, topology or physical profile fields");
+            }
+        }
+        needs_mapped=true;
+    };
+    auto result=accumulated_model;
+    for(std::size_t i=0;i<rows.size();++i) {
+        const auto& before=rows[i];const auto& existing=accumulated_model.at("instances")[i];
+        const auto& next=incoming_model.at("instances")[i];
+        require(existing.at("id")==before.at("id") && next.at("id")==before.at("id"),
+            "directional hosted composition changed instance identities or order");
+        const bool accumulated_changed=!exact_json(before,existing),incoming_changed=!exact_json(before,next);
+        if(!accumulated_changed && !incoming_changed)continue;
+        require(!accumulated_changed || !incoming_changed,"directional hosted composition overlaps one actual row");
+        const auto id=before.at("id").get<std::string>();
+        const auto& source_instance=*actual_instances.at(id);
+        const auto source=actual.expand(source_instance,actual_work);
+        if(accumulated_changed)admit_row(accumulated,source_instance,*accumulated_instances.at(id),before,existing,source,accumulated_work);
+        else {
+            admit_row(incoming,source_instance,*incoming_instances.at(id),before,next,source,incoming_work);
+            result.at("instances")[i]=next;
+        }
+    }
+    // Filtered phase contributions may carry a dialect promoted by baseline
+    // rows that are no longer part of this original catalog. Derive the final
+    // dialect from its actual source and the admitted accumulated/incoming rows,
+    // just as row-preserving historical placement replay does. Definitions and
+    // untouched rows stay exact; an incoming v9 tag alone grants no promotion.
+    const auto schema=actual_model.at("schema").get<std::string>();
+    const bool row_local=schema=="sketch.assemblies.v7" || schema=="sketch.assemblies.v8" || schema=="sketch.assemblies.v9";
+    const bool source_xyz=schema=="sketch.assemblies.v5" || schema=="sketch.assemblies.v6" || row_local;
+    result["schema"]=actual_model.at("schema");
+    if(needs_mapped)result["schema"]="sketch.assemblies.v9";
+    else if(((needs_xyz || needs_vertical) && !source_xyz) ||
+        (needs_vertical && schema!="sketch.assemblies.v6" && !row_local))
+        result["schema"]="sketch.assemblies.v7";
+    (void)AssemblyModel::from_json(result);
+    return result;
+}
 nlohmann::json retain_assembly_catalog_dialect(
     const nlohmann::json& actual_model, nlohmann::json generated_model) {
     const auto saved=actual_model.value("schema", nlohmann::json{});

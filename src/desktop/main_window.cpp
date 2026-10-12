@@ -51426,7 +51426,8 @@ private:
     // not arbitrary canvas payloads. Derive the actual changed host closure
     // (including attached rails), then add its dimension contribution once.
     static void appendOrdinaryHostedDimensions(const DocumentSnapshot& source,
-        const std::map<std::string,Entity,std::less<>>& bodies, ApplyEntityChanges& command) {
+        const std::map<std::string,Entity,std::less<>>& bodies, ApplyEntityChanges& command,
+        std::span<const SlabGeometryEditIntent> directional_slab_intents = {}) {
         if (command.expected_revision!=source.revision() || !command.asset_changes.empty() ||
             bodies.size()!=source.entities().size())
             throw std::invalid_argument("Hosted dimensions require the complete captured ordinary body edit.");
@@ -51444,7 +51445,9 @@ private:
             hosts.push_back(id);
         }
         if (hosts.empty()) return;
-        auto dimensions=carry_hosted_assembly_dimension_transform_entities(source.entities(),bodies,hosts);
+        auto dimensions=directional_slab_intents.empty()
+            ? carry_hosted_assembly_dimension_transform_entities(source.entities(),bodies,hosts)
+            : carry_hosted_assembly_directional_resize_dimension_entities(source.entities(),bodies,directional_slab_intents);
         std::vector<std::string> dimension_ids;
         dimension_ids.reserve(dimensions.size());
         for (const auto& dimension:dimensions) {
@@ -52157,6 +52160,7 @@ private:
             intent.slab_id = id;
             intent.kind = SlabGeometryEditKind::resize_plan;
             intent.resize = SlabPlanAxisResize{scale_x, scale_y, anchor, frame_rotation_radians};
+            intent.coordinate_world_hosted_geometry = true;
             return sourceDerivedSlabGeometryEditCommand(source, {intent}, "Resize horizontal assembly in plan");
         }
         if (const auto& before=source.entities().at(id); structuralObject(before))
@@ -52860,7 +52864,14 @@ private:
             throw std::invalid_argument("Edit horizontal profiles, layer inventories and outlines separately.");
         const bool stack_edit = !stacks.empty();
         const bool geometry_edit = !geometry.empty();
-        const auto physical = geometry_edit ? replay_slab_geometry_entities(source.entities(), geometry)
+        const auto directional=[](const auto& edit) { return edit.kind == SlabGeometryEditKind::resize_plan &&
+            edit.coordinate_world_hosted_geometry; };
+        const bool directional_cohort=std::any_of(geometry.begin(),geometry.end(),directional);
+        // Authenticate every actual hosted target, including unit members that
+        // the phase partition legitimately omits from its changed-owner roster.
+        const auto physical = geometry_edit ? (directional_cohort ?
+                replay_slab_geometry_with_hosted_entities(source.entities(), geometry) :
+                replay_slab_geometry_entities(source.entities(), geometry))
                               : stack_edit ? replay_slab_layer_stack_entities(source.entities(), stacks)
                                          : replay_slab_profile_entities(source.entities(), profiles);
         const auto geometry_partition = geometry_edit
@@ -52885,7 +52896,7 @@ private:
             }
         }
         if (!request) {
-            const auto ordinary = geometry_edit
+            const auto ordinary = geometry_edit && !directional_cohort
                 ? replay_slab_geometry_with_hosted_entities(source.entities(), geometry) : physical;
             ApplyEntityChanges command{source.revision(), {}, {}, message};
             for (const auto& [id, proposed] : ordinary) {
@@ -52894,7 +52905,8 @@ private:
                     original.extensions.dump() != proposed.extensions.dump())
                     command.entity_changes.push_back(EntityChange::upsert(proposed));
             }
-            appendOrdinaryHostedDimensions(source,ordinary,command);
+            appendOrdinaryHostedDimensions(source,ordinary,command,
+                directional_cohort ? std::span<const SlabGeometryEditIntent>{geometry} : std::span<const SlabGeometryEditIntent>{});
             (void)Document::preview_command(source, Command{command});
             return command;
         }
@@ -52919,6 +52931,9 @@ private:
             replacement.slab_geometry = geometry_partition->baseline_geometry;
             replacement.ordinary_geometry = geometry_partition->ordinary_geometry;
             replacement.coordinate_ordinary_hosted_geometry = !replacement.ordinary_geometry.empty();
+            replacement.coordinate_hosted_directional_geometry =
+                std::any_of(replacement.slab_geometry.begin(),replacement.slab_geometry.end(),directional) ||
+                std::any_of(replacement.ordinary_geometry.begin(),replacement.ordinary_geometry.end(),directional);
         }
         if (!occupied) occupied = retainedSlabIdentityNames(source,complete_component_dimensions);
         for (const auto* slots : {&plan.required_entity_ids, &plan.required_child_ids})

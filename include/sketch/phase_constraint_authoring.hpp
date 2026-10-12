@@ -49,6 +49,10 @@ struct PhaseConstraintAuthoringIntent {
     // baseline and its actual entered dimensions remain retained verbatim.
     // Dialect twenty-seven pairs exclusive leaf seven for explicit coordinated
     // slab elevation and actual hosted component carry; five refuses that lane.
+    // Dialect forty-two alone pairs slab child nine for explicit directional
+    // plan resize and actual-source hosted carry. Forty-three alone pairs its
+    // complete dimension child ten with slab_edit_version forty-two. Historical
+    // five/twenty-seven/thirty-nine and coordinated envelopes refuse this lane.
     nlohmann::json slab_replacement=nullptr;
     // Dialect six: registry-only demolition of actual shared baseline slabs.
     // No replacement identity or ordinary geometry authority accompanies it.

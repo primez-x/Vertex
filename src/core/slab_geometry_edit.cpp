@@ -1,15 +1,21 @@
 #include "sketch/slab_geometry_edit.hpp"
 
 #include "sketch/assembly_model.hpp"
+#include "sketch/assembly_profile_geometry.hpp"
 #include "sketch/constraint_entity.hpp"
 #include "sketch/constraint_phase_scope.hpp"
 #include "sketch/document_solid.hpp"
 #include "sketch/phase_slab_profile_edit.hpp"
 #include "sketch/project_organization.hpp"
 
+#include <boost/multiprecision/cpp_int.hpp>
+
 #include <algorithm>
+#include <bit>
 #include <cmath>
+#include <cstdint>
 #include <initializer_list>
+#include <limits>
 #include <numbers>
 #include <set>
 #include <stdexcept>
@@ -45,6 +51,9 @@ bool version_two(const Json& value) {
 }
 bool version_three(const Json& value) {
     return (value.is_number_integer() || value.is_number_unsigned()) && value == 3;
+}
+bool version_four(const Json& value) {
+    return (value.is_number_integer() || value.is_number_unsigned()) && value == 4;
 }
 std::string identity(const Json& value) {
     if (!value.is_string()) invalid("identity must be a string");
@@ -182,6 +191,66 @@ Vec2 resize_point(Vec2 p, const SlabPlanAxisResize& r) {
     const auto u = (c * dx + s * dy) * r.scale_x, v = (-s * dx + c * dy) * r.scale_y;
     return {scalar(r.anchor_m.x + c * u - s * v), scalar(r.anchor_m.y + s * u + c * v)};
 }
+using Exact = boost::multiprecision::cpp_rational;
+using Integer = boost::multiprecision::cpp_int;
+
+// Fixed expressions on admitted binary64 scalars. Do not depend on a wider
+// Windows long double or normalize the retained cosine/sine basis approximately.
+Exact binary64(double value) {
+    static_assert(std::numeric_limits<double>::is_iec559 &&
+        std::numeric_limits<double>::digits == 53 && sizeof(double) == sizeof(std::uint64_t));
+    const auto bits = std::bit_cast<std::uint64_t>(value);
+    const auto exponent = static_cast<unsigned>((bits >> 52) & 0x7ff);
+    if (exponent == 0x7ff) invalid("directional resize arithmetic must be finite");
+    Integer significand = bits & ((std::uint64_t{1} << 52) - 1);
+    if (exponent) significand += Integer{1} << 52;
+    if (bits >> 63) significand = -significand;
+    const int shift = exponent ? static_cast<int>(exponent) - 1075 : -1074;
+    if (shift >= 0) return Exact{significand << shift};
+    Exact result{significand}; result /= Integer{1} << -shift; return result;
+}
+double rounded_directional(const Exact& value) {
+    if (value == 0) return 0.0;
+    const bool negative = value < 0;
+    const Exact magnitude = negative ? -value : value;
+    if (magnitude > binary64(std::numeric_limits<double>::max()))
+        invalid("directional resize arithmetic exceeds numeric range");
+    const Integer num = numerator(magnitude), den = denominator(magnitude);
+    int exponent = static_cast<int>(boost::multiprecision::msb(num)) -
+        static_cast<int>(boost::multiprecision::msb(den));
+    if (exponent >= 0) { if (num < (den << exponent)) --exponent; }
+    else if ((num << -exponent) < den) --exponent;
+    const int quantum = std::max(exponent - 52, -1074);
+    const Integer scaled_num = quantum < 0 ? Integer{num << -quantum} : num;
+    const Integer scaled_den = quantum > 0 ? Integer{den << quantum} : den;
+    Integer significand = scaled_num / scaled_den;
+    const Integer remainder = scaled_num % scaled_den;
+    if ((remainder << 1) > scaled_den ||
+        ((remainder << 1) == scaled_den && (significand & 1) != 0)) ++significand;
+    const double result = std::ldexp(significand.convert_to<double>(), quantum);
+    if (!std::isfinite(result) || result == 0.0)
+        invalid("directional resize arithmetic overflows/underflows");
+    return negative ? -result : result;
+}
+AssemblyProfilePlanarAffine directional_resize_map(const SlabPlanAxisResize& r) {
+    AssemblyProfilePlanarAffine map;
+    map.source_origin = map.target_origin = r.anchor_m;
+    if (r.scale_x == r.scale_y) map.xx = map.yy = r.scale_x;
+    else {
+        const auto [rc, rs] = assembly_rotation_components(r.frame_rotation_radians);
+        const auto c = binary64(rc), s = binary64(rs);
+        const auto sx = binary64(r.scale_x), sy = binary64(r.scale_y);
+        const Exact norm = c * c + s * s;
+        if (norm <= 0) invalid("directional resize basis is singular");
+        // R*diag(sx,sy)*R^-1; the actual binary64 basis is not assumed unit.
+        // Match assembly_directional_resize's single rounding per matrix field.
+        map.xx = rounded_directional((sx * c * c + sy * s * s) / norm);
+        map.yy = rounded_directional((sx * s * s + sy * c * c) / norm);
+        map.xy = map.yx = rounded_directional((sx - sy) * c * s / norm);
+    }
+    validate_assembly_profile_affine(map);
+    return map;
+}
 Json derive(const Json& before, const SlabGeometryEditIntent& intent) {
     admit_frame(before);
     auto after = before;
@@ -206,6 +275,9 @@ Json derive(const Json& before, const SlabGeometryEditIntent& intent) {
             rigid_identity(*intent.transform)) return before;
         if (intent.kind == SlabGeometryEditKind::resize_plan &&
             intent.resize->scale_x == 1 && intent.resize->scale_y == 1) return before;
+        const auto directional = intent.kind == SlabGeometryEditKind::resize_plan &&
+            intent.coordinate_world_hosted_geometry
+            ? std::optional<AssemblyProfilePlanarAffine>(directional_resize_map(*intent.resize)) : std::nullopt;
         const auto update = [&](Json& raw_ring) {
             for (auto& raw : raw_ring) {
                 auto value = segment(raw);
@@ -223,7 +295,12 @@ Json derive(const Json& before, const SlabGeometryEditIntent& intent) {
                     const auto& r = *intent.resize;
                     if (value.sweep_radians != 0 && r.scale_x != r.scale_y)
                         invalid("unequal plan scales would require an unsupported elliptical arc");
-                    value.start = resize_point(value.start, r); value.end = resize_point(value.end, r);
+                    const auto resized = [&](Vec2 p) {
+                        if (!directional) return resize_point(p, r);
+                        const auto mapped = assembly_profile_affine_point(p, *directional);
+                        return Vec2{scalar(mapped.x), scalar(mapped.y)};
+                    };
+                    value.start = resized(value.start); value.end = resized(value.end);
                 }
                 assign_point(raw.at("start"), value.start); assign_point(raw.at("end"), value.end);
                 assign(raw.at("sweep_radians"), value.sweep_radians);
@@ -508,8 +585,8 @@ void admit_map(const Entities& source, const Ids& targets) {
 nlohmann::json encode_slab_geometry_edit_intent(const SlabGeometryEditIntent& intent) {
     (void)identity(intent.slab_id);
     if (intent.coordinate_world_hosted_geometry && intent.kind != SlabGeometryEditKind::transform_plan &&
-        intent.kind != SlabGeometryEditKind::transform_model)
-        invalid("coordinated hosted geometry requires a plan or model transform");
+        intent.kind != SlabGeometryEditKind::transform_model && intent.kind != SlabGeometryEditKind::resize_plan)
+        invalid("coordinated hosted geometry requires a plan/model transform or plan resize");
     Json result{{"version", 1}, {"slab_id", intent.slab_id}, {"kind", ""},
         {"vertex", nullptr}, {"transform", nullptr}, {"resize", nullptr}};
     switch (intent.kind) {
@@ -557,7 +634,7 @@ nlohmann::json encode_slab_geometry_edit_intent(const SlabGeometryEditIntent& in
     default: invalid("unsupported geometry edit kind");
     }
     if (intent.coordinate_world_hosted_geometry) {
-        result.at("version") = 3;
+        result.at("version") = intent.kind == SlabGeometryEditKind::resize_plan ? 4 : 3;
         result["coordinate_world_hosted_geometry"] = true;
     }
     (void)proof_budget(result);
@@ -565,7 +642,9 @@ nlohmann::json encode_slab_geometry_edit_intent(const SlabGeometryEditIntent& in
 }
 SlabGeometryEditIntent decode_slab_geometry_edit_intent(const nlohmann::json& value) {
     (void)proof_budget(value);
-    const bool coordinated = value.is_object() && value.contains("version") && version_three(value.at("version"));
+    const bool coordinated_transform = value.is_object() && value.contains("version") && version_three(value.at("version"));
+    const bool coordinated_resize = value.is_object() && value.contains("version") && version_four(value.at("version"));
+    const bool coordinated = coordinated_transform || coordinated_resize;
     if (coordinated) {
         keys(value, {"version", "slab_id", "kind", "vertex", "transform", "resize", "coordinate_world_hosted_geometry"});
         if (!value.at("coordinate_world_hosted_geometry").is_boolean() ||
@@ -577,8 +656,10 @@ SlabGeometryEditIntent decode_slab_geometry_edit_intent(const nlohmann::json& va
     SlabGeometryEditIntent result; result.slab_id = identity(value.at("slab_id"));
     result.coordinate_world_hosted_geometry = coordinated;
     const auto& kind = value.at("kind");
-    if (coordinated && kind != "transform_plan" && kind != "transform_model")
-        invalid("coordinated hosted geometry requires a plan or model transform");
+    if (coordinated_transform && kind != "transform_plan" && kind != "transform_model")
+        invalid("version three requires a coordinated plan or model transform");
+    if (coordinated_resize && kind != "resize_plan")
+        invalid("version four requires a coordinated plan resize");
     if (!coordinated && version_two(value.at("version")) != (kind == "transform_model"))
         invalid("intent version does not match its operation kind");
     if (kind == "move_vertex") {
@@ -624,25 +705,32 @@ void validate_slab_geometry_derivation(const Entity& source) {
     keys(*archive, {"version", "operations"});
     const bool model_archive = version_two(archive->at("version"));
     const bool coordinated_archive = version_three(archive->at("version"));
-    if (!version_one(archive->at("version")) && !model_archive && !coordinated_archive)
+    const bool directional_archive = version_four(archive->at("version"));
+    if (!version_one(archive->at("version")) && !model_archive && !coordinated_archive && !directional_archive)
         invalid("unsupported derivation archive namespace");
     const auto& operations = archive->at("operations");
     if (!operations.is_array() || operations.empty() || operations.size() > operation_limit) invalid("archive operation budget exceeded");
-    bool contains_model = false, contains_coordinated = false;
+    bool contains_model = false, contains_coordinated = false, contains_directional = false;
     for (const auto& record : operations) {
         const auto intent = decode_slab_geometry_edit_intent(record.at("operation"));
         const bool model = intent.kind == SlabGeometryEditKind::transform_model;
-        if (intent.coordinate_world_hosted_geometry && !coordinated_archive)
+        const bool directional = intent.coordinate_world_hosted_geometry && intent.kind == SlabGeometryEditKind::resize_plan;
+        if (directional && !directional_archive)
+            invalid("earlier archive cannot contain a coordinated directional operation");
+        if (intent.coordinate_world_hosted_geometry && !coordinated_archive && !directional_archive)
             invalid("historical archive cannot contain a coordinated hosted operation");
-        if (model && !model_archive && !coordinated_archive)
+        if (model && !model_archive && !coordinated_archive && !directional_archive)
             invalid("version one archive cannot contain a model operation");
         contains_model = contains_model || model;
         contains_coordinated = contains_coordinated || intent.coordinate_world_hosted_geometry;
+        contains_directional = contains_directional || directional;
         admit_record(record);
     }
     if (model_archive && !contains_model) invalid("version two archive requires a model operation");
     if (coordinated_archive && !contains_coordinated)
         invalid("version three archive requires a coordinated hosted operation");
+    if (directional_archive && !contains_directional)
+        invalid("version four archive requires a coordinated directional operation");
 }
 namespace {
 Entity replay_with_actual_shift(const Entity& source, const SlabGeometryEditIntent& intent,
@@ -663,10 +751,15 @@ Entity replay_with_actual_shift(const Entity& source, const SlabGeometryEditInte
         invalid("actual footprint/profile staging differs from mathematical replay");
     const auto receipts = retire_receipts(source, result, before, after);
     const auto key = std::string(slab_geometry_derivations_key);
+    const bool directional = intent.coordinate_world_hosted_geometry && intent.kind == SlabGeometryEditKind::resize_plan;
     if (!result.extensions.contains(key)) result.extensions[key] =
-        {{"version", intent.coordinate_world_hosted_geometry ? 3 : (model ? 2 : 1)}, {"operations", Json::array()}};
-    else if (intent.coordinate_world_hosted_geometry) result.extensions.at(key).at("version") = 3;
-    else if (model && !version_three(result.extensions.at(key).at("version")))
+        {{"version", directional ? 4 : (intent.coordinate_world_hosted_geometry ? 3 : (model ? 2 : 1))},
+            {"operations", Json::array()}};
+    else if (directional) result.extensions.at(key).at("version") = 4;
+    else if (intent.coordinate_world_hosted_geometry && !version_four(result.extensions.at(key).at("version")))
+        result.extensions.at(key).at("version") = 3;
+    else if (model && !version_three(result.extensions.at(key).at("version")) &&
+        !version_four(result.extensions.at(key).at("version")))
         result.extensions.at(key).at("version") = 2;
     auto& operations = result.extensions.at(key).at("operations");
     if (operations.size() >= operation_limit) invalid("archive operation budget exceeded");

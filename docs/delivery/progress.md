@@ -14,6 +14,59 @@ changed source does not acquire runtime acceptance without later qualification.
 
 ## Current delivery state
 
+### October 11 coordinated slab directional resize integration
+
+The component cohort canvas connection is committed and pushed as
+3a0ea25007801b6f2a47718dfebec6a9352581d6; the exact remote ref was verified.
+The subsequent status turn made no source changes. This continuation fixes the
+remaining mixed catalog isolation defect and integrates the current slab batch.
+
+New closed slab leaf4 and archive4 retain historical1..3 while applying the
+actual binary64 yaw basis and its squared-norm inverse to directional resizing.
+Hosted replay deforms all actual root/nested own profiles with one Site-framed
+operator, preserving source rings, topology, Z, materials, type definitions and
+poses. Legacy native host copies acquire one anonymous mapped root profile under
+their unchanged placement; unit operations authenticate without materialization.
+Shared raw, expansion, mapped and native budgets cover the affected cohort.
+The framed component producer uses exact basis products and relative anchor
+differences rather than rounded world anchors or summed angles.
+
+New slab phase9/dimension10 and outer42/43 preserve original baseline catalog
+rows and allocate exact qualified proposed copies. Ordinary rows derive from
+the same physical replay. The controller now requests this separate directional
+authority and authenticates unit members before changed-owner partitioning.
+Reader258 and extraction256 retain live, revised and undone authority; older
+codecs do not acquire new meanings. Associated ordinary dimensions use a
+separate typed-intent replay proof for the actual hosts, qualified roots,
+catalog definitions and ordered inventory, then existing selector-preserving
+measurement carry. Baseline dimension copies retain the existing clone path.
+
+Independent review found three integration defects: inconsistent first versus
+later Site-frame application to borrowed native profiles; whole-catalog
+historical XYZ/vertical promotion inside a directional cohort; and ordinary
+dimension carry still requiring placement-only row changes. These are corrected
+in source. A further mixed-case finding showed baseline-induced v9 leaking into
+an original catalog containing an ordinary historical edit. Composition now
+derives its dialect from the actual catalog and both admitted changed-row
+contributions, retaining actual capability and requiring v9 only for mapped
+geometry or v7 for historical row-local placement capability. Root reviewed the
+integrated source; independent final review approved source integration with no
+remaining actionable P1/P2 finding. Named whitespace checks passed.
+
+Compilation and runtime remain unverified. This batch does not complete general
+elliptical slab/cutout source support, full mixed-family directional canvas and
+command authority, or external Apex/integration/device prerequisites. All ten
+production acceptance gates remain open. No builds, tests, scripts, probes,
+native jobs, launches, packages or installations ran; the installed application
+is unchanged under source-only steering. Continue the consolidated plan rather
+than interpreting this source batch as full product delivery.
+Read-only next-gap discovery confirms the mixed capture/preview/release path
+currently carries move, rotation and uniform scale, while separate axis resize
+dispatch covers singleton owners and independent components. Complete common-
+axis mixed producer/command authority remains required; family primitives alone
+do not establish it, and parameter-only resizing cannot substitute for genuine
+directional geometry where the authored family cannot represent the result.
+
 ### October 11 component cohort canvas resize connection
 
 The complete cohort producer batch is committed and pushed as

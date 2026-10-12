@@ -137,6 +137,22 @@ void charge_linear(AssemblyExpansionBudget& work, std::size_t segments) {
     work.consumed_mapped_profile_work += segments * edge_work;
 }
 
+void charge_frame_coefficients(AssemblyExpansionBudget& work, std::size_t profiles) {
+    // One exact frame/axis product plus the added exact relative basis and
+    // anchor-delta expressions per mapped profile. Fixed-size expressions on
+    // binary64 inputs remain bounded even for distant origins/large angles.
+    constexpr std::size_t setup_work = 32, profile_work = 32;
+    const auto remaining = work.max_mapped_profile_work - work.consumed_mapped_profile_work;
+    require(remaining >= setup_work && profiles <= (remaining - setup_work) / profile_work,
+        "directional resize operation frame work budget exceeded");
+    work.consumed_mapped_profile_work += setup_work + profiles * profile_work;
+}
+
+struct ExactOperationFrame {
+    Exact cosine, sine;
+    Exact axis_cosine, axis_sine;
+};
+
 AssemblyProfilePlanarAffine inner_map(const AssemblyProfile& profile) {
     if (profile.planar_affine) return *profile.planar_affine;
     const auto anchor = profile.outer.front().start;
@@ -144,14 +160,20 @@ AssemblyProfilePlanarAffine inner_map(const AssemblyProfile& profile) {
 }
 
 AssemblyProfile resized_profile(const AssemblyProfile& source, const AssemblyTransform& node,
-    AssemblyRotationComponents axes, const AssemblyDirectionalResize& operation) {
+    AssemblyRotationComponents axes, const AssemblyDirectionalResize& operation,
+    const ExactOperationFrame* frame) {
     const auto [nc, ns] = assembly_rotation_components(node.rotation_radians);
     const auto [rc, rs] = axes;
     // Use the actual admitted rotation components rather than reducing and
     // subtracting huge authored angles (which can lose their actual yaw).
     const bool aligned = nc == rc && ns == rs;
     Exact c{1}, s{0};
-    if (!aligned) {
+    if (frame) {
+        // The actual node inverse contributes its squared basis norm as a
+        // common divisor, which cancels in B*diag(sx,sy)*B^-1 below.
+        c = binary64(nc) * frame->axis_cosine + binary64(ns) * frame->axis_sine;
+        s = -binary64(ns) * frame->axis_cosine + binary64(nc) * frame->axis_sine;
+    } else if (!aligned) {
         c = binary64(nc) * binary64(rc) + binary64(ns) * binary64(rs);
         s = -binary64(ns) * binary64(rc) + binary64(nc) * binary64(rs);
     }
@@ -177,8 +199,18 @@ AssemblyProfile resized_profile(const AssemblyProfile& source, const AssemblyTra
     // local anchor or manufacturing/subtracting two absolute world points.
     const Exact node_norm = binary64(nc) * binary64(nc) + binary64(ns) * binary64(ns);
     require(node_norm > 0, "directional resize node basis is singular");
-    const Exact dx = binary64(operation.world_anchor_m.x) - binary64(node.translation_m.x);
-    const Exact dy = binary64(operation.world_anchor_m.y) - binary64(node.translation_m.y);
+    Exact dx, dy;
+    if (frame) {
+        const auto& origin = operation.operation_frame->translation_m;
+        const Exact ax = binary64(operation.world_anchor_m.x), ay = binary64(operation.world_anchor_m.y);
+        // Keep the small frame-to-node difference before applying the local
+        // anchor. No binary64 world anchor or summed frame/axis angle exists.
+        dx = (binary64(origin.x) - binary64(node.translation_m.x)) + frame->cosine * ax - frame->sine * ay;
+        dy = (binary64(origin.y) - binary64(node.translation_m.y)) + frame->sine * ax + frame->cosine * ay;
+    } else {
+        dx = binary64(operation.world_anchor_m.x) - binary64(node.translation_m.x);
+        dy = binary64(operation.world_anchor_m.y) - binary64(node.translation_m.y);
+    }
     const Exact denominator = binary64(node.scale) * node_norm;
     const Exact bx = (binary64(nc) * dx + binary64(ns) * dy) / denominator;
     const Exact by = binary64(parity) * (-binary64(ns) * dx + binary64(nc) * dy) / denominator;
@@ -270,6 +302,14 @@ AssemblyDirectionalResizeDraft draft_assembly_directional_resize(const AssemblyM
         "directional resize anchor/factors must be finite and positive");
     require(!operation.world_axis_rotation_radians || std::isfinite(*operation.world_axis_rotation_radians),
         "directional resize world axis rotation must be finite");
+    if (operation.operation_frame) {
+        const auto& frame = *operation.operation_frame;
+        (void)transform_assembly_point({}, frame);
+        require(frame.scale == 1.0 && frame.vertical_scale == 1.0 && !frame.mirrored_y,
+            "directional resize operation frame must be orientation-preserving and rigid");
+        require(operation.world_axis_rotation_radians.has_value(),
+            "directional resize operation frame requires explicit local axes");
+    }
     const auto source = index_source(actual, available_work);
     // Establish own-source provenance against the selected model before any
     // profile copy. Inherited profiles must not be replaced by a stale or
@@ -313,6 +353,19 @@ AssemblyDirectionalResizeDraft draft_assembly_directional_resize(const AssemblyM
     const bool unit = operation.x_factor == 1.0 && operation.y_factor == 1.0;
     auto pending = available_work;
     if (!unit) charge_linear(pending, source.segments);
+    std::optional<ExactOperationFrame> frame;
+    if (operation.operation_frame) {
+        charge_frame_coefficients(pending, unit ? 0 : actual.profiles.size());
+        const auto [fc, fs] = assembly_rotation_components(operation.operation_frame->rotation_radians);
+        const Exact cosine = binary64(fc), sine = binary64(fs);
+        // Form F's basis times the explicit local axis basis exactly. Actual
+        // binary64 norms are retained by resized_profile's conjugation.
+        frame = ExactOperationFrame{cosine, sine,
+            cosine * binary64(axes.cosine) - sine * binary64(axes.sine),
+            sine * binary64(axes.cosine) + cosine * binary64(axes.sine)};
+        require(frame->axis_cosine * frame->axis_cosine + frame->axis_sine * frame->axis_sine > 0,
+            "directional resize operation frame axis basis is singular");
+    }
     AssemblyDirectionalResizeDraft result; result.source_instance = actual.source_instance;
     std::map<Path, std::size_t> destinations;
     for (const auto& node : actual.nodes) {
@@ -328,9 +381,12 @@ AssemblyDirectionalResizeDraft draft_assembly_directional_resize(const AssemblyM
         auto& node = result.nodes.at(destinations.at(profile.part_path));
         node.source_profiles.push_back(profile.profile);
         node.candidate_profiles.push_back(unit ? profile.profile :
-            resized_profile(profile.profile, profile.transform, axes, operation));
+            resized_profile(profile.profile, profile.transform, axes, operation, frame ? &*frame : nullptr));
     }
-    if (unit) return result;
+    if (unit) {
+        if (frame) available_work = std::move(pending);
+        return result;
+    }
     auto candidate = actual.source_instance;
     for (const auto& node : result.nodes) {
         if (node.source_profiles == node.candidate_profiles) continue;

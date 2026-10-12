@@ -360,7 +360,8 @@ public:
     // v255 retains exact affine component profiles in entities and authoring/history.
     // v256 retains atomic initial topology plus component affine deformation.
     // v257 retains complete reviewed initial component geometry and dimension carry.
-    static constexpr std::uint32_t format_version = 257;
+    // v258 retains actual-source coordinated slab directional geometry and phases.
+    static constexpr std::uint32_t format_version = 258;
     static constexpr std::uint32_t recovery_format_version = 4;
     [[nodiscard]] static std::uint32_t required_format_version(const DocumentSnapshot& snapshot);
     static constexpr std::uint64_t maximum_file_bytes = 4ULL * 1024ULL * 1024ULL * 1024ULL;

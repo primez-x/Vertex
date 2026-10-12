@@ -170,6 +170,20 @@ struct AssemblyPlacement {
 [[nodiscard]] nlohmann::json merge_disjoint_hosted_assembly_models(
     const nlohmann::json& actual_model, const nlohmann::json& accumulated_model,
     const nlohmann::json& incoming_model);
+// Compose independently replayed, disjoint hosted directional contributions.
+// Unlike the historical placement-only helper, this explicit authority admits
+// node-local mapped geometry and a row-local v9 promotion. Catalog definitions,
+// quantity/material/property overrides and source profile topology remain
+// unchanged. Each row admits either geometry-only deformation with unchanged
+// poses or a separately replayed historical placement-only consequence; it
+// cannot borrow both authorities. A previously borrowed host may acquire one
+// anonymous root profile; its actual host geometry must be proved by the caller's
+// complete typed slab replay. This helper supplies composition, not that proof.
+// Final dialect follows the actual catalog and admitted changed rows, never an
+// unneeded incoming promotion left behind by filtered baseline contributions.
+[[nodiscard]] nlohmann::json merge_disjoint_directionally_resized_hosted_assembly_models(
+    const nlohmann::json& actual_model, const nlohmann::json& accumulated_model,
+    const nlohmann::json& incoming_model);
 // Retain an existing XYZ/vertical placement dialect after canonical edits or
 // catalog closure, supplying only its required envelope fields. Saved v7/v8/v9
 // keep row-local envelopes and unchanged raw data without adding defaults;

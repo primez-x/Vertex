@@ -11,8 +11,15 @@ struct AssemblyDirectionalResize {
     double x_factor{1.0};
     double y_factor{1.0};
     // Appended for aggregate compatibility. nullopt uses the actual root axes;
-    // a finite angle selects one unreflected world frame for every component.
+    // a finite angle selects one unreflected world frame for every component,
+    // or the local axes of operation_frame when that frame is supplied.
     std::optional<double> world_axis_rotation_radians{};
+    // Appended producer-only frame. It must be finite, orientation-preserving,
+    // and rigid (unit XY/Z scales). Requires an explicit finite axis angle;
+    // world_anchor_m and world_axis_rotation_radians then denote frame-local
+    // values despite their historical names. No frame retains the original
+    // world-anchor/natural-root-axis behavior exactly.
+    std::optional<AssemblyTransform> operation_frame{};
 };
 
 struct AssemblyDirectionalResizeNodeDraft {
@@ -42,6 +49,11 @@ struct AssemblyDirectionalResizeDraft {
 // assembly_rotation_components for the selected frame angle. The operation is
 // a + R*diag(x_factor,y_factor)*R^-1*(q-a). Its inverse uses the exact squared
 // norm of those components; their stored basis need not be exactly orthonormal.
+// With operation_frame F, that operation is expressed in F's local metres and
+// pulled through F*D*F^-1 using exact products of the actual binary64 frame/axis
+// bases. Neither a summed angle nor a rounded absolute world anchor is made.
+// Frame translation (including Z), yaw and unit scales are authenticated even
+// for unit factors; Z geometry remains unchanged.
 // Each local profile map is pulled through its actual world pose. Circular
 // source rings, topology, extrusion/material fields, definitions and ALL root/
 // path transforms stay exact. No topology/dimension policy or intent is made.
@@ -54,6 +66,8 @@ struct AssemblyDirectionalResizeDraft {
 // node-local overrides; the supplied remaining document ledger is committed
 // only on success. Admission can refuse otherwise mathematical maps when
 // physical tolerance, numeric range or the remaining work budget fails.
+// Optional-frame coefficient work also shares that transactional ledger,
+// including frame/axis setup for unit factors.
 [[nodiscard]] AssemblyDirectionalResizeDraft draft_assembly_directional_resize(
     const AssemblyModel& model, const AssemblyExpansion& actual,
     const AssemblyDirectionalResize& operation, AssemblyExpansionBudget& available_work);

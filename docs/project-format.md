@@ -1,4 +1,49 @@
-# Vertex project formats v1 through v257
+# Vertex project formats v1 through v258
+
+Reader258/native extraction256 retains coordinated slab directional geometry.
+Slab geometry leaf v4 has the same seven closed fields as v3, requires
+`kind:"resize_plan"` and `coordinate_world_hosted_geometry:true`, and uses the
+actual binary64 yaw basis with its squared-norm inverse. Its boundary and hole
+frames retain source segment order/sweeps; physical Z, layers and materials do
+not change. Unequal resizing of circular slab arcs still requires a future
+elliptical source representation. Archive4 requires a v4 record, admits retained
+v1..3 records, and is never downgraded by a later historical operation.
+
+The actual-source hosted replay deforms complete own-profile rosters through
+each root/path pose, retaining source rings, topology, extrusion, materials,
+definitions and poses. Changed rosters become row-local catalog v9 overrides.
+A legacy borrowed-host native body materializes as one anonymous root profile
+under its unchanged placement. Both native source forms use the same
+Site-framed world operator from the first resize onward. Unit operations admit
+both snapshots without materializing profiles. Shared raw, expansion and native
+budgets apply to the affected catalog cohort; no partial candidate is published.
+
+Slab replacement v9 has exactly twelve fields: `version`, `registry_id`,
+`alternative_id`, `seed_slab_ids`, `identities`, `slab_profiles`, `slab_stacks`,
+`slab_geometry`, `ordinary_geometry`, `hosted_instance_identities`,
+`coordinate_hosted_directional_geometry:true`, and the boolean
+`coordinate_ordinary_hosted_geometry`. Geometry is its only primary edit family;
+at least one baseline/ordinary leaf is v4. Ordinary carry is true exactly when
+the ordinary geometry array is nonempty. Qualified hosted copies may be empty.
+Dimension wrapper v10 has exactly `version`, `authoring` (one canonical v9),
+`complete_component_dimensions:true`, and `dimension_identities`. Historical
+wrapper8 remains restricted to bodies1..7. Outer phase42 carries slab9; outer43
+carries slab10 with `slab_edit_version:42`. Earlier phase and coordinated family
+envelopes do not gain directional authority.
+
+One full-source physical replay derives the proposed rows. Baseline owners and
+original catalog rows remain exact; selected ordinary rows and qualified copies
+are derived by actual instance identity, with no baseline schema promotion
+leaking into an original catalog. Composition retains the actual dialect unless
+its selected changed rows require mapped v9 or historical row-local v7; a
+baseline-induced incoming v9 tag alone is insufficient. Directional dimension
+carry independently replays the bounded typed ordinary cohort, proves every
+target host and dimension-bearing qualified root, then remeasures unchanged
+source selectors through the existing shared carry. Existing topology
+correspondence governs associated dimension carry. Current, retained and undone
+authority raises the reader floor even when temporary geometry was composed
+away. This documents
+source behavior; compilation, runtime and migration remain unqualified.
 
 Reader257/native extraction255 retains complete initial anonymous profile
 geometry authoring. Closed property-edit leaf/request v7 adds the literal

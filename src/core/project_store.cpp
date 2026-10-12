@@ -547,6 +547,25 @@ std::uint32_t required_format_version_internal(const DocumentSnapshot& snapshot,
             const auto literal_true=[](const nlohmann::json& child,const char* field) {
                 return child.contains(field) && child.at(field).is_boolean() && child.at(field)==true;
             };
+            if(floor<258) {
+                const bool slab=typed_shape(value,4,{"version","slab_id","kind","vertex","transform","resize",
+                    "coordinate_world_hosted_geometry"}) && literal_true(value,"coordinate_world_hosted_geometry");
+                const bool replacement=typed_shape(value,9,{"version","registry_id","alternative_id","seed_slab_ids",
+                    "identities","slab_profiles","slab_stacks","slab_geometry","ordinary_geometry",
+                    "hosted_instance_identities","coordinate_hosted_directional_geometry","coordinate_ordinary_hosted_geometry"});
+                const bool dimensions=typed_shape(value,10,{"version","authoring","complete_component_dimensions","dimension_identities"});
+                const bool phase=value.is_object() && value.contains("version") &&
+                    (value.at("version")==42 || value.at("version")==43) && value.contains("slab_replacement") &&
+                    value.contains("phase_selections") && value.contains("source_snapshot_digest");
+                if(slab || replacement || dimensions || phase)try {
+                    if(slab)(void)decode_slab_geometry_edit_intent(value);
+                    else if(replacement || dimensions)(void)decode_phase_slab_replacement_authoring(value);
+                    else (void)decode_phase_constraint_authoring_intent(value);
+                    floor=258U;
+                } catch(const std::invalid_argument&) {
+                } catch(const nlohmann::json::exception&) {
+                }
+            }
             if(floor<257) {
                 const bool intent=typed_shape(value,7,{"version","target","properties","materials","quantities",
                     "pose","profile_geometry","review_initial_profile_geometry"}) && literal_true(value,"review_initial_profile_geometry");
@@ -1769,11 +1788,11 @@ std::uint32_t required_format_version_internal(const DocumentSnapshot& snapshot,
     };
     for (const auto& revision : snapshot.history()) {
         if (revision.phase_entity_import) required=std::max(required,160U);
-        if (required<257 && revision.boundary_constraint_changes)
+        if (required<258 && revision.boundary_constraint_changes)
             required=std::max(required,retained_component_reader_floor(command_to_json(Command{*revision.boundary_constraint_changes})));
-        if (required<257 && revision.boundary_geometry_edit)
+        if (required<258 && revision.boundary_geometry_edit)
             required=std::max(required,typed_edit_reader_floor(encode_boundary_geometry_edit(*revision.boundary_geometry_edit)));
-        if (required<257 && revision.boundary_constraint_changes)
+        if (required<258 && revision.boundary_constraint_changes)
             required=std::max(required,typed_edit_reader_floor(command_to_json(Command{*revision.boundary_constraint_changes})));
         if (required<122 && revision.boundary_geometry_edit)
             required=std::max(required,quantity_reader_floor(encode_boundary_geometry_edit(*revision.boundary_geometry_edit)));
@@ -2401,7 +2420,8 @@ std::uint32_t required_format_version_internal(const DocumentSnapshot& snapshot,
                 required = std::max(required, 103U);
             if (entity.type == "slab" && entity.extensions.contains("slab_geometry_derivations")) {
                 const auto& archive = entity.extensions.at("slab_geometry_derivations");
-                required = std::max(required, archive.is_object() && archive.value("version", 0) == 3 ? 126U :
+                required = std::max(required, archive.is_object() && archive.value("version", 0) == 4 ? 258U :
+                    archive.is_object() && archive.value("version", 0) == 3 ? 126U :
                     archive.is_object() && archive.value("version", 0) == 2 ? 109U : 104U);
             }
             if (entity.type == "wall" && entity.extensions.contains("wall_layer_stack_retirement"))
@@ -4340,6 +4360,7 @@ bool verify_sqlite_schema(sqlite3* database, bool allow_recovery = false) {
          sqlite3_column_int(user_version.get(), 0) != 255 &&
          sqlite3_column_int(user_version.get(), 0) != 256 &&
          sqlite3_column_int(user_version.get(), 0) != 257 &&
+         sqlite3_column_int(user_version.get(), 0) != 258 &&
          sqlite3_column_int(user_version.get(), 0) != 253 &&
          sqlite3_column_int(user_version.get(), 0) != 242 &&
          sqlite3_column_int(user_version.get(), 0) != 207 &&
@@ -5067,6 +5088,8 @@ DocumentSnapshot read_snapshot(sqlite3* database, RecoveryLedger* recovery = nul
     // here and authenticate the manifest with its stored version below.
     const auto required_format = required_format_version_internal(snapshot, format_number < 28);
     if (required_format > format_number) {
+        if (required_format>=258)
+            storage_error(StorageErrorCode::unsupported_format,"This project requires reader 258 for coordinated slab directional geometry and dimensions");
         if (required_format>=257)
             storage_error(StorageErrorCode::unsupported_format,"This project requires reader 257 for complete reviewed initial component geometry and dimensions");
         if (required_format>=256)
