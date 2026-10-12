@@ -108,7 +108,8 @@ AssemblyProfileDimensionTarget decode_profile_selector(const Json& selector) {
 }
 std::set<Target> reviewed_profile_nodes(std::span<const AssemblyInstancePropertyEditIntent> intents) {
     std::set<Target> result;
-    for (const auto& intent : intents) if (intent.review_profile_topology) result.insert(intent.target);
+    for (const auto& intent : intents)
+        if (intent.review_profile_topology || intent.initialize_deformed_profile_topology) result.insert(intent.target);
     return result;
 }
 Target root_target(const Json& value) {
@@ -133,11 +134,13 @@ PhaseAssemblyInstancePropertyEditAuthoring decode_authoring(const Json& value) {
     // cannot force an unbounded dump or reach source model decoding.
     (void)value.dump();
     if (!value.is_object() || !value.contains("version") || !value.at("version").is_number_integer() ||
-        (value.at("version") != 1 && value.at("version") != 2 && value.at("version") != 3 && value.at("version") != 4 && value.at("version") != 5 && value.at("version") != 6 && value.at("version") != 7)) reject("unsupported authoring version");
+        (value.at("version") != 1 && value.at("version") != 2 && value.at("version") != 3 && value.at("version") != 4 && value.at("version") != 5 && value.at("version") != 6 && value.at("version") != 7 && value.at("version") != 8)) reject("unsupported authoring version");
+    const bool initialize_deformed_topology = value.at("version") == 8;
     const bool reviewed_topology = value.at("version") == 7;
+    const bool profile_decisions = reviewed_topology || initialize_deformed_topology;
     const bool initialize_topology = value.at("version") == 6;
     const bool topology_geometry = value.at("version") == 5;
-    const bool geometry = value.at("version") == 3 || topology_geometry || initialize_topology || reviewed_topology;
+    const bool geometry = value.at("version") == 3 || topology_geometry || initialize_topology || profile_decisions;
     const bool complete_dimensions = value.at("version") == 4;
     const bool dimensions = geometry || complete_dimensions;
     const bool carry = value.at("version") != 1;
@@ -147,7 +150,7 @@ PhaseAssemblyInstancePropertyEditAuthoring decode_authoring(const Json& value) {
                 "presentation_overlay_identities", "complete_component_dimensions", "dimension_identities"});
             if (!value.at("complete_component_dimensions").is_boolean() || value.at("complete_component_dimensions") != true)
                 reject("v4 requires literal component dimension completion");
-        } else if (reviewed_topology) fields(value, {"version", "intents", "allocation", "carry_presentation_references",
+        } else if (profile_decisions) fields(value, {"version", "intents", "allocation", "carry_presentation_references",
             "presentation_overlay_identities", "dimension_identities", "profile_dimension_decisions"});
         else if (geometry) fields(value, {"version", "intents", "allocation", "carry_presentation_references",
             "presentation_overlay_identities", "dimension_identities"});
@@ -183,18 +186,23 @@ PhaseAssemblyInstancePropertyEditAuthoring decode_authoring(const Json& value) {
     bool has_topology_geometry = false;
     bool has_initial_topology = false;
     bool has_reviewed_topology = false;
+    bool has_deformed_initial_topology = false;
     for (const auto& row : intents) {
         auto intent = decode_assembly_instance_property_edit_intent(row);
+        if (row.at("version") == 6) {
+            if (!initialize_deformed_topology) reject("historical authoring cannot carry initial deformed profile topology authority");
+            has_deformed_initial_topology = true;
+        }
         if (row.at("version") == 5) {
-            if (!reviewed_topology) reject("historical authoring cannot carry reviewed profile topology authority");
+            if (!profile_decisions) reject("historical authoring cannot carry reviewed profile topology authority");
             has_reviewed_topology = true;
         }
         if (row.at("version") == 4) {
-            if (!initialize_topology && !reviewed_topology) reject("historical authoring cannot carry initial profile topology authority");
+            if (!initialize_topology && !profile_decisions) reject("historical authoring cannot carry initial profile topology authority");
             has_initial_topology = true;
         }
         if (row.at("version") == 3) {
-            if (!topology_geometry && !initialize_topology && !reviewed_topology) reject("historical authoring cannot carry topology-preserving geometry authority");
+            if (!topology_geometry && !initialize_topology && !profile_decisions) reject("historical authoring cannot carry topology-preserving geometry authority");
             has_topology_geometry = true;
         }
         if (!geometry && intent.profile_geometry.operation != AssemblyInstancePropertyPatchOperation::unchanged)
@@ -206,7 +214,8 @@ PhaseAssemblyInstancePropertyEditAuthoring decode_authoring(const Json& value) {
     if (topology_geometry && !has_topology_geometry) reject("v5 requires a topology-preserving geometry intent");
     if (initialize_topology && !has_initial_topology) reject("v6 requires an initial profile topology intent");
     if (reviewed_topology && !has_reviewed_topology) reject("v7 requires a reviewed profile topology intent");
-    if (reviewed_topology) {
+    if (initialize_deformed_topology && !has_deformed_initial_topology) reject("v8 requires an initial deformed profile topology intent");
+    if (profile_decisions) {
         const auto& decisions = value.at("profile_dimension_decisions");
         if (!decisions.is_object() || decisions.size() > count_limit) reject("invalid profile dimension decision count");
         for (const auto& [id, row] : decisions.items()) {
@@ -294,7 +303,7 @@ PhaseAssemblyInstancePropertyEditAuthoring decode_request(const Json& value) {
     WireBudget{}.visit(value);
     fields(value, {"version", "expected_revision", "source_snapshot_digest", "source_authoring_digest",
         "source_entities_digest", "source_saved_revision", "authoring"});
-    if (!value.at("version").is_number_integer() || (value.at("version") != 1 && value.at("version") != 2 && value.at("version") != 3 && value.at("version") != 4 && value.at("version") != 5 && value.at("version") != 6 && value.at("version") != 7))
+    if (!value.at("version").is_number_integer() || (value.at("version") != 1 && value.at("version") != 2 && value.at("version") != 3 && value.at("version") != 4 && value.at("version") != 5 && value.at("version") != 6 && value.at("version") != 7 && value.at("version") != 8))
         reject("unsupported request version");
     (void)revision(value.at("expected_revision"));
     for (const auto* name : {"source_snapshot_digest", "source_authoring_digest", "source_entities_digest"}) digest(value.at(name));
@@ -874,11 +883,13 @@ Json encode_phase_assembly_instance_property_edit_authoring(const PhaseAssemblyI
     bool topology_geometry = false;
     bool initialize_topology = false;
     bool reviewed_topology = false;
+    bool initialize_deformed_topology = false;
     for (const auto& intent : authoring.intents) {
         auto wire = encode_assembly_instance_property_edit_intent(intent);
         topology_geometry = topology_geometry || wire.at("version") == 3;
         initialize_topology = initialize_topology || wire.at("version") == 4;
         reviewed_topology = reviewed_topology || wire.at("version") == 5;
+        initialize_deformed_topology = initialize_deformed_topology || wire.at("version") == 6;
         budget.visit(wire); intents.push_back(std::move(wire));
     }
     for (const auto& [root, ids] : authoring.allocation.roots) {
@@ -900,9 +911,10 @@ Json encode_phase_assembly_instance_property_edit_authoring(const PhaseAssemblyI
         Json wire{{"original_overlay_id", original}, {"proposed_overlay_id", proposed}};
         budget.visit(wire); overlays.push_back(std::move(wire));
     }
-    if ((!reviewed_topology && !authoring.profile_dimension_decisions.empty()) || authoring.profile_dimension_decisions.size() > count_limit)
+    const bool profile_decisions = reviewed_topology || initialize_deformed_topology;
+    if ((!profile_decisions && !authoring.profile_dimension_decisions.empty()) || authoring.profile_dimension_decisions.size() > count_limit)
         reject("profile dimension decisions require reviewed topology and at most 1000 associations");
-    Json result{{"version", reviewed_topology ? 7 : initialize_topology ? 6 : topology_geometry ? 5 : authoring.complete_component_dimensions ? 4 : geometry ? 3 : authoring.carry_presentation_references ? 2 : 1}, {"intents", std::move(intents)},
+    Json result{{"version", initialize_deformed_topology ? 8 : reviewed_topology ? 7 : initialize_topology ? 6 : topology_geometry ? 5 : authoring.complete_component_dimensions ? 4 : geometry ? 3 : authoring.carry_presentation_references ? 2 : 1}, {"intents", std::move(intents)},
         {"allocation", {{"roots", std::move(roots)}, {"membership_entity_ids", std::move(memberships)}}}};
     if (authoring.carry_presentation_references) {
         result["carry_presentation_references"] = true;
@@ -918,7 +930,7 @@ Json encode_phase_assembly_instance_property_edit_authoring(const PhaseAssemblyI
         }
         result["dimension_identities"] = std::move(identities);
     }
-    if (reviewed_topology) {
+    if (profile_decisions) {
         auto decisions = Json::object();
         for (const auto& [id, selector] : authoring.profile_dimension_decisions) {
             admit_identity(id);

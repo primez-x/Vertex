@@ -69,11 +69,22 @@ model quantities, exact dimension descriptors, native geometry/cache, projected
 curve support, canvas/editor presentation and explicit exchange fidelity. Saved
 mapped carriers survive phase/clipboard/host operations. Numeric Properties
 resizing composes maps for identified curved profiles through fresh topology
-and reviewed dimension dispositions. Anonymous geometry uses the existing
-initial edge-identity step before that reviewed edit. Compilation and runtime
-remain unverified. Whole-component nested deformation and canvas side handles
-still require their complete captured authoring/preview path; neither is claimed
-complete by these consumer changes.
+and reviewed dimension dispositions. Anonymous curved/mapped XY resizing now
+uses an atomic initial-identity/deformation leaf v6, phase v8 and mixed Properties
+v37 under reader256. It preserves the complete source rings, scalar and material
+roster. Numeric Properties creates fresh identities and enters the same explicit
+dimension review; combined anonymous affine deformation with profile redraw or
+extrusion changes still needs a complete authoring contract.
+
+The whole-component geometry helper pulls each profile through its actual
+nested/reflected node frame, preserving Z, source geometry and override provenance.
+It uses the exact inverse of the actual binary64 rotation basis, including its
+norm, rather than assuming transpose is numerically the inverse. Unit factors
+do not create maps or overrides. Selection frames now consume analytical mapped
+arc bounds in that same root basis. These helpers do not yet supply the complete
+captured side-handle preview/release producer. Compilation and runtime remain
+unverified; canvas side handles and whole-component authoring are not claimed
+complete by these source additions.
 
 ## Mixed selections
 

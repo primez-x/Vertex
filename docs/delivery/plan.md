@@ -343,8 +343,13 @@ remain separately unqualified.
 The exact affine-profile source now includes mapped persistence and reader255,
 effective dimensions/quantities, native/cache, projected curves, reopened editing,
 canvas presentation and declared IFC/DXF fidelity. Numeric own-profile resizing
-uses reviewed maps for identified curves; anonymous profiles require initial
-edge identities. These sources have not been compiled or exercised. Follow the
+uses reviewed maps for identified curves. Atomic initial-identity/affine
+deformation under leaf6/phase8/mixed37 and reader256 supports anonymous curved
+XY numeric resizing without a separate identity step. Combined anonymous
+deformation with redraw/extrusion edits remains an authoring gap. The new
+whole-component helper handles actual nested/reflected frames and analytical
+selection bounds; captured side-handle publication remains required.
+These sources have not been compiled or exercised. Follow the
 [consumer integration design](../design/vertex-component-directional-resize.md)
 through whole-component nested deformation and captured canvas side handles;
 retain the complete geometry and mixed-family scope above. General elliptical

@@ -14,6 +14,47 @@ changed source does not acquire runtime acceptance without later qualification.
 
 ## Current delivery state
 
+### October 11 atomic component affine authoring continuation
+
+The mapped-profile consumer integration is committed and pushed as
+3f559570a573ec85785bf81417ce022fd7efe3ff; exact remote ref verification passed.
+Independent review approved the corrected aggregate mapped-work admission on
+source evidence. No production gate was closed by that source batch.
+
+This continuation adds the bounded whole-component XY deformation helper using
+actual nested/reflected node frames, complete own-profile rosters and override
+provenance. Source rings, Z, materials, definitions and node poses stay exact.
+Unit factors do not create overrides. Candidate expansion uses the shared
+remaining work ledger. Component selection frames now use analytical curve
+extrema rather than display tessellation. Independent review found a binary64
+rotation-basis inverse defect; the helper now retains exact basis norms through
+conjugation, inverse anchors and paired bounds/center reconstruction.
+
+New leaf/request6 admits atomic initial topology and genuine affine deformation
+of actual anonymous profiles. Phase8 and mixed Properties37 retain complete
+presentation/dimension review and source/history authority; old dialects keep
+their meaning. Reader256 detects retained authoring/history and extraction254
+uses the existing derived format mechanism. Numeric anonymous curved/mapped XY
+Properties resizing creates fresh topology and enters the same mandatory
+dimension review. Combined anonymous deformation with redraw or extrusion
+changes still needs its complete authoring contract.
+
+Independent source review approved this integrated batch after the basis-norm
+correction and removal of a premature anonymous-row refusal in mixed identified
+profile collections. Root reviewed the new codecs, strict historical authority,
+reader/history floors and actual Properties call path. Scoped diff checks are
+the available verification; no compilation or runtime acceptance is implied.
+
+Next implementation: connect the whole-component helper and fresh topology to
+captured side-handle previews, UI-thread dimension review, exact reviewed
+candidate manufacture and final release. Preserve actual-source/viewport/
+selection/recovery fences and support all nested nodes without silent omission.
+Mixed directional transforms, general elliptical cutout import, editable IFC
+assembly import, compatibility/device adapters and full production qualification
+remain in scope. No builds, tests, scripts, probes, native jobs, launches,
+packages or installations ran. Compilation/runtime and user resolution remain
+unverified; the installed app is unchanged and all ten release gates remain open.
+
 ### October 11 mapped-profile consumer integration
 
 The affine geometry foundation is committed and pushed as

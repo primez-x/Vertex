@@ -481,6 +481,7 @@ std::uint32_t required_format_version_internal(const DocumentSnapshot& snapshot,
                 if (version==52 && command->mixed_selection_edit_completion &&
                     !command->mixed_selection_edit_intent.is_null()) {
                     const auto intent=validate_mixed_selection_property_edit_intent(command->mixed_selection_edit_intent);
+                    if (intent.at("version")==37) return 256U;
                     if (intent.at("version")==36) return 254U;
                     if (intent.at("version")==35) return 253U;
                     if (intent.at("version")==34) return 251U;
@@ -545,6 +546,30 @@ std::uint32_t required_format_version_internal(const DocumentSnapshot& snapshot,
             const auto literal_true=[](const nlohmann::json& child,const char* field) {
                 return child.contains(field) && child.at(field).is_boolean() && child.at(field)==true;
             };
+            if(floor<256) {
+                const bool intent=typed_shape(value,6,{"version","target","properties","materials","quantities",
+                    "pose","profile_geometry","initialize_deformed_profile_topology"}) && literal_true(value,"initialize_deformed_profile_topology");
+                const bool request=typed_shape(value,6,{"version","expected_revision","source_snapshot_digest",
+                    "source_authoring_digest","source_entities_digest","source_saved_revision","intents"});
+                const bool authoring=typed_shape(value,8,{"version","intents","allocation","carry_presentation_references",
+                    "presentation_overlay_identities","dimension_identities","profile_dimension_decisions"});
+                const bool phase_request=typed_shape(value,8,{"version","expected_revision","source_snapshot_digest",
+                    "source_authoring_digest","source_entities_digest","source_saved_revision","authoring"});
+                const bool properties=typed_shape(value,37,{"version","expected_revision","source_snapshot_digest",
+                    "source_authoring_digest","source_entities_digest","source_saved_revision","component_request",
+                    "base_intent","room_reviews","phase_room_reviews","message","coordinate_component_hosts",
+                    "component_identity_reservations","carry_component_presentation","complete_instance_profile_geometry"});
+                if(intent || request || authoring || phase_request || properties)try {
+                    if(intent)(void)decode_assembly_instance_property_edit_intent(value);
+                    else if(request)(void)validate_assembly_instance_property_edit_request(value);
+                    else if(authoring)(void)decode_phase_assembly_instance_property_edit_authoring(value);
+                    else if(phase_request)(void)validate_phase_assembly_instance_property_edit_request(value);
+                    else (void)validate_mixed_selection_property_edit_intent(value);
+                    floor=256U;
+                } catch(const std::invalid_argument&) {
+                } catch(const nlohmann::json::exception&) {
+                }
+            }
             if(floor<254) {
                 const bool intent=typed_shape(value,5,{"version","target","properties","materials","quantities",
                     "pose","profile_geometry","review_profile_topology"}) && literal_true(value,"review_profile_topology");
@@ -1719,11 +1744,11 @@ std::uint32_t required_format_version_internal(const DocumentSnapshot& snapshot,
     };
     for (const auto& revision : snapshot.history()) {
         if (revision.phase_entity_import) required=std::max(required,160U);
-        if (required<254 && revision.boundary_constraint_changes)
+        if (required<256 && revision.boundary_constraint_changes)
             required=std::max(required,retained_component_reader_floor(command_to_json(Command{*revision.boundary_constraint_changes})));
-        if (required<255 && revision.boundary_geometry_edit)
+        if (required<256 && revision.boundary_geometry_edit)
             required=std::max(required,typed_edit_reader_floor(encode_boundary_geometry_edit(*revision.boundary_geometry_edit)));
-        if (required<255 && revision.boundary_constraint_changes)
+        if (required<256 && revision.boundary_constraint_changes)
             required=std::max(required,typed_edit_reader_floor(command_to_json(Command{*revision.boundary_constraint_changes})));
         if (required<122 && revision.boundary_geometry_edit)
             required=std::max(required,quantity_reader_floor(encode_boundary_geometry_edit(*revision.boundary_geometry_edit)));
@@ -4288,6 +4313,7 @@ bool verify_sqlite_schema(sqlite3* database, bool allow_recovery = false) {
          sqlite3_column_int(user_version.get(), 0) != 252 &&
          sqlite3_column_int(user_version.get(), 0) != 254 &&
          sqlite3_column_int(user_version.get(), 0) != 255 &&
+         sqlite3_column_int(user_version.get(), 0) != 256 &&
          sqlite3_column_int(user_version.get(), 0) != 253 &&
          sqlite3_column_int(user_version.get(), 0) != 242 &&
          sqlite3_column_int(user_version.get(), 0) != 207 &&
@@ -5015,6 +5041,8 @@ DocumentSnapshot read_snapshot(sqlite3* database, RecoveryLedger* recovery = nul
     // here and authenticate the manifest with its stored version below.
     const auto required_format = required_format_version_internal(snapshot, format_number < 28);
     if (required_format > format_number) {
+        if (required_format>=256)
+            storage_error(StorageErrorCode::unsupported_format,"This project requires reader 256 for atomic component affine deformation and topology");
         if (required_format>=255)
             storage_error(StorageErrorCode::unsupported_format,"This project requires reader 255 for exact affine component profiles");
         if (required_format>=254)

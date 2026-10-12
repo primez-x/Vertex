@@ -358,7 +358,8 @@ public:
     // v253 retains exact-source initial component profile identity assignment.
     // v254 retains reviewed component profile redraw and dimension dispositions.
     // v255 retains exact affine component profiles in entities and authoring/history.
-    static constexpr std::uint32_t format_version = 255;
+    // v256 retains atomic initial topology plus component affine deformation.
+    static constexpr std::uint32_t format_version = 256;
     static constexpr std::uint32_t recovery_format_version = 4;
     [[nodiscard]] static std::uint32_t required_format_version(const DocumentSnapshot& snapshot);
     static constexpr std::uint64_t maximum_file_bytes = 4ULL * 1024ULL * 1024ULL * 1024ULL;

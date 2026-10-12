@@ -18,12 +18,16 @@
 #include "sketch/project_store.hpp"
 #include "sketch/site_frame.hpp"
 
+#include <boost/multiprecision/cpp_int.hpp>
+
 #include <algorithm>
+#include <bit>
 #include <cctype>
 #include <cmath>
 #include <cstdint>
 #include <initializer_list>
 #include <iterator>
+#include <limits>
 #include <set>
 #include <stdexcept>
 #include <string_view>
@@ -185,6 +189,7 @@ bool has_mapped_profiles(const std::vector<AssemblyProfile>& profiles) {
 }
 bool topology_preserving_geometry(const Intent& intent) {
     return !intent.initialize_profile_topology && !intent.review_profile_topology &&
+        !intent.initialize_deformed_profile_topology &&
         intent.profile_geometry.operation == Operation::set && intent.profile_geometry.value &&
         has_identified_profiles(*intent.profile_geometry.value);
 }
@@ -221,11 +226,17 @@ void preflight_intent(const Intent& intent, Budget& budget) {
     if ((geometry.operation == Operation::set) != geometry.value.has_value()) reject("only profile set may carry a value");
     if (intent.initialize_profile_topology && intent.review_profile_topology)
         reject("initial and reviewed profile topology authority are exclusive");
+    if (intent.initialize_deformed_profile_topology &&
+        (intent.initialize_profile_topology || intent.review_profile_topology))
+        reject("initial deformed profile topology authority is exclusive");
     if (intent.review_profile_topology && geometry.operation == Operation::unchanged)
         reject("reviewed topology requires profile Set or Clear");
     if (intent.initialize_profile_topology &&
         (geometry.operation != Operation::set || !geometry.value || !has_identified_profiles(*geometry.value)))
         reject("initial topology authoring requires identified profile Set");
+    if (intent.initialize_deformed_profile_topology &&
+        (geometry.operation != Operation::set || !geometry.value || !has_identified_profiles(*geometry.value)))
+        reject("initial deformed topology authoring requires identified profile Set");
     if (geometry.value) {
         // Charge borrowed strings and segments before helper validation or any
         // profile JSON/string copy. Retain the source profile ID grammar; the
@@ -288,7 +299,7 @@ Json encode_intent(const Intent& intent) {
     const auto& p = intent.pose;
     const auto string_value = [](const std::string& value) { return Json(text(Json(value), 4096, false)); };
     const auto material = [](const std::string& value) { return Json(text(Json(value), 1024, true)); };
-    Json result{{"version", intent.review_profile_topology ? 5 : intent.initialize_profile_topology ? 4 : intent.profile_geometry.operation == Operation::unchanged ? 1 :
+    Json result{{"version", intent.initialize_deformed_profile_topology ? 6 : intent.review_profile_topology ? 5 : intent.initialize_profile_topology ? 4 : intent.profile_geometry.operation == Operation::unchanged ? 1 :
             topology_preserving_geometry(intent) ? 3 : 2},
         {"target", {{"catalog_id", t.catalog_id}, {"instance_id", t.instance_id},
             {"document_entity_id", optional(t.document_entity_id)}, {"part_path", t.part_path}}},
@@ -304,24 +315,34 @@ Json encode_intent(const Intent& intent) {
             {"value", intent.profile_geometry.value ? encode_assembly_profiles(*intent.profile_geometry.value) : Json(nullptr)}};
     if (intent.initialize_profile_topology) result["initialize_profile_topology"] = true;
     if (intent.review_profile_topology) result["review_profile_topology"] = true;
+    if (intent.initialize_deformed_profile_topology) result["initialize_deformed_profile_topology"] = true;
     return result;
 }
 Intent decode_intent(const Json& value) {
     if (!value.is_object() || !value.contains("version") || !value.at("version").is_number_integer() ||
         (value.at("version") != 1 && value.at("version") != 2 && value.at("version") != 3 && value.at("version") != 4 &&
-            value.at("version") != 5))
+            value.at("version") != 5 && value.at("version") != 6))
         reject("unsupported intent version");
+    const bool initialize_deformed = value.at("version") == 6;
     const bool review = value.at("version") == 5;
     const bool initialize = value.at("version") == 4;
-    const bool topology = value.at("version") == 3 || initialize;
+    const bool topology = value.at("version") == 3 || initialize || initialize_deformed;
     const bool geometry = value.at("version") != 1;
-    if (review) fields(value, {"version", "target", "properties", "materials", "quantities", "pose", "profile_geometry",
+    if (initialize_deformed) fields(value, {"version", "target", "properties", "materials", "quantities", "pose", "profile_geometry",
+        "initialize_deformed_profile_topology"});
+    else if (review) fields(value, {"version", "target", "properties", "materials", "quantities", "pose", "profile_geometry",
         "review_profile_topology"});
     else if (initialize) fields(value, {"version", "target", "properties", "materials", "quantities", "pose", "profile_geometry",
         "initialize_profile_topology"});
     else if (geometry) fields(value, {"version", "target", "properties", "materials", "quantities", "pose", "profile_geometry"});
     else fields(value, {"version", "target", "properties", "materials", "quantities", "pose"});
     Intent result;
+    if (initialize_deformed) {
+        if (!value.at("initialize_deformed_profile_topology").is_boolean() ||
+            !value.at("initialize_deformed_profile_topology").get<bool>())
+            reject("v6 requires literal initialize_deformed_profile_topology:true");
+        result.initialize_deformed_profile_topology = true;
+    }
     if (review) {
         if (!value.at("review_profile_topology").is_boolean() || !value.at("review_profile_topology").get<bool>())
             reject("v5 requires literal review_profile_topology:true");
@@ -520,6 +541,90 @@ void require_initial_profile_topology(const std::vector<AssemblyProfile>& source
     }
     if (!assigned) reject("initial topology authoring requires an actual anonymous profile identity assignment");
 }
+boost::multiprecision::cpp_rational affine_binary64(double value) {
+    using Integer = boost::multiprecision::cpp_int;
+    using Exact = boost::multiprecision::cpp_rational;
+    static_assert(sizeof(double) == sizeof(std::uint64_t) && std::numeric_limits<double>::is_iec559 &&
+        std::numeric_limits<double>::radix == 2 && std::numeric_limits<double>::digits == 53);
+    const auto bits = std::bit_cast<std::uint64_t>(value);
+    const auto exponent = static_cast<unsigned>((bits >> 52) & 0x7ff);
+    if (exponent == 0x7ff) reject("affine operator comparison requires finite operands");
+    Integer significand = bits & ((std::uint64_t{1} << 52) - 1);
+    if (exponent) significand += Integer{1} << 52;
+    if (bits >> 63) significand = -significand;
+    const int shift = exponent ? static_cast<int>(exponent) - 1075 : -1074;
+    if (shift >= 0) return Exact{significand << shift};
+    Exact result{significand}; result /= Integer{1} << -shift; return result;
+}
+bool same_profile_affine_operator(const std::optional<AssemblyProfilePlanarAffine>& first,
+    const std::optional<AssemblyProfilePlanarAffine>& second) {
+    const auto a = first.value_or(AssemblyProfilePlanarAffine{});
+    const auto b = second.value_or(AssemblyProfilePlanarAffine{});
+    if (a.xx != b.xx || a.xy != b.xy || a.yx != b.yx || a.yy != b.yy) return false;
+    // Compare the exact constant terms of q = M*p + t. These fixed expressions
+    // use only finite binary64 operands, bounding integer/exponent work. Do not
+    // sample rounded points or depend on wider long double on Windows.
+    const auto translation = [](const AssemblyProfilePlanarAffine& map, bool y)
+        -> boost::multiprecision::cpp_rational {
+        return affine_binary64(y ? map.target_origin.y : map.target_origin.x) -
+            affine_binary64(y ? map.yx : map.xx) * affine_binary64(map.source_origin.x) -
+            affine_binary64(y ? map.yy : map.xy) * affine_binary64(map.source_origin.y);
+    };
+    return translation(a, false) == translation(b, false) && translation(a, true) == translation(b, true);
+}
+void require_initial_deformed_profile_topology(const std::vector<AssemblyProfile>& source,
+    const std::vector<AssemblyProfile>& proposed, const std::vector<AssemblyProfile>& type_profiles) {
+    if (source.size() != proposed.size()) reject("initial deformed topology changed the source profile roster");
+    bool assigned_deformation = false;
+    for (const auto& profile : source) {
+        const auto found = std::find_if(proposed.begin(), proposed.end(),
+            [&](const auto& row) { return row.id == profile.id; });
+        if (found == proposed.end() || !same_boundary(found->outer, profile.outer) ||
+            found->holes.size() != profile.holes.size() ||
+            !std::equal(found->holes.begin(), found->holes.end(), profile.holes.begin(), same_boundary) ||
+            found->elevation_m != profile.elevation_m || found->height_m != profile.height_m ||
+            found->material_slot != profile.material_slot)
+            reject("initial deformed topology must retain exact source profiles, rings, scalars and materials");
+        if (found->planar_affine == profile.planar_affine) {
+            if (found->topology != profile.topology)
+                reject("initial deformed unchanged maps must retain exact source topology");
+            continue;
+        }
+        if (same_profile_affine_operator(profile.planar_affine, found->planar_affine))
+            reject("initial deformed topology requires actual affine changes, not map reanchoring");
+        if (!found->topology) reject("initial deformed profile must have fresh topology");
+        validate_assembly_profile_topology(*found);
+        std::set<std::string_view> rings, segments, vertices;
+        const auto reserve = [&](const AssemblyProfile& reserved) {
+            if (!reserved.topology) return;
+            const auto ring = [&](const AssemblyProfileRingIdentity& ids) {
+                rings.insert(ids.ring_id);
+                for (const auto& id : ids.segment_ids) segments.insert(id);
+                for (const auto& id : ids.vertex_ids) vertices.insert(id);
+            };
+            ring(reserved.topology->outer);
+            for (const auto& hole : reserved.topology->holes) ring(hole);
+        };
+        reserve(profile);
+        const auto inherited = std::find_if(type_profiles.begin(), type_profiles.end(),
+            [&](const auto& row) { return row.id == profile.id; });
+        if (inherited != type_profiles.end()) reserve(*inherited);
+        // Source and hidden shared-type identities remain reserved in each
+        // actual profile's separate ring/segment/vertex namespaces.
+        const auto fresh = [&](const AssemblyProfileRingIdentity& ids) {
+            if (rings.contains(ids.ring_id)) reject("initial deformed ring identity borrows actual same-profile topology");
+            for (const auto& id : ids.segment_ids) if (segments.contains(id))
+                reject("initial deformed segment identity borrows actual same-profile topology");
+            for (const auto& id : ids.vertex_ids) if (vertices.contains(id))
+                reject("initial deformed vertex identity borrows actual same-profile topology");
+        };
+        fresh(found->topology->outer);
+        for (const auto& hole : found->topology->holes) fresh(hole);
+        if (!profile.topology) assigned_deformation = true;
+    }
+    if (!assigned_deformation)
+        reject("initial deformed topology requires actual anonymous profile deformation and initial identity assignment");
+}
 void require_reviewed_profile_topology(const std::vector<AssemblyProfile>& source,
     const std::vector<AssemblyProfile>& proposed, const std::vector<AssemblyProfile>& type_profiles) {
     if (!has_identified_profiles(source)) reject("reviewed geometry requires actual identified own-source profiles");
@@ -580,6 +685,8 @@ void change_maps(auto& source, const AssemblyExpandedNode& node, const AssemblyT
         reject("clearing identified or mapped source profiles requires reviewed identity mapping/removal");
     if (geometry.operation == Operation::set) {
         if (intent.review_profile_topology) require_reviewed_profile_topology(resolved, *geometry.value, type.profiles);
+        else if (intent.initialize_deformed_profile_topology)
+            require_initial_deformed_profile_topology(resolved, *geometry.value, type.profiles);
         else if (intent.initialize_profile_topology) require_initial_profile_topology(resolved, *geometry.value, type.profiles);
         else if (topology_preserving_geometry(intent)) require_preserved_profile_topology(resolved, *geometry.value);
         else if (has_identified_profiles(resolved) || has_mapped_profiles(resolved))
@@ -1108,7 +1215,7 @@ struct PropertyEditSourceInspection {
         }))
             reject("profile Set suppresses the last actual solid; legacy host-copy is not replacement geometry");
         std::set<Path> reviewed_paths;
-        for (const auto* intent : rows) if (intent->review_profile_topology)
+        for (const auto* intent : rows) if (intent->review_profile_topology || intent->initialize_deformed_profile_topology)
             reviewed_paths.insert(intent->target.part_path);
         return {std::move(target), std::move(instance), std::move(changed), std::move(after), std::move(reviewed_paths)};
     }
@@ -1135,7 +1242,7 @@ std::vector<Intent> decode_request(const Json& request) {
         "source_entities_digest", "source_saved_revision", "intents"});
     if (!request.at("version").is_number_integer() ||
         (request.at("version") != 1 && request.at("version") != 2 && request.at("version") != 3 && request.at("version") != 4 &&
-            request.at("version") != 5))
+            request.at("version") != 5 && request.at("version") != 6))
         reject("unsupported request version");
     (void)revision(request.at("expected_revision"));
     for (const auto* name : {"source_snapshot_digest", "source_authoring_digest", "source_entities_digest"}) digest(request.at(name));
@@ -1145,19 +1252,28 @@ std::vector<Intent> decode_request(const Json& request) {
         return intent.profile_geometry.operation != Operation::unchanged;
     });
     if (request.at("version") == 1 && geometry) reject("v1 request cannot carry profile geometry authority");
+    const bool initialize_deformed = std::any_of(intents.begin(), intents.end(), [](const Intent& intent) {
+        return intent.initialize_deformed_profile_topology;
+    });
+    if (request.at("version") != 6 && initialize_deformed)
+        reject("initial deformed topology authoring requires request v6");
+    if (request.at("version") == 6 && !initialize_deformed)
+        reject("v6 request requires initial deformed topology authoring");
     const bool review = std::any_of(intents.begin(), intents.end(), [](const Intent& intent) {
         return intent.review_profile_topology;
     });
-    if (request.at("version") != 5 && review) reject("reviewed profile topology requires request v5");
+    if (request.at("version") != 5 && request.at("version") != 6 && review)
+        reject("reviewed profile topology requires request v5");
     if (request.at("version") == 5 && !review) reject("v5 request requires reviewed profile topology");
     const bool initialize = std::any_of(intents.begin(), intents.end(), [](const Intent& intent) {
         return intent.initialize_profile_topology;
     });
-    if (request.at("version") != 4 && request.at("version") != 5 && initialize)
+    if (request.at("version") != 4 && request.at("version") != 5 && request.at("version") != 6 && initialize)
         reject("initial topology authoring requires request v4/v5");
     if (request.at("version") == 4 && !initialize) reject("v4 request requires initial topology authoring");
     const bool topology = std::any_of(intents.begin(), intents.end(), topology_preserving_geometry);
-    if (request.at("version") != 3 && request.at("version") != 4 && request.at("version") != 5 && topology)
+    if (request.at("version") != 3 && request.at("version") != 4 && request.at("version") != 5 &&
+        request.at("version") != 6 && topology)
         reject("identified profile Set requires request v3/v4/v5");
     if (request.at("version") == 3 && !topology) reject("v3 request requires topology-preserving profile Set");
     return intents;
@@ -1765,7 +1881,8 @@ PhaseAssemblyInstancePropertyEditResult replay_phase_assembly_instance_property_
             AssemblyModel::from_json(result.entities.at(destination.catalog_id).properties.at("model")));
         const auto& model = final_models.at(destination.catalog_id);
         AssemblyInstance actual;
-        if (destination.document_entity_id) actual = decode_document_assembly_instance(result.entities.at(*destination.document_entity_id), final_budget).instance;
+        if (destination.document_entity_id)
+            actual = decode_document_assembly_instance(result.entities.at(*destination.document_entity_id), final_budget).instance;
         else {
             const auto row = std::find_if(model.instances().begin(), model.instances().end(),
                 [&](const auto& value) { return value.id == destination.instance_id; });
@@ -1875,7 +1992,8 @@ AssemblyDocumentEntities replay_assembly_instance_property_entities(const Assemb
         if (!final_models.contains(target.catalog_id)) final_models.emplace(target.catalog_id,
             AssemblyModel::from_json(result.at(target.catalog_id).properties.at("model")));
         const auto& model = final_models.at(target.catalog_id);
-        if (target.document_entity_id) actual = decode_document_assembly_instance(result.at(*target.document_entity_id), final_budget).instance;
+        if (target.document_entity_id)
+            actual = decode_document_assembly_instance(result.at(*target.document_entity_id), final_budget).instance;
         else {
             const auto found = std::find_if(model.instances().begin(), model.instances().end(),
                 [&](const auto& value) { return value.id == target.instance_id; });
@@ -1927,11 +2045,12 @@ Json validate_assembly_instance_property_edit_request(const Json& request) {
 AssemblyInstancePropertyEditPreparation prepare_assembly_instance_property_edit(const DocumentSnapshot& source,
     std::span<const Intent> intents) {
     auto wire = encode_intents(intents);
+    const bool initialize_deformed = std::any_of(wire.begin(), wire.end(), [](const Json& intent) { return intent.at("version") == 6; });
     const bool review = std::any_of(wire.begin(), wire.end(), [](const Json& intent) { return intent.at("version") == 5; });
     const bool initialize = std::any_of(wire.begin(), wire.end(), [](const Json& intent) { return intent.at("version") == 4; });
     const bool topology = std::any_of(wire.begin(), wire.end(), [](const Json& intent) { return intent.at("version") == 3; });
     const bool geometry = std::any_of(wire.begin(), wire.end(), [](const Json& intent) { return intent.at("version") != 1; });
-    Json request{{"version", review ? 5 : initialize ? 4 : topology ? 3 : geometry ? 2 : 1}, {"expected_revision", source.revision()},
+    Json request{{"version", initialize_deformed ? 6 : review ? 5 : initialize ? 4 : topology ? 3 : geometry ? 2 : 1}, {"expected_revision", source.revision()},
         {"source_snapshot_digest", document_snapshot_digest(source)},
         {"source_authoring_digest", document_authoring_source_digest_v2(source)},
         {"source_entities_digest", entity_map_digest(source.entities())},

@@ -257,7 +257,8 @@ bool curved(const std::vector<AssemblyProfile>& profiles) {
     return std::any_of(profiles.begin(),profiles.end(),[](const auto& profile) { return curved(profile); });
 }
 void resize_profiles(std::vector<AssemblyProfile>& profiles, const AssemblyTransform& frame,
-                     const std::array<std::optional<double>, 3>& dimensions) {
+                     const std::array<std::optional<double>, 3>& dimensions,
+                     bool permit_initial_deformation) {
     if (std::none_of(dimensions.begin(), dimensions.end(), [](const auto& value) { return value.has_value(); })) return;
     const auto bounds = profile_bounds(profiles);
     const auto spans = profile_spans(profiles, frame);
@@ -275,6 +276,12 @@ void resize_profiles(std::vector<AssemblyProfile>& profiles, const AssemblyTrans
     const AssemblyProfilePlanarAffine planar_resize{bounds.minimum, bounds.minimum,
         factors[0], 0.0, 0.0, factors[1]};
     validate_assembly_profile_affine(planar_resize);
+    // An anonymous curved/mapped source can acquire its initial identities in
+    // this same reviewed affine edit. Preserve every source ring in the complete
+    // own-profile roster so the new intent authenticates map deformation only.
+    const bool initial_map=permit_initial_deformation && (factors[0] != 1 || factors[1] != 1) &&
+        ((factors[0] != factors[1] && curved(profiles)) || std::any_of(profiles.begin(),profiles.end(),
+            [](const auto& profile) { return profile.planar_affine.has_value(); }));
     const auto scale_boundary = [&](Boundary& boundary) {
         if (factors[0] == 1 && factors[1] == 1) return;
         // Historical map-free lines and similarities retain their old wire.
@@ -285,11 +292,12 @@ void resize_profiles(std::vector<AssemblyProfile>& profiles, const AssemblyTrans
     };
     for (auto& profile : profiles) {
         const bool planar_change=factors[0] != 1 || factors[1] != 1;
-        const bool needs_map=profile.planar_affine.has_value() ||
+        const bool needs_map=initial_map || profile.planar_affine.has_value() ||
             (factors[0] != factors[1] && curved(profile));
         if (planar_change && needs_map) {
-            require(profile.topology.has_value(),
-                "Apply edge identities before resizing a curved or mapped profile. The edit needs explicit dimension mapping.");
+            // The caller assigns fresh topology and reviewed authority after
+            // classifying the complete final roster. A mixed identified source
+            // may contain anonymous curves covered by that same v5 review.
             profile.planar_affine=profile.planar_affine
                 ? compose_assembly_profile_affine(planar_resize,*profile.planar_affine) : planar_resize;
         } else if (!profile.planar_affine) {
@@ -1175,13 +1183,22 @@ public:
                     require(!intent.initialize_profile_topology || !resize,
                         "Apply pending edge identities before resizing geometry.");
                     if (resize)
-                        resize_profiles(profiles, final_geometry_frame(target, result), requested);
+                        resize_profiles(profiles, final_geometry_frame(target, result), requested,
+                            !identified(*selected.profiles));
                     if (!intent.initialize_profile_topology && identified(*selected.profiles)) {
                         // Classify the complete final draft after physical resizing.
                         // Fresh IDs exist only in this collected intent; editing
                         // or recollecting a draft cannot reuse a stale review map.
                         collect_reviewed_topology(profiles, selected);
                         intent.review_profile_topology = true;
+                    } else if(!intent.initialize_profile_topology && std::any_of(profiles.begin(),profiles.end(),
+                        [&](const auto& profile) {
+                            const auto actual=std::find_if(selected.profiles->begin(),selected.profiles->end(),
+                                [&](const auto& row) { return row.id==profile.id; });
+                            return actual!=selected.profiles->end() && profile.planar_affine!=actual->planar_affine;
+                        })) {
+                        collect_reviewed_topology(profiles,selected);
+                        intent.initialize_deformed_profile_topology=true;
                     }
                     (void)validate_assembly_profiles(profiles);
                 } catch (const std::exception& failure) {

@@ -1,4 +1,26 @@
-# Vertex project formats v1 through v255
+# Vertex project formats v1 through v256
+
+Reader256/native extraction254 retains atomic initial topology plus affine
+component deformation. Property-edit leaf/request v6 adds the literal
+`initialize_deformed_profile_topology:true` authority. It supplies the complete
+actual own-profile roster as identified Set. Source rings, sweeps, extrusion and
+material fields stay exact; an actual affine operator change is required.
+Changed anonymous profiles acquire initial fresh identities, changed identified
+profiles acquire fresh identities, and unchanged maps retain exact topology.
+At least one actual anonymous profile must be genuinely deformed. Own and hidden
+same-ID shared-type identities are reserved. A different anchored spelling of
+the same affine operator does not grant deformation authority.
+
+Phase authoring/request v8 retains v7's complete presentation and dimension
+carry, including exact same-kind profile-dimension remap/retire decisions. It
+requires a v6 leaf and admits compatible v1..6 leaves. Mixed Properties v37
+explicitly wraps phase v8; historical wrappers and leaves keep their authority.
+The new proof vocabulary participates in document identity reservations.
+Reader256 detects this authoring in retained commands, revisions and recovery,
+even when composition removes a temporary destination. Current mapped profile
+geometry still uses the version255 codecs below. The new reader requirement
+authenticates edit authority; it does not reinterpret old geometry or imply
+runtime qualification.
 
 Reader255/native extraction253 retains exact affine component profiles. The
 authoritative source rings still contain straight/circular segments; an optional

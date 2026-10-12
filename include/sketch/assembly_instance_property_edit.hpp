@@ -77,9 +77,18 @@ struct AssemblyInstancePropertyEditIntent {
     // initial identity authoring. Enclosing reviewed workflows own dimension
     // correspondence/removal, dependencies and publication.
     bool review_profile_topology{false};
+    // Atomic initial identity authoring plus actual planar-affine deformation.
+    // Set retains the complete actual own-source profile roster, source rings,
+    // sweeps, scalars and materials. Unchanged maps retain exact topology;
+    // each changed map requires entirely fresh profile-local identities,
+    // reserving actual same-ID own and hidden shared-type topology. At least
+    // one actually deformed anonymous source profile receives initial IDs.
+    // Representation-only map changes do not supply deformation authority.
+    // Mutually exclusive with both topology authorities above.
+    bool initialize_deformed_profile_topology{false};
 };
 
-// Closed canonical v1/v2/v3/v4/v5 codec. V2 adds anonymous profile_geometry and is
+// Closed canonical v1/v2/v3/v4/v5/v6 codec. V2 adds anonymous profile_geometry and is
 // emitted for a non-unchanged anonymous profile operation. V3 requires Set
 // containing identified profiles and explicit topology-preserving authority;
 // source replay checks the exact selected node's own geometry. V4 requires the
@@ -87,6 +96,8 @@ struct AssemblyInstancePropertyEditIntent {
 // source replay admits only initial identity authoring as specified above.
 // V5 requires literal review_profile_topology:true and non-unchanged geometry;
 // actual source replay admits only the reviewed geometry authority above.
+// V6 requires literal initialize_deformed_profile_topology:true and identified
+// Set; actual source replay admits only the atomic initial affine authority above.
 // Historical dialects reject the new flags and cannot acquire their authority. V1
 // rejects the geometry field; historical V2 rejects identified profiles. All
 // operations are explicit; set carries a value and unchanged/clear carry null.
@@ -94,7 +105,7 @@ struct AssemblyInstancePropertyEditIntent {
 // finite, scales positive, counts
 // integral/nonnegative; property strings <=4096 bytes and local keys <=1024.
 // No shared type/host/context/root or assembly-child identity creation/deletion
-// authority; v5 changes only the selected node's own profile geometry.
+// authority; v5/v6 change only the selected node's own profile geometry.
 [[nodiscard]] nlohmann::json encode_assembly_instance_property_edit_intent(
     const AssemblyInstancePropertyEditIntent&);
 [[nodiscard]] AssemblyInstancePropertyEditIntent decode_assembly_instance_property_edit_intent(
@@ -156,8 +167,10 @@ private:
         const DocumentSnapshot&, const nlohmann::json&);
 };
 [[nodiscard]] nlohmann::json validate_assembly_instance_property_edit_request(const nlohmann::json&);
-// Request v5 requires at least one intent v5 and permits compatible intents
-// v1..v4. Earlier request dialects reject intent v5. Request v4 requires at
+// Request v6 requires at least one intent v6 and permits compatible intents
+// v1..v5. Requests v1..v5 reject intent v6. Request v5 requires at least one
+// intent v5 and permits compatible intents v1..v4. Requests v1..v4 reject
+// intent v5. Request v4 requires at
 // least one intent v4 and permits compatible intents
 // v1/v2/v3. Request v3 is manufactured only when an intent v3 is present and no
 // intent v4 is present. Requests v1/v2 retain historical authority and reject

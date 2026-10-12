@@ -57,25 +57,25 @@ struct PhaseAssemblyInstancePropertyEditResult {
 [[nodiscard]] PhaseAssemblyInstancePropertyEditPlan inspect_phase_assembly_instance_property_edit_plan(
     const AssemblyDocumentEntities&, std::span<const AssemblyInstancePropertyEditIntent>);
 // Actual replacement roots only: independent owners or their exact embedded
-// presentation aliases, plus actual dimension copies in geometry v3/v5/v6/v7 or opt-in
+// presentation aliases, plus actual dimension copies in geometry v3/v5/v6/v7/v8 or opt-in
 // dimension-complete v4. Historical calls preserve the geometry-only inventory.
 // Ordinary and unchanged targets never allocate overlays.
 [[nodiscard]] std::vector<std::string> inspect_phase_assembly_instance_property_presentation_overlay_ids(
     const AssemblyDocumentEntities&, std::span<const AssemblyInstancePropertyEditIntent>,
     bool complete_component_dimensions = false,
     const std::map<std::string, std::optional<AssemblyProfileDimensionTarget>, std::less<>>& profile_dimension_decisions = {});
-// Geometry v3/v5/v6/v7 and opt-in v4 allocation inventory. Actual replacement roots only;
+// Geometry v3/v5/v6/v7/v8 and opt-in v4 allocation inventory. Actual replacement roots only;
 // ordinary roots share its 1000-association admission but allocate no copies.
 // Values retain the complete supported v6/v7 nested component target. Malformed,
 // unsupported or nonmeasurable affected associations refuse. Inactive copies
 // and dimensions registered outside the root's active baseline cohort refuse.
-// V7 requires the exact reviewed decision roster; retired copies and overlays
+// V7/V8 require the exact reviewed decision roster; retired copies and overlays
 // referencing them receive no fresh identities. Historical calls admit no decisions.
 [[nodiscard]] std::map<std::string, AssemblyInstancePropertyEditTarget, std::less<>>
 inspect_phase_assembly_instance_property_dimension_clone_roster(
     const AssemblyDocumentEntities&, std::span<const AssemblyInstancePropertyEditIntent>,
     const std::map<std::string, std::optional<AssemblyProfileDimensionTarget>, std::less<>>& profile_dimension_decisions = {});
-// Every actual v7 profile association on an exact reviewed leaf-five node,
+// Every actual v7 profile association on an exact reviewed leaf-five or leaf-six node,
 // including associations whose selectors will remain unchanged.
 [[nodiscard]] std::map<std::string, AssemblyDimensionTarget, std::less<>>
 inspect_phase_assembly_instance_profile_dimension_review_roster(
@@ -93,13 +93,13 @@ struct PhaseAssemblyInstancePropertyEditAuthoring {
     bool carry_presentation_references{false};
     // Actual original overlay ID -> fresh copy ID; exact sorted affected roster.
     std::map<std::string, std::string, std::less<>> presentation_overlay_identities;
-    // Geometry v3/v5/v6/v7 or explicit v4: exact actual source dimension -> fresh copy identity.
+    // Geometry v3/v5/v6/v7/v8 or explicit v4: exact actual source dimension -> fresh copy identity.
     // Required wire object even when empty; ordinary dimensions stay in place.
     std::map<std::string, std::string, std::less<>> dimension_identities;
     // Opt-in nongeometry v4 completes every affected supported v6/v7 association,
     // including pose/scalar edits. Requires literal presentation carry.
     bool complete_component_dimensions{false};
-    // V7 only: exact actual-source dimension ID -> own local selector or retire.
+    // V7/V8 only: exact actual-source dimension ID -> own local selector or retire.
     std::map<std::string, std::optional<AssemblyProfileDimensionTarget>, std::less<>> profile_dimension_decisions;
 };
 // Historical closed v1 is unchanged. Opt-in v2 adds exact presentation carry
@@ -116,8 +116,15 @@ struct PhaseAssemblyInstancePropertyEditAuthoring {
 // initializes topology, otherwise v5 when any leaf preserves topology.
 // V7 adds profile_dimension_decisions to v6's closed fields, requires a reviewed
 // leaf v5 and permits compatible leaves v1..5. Historical versions reject v5.
+// V8 uses v7's exact closed fields and complete carry/decision contract, requires
+// an initial-deformed-topology leaf v6 and permits compatible leaves v1..6.
+// V1..7 reject leaf v6. Typed encoding prefers v8 when leaf v6 is present;
+// otherwise leaf v5 continues to select v7. Newly identified deformed profiles
+// join the mandatory same-kind profile dimension remap/retire roster, and all
+// affected component extents are carried. Geometry still excludes the separate
+// complete_component_dimensions flag and requires literal presentation carry.
 // The leaf derives and checks the selected node's complete own profile roster;
-// initial topology requires exact actual anonymous geometry and scalars; the
+// historical initial topology requires exact actual anonymous geometry and scalars; the
 // wrapper never assigns or rewrites profile, ring, vertex or edge identities.
 // No dialect accepts a caller-authored target/candidate map or geometry-anchor
 // correspondence.

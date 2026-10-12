@@ -112,6 +112,7 @@
 #include "sketch/desktop/building_object_dialog.hpp"
 #include "sketch/desktop/assembly_authoring_dialog.hpp"
 #include "sketch/assembly_document_adapter.hpp"
+#include "sketch/assembly_directional_resize.hpp"
 #include "sketch/qualified_embedded_assembly_copy.hpp"
 #include "sketch/assembly_catalog_phase_edit.hpp"
 #include "sketch/phase_assembly_catalog_edit_preparation.hpp"
@@ -26526,17 +26527,22 @@ public:
 
     static CanvasSelectionFrame independentComponentPlanFrame(const DocumentSnapshot& source,
         const Entity& entity, const BuildingViewFrame* projection=nullptr) {
-        const auto angle=decode_document_assembly_instance(entity).instance.root_transform.value().rotation_radians;
         AssemblyExpansionBudget budget;
-        auto segments=project_assembly_plan(expand_document_assembly_instance(entity,source.entities(),budget));
+        const auto expanded=expand_document_assembly_instance(entity,source.entities(),budget);
+        const auto& pose=expanded.source_instance.root_transform.value();
+        const auto angle=pose.rotation_radians;
+        const Vec2 origin{pose.translation_m.x,pose.translation_m.y};
+        // Selection and resize anchors use analytical source-profile extrema,
+        // not the display chords produced by plan projection. Bounds are metre
+        // offsets about the actual root, including its reflected axes.
+        AssemblyExpansionBudget bounds_work;
+        const auto bounds=assembly_root_oriented_profile_bounds(expanded,origin,bounds_work);
         const auto rotation=assembly_rotation_components(angle);
-        for (auto& edge:segments) for (auto* point:{&edge.start,&edge.end}) {
-            const auto x=point->x,y=point->y;
-            *point={rotation.cosine*x+rotation.sine*y,-rotation.sine*x+rotation.cosine*y};
-        }
-        const auto bounds=boundary_bounds(segments);
-        const auto x=(bounds.minimum.x+bounds.maximum.x)/2.0,y=(bounds.minimum.y+bounds.maximum.y)/2.0;
-        CanvasSelectionFrame frame{{rotation.cosine*x-rotation.sine*y,rotation.sine*x+rotation.cosine*y},angle,
+        const auto x=bounds.minimum.x+(bounds.maximum.x-bounds.minimum.x)/2.0;
+        const auto y=(pose.mirrored_y ? -1.0 : 1.0)*(bounds.minimum.y+(bounds.maximum.y-bounds.minimum.y)/2.0);
+        const AssemblyProfilePlanarAffine placement{{},origin,rotation.cosine,-rotation.sine,
+            rotation.sine,rotation.cosine};
+        CanvasSelectionFrame frame{assembly_profile_affine_point({x,y},placement),angle,
             bounds.maximum.x-bounds.minimum.x,bounds.maximum.y-bounds.minimum.y};
         if (!std::isfinite(frame.center.x) || !std::isfinite(frame.center.y) ||
             !std::isfinite(frame.width_metres) || !std::isfinite(frame.depth_metres))
@@ -71724,7 +71730,7 @@ public:
                 AssemblyModel::from_json(catalog.properties.at("model"))).first;
             AssemblyInstance instance;
             if(destination.document_entity_id)instance=decode_document_assembly_instance(
-                body.entities.at(*destination.document_entity_id)).instance;
+                body.entities.at(*destination.document_entity_id),budget).instance;
             else {
                 const auto row=std::find_if(model->second.instances().begin(),model->second.instances().end(),
                     [&](const auto& value){return value.id==destination.instance_id;});
@@ -72342,7 +72348,7 @@ public:
                     }
                     for (const auto& registry_id:component_plan.required_membership_registry_ids)
                         authoring.allocation.membership_entity_ids.emplace(registry_id,fresh("requiredcompanion"));
-                    if(std::any_of(assembly_intents.begin(),assembly_intents.end(),[](const auto& intent){return intent.review_profile_topology;})) {
+                    if(std::any_of(assembly_intents.begin(),assembly_intents.end(),[](const auto& intent){return intent.review_profile_topology || intent.initialize_deformed_profile_topology;})) {
                         const auto decisions=reviewComponentProfileDimensions(*source,authoring,owner,fence,authority.context.metric_units);
                         if(!decisions)throw ComponentDimensionReviewCancelled{};
                         authoring.profile_dimension_decisions=*decisions;
