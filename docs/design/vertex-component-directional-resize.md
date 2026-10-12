@@ -81,10 +81,25 @@ nested/reflected node frame, preserving Z, source geometry and override provenan
 It uses the exact inverse of the actual binary64 rotation basis, including its
 norm, rather than assuming transpose is numerically the inverse. Unit factors
 do not create maps or overrides. Selection frames now consume analytical mapped
-arc bounds in that same root basis. These helpers do not yet supply the complete
-captured side-handle preview/release producer. Compilation and runtime remain
-unverified; canvas side handles and whole-component authoring are not claimed
-complete by these source additions.
+arc bounds in that same root basis.
+
+The canvas source connection now captures complete independent components for
+side-handle resizing in measurement, horizontal plan and Site plan views. One
+proposal emits sorted changed-node intents with freshly reserved topology;
+geometry-free ancestors do not prune descendants. More than 1000 changed nodes
+refuses the entire proposal. Properties and canvas share the topology authoring
+algorithm. Unit factors retain the source without overrides or dimension review.
+
+Dragging uses a detached, source-derived geometric preview. Affected profile
+dimensions may be suppressed in that preview, but those temporary dispositions
+have no publication path. Release consumes provisional edit tickets, retains the
+same geometry/topology and replacement-root identities, and requires explicit
+dimension remap/removal review. The final worker manufactures the complete
+reviewed command, native geometry and projected dimensions before publication.
+New canvas input/cancellation retires the asynchronous release; source,
+selection, camera, view publication and recovery changes refuse late output.
+Compilation and runtime remain unverified. This source connection needs actual
+interaction qualification; it does not establish complete canvas acceptance.
 
 ## Mixed selections
 

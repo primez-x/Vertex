@@ -1160,6 +1160,8 @@ if(SKETCH_BUILD_DESKTOP)
     src/desktop/assembly_authoring_dialog.cpp src/desktop/site_placement_dialog.cpp
     src/desktop/selection_properties_dialog.cpp
     src/desktop/assembly_properties_panel.cpp
+    src/desktop/assembly_directional_resize_authoring.cpp
+    src/desktop/assembly_profile_topology_authoring.cpp
     src/desktop/drawing_input_panel.cpp src/desktop/area_class_palette.cpp)
   target_link_libraries(sketch_desktop PUBLIC sketch_text_library)
   target_link_libraries(sketch_desktop PUBLIC sketch_floor_reference)

@@ -335,8 +335,9 @@ clipboard producers exist and require full lifecycle qualification; dated
 inventories above are not authority to restart those implementations. The
 confirmed mixed transform gap is directional scaling across ordinary owners and
 typed skylight children. Independent component numeric own-profile resizing
-exists; canvas side grips and exact unequal resizing of circular profiles remain
-required implementation work. The reviewed nonclone independent mirror correction
+exists; exact unequal resizing of circular profiles now has an affine source
+model and a captured canvas side-grip producer. Its complete native interaction
+and lifecycle acceptance remain required. The reviewed nonclone independent mirror correction
 reuses complete Properties pose replacement/carry; clone/group mirror routes
 remain separately unqualified.
 
@@ -348,7 +349,11 @@ deformation under leaf6/phase8/mixed37 and reader256 supports anonymous curved
 XY numeric resizing without a separate identity step. Combined anonymous
 deformation with redraw/extrusion edits remains an authoring gap. The new
 whole-component helper handles actual nested/reflected frames and analytical
-selection bounds; captured side-handle publication remains required.
+selection bounds. Canvas side handles now emit complete changed-node intents
+with shared fresh topology, temporary preview-only dimension suppression,
+mandatory release review and a separately manufactured final candidate. Actual
+source/selection/viewport/recovery fences retire stale output. Qualification
+remains required; source integration alone does not close the canvas gate.
 These sources have not been compiled or exercised. Follow the
 [consumer integration design](../design/vertex-component-directional-resize.md)
 through whole-component nested deformation and captured canvas side handles;

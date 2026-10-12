@@ -14,6 +14,40 @@ changed source does not acquire runtime acceptance without later qualification.
 
 ## Current delivery state
 
+### October 11 component canvas directional resize connection
+
+The atomic authoring/analytical-frame foundation is committed and pushed as
+d6e59ca5d0921f4ed233b9c6658a83f6a0994f85; the exact remote ref matches.
+The preceding user status turn made no implementation changes. This continuation
+committed that reviewed batch and proceeded to the canvas producer rather than
+treating the status response as goal progress.
+
+The next source batch adds the complete independent-component directional intent
+producer, shared Properties/canvas fresh topology authoring, and side-handle
+preview/release integration. The producer visits every actual nested node and
+refuses the whole operation above 1000 changed targets. It retains source rings,
+Z/materials/poses/definitions and unused overrides; unit factors emit no edits.
+Catalogue admission and shared expansion work retain their separate budgets.
+Settled selection frames and resized previews use analytical profile bounds.
+
+Provisional drag previews cannot publish their temporary dimension suppression.
+Release consumes provisional edit tickets before dimension review, retains the
+same captured topology and replacement roots, and manufactures the complete
+reviewed command/native projection in the existing background queue. Late output
+is fenced by source, selection, view/camera, publication and recovery authority;
+new canvas input or cancellation retires the release. Independent source review
+found and corrected missing desktop/Site mixed37 classifications and a source-free
+alternative resize-frame lookup. The bounded correction review approved both
+fixes. Root reviewed the integrated source and whitespace checks. No compilation,
+native interaction or user resolution
+is claimed, and the installed app remains unchanged.
+
+Remaining implementation includes combined anonymous deformation/redraw/extrusion,
+mixed owner/child directional transforms, general elliptical cutout import,
+editable IFC assembly import and observed compatibility/device adapters. All ten
+production gates and external prerequisites remain open. No builds, tests,
+scripts, probes, native jobs, launches, packages or installations ran.
+
 ### October 11 atomic component affine authoring continuation
 
 The mapped-profile consumer integration is committed and pushed as
