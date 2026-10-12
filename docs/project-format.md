@@ -1,4 +1,26 @@
-# Vertex project formats v1 through v256
+# Vertex project formats v1 through v257
+
+Reader257/native extraction255 retains complete initial anonymous profile
+geometry authoring. Closed property-edit leaf/request v7 adds the literal
+`review_initial_profile_geometry:true` authority, mutually exclusive with earlier
+topology flags. It reviews the actual complete anonymous own-source roster for
+Set or restoration of an existing own override through Clear. Added or genuinely
+changed XY geometry receives fresh identities; unchanged XY geometry retains
+its actual topology, including null, even when elevation, height or material
+changes. Equivalent anchored spellings of one affine operator do not constitute
+a geometry change. Existing final-solid admission still applies to empty Set.
+Missing type/path definitions refuse the operation; an authenticated type that
+omits its empty profiles field supplies an empty inherited roster.
+
+Phase authoring/request v9 retains v8's closed fields and complete presentation
+and dimension carry. It requires a v7 leaf, permits compatible v1..7 leaves, and
+requires exact same-kind remap or retirement decisions for actual affected old
+profile dimensions. Surviving extent dimensions retain their carry contract.
+Mixed Properties v38 explicitly wraps phase v9. Reader257 authenticates these
+typed retained commands, revisions and recovery, including composed-away
+destinations. Historical dialects retain their meanings; mapped source geometry
+continues to use the version255 geometry codecs. This format records edit
+authority, not compilation or production qualification.
 
 Reader256/native extraction254 retains atomic initial topology plus affine
 component deformation. Property-edit leaf/request v6 adds the literal

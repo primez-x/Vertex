@@ -73,8 +73,16 @@ and reviewed dimension dispositions. Anonymous curved/mapped XY resizing now
 uses an atomic initial-identity/deformation leaf v6, phase v8 and mixed Properties
 v37 under reader256. It preserves the complete source rings, scalar and material
 roster. Numeric Properties creates fresh identities and enters the same explicit
-dimension review; combined anonymous affine deformation with profile redraw or
-extrusion changes still needs a complete authoring contract.
+dimension review. Complete anonymous geometry authoring now uses leaf/request
+v7, phase v9 and mixed Properties v38 under reader257. Set reviews the complete
+actual own-source roster, permits additions/removals and combines redraw,
+deformation, extrusion or material edits. Unchanged XY geometry retains actual
+topology; changed/new XY geometry receives fresh identities. Clear requires an
+actual own override and restores the inherited type geometry through the same
+complete dimension review. Existing final-solid admission remains in force.
+Numeric Properties uses this contract for combined edits while retaining v6 for
+pure affine deformation. The separate explicit identity-initialization workflow
+retains its existing guards. Compilation and runtime remain unverified.
 
 The whole-component geometry helper pulls each profile through its actual
 nested/reflected node frame, preserving Z, source geometry and override provenance.

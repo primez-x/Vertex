@@ -270,6 +270,11 @@ private:
 // component request seven with at least one reviewed-topology leaf intent five.
 // Explicit source profile-dimension decisions own remap/retirement authority;
 // producers prefer thirty-six whenever profile topology review is authored.
+// Closed dialect thirty-seven retains those fields and requires component
+// request eight for atomic anonymous affine deformation. Thirty-eight requires
+// component request nine for complete reviewed initial own-profile geometry;
+// old wrappers cannot acquire either authority. Both retain exact source-bound
+// dimension decisions, presentation carry, host coordination and optional base.
 //
 // Closed dialect seventeen retains Properties16's source/reservation fields plus
 // carry_component_presentation:true. It requires component request two, whose

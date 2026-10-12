@@ -14,6 +14,39 @@ changed source does not acquire runtime acceptance without later qualification.
 
 ## Current delivery state
 
+### October 11 combined initial component geometry authoring
+
+The canvas directional resize batch is committed and pushed as
+880b22f131867b4fb854bad2853faacf4f513283; its exact remote ref was verified.
+The preceding status turn made source progress by correcting two independent
+review findings in the next batch, rather than treating a status restatement as
+implementation progress.
+
+The current source adds closed leaf/request7, phase9, mixed Properties38 and
+reader257/extraction255 for complete initial anonymous own-profile Set/Clear.
+Combined deformation, redraw, height/material edits and profile additions or
+removals enter one complete source-derived edit with affected dimension review.
+Unchanged XY geometry retains actual topology, including null; changed/new XY
+geometry receives fresh identities against own and hidden same-ID type sources.
+Clear requires an actual own override. Historical authoring authority and final
+solid admission remain unchanged. Numeric Properties selects this contract for
+combined edits and retains leaf6 for pure affine deformation. The explicit
+identity-initialization workflow still has its existing separate-step guards.
+
+Independent review found a misplaced presentation-version variable and raw
+override materialization that rejected authenticated empty type rosters when
+their profiles field was omitted. Both source defects are corrected; independent
+review approved the corrected source. Root reviewed the integrated paths and
+updated the format/design records. Scoped whitespace checks passed. The batch
+is ready for a scoped commit and remote backup. No compilation or runtime
+acceptance is claimed. The installed application is unchanged.
+
+Next implementation includes mixed owner/child directional transforms, general
+elliptical cutout import and editable IFC assembly import. Compatibility/device
+adapters require actual external fixtures and hardware. All ten production gates
+remain open. No builds, tests, scripts, probes, native jobs, launches, packages or
+installations ran under the binding source-only steering.
+
 ### October 11 component canvas directional resize connection
 
 The atomic authoring/analytical-frame foundation is committed and pushed as

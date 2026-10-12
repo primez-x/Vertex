@@ -346,8 +346,12 @@ effective dimensions/quantities, native/cache, projected curves, reopened editin
 canvas presentation and declared IFC/DXF fidelity. Numeric own-profile resizing
 uses reviewed maps for identified curves. Atomic initial-identity/affine
 deformation under leaf6/phase8/mixed37 and reader256 supports anonymous curved
-XY numeric resizing without a separate identity step. Combined anonymous
-deformation with redraw/extrusion edits remains an authoring gap. The new
+XY numeric resizing without a separate identity step. Complete initial anonymous
+geometry edits now use leaf7/phase9/mixed38 and reader257 for combined
+deformation/redraw/extrusion and complete profile additions/removals or override
+restoration. Unchanged XY geometry retains actual topology; genuinely changed
+or new XY geometry receives fresh identities and full dimension review. The
+separate explicit identity-initialization workflow retains its guards. The new
 whole-component helper handles actual nested/reflected frames and analytical
 selection bounds. Canvas side handles now emit complete changed-node intents
 with shared fresh topology, temporary preview-only dimension suppression,

@@ -1110,8 +1110,16 @@ public:
         output.reserve(result.size());
         for (auto& [target, intent] : result) {
             const auto selected = resolve(target);
-            if (intent.profile_geometry.operation == Operation::clear)
+            if (intent.profile_geometry.operation == Operation::clear) {
                 intent.review_profile_topology = identified(*selected.profiles) || identified(selected.type->profiles);
+                if (!intent.review_profile_topology) {
+                    const bool own_override=target.part_path.empty()
+                        ? expansion(target).source_instance.profile_overrides.has_value()
+                        : selected.node->path_override && selected.node->path_override->profile_overrides.has_value();
+                    if (own_override) intent.review_initial_profile_geometry=true;
+                    else intent.profile_geometry.operation=Operation::unchanged;
+                }
+            }
             if (intent.profile_geometry.operation == Operation::set) {
                 require(intent.profile_geometry.value.has_value(), "Set geometry requires actual profile data.");
                 auto& profiles = *intent.profile_geometry.value;
@@ -1129,14 +1137,25 @@ public:
                         // or recollecting a draft cannot reuse a stale review map.
                         collect_reviewed_topology(profiles, selected);
                         intent.review_profile_topology = true;
-                    } else if(!intent.initialize_profile_topology && std::any_of(profiles.begin(),profiles.end(),
-                        [&](const auto& profile) {
+                    } else if(!intent.initialize_profile_topology) {
+                        const bool mapped_source=std::any_of(selected.profiles->begin(),selected.profiles->end(),
+                            [](const auto& profile){return profile.planar_affine.has_value();});
+                        const bool edited=profiles!=*selected.profiles;
+                        bool map_change=false;
+                        bool affine_only=profiles.size()==selected.profiles->size();
+                        for (const auto& profile:profiles) {
                             const auto actual=std::find_if(selected.profiles->begin(),selected.profiles->end(),
-                                [&](const auto& row) { return row.id==profile.id; });
-                            return actual!=selected.profiles->end() && profile.planar_affine!=actual->planar_affine;
-                        })) {
+                                [&](const auto& row){return row.id==profile.id;});
+                            if (actual==selected.profiles->end()) { affine_only=false;continue; }
+                            map_change|=profile.planar_affine!=actual->planar_affine;
+                            auto retained=profile;
+                            retained.planar_affine=actual->planar_affine;
+                            retained.topology=actual->topology;
+                            affine_only&=retained==*actual;
+                        }
                         collect_reviewed_topology(profiles,selected);
-                        intent.initialize_deformed_profile_topology=true;
+                        if (map_change && affine_only) intent.initialize_deformed_profile_topology=true;
+                        else if (edited || mapped_source) intent.review_initial_profile_geometry=true;
                     }
                     (void)validate_assembly_profiles(profiles);
                 } catch (const std::exception& failure) {
