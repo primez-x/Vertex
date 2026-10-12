@@ -648,6 +648,8 @@ add_library(sketch_appraisal_area_partition src/core/appraisal_area_partition.cp
 target_include_directories(sketch_appraisal_area_partition PUBLIC include)
 target_link_libraries(sketch_appraisal_area_partition PUBLIC sketch_document sketch_project_organization sketch_calculations
   PRIVATE sketch_measurement_linework_source sketch_wall_measurement sketch_model_phases)
+# Document commands admit DISTO records and ANSI partition targets; static cycle.
+target_link_libraries(sketch_document PRIVATE sketch_field_adapter_contract sketch_appraisal_area_partition)
 if(MSVC)
   target_compile_options(sketch_appraisal_area_partition PRIVATE /W4 /permissive- /utf-8)
 endif()

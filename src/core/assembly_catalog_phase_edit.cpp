@@ -347,7 +347,7 @@ Entities derive_raw(const Entities& actual, const Json& request) {
         const auto found = actual.find(id);
         require(found != actual.end(), "catalog edit actual catalog is missing");
         const auto& original = raw_model(found->second);
-        require(catalog_digest(found->second) == edit.at("source_catalog_digest"), "catalog edit original catalog binding changed");
+        require(edit.at("source_catalog_digest") == catalog_digest(found->second), "catalog edit original catalog binding changed");
         auto& candidate = result.at(id).properties.at("model");
         const auto schema = original.at("schema").get<std::string>();
         bool promote = false, promote_geometry = false, promote_mapped = false;
@@ -640,7 +640,7 @@ Inspection inspect(const Entities& actual, const Json& request,
     auto& catalog_work = source_admitted ? *source_admitted : local_catalog_work;
     if (!source_admitted) admit_catalogs(actual, catalog_work);
     const auto source_digest = entity_map_digest(actual);
-    require(source_digest == request.at("source_entities_digest"), "catalog edit complete source map changed");
+    require(request.at("source_entities_digest") == source_digest, "catalog edit complete source map changed");
     auto candidate = derive_raw(actual, request);
     raw.map(candidate);
     admit_catalogs(candidate, catalog_work);

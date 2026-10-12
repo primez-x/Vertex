@@ -214,6 +214,8 @@ bool corner_window_entity(const CanvasEntity& entity) {
     return entity.type == QStringLiteral("corner_window") || entity.corner_window_width_controls.has_value();
 }
 
+double distance(Vec2 left, Vec2 right);
+
 bool valid_corner_window_width_controls(const CanvasEntity& entity) {
     if (entity.type != QStringLiteral("corner_window") || entity.opening_width_controls ||
         !entity.corner_window_width_controls) return false;

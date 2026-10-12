@@ -1408,7 +1408,8 @@ Stage composed_room_stage(const DocumentSnapshot& source,const PhaseConstraintAu
             invalid("composed stage changed an independently derived wall closure: "+copy);
     }
     for (const auto& id:stage.deferred) {
-        const auto expected=stage.entities.find(id),actual=analytical_entities.find(id);
+        const auto expected=stage.entities.find(id);
+        const auto actual=analytical_entities.find(id);
         if (expected==stage.entities.end() || actual==analytical_entities.end() || !exact(expected->second,actual->second))
             invalid("composed stage changed a deferred room relationship: "+id);
     }

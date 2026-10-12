@@ -3467,7 +3467,7 @@ std::string reconstructed_opening_kind(const Entity& opening) {
 
 #ifdef SKETCH_IFC_NATIVE_GEOMETRY
 Entity corner_source(const Json& source, std::string_view type) {
-    require(source.is_object() && source.at("id").is_string() && source.at("type") == type &&
+    require(source.is_object() && source.at("id").is_string() && source.at("type") == Json(type) &&
         source.at("properties").is_object() && source.at("extensions").is_object() && source.at("required").is_boolean());
     return {source.at("id").get<std::string>(),std::string(type),source.at("properties"),
         source.at("required").get<bool>(),source.at("extensions")};

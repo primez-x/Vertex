@@ -124,7 +124,8 @@ Segment joined(const Segment& a,const Segment& b) {
 }
 Vec2 point(const Segment& s,double fraction) {
     if(s.sweep_radians==0)return {std::lerp(s.start.x,s.end.x,fraction),std::lerp(s.start.y,s.end.y,fraction)};
-    const auto c=center(s),angle=s.sweep_radians*fraction;
+    const auto c=center(s);
+    const auto angle=s.sweep_radians*fraction;
     const auto x=s.start.x-c.x,y=s.start.y-c.y;
     return {c.x+x*std::cos(angle)-y*std::sin(angle),c.y+x*std::sin(angle)+y*std::cos(angle)};
 }

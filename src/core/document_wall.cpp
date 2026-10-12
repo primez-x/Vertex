@@ -157,7 +157,8 @@ bool read_document_wall_top_profile(const Entity& entity, Wall& output, std::str
             output.top_gradient_m_per_m = parse_wall_top_plane(*plane);
             if (!output.slope_rise) {
                 const auto gradient = *output.top_gradient_m_per_m;
-                const auto chord = output.baseline.end - output.baseline.start;
+                const Vec2 chord{output.baseline.end.x - output.baseline.start.x,
+                    output.baseline.end.y - output.baseline.start.y};
                 const auto rise = gradient.x * chord.x + gradient.y * chord.y;
                 if (!std::isfinite(rise)) throw std::invalid_argument("Wall top plane rise is not finite");
                 output.slope_rise = rise;

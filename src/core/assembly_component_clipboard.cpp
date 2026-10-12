@@ -236,7 +236,7 @@ void validate_assembly_component_clipboard_provenance(const Json& records) {
                 "component clipboard provenance has colliding owners or qualified sources");
             digest_shape(row.at("source_catalog_digest"));
             const auto [catalog_entry, catalog_added] = catalog_digests.emplace(catalog, string(row.at("source_catalog_digest")));
-            require(catalog_added || catalog_entry->second == row.at("source_catalog_digest"),
+            require(catalog_added || row.at("source_catalog_digest") == catalog_entry->second,
                 "component clipboard catalog digest disagrees across rows");
             const auto& raw = row.at("source_row");
             require(raw.is_object() && raw.contains("id") && raw.at("id") == instance,

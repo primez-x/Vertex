@@ -4,6 +4,7 @@
 #include "sketch/dxf_source_receipt.hpp"
 #include "sketch/physical_wall_room_data.hpp"
 #include "sketch/document_wall.hpp"
+#include "sketch/document_solid.hpp"
 #include "sketch/door_operation.hpp"
 #include "sketch/opening_assembly.hpp"
 #include "sketch/corner_window.hpp"
@@ -2382,7 +2383,7 @@ static bool supported_selection_entity(const Entity& entity) {
     const auto& p = entity.properties;
     const auto canonical = [&](int version, std::string_view form) {
         return p.contains("version") && p.at("version").is_number_integer() && p.at("version") == version &&
-            p.contains("form") && p.at("form") == form;
+            p.contains("form") && p.at("form") == nlohmann::json(form);
     };
     if (entity.type == "column") return canonical(1,"rectangular_column") || canonical(1,"circular_column");
     if (entity.type == "beam") return canonical(1,"straight_beam");
@@ -11300,9 +11301,9 @@ Command complete_disto_measurement_command(
         if (existing == changes->entity_changes.end()) changes->entity_changes.push_back(std::move(updated));
         else *existing = std::move(updated);
     } else {
-        auto& changes = std::get<ApplyBoundaryConstraintChanges>(result);
-        changes.disto_measurement = attachment;
-        changes.disto_measurement_completion = true;
+        auto& boundary_changes = std::get<ApplyBoundaryConstraintChanges>(result);
+        boundary_changes.disto_measurement = attachment;
+        boundary_changes.disto_measurement_completion = true;
     }
     const auto verified = Document::preview_command(source, result);
     if (verified.entities() != completed || verified.assets() != geometry.assets())

@@ -45,6 +45,38 @@
 
 namespace sketch::desktop {
 namespace {
+// Same exact line/circular-arc point evaluation as the main plan canvas.
+std::optional<Vec2> point_at_segment(const Segment& segment, double fraction) {
+    if (!std::isfinite(fraction)) {
+        return std::nullopt;
+    }
+    fraction = std::clamp(fraction, 0.0, 1.0);
+    if (segment.sweep_radians == 0.0) {
+        return Vec2{std::lerp(segment.start.x, segment.end.x, fraction),
+                    std::lerp(segment.start.y, segment.end.y, fraction)};
+    }
+    const auto chord_x = segment.end.x - segment.start.x;
+    const auto chord_y = segment.end.y - segment.start.y;
+    const auto chord_length = std::hypot(chord_x, chord_y);
+    const auto tangent = std::tan(segment.sweep_radians * 0.5);
+    if (!(chord_length > 1e-7) || !std::isfinite(tangent) || std::abs(tangent) <= 1e-12) {
+        return std::nullopt;
+    }
+    const auto midpoint = Vec2{(segment.start.x + segment.end.x) * 0.5,
+                               (segment.start.y + segment.end.y) * 0.5};
+    const auto factor = chord_length / (2.0 * tangent);
+    const auto center = Vec2{midpoint.x - chord_y / chord_length * factor,
+                             midpoint.y + chord_x / chord_length * factor};
+    const auto radius = std::hypot(segment.start.x - center.x, segment.start.y - center.y);
+    if (!(radius > 1e-7) || !std::isfinite(radius)) {
+        return std::nullopt;
+    }
+    const auto start_angle = std::atan2(segment.start.y - center.y,
+                                        segment.start.x - center.x);
+    const auto angle = start_angle + segment.sweep_radians * fraction;
+    return Vec2{center.x + radius * std::cos(angle), center.y + radius * std::sin(angle)};
+}
+
 using Entities = PhaseWallReplacementEntities;
 using Identity = std::tuple<QString, QString, QString>;
 
@@ -1037,7 +1069,8 @@ PhaseWallCanvasProjection project_phase_wall_canvas(const DocumentSnapshot& sour
         }
         stage_embedded=embedded_assembly_presentation_ids(stage);
         for (const auto& [owner,destination]:qualified_hosted) {
-            const auto original_entry=source_embedded.find(owner),proposed_entry=stage_embedded.find(destination);
+            const auto original_entry=source_embedded.find(owner);
+            const auto proposed_entry=stage_embedded.find(destination);
             if (original_entry==source_embedded.end() || proposed_entry==stage_embedded.end() ||
                 !stage_embedded.contains(owner) || stage_embedded.at(owner)!=original_entry->second)
                 throw std::invalid_argument("Phase wall canvas lost an exact original or proposed component presentation alias.");

@@ -235,9 +235,9 @@ void authenticate_source(const DocumentSnapshot& source, const Json& request) {
     const auto saved = request.at("source_saved_revision").is_null() ? std::nullopt :
         std::optional<Revision>{revision(request.at("source_saved_revision"))};
     if (source.revision() != revision(request.at("expected_revision")) || source.saved_revision_optional() != saved ||
-        document_snapshot_digest(source) != request.at("source_snapshot_digest") ||
-        document_authoring_source_digest_v2(source) != request.at("source_authoring_digest") ||
-        entity_map_digest(source.entities()) != request.at("source_entities_digest")) reject("captured full source changed");
+        request.at("source_snapshot_digest") != document_snapshot_digest(source) ||
+        request.at("source_authoring_digest") != document_authoring_source_digest_v2(source) ||
+        request.at("source_entities_digest") != entity_map_digest(source.entities())) reject("captured full source changed");
 }
 Key qualified(const Json& row) { return {identity(row.at("owner_id")), identity(row.at("child_id"))}; }
 

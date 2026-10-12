@@ -59,6 +59,7 @@ using Entities = std::map<std::string,Entity,std::less<>>;
 constexpr std::size_t proof_budget = 1024 * 1024;
 
 [[noreturn]] void invalid(const char* reason) { throw std::invalid_argument(reason); }
+[[noreturn]] void invalid(const std::string& reason) { throw std::invalid_argument(reason); }
 void admit_component_demolition_source_catalogs(const Entities& source) {
     // Charge every catalog, including unused carriers, before phase scope can
     // decode a registry or resolve any qualified component membership.
@@ -1519,6 +1520,10 @@ Entities replay_coordinated(const Entities& source,const PhaseConstraintAuthorin
     return result;
 }
 } // namespace
+
+nlohmann::json encode_phase_constraint_authoring_child_intent(const ConstraintAuthoringIntent& value) {
+    return encode_intent(value);
+}
 
 const nlohmann::json& phase_constraint_coordinated_authoring_body(const Json& value) {
     if (!value.is_object() || !value.contains("version") ||

@@ -2344,7 +2344,8 @@ static std::vector<BoundaryGeometryEdit> exterior_wall_measurement_source_update
     for (const auto& [id, edit] : updates) { (void)edit; append(append, id); }
     auto completed = edited_boundary_entities_batch(proposed, result);
     if (scope) for (const auto& id : scope->inactive_owner_ids) {
-        const auto before=original.find(id), after=completed.find(id);
+        const auto before=original.find(id);
+        const auto after=completed.find(id);
         if (before!=original.end() && (after==completed.end() || before->second!=after->second))
             reject("Exterior source completion changed an inactive phase owner: " + id);
     }

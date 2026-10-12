@@ -409,7 +409,8 @@ Command closed_completed_command(const Json& wire,const CompletedSelection& sele
             std::get<OrdinarySelectionRemovalIntent>(selection).openings &&
             std::get<OrdinarySelectionRemovalIntent>(selection).openings->complete_component_dimensions) :
         closed_command(wire,false);
-    if (std::visit([](const auto& typed){return typed.message.size()>4096;},command))
+    if (std::visit([](const auto& typed){
+        if constexpr (requires { typed.message; }) return typed.message.size()>4096; else return false;},command))
         reject("standalone base message exceeds 4096 bytes");
     if (const auto* raw=std::get_if<ApplyEntityChanges>(&command)) {
         if (raw->entity_changes.empty() || raw->entity_changes.size()>4096)
@@ -749,15 +750,15 @@ Entities replay_mixed_selection_removal(const DocumentSnapshot& source,const Jso
         const auto source_digest=document_snapshot_digest(source);
         const auto saved=value.at("source_saved_revision").is_null() ? std::nullopt :
             std::optional<Revision>{value.at("source_saved_revision").get<Revision>()};
-        if (source.saved_revision_optional()!=saved || source_digest!=value.at("source_snapshot_digest") ||
-            document_authoring_source_digest_v2(source)!=value.at("source_authoring_digest") ||
-            entity_map_digest(source.entities())!=value.at("source_entities_digest"))
+        if (source.saved_revision_optional()!=saved || value.at("source_snapshot_digest")!=source_digest ||
+            value.at("source_authoring_digest")!=document_authoring_source_digest_v2(source) ||
+            value.at("source_entities_digest")!=entity_map_digest(source.entities()))
             reject("standalone captured full source authority changed");
         const auto key=std::pair{source_digest,value.dump()};
         if (const auto retained=replay_memo->results.find(key);retained!=replay_memo->results.end()) return retained->second;
         const auto stage=completed_stage(source,selection,closed_completed_command(value.at("ordinary_command"),selection));
-        if (document_snapshot_digest(stage)!=value.at("stage_snapshot_digest") ||
-            document_authoring_source_digest_v2(stage)!=value.at("stage_authoring_digest"))
+        if (value.at("stage_snapshot_digest")!=document_snapshot_digest(stage) ||
+            value.at("stage_authoring_digest")!=document_authoring_source_digest_v2(stage))
             reject("standalone detached stage authority changed");
         remember(key,stage.entities());
         return stage.entities();
@@ -790,9 +791,9 @@ Entities replay_mixed_selection_removal(const DocumentSnapshot& source,const Jso
     }
     const auto source_digest=document_snapshot_digest(source);
     if (!source.is_editable() || source.saved_revision_optional()!=mixed_selection_removal_source_saved_revision(value) ||
-        source_digest!=value.at("source_snapshot_digest") ||
-        document_authoring_source_digest_v2(source)!=value.at("source_authoring_digest") ||
-        entity_map_digest(source.entities())!=value.at("source_entities_digest")) reject("captured full source authority changed");
+        value.at("source_snapshot_digest")!=source_digest ||
+        value.at("source_authoring_digest")!=document_authoring_source_digest_v2(source) ||
+        value.at("source_entities_digest")!=entity_map_digest(source.entities())) reject("captured full source authority changed");
     const auto key=std::pair{source_digest,value.dump()};
     if (const auto retained=replay_memo->results.find(key);retained!=replay_memo->results.end()) return retained->second;
     const auto members=decode_members(value.at("members"));
@@ -815,8 +816,8 @@ Entities replay_mixed_selection_removal(const DocumentSnapshot& source,const Jso
         complete ? prepare_mixed_selection_removal_stage(source,complete_selection,closed_ordinary_deletion_command(value.at("ordinary_command"),value.at("version")==16)) :
         phase ? prepare_mixed_selection_removal_stage(source,phase_selection,*phase_command) :
         prepare_mixed_selection_removal_stage(source,ordinary,closed_command(value.at("ordinary_command"),false));
-    if (document_snapshot_digest(stage)!=value.at("stage_snapshot_digest") ||
-        document_authoring_source_digest_v2(stage)!=value.at("stage_authoring_digest")) reject("detached ordinary stage authority changed");
+    if (value.at("stage_snapshot_digest")!=document_snapshot_digest(stage) ||
+        value.at("stage_authoring_digest")!=document_authoring_source_digest_v2(stage)) reject("detached ordinary stage authority changed");
     const auto remaining=corners ? mixed_selection_removal_remaining_children(source,corner_selection,members) :
         phase_drawing ? mixed_selection_removal_remaining_children(source,phase_drawing_selection,members) :
         complete ? mixed_selection_removal_remaining_children(source,complete_selection,members) :
@@ -1049,7 +1050,8 @@ ApplyBoundaryConstraintChanges prepare_completed_component_selection(const Docum
     const auto expected=replay_mixed_selection_removal(source,value);
     ApplyBoundaryConstraintChanges command;
     command.expected_revision=source.revision();
-    command.message=std::visit([](const auto& typed){return typed.message;},canonical);
+    command.message=std::visit([](const auto& typed)->std::string{
+        if constexpr (requires { typed.message; }) return typed.message; else return {};},canonical);
     command.mixed_selection_removal_completion=true;
     command.mixed_selection_removal_intent=std::move(value);
     const auto candidate=Document::preview_command(source,Command{command});

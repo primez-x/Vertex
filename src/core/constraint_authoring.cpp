@@ -2448,7 +2448,8 @@ ConstraintAuthoringPreview ConstraintAuthoringBuilder::build(Source snapshot,con
                 const auto model=ModelPhases::from_json(registry.properties.at("model"));
                 if (!model.active_alternative()) continue;
                 for (const auto& id : model.baseline_ids()) {
-                    const auto before=snapshot.entities().find(id),after=result.candidate_entities_.find(id);
+                    const auto before=snapshot.entities().find(id);
+                    const auto after=result.candidate_entities_.find(id);
                     if (before==snapshot.entities().end() || after==result.candidate_entities_.end() || after->second!=before->second)
                         invalid("Wall scaling cannot alter a shared baseline under an active alternative; source-derived replacement is required: " + id);
                 }

@@ -1621,8 +1621,8 @@ ReplayedPhysicalWallRoomReview review_stage(const DocumentSnapshot& source, cons
     std::vector<Json> intents;
     for (const auto& encoded : reviews) {
         const auto review = decode_physical_wall_room_review_intent(encoded);
-        if (review.source_snapshot_digest != value.at("source_snapshot_digest") ||
-            review.source_authoring_digest != value.at("source_authoring_digest") ||
+        if (value.at("source_snapshot_digest") != review.source_snapshot_digest ||
+            value.at("source_authoring_digest") != review.source_authoring_digest ||
             review.source_saved_revision != source.saved_revision_optional() || review.active_phase_room_scope != saved_phases)
             reject("room review must bind complete original source and actual active scope");
         const auto found = std::find_if(stage.reviews.begin(), stage.reviews.end(), [&](const auto& required) {

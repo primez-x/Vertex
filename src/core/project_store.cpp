@@ -25,6 +25,7 @@
 #include "sketch/qualified_embedded_assembly_copy.hpp"
 #include "sketch/architectural_drawing_removal.hpp"
 #include "sketch/phase_assembly_catalog_edit.hpp"
+#include "sketch/phase_assembly_catalog_edit_preparation.hpp"
 
 #include <sqlite3.h>
 
@@ -55,6 +56,7 @@ namespace sketch {
 
 namespace {
 bool snapshot_uses_shared_asset_payloads(const DocumentSnapshot& snapshot);
+[[noreturn]] void storage_error(StorageErrorCode code, const std::string& message);
 bool has_wall_top_plane_semantics(const Entity& entity) {
     if (entity.type != "wall" || !entity.properties.is_object()) return false;
     if (entity.properties.contains("top_plane")) return true;
@@ -850,7 +852,7 @@ std::uint32_t required_format_version_internal(const DocumentSnapshot& snapshot,
                                 only_move.message=child.intent.message;
                                 only_move.wall_geometry_move=child.intent.wall_geometry_move;
                                 canonical=child.intent.wall_geometry_move && !child.intent.wall_geometry_move->targets.empty() &&
-                                    encode_intent(only_move)==encode_intent(child.intent) &&
+                                    encode_phase_constraint_authoring_child_intent(only_move)==encode_phase_constraint_authoring_child_intent(child.intent) &&
                                     encode_phase_constraint_authoring_intent(child).dump()==wall.dump();
                                 if (!child.wall_replacement.is_null()) {
                                     const auto leaf=decode_phase_wall_replacement_authoring(child.wall_replacement);

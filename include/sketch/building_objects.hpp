@@ -1,5 +1,6 @@
 #pragma once
 
+#include "sketch/geometry.hpp"
 #include "sketch/stair_semantics.hpp"
 
 #include <TopoDS_Shape.hxx>

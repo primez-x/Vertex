@@ -14,6 +14,40 @@ changed source does not acquire runtime acceptance without later qualification.
 
 ## Current delivery state
 
+### October 12 first compile since October 6
+
+The user lifted the source-only restriction for compilation. The Release
+`vertex` application target (and its import worker) was compiled in the
+existing `build/windows-release` directory. No tests, launches, packages or
+installations ran; the installed application is unchanged.
+
+The first compile in roughly 385 commits failed in 31 translation units
+(about 150 errors). All were source-level defects introduced by uncompiled
+batches, corrected without behavioral or wire-format changes:
+- missing includes/declaration order (`Vec2` in building_objects.hpp, absent
+  `nlohmann/json_fwd.hpp`, `document_solid.hpp`, forward declarations for
+  `storage_error`, `distance`, `radians_from_degrees`);
+- C++20 nlohmann::json 3.12 mixed-type comparisons (json operand placed on the
+  left or wrapped explicitly), C3538 `auto` declarator lists, a redefined local;
+- Windows/Qt macro collisions (`far`, `slots`) and a shadowed captured
+  `request` in main_window.cpp; `QStringList::remove` by value -> `removeAll`;
+- static canvas previews now use `augmentAuthoredCommandForRegistry` (the
+  registry commit's static-preview convention) instead of the instance method;
+- a never-defined `admitArchitecturalGroupCandidate` call was replaced by the
+  existing full `Document::preview_command` admission. Any extra native group
+  admission intended by commit 8d8f78a7 remains an unimplemented gap;
+- `encode_intent` exposed as `encode_phase_constraint_authoring_child_intent`
+  for project_store's reader-floor checks; `same_block_geometry` forward
+  declaration aligned with its single definition; `point_at_segment` copied
+  into the phase wall projection; command `message` visits guarded for
+  alternatives without a message;
+- link: `sketch_document` now links `sketch_field_adapter_contract` and
+  `sketch_appraisal_area_partition` (static cycle, like the existing adapter).
+
+Result: `vertex.exe` builds (SHA-256 `cbb717e4...792f64a`). This is compiled
+behavior only for the app target; unit/desktop test targets were not built,
+nothing was run, and no runtime or user acceptance is claimed.
+
 ### October 12 source-preserving mapped slab integration
 
 Continues the interrupted mapped-slab batch on top of c61979e6. Source only:

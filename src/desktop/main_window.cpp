@@ -10376,7 +10376,7 @@ public:
                 transformations.push_back({translation.boundary_id,PlanarTransform{{},0,false,false,translation.offset}});
             movement=TransformBoundaries{source.revision(),std::move(transformations),std::move(changes),"Move selected objects"};
         } else movement=TranslateBoundaries{source.revision(),std::move(translations),std::move(changes),"Move selected objects"};
-        const Command command = completeMeasuredAreaConsequences(source, augmentAuthoredCommand(completeOrdinaryMeasuredDimensionMovement(source,
+        const Command command = completeMeasuredAreaConsequences(source, augmentAuthoredCommandForRegistry(completeOrdinaryMeasuredDimensionMovement(source,
             std::move(movement),PlanarTransform{{},0,false,false,offset}), source));
         const auto candidate = Document::preview_command(source,command);
         for (const auto& id : model_ids) {
@@ -11979,7 +11979,7 @@ public:
                 return value;
             };
             const auto cut = parse_finite(cut_depth_m, "Cut depth");
-            const auto far = parse_finite(far_depth_m, "Far depth");
+            const auto far_depth = parse_finite(far_depth_m, "Far depth");
             const auto cut_line = parse_finite(cut_line_mm, "Cut line width");
             const auto projection_line = parse_finite(projection_line_mm, "Projection line width");
             const auto hatch_scale_value = parse_finite(hatch_scale, "Hatch scale");
@@ -12045,7 +12045,7 @@ public:
                 throw std::invalid_argument("Architectural view identity was not found");
             auto replacement = *found;
             replacement.presentation.cut_depth_m = cut;
-            replacement.presentation.far_depth_m = far;
+            replacement.presentation.far_depth_m = far_depth;
             replacement.presentation.cut_line_mm = cut_line;
             replacement.presentation.projection_line_mm = projection_line;
             replacement.presentation.hatch_enabled = hatch_enabled;
@@ -25335,7 +25335,7 @@ public:
                 .entity_changes = std::move(changes),
                 .message = replace_selected ? "edit building object" : "create building object",
             })) return {};
-            if (m_pending_proposed_selection_document==m_document &&
+            if (m_pending_proposed_selection_document.lock()==m_document &&
                 m_pending_proposed_selection_revision==authoringSnapshot().revision()) {
                 const auto proposed=m_pending_proposed_selection.find(id.toStdString());
                 if (proposed!=m_pending_proposed_selection.end()) id=id_from(proposed->second);
@@ -27065,7 +27065,7 @@ public:
                     auto command=planEndpointCommand(source,entity_id,vertex_id,position);
                     const auto* changes=std::get_if<ApplyEntityChanges>(&command);
                     vertex_command=owner.type=="roof" && changes && changes->entity_changes.empty() && changes->asset_changes.empty()
-                        ? std::move(command) : augmentAuthoredCommand(command,source);
+                        ? std::move(command) : augmentAuthoredCommandForRegistry(command,source);
                     if (auto proposed = projectAlternativeWallCanvasCommand(source, *vertex_command,
                             retained, eligible, labels, metric_units, view_context, prepared)) {
                         if (admitted_command) *admitted_command = *vertex_command;
@@ -27109,7 +27109,7 @@ public:
                     std::optional<DocumentSnapshot> candidate;
                     vertex_command=measuredStrokeGeometryCommand(source,edit,std::nullopt,&candidate);
                     if (prepared) {
-                        vertex_command=augmentAuthoredCommand(*vertex_command,source);
+                        vertex_command=augmentAuthoredCommandForRegistry(*vertex_command,source);
                         return prepareCanvasEdit(source,*vertex_command,edit_source,*prepared);
                     }
                     return *candidate;
@@ -27131,7 +27131,7 @@ public:
                 std::optional<DocumentSnapshot> candidate;
                 vertex_command=constraint_authoring_verified_command(source,preview,&candidate);
                 if (prepared) {
-                    vertex_command=augmentAuthoredCommand(*vertex_command,source);
+                    vertex_command=augmentAuthoredCommandForRegistry(*vertex_command,source);
                     return prepareCanvasEdit(source,*vertex_command,edit_source,*prepared);
                 }
                 return *candidate;
@@ -31967,8 +31967,8 @@ public:
             while (!occupied.insert(proposed).second) proposed = new_id("proposed");
             return proposed;
         };
-        for (const auto* slots : {&plan.required_entity_ids, &plan.required_child_ids})
-            for (const auto& original : *slots)
+        for (const auto* id_slots : {&plan.required_entity_ids, &plan.required_child_ids})
+            for (const auto& original : *id_slots)
                 if (!replacement.identities.emplace(original, allocate()).second)
                     throw std::invalid_argument("The wall edit repeats an allocated owner identity.");
         for (const auto& original : plan.required_hosted_instance_ids)
@@ -32031,7 +32031,7 @@ public:
                     if (admitted_command) *admitted_command=std::move(command);
                     return std::move(projection->entities);
                 }
-                command=augmentAuthoredCommand(command,source);
+                command=augmentAuthoredCommandForRegistry(command,source);
                 const auto candidate=prepared ? prepareCanvasEdit(source,command,edit_source,*prepared)
                     : Document::preview_command(source,command);
                 validate_architectural_geometry_changes(source,candidate,{requested_id.toStdString()});
@@ -32081,7 +32081,7 @@ public:
             }
             // Width and station edits share the same complete-host projection.
             // Neither can display an affine copy of the old opening or wall cut.
-            if(admitted_command) command=augmentAuthoredCommand(command,source);
+            if(admitted_command) command=augmentAuthoredCommandForRegistry(command,source);
             const auto candidate=prepared ? prepareCanvasEdit(source,command,edit_source,*prepared)
                 : Document::preview_command(source,command);
             if(admitted_command) validate_architectural_geometry_changes(source,candidate,{requested_id.toStdString()});
@@ -45912,7 +45912,7 @@ public:
         auto* direction = new QLineEdit(&dialog); direction->setObjectName(QStringLiteral("namedViewDirection"));
         auto* up = new QLineEdit(&dialog); up->setObjectName(QStringLiteral("namedViewUp"));
         auto* cut = new QLineEdit(&dialog); cut->setObjectName(QStringLiteral("namedViewCut"));
-        auto* far = new QLineEdit(&dialog); far->setObjectName(QStringLiteral("namedViewFar"));
+        auto* far_edit = new QLineEdit(&dialog); far_edit->setObjectName(QStringLiteral("namedViewFar"));
         auto* crop_enabled = new QCheckBox(QStringLiteral("Crop to view extents"), &dialog);
         crop_enabled->setObjectName(QStringLiteral("namedViewCropEnabled"));
         auto* crop_bounds = new QLineEdit(&dialog);
@@ -45925,7 +45925,7 @@ public:
         form->addRow(QStringLiteral("Look direction X, Y, Z"), direction);
         form->addRow(QStringLiteral("Up direction X, Y, Z"), up);
         form->addRow(QStringLiteral("Section cut depth (m)"), cut);
-        form->addRow(QStringLiteral("Far depth (m)"), far);
+        form->addRow(QStringLiteral("Far depth (m)"), far_edit);
         form->addRow(crop_enabled);
         form->addRow(QStringLiteral("Crop left, right, bottom, top (m)"), crop_bounds);
         crop_bounds->setEnabled(false);
@@ -46035,7 +46035,7 @@ public:
             origin->setText(vector_text(value.origin_m)); direction->setText(vector_text(value.direction));
             up->setText(vector_text(value.up));
             cut->setText(QString::number(value.presentation.cut_depth_m, 'g', 17));
-            far->setText(QString::number(value.presentation.far_depth_m, 'g', 17));
+            far_edit->setText(QString::number(value.presentation.far_depth_m, 'g', 17));
             crop_enabled->setChecked(value.presentation.crop.has_value());
             crop_bounds->clear();
             if (value.presentation.crop) {
@@ -46082,7 +46082,7 @@ public:
                 if (value.name.empty()) throw std::invalid_argument("Enter a view name.");
                 value.kind = static_cast<CoordinatedViewKind>(kind->currentData().toInt());
                 value.origin_m = vector(origin); value.direction = vector(direction); value.up = vector(up);
-                value.presentation.cut_depth_m = scalar(cut->text()); value.presentation.far_depth_m = scalar(far->text());
+                value.presentation.cut_depth_m = scalar(cut->text()); value.presentation.far_depth_m = scalar(far_edit->text());
                 if (crop_enabled->isChecked()) {
                     const auto parts = crop_bounds->text().split(u',');
                     if (parts.size() != 4) {
@@ -46679,7 +46679,7 @@ public:
             dialog.setModal(true);
             auto* form = new QFormLayout(&dialog);
             auto* cut = new QLineEdit(number(found->presentation.cut_depth_m), &dialog);
-            auto* far = new QLineEdit(number(found->presentation.far_depth_m), &dialog);
+            auto* far_edit = new QLineEdit(number(found->presentation.far_depth_m), &dialog);
             auto* cut_line = new QLineEdit(number(found->presentation.cut_line_mm), &dialog);
             auto* projection_line = new QLineEdit(number(found->presentation.projection_line_mm), &dialog);
             auto* pattern = new QLineEdit(QString::fromStdString(found->presentation.hatch_pattern), &dialog);
@@ -46701,7 +46701,7 @@ public:
             detail->addItems({QStringLiteral("Coarse"), QStringLiteral("Medium"), QStringLiteral("Fine")});
             detail->setCurrentIndex(static_cast<int>(found->presentation.detail));
             cut->setObjectName(QStringLiteral("viewCutDepth"));
-            far->setObjectName(QStringLiteral("viewFarDepth"));
+            far_edit->setObjectName(QStringLiteral("viewFarDepth"));
             cut_line->setObjectName(QStringLiteral("viewCutLine"));
             projection_line->setObjectName(QStringLiteral("viewProjectionLine"));
             pattern->setObjectName(QStringLiteral("viewHatchPattern"));
@@ -46724,7 +46724,7 @@ public:
             QObject::connect(crop_enabled, &QCheckBox::toggled,
                              crop_bounds, &QWidget::setEnabled);
             form->addRow(QStringLiteral("Cut depth (m)"), cut);
-            form->addRow(QStringLiteral("Far depth (m)"), far);
+            form->addRow(QStringLiteral("Far depth (m)"), far_edit);
             form->addRow(QStringLiteral("Cut line width (mm)"), cut_line);
             form->addRow(QStringLiteral("Projection line width (mm)"), projection_line);
             form->addRow(QStringLiteral("Hatch pattern"), pattern);
@@ -46752,7 +46752,7 @@ public:
             QObject::connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
             if (dialog.exec() != QDialog::Accepted || !modalContextUnchanged(context)) return;
             (void)editArchitecturalViewPresentation(
-                QString::fromStdString(found->id), cut->text(), far->text(), cut_line->text(),
+                QString::fromStdString(found->id), cut->text(), far_edit->text(), cut_line->text(),
                 projection_line->text(), hatch->isChecked(), pattern->text(), hatch_scale->text(),
                 detail->currentText(), object_ids->text(),
                 crop_enabled->isChecked() ? std::optional<QString>(crop_bounds->text())
@@ -51355,8 +51355,8 @@ private:
             if (!occupied.insert(proposed).second)
                 throw std::invalid_argument("A roof copy destination is already reserved in the source or history.");
         }
-        for (const auto* slots : {&plan.required_entity_ids, &plan.required_child_ids})
-            for (const auto& id : *slots) {
+        for (const auto* id_slots : {&plan.required_entity_ids, &plan.required_child_ids})
+            for (const auto& id : *id_slots) {
                 if (identities.contains(id)) continue;
                 auto fresh = new_id("roof-copy");
                 while (!occupied.insert(fresh).second) fresh = new_id("roof-copy");
@@ -52010,8 +52010,8 @@ private:
         command.message=message;
         command.phase_constraint_authoring_completion=true;
         command.phase_constraint_authoring_intent=encode_phase_constraint_authoring_intent(intent);
-        const auto candidate=Document::preview_command(source,Command{command});
-        (void)admitArchitecturalGroupCandidate(candidate.entities());
+        // Full document admission; throws before any publication on refusal.
+        (void)Document::preview_command(source,Command{command});
         return Command{std::move(command)};
     }
 
@@ -52780,8 +52780,8 @@ private:
             if (!occupied.insert(copied).second)
                 throw std::invalid_argument("A horizontal copy destination is already reserved in source or history.");
         }
-        for (const auto* slots : {&plan.required_entity_ids, &plan.required_child_ids})
-            for (const auto& original : *slots) {
+        for (const auto* id_slots : {&plan.required_entity_ids, &plan.required_child_ids})
+            for (const auto& original : *id_slots) {
                 if (identities.contains(original)) continue;
                 auto copied = new_id("assembly-copy");
                 while (!occupied.insert(copied).second) copied = new_id("assembly-copy");
@@ -52994,8 +52994,8 @@ private:
                 std::any_of(replacement.ordinary_geometry.begin(),replacement.ordinary_geometry.end(),mapped);
         }
         if (!occupied) occupied = retainedSlabIdentityNames(source,complete_component_dimensions);
-        for (const auto* slots : {&plan.required_entity_ids, &plan.required_child_ids})
-            for (const auto& original : *slots) {
+        for (const auto* id_slots : {&plan.required_entity_ids, &plan.required_child_ids})
+            for (const auto& original : *id_slots) {
                 auto proposed = new_id("proposed");
                 while (!occupied->insert(proposed).second) proposed = new_id("proposed");
                 replacement.identities.emplace(original, std::move(proposed));
@@ -73090,7 +73090,7 @@ public:
             const auto publication_preview=prepareCanvasEdit(*source,Command{command},edit_source,*publication);
             auto restored=ordinary;
             auto order=authority.semantic_selection_order;
-            for (const auto& id:retired_stair_rails) restored.remove(QString::fromStdString(id));
+            for (const auto& id:retired_stair_rails) restored.removeAll(QString::fromStdString(id));
             std::erase_if(order,[&](const auto& member) {
                 return !member.child && std::binary_search(retired_stair_rails.begin(),retired_stair_rails.end(),
                     member.ordinary_id.toStdString());
@@ -73754,8 +73754,8 @@ public:
                 present_projection(*replacements);
                 merge_geometry(replacements->entities);merge_labels(replacements->labels);
             }
-            const auto& request=preparation.intent().at("ordinary_request");
-            for (const auto& row:request.at("annotations")) {
+            const auto& ordinary_request=preparation.intent().at("ordinary_request");
+            for (const auto& row:ordinary_request.at("annotations")) {
                 if (site) {
                     const SiteAnnotationTarget target{row.at("owner_id").get<std::string>(),row.at("child_id").get<std::string>()};
                     const auto alias=std::find_if(site->move_annotation_targets.begin(),site->move_annotation_targets.end(),
@@ -73788,7 +73788,7 @@ public:
                     }
                 }
             }
-            for (const auto& row:request.at("references")) {
+            for (const auto& row:ordinary_request.at("references")) {
                 const auto id=id_from(row.at("entity_id").get<std::string>());
                 if (site) {
                     const auto original=std::find_if(site->move_references.begin(),site->move_references.end(),[&](const auto& value){return value.id==id;});

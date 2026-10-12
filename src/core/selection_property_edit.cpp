@@ -161,9 +161,9 @@ void authenticate_source(const DocumentSnapshot& source, const Json& value) {
     const auto saved = value.at("source_saved_revision").is_null() ? std::nullopt :
         std::optional<Revision>{revision(value.at("source_saved_revision"))};
     if (source.revision() != revision(value.at("expected_revision")) || source.saved_revision_optional() != saved ||
-        document_snapshot_digest(source) != value.at("source_snapshot_digest") ||
-        document_authoring_source_digest_v2(source) != value.at("source_authoring_digest") ||
-        entity_map_digest(source.entities()) != value.at("source_entities_digest"))
+        value.at("source_snapshot_digest") != document_snapshot_digest(source) ||
+        value.at("source_authoring_digest") != document_authoring_source_digest_v2(source) ||
+        value.at("source_entities_digest") != entity_map_digest(source.entities()))
         reject("captured full source authority changed");
 }
 

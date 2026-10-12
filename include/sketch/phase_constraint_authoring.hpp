@@ -199,6 +199,9 @@ struct PhaseConstraintAuthoringIntent {
     const nlohmann::json& value);
 [[nodiscard]] nlohmann::json encode_phase_constraint_authoring_intent(
     const PhaseConstraintAuthoringIntent& intent);
+// Canonical encoding of one ordinary constraint child, as embedded in phase intents.
+[[nodiscard]] nlohmann::json encode_phase_constraint_authoring_child_intent(
+    const ConstraintAuthoringIntent& value);
 // Borrow the historical coordinated body from an already validated canonical
 // enclosing intent. Inner six/seven/eight/nine's exact closed, literal-true, nonnested
 // wrapper is checked before unwrapping once; historical bodies return unchanged.

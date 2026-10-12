@@ -528,9 +528,9 @@ Entities replay_completed_ordinary_selection_removal(const DocumentSnapshot& sou
         reject("captured source history/metadata inventory is invalid");
     const auto source_digest=document_snapshot_digest(source);
     if (!source.is_editable() || source.saved_revision_optional()!=saved_revision(retained.at("source_saved_revision")) ||
-        source_digest!=retained.at("source_snapshot_digest") ||
-        document_authoring_source_digest_v2(source)!=retained.at("source_authoring_digest") ||
-        entity_map_digest(source.entities())!=retained.at("source_entities_digest"))
+        retained.at("source_snapshot_digest")!=source_digest ||
+        retained.at("source_authoring_digest")!=document_authoring_source_digest_v2(source) ||
+        retained.at("source_entities_digest")!=entity_map_digest(source.entities()))
         reject("captured complete source authority changed");
     const auto key=std::pair{source_digest,retained.dump()};
     if (const auto found=replay_memo->results.find(key);found!=replay_memo->results.end()) return found->second;
@@ -570,7 +570,8 @@ ApplyBoundaryConstraintChanges prepare_completed_ordinary_selection_removal(cons
     const auto expected=replay_completed_ordinary_selection_removal(source,value);
     ApplyBoundaryConstraintChanges command;
     command.expected_revision=source.revision();
-    command.message=std::visit([](const auto& typed){return typed.message;},base_command);
+    command.message=std::visit([](const auto& typed)->std::string{
+        if constexpr (requires { typed.message; }) return typed.message; else return {};},base_command);
     command.ordinary_selection_removal_completion=true;
     command.ordinary_selection_removal_intent=std::move(value);
     const auto candidate=prepare_ordinary_selection_removal_stage(source,intent,Command{command});

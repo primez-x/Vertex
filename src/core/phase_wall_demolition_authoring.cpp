@@ -467,7 +467,8 @@ Entities prove_pruned_companions(const Entities& source,const Entities& candidat
     for (const auto& [id,entity]:source) if (entity.type==assembly_phase_membership_entity_type) projection.insert_or_assign(id,entity);
     auto proof=prune_removed_assembly_phase_memberships(source,projection);
     for (const auto& [id,entity]:source) if (entity.type==assembly_phase_membership_entity_type) {
-        const auto expected=proof.find(id),supplied=candidate.find(id);
+        const auto expected=proof.find(id);
+        const auto supplied=candidate.find(id);
         if ((expected==proof.end())!=(supplied==candidate.end()) ||
             (expected!=proof.end() && !exact(expected->second,supplied->second)))
             invalid("candidate differs from exact source-derived companion pruning");

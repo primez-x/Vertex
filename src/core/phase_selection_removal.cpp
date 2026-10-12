@@ -462,9 +462,9 @@ Entities replay_completed_phase_selection_removal(const DocumentSnapshot& source
     const auto retained=validate_completed_phase_selection_removal_intent(value);source_budget(source);
     const auto source_digest=document_snapshot_digest(source);
     if (source.saved_revision_optional()!=saved_revision(retained.at("source_saved_revision")) ||
-        source_digest!=retained.at("source_snapshot_digest") ||
-        document_authoring_source_digest_v2(source)!=retained.at("source_authoring_digest") ||
-        entity_map_digest(source.entities())!=retained.at("source_entities_digest"))
+        retained.at("source_snapshot_digest")!=source_digest ||
+        retained.at("source_authoring_digest")!=document_authoring_source_digest_v2(source) ||
+        retained.at("source_entities_digest")!=entity_map_digest(source.entities()))
         reject("captured complete source authority changed");
     const auto key=std::pair{source_digest,retained.dump()};
     if (const auto found=replay_memo->results.find(key);found!=replay_memo->results.end()) return found->second;

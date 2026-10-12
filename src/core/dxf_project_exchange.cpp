@@ -1350,7 +1350,9 @@ const char* source_depiction(const Entity& entity) {
 
 Entity detached_native_entity(const Entity& source, const std::map<std::string, std::string>& ids,
                               bool proved_stair_floor = false);
-bool same_block_geometry(const DxfBlock& a, const DxfBlock& b, bool exact);
+bool same_block_geometry(const DxfBlock& a, const DxfBlock& b, bool exact = false,
+                         bool compare_labels = false);
+double radians_from_degrees(double degrees);
 
 bool export_boundary_entity(const DocumentSnapshot& document, const Entity& entity, const std::string& layer,
                             DxfProjectExportResult& result) {
@@ -2939,7 +2941,7 @@ NativeCandidate decode_native_candidate(const DxfBlock& block, std::size_t inser
     bool original_required = false;
     if (physical_source) {
         const auto& original = source_index.at(payload.at("physical_source_graph_id").get<std::string>()).at(payload.at("id").get<std::string>());
-        if (original.type != payload.at("type")) throw std::invalid_argument("V7 thin carrier source type differs");
+        if (payload.at("type") != original.type) throw std::invalid_argument("V7 thin carrier source type differs");
         original_properties = original.properties; original_extensions = original.extensions;
         if (payload.at("version") == 8) original_required = original.required;
     }
@@ -3034,8 +3036,8 @@ NativeCandidate decode_native_candidate(const DxfBlock& block, std::size_t inser
     return candidate;
 }
 
-bool same_block_geometry(const DxfBlock& a, const DxfBlock& b, bool exact = false,
-                         bool compare_labels = false) {
+bool same_block_geometry(const DxfBlock& a, const DxfBlock& b, bool exact,
+                         bool compare_labels) {
     const auto near = [exact](double x, double y) {
         return exact ? x == y : std::abs(x - y) <= kGeometryTolerance;
     };

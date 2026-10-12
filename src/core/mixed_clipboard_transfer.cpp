@@ -277,7 +277,7 @@ struct IdentityRoster {
 
 std::size_t ordinary(const Json& value, IdentityRoster& identities) {
     if (!value.is_object() || value.size() < 4 || value.size() > 5 ||
-        !value.contains("format") || !value.at("format").is_string() || value.at("format") != ordinary_format ||
+        !value.contains("format") || !value.at("format").is_string() || value.at("format") != Json(ordinary_format) ||
         !value.contains("version") || !value.contains("root_id") || !value.contains("entities"))
         reject("unsupported ordinary clipboard contract");
     for (const auto& [key, child] : value.items()) {
@@ -347,7 +347,7 @@ void wire_shape(const Json& value) {
     const bool components = value.at("version") == 2;
     if (components) keys(value, {"format", "version", "ordinary", "corners", "catalogs", "skylights", "detached_components"});
     else keys(value, {"format", "version", "ordinary", "corners", "catalogs", "skylights"});
-    if (!value.at("format").is_string() || value.at("format") != format) reject("unsupported format");
+    if (!value.at("format").is_string() || value.at("format") != Json(format)) reject("unsupported format");
     if (components && (!value.at("detached_components").is_array() || value.at("detached_components").size() > legacy_limit))
         reject("detached component roster limit exceeded");
     if ((!value.at("ordinary").is_null() && !value.at("ordinary").is_object()) ||
