@@ -251,7 +251,9 @@ Authored author(MainWindow& window) {
             text(dialog,"assemblyTypeName","Nested canopy");named(dialog,"assemblyType","Properties","label","Canopy");
             click(dialog,"assemblyAddPart");click(dialog,"assemblyAddPart");auto& parts=control<QTableWidget>(dialog,"assemblyParts");
             for(int i=0;i<2;++i)choice(*qobject_cast<QComboBox*>(parts.cellWidget(i,0)),QString::fromStdString(leaf.id));
-            cell_text(parts,0,1,"6 m");cell_text(parts,0,5,"2");cell_text(parts,1,3,"0.1 m");cell_text(parts,1,4,"15");
+            // Width/depth and height scales are independent (format v115); author
+            // both so the nested part scales uniformly in XYZ.
+            cell_text(parts,0,1,"6 m");cell_text(parts,0,5,"2");cell_text(parts,0,6,"2");cell_text(parts,1,3,"0.1 m");cell_text(parts,1,4,"15");
             first_part=qobject_cast<QComboBox*>(parts.cellWidget(1,0))->property("stableId").toString().toStdString();parts.setCurrentCell(1,0);click(dialog,"assemblyPartUp");save(dialog);
         });
     });
@@ -260,7 +262,7 @@ Authored author(MainWindow& window) {
     hub(window,[&](QDialog& workspace) {
         modal("assemblyInstanceAuthoringDialog",[&]{click(workspace,"placeIndependentAssembly");},[&](QDialog& dialog) {
             choice(control<QComboBox>(dialog,"assemblyInstanceType"),QString::fromStdString(root.id));text(dialog,"assemblyInstanceName","Entrance canopy");
-            text(dialog,"assemblyRootX","10 m");text(dialog,"assemblyRootY","20 m");text(dialog,"assemblyRootZ","0.2 m");text(dialog,"assemblyRootYaw","30");text(dialog,"assemblyRootScale","1.25");
+            text(dialog,"assemblyRootX","10 m");text(dialog,"assemblyRootY","20 m");text(dialog,"assemblyRootZ","0.2 m");text(dialog,"assemblyRootYaw","30");text(dialog,"assemblyRootScale","1.25");text(dialog,"assemblyRootHeightScale","1.25");
             named(dialog,"assemblyRoot","Properties","label","Canopy");
             auto& nested=control<QComboBox>(dialog,"assemblyNestedPart");require(nested.count()==2,"both typed nested choices exposed");nested.setCurrentIndex(0);
             named(dialog,"assemblyNested","Properties","finish","natural");named(dialog,"assemblyNested","Materials","core","steel");named(dialog,"assemblyNested","Quantities","pieces","2");

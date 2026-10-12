@@ -245,8 +245,10 @@ void test_associative_section() {
         require(close(vertical.start.x, 5 + width) && close(vertical.end.x, 5 + width) &&
                     close(vertical.start.y, 2.65) && close(vertical.end.y, top),
                 "height line follows resolved level elevation and authoritative wall height");
-        require(dimension_label(*canvas, width_id).text == QString::number(width, 'f', 3) + " m" &&
-                    dimension_label(*canvas, height_id).text == QString::number(height, 'f', 3) + " m",
+        // Measured section annotations share the practical drawing-length
+        // presentation: exact metres without padded trailing zeros.
+        require(dimension_label(*canvas, width_id).text == QString::number(width, 'g', 6) + " m" &&
+                    dimension_label(*canvas, height_id).text == QString::number(height, 'g', 6) + " m",
                 "labels measure authoritative source extents rather than cached endpoints or text");
         require(std::count_if(canvas->entities().begin(), canvas->entities().end(),
                     [](const auto& entity) { return entity.type == "section_overlay"; }) == 2,
@@ -255,8 +257,8 @@ void test_associative_section() {
     check(4, 3, 0.75);
     const auto annotated_entities = window.document().snapshot().entities();
     window.setMetricUnits(false);
-    require(dimension_label(*canvas, width_id).text.contains('\'') &&
-                dimension_label(*canvas, height_id).text.contains('\'') &&
+    require(dimension_label(*canvas, width_id).text.contains(QStringLiteral(" ft ")) &&
+                dimension_label(*canvas, height_id).text.contains(QStringLiteral(" ft ")) &&
                 window.document().snapshot().entities() == annotated_entities,
             "display units update derived dimension labels without modifying source entities");
     window.setMetricUnits(true);
@@ -303,8 +305,8 @@ void test_associative_section() {
     QFile output(svg);
     require(output.open(QIODevice::ReadOnly), "SVG output can be read");
     const auto bytes = output.readAll();
-    require(bytes.contains("5.500 m") && bytes.contains("4.250 m") &&
-                !bytes.contains("stale authored label") && !bytes.contains("999.000 m"),
+    require(bytes.contains("5.5 m") && bytes.contains("4.25 m") &&
+                !bytes.contains("stale authored label") && !bytes.contains("999 m"),
             "shared printable output uses current source dimensions");
     const auto capture = qEnvironmentVariable("VERTEX_TEST_CAPTURE_DIR");
     if (!capture.isEmpty()) {
@@ -417,7 +419,7 @@ void test_associative_section() {
     require(detached_section.overlays.size() == 2 &&
                 !overlay_by_id(detached_section, width_id).dimension_binding &&
                 overlay_by_id(detached_section, width_id).object_id.empty() &&
-                dimension_label(*canvas, width_id).text == "2.000 m",
+                dimension_label(*canvas, width_id).text == "2 m",
             "detaching persists explicit geometry and clears the former source reference");
     const auto detached = window.document().snapshot();
     require(window.selectEntity(wall) && window.deleteSelection(),
@@ -426,7 +428,7 @@ void test_associative_section() {
     require(surviving_section.restrict_to_objects && surviving_section.object_ids.empty() &&
                 surviving_section.overlays.size() == 1 &&
                 overlay_by_id(surviving_section, width_id) == overlay_by_id(detached_section, width_id) &&
-                !has_source(other_wall) && dimension_label(*canvas, width_id).text == "2.000 m",
+                !has_source(other_wall) && dimension_label(*canvas, width_id).text == "2 m",
             "detached annotation survives former-source deletion while its linked sibling is removed");
     const auto detached_key = QString::fromStdString("view-section/overlay/" + width_id);
     const auto detached_line = std::find_if(canvas->entities().begin(), canvas->entities().end(),

@@ -226,7 +226,8 @@ Exact binary64(double value) {
     Exact result{significand}; result /= Integer{1} << -shift; return result;
 }
 double rounded_directional(const Exact& value) {
-    if (value == 0) return 0.0;
+    // An exact zero may be stored as 0/d (d != 1), which `== 0` rejects.
+    if (value.is_zero()) return 0.0;
     const bool negative = value < 0;
     const Exact magnitude = negative ? -value : value;
     if (magnitude > binary64(std::numeric_limits<double>::max()))

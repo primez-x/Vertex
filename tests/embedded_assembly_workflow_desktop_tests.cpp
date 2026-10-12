@@ -13,6 +13,7 @@
 #include <QClipboard>
 #include <QDialog>
 #include <QDialogButtonBox>
+#include <QElapsedTimer>
 #include <QFontDatabase>
 #include <QLineEdit>
 #include <QKeyEvent>
@@ -168,7 +169,14 @@ void lifecycle(const QString& directory) {
     mouse(drawing,QEvent::MouseButtonRelease,rotated);
     require(window.document().snapshot().entities()==before_gesture.entities() && window.document().revision()==before_gesture.revision(),"cancelled actual embedded transform gesture preserves source");
     require(window.selectEntity(placed_id),"reselect embedded root after cancelled gesture");
-    mouse(drawing,QEvent::MouseButtonPress,*handle);mouse(drawing,QEvent::MouseMove,rotated);mouse(drawing,QEvent::MouseButtonRelease,rotated);QApplication::processEvents();
+    mouse(drawing,QEvent::MouseButtonPress,*handle);mouse(drawing,QEvent::MouseMove,rotated);mouse(drawing,QEvent::MouseButtonRelease,rotated);
+    // Embedded profile transforms prepare their command in the background
+    // preview worker (October 7); release publishes once that exact preview
+    // completes. Wait for it rather than assuming a synchronous release.
+    QElapsedTimer gesture_deadline;gesture_deadline.start();
+    while(window.document().revision()==before_gesture.revision() && gesture_deadline.elapsed()<10000)
+        QApplication::processEvents(QEventLoop::AllEvents,20);
+    QApplication::processEvents();
     require(window.document().revision()==before_gesture.revision()+1 && embedded(window,"placed").root_transform &&
         window.document().snapshot().entities().at(host.toStdString())==original_host,"actual embedded rotation gesture commits one catalog operation and preserves host");
     history(window,before_gesture,window.document().snapshot());require(window.undoCommand(),"restore fixture after gesture coverage");require(window.selectEntity(placed_id),"reselect embedded root for clone");
@@ -183,9 +191,17 @@ void lifecycle(const QString& directory) {
     require(window.selectEntity(placed_id),"select embedded geometric root for Copy");
     const auto before_copy=window.document().snapshot();require(window.copySelection(),"Copy flattens a detached geometric catalog child into typed independent clipboard source");
     require(window.document().snapshot().entities()==before_copy.entities() && window.document().revision()==before_copy.revision(),"Copy preserves exact active catalog, host placement and source IDs");
+    // A detached catalog child travels in the mixed clipboard (October 11):
+    // its ordinary lane is the typed independent graph and the detached lane
+    // retains the exact source catalog row for origin-preserving placement.
     const auto payload=Json::parse(QApplication::clipboard()->text().toStdString());
-    const auto copied_root=payload.at("root_id").get<std::string>();bool typed=false;
-    for(const auto& item:payload.at("entities"))if(item.at("id")==copied_root)typed=item.at("type")=="assembly_instance";
+    require(payload.at("format")=="vertex-mixed-clipboard" && payload.at("ordinary").is_object(),"detached Copy publishes the mixed clipboard with an ordinary graph");
+    const auto& graph=payload.at("ordinary");
+    const auto copied_root=graph.at("root_id").get<std::string>();bool typed=false;
+    const auto& detached=payload.at("detached_components");
+    require(detached.size()==1 && detached.front().at("source_catalog_id")=="embedded-catalog" && detached.front().at("source_instance_id")=="placed" &&
+        detached.front().at("wire_owner_id")==copied_root,"detached lane binds the copied root to its exact source catalog child");
+    for(const auto& item:graph.at("entities"))if(item.at("id")==copied_root)typed=item.at("type")=="assembly_instance";
     require(typed,"clipboard root is the existing typed external assembly envelope");
     require(window.pasteSelection(),"actual Paste admits detached assembly with catalog closure");
     const auto pasted=window.selectedEntityId();require(window.document().snapshot().entities().at(pasted.toStdString()).type=="assembly_instance","Paste publishes actual independent root");

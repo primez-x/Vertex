@@ -42,6 +42,7 @@
 #include <QCryptographicHash>
 #include <QDialog>
 #include <QDialogButtonBox>
+#include <QElapsedTimer>
 #include <QDir>
 #include <QEventLoop>
 #include <QFile>
@@ -333,16 +334,42 @@ void test_shortcuts_and_measurement_keypad(const QString& capture_directory) {
         require(edit_curve && !edit_curve->isHidden() && edit_curve->isEnabled(),
                 "selected curved walls must expose a contextual curve editor");
         const auto curved_edit_revision = window.document().revision();
+        // Edit mode solves connected geometry asynchronously (cf11effc): Apply
+        // stays disabled until the debounced preview is admitted. Wait for it
+        // instead of clicking a disabled button, and never leave the modal
+        // open on failure (an unanswered dialog hangs the whole smoke run).
+        bool curve_edit_dialog_seen = false;
+        bool curve_edit_applied = false;
         QTimer::singleShot(0, &window, [&] {
             auto* dialog = window.findChild<QDialog*>(QStringLiteral("curvedWallDialog"));
-            require(dialog && dialog->windowTitle() == QStringLiteral("Edit curved wall"),
-                    "curve editor must open in edit mode for a selected arc");
-            dialog->findChild<QLineEdit*>(QStringLiteral("curvedWallEndX"))->setText(QStringLiteral("32 ft"));
-            dialog->findChild<QLineEdit*>(QStringLiteral("curvedWallSweep"))->setText(QStringLiteral("-90 deg"));
-            dialog->findChild<QDialogButtonBox*>(QStringLiteral("curvedWallButtons"))
-                ->button(QDialogButtonBox::Apply)->click();
+            if (!dialog) return;
+            curve_edit_dialog_seen = dialog->windowTitle() == QStringLiteral("Edit curved wall");
+            auto* end_x = dialog->findChild<QLineEdit*>(QStringLiteral("curvedWallEndX"));
+            auto* sweep = dialog->findChild<QLineEdit*>(QStringLiteral("curvedWallSweep"));
+            auto* buttons = dialog->findChild<QDialogButtonBox*>(QStringLiteral("curvedWallButtons"));
+            if (!curve_edit_dialog_seen || !end_x || !sweep || !buttons) { dialog->reject(); return; }
+            end_x->setText(QStringLiteral("32 ft"));
+            sweep->setText(QStringLiteral("-90 deg"));
+            auto* poll = new QTimer(dialog);
+            auto* elapsed = new QElapsedTimer;
+            elapsed->start();
+            QObject::connect(poll, &QTimer::timeout, dialog, [dialog, buttons, poll, elapsed, &curve_edit_applied] {
+                auto* apply = buttons->button(QDialogButtonBox::Apply);
+                if (apply && apply->isEnabled()) {
+                    poll->stop(); delete elapsed;
+                    curve_edit_applied = true;
+                    apply->click();
+                    if (dialog->isVisible()) dialog->reject();
+                } else if (elapsed->elapsed() > 15000) {
+                    poll->stop(); delete elapsed;
+                    dialog->reject();
+                }
+            });
+            poll->start(20);
         });
         edit_curve->click();
+        require(curve_edit_dialog_seen, "curve editor must open in edit mode for a selected arc");
+        require(curve_edit_applied, "curve editor must admit an asynchronous connected preview before Apply");
         require(window.document().revision() == curved_edit_revision + 1,
                 "curved-wall edits must commit one revision-fenced command");
         const auto edited_curved_document = window.document().snapshot();
@@ -732,11 +759,15 @@ void test_workspace_theme_canvases() {
     std::array<desktop::PlanCanvas*, 2> canvases{
         dynamic_cast<desktop::PlanCanvas*>(window.findChild<QWidget*>("measurementPlanCanvas")),
         dynamic_cast<desktop::PlanCanvas*>(window.findChild<QWidget*>("architecturalPlanCanvas"))};
+    // Public renderScene overloads are the committed output lane (no grid or
+    // interactive presentation). Theme readability is a property of the
+    // actual widget paint, so the screen capture uses the canvas paintEvent.
     const auto capture = [](desktop::PlanCanvas* canvas, bool output = false) {
-        QImage image(QSize(640, 480), QImage::Format_ARGB32_Premultiplied);
+        QImage image(output ? QSize(640, 480) : canvas->size(), QImage::Format_ARGB32_Premultiplied);
+        image.fill(Qt::transparent);
         QPainter painter(&image);
         if (output) canvas->renderSceneAt(painter, image.rect(), 100, {}, Qt::white);
-        else canvas->renderScene(painter, image.rect());
+        else canvas->render(&painter);
         painter.end();
         return image;
     };
@@ -764,22 +795,26 @@ void test_workspace_theme_canvases() {
             : theme == WorkspaceTheme::dark ? QColor("#141b27") : QColor("#f8fafc");
         for (std::size_t i = 0; i < canvases.size(); ++i) {
             const auto image = capture(canvases[i]);
-            require(image.pixelColor(9, 9) == background,
+            require(image.width() >= 160 && image.height() >= 120 &&
+                        image.pixelColor(9, 9) == background,
                     "both canvases must render the selected field/light/dark background");
             if (theme == WorkspaceTheme::high_contrast) {
-                // The centred baseline sits on row 240 at 100 px/m; sample the
-                // actual upper face of the authored wall thickness (140 mm by
-                // default) rather than a hard-coded 200 mm assumption.
+                // The centred baseline sits on the canvas centre row at
+                // 100 px/m; sample the actual upper face of the authored wall
+                // thickness (140 mm by default) rather than a hard-coded
+                // 200 mm assumption.
                 const auto half_thickness = window.document().snapshot().entities().at(wall.toStdString())
                     .properties.value("thickness_m", 0.0) / 2.0;
-                const auto face_row = static_cast<int>(std::lround(240.0 - half_thickness * 100.0));
+                const auto centre = QRectF(image.rect()).center();
+                const auto centre_x = static_cast<int>(centre.x());
+                const auto face_row = static_cast<int>(std::lround(centre.y() - half_thickness * 100.0));
                 bool visible_face = false;
                 for (int y = face_row - 2; y <= face_row + 2; ++y)
-                    visible_face = visible_face || image.pixelColor(320, y).lightnessF() > .5;
+                    visible_face = visible_face || image.pixelColor(centre_x, y).lightnessF() > .5;
                 require(visible_face, "physical wall faces must remain readable on the black field canvas");
                 canvases[i]->setGridEnabled(true);
                 const auto grid = capture(canvases[i]);
-                require(grid.pixelColor(320, 20).lightnessF() >= .3,
+                require(grid.pixelColor(centre_x, 20).lightnessF() >= .3,
                         "the high-contrast field grid must remain visible away from drawing objects");
                 canvases[i]->setGridEnabled(false);
             }
@@ -1849,7 +1884,13 @@ void test_pasted_annotation_visible_selection() {
     }
     source.document().apply(ApplyEntityChanges{source.document().revision(), {EntityChange::upsert(source_owner)}, {}, "Opaque source symbols"});
     require(source.selectEntity(first) && source.copySelection(), "copy a real SVG instance for immediate paste selection");
+    // Canvas transforms and moves are fenced to a visible, unchanged viewport
+    // (October 7 transform/move capture); drive them on shown windows.
     desktop::MainWindow target;
+    target.setAttribute(Qt::WA_DontShowOnScreen);
+    target.resize(1200, 800);
+    target.show();
+    QApplication::processEvents();
     AnnotationState existing_state;
     SymbolInstance existing_symbol;
     existing_symbol.id = "existing-unselected-symbol";
@@ -1884,12 +1925,21 @@ void test_pasted_annotation_visible_selection() {
         QMouseEvent event(type, point, canvas->mapToGlobal(point.toPoint()), button, buttons, Qt::NoModifier);
         QApplication::sendEvent(canvas, &event);
     };
+    // Exact transform proposals are worker projections; a release while one
+    // is pending commits that one admitted command when it completes.
+    const auto settle = [&] {
+        const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+        while (canvas->entityTransformPreviewPending() && std::chrono::steady_clock::now() < deadline)
+            QApplication::processEvents(QEventLoop::AllEvents, 20);
+        QApplication::processEvents();
+    };
     const auto frame = canvas->selectionBounds();
     require(frame.has_value(), "pasted SVG must immediately expose its canvas transform frame");
     const auto resize_end = frame->bottomRight() + QPointF(60, 45);
     mouse(QEvent::MouseButtonPress, frame->bottomRight(), Qt::LeftButton, Qt::LeftButton);
     mouse(QEvent::MouseMove, resize_end, Qt::NoButton, Qt::LeftButton);
     mouse(QEvent::MouseButtonRelease, resize_end, Qt::LeftButton, Qt::NoButton);
+    settle();
     const auto resized = target.document().snapshot();
     const auto resized_symbol = decode_annotation_entity(resized.entities().at(owner.id)).symbols.front();
     auto resize_expected = pasted.entities();
@@ -1914,6 +1964,7 @@ void test_pasted_annotation_visible_selection() {
     mouse(QEvent::MouseButtonPress, rotation_start, Qt::LeftButton, Qt::LeftButton);
     mouse(QEvent::MouseMove, rotation_end, Qt::NoButton, Qt::LeftButton);
     mouse(QEvent::MouseButtonRelease, rotation_end, Qt::LeftButton, Qt::NoButton);
+    settle();
     const auto rotated = target.document().snapshot();
     auto rotation_expected = pasted.entities();
     auto& rotate_placement = rotation_expected.at(owner.id).properties["state"]["symbols"][0]["placement"];
@@ -1932,6 +1983,10 @@ void test_pasted_annotation_visible_selection() {
     require(source.selectEntity(QString::fromStdString(source_owner.id)) && source.copySelection(),
             "copy a whole annotation owner containing two real SVG children");
     desktop::MainWindow group;
+    group.setAttribute(Qt::WA_DontShowOnScreen);
+    group.resize(1200, 800);
+    group.show();
+    QApplication::processEvents();
     group.document().apply(ApplyEntityChanges{group.document().revision(), {EntityChange::upsert(existing)}, {}, "Existing group owner"});
     require(group.pasteSelection(), "paste two annotation children as a visible group");
     auto group_owner = annotation_owner_for_selection(group.document().snapshot(), group.selectedEntityId());

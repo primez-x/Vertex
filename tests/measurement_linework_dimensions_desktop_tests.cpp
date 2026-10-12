@@ -309,8 +309,18 @@ void saved_dimension_canvas_drag(int kind,bool mixed=false) {
                 require_near(now.at(endpoint).at(1).get<double>(),old.at(endpoint).at(1).get<double>()+shift.y);
             }
         }
-        require(after.history().back().boundary_constraint_changes &&
-            command_to_json(*after.history().back().boundary_constraint_changes).at("version")==15,
+        require(after.history().back().boundary_constraint_changes.has_value(),"Partial wall and callout drag retains its typed placement command");
+        const auto typed=command_to_json(*after.history().back().boundary_constraint_changes);
+        // A single partial wall keeps the connected solve plus saved-callout
+        // placement lane (envelope 15). Multi-wall or annotated wall-only groups
+        // use per-owner joint authority (envelope 17, e872fd90/d5527650) whose
+        // qualified per-callout offsets carry the same typed placement intent.
+        const bool wall_group=source_walls.size()>1 || plain;
+        bool callout_translated=false;
+        if(wall_group && typed.contains("joint_translation") && typed.at("joint_translation").is_object())
+            for(const auto& item:typed.at("joint_translation").value("dimension_translations",Json::array()))
+                callout_translated=callout_translated || item.dump().find(id.toStdString())!=std::string::npos;
+        require(wall_group ? typed.at("version")==17 && callout_translated : typed.at("version")==15,
             "Partial wall and callout drag retains its typed placement command");
         if(kind==9)require(std::abs(measured_after.area_square_metres-measured_before.area_square_metres)>1e-4,
             "Partial wall movement updates the actual area callout value");

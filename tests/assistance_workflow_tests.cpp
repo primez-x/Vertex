@@ -729,11 +729,19 @@ int main(int argc, char** argv) {
                     edge_trace.front().preview.arguments.at("holes").size() == 1,
                 "desktop must expose topology-preserving edge tracing");
         const auto revision_before_trace = window.document().revision();
-        require(window.acceptAssistanceProposal(trace.front()),
+        // Each generation replaces the reviewed suggestion set and its captured
+        // source bindings, so the earlier tracing set is now superseded.
+        require(!window.acceptAssistanceProposal(trace.front()) &&
+                    window.document().revision() == revision_before_trace,
+                "a superseded trace suggestion must be refused before document mutation");
+        const auto current_trace = window.suggestReferenceAssistance(reference_id, AssistanceKind::tracing);
+        require(current_trace.size() == 1 && current_trace.front().preview.command_type == "add_boundary",
+                "trace suggestions must regenerate against the current source");
+        require(window.acceptAssistanceProposal(current_trace.front()),
                 "accepted trace must use the desktop command path");
         require(window.document().revision() == revision_before_trace + 1,
                 "accepted trace must create one history revision");
-        const auto trace_id = trace.front().id;
+        const auto trace_id = current_trace.front().id;
         const auto traced_snapshot = window.document().snapshot();
         const auto traced = traced_snapshot.entities().find(trace_id);
         require(traced != traced_snapshot.entities().end() &&

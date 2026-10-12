@@ -2274,7 +2274,7 @@ void run() {
     check(import_case("unsupported host and opening reference", hosted_reference.step).entities.size() == 2,
           "unsupported host and opening must both retain native references");
 
-    const auto old_axis = import_case("legacy wall axis",
+    const std::string legacy_axis_records =
         "ISO-10303-21;\nHEADER;\nFILE_SCHEMA(('IFC4'));\nENDSEC;\nDATA;\n"
         "#1=IFCSIUNIT(*,.LENGTHUNIT.,$,.METRE.);\n"
         "#2=IFCCARTESIANPOINT((0.,0.,0.));\n#3=IFCCARTESIANPOINT((4.,0.,0.));\n"
@@ -2283,10 +2283,26 @@ void run() {
         "#7=IFCWALLSTANDARDCASE('legacy',$,'legacy',$,$,$,#6,$);\n"
         "#8=IFCPROPERTYSINGLEVALUE('Properties',$,IFCTEXT('{\"thickness_m\":0.2,\"height_m\":2.5}'),$);\n"
         "#9=IFCPROPERTYSET('pset',$,'Pset_VertexExchange_v1',$,(#8));\n"
-        "#10=IFCRELDEFINESBYPROPERTIES('link',$,$,$,(#7),#9);\nENDSEC;\nEND-ISO-10303-21;\n");
+        "#10=IFCRELDEFINESBYPROPERTIES('link',$,$,$,(#7),#9);\n";
+    const std::string legacy_axis_end = "ENDSEC;\nEND-ISO-10303-21;\n";
+    // Core reconstruction requires the actual project's linked metre length
+    // assignment (docs/interchange-profiles.md, "project unit authority").
+    const auto old_axis = import_case("legacy wall axis", legacy_axis_records +
+        "#11=IFCUNITASSIGNMENT((#1));\n"
+        "#12=IFCPROJECT('project',$,'project',$,$,$,$,$,#11);\n" + legacy_axis_end);
     check(old_axis.entities.size() == 1 && old_axis.entities[0].type == "wall" &&
           old_axis.entities[0].properties.at("baseline").at("end") == nlohmann::json({4,0}),
           "legacy axis-only native IFC exports must remain editable on import");
+    // An orphan metre declaration cannot authorize editable geometry: the
+    // axis stays an inert retained reference instead of unscaled metres.
+    const auto orphan_axis = import_case("legacy wall axis with orphan units",
+        legacy_axis_records + legacy_axis_end);
+    check(orphan_axis.entities.size() == 1 && orphan_axis.entities[0].type == "ifc_reference" &&
+          orphan_axis.source_retention_required &&
+          std::any_of(orphan_axis.diagnostics.begin(), orphan_axis.diagnostics.end(), [](const auto& item) {
+              return item.code == "length_units_not_reconstructed";
+          }),
+          "legacy axis-only IFC with only an orphan metre unit must remain an inert retained reference");
 
     auto inconsistent_body = layered.step;
     const auto extrusion = inconsistent_body.find("=IFCEXTRUDEDAREASOLID");

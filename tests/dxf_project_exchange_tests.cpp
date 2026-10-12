@@ -19,6 +19,7 @@
 #include <stdexcept>
 #include <set>
 #include <string>
+#include <string_view>
 #include <utility>
 #include <vector>
 
@@ -507,16 +508,30 @@ void test_non_linear_dimensions_are_not_flattened() {
     const auto mapped = export_project_dxf(Document::create(std::move(entities)).snapshot());
     check(mapped.drawing.dimensions.size() == 1,
           "only linear boundary dimensions may become DXF DIMENSION records");
-    const auto has_diagnostic = [&](const char* id) {
+    const auto has_diagnostic = [&](const char* id, std::string_view code) {
         return std::any_of(mapped.diagnostics.begin(), mapped.diagnostics.end(), [&](const auto& item) {
-            return item.source_id == id && item.source_kind == "dimension" &&
-                   item.code == "dimension_semantics_not_representable";
+            return item.source_id == id && item.source_kind == "dimension" && item.code == code;
         });
     };
-    check(has_diagnostic("dimension-angle"),
-          "angle dimensions must report their unsupported DXF semantics");
-    check(has_diagnostic("dimension-area"),
-          "area dimensions must report their unsupported DXF semantics");
+    const auto has_any_diagnostic = [&](const char* id) {
+        return std::any_of(mapped.diagnostics.begin(), mapped.diagnostics.end(),
+            [&](const auto& item) { return item.source_id == id; });
+    };
+    // Angles export as three-point angular DIMENSION records at the admitted
+    // vertex (docs/project-format.md, "Angular dimensions retain the admitted
+    // vertex and tangents"), never as a flattened linear record.
+    check(mapped.drawing.angular_dimensions.size() == 1 &&
+              mapped.drawing.angular_dimensions.front().vertex.x == 4.0 &&
+              mapped.drawing.angular_dimensions.front().vertex.y == 0.0 &&
+              !has_any_diagnostic("dimension-angle"),
+          "angle dimensions must export as one native angular DXF dimension at their vertex");
+    // Areas have no DXF dimension family; they keep a named quantity callout
+    // and diagnose the association loss.
+    check(has_diagnostic("dimension-area", "dimension_area_exported_as_quantity_callout") &&
+              std::any_of(mapped.drawing.labels.begin(), mapped.drawing.labels.end(), [](const auto& label) {
+                  return label.text == "Area: 12 m2" && label.layer == "Dimensions";
+              }),
+          "area dimensions must report their DXF association loss and keep their quantity callout");
 }
 
 void test_hidden_linear_dimensions_stay_hidden_in_dxf_output() {

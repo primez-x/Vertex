@@ -145,13 +145,13 @@ QImage requireTransparentSelection(const sketch::desktop::CanvasEntity& entity,
     canvas.setSnapEnabled(false);
     canvas.setCanvasBackground(QColor(40, 48, 60));
     canvas.setEntities({entity});
+    canvas.setOverviewMapEnabled(false);
     canvas.fitView();
+    // Public renderScene draws the committed output lane without interaction
+    // overlays (6f5d7def). The selection frame is screen feedback, so capture
+    // the actual widget paint path that the user sees.
     const auto render = [&] {
-        QImage image(canvas.size(), QImage::Format_ARGB32_Premultiplied);
-        image.fill(Qt::transparent);
-        QPainter painter(&image);
-        canvas.renderScene(painter, QRectF(canvas.rect()));
-        return image;
+        return canvas.grab().toImage().convertToFormat(QImage::Format_ARGB32_Premultiplied);
     };
     canvas.setSelectedIds({});
     const auto unselected = render();

@@ -1492,9 +1492,13 @@ void appraisal_qualification_transition_preview_workflow(bool named=true) {
     require(window.editSelectedAppraisalFacts(declarations("residential_declared","garage")),
             "declare preview qualification deduction");
     auto outer=window.document().snapshot().entities().at(parent.toStdString());
-    outer.properties["name"]=named ? "Dwelling" : "measurement"; outer.properties["deduction_ids"]={child.toStdString()};
+    // Anonymous areas carry no authored name: since the October 5 Pinc import
+    // work, any authored name (even a generic token) is displayed verbatim, so
+    // the unnamed variant relies on the default generic classification instead.
+    if (named) outer.properties["name"]="Dwelling"; else outer.properties.erase("name");
+    outer.properties["deduction_ids"]={child.toStdString()};
     auto inner=window.document().snapshot().entities().at(child.toStdString());
-    inner.properties["name"]=named ? "Garage" : "measurement";
+    if (named) inner.properties["name"]="Garage"; else inner.properties.erase("name");
     window.document().apply(ApplyEntityChanges{window.document().revision(),
         {EntityChange::upsert(outer),EntityChange::upsert(inner)}, {}, "outside deduction qualification fixture"});
     require(window.selectEntity(child),"select outside deduction for repair");

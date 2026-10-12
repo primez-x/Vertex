@@ -61,7 +61,10 @@ Exact binary64(double value) {
 }
 
 double checked_exact(const Exact& value, const char* message) {
-    if (value == 0) return 0.0;
+    // Boost's rational_adaptor can leave an exact zero sum as 0/d with d != 1,
+    // and `value == 0` then compares false. Test the numerator so msb() below
+    // never sees zero.
+    if (value.is_zero()) return 0.0;
     const bool negative = value < 0;
     const Exact magnitude = negative ? -value : value;
     constexpr std::uint64_t maximum_bits = 0x7fefffffffffffffULL;

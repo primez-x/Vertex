@@ -443,7 +443,11 @@ Derivation derive(const Entities& actual, const std::vector<StairTransformIntent
             if (!result.catalogs.contains(id) && !result.owners.contains(id) && !touches(entity.properties, presentation) && !touches(entity.extensions, presentation)) continue;
             auto scratch = remainder(entity), external = scratch;
             if (entity.type == kSheetViewEntityType) for (auto& view : external.properties.at("model").at("views")) view.erase("id");
-            if (touches(external.properties, presentation) || touches(external.extensions, presentation))
+            // A copied physical owner's own opaque content is retained verbatim,
+            // as clipboard copies do; bare text equal to an owner ID is not a
+            // reference and grants no rewrite authority. Typed host slots are
+            // remapped by replay; original-child spellings still refuse below.
+            if (!result.owners.contains(id) && (touches(external.properties, presentation) || touches(external.extensions, presentation)))
                 diagnostic(plan, id, "affected opaque reference has no qualified stair clone codec");
             // Bare child/instance/overlay spellings belong only to their actual
             // owner namespace. An unrelated owner's same spelling is inert.

@@ -11,6 +11,7 @@
 #include <QPainter>
 #include <QStandardPaths>
 #include <QTemporaryDir>
+#include <QToolButton>
 #include <QUuid>
 
 #include <algorithm>
@@ -106,6 +107,12 @@ struct Fixture {
         if (sibling) require(window.selectEntity(wall)&&!window.createHostedOpening("opening","4 m","1 m","0 m","2 m").isEmpty(),
             "curved sibling creation failed");
         auto& view=canvas(window);
+        // Disable Snap through the window's own toggle: each refresh (select,
+        // undo, reopen) republishes that state to the canvas, so a canvas-only
+        // override is lost and halo drags would quantize to whole increments.
+        auto* snap=window.findChild<QToolButton*>(QStringLiteral("snapTool"));
+        require(snap!=nullptr,"Snap toggle missing");
+        snap->setChecked(false);
         view.setSnapEnabled(false);
         view.setOverviewMapEnabled(false);
         require(window.selectEntity(wall),"host selection failed");

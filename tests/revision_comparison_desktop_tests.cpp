@@ -311,7 +311,7 @@ void test_native_visual_revision_comparison() {
                 "comparison scenes retain exact historical line endpoints and circular sweeps");
             const auto& annotation = label(canvas,dimension);
             const bool old = snapshot.revision() == existing.revision();
-            require(annotation.text == (old ? QStringLiteral("4.000 m") : QStringLiteral("5.000 m")) &&
+            require(annotation.text == (old ? QStringLiteral("4 m") : QStringLiteral("5 m")) &&
                 annotation.color == QColor(old ? "#112233" : "#aa5500") &&
                 annotation.bold == old && annotation.italic != old && annotation.paper_height_mm==(old ? 4.0 : 5.0) &&
                 same_point(annotation.position,old ? Vec2{2,-1} : Vec2{2.5,-1}) &&
@@ -354,8 +354,8 @@ void test_native_visual_revision_comparison() {
         };
         require(raster_pixel(before_canvas)==QColor(Qt::red) && raster_pixel(after_canvas)==QColor(Qt::blue),
             "actual historical pane rendering paints each retained asset's own pixels");
-        require(label(before_canvas,derived_dimension).text==QStringLiteral("4.000 m") &&
-            label(after_canvas,derived_dimension).text==QStringLiteral("5.000 m"),
+        require(label(before_canvas,derived_dimension).text==QStringLiteral("4 m") &&
+            label(after_canvas,derived_dimension).text==QStringLiteral("5 m"),
             "unchanged dependent dimension owners resolve from each selected state's actual geometry");
         require(entity(before_canvas,removed) && !entity(after_canvas,removed) &&
             !entity(before_canvas,added) && entity(after_canvas,added) && entity(after_canvas,live_only),

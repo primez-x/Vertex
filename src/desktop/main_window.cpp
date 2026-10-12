@@ -10133,9 +10133,9 @@ public:
             for(const auto& id:model_ids)if(source.entities().at(id.toStdString()).type=="measurement_linework")
                 rigid_seed.push_back(source.entities().at(id.toStdString()));
             auto rigid_graph=independentAreaCopyGraph(source,std::move(rigid_seed),false);includeMeasuredAreaSources(source,rigid_graph);
-            if(std::any_of(rigid_graph.begin(),rigid_graph.end(),[&](const auto& entity) {
+            const bool unselected_rigid_dependency=std::any_of(rigid_graph.begin(),rigid_graph.end(),[&](const auto& entity) {
                 return is_closed_boundary_entity(entity.type) && !rigid_owners.contains(entity.id) && !model_ids.contains(id_from(entity.id));
-            }))throw std::invalid_argument("Select the measured area's deductions together before moving its perimeter in a mixed group.");
+            });
             std::set<std::string,std::less<>> rigid_geometry;
             QStringList rigid_ids,partial_ids;
             for(const auto& entity:rigid_graph)
@@ -10145,6 +10145,14 @@ public:
             for(const auto& id:model_ids)if(source.entities().at(id.toStdString()).type=="wall" && !rigid_geometry.contains(id.toStdString()))
                 partial_ids.push_back(id);
             if(!partial_ids.isEmpty()) {
+                // Only this complete-plus-partial lane moves complete owners
+                // rigidly with their copy graph, so it must not drag an
+                // unselected deduction along. A complete selected shell without
+                // partial walls keeps the earlier exterior-update path below:
+                // the owner is redrawn from its moved walls while unselected
+                // deductions stay in place (containment is still validated).
+                if(unselected_rigid_dependency)
+                    throw std::invalid_argument("Select the measured area's deductions together before moving its perimeter in a mixed group.");
                 JointTranslationIntent joint;
                 joint.offset=offset;
                 complete_joint_presentations(joint);
@@ -21638,7 +21646,14 @@ public:
                     !entity.properties.contains("name") || !entity.properties.at("name").is_string()) {
                     continue;
                 }
-                const auto context = scene.organization.drawing_context(id);
+                auto context = scene.organization.drawing_context(id);
+                if (!context && entity.type == "reference_asset" && !siteCanvas(m_architecturalCanvas) &&
+                    !entity.properties.contains("property_id") && !entity.properties.contains("building_id") &&
+                    !entity.properties.contains("floor_id") && !entity.properties.contains("layer_id")) {
+                    // An unorganized plan reference labels on the active layer,
+                    // exactly as stampAssistanceProposals binds its owned label.
+                    context = scene.organization.drawing_context(m_active_layer_id.toStdString());
+                }
                 if (!context || !context->complete()) continue;
                 std::optional<Vec2> position;
                 for (const auto* key : {"position_m", "base_position_m", "start_m"}) {
@@ -30652,6 +30667,9 @@ public:
         m_entity_transform_command.reset();
         m_entity_transform_ready=false;
         m_entity_transform_serial=serial;
+        // A refused transform start already reported its exact reason and
+        // released the source; reject the preview without replacing it.
+        if (!canvas || !m_entity_transform_source) return std::vector<CanvasEntity>{};
         try {
             const auto capture=m_ordinary_transform_capture;
             const bool wall_group=capture && !capture->wall_ids.isEmpty();
@@ -56121,9 +56139,18 @@ private:
                 // selection event; never retain a pointer to the old item.
                 QTimer::singleShot(0, owner, [this, id, type, document, revision, selection] {
                     const auto* current = m_navigator->currentItem();
+                    // Keyboard and pointer navigation select the new current
+                    // row. Qt's focus-in only places a current cursor on the
+                    // first row (NoUpdate) when none exists; focus arriving at
+                    // the tree, e.g. during window activation, is not a pick
+                    // and must not replace or create the canvas selection.
+                    // A modal tool has also captured selection; the tree is
+                    // blocked then, so a queued change is never user intent.
+                    if (QApplication::activeModalWidget()) return;
                     if (m_document != document || id.isEmpty() ||
                         document->revision() != revision || m_selected_ids != selection ||
-                        !current || current->data(0, Qt::UserRole).toString() != id) return;
+                        !current || !current->isSelected() ||
+                        current->data(0, Qt::UserRole).toString() != id) return;
                     if (type == QStringLiteral("layer")) {
                         (void)setActiveLayer(id);
                     } else if (id != m_selected_id &&
@@ -58147,6 +58174,10 @@ private:
             catch (const std::exception& error) { cancelSymbolPlacement();clearSitePublication(); setError(QString::fromUtf8(error.what())); return; }
             if (placeArmedCanvasSymbol(canvas)) return;
             try {
+                // An empty, non-toggling click is the contract's deselect-only
+                // gesture (FB-002). Clearing selection binds no displayed
+                // geometry, so a stale plan publication cannot refuse it.
+                if (id.isEmpty() && !toggle && !siteCanvas(canvas)) { (void)selectEntity({}, false); return; }
                 const auto source=captureCanvasGeometrySource(canvas,std::nullopt,false);
                 (void)selectOrdinaryFromSource(source,id,toggle,false);
             } catch (const std::exception& error) { setError(QString::fromUtf8(error.what())); }
@@ -58354,6 +58385,7 @@ private:
             m_model_move_edit_source.reset();
             m_wall_move_source.reset();
             m_wall_move_authority.reset();
+            m_wall_move_start_error.clear();
             try {
                 if (mixedSemanticSelection()) { captureMixedPlanTransform(canvas,ids,false);return; }
                 cancelMixedPlanTransformPreview();
@@ -58402,7 +58434,8 @@ private:
                 clearOpeningWidthCapture();clearSitePublication(); m_wall_move_source.reset(); m_wall_move_authority.reset();
                 m_plan_move_capture.reset();m_plan_move_preview.reset();m_plan_move_error.clear();
                 m_model_move_edit_source.reset();
-                setError(QString::fromUtf8(error.what()));
+                m_wall_move_start_error=QString::fromUtf8(error.what());
+                setError(m_wall_move_start_error);
             }
         });
         canvas->setEntitiesMoveRequested([this,canvas](QStringList ids, Vec2 delta) {
@@ -58451,6 +58484,10 @@ private:
                         : QStringLiteral("The project or view changed during this drag. Try the move again.");
                     m_plan_move_preview.reset();
                     setError(QStringLiteral("Move: %1").arg(message));refresh();return;
+                }
+                if (!m_wall_move_source && !m_wall_move_start_error.isEmpty()) {
+                    // The press already refused this drag; keep its exact reason.
+                    setError(m_wall_move_start_error);return;
                 }
                 if (!m_wall_move_source || m_wall_move_document!=m_document || m_wall_move_canvas!=canvas ||
                     !m_wall_move_authority || !sourceEditAuthorityCurrent(*m_wall_move_authority) || ids != m_wall_move_ids)
@@ -76628,6 +76665,7 @@ private:
     std::shared_ptr<const TransformViewportCapture> m_plan_move_capture;
     std::optional<PlanMovePreviewCommand> m_plan_move_preview;
     QString m_plan_move_error;
+    QString m_wall_move_start_error;
     std::shared_ptr<const CanvasEditSourceCapture> m_model_move_edit_source;
     std::optional<BuildingViewFrame> m_entity_transform_frame;
     std::shared_ptr<const SiteTransformPreviewCapture> m_entity_transform_site_capture;
