@@ -50,28 +50,36 @@ bool genuine_drafted_map_change(const AssemblyProfile& source, const AssemblyPro
 }
 
 std::vector<AssemblyInstancePropertyEditIntent> draft_resize_intents(
-    const DocumentSnapshot& source, std::span<const std::string> independent_entity_ids,
-    const AssemblyDirectionalResize& operation, AssemblyExpansionBudget& available_work,
+    const DocumentSnapshot& source, std::span<const AssemblyDirectionalResizeTarget> targets,
+    AssemblyExpansionBudget& available_work,
     bool require_world_axes) {
     require_budget(available_work);
-    require(std::isfinite(operation.world_anchor_m.x) && std::isfinite(operation.world_anchor_m.y) &&
-        std::isfinite(operation.x_factor) && operation.x_factor > 0 &&
-        std::isfinite(operation.y_factor) && operation.y_factor > 0,
-        "component directional resize anchor/factors must be finite and positive");
-    require(!operation.world_axis_rotation_radians || std::isfinite(*operation.world_axis_rotation_radians),
-        "component directional resize world axis rotation must be finite");
-    require(!require_world_axes || operation.world_axis_rotation_radians.has_value(),
-        "component directional resize cohort requires explicit world axes");
     require(source.is_editable(), "component directional resize source is read only");
-    require(!independent_entity_ids.empty() && independent_entity_ids.size() <= 1000,
+    require(!targets.empty() && targets.size() <= 1000,
         "component directional resize requires 1..1000 independent document entities");
-    for (const auto& id : independent_entity_ids)
-        require(!id.empty() && id.size() <= 128,
+    for (const auto& target : targets) {
+        require(!target.independent_entity_id.empty() && target.independent_entity_id.size() <= 128,
             "component directional resize independent entity ID exceeds the document identity bound");
-    std::vector<std::string> sorted_ids(independent_entity_ids.begin(), independent_entity_ids.end());
-    std::sort(sorted_ids.begin(), sorted_ids.end());
-    require(!sorted_ids.front().empty() &&
-        std::adjacent_find(sorted_ids.begin(), sorted_ids.end()) == sorted_ids.end(),
+        const auto& operation = target.operation;
+        require(std::isfinite(operation.world_anchor_m.x) && std::isfinite(operation.world_anchor_m.y) &&
+            std::isfinite(operation.x_factor) && operation.x_factor > 0 &&
+            std::isfinite(operation.y_factor) && operation.y_factor > 0,
+            "component directional resize anchor/factors must be finite and positive");
+        require(!operation.world_axis_rotation_radians || std::isfinite(*operation.world_axis_rotation_radians),
+            "component directional resize world axis rotation must be finite");
+        require(!require_world_axes || operation.world_axis_rotation_radians.has_value(),
+            "component directional resize cohort requires explicit world axes");
+        require(operation.x_factor == targets.front().operation.x_factor &&
+            operation.y_factor == targets.front().operation.y_factor,
+            "component directional resize cohort requires identical directional factors");
+    }
+    std::vector<AssemblyDirectionalResizeTarget> sorted_targets(targets.begin(), targets.end());
+    std::sort(sorted_targets.begin(), sorted_targets.end(), [](const auto& first, const auto& second) {
+        return first.independent_entity_id < second.independent_entity_id;
+    });
+    require(std::adjacent_find(sorted_targets.begin(), sorted_targets.end(), [](const auto& first, const auto& second) {
+        return first.independent_entity_id == second.independent_entity_id;
+    }) == sorted_targets.end(),
         "component directional resize independent entity IDs must be nonempty and unique");
 
     auto pending = available_work;
@@ -80,9 +88,10 @@ std::vector<AssemblyInstancePropertyEditIntent> draft_resize_intents(
     // Never reset or raise either ledger to admit another root/candidate.
     AssemblyCatalogTransferBudget catalog_work;
     std::map<std::string, const Entity*, std::less<>> catalogs;
-    std::vector<AssemblyDocumentInstance> documents;
-    documents.reserve(sorted_ids.size());
-    for (const auto& independent_entity_id : sorted_ids) {
+    std::vector<std::pair<AssemblyDocumentInstance, AssemblyDirectionalResize>> documents;
+    documents.reserve(sorted_targets.size());
+    for (const auto& target : sorted_targets) {
+        const auto& independent_entity_id = target.independent_entity_id;
         const auto entity = source.entities().find(independent_entity_id);
         require(entity != source.entities().end() && entity->second.id == independent_entity_id &&
             entity->second.type == "assembly_instance",
@@ -98,7 +107,7 @@ std::vector<AssemblyInstancePropertyEditIntent> draft_resize_intents(
             "component directional resize actual catalogue is missing or inconsistent");
         if (catalogs.emplace(document.assembly_catalog_id, &catalog->second).second)
             admit_existing_assembly_catalog_work(catalog->second, catalog_work);
-        documents.push_back(std::move(document));
+        documents.emplace_back(std::move(document), target.operation);
     }
     std::map<std::string, AssemblyModel, std::less<>> models;
     for (const auto& [catalog_id, catalog] : catalogs)
@@ -123,7 +132,7 @@ std::vector<AssemblyInstancePropertyEditIntent> draft_resize_intents(
     };
 
     std::vector<AssemblyInstancePropertyEditIntent> intents;
-    for (const auto& document : documents) {
+    for (const auto& [document, operation] : documents) {
         const auto& model = models.at(document.assembly_catalog_id);
         const auto actual = model.expand(document.instance, pending);
         require(actual.source_instance == document.instance,
@@ -194,19 +203,42 @@ std::vector<AssemblyInstancePropertyEditIntent> draft_resize_intents(
     return intents;
 }
 
+std::vector<AssemblyInstancePropertyEditIntent> draft_common_resize_intents(
+    const DocumentSnapshot& source, std::span<const std::string> independent_entity_ids,
+    const AssemblyDirectionalResize& operation, AssemblyExpansionBudget& available_work,
+    bool require_world_axes) {
+    // Bound count and every identity before copying IDs into target/operator
+    // pairs. The shared producer authenticates every pair and actual source.
+    require(!independent_entity_ids.empty() && independent_entity_ids.size() <= 1000,
+        "component directional resize requires 1..1000 independent document entities");
+    for (const auto& id : independent_entity_ids)
+        require(!id.empty() && id.size() <= 128,
+            "component directional resize independent entity ID exceeds the document identity bound");
+    std::vector<AssemblyDirectionalResizeTarget> targets;
+    targets.reserve(independent_entity_ids.size());
+    for (const auto& id : independent_entity_ids) targets.push_back({id, operation});
+    return draft_resize_intents(source, targets, available_work, require_world_axes);
+}
+
 } // namespace
 
 std::vector<AssemblyInstancePropertyEditIntent> draft_assembly_directional_resize_intents(
     const DocumentSnapshot& source, const std::string& independent_entity_id,
     const AssemblyDirectionalResize& operation, AssemblyExpansionBudget& available_work) {
-    return draft_resize_intents(source, std::span<const std::string>(&independent_entity_id, 1),
+    return draft_common_resize_intents(source, std::span<const std::string>(&independent_entity_id, 1),
         operation, available_work, false);
 }
 
 std::vector<AssemblyInstancePropertyEditIntent> draft_assembly_directional_resize_intents(
     const DocumentSnapshot& source, std::span<const std::string> independent_entity_ids,
     const AssemblyDirectionalResize& operation, AssemblyExpansionBudget& available_work) {
-    return draft_resize_intents(source, independent_entity_ids, operation, available_work, true);
+    return draft_common_resize_intents(source, independent_entity_ids, operation, available_work, true);
+}
+
+std::vector<AssemblyInstancePropertyEditIntent> draft_assembly_directional_resize_intents(
+    const DocumentSnapshot& source, std::span<const AssemblyDirectionalResizeTarget> targets,
+    AssemblyExpansionBudget& available_work) {
+    return draft_resize_intents(source, targets, available_work, true);
 }
 
 } // namespace sketch::desktop

@@ -503,6 +503,10 @@ public:
     void setSelectionCaption(QString caption);
     void setSelectionTransformEnabled(bool resize_enabled, bool rotate_enabled);
     void setSelectionAxisResizeEnabled(bool enabled);
+    // Explicit independent-root side resize. The host supplies analytical axes;
+    // ordinary multi-selection and corner transforms retain their own opt-ins.
+    void setSelectionAxisResizeCohort(QStringList ids, std::optional<CanvasSelectionFrame> frame);
+    [[nodiscard]] std::optional<CanvasSelectionFrame> selectionAxisResizeCohortFrame() const;
     void setLabels(std::vector<CanvasLabel> labels);
     [[nodiscard]] const std::vector<CanvasLabel>& labels() const noexcept { return m_labels; }
     void setReference(std::optional<CanvasReference> reference);
@@ -727,9 +731,16 @@ public:
     [[nodiscard]] bool entityTransformPreviewPending() const noexcept { return m_transform_preview_pending || m_transform_release_pending; }
     [[nodiscard]] std::vector<CanvasEntity> entityTransformPreview() const { return m_transform_entities_preview; }
     bool markEntityTransformPreviewPending(std::uint64_t serial);
+    // Cohort side resize always uses marked exact completion with a finite,
+    // positive analytical cohort_frame. Missing frames reject the proposal.
     bool completeEntityTransformPreview(std::uint64_t serial,
         std::optional<std::vector<CanvasEntity>> result, std::vector<CanvasLabel> labels = {}, std::vector<CanvasReference> references = {},
-        std::optional<std::vector<CanvasRoofOpeningControls>> child_controls = std::nullopt);
+        std::optional<std::vector<CanvasRoofOpeningControls>> child_controls = std::nullopt,
+        std::optional<CanvasSelectionFrame> cohort_frame = std::nullopt);
+    void setEntitiesAxisResizeStarted(std::function<void(QStringList)> callback);
+    void setEntitiesAxisResizePreviewRequested(std::function<std::optional<std::vector<CanvasEntity>>(
+        QStringList, double, double, Vec2, std::uint64_t)> callback);
+    void setEntitiesAxisResizeRequested(std::function<bool(QStringList, double, double, Vec2)> callback);
     // Local-axis scales around the model-space midpoint of the opposite edge.
     // Capability gating belongs to the document; rejected previews restore.
     void setEntityAxisResizeRequested(
@@ -1062,7 +1073,12 @@ private:
     void updateEntityTransformPreview();
     bool applyEntityTransformPreview(std::uint64_t serial,
         std::optional<std::vector<CanvasEntity>> result, std::vector<CanvasLabel> labels = {}, std::vector<CanvasReference> references = {},
-        std::optional<std::vector<CanvasRoofOpeningControls>> child_controls = std::nullopt);
+        std::optional<std::vector<CanvasRoofOpeningControls>> child_controls = std::nullopt,
+        std::optional<CanvasSelectionFrame> cohort_frame = std::nullopt);
+    [[nodiscard]] bool axisResizeCohortEnabled() const;
+    [[nodiscard]] bool axisResizeCohortCaptureCurrent() const;
+    [[nodiscard]] bool validAxisResizeCohortPreview(const std::vector<CanvasEntity>& entities,
+        const std::vector<CanvasLabel>& labels, const std::vector<CanvasReference>& references) const;
     void finishEntityTransformPreview(std::uint64_t serial);
     void finishBoundaryVertexPreview(std::uint64_t serial);
     void updateOpeningWidthPreview(QPointF point, Qt::KeyboardModifiers modifiers);
@@ -1204,6 +1220,12 @@ private:
     mutable std::vector<std::size_t> m_selected_entity_indices;
     mutable bool m_has_selected_label{};
     mutable bool m_has_selected_reference{};
+    // Admission belongs to the retained source/selection inputs. Their existing
+    // invalidation paths also retire this cache; live gesture/view checks do not.
+    mutable bool m_axis_resize_cohort_admission_ready{};
+    mutable bool m_axis_resize_cohort_admitted{};
+    mutable QHash<QString, QHash<QString, QString>> m_axis_resize_cohort_presentations;
+    mutable std::vector<std::size_t> m_axis_resize_cohort_label_indices;
     struct SelectionRectCache {
         QByteArray key;
         std::optional<QRectF> bounds;
@@ -1482,6 +1504,15 @@ private:
     bool m_selection_resize_enabled{};
     bool m_selection_rotate_enabled{};
     bool m_selection_axis_resize_enabled{};
+    QStringList m_axis_resize_cohort_ids;
+    std::optional<CanvasSelectionFrame> m_axis_resize_cohort_frame;
+    std::optional<CanvasSelectionFrame> m_axis_resize_cohort_capture_frame;
+    std::optional<CanvasSelectionFrame> m_axis_resize_cohort_preview_frame;
+    std::uint64_t m_axis_resize_cohort_navigation_generation{};
+    Vec2 m_axis_resize_cohort_view_center{};
+    double m_axis_resize_cohort_view_scale{};
+    QSize m_axis_resize_cohort_view_size;
+    qreal m_axis_resize_cohort_view_dpr{};
     std::optional<QRectF> m_transform_frame_start;
     QPointF m_transform_center;
     QPointF m_transform_start;
@@ -1605,6 +1636,10 @@ private:
     std::function<std::optional<std::vector<CanvasEntity>>(
         QString, double, double, Vec2, std::uint64_t)> m_entity_transform_preview_requested;
     std::function<bool(QString, double, double, Vec2)> m_entity_axis_resize_requested;
+    std::function<void(QStringList)> m_entities_axis_resize_started;
+    std::function<std::optional<std::vector<CanvasEntity>>(
+        QStringList, double, double, Vec2, std::uint64_t)> m_entities_axis_resize_preview_requested;
+    std::function<bool(QStringList, double, double, Vec2)> m_entities_axis_resize_requested;
     std::function<std::optional<std::vector<CanvasEntity>>(
         QString, double, double, Vec2, std::uint64_t)> m_entity_axis_resize_preview_requested;
     std::function<std::optional<std::vector<CanvasEntity>>(

@@ -14,6 +14,45 @@ changed source does not acquire runtime acceptance without later qualification.
 
 ## Current delivery state
 
+### October 11 component cohort canvas resize connection
+
+The complete cohort producer batch is committed and pushed as
+924e66a93efe71d53b76a4aea9c0683d3a23caa5; the exact remote ref was verified.
+The preceding status turn changed no source. This continuation connects the
+producer to actual multi-component side handles rather than treating that
+status restatement as implementation progress.
+
+The canvas now has a separate opt-in independent-component cohort capability,
+captured complete root/profile roster and analytical source frame, dedicated
+start/preview/release callbacks and mandatory analytical candidate-frame
+completion. Partial, stale or frameless proposals cannot authorize release.
+Existing singleton and wall/mixed corner meanings are retained. The controller
+captures the exact source, full selection/presentations, model plan or each
+Site placement, viewport and recovery authority. Differently placed Site roots
+reexpress one canvas anchor/axis operation through their actual placements.
+The target/operator producer sorts complete pairs and retains shared raw/model,
+expansion, topology and aggregate target budgets; it does not merge independent
+commands or reset work for each selected root.
+
+One phase-aware provisional command produces the complete manufactured preview.
+Release retains its geometry/topology and allocations, consumes provisional
+tickets and requires explicit affected profile dimension review. A final worker
+prepares reviewed geometry/dimension presentation before the sole publication
+path. New input, cancellation and source/selection/view/recovery changes still
+retire asynchronous authority. Independent source review found repeated
+quadratic profile admission on painting/pointer paths. The correction caches
+source/selection admission behind retained-input invalidation and uses indexed
+exact candidate coverage. Live gesture roster, presentation, view and navigation
+checks remain uncached. Root reviewed the integrated source and independent
+correction review approved it with no remaining P1/P2 finding in this batch.
+Named whitespace checks passed. Compilation and runtime remain unverified.
+
+This source slice does not complete mixed architectural-family directional
+resizing, hosted slab coordination, general elliptical cutouts, compatibility or
+device prerequisites. All ten production acceptance gates remain open. No
+builds, tests, scripts, probes, native jobs, launches, packages or installations
+ran; the installed application is unchanged under source-only steering.
+
 ### October 11 complete component cohort resize source
 
 The generic mixed Properties dispatch correction is committed and pushed as

@@ -48,4 +48,29 @@ namespace sketch::desktop {
     const DocumentSnapshot& source, std::span<const std::string> independent_entity_ids,
     const AssemblyDirectionalResize& operation, AssemblyExpansionBudget& available_work);
 
+struct AssemblyDirectionalResizeTarget {
+    std::string independent_entity_id;
+    AssemblyDirectionalResize operation;
+};
+
+// Complete independent cohort with an individually reexpressed operator for
+// each root (for example, through different building placements in Site Plan).
+// Requires 1..1000 unique actual IDs, each nonempty and at most 128 bytes. Every
+// operation requires a finite explicit world angle, finite anchor and positive
+// finite factors. All x_factor/y_factor pairs must be exactly equal; anchors and
+// angles may differ after the caller reexpresses one common canvas operation
+// through each captured proper/reflected similarity. The caller authenticates
+// that common operation and every source placement: this API cannot prove
+// coherence between external frames.
+//
+// Whole ID/operator pairs sort together. Actual sources/catalogs resolve once;
+// all targets share the raw-work ledger, model decode cache, transactional
+// expansion ledger, aggregate changed-node cap and UUID namespace/sequence
+// described above. Unit factors still authenticate every operator and root.
+// The returned qualified targets are sorted; a later failure returns no partial
+// proposal and commits no available_work. This grants no publication authority.
+[[nodiscard]] std::vector<AssemblyInstancePropertyEditIntent> draft_assembly_directional_resize_intents(
+    const DocumentSnapshot& source, std::span<const AssemblyDirectionalResizeTarget> targets,
+    AssemblyExpansionBudget& available_work);
+
 } // namespace sketch::desktop

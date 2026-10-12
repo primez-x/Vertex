@@ -132,6 +132,33 @@ angle and preserves its existing selection, dimension-review and release fences.
 The original single-root API retains its default-axis behavior. This cohort
 source facility does not yet enable complete mixed-family canvas resizing.
 
+Independent-component cohorts now have a separate canvas side-handle path.
+The host supplies complete analytical source bounds, rather than bounds of
+display chords. Press captures every selected root and exact keyed profile
+presentation, the fixed opposite-edge anchor, the analytical frame and viewport.
+Every accepted preview must contain those actual presentations and a separately
+computed analytical candidate frame. Missing or partial geometry, missing frames,
+changed selection/source/navigation and late serials cannot authorize release.
+Ordinary wall/mixed corner transforms keep their separate meaning.
+
+All members receive one operation in canvas axes. A horizontal saved plan uses
+its captured projection basis. Site Plan captures every root's actual placement,
+then reexpresses the common anchor and axes through each placement, including
+roots in different buildings. The target/operator producer sorts complete pairs
+without detaching their operations, requires identical directional factors and
+authenticates every finite explicit frame even for unit factors. Actual catalogs
+share raw admission and a decode cache; every root/node shares the same
+transactional expansion ledger, topology namespace and aggregate target limit.
+
+The controller produces one phase-aware cohort command and exact manufactured
+preview. Release retains that complete proposal and requires affected profile
+dimension review before a final worker prepares the reviewed command and its
+dimension presentation. Provisional display suppression never becomes a release
+decision. Source, selection, view/presentation and recovery fences remain in
+force through nested review and asynchronous completion. This completes the
+source connection for independent-component side handles; it does not implement
+directional resizing of mixed architectural families or qualify the interaction.
+
 Cutout transfer now examines the exact relative map, rather than requiring both
 individual profile maps to be similarities. Compatible anisotropic maps can
 therefore transfer circular source primitives without tessellation. Anchored
