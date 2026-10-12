@@ -14,6 +14,37 @@ changed source does not acquire runtime acceptance without later qualification.
 
 ## Current delivery state
 
+### October 11 complete component cohort resize source
+
+The generic mixed Properties dispatch correction is committed and pushed as
+33e5954ebca882d779b75629685e787df16a404e; the exact remote ref matches.
+Independent source review approved routing34..38 and confirmed unpublished14
+must remain excluded. This fixed an actual rejection path; it did not establish
+runtime behavior or close a production gate.
+
+The next source batch adds complete independent-component cohort intent
+derivation with one explicit common world-axis angle, anchor and factors. Unique
+actual roots are bounded before copying. Every distinct actual catalog is
+admitted through one shared raw-work ledger before model decoding and decoded
+once. Every root/node shares one transactional expansion ledger, one topology
+namespace/sequence and an aggregate1000 changed-node limit. The final roster
+sorts by qualified catalog/instance/document/path target order, as required by
+the existing closed component codec. A failed later root cannot return earlier
+partial intents or commit their work. Unit factors still authenticate all roots.
+The original single-root API keeps its default natural axes. The existing
+single-object canvas preview now uses the cohort producer with the actual
+natural angle, without changing selection, dimension-review or release fences.
+
+Root reviewed the source and corrected bounded ID admission and qualified
+multi-catalog ordering. Named whitespace checks passed. Independent source
+review approved shared-budget rollback, aggregate target limits, source topology,
+qualified ordering, default/common-axis compatibility and existing release
+fences. Compilation/runtime are unverified. Full mixed-family
+canvas resizing, hosted slab directional coordination, general elliptical
+cutouts and external compatibility/device prerequisites remain open. No builds,
+tests, scripts, probes, native jobs, launches, packages or installations ran;
+the installed application is unchanged and all ten production gates remain open.
+
 ### October 11 mixed Properties dispatch correction
 
 The common-world-axis component geometry foundation is committed and pushed as

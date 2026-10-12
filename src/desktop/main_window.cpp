@@ -26477,7 +26477,14 @@ public:
         const DocumentSnapshot& source,const std::string& id,double sx,double sy,Vec2 anchor) {
         AssemblyExpansionBudget budget;
         PhaseAssemblyInstancePropertyEditAuthoring authoring;
-        authoring.intents=draft_assembly_directional_resize_intents(source,id,{anchor,sx,sy},budget);
+        const std::array<std::string,1> roots{id};
+        const auto& actual=source.entities().at(id);
+        // Keep the existing single-object gesture's natural axes while using
+        // the same complete, shared-world-axis producer needed by a cohort.
+        // This does not widen the captured selection or publication fences.
+        authoring.intents=draft_assembly_directional_resize_intents(source,
+            std::span<const std::string>{roots},
+            {anchor,sx,sy,physicalPlanRotationAngle(actual)},budget);
         if (authoring.intents.empty()) return authoring;
         authoring.carry_presentation_references=true;
         const auto plan=inspect_phase_assembly_instance_property_edit_plan(source.entities(),authoring.intents);

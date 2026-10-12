@@ -3,6 +3,8 @@
 #include "sketch/assembly_directional_resize.hpp"
 #include "sketch/assembly_instance_property_edit.hpp"
 
+#include <span>
+
 namespace sketch::desktop {
 
 // Source-only producer for one actual independent document entity. Captured
@@ -11,6 +13,8 @@ namespace sketch::desktop {
 // Anchor/factors must be finite and factors positive. Catalogue decoding has
 // its own bounded raw-work admission; independent decode, actual expansion and
 // exact candidate drafting share available_work, committed only on success.
+// An omitted world-axis angle retains the single root's historical axes;
+// an explicit angle must be finite, including for unit factors.
 //
 // Returns sorted, unique Set intents for EVERY changed own-profile roster,
 // retaining unchanged topology and replacing changed topology against actual
@@ -27,6 +31,21 @@ namespace sketch::desktop {
 // source proof, plus selection/viewport/recovery fences, before publication.
 [[nodiscard]] std::vector<AssemblyInstancePropertyEditIntent> draft_assembly_directional_resize_intents(
     const DocumentSnapshot& source, const std::string& independent_entity_id,
+    const AssemblyDirectionalResize& operation, AssemblyExpansionBudget& available_work);
+
+// Source-only component cohort producer, not the full mixed-selection workflow.
+// Requires 1..1000 unique, nonempty actual independent document entity IDs and
+// a finite explicit world_axis_rotation_radians, even for unit factors. Every
+// root receives the SAME world anchor/axes/factors from the immutable editable
+// source. IDs and paths are processed in structural sorted order; complete raw
+// catalog admission shares one bounded ledger and decodes each actual catalog
+// once. All roots share available_work, one UUID namespace/identity sequence
+// and the aggregate 1000 changed-node cap. Later-root failure commits no work
+// and returns no partial proposal. All single-root topology/source guarantees
+// above apply. The caller owns one atomic mixed command, source fences, phase,
+// room and dimension review, candidate preparation and publication.
+[[nodiscard]] std::vector<AssemblyInstancePropertyEditIntent> draft_assembly_directional_resize_intents(
+    const DocumentSnapshot& source, std::span<const std::string> independent_entity_ids,
     const AssemblyDirectionalResize& operation, AssemblyExpansionBudget& available_work);
 
 } // namespace sketch::desktop

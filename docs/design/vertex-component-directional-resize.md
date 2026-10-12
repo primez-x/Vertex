@@ -120,6 +120,18 @@ actual binary64 basis inverses and transactional shared work admission. The
 finite-angle requirement applies even to unit factors. This adds geometry
 support, not mixed command, room, constraint or dimension authority.
 
+The desktop intent producer also accepts a complete independent-component
+cohort with one mandatory explicit world-axis angle. It sorts and authenticates
+unique actual roots, admits each distinct catalog once through one shared raw
+ledger, and derives every actual node through one transactional expansion
+ledger. The entire proposal has one UUID namespace and a total limit of 1000
+changed node targets. A later failure commits neither an earlier partial roster
+nor its work ledger. Unit factors still authenticate every selected root. The
+single-object canvas preview uses this same producer with its actual natural
+angle and preserves its existing selection, dimension-review and release fences.
+The original single-root API retains its default-axis behavior. This cohort
+source facility does not yet enable complete mixed-family canvas resizing.
+
 Cutout transfer now examines the exact relative map, rather than requiring both
 individual profile maps to be similarities. Compatible anisotropic maps can
 therefore transfer circular source primitives without tessellation. Anchored
