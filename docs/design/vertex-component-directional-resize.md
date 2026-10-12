@@ -111,6 +111,13 @@ interaction qualification; it does not establish complete canvas acceptance.
 
 ## Mixed selections
 
+Cutout transfer now examines the exact relative map, rather than requiring both
+individual profile maps to be similarities. Compatible anisotropic maps can
+therefore transfer circular source primitives without tessellation. Anchored
+endpoint conversion keeps the intermediate arithmetic exact and rounds only the
+final destination coordinate. Arbitrary different ellipse shapes still require
+a broader boundary representation; this correction does not close that gap.
+
 Current ordinary transform dialects contain rigid/similarity operators, and the
 combined invariant-child proof uses rigid encoding. Existing child-only skylight
 resizing already has directional factors. Mixed resizing must carry the complete

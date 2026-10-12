@@ -1,6 +1,7 @@
 #pragma once
 
 #include "sketch/annotation_entity_codec.hpp"
+#include "sketch/assembly_document_adapter.hpp"
 #include "sketch/boundary_entity.hpp"
 #include "sketch/document.hpp"
 #include "sketch/document_wall.hpp"
@@ -636,6 +637,63 @@ inline void validate_ifc_reference(const Entity& entity) {
     if (!entity.extensions.at("ifc_vertex_properties").is_object()) reject();
 }
 
+// Recovered assemblies are a closed detached cohort, not an unrestricted model
+// lane in the worker protocol. Every root owns one private, instance-free
+// catalog; opaque original context remains in provenance. Admit every raw
+// catalog before the first model decode, then share one expansion ledger.
+inline void validate_detached_ifc_assemblies(const std::vector<Entity>& entities) {
+    AssemblyDocumentEntities graph;
+    AssemblyCatalogTransferBudget catalog_budget;
+    std::set<std::string, std::less<>> catalogs;
+    std::set<std::string, std::less<>> referenced_catalogs;
+    for (const auto& entity : entities) {
+        if (entity.type != "assembly_model" && entity.type != "assembly_instance") continue;
+        validate_native_context(entity);
+        if (entity.required) reject();
+        fields(entity.extensions, {"ifc_source", "ifc_vertex_properties"});
+        const auto& provenance = entity.extensions.at("ifc_source");
+        fields(provenance, {"record_id", "record_type", "arguments"});
+        if (!provenance.at("record_id").is_number_integer() ||
+            provenance.at("record_id").get<std::int64_t>() <= 0 ||
+            provenance.at("record_type") != "IFCELEMENTASSEMBLY") reject();
+        (void)text(provenance.at("arguments"), true, 1024 * 1024);
+        const auto root_id = std::string{"ifc-"} + std::to_string(provenance.at("record_id").get<std::int64_t>());
+        const auto catalog_id = root_id + "-assembly-catalog";
+        const auto& metadata = entity.extensions.at("ifc_vertex_properties");
+        if (!metadata.is_object() || !metadata.contains("_vertex_ifc_assembly_source")) reject();
+        const auto& source = metadata.at("_vertex_ifc_assembly_source");
+        if (!source.is_object() || !source.contains("version") ||
+            !source.at("version").is_number_integer() || source.at("version") != 2) reject();
+        if (!graph.emplace(entity.id, entity).second) reject();
+        if (entity.type == "assembly_model") {
+            fields(entity.properties, {"model"});
+            const auto& model = entity.properties.at("model");
+            if (entity.id != catalog_id || !model.is_object() || !model.contains("instances") ||
+                !model.at("instances").is_array() || !model.at("instances").empty()) reject();
+            if (!catalogs.insert(entity.id).second) reject();
+            try { admit_complete_assembly_catalog_source(entity, catalog_budget); }
+            catch (...) { reject(); }
+        } else {
+            if (entity.id != root_id || entity.properties.value("assembly_catalog_id", std::string{}) != catalog_id ||
+                !referenced_catalogs.insert(catalog_id).second) reject();
+        }
+    }
+    if (catalogs != referenced_catalogs) reject();
+    AssemblyExpansionBudget expansion_budget;
+    expansion_budget.max_profile_segments = project_import_geometry_segment_limit;
+    for (const auto& [id, entity] : graph) {
+        if (entity.type != "assembly_instance") continue;
+        try {
+            const auto instance = decode_document_assembly_instance(entity, expansion_budget);
+            if (instance.instance.id != id || !instance.instance.root_transform || instance.instance.placement) reject();
+            const auto& catalog = graph.at(instance.assembly_catalog_id);
+            if (catalog.extensions != entity.extensions) reject();
+        } catch (...) { reject(); }
+    }
+    try { (void)expand_document_assembly_instances(graph, expansion_budget); }
+    catch (...) { reject(); }
+}
+
 // Bound canonical stair/rail layout work before a decoder can allocate treads,
 // posts or perform landing-pair checks. This is analytical, not solid creation.
 inline std::size_t native_stair_railing_work(const Entity& entity, const Entity* host = nullptr) {
@@ -869,7 +927,8 @@ inline void validate(const ProjectImportCandidate& result) {
             (native_dxf_catalog_source && native_dxf_architectural_source_type(entity.type));
         const bool ifc = entity.type == "wall" || entity.type == "slab" || entity.type == "roof" || entity.type == "room" ||
             entity.type == "opening" || entity.type == "ifc_reference" ||
-            entity.type == "stair" || entity.type == "railing" || entity.type == "corner_window";
+            entity.type == "stair" || entity.type == "railing" || entity.type == "corner_window" ||
+            entity.type == "assembly_model" || entity.type == "assembly_instance";
         if (!shared && !(result.kind == ProjectImportKind::dxf ? dxf : ifc)) reject();
         if (entity.properties.contains("parent_id") || entity.properties.contains("layer_id")) reject();
         if (native_dxf_wall_source && !native_dxf_boundary) {
@@ -1041,6 +1100,7 @@ inline void validate(const ProjectImportCandidate& result) {
                 result.phase_source_graph ? &source_budget : nullptr);
         } catch (...) { reject(); }
     }
+    if (result.kind == ProjectImportKind::ifc) validate_detached_ifc_assemblies(result.entities);
     auto document = Document::create(result.kind == ProjectImportKind::ifc
         ? detached_ifc_validation_entities(result.entities) : result.entities);
     if (!document.snapshot().is_editable()) reject();

@@ -46,6 +46,15 @@ void validate_assembly_profile_affine(const AssemblyProfilePlanarAffine& affine)
 // closed area and all segment validation/bounds work. Empty boundaries and
 // counts above this cap are rejected. Bounds/perimeter do not establish topology.
 inline constexpr std::size_t assembly_profile_geometry_max_segments = 1024;
+// Reexpress editable source primitives through destination^-1 * source, with
+// one final binary64 rounding per coordinate. Straight segments admit any valid
+// relative affine; circular segments require an exactly orientation-preserving
+// relative similarity. Arbitrary elliptical mismatch is refused and remains a
+// broader source-representation gap. Sweeps/order/connectivity are retained;
+// invalid, empty, over-budget or collapsed/unrepresentable segments are refused.
+[[nodiscard]] Boundary reexpress_assembly_profile_boundary(
+    const Boundary& boundary, const AssemblyProfilePlanarAffine& source,
+    const AssemblyProfilePlanarAffine& destination);
 [[nodiscard]] Bounds2 assembly_profile_boundary_bounds(
     const Boundary& source, const AssemblyProfilePlanarAffine& affine);
 

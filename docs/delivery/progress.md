@@ -14,6 +14,46 @@ changed source does not acquire runtime acceptance without later qualification.
 
 ## Current delivery state
 
+### October 11 IFC component recovery and cutout transfer continuation
+
+The complete initial component-geometry batch is committed and pushed as
+4797964acc2306d86941cfc51b2f9c30788e2fd5; the exact remote ref matches.
+The continuation now implements editable recovery of complete Vertex-authored
+independent IFC assembly cohorts. Export binds each actual profile proxy to its
+root/provenance; import must prove linked metre units, complete unique aggregates,
+proper frames, every native solid and full source quantities before creating a
+detached root/private catalog. Worker admission and desktop destination remapping
+are being integrated in the same batch. Foreign or unproved geometry remains
+retained source; successful cohorts must not leave duplicate generic children.
+The [IFC component design](../design/vertex-ifc-component-import.md) records the
+supported boundary and qualification requirements. Independent source review
+found repeated validation of the entire growing graph per successful cohort.
+The correction validates each isolated root/catalog pair once; final importer
+and broker whole-graph validation remain. The bounded correction review approved
+the fix, with no other concrete blocker in the inspected source. Root reviewed
+the export/proof/atomic-consumption and worker/destination paths. This batch is
+ready for a scoped commit and remote backup; it is not runtime-qualified.
+
+A separate source correction reexpresses compatible cutouts using the exact
+relative profile map. It accepts compatible anisotropic source/destination maps,
+keeps circular sweeps and exact anchored intermediate arithmetic, and rounds
+only final destination coordinates. Collapsed or unrepresentable results refuse.
+Arbitrary different ellipse shapes remain a source-representation gap. Root
+reviewed the helper's exact matrix equalities, endpoint conversion, limits and
+dialog integration. Independent review also confirmed the exact relative-matrix
+admission and anchored final-coordinate rounding. Scoped whitespace checks
+passed; no runtime observation is claimed.
+
+Bounded mixed-transform discovery confirms the ordinary/mixed source contracts
+still encode scalar similarity while the independent skylight leaf already
+supports directional factors. A complete common-pivot directional operator must
+span both original-source lanes, carried children, room review, phase replacement
+and dimensions. Independent per-owner command merging would not fulfil that
+requirement. This gap remains open alongside general elliptical cutouts and
+external compatibility/device prerequisites. All ten production gates remain
+open. No builds, tests, scripts, probes, native jobs, launches, packages or
+installations ran; the installed application is unchanged.
+
 ### October 11 combined initial component geometry authoring
 
 The canvas directional resize batch is committed and pushed as

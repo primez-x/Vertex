@@ -79,6 +79,10 @@ struct IfcProjectImportResult {
 // part and two glazing-leg window parts. Each leg fills exactly one actual
 // wall void; parts only aggregate under the spatially contained owner. Exact
 // pane dimensions and proper opening-local frames describe those real solids.
+// Independent profile assemblies export one bodyless IfcElementAssembly and
+// one marked proxy per expanded solid profile. A v2 source envelope binds the
+// complete child roster, scoped profile paths, effective transforms/materials,
+// computed volumes and declared quantities to the exact instance and catalog.
 [[nodiscard]] IfcProjectExportResult export_project_ifc(
     const DocumentSnapshot& document,
     const IfcExchangeLimits& limits = {});
@@ -131,6 +135,20 @@ struct IfcProjectImportResult {
 // owner/host/cut context is detached and resolved elevations are world metres;
 // opaque original properties/extensions remain in the source envelope. Linked
 // dimension annotation source is retained without inventing active targets.
+// Independent assembly recovery supports only the marked v2 Vertex export:
+// actual assembly/proxy types, unique complete aggregates, proper matching
+// occurrence frames, supported contexts, linked metre units, material relations
+// and every exact regenerated solid must agree with the complete validated
+// source expansion, including nested/reflected/affine-mapped profiles. Version-1
+// and foreign/mismatching assemblies stay inert with retained source. Successful
+// cohorts atomically replace the owner and consume all profile children, using
+// a separate nonrequired editable catalog per root with no embedded instances.
+// Only document owner/catalog identities are remapped; local type/profile/path
+// identities stay scoped. World pose comes from the proved IFC frame composed
+// with the source root transform. Organization, levels, phases, site authoring,
+// unselected embedded instances and opaque extensions remain source provenance;
+// they do not acquire reconstructed authority. Failed attempts retain bounded
+// catalog/topology/native work charges and never partially publish a cohort.
 [[nodiscard]] IfcProjectImportResult import_project_ifc(
     std::string_view bytes,
     const IfcExchangeLimits& limits = {});

@@ -699,6 +699,7 @@ void retain_properties(const Entity& input, int product_id, ExportContext& conte
              (retained_type=="opening" && native->contains("properties") && native->at("properties").contains("corner_window_id")) ||
              entity.type=="assembly_instance" || entity.type=="terrain_surface" ||
              entity.properties.contains("_vertex_ifc_corner_window") || entity.properties.contains("_vertex_ifc_corner_cut") ||
+             entity.properties.contains("_vertex_ifc_assembly_profile") ||
              entity.properties.contains("_vertex_ifc_site_source") || entity.properties.contains("_vertex_ifc_join") ||
              ((entity.type == "roof" || entity.type == "room" || entity.type == "stair" || entity.type == "railing") && entity.properties.contains("_vertex_ifc_entity"))) &&
             context.limits.max_string_bytes >= 512 && payload.size() <= 8*1024*1024) {
@@ -1913,6 +1914,48 @@ void export_terrain(const Entity& entity, ExportContext& context,
     } catch (const std::exception&) { add_diagnostic(diagnostics,entity.id,entity.type,"terrain_geometry_not_exported"); }
 }
 
+#ifdef SKETCH_IFC_NATIVE_GEOMETRY
+Json assembly_profile_provenance(const AssemblyExpandedProfile& p) {
+    return {{"part_path",p.part_path},{"type_id",p.type_id},{"profile_id",p.profile.id},
+        {"transform",encode_assembly_transform(p.transform)},
+        {"material_id",p.material_id ? Json(*p.material_id) : Json(nullptr)},
+        {"geometric_volume_m3",p.volume_m3}};
+}
+
+Json assembly_quantity_provenance(const AssemblyExpansion& expansion) {
+    Json result=Json::array();
+    for (const auto& [key,value] : expansion.declared_quantities)
+        result.push_back({{"name",key.name},{"unit",static_cast<int>(key.unit)},{"value",value}});
+    return result;
+}
+
+// Export and recovery use the same exact solid factory. In particular mapped
+// circular profiles retain their affine geometry through the native kernel.
+std::vector<IfcNativeMesh> independent_assembly_profile_mesh(const AssemblyExpandedProfile& expanded,
+    std::size_t vertices, std::size_t triangles) {
+    const auto& profile=expanded.profile;
+    const auto& transform=expanded.transform;
+    if (profile.planar_affine) return ifc_native_assembly_profile_mesh(expanded,vertices,triangles);
+    const auto boundary=[&](const Boundary& source) {
+        Boundary result=source;
+        for (auto& s:result) {
+            const auto a=transform_assembly_point({s.start.x,s.start.y,0},transform);
+            const auto b=transform_assembly_point({s.end.x,s.end.y,0},transform);
+            s.start={a.x,a.y}; s.end={b.x,b.y};
+            if (transform.mirrored_y) s.sweep_radians=-s.sweep_radians;
+        }
+        return result;
+    };
+    Json holes=Json::array();
+    for (const auto& hole:profile.holes) holes.push_back(boundary_json(boundary(hole)));
+    const auto height_scale=transform.scale*transform.vertical_scale;
+    Entity room{"ifc-assembly-profile","room",{{"boundary",boundary_json(boundary(profile.outer))},
+        {"holes",holes},{"height_m",profile.height_m*height_scale},
+        {"elevation_m",profile.elevation_m*height_scale+transform.translation_m.z}}};
+    return ifc_native_room_mesh(room,vertices,triangles);
+}
+#endif
+
 void export_independent_assembly(const DocumentSnapshot& document, const Entity& entity,
     ExportContext& context, std::vector<IfcProjectDiagnostic>& diagnostics) {
 #ifdef SKETCH_IFC_NATIVE_GEOMETRY
@@ -1943,41 +1986,14 @@ void export_independent_assembly(const DocumentSnapshot& document, const Entity&
         std::size_t vertices=context.mesh_vertices, triangles=context.mesh_triangles;
         for (const auto& expanded:expansion.profiles) {
             const auto& profile=expanded.profile;
-            const auto& transform=expanded.transform;
             std::size_t work=profile.outer.size();
             for (const auto& hole:profile.holes) work+=hole.size();
             context.native_work.charge(work);
             // Native admission and final construction each check edges.
             context.native_work.charge_cross(work);
             context.native_work.charge_cross(work);
-            std::vector<IfcNativeMesh> meshes;
-            if (profile.planar_affine) {
-                // Apply the complete profile map before the actual expanded
-                // node pose in the native solid factory. Elliptical arcs must
-                // never pass through room Segments reconstructed from mapped
-                // endpoints and the original circular sweep.
-                meshes = ifc_native_assembly_profile_mesh(expanded,
-                    context.limits.max_mesh_vertices-vertices,
-                    context.limits.max_mesh_triangles-triangles);
-            } else {
-                const auto boundary=[&](const Boundary& source) {
-                    Boundary result=source;
-                    for (auto& s:result) {
-                        const auto a=transform_assembly_point({s.start.x,s.start.y,0},transform);
-                        const auto b=transform_assembly_point({s.end.x,s.end.y,0},transform);
-                        s.start={a.x,a.y}; s.end={b.x,b.y};
-                        if (transform.mirrored_y) s.sweep_radians=-s.sweep_radians;
-                    }
-                    return result;
-                };
-                Json holes=Json::array(); for (const auto& hole:profile.holes) holes.push_back(boundary_json(boundary(hole)));
-                const auto height_scale=transform.scale*transform.vertical_scale;
-                Entity room{"ifc-assembly-profile","room",{{"boundary",boundary_json(boundary(profile.outer))},
-                    {"holes",holes},{"height_m",profile.height_m*height_scale},
-                    {"elevation_m",profile.elevation_m*height_scale+transform.translation_m.z}}};
-                meshes=ifc_native_room_mesh(room,context.limits.max_mesh_vertices-vertices,
-                    context.limits.max_mesh_triangles-triangles);
-            }
+            auto meshes=independent_assembly_profile_mesh(expanded,
+                context.limits.max_mesh_vertices-vertices,context.limits.max_mesh_triangles-triangles);
             for (const auto& mesh:meshes) {
                 require(mesh.vertices.size()<=context.limits.max_mesh_vertices-vertices &&
                     mesh.triangles.size()<=context.limits.max_mesh_triangles-triangles);
@@ -2005,15 +2021,19 @@ void export_independent_assembly(const DocumentSnapshot& document, const Entity&
                 }
                 context.builder.add("IFCRELASSOCIATESMATERIAL",context.root("assembly-material:"+child_id,"")+",("+ref(child)+"),"+ref(material->second));
             }
-            provenance.push_back({{"part_path",p.part_path},{"type_id",p.type_id},{"profile_id",p.profile.id},
-                {"transform",encode_assembly_transform(p.transform)},{"material_id",p.material_id ? Json(*p.material_id) : Json(nullptr)},
-                {"geometric_volume_m3",p.volume_m3}});
+            auto row=assembly_profile_provenance(p); row["child_product"]=child;
+            provenance.push_back(row);
+            Entity retained_child{child_id,"ifc_reference",{{"_vertex_ifc_assembly_profile",
+                {{"version",1},{"assembly_product",root},{"ordinal",i},{"provenance",row}}}}};
+            retain_properties(retained_child,child,context,diagnostics);
         }
         auto retained=mapped ? mesh_metadata(entity,"assembly_instance") : entity;
-        retained.properties["_vertex_ifc_assembly_source"]={{"version",1},{"id",entity.id},{"required",entity.required},
+        retained.properties["_vertex_ifc_assembly_source"]={{"version",2},{"id",entity.id},{"type",entity.type},{"required",entity.required},
             {"properties",entity.properties},{"extensions",entity.extensions},
-            {"catalog",{{"id",catalog.id},{"properties",catalog.properties},{"extensions",catalog.extensions}}},
-            {"profiles",provenance},{"geometric_volume_m3",expansion.volume_m3}};
+            {"catalog",{{"id",catalog.id},{"type",catalog.type},{"required",catalog.required},
+                {"properties",catalog.properties},{"extensions",catalog.extensions}}},
+            {"profiles",provenance},{"declared_quantities",assembly_quantity_provenance(expansion)},
+            {"material_volumes_m3",expansion.material_volumes_m3},{"geometric_volume_m3",expansion.volume_m3}};
         // Declared quantities stay in the exact authored instance/catalog. They
         // are never serialized as geometric volume or scaled by site placement.
         retain_properties(retained,root,context,diagnostics);
@@ -3699,6 +3719,242 @@ void reconstruct_corner_windows(const ParsedStep& parsed, const std::map<int,Jso
         }
     }
 }
+
+void reconstruct_independent_assemblies(const ParsedStep& parsed, const std::map<int,Json>& metadata,
+    const std::map<int,std::vector<IfcNativeMesh>>& meshes, const NativeRoofRelations& relations,
+    const std::map<int,std::vector<int>>& parents, NativeReconstructionLedger& ledger,
+    std::size_t& count, const IfcExchangeLimits& limits, IfcProjectImportResult& result) {
+    if (std::none_of(metadata.begin(),metadata.end(),[](const auto& entry) {
+        return entry.second.contains("_vertex_ifc_assembly_source");
+    })) return;
+    std::map<int,std::vector<int>> materials, contained;
+    std::map<std::string,std::size_t> product_guids, source_ids;
+    std::set<int> project_contexts;
+    for (const auto& record : parsed.records) {
+        if (record.type=="IFCPROJECT") {
+            const auto fields=split_top_level(record.args,count,limits);
+            if (fields.size()==9 && fields[7]!="$")
+                for (const auto id : list_references(fields[7],count,limits)) project_contexts.insert(id);
+        }
+        if (is_product(record.type)) {
+            const auto fields=split_top_level(record.args,count,limits);
+            require(!fields.empty()); ++product_guids[decode_string(fields[0],limits)];
+        }
+        if (record.type=="IFCRELASSOCIATESMATERIAL" || record.type=="IFCRELCONTAINEDINSPATIALSTRUCTURE") {
+            const auto fields=split_top_level(record.args,count,limits);
+            require(fields.size()==6);
+            const auto owner=reference(fields[5]); require(owner.has_value());
+            for (const auto child : list_references(fields[4],count,limits))
+                (record.type=="IFCRELASSOCIATESMATERIAL" ? materials : contained)[child].push_back(*owner);
+        }
+    }
+    for (const auto& [id,p] : metadata) {
+        (void)id;
+        const auto tag=p.find("_vertex_ifc_assembly_source");
+        if (tag!=p.end() && tag->is_object() && tag->contains("id") && tag->at("id").is_string())
+            ++source_ids[tag->at("id").get<std::string>()];
+    }
+    AssemblyCatalogTransferBudget catalog_budget;
+    AssemblyExpansionBudget expansion_budget;
+    // All failed catalog/override attempts consume these exchange-wide ledgers.
+    const auto charge_profiles=[&](const Json& profiles, bool reserve_mapped=false) {
+        require(profiles.is_array() && profiles.size()<=4096);
+        for (const auto& p : profiles) {
+            require(p.is_object() && p.at("outer").is_array() && p.at("holes").is_array());
+            auto work=p.at("outer").size();
+            for (const auto& hole : p.at("holes")) { require(hole.is_array()); work+=hole.size(); }
+            for (int pass=0; pass<3; ++pass) ledger.geometry.charge(work);
+            if (reserve_mapped && p.contains("planar_affine")) {
+                // Match the canonical raw mapped-profile reservation, including
+                // nonlinear arc work, before a transactional decoder can fail.
+                // Complete-catalog preflight already covers catalog profiles.
+                std::size_t arcs=0;
+                const auto ring=[&](const Json& edges) {
+                    for (const auto& edge : edges) if (edge.at("sweep_radians")!=0) ++arcs;
+                };
+                ring(p.at("outer")); for (const auto& hole : p.at("holes")) ring(hole);
+                const auto product=[&](std::initializer_list<std::size_t> factors) {
+                    const auto remaining=catalog_budget.max_validation_work-catalog_budget.consumed_validation_work;
+                    if (std::find(factors.begin(),factors.end(),0)!=factors.end()) return;
+                    std::size_t charge=1;
+                    for (const auto factor : factors) {
+                        if (factor>remaining/charge) NativeReconstructionLedger::exhausted();
+                        charge*=factor;
+                    }
+                    catalog_budget.consumed_validation_work+=charge;
+                };
+                const auto topology=work+p.at("holes").size()+1;
+                product({24,topology,topology}); product({900000,arcs,work});
+            }
+        }
+    };
+    const auto charge_overrides=[&](const Json& instance, bool reserve_mapped=false) {
+        require(instance.is_object());
+        if (instance.contains("profile_overrides")) charge_profiles(instance.at("profile_overrides"),reserve_mapped);
+        if (instance.contains("nested_overrides")) {
+            const auto& rows=instance.at("nested_overrides"); require(rows.is_array() && rows.size()<=4096);
+            for (const auto& row : rows)
+                if (row.contains("profile_overrides")) charge_profiles(row.at("profile_overrides"),reserve_mapped);
+        }
+    };
+    for (const auto& record : parsed.records) {
+        const auto found=metadata.find(record.id);
+        if (found==metadata.end() || !found->second.contains("_vertex_ifc_assembly_source")) continue;
+        try {
+            ledger.begin_attempt();
+            const auto& p=found->second;
+            const auto& tag=p.at("_vertex_ifc_assembly_source");
+            // Version 1 did not bind actual parts to the source roster.
+            if (tag.is_object() && tag.value("version",0)==1) {
+                add_diagnostic(result.diagnostics,"#"+std::to_string(record.id),record.type,
+                    "independent_assembly_legacy_roster_not_reconstructed");
+                continue;
+            }
+            require(tag.is_object() && tag.size()==11 && tag.at("version").is_number_integer() && tag.at("version")==2);
+            auto source=corner_source(tag,"assembly_instance");
+            auto source_catalog=corner_source(tag.at("catalog"),"assembly_model");
+            require(tag.at("catalog").size()==5 && source.id!=source_catalog.id && source_ids.at(source.id)==1);
+            for (const auto& [key,value] : source.properties.items()) require(p.contains(key) && p.at(key)==value);
+            const auto fields=split_top_level(record.args,count,limits);
+            require(record.type=="IFCELEMENTASSEMBLY" && fields.size()==10 &&
+                fields[4]=="'Independent profile assembly'" && fields[6]=="$" && fields[7]=="$" &&
+                fields[8]==".NOTDEFINED." && fields[9]==".USERDEFINED." &&
+                decode_string(fields[2],limits)==source.id && product_guids.at(decode_string(fields[0],limits))==1 &&
+                !parents.contains(record.id) && !materials.contains(record.id) && contained.contains(record.id) &&
+                contained.at(record.id).size()==1 && !relations.fill_use.contains(record.id) &&
+                !relations.roof_voids.contains(record.id) && !relations.void_parents.contains(record.id));
+            const auto frame=product_frame(parsed,fields,count,limits); require(frame.has_value());
+            const auto& rows=tag.at("profiles");
+            require(rows.is_array() && !rows.empty() && rows.size()<=4096);
+            // Admit the complete original catalog, including unused types and
+            // embedded rows, before any semantic model decode. Repeated model
+            // validation and destination admission are already included in the
+            // adapter's conservative complete-catalog reservation.
+            admit_existing_assembly_catalog_work(source_catalog,catalog_budget);
+            for (const auto& type : source_catalog.properties.at("model").at("types"))
+                if (type.contains("profiles")) charge_profiles(type.at("profiles"));
+            for (const auto& instance : source_catalog.properties.at("model").at("instances")) charge_overrides(instance);
+            charge_overrides(source.properties.at("instance"),true);
+            const auto decoded=decode_document_assembly_instance(source,expansion_budget);
+            require(decoded.assembly_catalog_id==source_catalog.id);
+            (void)AssemblyModel::from_json(source_catalog.properties.at("model"));
+            // No unproved embedded instance, owner reference, organization or
+            // asset becomes active. Definition rows and their scoped identities
+            // stay exact; each root receives its own private catalog owner.
+            Entity catalog{source_catalog.id,"assembly_model",{{"model",source_catalog.properties.at("model")}},false};
+            catalog.properties.at("model").at("instances")=Json::array();
+            AssemblyDocumentEntities local;
+            require(local.emplace(catalog.id,catalog).second && local.emplace(source.id,source).second);
+            const auto expansion=expand_document_assembly_instance(source,local,expansion_budget);
+            require(expansion.profiles.size()==rows.size() &&
+                tag.at("geometric_volume_m3")==Json(expansion.volume_m3) &&
+                tag.at("declared_quantities")==assembly_quantity_provenance(expansion) &&
+                tag.at("material_volumes_m3")==Json(expansion.material_volumes_m3));
+            std::map<std::string,std::string> names;
+            for (const auto& m : catalog.properties.at("model").at("materials"))
+                require(names.emplace(m.at("id").get<std::string>(),m.at("name").get<std::string>()).second);
+            std::set<int> consumed{record.id}, children;
+            std::optional<int> cohort_context;
+            for (std::size_t i=0; i<rows.size(); ++i) {
+                const auto& row=rows[i]; require(row.is_object() && row.size()==7 && row.at("child_product").is_number_integer());
+                const auto child=row.at("child_product").get<int>();
+                require(children.insert(child).second && child!=record.id);
+                auto expected_row=assembly_profile_provenance(expansion.profiles[i]); expected_row["child_product"]=child;
+                require(row==expected_row && parents.contains(child) && parents.at(child)==std::vector<int>{record.id} &&
+                    !contained.contains(child) && !relations.fill_use.contains(child) &&
+                    !relations.void_parents.contains(child) && !relations.roof_voids.contains(child) &&
+                    metadata.contains(child) && meshes.contains(child));
+                const auto* actual=find_record(parsed,child); require(actual && actual->type=="IFCBUILDINGELEMENTPROXY");
+                const auto child_fields=split_top_level(actual->args,count,limits);
+                require(child_fields.size()==9 && child_fields[4]=="$" && child_fields[7]=="$" && child_fields[8]==".ELEMENT." &&
+                    decode_string(child_fields[2],limits)==expansion.profiles[i].profile.id &&
+                    product_guids.at(decode_string(child_fields[0],limits))==1);
+                const auto child_frame=product_frame(parsed,child_fields,count,limits);
+                require(child_frame && same_frame(*frame,*child_frame));
+                // product_meshes proved the body/context shape. Also prove that
+                // this exact context belongs to the actual metre project.
+                const auto shape_id=reference(child_fields[6]); require(shape_id.has_value());
+                const auto* shape=find_record(parsed,*shape_id); require(shape!=nullptr);
+                const auto shape_fields=split_top_level(shape->args,count,limits);
+                const auto representations=list_references(shape_fields.at(2),count,limits);
+                require(representations.size()==1);
+                const auto* representation=find_record(parsed,representations.front()); require(representation!=nullptr);
+                const auto representation_fields=split_top_level(representation->args,count,limits);
+                const auto context=reference(representation_fields.at(0));
+                require(context && project_contexts.contains(*context) && (!cohort_context || *cohort_context==*context));
+                cohort_context=context;
+                require(metadata.at(child)==Json{{"_vertex_ifc_assembly_profile",{{"version",1},
+                    {"assembly_product",record.id},{"ordinal",i},{"provenance",row}}}});
+                const auto material=expansion.profiles[i].material_id;
+                if (material) {
+                    require(materials.contains(child) && materials.at(child).size()==1 && names.contains(*material));
+                    const auto* actual_material=find_record(parsed,materials.at(child).front());
+                    require(actual_material && actual_material->type=="IFCMATERIAL");
+                    const auto material_fields=split_top_level(actual_material->args,count,limits);
+                    require(material_fields.size()==3 && material_fields[1]=="$" && material_fields[2]=="$" &&
+                        decode_string(material_fields[0],limits)==names.at(*material));
+                } else require(!materials.contains(child));
+                auto work=expansion.profiles[i].profile.outer.size();
+                for (const auto& hole : expansion.profiles[i].profile.holes) work+=hole.size();
+                ledger.geometry.charge(work); ledger.geometry.charge_cross(work); ledger.geometry.charge_cross(work);
+                std::size_t vertices=0, triangles=0;
+                for (const auto& mesh : meshes.at(child)) { vertices+=mesh.vertices.size(); triangles+=mesh.triangles.size(); }
+                require(vertices && triangles);
+                if (vertices>ledger.vertices || triangles>ledger.triangles) NativeReconstructionLedger::exhausted();
+                ledger.vertices-=vertices; ledger.triangles-=triangles;
+                const auto expected=corner_world_mesh(independent_assembly_profile_mesh(expansion.profiles[i],vertices,triangles),*frame);
+                require(matching_meshes(meshes.at(child),expected)); consumed.insert(child);
+            }
+            for (const auto& [child,owners] : parents) {
+                if (std::find(owners.begin(),owners.end(),record.id)!=owners.end()) require(children.contains(child));
+                for (const auto parent : owners) require(!children.contains(parent));
+            }
+            for (const auto& [id,child_properties] : metadata) {
+                const auto child_tag=child_properties.find("_vertex_ifc_assembly_profile");
+                if (child_tag!=child_properties.end() && child_tag->is_object() &&
+                    child_tag->contains("assembly_product") && child_tag->at("assembly_product")==record.id)
+                    require(children.contains(id));
+            }
+            Entity owner{source.id,"assembly_instance",{{"version",source.properties.at("version")},
+                {"form",source.properties.at("form")},{"assembly_catalog_id",catalog.id},
+                {"instance",source.properties.at("instance")}},false};
+            const AssemblyTransform placement{{frame->origin.x,frame->origin.y,frame->origin.z},
+                std::atan2(frame->x.y,frame->x.x),1.0,false,1.0};
+            auto pose=decoded;
+            pose.instance.root_transform=compose_assembly_transform(placement,*decoded.instance.root_transform);
+            owner=encode_document_assembly_instance(owner,pose);
+            const auto root_id="ifc-"+std::to_string(record.id), catalog_id=root_id+"-assembly-catalog";
+            owner=remap_independent_assembly_instance(owner,{{source.id,root_id},{catalog.id,catalog_id}});
+            catalog.id=catalog_id;
+            const Json provenance{{"ifc_source",{{"record_id",record.id},{"record_type",record.type},{"arguments",record.args}}},
+                {"ifc_vertex_properties",p}};
+            owner.extensions=provenance; catalog.extensions=provenance;
+            // This cohort has no active references beyond its private catalog.
+            // Admit its pair once; replaying every earlier catalog per success
+            // would multiply their already-reserved work. Complete composition
+            // is validated by the final graph pass and worker-response boundary.
+            require(Document::create(std::vector<Entity>{owner,catalog}).snapshot().is_editable());
+            auto entities=result.entities;
+            bool replaced=false;
+            for (auto& entity : entities) if (entity.id==root_id) { require(!replaced); entity=owner; replaced=true; }
+            require(replaced && std::none_of(entities.begin(),entities.end(),[&](const auto& e){return e.id==catalog_id;}));
+            std::erase_if(entities,[&](const Entity& e){
+                return children.contains(e.extensions.at("ifc_source").at("record_id").get<int>());
+            });
+            entities.push_back(std::move(catalog));
+            result.entities=std::move(entities);
+            std::erase_if(result.diagnostics,[&](const auto& d){return std::any_of(consumed.begin(),consumed.end(),
+                [&](int id){return d.source_id=="#"+std::to_string(id);});});
+            add_diagnostic(result.diagnostics,"#"+std::to_string(record.id),record.type,
+                "independent_assembly_context_retained_not_reconstructed");
+        } catch (const std::exception& error) {
+            const std::string_view message=error.what();
+            add_diagnostic(result.diagnostics,"#"+std::to_string(record.id),record.type,
+                message.find("budget")!=std::string_view::npos ?
+                    "independent_assembly_reconstruction_budget_exceeded" : "independent_assembly_geometry_metadata_inconsistent");
+        }
+    }
+}
 #endif
 
 } // namespace
@@ -4012,7 +4268,7 @@ IfcProjectImportResult import_project_ifc(std::string_view bytes,
         const auto metadata = metadata_by_id.find(record.id);
         const bool corner_frame = metadata != metadata_by_id.end() &&
             (metadata->second.contains("_vertex_ifc_corner_host") || metadata->second.contains("_vertex_ifc_corner_cut") ||
-                metadata->second.contains("_vertex_ifc_corner_part"));
+                metadata->second.contains("_vertex_ifc_corner_part") || metadata->second.contains("_vertex_ifc_assembly_profile"));
         if (auto mesh = product_meshes(parsed, record, argument_count, limits, mesh_vertices, mesh_triangles,corner_frame))
             meshes_by_id.emplace(record.id, std::move(*mesh));
     }
@@ -4126,7 +4382,9 @@ IfcProjectImportResult import_project_ifc(std::string_view bytes,
                  metadata_by_id.at(record.id).contains("_vertex_ifc_corner_cut") ||
                  metadata_by_id.at(record.id).contains("corner_window_id") ||
                  metadata_by_id.at(record.id).contains("_vertex_ifc_corner_part") ||
-                 metadata_by_id.at(record.id).contains("_vertex_ifc_corner_window"))) {
+                 metadata_by_id.at(record.id).contains("_vertex_ifc_corner_window") ||
+                 metadata_by_id.at(record.id).contains("_vertex_ifc_assembly_source") ||
+                 metadata_by_id.at(record.id).contains("_vertex_ifc_assembly_profile"))) {
                 // A nested roof fill/void has no independent editable route.
                 // Until its owning roof passes the whole product proof keep
                 // both the foreign body and semantic provenance inert.
@@ -4136,7 +4394,10 @@ IfcProjectImportResult import_project_ifc(std::string_view bytes,
                         {"ifc_vertex_properties",metadata_by_id.at(record.id)}}});
                 add_diagnostic(result.diagnostics, "#" + std::to_string(record.id), record.type,
                     metadata_by_id.at(record.id).contains("_vertex_ifc_roof_child") ?
-                        "roof_skylight_semantics_not_reconstructed" : "corner_window_cohort_not_reconstructed");
+                        "roof_skylight_semantics_not_reconstructed" :
+                        metadata_by_id.at(record.id).contains("_vertex_ifc_assembly_source") ||
+                        metadata_by_id.at(record.id).contains("_vertex_ifc_assembly_profile") ?
+                            "independent_assembly_cohort_not_reconstructed" : "corner_window_cohort_not_reconstructed");
                 continue;
             }
 #ifdef SKETCH_IFC_NATIVE_GEOMETRY
@@ -4613,6 +4874,8 @@ IfcProjectImportResult import_project_ifc(std::string_view bytes,
                 "fill_semantics_not_reconstructed");
 #ifdef SKETCH_IFC_NATIVE_GEOMETRY
     if (supported_units) reconstruct_corner_windows(parsed,metadata_by_id,meshes_by_id,roof_relations,
+        aggregate_parents,native_ledger,argument_count,limits,result);
+    if (supported_units) reconstruct_independent_assemblies(parsed,metadata_by_id,meshes_by_id,roof_relations,
         aggregate_parents,native_ledger,argument_count,limits,result);
     // Reserve the existing candidates' cost first, then admit native additions
     // against one file-wide budget. A declined native carrier stays retained;

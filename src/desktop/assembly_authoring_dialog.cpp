@@ -383,24 +383,9 @@ struct ProfileGeometrySource {
 
 Boundary imported_cutout(const ProfileGeometrySource& source,
                          const std::optional<AssemblyProfilePlanarAffine>& destination) {
-    if(source.planar_affine==destination)return source.outer;
-    const auto similarity=[](const std::optional<AssemblyProfilePlanarAffine>& affine) {
-        return !affine || (affine->xx==affine->yy && affine->xy==-affine->yx);
-    };
-    // Orientation-preserving similarities and their inverses preserve the
-    // circular primitive and signed sweep. General map changes can produce
-    // ellipses, which cannot be stored as a source circular Segment.
-    require((similarity(source.planar_affine) && similarity(destination)) ||
-        std::none_of(source.outer.begin(),source.outer.end(),[](const Segment& edge){return edge.sweep_radians!=0;}),
-        "Circular cutouts cannot be imported between different profile mappings. Replace the whole outer profile to use its mapping, or edit the cutout in local source coordinates.");
-    auto result=source.outer;
-    auto point=[&](Vec2 value) {
-        if(source.planar_affine)value=assembly_profile_affine_point(value,*source.planar_affine);
-        if(destination)value=assembly_profile_affine_inverse_point(value,*destination);
-        return value;
-    };
-    for(auto& edge:result){edge.start=point(edge.start);edge.end=point(edge.end);}
-    return result;
+    return reexpress_assembly_profile_boundary(source.outer,
+        source.planar_affine.value_or(AssemblyProfilePlanarAffine{}),
+        destination.value_or(AssemblyProfilePlanarAffine{}));
 }
 
 // Presentation only: these paths are never converted back into stored geometry.
@@ -661,7 +646,7 @@ std::optional<AssemblyProfile> edit_profile_geometry(QWidget* parent,const Assem
     import_bar->addWidget(import_choice,1);
     auto* import=button(&dialog,import_bar,"assemblyProfileImport","Import selected");
     import->setEnabled(!imports.empty());import_choice->setEnabled(!imports.empty());
-    import->setToolTip("Replacing the outer also replaces all cutouts and adopts the selected source mapping (captured drawing boundaries have no map). A cutout import retains this profile's map and converts straight geometry into its source coordinates.");
+    import->setToolTip("Replacing the outer also replaces all cutouts and uses the imported profile's shape and scale. Importing a cutout keeps this profile's shape and scale; straight edges and compatible curves are converted without approximation. Curves needing a different shape mapping require a separate profile.");
     layout->addLayout(import_bar);
     auto* body=new QHBoxLayout;auto* stack=new QStackedWidget(&dialog);stack->setObjectName("assemblyProfileBoundaryEditors");
     auto* preview=new ProfileGeometryPreview(&dialog);body->addWidget(stack,3);body->addWidget(preview,2);layout->addLayout(body,1);

@@ -537,6 +537,55 @@ Bounds2 assembly_profile_segment_bounds(const Segment& source, const AssemblyPro
     return bounds_of(prepare(source), affine);
 }
 
+Boundary reexpress_assembly_profile_boundary(const Boundary& boundary,
+    const AssemblyProfilePlanarAffine& source, const AssemblyProfilePlanarAffine& destination) {
+    validate_assembly_profile_affine(source);
+    validate_assembly_profile_affine(destination);
+    require_boundary_count(boundary);
+    for (const auto& segment : boundary) (void)prepare(segment);
+
+    // Compare adj(destination) * source exactly. Its common positive
+    // determinant divisor cannot affect the proper-similarity equalities.
+    if (std::any_of(boundary.begin(), boundary.end(),
+        [](const Segment& segment) { return segment.sweep_radians != 0.0; })) {
+        const Exact a = binary64(destination.yy) * binary64(source.xx) -
+            binary64(destination.xy) * binary64(source.yx);
+        const Exact b = binary64(destination.yy) * binary64(source.xy) -
+            binary64(destination.xy) * binary64(source.yy);
+        const Exact c = binary64(destination.xx) * binary64(source.yx) -
+            binary64(destination.yx) * binary64(source.xx);
+        const Exact d = binary64(destination.xx) * binary64(source.yy) -
+            binary64(destination.yx) * binary64(source.xy);
+        if (a != d || b != -c)
+            throw std::invalid_argument("Circular cutouts require an exact relative similarity between profile mappings. Replace the whole outer profile to use its mapping, or edit the cutout in local source coordinates.");
+    }
+    if (source == destination) return boundary;
+    const Exact det = exact_determinant(destination);
+    const auto point = [&](Vec2 value) -> Vec2 {
+        const Exact x = binary64(value.x) - binary64(source.source_origin.x);
+        const Exact y = binary64(value.y) - binary64(source.source_origin.y);
+        // Keep the world displacement exact, including distant anchors and
+        // individually overflowing products, until the destination conversion.
+        const Exact world_x = binary64(source.target_origin.x) - binary64(destination.target_origin.x) +
+            binary64(source.xx) * x + binary64(source.xy) * y;
+        const Exact world_y = binary64(source.target_origin.y) - binary64(destination.target_origin.y) +
+            binary64(source.yx) * x + binary64(source.yy) * y;
+        return {checked_exact(binary64(destination.source_origin.x) +
+                (binary64(destination.yy) * world_x - binary64(destination.xy) * world_y) / det,
+                "Reexpressed profile X exceeds numeric range"),
+            checked_exact(binary64(destination.source_origin.y) +
+                (binary64(destination.xx) * world_y - binary64(destination.yx) * world_x) / det,
+                "Reexpressed profile Y exceeds numeric range")};
+    };
+    auto result = boundary;
+    for (auto& segment : result) {
+        segment.start = point(segment.start);
+        segment.end = point(segment.end);
+        (void)prepare(segment);
+    }
+    return result;
+}
+
 Bounds2 assembly_profile_boundary_bounds(const Boundary& source, const AssemblyProfilePlanarAffine& affine) {
     validate_assembly_profile_affine(affine);
     require_boundary_count(source);

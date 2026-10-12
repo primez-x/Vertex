@@ -44463,7 +44463,8 @@ public:
                     candidate.type != "slab" && candidate.type != "opening" &&
                     candidate.type != "roof" && candidate.type != "room" &&
                     candidate.type != "stair" && candidate.type != "railing" &&
-                    candidate.type != "corner_window" && candidate.type != "ifc_reference") {
+                    candidate.type != "corner_window" && candidate.type != "ifc_reference" &&
+                    candidate.type != "assembly_model" && candidate.type != "assembly_instance") {
                     ++rejected_entity_count;
                     diagnostics.push_back({candidate.id, candidate.type, "desktop_entity_type_unsupported"});
                     continue;
@@ -44485,13 +44486,13 @@ public:
                 remap_entity_references(imported, identities);
                 // Reference-only records retain unsupported IFC/native semantics for
                 // loss-aware round trips. They are not drawable floor/layer content.
-                if (imported.type != "ifc_reference") {
+                if (imported.type != "ifc_reference" && imported.type != "assembly_model") {
                     imported.properties["property_id"] = context->property_id;
                     imported.properties["building_id"] = context->building_id;
                     imported.properties["floor_id"] = floor_id;
                     imported.properties["layer_id"] = layer_id;
                 }
-                imported_ids.push_back(imported.id);
+                if (imported.type != "assembly_model") imported_ids.push_back(imported.id);
                 changes.push_back(EntityChange::upsert(std::move(imported)));
             }
             const auto asset_id = allocate_import_id("ifc-source");

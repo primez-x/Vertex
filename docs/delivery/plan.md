@@ -361,9 +361,15 @@ remains required; source integration alone does not close the canvas gate.
 These sources have not been compiled or exercised. Follow the
 [consumer integration design](../design/vertex-component-directional-resize.md)
 through whole-component nested deformation and captured canvas side handles;
-retain the complete geometry and mixed-family scope above. General elliptical
-cutout imports across differing profile maps and editable IFC assembly import
-remain required gaps, alongside lifecycle qualification.
+retain the complete geometry and mixed-family scope above. Cutout transfer now
+uses exact relative-map admission, accepting compatible anisotropic maps without
+flattening curves; arbitrary differing ellipse shapes remain a representation
+gap. Editable Vertex independent IFC assembly recovery is now implemented in
+source through a complete marked child cohort, private detached catalog,
+worker admission and destination remapping. Independent source review approved
+the corrected integrated batch; lifecycle qualification remains required.
+Foreign/unproved assemblies retain declared
+reference fidelity. See the [IFC component contract](../design/vertex-ifc-component-import.md).
 
 All retained interactions/preparations bind an actual captured snapshot.
 One authoritative model feeds calculations, views, schedules, print and export.
