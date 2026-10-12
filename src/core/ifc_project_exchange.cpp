@@ -578,6 +578,7 @@ struct ExportContext {
     SitePresentationPlacement presentation;
     std::map<std::string,SitePresentationPlacement,std::less<>> site_placements;
     std::map<std::string,AssemblyExpansion,std::less<>> assembly_expansions;
+    std::map<std::string,std::map<std::string,std::string,std::less<>>,std::less<>> assembly_material_names;
     std::map<std::string,std::vector<const Entity*>,std::less<>> hosted_openings;
     std::set<std::string,std::less<>> corner_hosts;
     bool corner_batch_attempted{};
@@ -1915,9 +1916,29 @@ void export_terrain(const Entity& entity, ExportContext& context,
 void export_independent_assembly(const DocumentSnapshot& document, const Entity& entity,
     ExportContext& context, std::vector<IfcProjectDiagnostic>& diagnostics) {
 #ifdef SKETCH_IFC_NATIVE_GEOMETRY
+    const auto checkpoint = context.builder.checkpoint();
+    const auto ordinal = context.ordinal, initial_vertices = context.mesh_vertices,
+        initial_triangles = context.mesh_triangles, metadata_bytes = context.retained_metadata_charge;
+    const auto products = context.product_ids, materials = context.material_ids;
+    const auto contained = context.contained_products;
+    const auto diagnostic_count = diagnostics.size();
     try {
         const auto& expansion=context.assembly_expansions.at(entity.id);
         require(!expansion.profiles.empty());
+        // The complete expansion admitted this exact source envelope/catalog.
+        // Do not revalidate its mapped overrides or entire type graph once per
+        // exported profile/material. Index the already-admitted material names.
+        const auto catalog_id=entity.properties.at("assembly_catalog_id").get<std::string>();
+        const auto& catalog=document.entities().at(catalog_id);
+        auto material_names=context.assembly_material_names.find(catalog_id);
+        if(material_names==context.assembly_material_names.end()) {
+            std::map<std::string,std::string,std::less<>> names;
+            for(const auto& material:catalog.properties.at("model").at("materials"))
+                names.emplace(material.at("id").get<std::string>(),material.at("name").get<std::string>());
+            material_names=context.assembly_material_names.emplace(catalog_id,std::move(names)).first;
+        }
+        const bool mapped = std::any_of(expansion.profiles.begin(), expansion.profiles.end(),
+            [](const auto& p) { return p.profile.planar_affine.has_value(); });
         std::vector<std::vector<IfcNativeMesh>> profile_meshes;
         std::size_t vertices=context.mesh_vertices, triangles=context.mesh_triangles;
         for (const auto& expanded:expansion.profiles) {
@@ -1926,26 +1947,37 @@ void export_independent_assembly(const DocumentSnapshot& document, const Entity&
             std::size_t work=profile.outer.size();
             for (const auto& hole:profile.holes) work+=hole.size();
             context.native_work.charge(work);
-            // Native room admission and final construction each check edges.
+            // Native admission and final construction each check edges.
             context.native_work.charge_cross(work);
             context.native_work.charge_cross(work);
-            const auto boundary=[&](const Boundary& source) {
-                Boundary result=source;
-                for (auto& s:result) {
-                    const auto a=transform_assembly_point({s.start.x,s.start.y,0},transform);
-                    const auto b=transform_assembly_point({s.end.x,s.end.y,0},transform);
-                    s.start={a.x,a.y}; s.end={b.x,b.y};
-                    if (transform.mirrored_y) s.sweep_radians=-s.sweep_radians;
-                }
-                return result;
-            };
-            Json holes=Json::array(); for (const auto& hole:profile.holes) holes.push_back(boundary_json(boundary(hole)));
-            const auto height_scale=transform.scale*transform.vertical_scale;
-            Entity room{"ifc-assembly-profile","room",{{"boundary",boundary_json(boundary(profile.outer))},
-                {"holes",holes},{"height_m",profile.height_m*height_scale},
-                {"elevation_m",profile.elevation_m*height_scale+transform.translation_m.z}}};
-            auto meshes=ifc_native_room_mesh(room,context.limits.max_mesh_vertices-vertices,
-                context.limits.max_mesh_triangles-triangles);
+            std::vector<IfcNativeMesh> meshes;
+            if (profile.planar_affine) {
+                // Apply the complete profile map before the actual expanded
+                // node pose in the native solid factory. Elliptical arcs must
+                // never pass through room Segments reconstructed from mapped
+                // endpoints and the original circular sweep.
+                meshes = ifc_native_assembly_profile_mesh(expanded,
+                    context.limits.max_mesh_vertices-vertices,
+                    context.limits.max_mesh_triangles-triangles);
+            } else {
+                const auto boundary=[&](const Boundary& source) {
+                    Boundary result=source;
+                    for (auto& s:result) {
+                        const auto a=transform_assembly_point({s.start.x,s.start.y,0},transform);
+                        const auto b=transform_assembly_point({s.end.x,s.end.y,0},transform);
+                        s.start={a.x,a.y}; s.end={b.x,b.y};
+                        if (transform.mirrored_y) s.sweep_radians=-s.sweep_radians;
+                    }
+                    return result;
+                };
+                Json holes=Json::array(); for (const auto& hole:profile.holes) holes.push_back(boundary_json(boundary(hole)));
+                const auto height_scale=transform.scale*transform.vertical_scale;
+                Entity room{"ifc-assembly-profile","room",{{"boundary",boundary_json(boundary(profile.outer))},
+                    {"holes",holes},{"height_m",profile.height_m*height_scale},
+                    {"elevation_m",profile.elevation_m*height_scale+transform.translation_m.z}}};
+                meshes=ifc_native_room_mesh(room,context.limits.max_mesh_vertices-vertices,
+                    context.limits.max_mesh_triangles-triangles);
+            }
             for (const auto& mesh:meshes) {
                 require(mesh.vertices.size()<=context.limits.max_mesh_vertices-vertices &&
                     mesh.triangles.size()<=context.limits.max_mesh_triangles-triangles);
@@ -1964,14 +1996,12 @@ void export_independent_assembly(const DocumentSnapshot& document, const Entity&
                 ref(context.placement)+","+ref(shape)+",$,.ELEMENT.");
             context.aggregate(root,child,"assembly-profile:"+child_id);
             if (p.material_id) {
-                const auto catalog_id=decode_document_assembly_instance(entity).assembly_catalog_id;
                 const auto key=Json::array({catalog_id,*p.material_id}).dump();
                 auto material=context.material_ids.find(key);
                 if (material==context.material_ids.end()) {
-                    const auto model=AssemblyModel::from_json(document.entities().at(catalog_id).properties.at("model"));
-                    const auto found=std::find_if(model.materials().begin(),model.materials().end(),[&](const auto& m){return m.id==*p.material_id;});
-                    require(found!=model.materials().end());
-                    material=context.material_ids.emplace(key,context.builder.add("IFCMATERIAL",step_string(found->name,context.limits)+",$,$")).first;
+                    const auto found=material_names->second.find(*p.material_id);
+                    require(found!=material_names->second.end());
+                    material=context.material_ids.emplace(key,context.builder.add("IFCMATERIAL",step_string(found->second,context.limits)+",$,$")).first;
                 }
                 context.builder.add("IFCRELASSOCIATESMATERIAL",context.root("assembly-material:"+child_id,"")+",("+ref(child)+"),"+ref(material->second));
             }
@@ -1979,9 +2009,7 @@ void export_independent_assembly(const DocumentSnapshot& document, const Entity&
                 {"transform",encode_assembly_transform(p.transform)},{"material_id",p.material_id ? Json(*p.material_id) : Json(nullptr)},
                 {"geometric_volume_m3",p.volume_m3}});
         }
-        auto retained=entity;
-        const auto catalog_id=decode_document_assembly_instance(entity).assembly_catalog_id;
-        const auto& catalog=document.entities().at(catalog_id);
+        auto retained=mapped ? mesh_metadata(entity,"assembly_instance") : entity;
         retained.properties["_vertex_ifc_assembly_source"]={{"version",1},{"id",entity.id},{"required",entity.required},
             {"properties",entity.properties},{"extensions",entity.extensions},
             {"catalog",{{"id",catalog.id},{"properties",catalog.properties},{"extensions",catalog.extensions}}},
@@ -1989,7 +2017,17 @@ void export_independent_assembly(const DocumentSnapshot& document, const Entity&
         // Declared quantities stay in the exact authored instance/catalog. They
         // are never serialized as geometric volume or scaled by site placement.
         retain_properties(retained,root,context,diagnostics);
-    } catch (const std::exception&) { add_diagnostic(diagnostics,entity.id,entity.type,"independent_assembly_geometry_not_exported"); }
+        if (mapped) add_diagnostic(diagnostics,entity.id,entity.type,"mapped_assembly_profile_exported_as_native_mesh");
+    } catch (const std::exception&) {
+        // A late material/metadata/budget refusal cannot leave an incomplete
+        // assembly or cached IDs referring to rolled-back STEP records.
+        context.builder.rollback(checkpoint);
+        context.ordinal=ordinal; context.mesh_vertices=initial_vertices; context.mesh_triangles=initial_triangles;
+        context.retained_metadata_charge=metadata_bytes;
+        context.product_ids=products; context.material_ids=materials; context.contained_products=contained;
+        diagnostics.resize(diagnostic_count);
+        add_diagnostic(diagnostics,entity.id,entity.type,"independent_assembly_geometry_not_exported");
+    }
 #else
     (void)document; (void)context;
     add_diagnostic(diagnostics,entity.id,entity.type,"independent_assembly_runtime_unavailable");

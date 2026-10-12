@@ -102,7 +102,8 @@ bool supported_schema(const Json& raw) {
     return schema && schema->is_string() && (*schema == "sketch.assemblies.v1" ||
         *schema == "sketch.assemblies.v2" || *schema == "sketch.assemblies.v3" ||
         *schema == "sketch.assemblies.v4" || *schema == "sketch.assemblies.v5" || *schema == "sketch.assemblies.v6" ||
-        *schema == "sketch.assemblies.v7" || *schema == "sketch.assemblies.v8");
+        *schema == "sketch.assemblies.v7" || *schema == "sketch.assemblies.v8" ||
+        *schema == "sketch.assemblies.v9");
 }
 bool affected_catalog(const Entity& entity, const Ids& owners) {
     if (host_binding(entity.extensions, owners)) return true;

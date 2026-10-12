@@ -97,6 +97,7 @@ void preflight_type(const AssemblyType& value, RawBudget& budget) {
     for (const auto& profile : value.profiles) {
         require(profile.outer.size() <= 1024 && profile.holes.size() <= 1024, "catalog edit typed profile exceeds bound");
         budget.reserve_nodes(8); budget.text(profile.id);
+        if (profile.planar_affine) budget.reserve_nodes(16);
         if (profile.material_slot) budget.text(*profile.material_slot);
         std::size_t segments = profile.outer.size();
         for (const auto& hole : profile.holes) {
@@ -199,6 +200,7 @@ Json encode_type(const AssemblyType& value, bool identified_profiles = false) {
     if (identified_profiles) profiles = encode_assembly_profiles(value.profiles);
     else for (const auto& profile : value.profiles) {
         require(!profile.topology, "identified catalog edit profiles require request version 3");
+        require(!profile.planar_affine, "mapped catalog edit profiles require request version 3");
         require(profile.holes.size() <= 1024, "catalog edit profile hole count exceeds bound");
         Json holes = Json::array();
         std::size_t segments = profile.outer.size();
@@ -276,7 +278,8 @@ std::string catalog_digest(const Entity& value) { return entity_map_digest(Entit
 bool identified_profiles(const Json& type) {
     if (!type.contains("profiles")) return false;
     return std::any_of(type.at("profiles").begin(), type.at("profiles").end(), [](const auto& profile) {
-        return profile.contains("version") || profile.contains("topology");
+        return profile.contains("version") || profile.contains("topology") ||
+            profile.contains("profile_version") || profile.contains("planar_affine");
     });
 }
 bool same_boundary(const Boundary& a, const Boundary& b) {
@@ -299,14 +302,22 @@ void retain_identified_profiles(const Json& original, Json& candidate,
         require(source != before.profiles.end() && source->topology,
             "catalog edit cannot assign profile topology; use reviewed identity mapping");
     }
-    for (const auto& profile : before.profiles) if (profile.topology) {
+    for (const auto& profile : after.profiles) if (profile.planar_affine) {
+        const auto source = std::find_if(before.profiles.begin(), before.profiles.end(),
+            [&](const auto& value) { return value.id == profile.id; });
+        require(source != before.profiles.end() && source->planar_affine == profile.planar_affine,
+            "catalog edit cannot assign or change a profile map; use reviewed geometry editing");
+    }
+    for (const auto& profile : before.profiles) if (profile.topology || profile.planar_affine) {
         const auto retained = std::find_if(after.profiles.begin(), after.profiles.end(),
             [&](const auto& value) { return value.id == profile.id; });
         require(retained != after.profiles.end(),
-            "catalog edit cannot remove identified profiles; use reviewed identity mapping");
+            "catalog edit cannot remove identified or mapped profiles; use reviewed geometry editing");
         const auto& replacement = *retained;
         require(profile.topology == replacement.topology,
             "catalog edit must retain source profile topology; use reviewed identity mapping");
+        require(profile.planar_affine == replacement.planar_affine,
+            "catalog edit must retain source profile map; use reviewed geometry editing");
         require(same_boundary(profile.outer, replacement.outer) && profile.holes.size() == replacement.holes.size(),
             "catalog edit cannot redraw identified profile boundaries; use reviewed identity mapping");
         for (std::size_t i = 0; i < profile.holes.size(); ++i)
@@ -314,7 +325,10 @@ void retain_identified_profiles(const Json& original, Json& candidate,
                 "catalog edit cannot redraw identified profile holes; use reviewed identity mapping");
         const auto& saved = row(original, "profiles", profile.id);
         for (auto& value : candidate.at("profiles")) if (value.at("id") == profile.id) {
-            value.at("version") = saved.at("version");
+            if (profile.planar_affine) {
+                value.at("profile_version") = saved.at("profile_version");
+                value.at("planar_affine") = saved.at("planar_affine");
+            } else value.at("version") = saved.at("version");
             value.at("topology") = saved.at("topology");
             value.at("outer") = saved.at("outer");
             value.at("holes") = saved.at("holes");
@@ -324,7 +338,7 @@ void retain_identified_profiles(const Json& original, Json& candidate,
 }
 
 // Patch only requested existing definition rows. Retained unrelated rows never
-// pass through a semantic serializer. A union v7/v8 promotion is used only
+// pass through a semantic serializer. A union v7/v8/v9 promotion is used only
 // when the old dialect cannot express a changed row's new envelope.
 Entities derive_raw(const Entities& actual, const Json& request) {
     Entities result = actual;
@@ -336,7 +350,7 @@ Entities derive_raw(const Entities& actual, const Json& request) {
         require(catalog_digest(found->second) == edit.at("source_catalog_digest"), "catalog edit original catalog binding changed");
         auto& candidate = result.at(id).properties.at("model");
         const auto schema = original.at("schema").get<std::string>();
-        bool promote = false, promote_geometry = false;
+        bool promote = false, promote_geometry = false, promote_mapped = false;
         for (const auto* collection : {"types", "materials"}) for (const auto& change : edit.at(collection)) {
             const auto key = local_id(change.at("replacement").at("id"));
             require(exact(row(original, collection, key), change.at("original")), "catalog edit original definition binding changed");
@@ -345,19 +359,22 @@ Entities derive_raw(const Entities& actual, const Json& request) {
                 require(request.at("version") == 3 || !identified_profiles(row(original, collection, key)),
                     "identified source catalog profiles require request version 3");
                 promote_geometry = promote_geometry || identified_profiles(replacement);
+                promote_mapped = promote_mapped || std::any_of(replacement.at("profiles").begin(),
+                    replacement.at("profiles").end(), [](const Json& profile) { return profile.contains("planar_affine"); });
                 const bool old_nested = schema == "sketch.assemblies.v4" || schema == "sketch.assemblies.v5" ||
                     schema == "sketch.assemblies.v6";
                 if (!old_nested && !row(original, collection, key).contains("profiles") &&
                     replacement.at("profiles").empty() && replacement.at("parts").empty()) {
                     replacement.erase("profiles"); replacement.erase("parts");
-                } else if (!old_nested && schema != "sketch.assemblies.v7" && schema != "sketch.assemblies.v8") promote = true;
-                if (schema != "sketch.assemblies.v6" && schema != "sketch.assemblies.v7" && schema != "sketch.assemblies.v8" && replacement.contains("parts"))
+                } else if (!old_nested && schema != "sketch.assemblies.v7" && schema != "sketch.assemblies.v8" && schema != "sketch.assemblies.v9") promote = true;
+                if (schema != "sketch.assemblies.v6" && schema != "sketch.assemblies.v7" && schema != "sketch.assemblies.v8" && schema != "sketch.assemblies.v9" && replacement.contains("parts"))
                     for (const auto& part : replacement.at("parts"))
                         if (part.at("transform").contains("vertical_scale")) promote = true;
             } else if (schema == "sketch.assemblies.v1" && replacement.contains("color_srgb")) promote = true;
             for (auto& saved : candidate.at(collection)) if (saved.at("id") == key) { saved = std::move(replacement); break; }
         }
-        if (promote_geometry) candidate.at("schema") = "sketch.assemblies.v8";
+        if (schema == "sketch.assemblies.v9" || promote_mapped) candidate.at("schema") = "sketch.assemblies.v9";
+        else if (promote_geometry) candidate.at("schema") = "sketch.assemblies.v8";
         else if (promote) candidate.at("schema") = schema == "sketch.assemblies.v8" ? "sketch.assemblies.v8" : "sketch.assemblies.v7";
     }
     return result;
@@ -656,15 +673,15 @@ Inspection inspect(const Entities& actual, const Json& request,
     // Candidate companions, registries, hosts and instance rows are untouched;
     // resolving actual membership therefore supplies the exact candidate roles.
     std::map<Target, AssemblyInstance> roots;
+    AssemblyExpansionBudget before_budget, after_budget;
     for (const auto& [id, model] : before) for (const auto& instance : model.instances())
         roots.emplace(Target{id, instance.id, std::nullopt, {}}, instance);
     for (const auto& [id, entity] : actual) if (entity.type == "assembly_instance") {
-        const auto value = decode_document_assembly_instance(entity);
+        const auto value = decode_document_assembly_instance(entity, before_budget);
         require(before.contains(value.assembly_catalog_id), "catalog edit independent root references a missing catalog");
         require(roots.emplace(Target{value.assembly_catalog_id, value.instance.id, id, {}}, value.instance).second,
             "catalog edit independent qualified root is duplicated");
     }
-    AssemblyExpansionBudget before_budget, after_budget;
     AssemblyCatalogPhaseEditPlan plan;
     plan.source_entities_digest = source_digest;
     plan.ordinary_replay_safe = true;
@@ -780,7 +797,7 @@ Json prepare_assembly_catalog_phase_edit_request(const Entities& actual,
                 previous_type = value.id;
                 if (identified_profiles(row(model, "types", value.id)) ||
                     std::any_of(value.profiles.begin(), value.profiles.end(), [](const auto& profile) {
-                        return profile.topology.has_value();
+                        return profile.topology.has_value() || profile.planar_affine.has_value();
                     })) version = 3;
             }
             for (const auto& value : intent.replacement_materials) {
@@ -866,13 +883,13 @@ void validate_current_assembly_catalog_phase_preservation(const Entities& source
     const auto before = models(source), after = models(candidate);
     const PhaseInventory phases(source);
     std::map<Target, AssemblyInstance> roots;
+    AssemblyExpansionBudget before_budget, after_budget;
     for (const auto& [id, model] : before) for (const auto& instance : model.instances())
         roots.emplace(Target{id,instance.id,std::nullopt,{}},instance);
     for (const auto& [id, entity] : source) if (entity.type == "assembly_instance") {
-        const auto value = decode_document_assembly_instance(entity);
+        const auto value = decode_document_assembly_instance(entity, before_budget);
         roots.emplace(Target{value.assembly_catalog_id,value.instance.id,id,{}},value.instance);
     }
-    AssemblyExpansionBudget before_budget, after_budget;
     for (const auto& [target, instance] : roots) {
         AssemblyCatalogPhaseEditRootImpact impact;
         impact.root=target; impact.host_closure=host_closure(source,instance); classify(phases,impact);
@@ -906,7 +923,7 @@ void validate_current_assembly_catalog_phase_preservation(const Entities& source
             require(original.type==proposed.type && original.required==proposed.required &&
                 exact(original.properties,proposed.properties) && exact(original.extensions,proposed.extensions),
                 "current catalog editing changed a protected/inactive independent root");
-            const auto decoded=decode_document_assembly_instance(proposed);
+            const auto decoded=decode_document_assembly_instance(proposed,after_budget);
             require(decoded.assembly_catalog_id==target.catalog_id, "protected/inactive root changed catalog");
             retained=decoded.instance;
         } else {

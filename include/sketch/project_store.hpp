@@ -357,7 +357,8 @@ public:
     // v252 retains placed own-profile edge/vertex component dimensions.
     // v253 retains exact-source initial component profile identity assignment.
     // v254 retains reviewed component profile redraw and dimension dispositions.
-    static constexpr std::uint32_t format_version = 254;
+    // v255 retains exact affine component profiles in entities and authoring/history.
+    static constexpr std::uint32_t format_version = 255;
     static constexpr std::uint32_t recovery_format_version = 4;
     [[nodiscard]] static std::uint32_t required_format_version(const DocumentSnapshot& snapshot);
     static constexpr std::uint64_t maximum_file_bytes = 4ULL * 1024ULL * 1024ULL * 1024ULL;

@@ -1,4 +1,5 @@
 #include "sketch/phase_wall_canvas_projection.hpp"
+#include "assembly_profile_canvas_geometry.hpp"
 
 #include "sketch/annotation_entity_codec.hpp"
 #include "sketch/appraisal_document.hpp"
@@ -1140,15 +1141,24 @@ PhaseWallCanvasProjection project_phase_wall_canvas(const DocumentSnapshot& sour
                     return value.part_path==identity.part_path && value.type_id==identity.type_id && value.profile.id==identity.profile_id;
                 })) throw std::invalid_argument("Coordinated canvas profile has no actual captured source.");
                 for (const auto& value:expansion.profiles) {
-                    const auto path=placed_path(value.profile.outer,value.transform);
+                    std::size_t remaining_segments=8192;
+                    const auto path=value.profile.planar_affine
+                        ? mapped_assembly_profile_canvas_path(value,value.profile.outer,remaining_segments)
+                        : placed_path(value.profile.outer,value.transform);
                     frame_paths.insert(frame_paths.end(),path.begin(),path.end());
                 }
                 AssemblyExpansion part;part.profiles.push_back(*profile);
                 if (view_context && !analytical_canvas_plan_context(BuildingViewKind::plan,*view_context)) {
                     projected.segments=project_solid(make_assembly_geometry(part).shape,*view_context);world=false;
                 } else {
-                    projected.segments=placed_path(profile->profile.outer,profile->transform);
-                    for (const auto& hole:profile->profile.holes) projected.holes.push_back(placed_path(hole,profile->transform));
+                    std::size_t remaining_segments=8192;
+                    const auto path=[&](const Boundary& boundary) {
+                        return profile->profile.planar_affine
+                            ? mapped_assembly_profile_canvas_path(*profile,boundary,remaining_segments)
+                            : placed_path(boundary,profile->transform);
+                    };
+                    projected.segments=path(profile->profile.outer);
+                    for (const auto& hole:profile->profile.holes) projected.holes.push_back(path(hole));
                     projected.hit_segments=project_assembly_plan(part);
                 }
             } else {
@@ -1511,8 +1521,13 @@ PhaseWallCanvasProjection project_phase_wall_canvas(const DocumentSnapshot& sour
                         const auto end=view_context ? project_point(baseline.end,view_context->frame) : baseline.end;
                         const auto chord=std::hypot(end.x-start.x,end.y-start.y);
                         if (std::isfinite(chord) && chord>1e-7) {
-                            projected.segments=dimension_overlay(baseline,decoded.text_position);
-                            projected.dimension_end_ticks=true;
+                            if (has_mapped_assembly_dimension_curve(assembly)) {
+                                projected.segments=mapped_assembly_dimension_canvas_overlay(assembly,decoded.text_position);
+                                projected.dimension_end_ticks=false;
+                            } else {
+                                projected.segments=dimension_overlay(baseline,decoded.text_position);
+                                projected.dimension_end_ticks=true;
+                            }
                         }
                     }
                 }

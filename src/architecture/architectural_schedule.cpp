@@ -560,7 +560,7 @@ void append_assembly_rows(const DocumentSnapshot& document,
         for (const auto& [id, entity] : document.entities()) {
             if (entity.type != "assembly_instance" || !visible(id)) continue;
             context = id;
-            const auto value = decode_document_assembly_instance(entity);
+            const auto value = decode_document_assembly_instance(entity, visibility_budget);
             required_catalogs.insert(value.assembly_catalog_id);
             scoped.emplace(id, entity);
         }
@@ -775,17 +775,19 @@ void append_assembly_rows(const DocumentSnapshot& document,
                 }
             }
         };
+        AssemblyExpansionBudget replay;
         for (const auto& [catalog_id,model] : models) {
             for (const auto& instance : model.instances()) {
                 // Whole-scope limits were consumed exactly once above. This
                 // isolated replay obtains the retained legacy expansion only.
-                AssemblyExpansionBudget replay;
                 append(catalog_id,model.expand(instance,replay),catalog_id,false);
             }
         }
         for (const auto& [id,expansion] : independent) {
-            const auto source = decode_document_assembly_instance(scoped.at(id));
-            append(source.assembly_catalog_id,expansion,id,true);
+            // The exact independent envelope was admitted in the scope expansion;
+            // avoid a second unshared mapped-override decode for each output row.
+            const auto catalog_id = scoped.at(id).properties.at("assembly_catalog_id").get<std::string>();
+            append(catalog_id,expansion,id,true);
         }
         std::set<std::string,std::less<>> identities;
         for (const auto& existing : projection.snapshot.rows) identities.insert(existing.object_id);

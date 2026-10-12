@@ -14,6 +14,49 @@ changed source does not acquire runtime acceptance without later qualification.
 
 ## Current delivery state
 
+### October 11 mapped-profile consumer integration
+
+The affine geometry foundation is committed and pushed as
+a10e7682bbbbf33acd4897d3e535dc848000e8da. The preceding status-only turn made
+no source changes. This continuation resumes the actual consumer integration
+and its independent-root work-admission correction.
+
+Mapped profiles now have explicit profile-v3, catalog-v9 and independent-v4
+source codecs, with unchanged numeric fields and surviving source rows retained.
+Reader255 detects mapped content in current entities and retained history.
+Effective analytical dimensions and quantities consume the same map as native
+solids, geometry caches, canvas/editor presentation and declared IFC/DXF output.
+Native projections admit exact ellipse/NURBS sources with bounded derived chords;
+those chords do not supply measurements. Numeric own-profile Properties edits
+compose maps for identified curves with fresh topology and explicit dimension
+decisions. Existing phase, clipboard and hosted-object consumers retain mapped
+carriers. These sources have not been compiled or exercised.
+
+Independent source review found and corrected embedded catalog downgrade,
+missing historical nested-override envelopes, phase mapped-work accounting and
+unchanged map-number retention. Aggregate analytical-work admission now covers
+raw independent overrides before decoding and every effective inherited/nested
+expansion visit. Shared budgets cover dimensions, Properties, phase inspection,
+selection, schedules and general/native document expansion. Native/schedule
+output reuses admitted envelopes; IFC indexes admitted materials without
+revalidating the complete mapped catalog once per material. Failed operations
+preserve the caller's budget; lowered limits and overflow-safe reservations
+precede analytical work. Root is also preparing the next whole-component
+directional geometry and canvas-side-handle
+implementation. Nested deformation needs actual reflected/scaled node frames,
+fresh profile topology, mandatory dimension review and an exact reviewed preview.
+Anonymous geometry needs an explicit new atomic initialization/deformation
+dialect; historical initial-identity and reviewed-edit dialects keep their meaning.
+
+Remaining source gaps include complete component side handles, mixed-owner/child
+directional scaling, general elliptical cutout import between differing profile
+maps, editable IFC assembly import and observed compatibility/device adapters.
+Full lifecycle, appraisal, compatibility, output and offline qualification remain
+required across all ten production gates and external prerequisites.
+No builds, tests, scripts, probes, native jobs, launches, packages or installations
+ran. The installed application is unchanged; source review is not runtime or
+user acceptance.
+
 ### October 11 exact affine-profile geometry foundation
 
 The reviewed independent mirror correction is committed and pushed as

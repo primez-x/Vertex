@@ -3,6 +3,7 @@
 #include "sketch/geometry.hpp"
 
 #include <cstddef>
+#include <span>
 
 namespace sketch {
 
@@ -48,6 +49,15 @@ inline constexpr std::size_t assembly_profile_geometry_max_segments = 1024;
 [[nodiscard]] Bounds2 assembly_profile_boundary_bounds(
     const Boundary& source, const AssemblyProfilePlanarAffine& affine);
 
+// Derived display/output path only, never a measurement or editable source.
+// Lines are exact. Affine arcs become straight chords with a conservative
+// second-derivative bound on curve-to-chord deviation in mapped metres.
+// Counts share one explicit boundary budget (1..65536); callers must share
+// remaining capacity across holes/profiles. Exhaustion returns no partial path.
+[[nodiscard]] Boundary assembly_profile_boundary_display_path(
+    const Boundary& source, const AssemblyProfilePlanarAffine& affine,
+    double maximum_deviation_metres, std::size_t maximum_segments = 8192);
+
 // Requires exact endpoint connectivity/closure AND validate_boundary admission
 // at the supplied positive metre tolerance. Tolerance-gapped rings must be
 // explicitly repaired by the owner before using the closed-area identity.
@@ -55,6 +65,15 @@ inline constexpr std::size_t assembly_profile_geometry_max_segments = 1024;
 [[nodiscard]] double assembly_profile_closed_boundary_signed_area(
     const Boundary& source, const AssemblyProfilePlanarAffine& affine,
     double tolerance_metres = default_geometry_tolerance_metres);
+
+// Caller supplies an admitted positive source area. Retain the exact binary64
+// determinant and all positive finite factors through one final binary64
+// rounding; this avoids underflow/overflow in intermediate area/volume products.
+// At most eight factors are admitted. This quantity helper does not establish
+// source topology or effective physical geometry admission.
+[[nodiscard]] double assembly_profile_affine_scaled_area(
+    double admitted_source_area, const AssemblyProfilePlanarAffine& affine,
+    std::span<const double> positive_factors = {});
 
 struct AssemblyProfileLengthOptions {
     double absolute_tolerance_metres{1e-8};

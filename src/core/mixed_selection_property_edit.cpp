@@ -758,7 +758,7 @@ void require_assembly_targets_present(const Entities& candidate,
         if (entity_id) {
             const auto& root = owner(*entity_id);
             if (root.type != "assembly_instance") reject("selected independent assembly changed its source role");
-            const auto actual = decode_document_assembly_instance(root);
+            const auto actual = decode_document_assembly_instance(root, budget);
             if (actual.assembly_catalog_id != catalog_id || actual.instance.id != instance_id)
                 reject("selected independent assembly lost its exact qualified source identity");
             instance = actual.instance;

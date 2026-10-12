@@ -130,7 +130,38 @@ template<class T> void retain_assembly_override_source(nlohmann::json& encoded,
             if (old->elevation_m == next->elevation_m) profile["elevation_m"] = original->at("elevation_m");
             if (old->height_m == next->height_m) profile["height_m"] = original->at("height_m");
             if (old->material_slot == next->material_slot) profile["material_slot"] = original->at("material_slot");
+            if (old->topology == next->topology && original->contains("topology") &&
+                profile.contains("topology")) profile["topology"] = original->at("topology");
+            if (old->planar_affine && next->planar_affine) {
+                profile["profile_version"] = original->at("profile_version");
+                auto& affine = profile.at("planar_affine");
+                const auto& source_affine = original->at("planar_affine");
+                if (old->planar_affine == next->planar_affine) affine = source_affine;
+                else {
+                    affine["version"] = source_affine.at("version");
+                    const auto& a = *old->planar_affine; const auto& b = *next->planar_affine;
+                    if (a.source_origin.x == b.source_origin.x) affine["source_origin_m"][0] = source_affine.at("source_origin_m")[0];
+                    if (a.source_origin.y == b.source_origin.y) affine["source_origin_m"][1] = source_affine.at("source_origin_m")[1];
+                    if (a.target_origin.x == b.target_origin.x) affine["target_origin_m"][0] = source_affine.at("target_origin_m")[0];
+                    if (a.target_origin.y == b.target_origin.y) affine["target_origin_m"][1] = source_affine.at("target_origin_m")[1];
+                    const double before_matrix[]{a.xx, a.xy, a.yx, a.yy}, after_matrix[]{b.xx, b.xy, b.yx, b.yy};
+                    for (std::size_t i = 0; i < 4; ++i)
+                        if (before_matrix[i] == after_matrix[i]) affine["matrix"][i] = source_affine.at("matrix")[i];
+                }
+            }
         }
+        std::map<std::string, const nlohmann::json*, std::less<>> profiles;
+        for (const auto& profile : encoded.at("profile_overrides"))
+            profiles.emplace(profile.at("id").template get<std::string>(), &profile);
+        auto ordered = nlohmann::json::array();
+        for (const auto& original : raw.at("profile_overrides")) {
+            const auto id = original.at("id").template get<std::string>();
+            if (const auto found = profiles.find(id); found != profiles.end()) {
+                ordered.push_back(*found->second); profiles.erase(found);
+            }
+        }
+        for (const auto& [id, profile] : profiles) { (void)id; ordered.push_back(*profile); }
+        encoded["profile_overrides"] = std::move(ordered);
     }
     if (before.property_overrides == after.property_overrides)
         encoded["property_overrides"] = raw.at("property_overrides");
@@ -152,8 +183,10 @@ nlohmann::json retain_independent_assembly_instance_source(const nlohmann::json&
     const auto after = decode_assembly_instance(encoded);
     if (before.id == after.id) encoded["id"] = raw.at("id");
     if (before.type_id == after.type_id) encoded["type_id"] = raw.at("type_id");
-    if (raw.at("schema") == "sketch.assembly-instance.v3" ||
-        (raw.at("schema") == "sketch.assembly-instance.v2" && encoded.at("schema") != "sketch.assembly-instance.v3"))
+    if (raw.at("schema") == "sketch.assembly-instance.v4" ||
+        (raw.at("schema") == "sketch.assembly-instance.v3" && encoded.at("schema") != "sketch.assembly-instance.v4") ||
+        (raw.at("schema") == "sketch.assembly-instance.v2" && encoded.at("schema") != "sketch.assembly-instance.v3" &&
+            encoded.at("schema") != "sketch.assembly-instance.v4"))
         encoded["schema"] = raw.at("schema");
     retain_assembly_transform_source(encoded.at("root_transform"), raw.at("root_transform"),
         *before.root_transform, *after.root_transform);
@@ -532,7 +565,7 @@ AssemblyCatalogSourceReferences preflight_complete_catalog(const Entity& source,
     require(schema.is_string() && (schema == "sketch.assemblies.v1" || schema == "sketch.assemblies.v2" ||
         schema == "sketch.assemblies.v3" || schema == "sketch.assemblies.v4" ||
         schema == "sketch.assemblies.v5" || schema == "sketch.assemblies.v6" || schema == "sketch.assemblies.v7" ||
-        schema == "sketch.assemblies.v8"),
+        schema == "sketch.assemblies.v8" || schema == "sketch.assemblies.v9"),
         "unsupported complete assembly catalog schema");
     for (const auto* key : {"materials", "types", "instances"}) {
         require(model.at(key).is_array() && model.at(key).size() <= 4096,
@@ -550,10 +583,12 @@ AssemblyCatalogSourceReferences preflight_complete_catalog(const Entity& source,
         GraphSize size;
     };
     std::map<std::string, RawType, std::less<>> types;
+    std::size_t maximum_mapped_visit_work{};
     const auto admit_profiles = [&](const nlohmann::json& profiles, std::size_t topology_passes = 1) {
         require(profiles.is_array() && profiles.size() <= 4096,
             "complete assembly catalog profile budget exceeded");
         std::size_t total{};
+        std::size_t mapped_visit_work{};
         for (const auto& profile : profiles) {
             require(profile.is_object() && profile.at("outer").is_array() &&
                 profile.at("outer").size() <= 1024 && profile.at("holes").is_array() &&
@@ -577,12 +612,26 @@ AssemblyCatalogSourceReferences preflight_complete_catalog(const Entity& source,
             // Reserve self/contact/containment checks and certified arc work
             // for each actual authored profile, before the topology decoder.
             const auto topology = segments + profile.at("holes").size() + 1;
-            charge_catalog_product(budget, topology, 8 * topology * topology_passes);
-            charge_catalog_product(budget, arcs, 300000 * segments * topology_passes);
+            const bool mapped = profile.contains("planar_affine");
+            require(!mapped || schema == "sketch.assemblies.v9",
+                "mapped assembly profiles require catalog schema v9");
+            const auto passes = topology_passes * (mapped ? 3u : 1u);
+            charge_catalog_product(budget, topology, 8 * topology * passes);
+            charge_catalog_product(budget, arcs, 300000 * segments * passes);
+            if (mapped) {
+                // Effective admission repeats analytical source topology at
+                // each expanded node's actual physical scale. A maximum own-
+                // collection cost times visits safely bounds DAG reuse.
+                const auto work = 3 * (8 * topology * topology + 300000 * arcs * segments);
+                require(work <= budget.max_validation_work - mapped_visit_work,
+                    "complete mapped assembly catalog analytical work budget exceeded");
+                mapped_visit_work += work;
+            }
             require(segments <= 262144 - total,
                 "complete assembly catalog profile segment budget exceeded");
             total += segments;
         }
+        maximum_mapped_visit_work = std::max(maximum_mapped_visit_work, mapped_visit_work);
         return total;
     };
     for (const auto& row : model.at("types")) {
@@ -644,7 +693,8 @@ AssemblyCatalogSourceReferences preflight_complete_catalog(const Entity& source,
         std::size_t replacements{};
         const auto replace_profiles = [&](const nlohmann::json& row, const RawType& selected) {
             if (!row.contains("profile_overrides")) return;
-            require(schema == "sketch.assemblies.v8", "assembly profile overrides require catalog schema v8");
+            require(schema == "sketch.assemblies.v8" || schema == "sketch.assemblies.v9",
+                "assembly profile overrides require catalog schema v8 or v9");
             // Override topology is checked by profile decode, instance
             // validation in create(), and its subsequent real expansion.
             const auto count = admit_profiles(row.at("profile_overrides"), 3);
@@ -711,6 +761,7 @@ AssemblyCatalogSourceReferences preflight_complete_catalog(const Entity& source,
     charge_catalog_product(budget, weighted_source,
         4 * (validation_nodes + instance_nodes + types.size() + model.at("materials").size() + 1));
     charge_catalog_product(budget, validation_segments + instance_segments, 4);
+    charge_catalog_product(budget, maximum_mapped_visit_work, validation_nodes + instance_nodes);
     return references;
 }
 void revision(const DocumentSnapshot& source, Revision expected) {
@@ -1367,6 +1418,11 @@ std::optional<AssemblyDocumentInstance> resolve_embedded_assembly_presentation(
 }
 
 AssemblyDocumentInstance decode_document_assembly_instance(const Entity& entity) {
+    AssemblyExpansionBudget budget;
+    return decode_document_assembly_instance(entity,budget);
+}
+AssemblyDocumentInstance decode_document_assembly_instance(const Entity& entity,AssemblyExpansionBudget& budget) {
+    auto pending=budget;
     require(entity.type == "assembly_instance", "expected an assembly_instance entity");
     identifier(entity.id);
     const auto& p = entity.properties;
@@ -1382,11 +1438,12 @@ AssemblyDocumentInstance decode_document_assembly_instance(const Entity& entity)
     for (const auto* key : {"host", "host_entity_id", "placement", "root_transform", "type_id"})
         require(!p.contains(key), "independent assembly instance has a forbidden placement/type alias");
     AssemblyDocumentInstance result{p.at("assembly_catalog_id").get<std::string>(),
-        decode_assembly_instance(p.at("instance"))};
+        decode_assembly_instance(p.at("instance"),pending)};
     identifier(result.assembly_catalog_id);
     require(result.instance.id == entity.id, "assembly instance identity differs from its document entity");
     require(result.instance.root_transform.has_value() && !result.instance.placement,
         "independent assembly instance requires root_transform and forbids host placement");
+    budget=std::move(pending);
     return result;
 }
 Entity encode_document_assembly_instance(const Entity& source, const AssemblyDocumentInstance& value) {
@@ -1419,10 +1476,13 @@ Entity encode_document_assembly_instance(const Entity& source, const AssemblyDoc
 }
 AssemblyExpansion expand_document_assembly_instance(const Entity& entity,
     const AssemblyDocumentEntities& entities, AssemblyExpansionBudget& budget) {
-    const auto value = decode_document_assembly_instance(entity);
+    auto pending=budget;
+    const auto value = decode_document_assembly_instance(entity,pending);
     const auto found = entities.find(value.assembly_catalog_id);
     require(found != entities.end(), "assembly instance references a missing catalog");
-    return catalog(found->second).expand(value.instance, budget);
+    auto result=catalog(found->second).expand(value.instance,pending);
+    budget=std::move(pending);
+    return result;
 }
 std::map<std::string, AssemblyExpansion, std::less<>> expand_document_assembly_instances(
     const AssemblyDocumentEntities& entities, AssemblyExpansionBudget& budget) {
@@ -1442,7 +1502,7 @@ std::map<std::string, AssemblyExpansion, std::less<>> expand_document_assembly_i
     std::map<std::string, AssemblyExpansion, std::less<>> result;
     for (const auto& [id, entity] : entities) {
         if (entity.type != "assembly_instance") continue;
-        const auto value = decode_document_assembly_instance(entity);
+        const auto value = decode_document_assembly_instance(entity,candidate_budget);
         const auto found = catalogs.find(value.assembly_catalog_id);
         require(found != catalogs.end(), "assembly instance references a missing catalog");
         result.emplace(id, found->second.expand(value.instance, candidate_budget));
@@ -1481,9 +1541,10 @@ AssemblyDocumentEntities clipboard_dependencies(const AssemblyDocumentEntities& 
     const std::vector<Entity>& independent_roots, bool retain_raw_catalog) {
     std::map<std::string, std::vector<AssemblyInstance>, std::less<>> roots;
     AssemblyDocumentEntities closure;
+    AssemblyExpansionBudget decode_budget;
     for (const auto& entity : independent_roots) {
         require(closure.emplace(entity.id, entity).second, "duplicate assembly clipboard root");
-        const auto value = decode_document_assembly_instance(entity);
+        const auto value = decode_document_assembly_instance(entity,decode_budget);
         roots[value.assembly_catalog_id].push_back(value.instance);
     }
     AssemblyDocumentEntities result;
@@ -1546,6 +1607,7 @@ AssemblyDocumentEntities clipboard_dependencies(const AssemblyDocumentEntities& 
             "assembly clipboard root collides with its catalog");
     }
     AssemblyExpansionBudget closure_budget;
+    closure_budget.consumed_mapped_profile_work=decode_budget.consumed_mapped_profile_work;
     (void)expand_document_assembly_instances(closure, closure_budget);
     return result;
 }
@@ -1578,8 +1640,9 @@ std::vector<AssemblyDocumentTypeUpdateImpact> preview_document_assembly_type_upd
     const auto before=expand_document_assembly_instances(entities,before_budget);
     const auto after=expand_document_assembly_instances(candidate,after_budget);
     std::vector<AssemblyDocumentTypeUpdateImpact> result;
+    AssemblyExpansionBudget decode_budget;
     for(const auto& [id,expansion]:before) {
-        const auto value=decode_document_assembly_instance(entities.at(id));
+        const auto value=decode_document_assembly_instance(entities.at(id),decode_budget);
         if(value.assembly_catalog_id==catalog_id && std::any_of(expansion.nodes.begin(),expansion.nodes.end(),
             [&](const auto& node){return node.type_id==type_id;}))
             result.push_back({id,expansion,after.at(id),value});
@@ -2550,9 +2613,19 @@ ApplyEntityChanges embedded_assembly_group_copy_command(const DocumentSnapshot& 
         const bool profile_overrides = raw.contains("profile_overrides") ||
             (raw.contains("nested_overrides") && std::any_of(raw.at("nested_overrides").begin(),
                 raw.at("nested_overrides").end(), [](const auto& path) { return path.contains("profile_overrides"); }));
-        raw["schema"] = catalog_schema == "sketch.assemblies.v8" || profile_overrides
+        const auto mapped_profiles = [](const auto& profiles) {
+            return std::any_of(profiles.begin(), profiles.end(),
+                [](const auto& profile) { return profile.planar_affine.has_value(); });
+        };
+        const bool mapped = (instance->profile_overrides && mapped_profiles(*instance->profile_overrides)) ||
+            std::any_of(instance->nested_overrides.begin(), instance->nested_overrides.end(), [&](const auto& path) {
+                return path.profile_overrides && mapped_profiles(*path.profile_overrides);
+            });
+        raw["schema"] = mapped ? "sketch.assembly-instance.v4"
+            : catalog_schema == "sketch.assemblies.v8" || profile_overrides
             ? "sketch.assembly-instance.v3"
-            : catalog_schema == "sketch.assemblies.v6" || catalog_schema == "sketch.assemblies.v7"
+            : catalog_schema == "sketch.assemblies.v6" || catalog_schema == "sketch.assemblies.v7" ||
+                catalog_schema == "sketch.assemblies.v9"
                 ? "sketch.assembly-instance.v2" : "sketch.assembly-instance.v1";
         raw["id"] = *target.copy_instance_id;
         if (raw.contains("placement") || !raw.contains("root_transform") || !raw.at("root_transform").is_object())

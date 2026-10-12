@@ -305,7 +305,7 @@ bool affected_catalog(const Json& model, const Ids& owners) {
         (*schema == "sketch.assemblies.v1" || *schema == "sketch.assemblies.v2" ||
          *schema == "sketch.assemblies.v3" || *schema == "sketch.assemblies.v4" ||
          *schema == "sketch.assemblies.v5" || *schema == "sketch.assemblies.v6" || *schema == "sketch.assemblies.v7" ||
-         *schema == "sketch.assemblies.v8");
+         *schema == "sketch.assemblies.v8" || *schema == "sketch.assemblies.v9");
     if (!supported && references_owner(model, owners)) return true;
     const auto rows = model.is_object() ? field(model, "instances") : nullptr;
     if (!rows) return false;

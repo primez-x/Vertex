@@ -1,9 +1,14 @@
 #include "sketch/assembly_dimension.hpp"
 
+#include <boost/multiprecision/cpp_int.hpp>
+
 #include <algorithm>
+#include <bit>
 #include <cctype>
 #include <cmath>
+#include <cstdint>
 #include <initializer_list>
+#include <limits>
 #include <map>
 #include <numbers>
 #include <stdexcept>
@@ -123,10 +128,24 @@ struct RawBudget {
 };
 struct MeasurementBudget {
     std::size_t work{};
+    std::size_t quadrature_evaluations{};
     RawBudget output;
     void charge(std::size_t count) {
         require(count <= 64 * 1024 * 1024 - work, "batched analytical work budget exceeded");
         work += count;
+    }
+    double mapped_edge_length(const Segment& source, const AssemblyProfilePlanarAffine& map) {
+        constexpr std::size_t maximum = 1048576;
+        AssemblyProfileLengthOptions options;
+        // A depleted ledger still admits direct analytical lines/similarities;
+        // any numerical integration must refuse before returning its result.
+        options.maximum_evaluations = std::max(std::size_t{1}, maximum - quadrature_evaluations);
+        const auto measured = assembly_profile_segment_length(source, map, options);
+        require(measured.evaluations <= maximum - quadrature_evaluations,
+            "batched curved length evaluation budget exceeded");
+        quadrature_evaluations += measured.evaluations;
+        charge(measured.evaluations);
+        return measured.length_metres;
     }
     void path(const Path& value) {
         output.reserve(1 + value.size());
@@ -145,6 +164,7 @@ struct MeasurementBudget {
     }
     void profile_geometry(const AssemblyProfile& value) {
         output.reserve(16); output.text(value.id);
+        if (value.planar_affine) output.reserve(8);
         if (value.material_slot) output.text(*value.material_slot);
         const auto boundary = [&](const Boundary& ring) { output.reserve(1 + 8 * ring.size()); };
         boundary(value.outer);
@@ -207,6 +227,66 @@ double finite(double value) {
 AssemblyPoint3 finite(AssemblyPoint3 value) {
     (void)finite(value.x); (void)finite(value.y); (void)finite(value.z); return value;
 }
+using Exact = boost::multiprecision::cpp_rational;
+using Integer = boost::multiprecision::cpp_int;
+// Fixed expressions over finite binary64 inputs only. Keep effective profile
+// origins exact through node placement and subtraction: separately rounded
+// affine points at a distant origin can erase real cross-profile differences.
+Exact binary64(double value) {
+    static_assert(sizeof(double) == sizeof(std::uint64_t));
+    static_assert(std::numeric_limits<double>::is_iec559 &&
+        std::numeric_limits<double>::radix == 2 && std::numeric_limits<double>::digits == 53);
+    (void)finite(value);
+    const auto bits = std::bit_cast<std::uint64_t>(value);
+    const auto exponent = static_cast<unsigned>((bits >> 52) & 0x7ff);
+    Integer significand = bits & ((std::uint64_t{1} << 52) - 1);
+    if (exponent != 0) significand += Integer{1} << 52;
+    if (bits >> 63) significand = -significand;
+    const int shift = exponent == 0 ? -1074 : static_cast<int>(exponent) - 1075;
+    if (shift >= 0) return Exact{significand << shift};
+    Exact result{significand}; result /= Integer{1} << -shift; return result;
+}
+double rounded(const Exact& value) {
+    if (value == 0) return 0.0;
+    const bool negative = value < 0;
+    const Exact magnitude = negative ? -value : value;
+    require(magnitude <= binary64(std::numeric_limits<double>::max()), "measurement arithmetic overflow");
+    const Integer num = numerator(magnitude), den = denominator(magnitude);
+    int exponent = static_cast<int>(boost::multiprecision::msb(num)) -
+        static_cast<int>(boost::multiprecision::msb(den));
+    if (exponent >= 0) { if (num < (den << exponent)) --exponent; }
+    else if ((num << -exponent) < den) --exponent;
+    const int quantum = std::max(exponent - 52, -1074);
+    const Integer scaled_num = quantum < 0 ? Integer{num << -quantum} : num;
+    const Integer scaled_den = quantum > 0 ? Integer{den << quantum} : den;
+    Integer significand = scaled_num / scaled_den;
+    const Integer remainder = scaled_num % scaled_den;
+    const Integer twice_remainder = remainder << 1;
+    if (twice_remainder > scaled_den ||
+        (twice_remainder == scaled_den && (significand & 1) != 0)) ++significand;
+    const auto result = finite(std::ldexp(significand.convert_to<double>(), quantum));
+    return negative ? -result : result;
+}
+std::pair<Exact, Exact> effective_point(Vec2 point, const AssemblyProfile& profile) {
+    if (!profile.planar_affine) return {binary64(point.x), binary64(point.y)};
+    const auto& map = *profile.planar_affine;
+    validate_assembly_profile_affine(map);
+    const Exact x = binary64(point.x) - binary64(map.source_origin.x);
+    const Exact y = binary64(point.y) - binary64(map.source_origin.y);
+    return {binary64(map.target_origin.x) + binary64(map.xx) * x + binary64(map.xy) * y,
+        binary64(map.target_origin.y) + binary64(map.yx) * x + binary64(map.yy) * y};
+}
+AssemblyProfilePlanarAffine physical_edge_map(const AssemblyProfile& profile, Vec2 origin, double scale) {
+    require(profile.planar_affine.has_value(), "mapped profile requires an affine map");
+    const auto& source = *profile.planar_affine;
+    validate_assembly_profile_affine(source);
+    // Reanchoring preserves the exact displacement operator without ever
+    // subtracting rounded effective endpoints or including node reflection.
+    AssemblyProfilePlanarAffine result{origin, {}, finite(source.xx * scale), finite(source.xy * scale),
+        finite(source.yx * scale), finite(source.yy * scale)};
+    validate_assembly_profile_affine(result);
+    return result;
+}
 double z_scale(const AssemblyTransform& pose) {
     const auto result = finite(pose.scale * pose.vertical_scale);
     require(result > 0, "vertical scale underflow"); return result;
@@ -248,7 +328,7 @@ Expansions admitted_expansions(const AssemblyDocumentEntities& actual,
     for (const auto& [id, model] : models) for (const auto& instance : model.instances())
         expand({id, instance.id, std::nullopt, {}}, model, instance);
     for (const auto& [id, entity] : actual) if (entity.type == "assembly_instance") {
-        const auto value = decode_document_assembly_instance(entity);
+        const auto value = decode_document_assembly_instance(entity, budget);
         const auto model = models.find(value.assembly_catalog_id);
         require(model != models.end(), "independent root references a missing catalog");
         expand({value.assembly_catalog_id, value.instance.id, id, {}}, model->second, value.instance);
@@ -276,6 +356,21 @@ ProfileFrame profile_frame(const AssemblyExpandedProfile& profile, const Assembl
 // Offsets between profile origins use translation differences and differences
 // of coefficients, avoiding subtraction of large absolute world coordinates.
 Bounds2 profile_bounds(const AssemblyProfile& profile, const ProfileFrame& frame) {
+    if (profile.planar_affine) {
+        const auto angle = frame.pose.mirrored_y ? -frame.pose.rotation_radians : frame.pose.rotation_radians;
+        const auto [c, s] = assembly_rotation_components(angle);
+        const AssemblyProfilePlanarAffine rotation{{}, {}, c, -s, s, c};
+        const auto map = compose_assembly_profile_affine(rotation,
+            physical_edge_map(profile, frame.origin, frame.pose.scale));
+        auto bounds = assembly_profile_boundary_bounds(profile.outer, map);
+        // R(theta)F == F R(-theta). Helpers receive only positive determinant
+        // maps; reflect their completed analytical extrema in selected axes.
+        if (frame.pose.mirrored_y) {
+            const auto minimum = bounds.minimum.y;
+            bounds.minimum.y = -bounds.maximum.y; bounds.maximum.y = -minimum;
+        }
+        return bounds;
+    }
     Boundary centered; centered.reserve(profile.outer.size());
     const auto scale_point = [&](Vec2 p) {
         return Vec2{finite((p.x - frame.origin.x) * frame.pose.scale),
@@ -292,6 +387,18 @@ Bounds2 profile_bounds(const AssemblyProfile& profile, const ProfileFrame& frame
 }
 AssemblyPoint3 profile_origin_difference(const AssemblyProfile& profile, const ProfileFrame& frame,
     const AssemblyProfile& reference, const ProfileFrame& anchor) {
+    if (profile.planar_affine || reference.planar_affine) {
+        const auto [x, y] = effective_point(frame.origin, profile);
+        const auto [ax, ay] = effective_point(anchor.origin, reference);
+        return finite(AssemblyPoint3{
+            rounded(binary64(frame.pose.translation_m.x) - binary64(anchor.pose.translation_m.x) +
+                binary64(frame.xx) * x + binary64(frame.xy) * y - binary64(anchor.xx) * ax - binary64(anchor.xy) * ay),
+            rounded(binary64(frame.pose.translation_m.y) - binary64(anchor.pose.translation_m.y) +
+                binary64(frame.yx) * x + binary64(frame.yy) * y - binary64(anchor.yx) * ax - binary64(anchor.yy) * ay),
+            rounded(binary64(frame.pose.translation_m.z) - binary64(anchor.pose.translation_m.z) +
+                binary64(frame.zz) * binary64(profile.elevation_m) -
+                binary64(anchor.zz) * binary64(reference.elevation_m))});
+    }
     const auto dx = frame.origin.x - anchor.origin.x, dy = frame.origin.y - anchor.origin.y;
     return finite(AssemblyPoint3{
         (frame.pose.translation_m.x - anchor.pose.translation_m.x) +
@@ -300,6 +407,18 @@ AssemblyPoint3 profile_origin_difference(const AssemblyProfile& profile, const P
             (frame.yx - anchor.yx) * anchor.origin.x + (frame.yy - anchor.yy) * anchor.origin.y + frame.yx * dx + frame.yy * dy,
         (frame.pose.translation_m.z - anchor.pose.translation_m.z) +
             (frame.zz - anchor.zz) * reference.elevation_m + frame.zz * (profile.elevation_m - reference.elevation_m)});
+}
+AssemblyPoint3 profile_origin(const AssemblyProfile& profile, const ProfileFrame& frame) {
+    if (profile.planar_affine) {
+        const auto [x, y] = effective_point(frame.origin, profile);
+        return {rounded(binary64(frame.pose.translation_m.x) + binary64(frame.xx) * x + binary64(frame.xy) * y),
+            rounded(binary64(frame.pose.translation_m.y) + binary64(frame.yx) * x + binary64(frame.yy) * y),
+            rounded(binary64(frame.pose.translation_m.z) + binary64(frame.zz) * binary64(profile.elevation_m))};
+    }
+    return finite(AssemblyPoint3{
+        frame.pose.translation_m.x + frame.xx * frame.origin.x + frame.xy * frame.origin.y,
+        frame.pose.translation_m.y + frame.yx * frame.origin.x + frame.yy * frame.origin.y,
+        frame.pose.translation_m.z + frame.zz * profile.elevation_m});
 }
 AssemblyPoint3 add_world_offset(AssemblyPoint3 origin, AssemblyPoint3 offset,
     AssemblyPoint3 width, AssemblyPoint3 depth) {
@@ -343,9 +462,13 @@ void measure_own_profile(AssemblyDimensionResolution& result, const AssemblyExpa
         const auto& source = (*boundary)[static_cast<std::size_t>(segment - identity->segment_ids.begin())];
         geometry.segment_profile_m = source;
         geometry.start_profile_m = source.start; geometry.end_profile_m = source.end;
-        // Measure the actual analytical source edge, then scale once. Its chord
-        // is retained separately for presentation, never substituted for length.
-        result.span_metres = finite(segment_length(source) * result.selected_node.transform.scale);
+        // Historical sources scale their analytical length once. Mapped edges
+        // measure the exact affine derivative in physical metres; the retained
+        // endpoint chord never substitutes for curved length.
+        result.span_metres = profile.planar_affine ?
+            finite(budget.mapped_edge_length(source,
+                physical_edge_map(profile, source.start, result.selected_node.transform.scale))) :
+            finite(segment_length(source) * result.selected_node.transform.scale);
     } else {
         const auto vertex = [&](const std::string& id) {
             const auto found = std::find(identity->vertex_ids.begin(), identity->vertex_ids.end(), id);
@@ -357,7 +480,10 @@ void measure_own_profile(AssemblyDimensionResolution& result, const AssemblyExpa
     }
     const auto scale = result.selected_node.transform.scale;
     const auto start = geometry.start_profile_m, end = geometry.end_profile_m;
-    const auto offset = finite(AssemblyPoint3{
+    std::optional<AssemblyProfilePlanarAffine> mapped;
+    if (profile.planar_affine) mapped = physical_edge_map(profile, start, scale);
+    const auto mapped_end = mapped ? assembly_profile_affine_point(end, *mapped) : Vec2{};
+    const auto offset = mapped ? AssemblyPoint3{mapped_end.x, mapped_end.y, 0} : finite(AssemblyPoint3{
         (end.x - start.x) * scale, (end.y - start.y) * scale, 0});
     if (geometry.segment_profile_m) {
         // The admitted ring's signed area integrates every analytical edge.
@@ -365,20 +491,32 @@ void measure_own_profile(AssemblyDimensionResolution& result, const AssemblyExpa
         budget.charge(boundary->size()); budget.charge(boundary->size());
         const auto area = finite(signed_area(*boundary));
         require(area != 0.0, "selected profile ring has no representable orientation");
-        const auto dx = finite(end.x - start.x), dy = finite(end.y - start.y);
-        const auto chord = finite(std::hypot(dx, dy));
-        require(chord > 0.0, "selected profile edge has no representable chord");
-        const Vec2 left{finite(-dy / chord), finite(dx / chord)};
-        const auto sweep = finite(geometry.segment_profile_m->sweep_radians);
-        require(std::abs(sweep) < 2.0 * std::numbers::pi,
-            "selected profile edge sweep exceeds numeric bounds");
-        // At the analytical arc midpoint, the directed tangent is parallel to
-        // its chord. Its sagitta avoids subtracting absolute source positions.
-        const auto sagitta = finite((chord / 2.0) * finite(std::tan(sweep / 4.0)));
         AssemblyProfileDimensionEdgePlacement placement;
-        placement.midpoint_from_anchor_m = {
-            finite(finite(dx / 2.0 - left.x * sagitta) * scale),
-            finite(finite(dy / 2.0 - left.y * sagitta) * scale)};
+        Vec2 left;
+        if (mapped) {
+            require(finite(std::hypot(offset.x, offset.y)) > 0.0,
+                "selected mapped edge has no representable chord");
+            placement.midpoint_from_anchor_m = assembly_profile_segment_point(*geometry.segment_profile_m, *mapped, 0.5);
+            const auto tangent = assembly_profile_segment_tangent(*geometry.segment_profile_m, *mapped, 0.5);
+            const auto magnitude = finite(std::hypot(tangent.x, tangent.y));
+            require(magnitude > 0.0, "selected mapped edge has no representable tangent");
+            left = {finite(-tangent.y / magnitude), finite(tangent.x / magnitude)};
+            budget.output.reserve(16);
+            geometry.affine_edge = AssemblyProfileDimensionAffineEdge{*geometry.segment_profile_m, *mapped};
+        } else {
+            const auto dx = finite(end.x - start.x), dy = finite(end.y - start.y);
+            const auto chord = finite(std::hypot(dx, dy));
+            require(chord > 0.0, "selected profile edge has no representable chord");
+            left = {finite(-dy / chord), finite(dx / chord)};
+            const auto sweep = finite(geometry.segment_profile_m->sweep_radians);
+            require(std::abs(sweep) < 2.0 * std::numbers::pi,
+                "selected profile edge sweep exceeds numeric bounds");
+            // Historical midpoint/sagitta arithmetic remains unchanged.
+            const auto sagitta = finite((chord / 2.0) * finite(std::tan(sweep / 4.0)));
+            placement.midpoint_from_anchor_m = {
+                finite(finite(dx / 2.0 - left.x * sagitta) * scale),
+                finite(finite(dy / 2.0 - left.y * sagitta) * scale)};
+        }
         const bool hole = boundary != &profile.outer;
         const auto outward_sign = (area > 0.0) != hole ? -1.0 : 1.0;
         placement.outward_unit_profile = {
@@ -389,16 +527,26 @@ void measure_own_profile(AssemblyDimensionResolution& result, const AssemblyExpa
     if (selector.measurement == AssemblyProfileDimensionMeasurement::vertex_distance)
         result.span_metres = finite(std::hypot(offset.x, offset.y));
     require(result.span_metres > 0, "selected profile dimension is unrepresentable");
-    const auto anchor = finite(AssemblyPoint3{start.x * scale, start.y * scale,
+    auto anchor = finite(AssemblyPoint3{profile.planar_affine ? 0.0 : start.x * scale,
+        profile.planar_affine ? 0.0 : start.y * scale,
         profile.elevation_m * z_scale(result.selected_node.transform)});
+    if (mapped) {
+        const auto [x, y] = effective_point(start, profile);
+        anchor.x = rounded(x * binary64(scale)); anchor.y = rounded(y * binary64(scale));
+    }
     result.anchor_world_m = add_world_offset(result.selected_world_frame.translation_m, anchor,
         result.width_direction_world, result.depth_direction_world);
     result.anchor_authored_m = add_world_offset(result.selected_node.transform.translation_m, anchor,
         local_width, local_depth);
     result.start_from_anchor_m = {}; result.end_from_anchor_m = offset;
+    const bool circular = !profile.planar_affine ||
+        (profile.planar_affine->xx == profile.planar_affine->yy &&
+            profile.planar_affine->xy == -profile.planar_affine->yx);
     geometry.segment_from_anchor_m = {{}, {offset.x, offset.y},
-        geometry.segment_profile_m ? geometry.segment_profile_m->sweep_radians : 0.0};
-    const auto bounds = segment_bounds(geometry.segment_from_anchor_m);
+        geometry.segment_profile_m && circular ? geometry.segment_profile_m->sweep_radians : 0.0};
+    const auto bounds = geometry.affine_edge ? assembly_profile_segment_bounds(
+        geometry.affine_edge->source, geometry.affine_edge->source_to_anchor_m) :
+        segment_bounds(geometry.segment_from_anchor_m);
     result.minimum_from_anchor_m = {bounds.minimum.x, bounds.minimum.y, 0};
     result.maximum_from_anchor_m = {bounds.maximum.x, bounds.maximum.y, 0};
     result.start_world_m = result.anchor_world_m;
@@ -475,10 +623,7 @@ AssemblyDimensionResolution measure(const AssemblyDimensionTarget& target,
         const auto bounds = profile_bounds(expanded.profile, frame);
         if (!reference) {
             reference = &expanded.profile; anchor = frame;
-            const auto origin = finite(AssemblyPoint3{
-                frame.pose.translation_m.x + frame.xx * frame.origin.x + frame.xy * frame.origin.y,
-                frame.pose.translation_m.y + frame.yx * frame.origin.x + frame.yy * frame.origin.y,
-                frame.pose.translation_m.z + frame.zz * reference->elevation_m});
+            const auto origin = profile_origin(*reference, frame);
             result.anchor_world_m = add_world_offset(result.selected_world_frame.translation_m, origin,
                 result.width_direction_world, result.depth_direction_world);
             result.anchor_authored_m = add_world_offset(selected->transform.translation_m, origin,

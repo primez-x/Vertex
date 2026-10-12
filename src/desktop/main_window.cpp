@@ -10,6 +10,7 @@
 #include "sketch/area_type_presets.hpp"
 
 #include "plan_canvas.hpp"
+#include "assembly_profile_canvas_geometry.hpp"
 #include "horizontal_profile_dialog.hpp"
 #include "horizontal_layer_stack_dialog.hpp"
 #include "wall_profile_dialog.hpp"
@@ -2417,7 +2418,9 @@ DimensionCanvasProjection project_boundary_dimension_resolution(const BoundaryDi
         text=format_boundary_length(resolved.segment_length_metres,metric,false);
         if (!dimension.assembly_target->profile && dimension.assembly_target->axis==AssemblyDimensionAxis::height)
             text.prepend(QStringLiteral("H "));
-        if (const auto segment=assembly_dimension_plan_segment(resolved))
+        if (resolved.assembly_geometry && has_mapped_assembly_dimension_curve(*resolved.assembly_geometry))
+            overlay=mapped_assembly_dimension_canvas_overlay(*resolved.assembly_geometry,dimension.text_position);
+        else if (const auto segment=assembly_dimension_plan_segment(resolved))
             overlay=dimension_overlay(*segment,dimension.text_position);
     } else if (resolved.kind==BoundaryDimensionKind::angle) {
         text=format_dimension_angle(resolved.angle_radians);
@@ -2440,6 +2443,8 @@ DimensionCanvasProjection project_boundary_dimension_resolution(const BoundaryDi
         result.line->dimension_end_ticks=resolved.kind==BoundaryDimensionKind::segment_length ||
             resolved.kind==BoundaryDimensionKind::wall_axis_length || resolved.kind==BoundaryDimensionKind::corner_window_leg_length ||
             is_assembly_boundary_dimension_kind(resolved.kind);
+        if (resolved.assembly_geometry && has_mapped_assembly_dimension_curve(*resolved.assembly_geometry))
+            result.line->dimension_end_ticks=false;
     }
     return result;
 }
@@ -2477,6 +2482,20 @@ Boundary assembly_placement_boundary(const Boundary& source,
                           placement.mirrored_y ? -segment.sweep_radians : segment.sweep_radians});
     }
     return result;
+}
+
+Boundary assembly_plan_profile_boundary(const AssemblyExpandedProfile& profile, const Boundary& source,
+                                       std::size_t& remaining_segments) {
+    if (profile.profile.planar_affine)
+        return mapped_assembly_profile_canvas_path(profile, source, remaining_segments);
+    const AssemblyPlacement xy{{},{profile.transform.translation_m.x,profile.transform.translation_m.y},
+        profile.transform.rotation_radians,profile.transform.scale,profile.transform.mirrored_y};
+    return assembly_placement_boundary(source,xy);
+}
+
+Boundary assembly_plan_profile_outer(const AssemblyExpandedProfile& profile) {
+    std::size_t remaining_segments=8192;
+    return assembly_plan_profile_boundary(profile,profile.profile.outer,remaining_segments);
 }
 
 std::string trim_ascii(std::string_view value) {
@@ -8593,9 +8612,22 @@ public:
         // legacy rows merely to transform or clone one component.
         auto& raw_model=catalog.properties.at("model");
         const auto generated=AssemblyModel::create(model.materials(),model.types(),{instance}).to_json();
-        raw_model["schema"]=(raw_model.at("schema")=="sketch.assemblies.v8" ||
-            generated.at("schema")=="sketch.assemblies.v8") ? "sketch.assemblies.v8" : "sketch.assemblies.v7";
-        const auto& changed_row=generated.at("instances").front();
+        raw_model["schema"]=(raw_model.at("schema")=="sketch.assemblies.v9" ||
+            generated.at("schema")=="sketch.assemblies.v9") ? "sketch.assemblies.v9" :
+            (raw_model.at("schema")=="sketch.assemblies.v8" ||
+                generated.at("schema")=="sketch.assemblies.v8") ? "sketch.assemblies.v8" : "sketch.assemblies.v7";
+        const auto source_row=std::find_if(raw_model.at("instances").begin(),raw_model.at("instances").end(),
+            [&](const auto& row) { return row.at("id")==binding->instance.id; });
+        if (source_row==raw_model.at("instances").end())
+            throw std::invalid_argument("Embedded transform lost its actual source row.");
+        auto changed_row=*source_row;
+        changed_row.at("id")=instance.id;
+        changed_row.erase("placement");
+        changed_row["root_transform"]=generated.at("instances").front().at("root_transform");
+        if (!changed_row.contains("nested_overrides"))
+            changed_row["nested_overrides"]=generated.at("instances").front().at("nested_overrides");
+        // All local/nested profile maps, topology, receipts and unchanged
+        // numeric representations belong to the captured row, even for clone.
         if (clone) raw_model.at("instances").push_back(changed_row);
         else for (auto& row:raw_model.at("instances")) if (row.at("id")==instance.id) row=changed_row;
         auto candidate = source.entities(); candidate.insert_or_assign(catalog.id, catalog);
@@ -14031,9 +14063,7 @@ public:
                         if (expansion.profiles.empty())
                             throw std::invalid_argument("A selected embedded assembly has no canonical geometric profiles.");
                         for (const auto& profile : expansion.profiles) {
-                            const AssemblyPlacement xy{{},{profile.transform.translation_m.x,profile.transform.translation_m.y},
-                                profile.transform.rotation_radians,profile.transform.scale,profile.transform.mirrored_y};
-                            const auto path=assembly_placement_boundary(profile.profile.outer,xy);
+                            const auto path=assembly_plan_profile_outer(profile);
                             include_path(geometry,path,id);
                         }
                         continue;
@@ -26884,11 +26914,10 @@ public:
         CanvasEntity item{id,QStringLiteral("assembly_instance"),project_assembly_plan(expansion),0.0,selected};
         item.presentation_key=key;
         item.hit_segments=item.segments;
-        const AssemblyPlacement xy{{},{profile.transform.translation_m.x,profile.transform.translation_m.y},
-            profile.transform.rotation_radians,profile.transform.scale,profile.transform.mirrored_y};
-        item.segments=assembly_placement_boundary(profile.profile.outer,xy);
+        std::size_t remaining_segments=8192;
+        item.segments=assembly_plan_profile_boundary(profile,profile.profile.outer,remaining_segments);
         for (const auto& hole:profile.profile.holes)
-            item.holes.push_back(assembly_placement_boundary(hole,xy));
+            item.holes.push_back(assembly_plan_profile_boundary(profile,hole,remaining_segments));
         if (profile.material_id) {
             const auto material=std::find_if(model.materials().begin(),model.materials().end(),
                 [&](const auto& value){return value.id==*profile.material_id;});
@@ -27033,9 +27062,7 @@ public:
         // Selection extents need the complete placed profile outlines, not
         // another native solid generation after the scene was already built.
         for (const auto& profile:expansion.profiles) {
-            const AssemblyPlacement xy{{},{profile.transform.translation_m.x,profile.transform.translation_m.y},
-                profile.transform.rotation_radians,profile.transform.scale,profile.transform.mirrored_y};
-            auto outer=assembly_placement_boundary(profile.profile.outer,xy);
+            auto outer=assembly_plan_profile_outer(profile);
             segments.insert(segments.end(),outer.begin(),outer.end());
         }
         if (expansion.profiles.empty() && child.instance.placement) {
@@ -27420,13 +27447,11 @@ public:
                                 proposed.segments=project_architectural_view_shape(make_assembly_geometry(part).shape,
                                     BuildingViewKind::plan,*view_context).value_or(Boundary{});
                             } else {
-                                const AssemblyPlacement xy{{},
-                                    {profile->transform.translation_m.x,profile->transform.translation_m.y},
-                                    profile->transform.rotation_radians,profile->transform.scale,profile->transform.mirrored_y};
-                                proposed.segments=assembly_placement_boundary(profile->profile.outer,xy);
+                                std::size_t remaining_segments=8192;
+                                proposed.segments=assembly_plan_profile_boundary(*profile,profile->profile.outer,remaining_segments);
                                 proposed.hit_segments=canonical;
                                 for (const auto& hole:profile->profile.holes)
-                                    proposed.holes.push_back(assembly_placement_boundary(hole,xy));
+                                    proposed.holes.push_back(assembly_plan_profile_boundary(*profile,hole,remaining_segments));
                                 if (view_context) {
                                     proposed.segments=project_plan_path(std::move(proposed.segments),view_context->frame);
                                     proposed.hit_segments=project_plan_path(std::move(proposed.hit_segments),view_context->frame);
@@ -27701,11 +27726,11 @@ public:
                         world_paths = false;
                     } else if (!item.presentation_key.isEmpty()) {
                         const auto& profile=presented.profiles.front();
-                        const AssemblyPlacement xy{{},{profile.transform.translation_m.x,profile.transform.translation_m.y},
-                            profile.transform.rotation_radians,profile.transform.scale,profile.transform.mirrored_y};
                         proposed.hit_segments=std::move(canonical);
-                        proposed.segments=assembly_placement_boundary(profile.profile.outer,xy);
-                        for (const auto& hole:profile.profile.holes) proposed.holes.push_back(assembly_placement_boundary(hole,xy));
+                        std::size_t remaining_segments=8192;
+                        proposed.segments=assembly_plan_profile_boundary(profile,profile.profile.outer,remaining_segments);
+                        for (const auto& hole:profile.profile.holes)
+                            proposed.holes.push_back(assembly_plan_profile_boundary(profile,hole,remaining_segments));
                     } else proposed.segments = std::move(canonical);
                 } else if (entity.type == "roof_join") {
                     const auto join = parse_roof_join(entity.properties, entity.id);
@@ -74037,7 +74062,9 @@ public:
                             resolved.kind == BoundaryDimensionKind::corner_window_leg_length)
                             overlay = dimension_overlay(resolved.segment, dimension.text_position);
                         else if (is_assembly_boundary_dimension_kind(resolved.kind)) {
-                            if (const auto segment=assembly_dimension_plan_segment(resolved))
+                            if (resolved.assembly_geometry && has_mapped_assembly_dimension_curve(*resolved.assembly_geometry))
+                                overlay=mapped_assembly_dimension_canvas_overlay(*resolved.assembly_geometry,dimension.text_position);
+                            else if (const auto segment=assembly_dimension_plan_segment(resolved))
                                 overlay=dimension_overlay(*segment,dimension.text_position);
                         }
                         else if (resolved.kind == BoundaryDimensionKind::angle)
@@ -74049,6 +74076,8 @@ public:
                             line.dimension_end_ticks = resolved.kind == BoundaryDimensionKind::segment_length ||
                                 resolved.kind == BoundaryDimensionKind::wall_axis_length || resolved.kind == BoundaryDimensionKind::corner_window_leg_length ||
                                 is_assembly_boundary_dimension_kind(resolved.kind);
+                            if (resolved.assembly_geometry && has_mapped_assembly_dimension_curve(*resolved.assembly_geometry))
+                                line.dimension_end_ticks=false;
                             geometry.push_back(std::move(line));
                         }
                         if (text.isEmpty()) return;

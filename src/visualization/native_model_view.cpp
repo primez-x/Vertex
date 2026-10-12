@@ -28,7 +28,10 @@
 #include <BRep_Builder.hxx>
 #include <BRepBndLib.hxx>
 #include <BRepBuilderAPI_Transform.hxx>
+#include <BRepBuilderAPI_GTransform.hxx>
 #include <BRepBuilderAPI_MakeEdge.hxx>
+#include <BRepCheck_Analyzer.hxx>
+#include <BRepAdaptor_Curve.hxx>
 #include <BRepGProp.hxx>
 #include <GC_MakeArcOfCircle.hxx>
 #include <GProp_GProps.hxx>
@@ -44,6 +47,7 @@
 #include <Standard_Failure.hxx>
 #include <TopoDS_Shape.hxx>
 #include <TopoDS_Compound.hxx>
+#include <TopoDS.hxx>
 #include <V3d_View.hxx>
 #include <V3d_Viewer.hxx>
 #include <WNT_Window.hxx>
@@ -52,7 +56,10 @@
 #include <gp_Ax2.hxx>
 #include <gp_Dir.hxx>
 #include <gp_Trsf.hxx>
+#include <gp_GTrsf.hxx>
+#include <gp_Mat.hxx>
 #include <gp_Vec.hxx>
+#include <gp_XYZ.hxx>
 
 #include <QApplication>
 #include <QByteArray>
@@ -80,6 +87,7 @@
 #include <QThread>
 
 #include <algorithm>
+#include <array>
 #include <chrono>
 #include <cstdint>
 #include <cmath>
@@ -249,6 +257,115 @@ struct ComponentDimensionPresentation {
     bool visible{};
 };
 
+struct AffineComponentDimensionEdge {
+    TopoDS_Shape shape;
+    AssemblyPoint3 midpoint_world_m;
+    std::array<AssemblyPoint3, 2> endpoint_normals_world;
+};
+
+std::optional<AffineComponentDimensionEdge> affine_component_dimension_edge(
+    const AssemblyProfileDimensionAffineEdge& descriptor,
+    const AssemblyDimensionResolution& measurement, double tolerance) {
+    try {
+        const auto& source = descriptor.source;
+        const auto& map = descriptor.source_to_anchor_m;
+        const auto& width = measurement.width_direction_world;
+        const auto& depth = measurement.depth_direction_world;
+        const auto& anchor = measurement.anchor_world_m;
+        validate_assembly_profile_affine(map);
+        const auto offset_world = [&](Vec2 point) {
+            return AssemblyPoint3{width.x * point.x + depth.x * point.y,
+                width.y * point.x + depth.y * point.y, 0};
+        };
+        const auto world_point = [&](Vec2 point) {
+            const auto offset = offset_world(point);
+            const AssemblyPoint3 result{anchor.x + offset.x, anchor.y + offset.y, anchor.z};
+            if (!std::isfinite(result.x) || !std::isfinite(result.y) || !std::isfinite(result.z) ||
+                std::abs((result.x - anchor.x) - offset.x) > tolerance ||
+                std::abs((result.y - anchor.y) - offset.y) > tolerance)
+                throw std::invalid_argument("native affine dimension point is not representable");
+            return result;
+        };
+        AffineComponentDimensionEdge result;
+        // Check the actual analytical curve, including its non-endpoint range.
+        const auto bounds = assembly_profile_segment_bounds(source, map);
+        (void)world_point(bounds.minimum);
+        (void)world_point(bounds.maximum);
+        result.midpoint_world_m = world_point(assembly_profile_segment_point(source, map, 0.5));
+        for (std::size_t endpoint = 0; endpoint < 2; ++endpoint) {
+            const auto tangent = assembly_profile_segment_tangent(source, map, static_cast<double>(endpoint));
+            const auto length = std::hypot(tangent.x, tangent.y);
+            if (!std::isfinite(length) || length <= 0)
+                throw std::invalid_argument("native affine dimension tangent is not representable");
+            result.endpoint_normals_world[endpoint] = offset_world({tangent.y / length, -tangent.x / length});
+        }
+
+        // Recover only the source circle near its actual starting vertex. A
+        // native general transform maps its support to the genuine ellipse;
+        // mapped endpoints and a circular sweep never manufacture a circle.
+        const AssemblyProfilePlanarAffine rebase{source.start, {0, 0}};
+        const auto local_end = assembly_profile_affine_point(source.end, rebase);
+        TopoDS_Shape local;
+        if (source.sweep_radians != 0) {
+            const auto local_midpoint = assembly_profile_segment_point(source, rebase, 0.5);
+            GC_MakeArcOfCircle arc(gp_Pnt(0, 0, 0),
+                gp_Pnt(local_midpoint.x, local_midpoint.y, 0), gp_Pnt(local_end.x, local_end.y, 0));
+            if (!arc.IsDone()) return std::nullopt;
+            BRepBuilderAPI_MakeEdge edge(arc.Value());
+            if (!edge.IsDone()) return std::nullopt;
+            local = edge.Shape();
+        } else {
+            BRepBuilderAPI_MakeEdge edge(gp_Pnt(0, 0, 0), gp_Pnt(local_end.x, local_end.y, 0));
+            if (!edge.IsDone()) return std::nullopt;
+            local = edge.Shape();
+        }
+        const auto mapped_start = world_point(assembly_profile_affine_point(source.start, map));
+        // These unit axes already own reflection and Site presentation. The
+        // descriptor owns profile affinity and node XY scale, each applied once.
+        const gp_Mat linear(width.x * map.xx + depth.x * map.yx,
+            width.x * map.xy + depth.x * map.yy, 0,
+            width.y * map.xx + depth.y * map.yx,
+            width.y * map.xy + depth.y * map.yy, 0, 0, 0, 1);
+        for (int row = 1; row <= 3; ++row)
+            for (int column = 1; column <= 3; ++column)
+                if (!std::isfinite(linear.Value(row, column))) return std::nullopt;
+        const gp_GTrsf affine(linear, gp_XYZ(mapped_start.x, mapped_start.y, mapped_start.z));
+        if (!std::isfinite(linear.Determinant()) || linear.Determinant() == 0 || affine.IsSingular())
+            return std::nullopt;
+        const auto inverse = linear.Inverted();
+        for (int row = 1; row <= 3; ++row)
+            for (int column = 1; column <= 3; ++column)
+                if (!std::isfinite(inverse.Value(row, column))) return std::nullopt;
+        BRepBuilderAPI_GTransform transformed(local, affine, true);
+        if (!transformed.IsDone() || transformed.Shape().IsNull() ||
+            !BRepCheck_Analyzer(transformed.Shape()).IsValid()) return std::nullopt;
+        const BRepAdaptor_Curve native_curve(TopoDS::Edge(transformed.Shape()));
+        const auto native_start = native_curve.Value(native_curve.FirstParameter());
+        const auto native_end = native_curve.Value(native_curve.LastParameter());
+        const auto mapped_end = world_point(assembly_profile_affine_point(source.end, map));
+        const auto matches = [&](const gp_Pnt& native, const AssemblyPoint3& actual) {
+            return std::isfinite(native.X()) && std::isfinite(native.Y()) && std::isfinite(native.Z()) &&
+                std::abs(native.X() - actual.x) <= tolerance &&
+                std::abs(native.Y() - actual.y) <= tolerance &&
+                std::abs(native.Z() - actual.z) <= tolerance;
+        };
+        if (!(matches(native_start, mapped_start) && matches(native_end, mapped_end)) &&
+            !(matches(native_start, mapped_end) && matches(native_end, mapped_start))) return std::nullopt;
+        GProp_GProps properties;
+        BRepGProp::LinearProperties(transformed.Shape(), properties);
+        if (!std::isfinite(properties.Mass()) ||
+            std::abs(properties.Mass() - measurement.span_metres) >
+                std::max(Precision::Confusion(), measurement.span_metres * 1e-6)) return std::nullopt;
+        result.shape = transformed.Shape();
+        return result;
+    } catch (const Standard_Failure&) {
+        return std::nullopt;
+    } catch (const std::invalid_argument&) {
+        // Native topology is optional; the analytical span and text survive.
+        return std::nullopt;
+    }
+}
+
 std::vector<ComponentDimensionPresentation> prepared_component_dimensions(
     const DocumentSnapshot& source,
     const std::optional<NativeModelView::VisibleEntityIds>& visible_ids,
@@ -332,7 +449,9 @@ std::vector<ComponentDimensionPresentation> prepared_component_dimensions(
             throw std::invalid_argument("native component dimension color is invalid");
         auto label = occ::handle<AIS_TextLabel>(new AIS_TextLabel());
         const auto* profile = measurement.profile_geometry ? &*measurement.profile_geometry : nullptr;
-        const bool curved_profile = profile && profile->segment_from_anchor_m.sweep_radians != 0.0;
+        const bool curved_profile = profile && (profile->affine_edge
+            ? profile->affine_edge->source.sweep_radians != 0.0
+            : profile->segment_from_anchor_m.sweep_radians != 0.0);
         // This is a scalar callout for the analytical arc length. A native
         // point-to-point length dimension would silently measure its chord.
         const auto text_utf8 = ((curved_profile ? QStringLiteral("Arc length: ") : QString{}) +
@@ -387,7 +506,17 @@ std::vector<ComponentDimensionPresentation> prepared_component_dimensions(
                 builder.Add(lines, edge.Shape());
             };
             bool has_measurement_edge = false;
-            if (curved_profile) {
+            std::optional<AffineComponentDimensionEdge> mapped_edge;
+            if (profile && profile->affine_edge) {
+                mapped_edge = affine_component_dimension_edge(*profile->affine_edge, measurement,
+                    representation_tolerance);
+                if (mapped_edge) {
+                    builder.Add(lines, mapped_edge->shape);
+                    has_measurement_edge = true;
+                    if (curved_profile)
+                        add_line(mapped_edge->midpoint_world_m, {text.x, text.y, text.z});
+                }
+            } else if (curved_profile) {
                 const auto& segment = profile->segment_from_anchor_m;
                 const auto dx = segment.end.x - segment.start.x;
                 const auto dy = segment.end.y - segment.start.y;
@@ -439,7 +568,9 @@ std::vector<ComponentDimensionPresentation> prepared_component_dimensions(
                 if (!has_measurement_edge) break;
                 auto tick_direction = measurement.target.axis == AssemblyDimensionAxis::width
                     ? measurement.depth_direction_world : measurement.width_direction_world;
-                if (profile) {
+                if (mapped_edge) {
+                    tick_direction = mapped_edge->endpoint_normals_world[endpoint];
+                } else if (profile) {
                     const auto& segment = profile->segment_from_anchor_m;
                     const auto dx = segment.end.x - segment.start.x;
                     const auto dy = segment.end.y - segment.start.y;

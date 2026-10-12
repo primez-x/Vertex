@@ -59,6 +59,8 @@ using EmbeddedAssemblyPresentationIds =
 [[nodiscard]] Entity encode_document_assembly_instance(const Entity& source,
     const AssemblyDocumentInstance& value);
 [[nodiscard]] AssemblyDocumentInstance decode_document_assembly_instance(const Entity& entity);
+[[nodiscard]] AssemblyDocumentInstance decode_document_assembly_instance(const Entity& entity,
+    AssemblyExpansionBudget& budget);
 [[nodiscard]] AssemblyExpansion expand_document_assembly_instance(const Entity& entity,
     const AssemblyDocumentEntities& entities, AssemblyExpansionBudget& budget);
 // All catalogs, including unused catalogs/types, are decoded before expansion.

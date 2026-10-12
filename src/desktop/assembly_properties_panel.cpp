@@ -147,7 +147,8 @@ bool same_boundary(const Boundary& first, const Boundary& second) {
         });
 }
 bool same_profile_geometry(const AssemblyProfile& first, const AssemblyProfile& second) {
-    return same_boundary(first.outer, second.outer) && first.holes.size() == second.holes.size() &&
+    return first.planar_affine == second.planar_affine &&
+        same_boundary(first.outer, second.outer) && first.holes.size() == second.holes.size() &&
         std::equal(first.holes.begin(), first.holes.end(), second.holes.begin(), same_boundary);
 }
 void assign_fresh_topology(AssemblyProfile& profile, const std::vector<AssemblyProfile>& own_profiles,
@@ -215,7 +216,9 @@ ProfileBounds profile_bounds(const std::vector<AssemblyProfile>& profiles) {
     ProfileBounds result;
     bool first = true;
     for (const auto& profile : profiles) {
-        const auto bounds = boundary_bounds(profile.outer);
+        const auto bounds = profile.planar_affine
+            ? assembly_profile_boundary_bounds(profile.outer,*profile.planar_affine)
+            : boundary_bounds(profile.outer);
         const auto top = profile.elevation_m + profile.height_m;
         require(std::isfinite(top), "Profile extrusion endpoints must be representable.");
         if (first) {
@@ -244,13 +247,14 @@ std::array<double, 3> profile_spans(const std::vector<AssemblyProfile>& profiles
         require(std::isfinite(span) && span > 0, "The own-profile dimensions must be finite, positive and representable.");
     return result;
 }
-bool curved(const std::vector<AssemblyProfile>& profiles) {
+bool curved(const AssemblyProfile& profile) {
     const auto has_arc = [](const Boundary& boundary) {
         return std::any_of(boundary.begin(), boundary.end(), [](const auto& edge) { return edge.sweep_radians != 0; });
     };
-    return std::any_of(profiles.begin(), profiles.end(), [&](const auto& profile) {
-        return has_arc(profile.outer) || std::any_of(profile.holes.begin(), profile.holes.end(), has_arc);
-    });
+    return has_arc(profile.outer) || std::any_of(profile.holes.begin(),profile.holes.end(),has_arc);
+}
+bool curved(const std::vector<AssemblyProfile>& profiles) {
+    return std::any_of(profiles.begin(),profiles.end(),[](const auto& profile) { return curved(profile); });
 }
 void resize_profiles(std::vector<AssemblyProfile>& profiles, const AssemblyTransform& frame,
                      const std::array<std::optional<double>, 3>& dimensions) {
@@ -263,30 +267,35 @@ void resize_profiles(std::vector<AssemblyProfile>& profiles, const AssemblyTrans
         require(std::isfinite(factors[i]) && factors[i] > 0, "Geometry resize factors must be finite and positive.");
     }
     if (curved(profiles) && factors[0] != factors[1]) {
-        // Circular arcs can only undergo a planar similarity. Allow arithmetic
-        // rounding in an otherwise uniform request, then use ONE exact factor.
+        // Retain the historical exact-similarity path for a roundoff-only
+        // difference. Actual directional curve edits use an affine profile.
         const auto rounding = 32 * std::numeric_limits<double>::epsilon() * std::max(factors[0], factors[1]);
-        require(std::abs(factors[0] - factors[1]) <= rounding,
-            "Circular arcs require equal width and depth scale factors. Enter both dimensions in their current ratio, "
-            "or edit the outline/cutouts explicitly. Unequal planar scaling would require unsupported elliptical arcs.");
-        factors[1] = factors[0];
+        if (std::abs(factors[0] - factors[1]) <= rounding) factors[1] = factors[0];
     }
     const AssemblyProfilePlanarAffine planar_resize{bounds.minimum, bounds.minimum,
         factors[0], 0.0, 0.0, factors[1]};
     validate_assembly_profile_affine(planar_resize);
     const auto scale_boundary = [&](Boundary& boundary) {
         if (factors[0] == 1 && factors[1] == 1) return;
-        // This historical endpoint path admits lines and planar similarities
-        // only. A general affine circular image needs the mapped-profile codec
-        // and every exact-curve consumer before it can be authored here.
+        // Historical map-free lines and similarities retain their old wire.
         for (auto& edge : boundary) {
             edge.start = assembly_profile_affine_point(edge.start, planar_resize);
             edge.end = assembly_profile_affine_point(edge.end, planar_resize);
         }
     };
     for (auto& profile : profiles) {
-        scale_boundary(profile.outer);
-        for (auto& hole : profile.holes) scale_boundary(hole);
+        const bool planar_change=factors[0] != 1 || factors[1] != 1;
+        const bool needs_map=profile.planar_affine.has_value() ||
+            (factors[0] != factors[1] && curved(profile));
+        if (planar_change && needs_map) {
+            require(profile.topology.has_value(),
+                "Apply edge identities before resizing a curved or mapped profile. The edit needs explicit dimension mapping.");
+            profile.planar_affine=profile.planar_affine
+                ? compose_assembly_profile_affine(planar_resize,*profile.planar_affine) : planar_resize;
+        } else if (!profile.planar_affine) {
+            scale_boundary(profile.outer);
+            for (auto& hole : profile.holes) scale_boundary(hole);
+        }
         if (factors[2] != 1) {
             profile.elevation_m = bounds.bottom + (profile.elevation_m - bounds.bottom) * factors[2];
             profile.height_m *= factors[2];
@@ -355,7 +364,7 @@ public:
                 const auto found = source.entities().find(*target.document_entity_id);
                 require(found != source.entities().end() && found->second.id == *target.document_entity_id,
                     "The selected independent root is missing or inconsistent.");
-                const auto document = decode_document_assembly_instance(found->second);
+                const auto document = decode_document_assembly_instance(found->second, budget);
                 require(document.assembly_catalog_id == target.catalog_id && document.instance.id == target.instance_id,
                     "The selected independent root does not match its catalog and instance.");
                 instance = document.instance;

@@ -1,6 +1,7 @@
 #pragma once
 
 #include "sketch/assembly_instance_property_edit.hpp"
+#include "sketch/assembly_profile_geometry.hpp"
 #include "sketch/site_frame.hpp"
 
 #include <span>
@@ -51,9 +52,23 @@ struct AssemblyProfileDimensionEdgePlacement {
     // Analytical edge midpoint in physical metres along the selected node's
     // unit width/depth axes, relative to the dimension's start anchor.
     Vec2 midpoint_from_anchor_m;
-    // Unit normal pointing out of profile material, in source local XY.
+    // Unit normal pointing out of profile material, in effective profile XY
+    // (the selected node's unit width/depth axes, before node reflection).
     // Apply the actual width/depth basis, including its reflection, once.
     Vec2 outward_unit_profile;
+};
+
+struct AssemblyProfileDimensionAffineEdge {
+    // Authoritative source line/circular arc, never a manufactured ellipse.
+    Segment source;
+    // Outputs physical metre XY offsets relative to resolution.anchor_world_m
+    // /anchor_authored_m, along the selected node's unit width/depth axes.
+    // Includes profile affine and node uniform scale. Determinant is positive;
+    // apply the selected axes (including node reflection) exactly once.
+    // Evaluate with assembly_profile_segment_point/tangent/bounds. This map
+    // is anchored at source.start with target_origin == {0,0}, retaining small
+    // displacements even when absolute authored/world coordinates are distant.
+    AssemblyProfilePlanarAffine source_to_anchor_m;
 };
 
 struct AssemblyProfileDimensionGeometry {
@@ -63,12 +78,18 @@ struct AssemblyProfileDimensionGeometry {
     // Present only for edge_length, including the original analytical sweep.
     std::optional<Segment> segment_profile_m;
     // Physical metres along the selected node's unit width/depth axes, relative
-    // to resolution.anchor_world_m/anchor_authored_m. Source sweep is preserved;
-    // reflecting these axes reverses its visible sweep. Vertex distance is a
-    // straight chord. This avoids subtracting distant absolute endpoints.
+    // to resolution.anchor_world_m/anchor_authored_m. Historical edges and
+    // mapped similarities preserve circular sweep; general affine edges carry
+    // sweep zero here (endpoint chord only). If affine_edge exists, consumers
+    // MUST use its exact curve instead of interpreting this segment as an arc.
+    // Reflecting the axes reverses visible sweep. Vertex distance is a chord.
     Segment segment_from_anchor_m;
     // Edge-only default placement; vertex distances retain their chord policy.
     std::optional<AssemblyProfileDimensionEdgePlacement> edge_placement;
+    // Appended for aggregate compatibility. Present for every mapped edge,
+    // including lines/similarities; absent for historical edges and all vertex
+    // distances. segment_profile_m/start_profile_m/end_profile_m remain source.
+    std::optional<AssemblyProfileDimensionAffineEdge> affine_edge;
 };
 
 struct AssemblyDimensionResolution {
@@ -112,13 +133,17 @@ struct AssemblyDimensionResolution {
 // unrepresentable measurements throw std::invalid_argument. Inactive retained
 // roots may resolve; this supplies no active-edit or publication authorization.
 // Profile targets select only the exact node's own identified profile/ring.
-// Edge span is analytical physical length (including arcs); vertex span is
-// the source-vertex chord. Anonymous topology and missing/retired IDs refuse.
+// Edge span is physical length of the exact effective edge; general mapped arcs
+// use bounded deterministic quadrature (1e-8 m absolute + 1e-10 relative error
+// estimate per edge). Vertex span is the effective mapped-vertex chord.
+// Anonymous topology and missing/retired IDs refuse.
 [[nodiscard]] AssemblyDimensionResolution resolve_assembly_dimension(
     const AssemblyDocumentEntities& actual, const AssemblyDimensionTarget&);
 // 1..1000 targets, in input order, including duplicates. Complete map admission
 // and expansion are shared once. Aggregate analytical work and retained output
-// are bounded; no snapshot/candidate fabrication occurs.
+// are bounded, including a shared 1,048,576 quadrature speed-evaluation ceiling
+// across the entire target batch; exhaustion refuses the complete batch.
+// No snapshot/candidate fabrication occurs.
 [[nodiscard]] std::vector<AssemblyDimensionResolution> resolve_assembly_dimensions(
     const AssemblyDocumentEntities& actual, std::span<const AssemblyDimensionTarget>);
 

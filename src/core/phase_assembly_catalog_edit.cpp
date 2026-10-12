@@ -230,7 +230,7 @@ Entity edited_catalog(const Entity& original, const Json* edit) {
         require(exact(raw_row(saved, collection, key), change.at("original")), "actual original definition binding changed");
         auto replacement = change.at("replacement");
         if (std::string_view(collection) == "types") {
-            // Foundation request3 has already proved exact source topology/XY.
+            // Foundation request3 has already proved exact source topology/map/XY.
             // Private carriers must retain the same raw source representations
             // as ordinary replay, including when type metadata alone changes.
             const auto& original_type=raw_row(saved,collection,key);
@@ -238,20 +238,22 @@ Entity edited_catalog(const Entity& original, const Json* edit) {
                 const auto retained=std::find_if(original_type.at("profiles").begin(),original_type.at("profiles").end(),
                     [&](const auto& value){return value.at("id")==profile.at("id");});
                 if(retained!=original_type.at("profiles").end() && retained->contains("topology")) {
-                    for(const auto* field:{"version","topology","outer","holes"})profile[field]=retained->at(field);
+                    for(const auto* field:{"version","profile_version","topology","planar_affine","outer","holes"})
+                        if(retained->contains(field))profile[field]=retained->at(field);
                 }
             }
             const bool nested = schema == "sketch.assemblies.v4" || schema == "sketch.assemblies.v5" || schema == "sketch.assemblies.v6";
             if (!nested && !raw_row(saved, collection, key).contains("profiles") &&
                 replacement.at("profiles").empty() && replacement.at("parts").empty()) {
                 replacement.erase("profiles"); replacement.erase("parts");
-            } else if (!nested && schema != "sketch.assemblies.v7" && schema != "sketch.assemblies.v8") promote = true;
-            if (schema != "sketch.assemblies.v6" && schema != "sketch.assemblies.v7" && schema != "sketch.assemblies.v8" && replacement.contains("parts"))
+            } else if (!nested && schema != "sketch.assemblies.v7" && schema != "sketch.assemblies.v8" && schema != "sketch.assemblies.v9") promote = true;
+            if (schema != "sketch.assemblies.v6" && schema != "sketch.assemblies.v7" && schema != "sketch.assemblies.v8" && schema != "sketch.assemblies.v9" && replacement.contains("parts"))
                 for (const auto& part : replacement.at("parts")) if (part.at("transform").contains("vertical_scale")) promote = true;
         } else if (schema == "sketch.assemblies.v1" && replacement.contains("color_srgb")) promote = true;
         for (auto& row : model.at(collection)) if (row.at("id") == key) { row = std::move(replacement); break; }
     }
-    if (promote) model.at("schema") = schema == "sketch.assemblies.v8" ? "sketch.assemblies.v8" : "sketch.assemblies.v7";
+    if (promote) model.at("schema") = schema == "sketch.assemblies.v9" ? "sketch.assemblies.v9" :
+        schema == "sketch.assemblies.v8" ? "sketch.assemblies.v8" : "sketch.assemblies.v7";
     return result;
 }
 void retain_equal_definitions(const Entity& original, Entity& edited, const AssemblyModel& before, const AssemblyModel& after) {
@@ -742,7 +744,7 @@ PhaseAssemblyCatalogEditResult replay_phase_assembly_catalog_edit_entities(const
         for (const auto& [key, model] : final_models) for (const auto& row : model.instances())
             expansions.emplace(Target{key, row.id, std::nullopt, {}}, model.expand(row, final_expansion));
         for (const auto& [key, owner] : result.entities) if (owner.type == "assembly_instance") {
-            const auto value = decode_document_assembly_instance(owner);
+            const auto value = decode_document_assembly_instance(owner, final_expansion);
             require(final_models.contains(value.assembly_catalog_id), "final independent catalog is missing");
             expansions.emplace(Target{value.assembly_catalog_id, value.instance.id, key, {}},
                 final_models.at(value.assembly_catalog_id).expand(value.instance, final_expansion));

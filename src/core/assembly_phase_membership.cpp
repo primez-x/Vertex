@@ -174,10 +174,12 @@ void admit_catalog_work(const nlohmann::json& model, ResolveBudget& budget) {
         GraphSize size;
     };
     std::map<std::string, RawType, std::less<>> raw_types;
+    std::size_t maximum_mapped_visit_work{};
     const auto admit_profiles = [&](const nlohmann::json& profiles, std::size_t topology_passes = 1) {
         require(profiles.is_array() && profiles.size() <= 4096,
             "invalid assembly phase catalog profiles");
         std::size_t total{};
+        std::size_t mapped_visit_work{};
         for (const auto& profile : profiles) {
             require(profile.is_object() && profile.at("outer").is_array() && profile.at("outer").size() <= 1024 &&
                 profile.at("holes").is_array() && profile.at("holes").size() <= 1024,
@@ -199,12 +201,26 @@ void admit_catalog_work(const nlohmann::json& model, ResolveBudget& budget) {
             count_arcs(profile.at("outer"));
             for (const auto& hole : profile.at("holes")) count_arcs(hole);
             const auto topology = segments + profile.at("holes").size() + 1;
-            budget.product(topology, 8 * topology * topology_passes);
-            budget.product(arcs, 300000 * segments * topology_passes);
+            const bool mapped=profile.contains("planar_affine");
+            require(!mapped || model.at("schema")=="sketch.assemblies.v9",
+                "mapped assembly phase profiles require catalog schema v9");
+            const auto passes=topology_passes*(mapped ? 3u : 1u);
+            budget.product(topology, 8 * topology * passes);
+            budget.product(arcs, 300000 * segments * passes);
+            if (mapped) {
+                // Match complete carrier preflight: mapped physical admission
+                // repeats topology/closed-area work for every real DAG visit.
+                constexpr std::size_t limit=67108864;
+                const auto work=3*(8*topology*topology+300000*arcs*segments);
+                require(work<=limit-mapped_visit_work,
+                    "mapped assembly phase profile visit work budget exceeded");
+                mapped_visit_work+=work;
+            }
             require(segments <= 262144 - total,
                 "assembly phase catalog type segment budget exceeded");
             total += segments;
         }
+        maximum_mapped_visit_work=std::max(maximum_mapped_visit_work,mapped_visit_work);
         return total;
     };
     for (const auto& row : types) {
@@ -253,8 +269,8 @@ void admit_catalog_work(const nlohmann::json& model, ResolveBudget& budget) {
         std::size_t replacements{};
         const auto replace_profiles = [&](const nlohmann::json& row, const RawType& selected) {
             if (!row.contains("profile_overrides")) return;
-            require(model.at("schema") == "sketch.assemblies.v8",
-                "assembly profile overrides require catalog schema v8");
+            require(model.at("schema") == "sketch.assemblies.v8" || model.at("schema") == "sketch.assemblies.v9",
+                "assembly profile overrides require catalog schema v8/v9");
             // Decode, create() validation and real expansion each validate
             // override topology; shared definitions retain their single charge.
             const auto count = admit_profiles(row.at("profile_overrides"), 3);
@@ -316,6 +332,7 @@ void admit_catalog_work(const nlohmann::json& model, ResolveBudget& budget) {
     budget.product(source.values + source.bytes / 8,
         4 * (validation_nodes + instance_nodes + types.size() + materials.size() + 1));
     budget.product(validation_segments + instance_segments, 4);
+    budget.product(maximum_mapped_visit_work,validation_nodes+instance_nodes);
 }
 const nlohmann::json& entity_model(const Entity& entity, const std::string& map_id, std::string_view type) {
     document_id(map_id);

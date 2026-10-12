@@ -124,7 +124,8 @@ bool has_architectural_appraisal_v57_semantics(const Entity& entity) {
              model->value("schema", nlohmann::json()) == "sketch.assemblies.v5" ||
              model->value("schema", nlohmann::json()) == "sketch.assemblies.v6" ||
              model->value("schema", nlohmann::json()) == "sketch.assemblies.v7" ||
-             model->value("schema", nlohmann::json()) == "sketch.assemblies.v8")) return true;
+             model->value("schema", nlohmann::json()) == "sketch.assemblies.v8" ||
+             model->value("schema", nlohmann::json()) == "sketch.assemblies.v9")) return true;
     }
     if (entity.type == "roof_join" &&
         (entity.properties.value("version", nlohmann::json()) == 2 ||
@@ -283,6 +284,18 @@ bool has_identified_assembly_profile_rows(const nlohmann::json& rows) {
     if (!identified) return false;
     try { (void)preflight_assembly_profiles(rows); return true; }
     catch (const std::invalid_argument&) { return false; }
+}
+
+bool has_mapped_assembly_profile_rows(const nlohmann::json& rows) {
+    if (!rows.is_array()) return false;
+    const auto mapped = std::any_of(rows.begin(), rows.end(), [](const auto& row) {
+        return row.is_object() && row.value("profile_version", nlohmann::json()) == 3 &&
+            row.contains("planar_affine");
+    });
+    if (!mapped) return false;
+    try { (void)preflight_assembly_profiles(rows); return true; }
+    catch (const std::invalid_argument&) { return false; }
+    catch (const nlohmann::json::exception&) { return false; }
 }
 
 bool has_identified_assembly_instance_profiles(const nlohmann::json& instance) {
@@ -518,6 +531,7 @@ std::uint32_t required_format_version_internal(const DocumentSnapshot& snapshot,
             // authoring after composition elides a temporary destination. This
             // raises the reader floor; it supplies no geometry/edit authority.
             if (floor<250 && has_identified_assembly_profile_rows(value)) floor=250U;
+            if (floor<255 && has_mapped_assembly_profile_rows(value)) floor=255U;
             const auto closed_shape=[&](std::initializer_list<const char*> fields) {
                 if (!value.is_object() || value.size()!=fields.size()) return false;
                 return std::all_of(fields.begin(),fields.end(),[&](const char* field) { return value.contains(field); });
@@ -1707,9 +1721,9 @@ std::uint32_t required_format_version_internal(const DocumentSnapshot& snapshot,
         if (revision.phase_entity_import) required=std::max(required,160U);
         if (required<254 && revision.boundary_constraint_changes)
             required=std::max(required,retained_component_reader_floor(command_to_json(Command{*revision.boundary_constraint_changes})));
-        if (required<254 && revision.boundary_geometry_edit)
+        if (required<255 && revision.boundary_geometry_edit)
             required=std::max(required,typed_edit_reader_floor(encode_boundary_geometry_edit(*revision.boundary_geometry_edit)));
-        if (required<254 && revision.boundary_constraint_changes)
+        if (required<255 && revision.boundary_constraint_changes)
             required=std::max(required,typed_edit_reader_floor(command_to_json(Command{*revision.boundary_constraint_changes})));
         if (required<122 && revision.boundary_geometry_edit)
             required=std::max(required,quantity_reader_floor(encode_boundary_geometry_edit(*revision.boundary_geometry_edit)));
@@ -2303,6 +2317,9 @@ std::uint32_t required_format_version_internal(const DocumentSnapshot& snapshot,
                     required=std::max(required,248U);
                 const auto model = entity.properties.find("model");
                 if (model != entity.properties.end() && model->is_object() &&
+                    model->value("schema", nlohmann::json()) == "sketch.assemblies.v9")
+                    required = std::max(required, 255U);
+                if (model != entity.properties.end() && model->is_object() &&
                     model->value("schema", nlohmann::json()) == "sketch.assemblies.v8")
                     required = std::max(required, 240U);
                 if (model != entity.properties.end() && model->is_object() &&
@@ -2317,6 +2334,9 @@ std::uint32_t required_format_version_internal(const DocumentSnapshot& snapshot,
             }
             if (entity.type == "assembly_instance" && entity.properties.is_object()) {
                 const auto instance = entity.properties.find("instance");
+                if (instance != entity.properties.end() && instance->is_object() &&
+                    instance->value("schema", nlohmann::json()) == "sketch.assembly-instance.v4")
+                    required = std::max(required, 255U);
                 if (instance != entity.properties.end() && instance->is_object() &&
                     instance->value("schema", nlohmann::json()) == "sketch.assembly-instance.v3")
                     required = std::max(required, 240U);
@@ -4267,6 +4287,7 @@ bool verify_sqlite_schema(sqlite3* database, bool allow_recovery = false) {
          sqlite3_column_int(user_version.get(), 0) != 251 &&
          sqlite3_column_int(user_version.get(), 0) != 252 &&
          sqlite3_column_int(user_version.get(), 0) != 254 &&
+         sqlite3_column_int(user_version.get(), 0) != 255 &&
          sqlite3_column_int(user_version.get(), 0) != 253 &&
          sqlite3_column_int(user_version.get(), 0) != 242 &&
          sqlite3_column_int(user_version.get(), 0) != 207 &&
@@ -4994,6 +5015,8 @@ DocumentSnapshot read_snapshot(sqlite3* database, RecoveryLedger* recovery = nul
     // here and authenticate the manifest with its stored version below.
     const auto required_format = required_format_version_internal(snapshot, format_number < 28);
     if (required_format > format_number) {
+        if (required_format>=255)
+            storage_error(StorageErrorCode::unsupported_format,"This project requires reader 255 for exact affine component profiles");
         if (required_format>=254)
             storage_error(StorageErrorCode::unsupported_format,"This project requires reader 254 for reviewed component profile redraw and dimensions");
         if (required_format>=253)

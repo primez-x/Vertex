@@ -1,5 +1,6 @@
 #include "sketch/building_view_projection.hpp"
 #include "sketch/assembly_geometry.hpp"
+#include "projected_ellipse_geometry.hpp"
 
 #include <BRepAlgoAPI_Section.hxx>
 #include <BRep_Builder.hxx>
@@ -14,10 +15,16 @@
 #include <BRepPrimAPI_MakeHalfSpace.hxx>
 #include <Geom2d_Circle.hxx>
 #include <Geom2d_Curve.hxx>
+#include <Geom2d_Ellipse.hxx>
+#include <Geom2d_BSplineCurve.hxx>
+#include <Geom2dConvert_BSplineCurveToBezierCurve.hxx>
 #include <Geom2d_Line.hxx>
 #include <Geom2d_TrimmedCurve.hxx>
 #include <Geom_Circle.hxx>
 #include <Geom_Curve.hxx>
+#include <Geom_Ellipse.hxx>
+#include <Geom_BSplineCurve.hxx>
+#include <GeomConvert_BSplineCurveToBezierCurve.hxx>
 #include <Geom_Line.hxx>
 #include <Geom_Plane.hxx>
 #include <Geom_TrimmedCurve.hxx>
@@ -128,7 +135,8 @@ bool finite_point(Vec2 point) {
 }
 
 void append_segment(Boundary& result, Vec2 start, Vec2 end, double sweep,
-                    std::string_view context) {
+                    std::string_view context, projected_curve_detail::Budget& budget) {
+    budget.point(2);
     if (!std::isfinite(sweep) || !finite_point(start) || !finite_point(end)) {
         projection_error("Building view projection produced a non-finite " +
                          std::string(context));
@@ -140,6 +148,7 @@ void append_segment(Boundary& result, Vec2 start, Vec2 end, double sweep,
         projection_error("Building view projection produced an invalid " +
                          std::string(context) + " sweep");
     }
+    budget.segment();
     result.push_back({start, end, sweep});
 }
 
@@ -162,7 +171,8 @@ occ::handle<Geom_Curve> basis_curve_3d(occ::handle<Geom_Curve> curve) {
 }
 
 void append_circle_2d(const TopoDS_Edge& edge, const occ::handle<Geom2d_Curve>& curve,
-                      double first, double last, Boundary& result) {
+                      double first, double last, Boundary& result,
+                      projected_curve_detail::Budget& budget) {
     if (edge.Orientation() == TopAbs_REVERSED) std::swap(first, last);
     const auto circle = occ::down_cast<Geom2d_Circle>(curve);
     if (circle.IsNull() || !std::isfinite(first) || !std::isfinite(last) ||
@@ -191,11 +201,13 @@ void append_circle_2d(const TopoDS_Edge& edge, const occ::handle<Geom2d_Curve>& 
         const auto start_point = circle->Value(start);
         const auto end_point = circle->Value(end);
         append_segment(result, {start_point.X(), start_point.Y()},
-                       {end_point.X(), end_point.Y()}, sweep_step, "circle");
+                       {end_point.X(), end_point.Y()}, sweep_step, "circle", budget);
     }
 }
 
-void append_hlr_edge(const TopoDS_Edge& edge, Boundary& result) {
+void append_hlr_edge(const TopoDS_Edge& edge, Boundary& result,
+                     projected_curve_detail::Budget& budget) {
+    budget.edge();
     double first = 0.0;
     double last = 0.0;
     auto curve = BRep_Tool::CurveOnSurface(edge, BRepLib::Plane(),
@@ -205,20 +217,31 @@ void append_hlr_edge(const TopoDS_Edge& edge, Boundary& result) {
     if (const auto line = occ::down_cast<Geom2d_Line>(curve); !line.IsNull()) {
         if (edge.Orientation() == TopAbs_REVERSED) std::swap(first, last);
         append_segment(result, {line->Value(first).X(), line->Value(first).Y()},
-                       {line->Value(last).X(), line->Value(last).Y()}, 0.0, "line");
+                       {line->Value(last).X(), line->Value(last).Y()}, 0.0, "line", budget);
     } else if (!occ::down_cast<Geom2d_Circle>(curve).IsNull()) {
-        append_circle_2d(edge, curve, first, last, result);
+        append_circle_2d(edge, curve, first, last, result, budget);
+    } else if (const auto ellipse = occ::down_cast<Geom2d_Ellipse>(curve); !ellipse.IsNull()) {
+        if (edge.Orientation() == TopAbs_REVERSED) std::swap(first, last);
+        projected_curve_detail::append_ellipse(ellipse, first, last,
+            [](const gp_Pnt2d& point) { return Vec2{point.X(), point.Y()}; }, result, budget);
+    } else if (const auto spline = occ::down_cast<Geom2d_BSplineCurve>(curve); !spline.IsNull()) {
+        if (edge.Orientation() == TopAbs_REVERSED) std::swap(first, last);
+        projected_curve_detail::append_bspline<Geom2dConvert_BSplineCurveToBezierCurve>(
+            spline, first, last,
+            [](const gp_Pnt2d& point) { return Vec2{point.X(), point.Y()}; }, result, budget);
     } else {
         projection_error("Building view projection contains an unsupported projected curve");
     }
 }
 
-Boundary project_hlr(const TopoDS_Shape& shape, const gp_Ax2& axes) {
+Boundary project_hlr(const TopoDS_Shape& shape, const gp_Ax2& axes,
+                     projected_curve_detail::Budget& budget) {
     const occ::handle<HLRBRep_Algo> algorithm = new HLRBRep_Algo();
     algorithm->Projector(HLRAlgo_Projector(axes));
     algorithm->Add(shape);
     algorithm->Update();
     algorithm->Hide();
+    projected_curve_detail::require_bounded_hlr_curves(algorithm);
 
     HLRBRep_HLRToShape extractor(algorithm);
     TopoDS_Compound visible;
@@ -232,7 +255,7 @@ Boundary project_hlr(const TopoDS_Shape& shape, const gp_Ax2& axes) {
 
     Boundary result;
     for (TopExp_Explorer explorer(visible, TopAbs_EDGE); explorer.More(); explorer.Next()) {
-        append_hlr_edge(TopoDS::Edge(explorer.Current()), result);
+        append_hlr_edge(TopoDS::Edge(explorer.Current()), result, budget);
     }
     std::sort(result.begin(), result.end(), [](const Segment& left, const Segment& right) {
         if (left.start.x != right.start.x) return left.start.x < right.start.x;
@@ -250,9 +273,21 @@ Vec2 map_point(const gp_Pnt& point, const FrameBasis& frame) {
     return {offset.Dot(frame.horizontal), offset.Dot(frame.vertical)};
 }
 
+Vec2 map_derived_point(const gp_Pnt& point, const FrameBasis& frame) {
+    // Bound world inputs as well as output so subtraction/dot products cannot
+    // hide extreme coordinates behind a small projected value.
+    for (const auto value : {point.X(), point.Y(), point.Z(),
+                             frame.origin.X(), frame.origin.Y(), frame.origin.Z()}) {
+        if (!std::isfinite(value) ||
+            std::abs(value) > projected_curve_detail::maximum_coordinate_metres)
+            projection_error("Derived section coordinates exceed the one-million-metre range");
+    }
+    return map_point(point, frame);
+}
+
 void append_section_circle(const TopoDS_Edge& edge, const occ::handle<Geom_Curve>& curve,
                            double first, double last, const FrameBasis& frame,
-                           Boundary& result) {
+                           Boundary& result, projected_curve_detail::Budget& budget) {
     if (edge.Orientation() == TopAbs_REVERSED) std::swap(first, last);
     const auto circle = occ::down_cast<Geom_Circle>(curve);
     if (circle.IsNull() || !std::isfinite(first) || !std::isfinite(last) ||
@@ -277,12 +312,13 @@ void append_section_circle(const TopoDS_Edge& edge, const occ::handle<Geom_Curve
         const double start = first + parameter_step * static_cast<double>(index);
         const double end = first + parameter_step * static_cast<double>(index + 1);
         append_segment(result, map_point(circle->Value(start), frame),
-                       map_point(circle->Value(end), frame), sweep_step, "section circle");
+                       map_point(circle->Value(end), frame), sweep_step, "section circle", budget);
     }
 }
 
 void append_section_edge(const TopoDS_Edge& edge, const FrameBasis& frame,
-                         Boundary& result) {
+                         Boundary& result, projected_curve_detail::Budget& budget) {
+    budget.edge();
     double first = 0.0;
     double last = 0.0;
     auto curve = BRep_Tool::Curve(edge, first, last);
@@ -291,16 +327,27 @@ void append_section_edge(const TopoDS_Edge& edge, const FrameBasis& frame,
     if (const auto line = occ::down_cast<Geom_Line>(curve); !line.IsNull()) {
         if (edge.Orientation() == TopAbs_REVERSED) std::swap(first, last);
         append_segment(result, map_point(line->Value(first), frame),
-                       map_point(line->Value(last), frame), 0.0, "section line");
+                       map_point(line->Value(last), frame), 0.0, "section line", budget);
     } else if (!occ::down_cast<Geom_Circle>(curve).IsNull()) {
-        append_section_circle(edge, curve, first, last, frame, result);
+        append_section_circle(edge, curve, first, last, frame, result, budget);
+    } else if (const auto ellipse = occ::down_cast<Geom_Ellipse>(curve); !ellipse.IsNull()) {
+        if (edge.Orientation() == TopAbs_REVERSED) std::swap(first, last);
+        projected_curve_detail::append_ellipse(ellipse, first, last,
+            [&](const gp_Pnt& point) { return map_derived_point(point, frame); }, result, budget);
+    } else if (const auto spline = occ::down_cast<Geom_BSplineCurve>(curve); !spline.IsNull()) {
+        if (edge.Orientation() == TopAbs_REVERSED) std::swap(first, last);
+        // A general native affinity retains the exact conic as a rational
+        // spline. Approximate only the derived section, never measurement data.
+        projected_curve_detail::append_bspline<GeomConvert_BSplineCurveToBezierCurve>(
+            spline, first, last,
+            [&](const gp_Pnt& point) { return map_derived_point(point, frame); }, result, budget);
     } else {
         projection_error("Building section contains an unsupported intersection curve");
     }
 }
 
 Boundary project_section(const TopoDS_Shape& shape, const FrameBasis& frame,
-                         bool allow_miss = false) {
+                         projected_curve_detail::Budget& budget, bool allow_miss = false) {
     const gp_Pln plane(frame.origin, gp_Dir(frame.normal));
     BRepAlgoAPI_Section section(shape, plane, true);
     if (!section.IsDone() || section.Shape().IsNull()) {
@@ -308,7 +355,7 @@ Boundary project_section(const TopoDS_Shape& shape, const FrameBasis& frame,
     }
     Boundary result;
     for (TopExp_Explorer explorer(section.Shape(), TopAbs_EDGE); explorer.More(); explorer.Next()) {
-        append_section_edge(TopoDS::Edge(explorer.Current()), frame, result);
+        append_section_edge(TopoDS::Edge(explorer.Current()), frame, result, budget);
     }
     std::sort(result.begin(), result.end(), [](const Segment& left, const Segment& right) {
         if (left.start.x != right.start.x) return left.start.x < right.start.x;
@@ -319,6 +366,16 @@ Boundary project_section(const TopoDS_Shape& shape, const FrameBasis& frame,
     });
     if (result.empty() && !allow_miss) projection_error("Building section plane does not intersect the solid");
     return result;
+}
+
+Boundary project_shape(const TopoDS_Shape& shape, BuildingViewKind kind,
+                        const FrameBasis& frame, projected_curve_detail::Budget& budget) {
+    if (shape.IsNull()) projection_error("Building view received a null solid");
+    if (kind == BuildingViewKind::section) return project_section(shape, frame, budget);
+    if (kind != BuildingViewKind::plan && kind != BuildingViewKind::elevation)
+        projection_error("Unknown building view kind");
+    const gp_Ax2 axes(frame.origin, gp_Dir(frame.normal), gp_Dir(frame.horizontal));
+    return project_hlr(shape, axes, budget);
 }
 
 struct DepthBounds {
@@ -564,14 +621,8 @@ Boundary project_shape_view(const TopoDS_Shape& shape, BuildingViewKind kind,
                             const BuildingViewFrame& frame) {
     try {
         const auto frame_basis = basis(frame);
-        if (shape.IsNull()) projection_error("Building view received a null solid");
-        if (kind == BuildingViewKind::section) return project_section(shape, frame_basis);
-        if (kind != BuildingViewKind::plan && kind != BuildingViewKind::elevation) {
-            projection_error("Unknown building view kind");
-        }
-        const gp_Ax2 axes(frame_basis.origin, gp_Dir(frame_basis.normal),
-                          gp_Dir(frame_basis.horizontal));
-        return project_hlr(shape, axes);
+        projected_curve_detail::Budget budget;
+        return project_shape(shape, kind, frame_basis, budget);
     } catch (const std::invalid_argument&) {
         throw;
     } catch (const Standard_Failure& error) {
@@ -596,13 +647,15 @@ AssemblyViewProjection project_assembly_view(const AssemblyExpansion& expansion,
             projection_error("Assembly view requires at least one actual profile");
         const auto geometry = make_assembly_geometry(expansion);
         AssemblyViewProjection result;
-        result.boundary = project_shape_view(geometry.shape, kind, frame);
+        // One budget covers both aggregate output and all per-profile views.
+        projected_curve_detail::Budget budget;
+        result.boundary = project_shape(geometry.shape, kind, frame_basis, budget);
         result.profiles.reserve(geometry.solids.size());
         for (const auto& solid : geometry.solids) {
             const auto& source = solid.source;
             auto edges = kind == BuildingViewKind::section
-                ? project_section(solid.shape, frame_basis, true)
-                : project_shape_view(solid.shape, kind, frame);
+                ? project_section(solid.shape, frame_basis, budget, true)
+                : project_shape(solid.shape, kind, frame_basis, budget);
             result.profiles.push_back({source.part_path, source.type_id,
                 source.profile.id, source.material_id, std::move(edges)});
         }

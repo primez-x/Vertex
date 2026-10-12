@@ -180,6 +180,9 @@ Json optional(auto value) { return value ? Json(*value) : Json(nullptr); }
 bool has_identified_profiles(const std::vector<AssemblyProfile>& profiles) {
     return std::any_of(profiles.begin(), profiles.end(), [](const auto& profile) { return profile.topology.has_value(); });
 }
+bool has_mapped_profiles(const std::vector<AssemblyProfile>& profiles) {
+    return std::any_of(profiles.begin(), profiles.end(), [](const auto& profile) { return profile.planar_affine.has_value(); });
+}
 bool topology_preserving_geometry(const Intent& intent) {
     return !intent.initialize_profile_topology && !intent.review_profile_topology &&
         intent.profile_geometry.operation == Operation::set && intent.profile_geometry.value &&
@@ -241,6 +244,11 @@ void preflight_intent(const Intent& intent, Budget& budget) {
             if (profile.material_slot) budget.quoted(*profile.material_slot);
             if (8 > 100000 - budget.nodes) reject("typed profile complexity budget exceeded");
             budget.nodes += 8;
+            if (profile.planar_affine) {
+                budget.add(512);
+                if (16 > 100000 - budget.nodes) reject("typed profile map complexity budget exceeded");
+                budget.nodes += 16;
+            }
             boundary(profile.outer);
             for (const auto& hole : profile.holes) {
                 if (++budget.nodes > 100000) reject("typed profile complexity budget exceeded");
@@ -348,7 +356,8 @@ Intent decode_intent(const Json& value) {
             // The shared profile codec admits both dialects. Historical intent
             // authority remains anonymous regardless of that decoder's growth.
             if (!topology && !review && patch.at("value").is_array()) for (const auto& profile : patch.at("value"))
-                if (profile.is_object() && (profile.contains("topology") || profile.contains("version")))
+                if (profile.is_object() && (profile.contains("topology") || profile.contains("version") ||
+                    profile.contains("profile_version") || profile.contains("planar_affine")))
                     reject("v2 profile Set requires anonymous historical geometry");
             result.profile_geometry.value = decode_assembly_profiles(patch.at("value"));
             if (topology && !has_identified_profiles(*result.profile_geometry.value))
@@ -454,9 +463,10 @@ void require_preserved_profile_topology(const std::vector<AssemblyProfile>& sour
         const auto found = std::find_if(proposed.begin(), proposed.end(),
             [&](const auto& row) { return row.id == profile.id; });
         if (found == proposed.end() || found->topology != profile.topology ||
+            found->planar_affine != profile.planar_affine ||
             !same_boundary(found->outer, profile.outer) || found->holes.size() != profile.holes.size() ||
             !std::equal(found->holes.begin(), found->holes.end(), profile.holes.begin(), same_boundary))
-            reject("topology-preserving Set changed source identity, rings or edges; reviewed mapping is required");
+            reject("topology-preserving Set changed source identity, map, rings or edges; reviewed mapping is required");
     }
 }
 void require_initial_profile_topology(const std::vector<AssemblyProfile>& source,
@@ -467,6 +477,7 @@ void require_initial_profile_topology(const std::vector<AssemblyProfile>& source
         const auto found = std::find_if(proposed.begin(), proposed.end(),
             [&](const auto& row) { return row.id == profile.id; });
         if (found == proposed.end() || !same_boundary(found->outer, profile.outer) ||
+            found->planar_affine != profile.planar_affine ||
             found->holes.size() != profile.holes.size() ||
             !std::equal(found->holes.begin(), found->holes.end(), profile.holes.begin(), same_boundary) ||
             found->elevation_m != profile.elevation_m || found->height_m != profile.height_m ||
@@ -515,7 +526,8 @@ void require_reviewed_profile_topology(const std::vector<AssemblyProfile>& sourc
     for (const auto& next : proposed) {
         const auto old = std::find_if(source.begin(), source.end(),
             [&](const auto& profile) { return profile.id == next.id; });
-        if (old != source.end() && same_boundary(old->outer, next.outer) && old->holes.size() == next.holes.size() &&
+        if (old != source.end() && old->planar_affine == next.planar_affine &&
+            same_boundary(old->outer, next.outer) && old->holes.size() == next.holes.size() &&
             std::equal(old->holes.begin(), old->holes.end(), next.holes.begin(), same_boundary)) {
             // A mixed source can retain anonymous rows, but review is not an
             // alternative route for assigning identity to unchanged geometry.
@@ -563,14 +575,15 @@ void change_maps(auto& source, const AssemblyExpandedNode& node, const AssemblyT
         !(geometry.operation == Operation::clear && has_identified_profiles(type.profiles)))
         reject("reviewed geometry requires actual identified own-source profiles");
     if (!intent.review_profile_topology && geometry.operation == Operation::clear &&
-        (has_identified_profiles(resolved) || (source.profile_overrides && has_identified_profiles(type.profiles))))
-        reject("clearing identified source profiles requires reviewed identity mapping/removal");
+        (has_identified_profiles(resolved) || has_mapped_profiles(resolved) || (source.profile_overrides &&
+            (has_identified_profiles(type.profiles) || has_mapped_profiles(type.profiles)))))
+        reject("clearing identified or mapped source profiles requires reviewed identity mapping/removal");
     if (geometry.operation == Operation::set) {
         if (intent.review_profile_topology) require_reviewed_profile_topology(resolved, *geometry.value, type.profiles);
         else if (intent.initialize_profile_topology) require_initial_profile_topology(resolved, *geometry.value, type.profiles);
         else if (topology_preserving_geometry(intent)) require_preserved_profile_topology(resolved, *geometry.value);
-        else if (has_identified_profiles(resolved))
-            reject("historical profile Set cannot redraw identified source profiles");
+        else if (has_identified_profiles(resolved) || has_mapped_profiles(resolved))
+            reject("historical profile Set cannot redraw identified or mapped source profiles");
     }
     change_overrides(source.property_overrides, node.properties, type.properties, intent.properties,
         [](const auto&, const auto&) {});
@@ -708,8 +721,28 @@ void patch_maps(Json& raw, const auto& before, const auto& after, const Json* in
                 if (old->second->topology == next.topology && next.topology) {
                     // Scalar changes never regenerate the authored topology
                     // representation or widen/downgrade its profile envelope.
-                    profile["version"] = retained.at("version");
+                    if (profile.contains("version") && retained.contains("version"))
+                        profile["version"] = retained.at("version");
                     profile["topology"] = retained.at("topology");
+                }
+                if (old->second->planar_affine && next.planar_affine) {
+                    profile["profile_version"] = retained.at("profile_version");
+                    auto& affine=profile.at("planar_affine");
+                    const auto& saved_affine=retained.at("planar_affine");
+                    if (old->second->planar_affine==next.planar_affine) affine=saved_affine;
+                    else {
+                        affine["version"]=saved_affine.at("version");
+                        const auto& before=*old->second->planar_affine;
+                        const auto& after=*next.planar_affine;
+                        if (before.source_origin.x==after.source_origin.x) affine["source_origin_m"][0]=saved_affine.at("source_origin_m")[0];
+                        if (before.source_origin.y==after.source_origin.y) affine["source_origin_m"][1]=saved_affine.at("source_origin_m")[1];
+                        if (before.target_origin.x==after.target_origin.x) affine["target_origin_m"][0]=saved_affine.at("target_origin_m")[0];
+                        if (before.target_origin.y==after.target_origin.y) affine["target_origin_m"][1]=saved_affine.at("target_origin_m")[1];
+                        const double before_matrix[]{before.xx,before.xy,before.yx,before.yy};
+                        const double after_matrix[]{after.xx,after.xy,after.yx,after.yy};
+                        for (std::size_t i=0;i<4;++i)
+                            if (before_matrix[i]==after_matrix[i]) affine["matrix"][i]=saved_affine.at("matrix")[i];
+                    }
                 }
             }
             if (reviewed_profiles || has_identified_profiles(*after.profile_overrides)) {
@@ -835,7 +868,7 @@ void patch_instance(Json& raw, const AssemblyInstance& before, const AssemblyIns
 }
 bool needs_embedded_promotion(const Json& model, const Json& row) {
     const auto schema = model.at("schema").get<std::string>();
-    if (schema == "sketch.assemblies.v7" || schema == "sketch.assemblies.v8") return false;
+    if (schema == "sketch.assemblies.v7" || schema == "sketch.assemblies.v8" || schema == "sketch.assemblies.v9") return false;
     const bool nested = schema == "sketch.assemblies.v4" || schema == "sketch.assemblies.v5" || schema == "sketch.assemblies.v6";
     if (!nested && (row.contains("root_transform") || row.contains("nested_overrides"))) return true;
     const auto vertical = [](const Json& pose) { return pose.is_object() && pose.contains("vertical_scale"); };
@@ -856,12 +889,28 @@ bool has_profile_overrides(const Json& row) {
         std::any_of(row.at("nested_overrides").begin(), row.at("nested_overrides").end(),
             [](const Json& path) { return path.contains("profile_overrides"); }));
 }
+bool has_mapped_profile_overrides(const Json& row) {
+    const auto mapped = [](const Json& profiles) {
+        return std::any_of(profiles.begin(), profiles.end(), [](const Json& profile) {
+            return profile.contains("planar_affine");
+        });
+    };
+    return (row.contains("profile_overrides") && mapped(row.at("profile_overrides"))) ||
+        (row.contains("nested_overrides") && std::any_of(row.at("nested_overrides").begin(),
+            row.at("nested_overrides").end(), [&](const Json& path) {
+                return path.contains("profile_overrides") && mapped(path.at("profile_overrides"));
+            }));
+}
 void promote_embedded(Json& model, const Json& row) {
-    if (has_profile_overrides(row)) model["schema"] = "sketch.assemblies.v8";
+    if (model.at("schema") == "sketch.assemblies.v9") return;
+    if (has_mapped_profile_overrides(row)) model["schema"] = "sketch.assemblies.v9";
+    else if (has_profile_overrides(row)) model["schema"] = "sketch.assemblies.v8";
     else if (needs_embedded_promotion(model, row)) model["schema"] = "sketch.assemblies.v7";
 }
 void promote_independent(Json& raw) {
-    if (has_profile_overrides(raw)) raw["schema"] = "sketch.assembly-instance.v3";
+    if (raw.at("schema") == "sketch.assembly-instance.v4") return;
+    if (has_mapped_profile_overrides(raw)) raw["schema"] = "sketch.assembly-instance.v4";
+    else if (has_profile_overrides(raw)) raw["schema"] = "sketch.assembly-instance.v3";
     else if (raw.at("schema") != "sketch.assembly-instance.v3") {
         const auto vertical = [](const Json& pose) { return pose.is_object() && pose.contains("vertical_scale"); };
         if (vertical(raw.at("root_transform")) || std::any_of(raw.at("nested_overrides").begin(),
@@ -1036,7 +1085,7 @@ struct PropertyEditSourceInspection {
         if (target.document_entity_id) {
             const auto found = original.find(*target.document_entity_id);
             if (found == original.end() || found->second.type != "assembly_instance") reject("actual independent root is missing");
-            const auto value = decode_document_assembly_instance(found->second);
+            const auto value = decode_document_assembly_instance(found->second, before_budget);
             if (value.assembly_catalog_id != target.catalog_id || value.instance.id != target.instance_id)
                 reject("qualified independent root does not match actual source identity");
             instance = value.instance;
@@ -1314,9 +1363,9 @@ const Json& actual_instance_row(const AssemblyDocumentEntities& actual, const Ta
     return *row;
 }
 AssemblyInstance actual_carried_instance(const AssemblyDocumentEntities& actual, const Target& target,
-    const AssemblyModel& model) {
+    const AssemblyModel& model, AssemblyExpansionBudget& budget) {
     if (target.document_entity_id) {
-        const auto value = decode_document_assembly_instance(actual.at(*target.document_entity_id));
+        const auto value = decode_document_assembly_instance(actual.at(*target.document_entity_id), budget);
         if (value.assembly_catalog_id != target.catalog_id || value.instance.id != target.instance_id)
             reject("carried qualified owner does not match actual catalog and row");
         return value.instance;
@@ -1340,7 +1389,7 @@ void require_carry_catalog(const Entity& before, const Entity& carried,
     // Decoding separately admits each actual supported dialect. A carry may
     // retain its dialect or promote it; it may never silently downgrade it.
     const auto schema_rank = [](const Json& schema) {
-        for (int version = 1; version <= 8; ++version)
+        for (int version = 1; version <= 9; ++version)
             if (schema == "sketch.assemblies.v" + std::to_string(version)) return version;
         reject("unsupported carried catalog dialect");
     };
@@ -1388,7 +1437,7 @@ void require_carry_instance(const AssemblyDocumentEntities& original, const Targ
     raw_after["id"] = raw_before.at("id");
     if (raw_before.contains("schema")) {
         const auto rank = [](const Json& schema) {
-            for (int version = 1; version <= 3; ++version)
+            for (int version = 1; version <= 4; ++version)
                 if (schema == "sketch.assembly-instance.v" + std::to_string(version)) return version;
             reject("unsupported carried independent dialect");
         };
@@ -1470,7 +1519,7 @@ AssemblyDocumentEntities detail::calculate_carried_assembly_instance_property_en
         if (!carried_models.contains(destination.catalog_id)) carried_models.emplace(destination.catalog_id,
             AssemblyModel::from_json(catalog->second.properties.at("model")));
         const auto& model = carried_models.at(destination.catalog_id);
-        const auto carried = actual_carried_instance(derived_carried, destination, model);
+        const auto carried = actual_carried_instance(derived_carried, destination, model, carried_before_budget);
         if (checked_catalogs.emplace(root.target.catalog_id, destination.catalog_id).second) {
             std::map<std::string, std::string, std::less<>> instance_mapping;
             std::set<std::string, std::less<>> mapped;
@@ -1516,7 +1565,7 @@ AssemblyDocumentEntities detail::calculate_carried_assembly_instance_property_en
         if (!final_models.contains(destination.catalog_id)) final_models.emplace(destination.catalog_id,
             AssemblyModel::from_json(result.at(destination.catalog_id).properties.at("model")));
         const auto& model = final_models.at(destination.catalog_id);
-        auto actual = actual_carried_instance(result, destination, model);
+        auto actual = actual_carried_instance(result, destination, model, final_budget);
         auto intended = root.changed;
         const auto sort_paths = [](auto& instance) {
             std::sort(instance.nested_overrides.begin(), instance.nested_overrides.end(),
@@ -1716,7 +1765,7 @@ PhaseAssemblyInstancePropertyEditResult replay_phase_assembly_instance_property_
             AssemblyModel::from_json(result.entities.at(destination.catalog_id).properties.at("model")));
         const auto& model = final_models.at(destination.catalog_id);
         AssemblyInstance actual;
-        if (destination.document_entity_id) actual = decode_document_assembly_instance(result.entities.at(*destination.document_entity_id)).instance;
+        if (destination.document_entity_id) actual = decode_document_assembly_instance(result.entities.at(*destination.document_entity_id), final_budget).instance;
         else {
             const auto row = std::find_if(model.instances().begin(), model.instances().end(),
                 [&](const auto& value) { return value.id == destination.instance_id; });
@@ -1826,7 +1875,7 @@ AssemblyDocumentEntities replay_assembly_instance_property_entities(const Assemb
         if (!final_models.contains(target.catalog_id)) final_models.emplace(target.catalog_id,
             AssemblyModel::from_json(result.at(target.catalog_id).properties.at("model")));
         const auto& model = final_models.at(target.catalog_id);
-        if (target.document_entity_id) actual = decode_document_assembly_instance(result.at(*target.document_entity_id)).instance;
+        if (target.document_entity_id) actual = decode_document_assembly_instance(result.at(*target.document_entity_id), final_budget).instance;
         else {
             const auto found = std::find_if(model.instances().begin(), model.instances().end(),
                 [&](const auto& value) { return value.id == target.instance_id; });

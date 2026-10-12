@@ -64,9 +64,16 @@ was added: the implementation reuses the existing pinned Boost Multiprecision.
    with actual-source, viewport, selection and recovery fences. The complete
    path, not a mathematical helper alone, fulfils the canvas requirement.
 
-The initial foundation does not attach a persisted map to profiles. This avoids
-allowing existing readers, dimensions or exports to silently ignore it while
-the consumer integration is unfinished. No side-grip completion is claimed.
+The source continuation adds mapped-profile persistence, reader255, effective
+model quantities, exact dimension descriptors, native geometry/cache, projected
+curve support, canvas/editor presentation and explicit exchange fidelity. Saved
+mapped carriers survive phase/clipboard/host operations. Numeric Properties
+resizing composes maps for identified curved profiles through fresh topology
+and reviewed dimension dispositions. Anonymous geometry uses the existing
+initial edge-identity step before that reviewed edit. Compilation and runtime
+remain unverified. Whole-component nested deformation and canvas side handles
+still require their complete captured authoring/preview path; neither is claimed
+complete by these consumer changes.
 
 ## Mixed selections
 

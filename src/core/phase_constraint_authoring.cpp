@@ -782,6 +782,8 @@ Entity merge_source_row_container(const Entity& source,const std::vector<const E
 // Hosted transformation codecs may promote a legacy whole-catalog dialect.
 // Omit only the defaults that promotion adds, then retain actual raw rows under
 // v7. Definitions, identity namespaces and every other envelope field are exact.
+// Current v8/v9 carriers keep their actual dialect and profile rows verbatim;
+// historical promotion grants no authority to create mapped geometry.
 Entity merge_hosted_instance_placements(const Entity& source,const std::vector<const Entity*>& candidates,
     const std::set<std::string,std::less<>>& permitted_retirements={}) {
     const auto& original=source.properties.at("model");
@@ -2305,6 +2307,7 @@ Entity merge_mixed_edit_instance_rows(const Entity& source,const std::vector<con
     Json suffix=Json::array();
     bool promoted=false;
     bool profile_dialect=false;
+    bool mapped_dialect=false;
     for (const auto* candidate:candidates) {
         const auto& model=candidate->properties.at("model");
         (void)AssemblyModel::from_json(model);
@@ -2321,11 +2324,15 @@ Entity merge_mixed_edit_instance_rows(const Entity& source,const std::vector<con
                 !((before=="sketch.assemblies.v3" || before=="sketch.assemblies.v4" ||
                     before=="sketch.assemblies.v5" || before=="sketch.assemblies.v6" ||
                     before=="sketch.assemblies.v7") && after=="sketch.assemblies.v8") &&
+                !((before=="sketch.assemblies.v3" || before=="sketch.assemblies.v4" ||
+                    before=="sketch.assemblies.v5" || before=="sketch.assemblies.v6" ||
+                    before=="sketch.assemblies.v7" || before=="sketch.assemblies.v8") && after=="sketch.assemblies.v9") &&
                 !(allow_legacy_assembly_promotion && (before=="sketch.assemblies.v1" || before=="sketch.assemblies.v2") &&
-                    (after=="sketch.assemblies.v7" || after=="sketch.assemblies.v8")))
+                    (after=="sketch.assemblies.v7" || after=="sketch.assemblies.v8" || after=="sketch.assemblies.v9")))
                 invalid("Mixed edit catalog has an unsupported dialect change");
             promoted=true;
             profile_dialect=profile_dialect || after=="sketch.assemblies.v8";
+            mapped_dialect=mapped_dialect || after=="sketch.assemblies.v9";
             normalized.at("schema")=original.at("schema");
             auto& types=normalized.at("types");
             const auto& source_types=original.at("types");
@@ -2376,7 +2383,7 @@ Entity merge_mixed_edit_instance_rows(const Entity& source,const std::vector<con
     auto result=source;
     result.properties.at("model").at("instances")=std::move(rows);
     if (promoted && (!changed.empty() || !suffix.empty())) result.properties.at("model").at("schema")=
-        profile_dialect ? "sketch.assemblies.v8" : "sketch.assemblies.v7";
+        mapped_dialect ? "sketch.assemblies.v9" : profile_dialect ? "sketch.assemblies.v8" : "sketch.assemblies.v7";
     (void)AssemblyModel::from_json(result.properties.at("model"));
     return result;
 }
@@ -3118,7 +3125,7 @@ Entities compose_assembly_property_selection_edit_candidates(const DocumentSnaps
         const auto& before=entity.properties.at("model").at("schema");
         const auto& after=replayed.preview_entities().at(id).properties.at("model").at("schema");
         if ((before=="sketch.assemblies.v1" || before=="sketch.assemblies.v2") &&
-            (after=="sketch.assemblies.v7" || after=="sketch.assemblies.v8"))
+            (after=="sketch.assemblies.v7" || after=="sketch.assemblies.v8" || after=="sketch.assemblies.v9"))
             promoted.insert(id);
     }
     auto leaves=ordinary;
@@ -3141,7 +3148,8 @@ Entities compose_phase_assembly_property_selection_edit_candidates(const Documen
         const auto& before=entity.properties.at("model");
         const auto& after=admitted.at(id).properties.at("model");
         if ((before.at("schema")=="sketch.assemblies.v1" || before.at("schema")=="sketch.assemblies.v2") &&
-            (after.at("schema")=="sketch.assemblies.v7" || after.at("schema")=="sketch.assemblies.v8")) promoted.insert(id);
+            (after.at("schema")=="sketch.assemblies.v7" || after.at("schema")=="sketch.assemblies.v8" ||
+                after.at("schema")=="sketch.assemblies.v9")) promoted.insert(id);
         std::map<std::string,const Json*,std::less<>> final_rows;
         for (const auto& row:after.at("instances"))
             if (!final_rows.emplace(row.at("id").get<std::string>(),&row).second)
@@ -3235,7 +3243,8 @@ AssemblyPropertyRowAdmission component_property_row_admission(const Entities& or
         const auto& before=entity.properties.at("model");
         const auto& after=admitted.at(id).properties.at("model");
         if ((before.at("schema")=="sketch.assemblies.v1" || before.at("schema")=="sketch.assemblies.v2") &&
-            (after.at("schema")=="sketch.assemblies.v7" || after.at("schema")=="sketch.assemblies.v8")) promoted.insert(id);
+            (after.at("schema")=="sketch.assemblies.v7" || after.at("schema")=="sketch.assemblies.v8" ||
+                after.at("schema")=="sketch.assemblies.v9")) promoted.insert(id);
         std::map<std::string,const Json*,std::less<>> rows;
         for (const auto& row:after.at("instances"))
             if (!rows.emplace(row.at("id").get<std::string>(),&row).second)
@@ -3902,7 +3911,7 @@ Entities compose_phase_property_selection_edit_candidates(const DocumentSnapshot
             const auto& before=entity.properties.at("model").at("schema");
             const auto& after=assembly_replay->preview_entities().at(id).properties.at("model").at("schema");
             if ((before=="sketch.assemblies.v1" || before=="sketch.assemblies.v2") &&
-                (after=="sketch.assemblies.v7" || after=="sketch.assemblies.v8"))
+                (after=="sketch.assemblies.v7" || after=="sketch.assemblies.v8" || after=="sketch.assemblies.v9"))
                 promoted.insert(id);
         }
     }

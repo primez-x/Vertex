@@ -1,5 +1,6 @@
 #include "sketch/assembly_geometry.hpp"
 #include "sketch/architecture.hpp"
+#include "sketch/assembly_profile_geometry.hpp"
 
 #include <BRepBuilderAPI_Transform.hxx>
 #include <BRepBuilderAPI_GTransform.hxx>
@@ -20,6 +21,84 @@
 #include <string>
 
 namespace sketch {
+namespace {
+
+TopoDS_Shape make_assembly_profile_shape(const AssemblyProfile& profile) {
+    const auto source_shape = [&](const Boundary& outer, const std::vector<Boundary>& holes) {
+        return make_slab(Slab{profile.id, outer, holes, profile.height_m, profile.elevation_m});
+    };
+    if (!profile.planar_affine) return source_shape(profile.outer, profile.holes);
+    const auto& map = *profile.planar_affine;
+    validate_assembly_profile_affine(map);
+    if (map.xx == 1 && map.xy == 0 && map.yx == 0 && map.yy == 1 &&
+        map.source_origin.x == map.target_origin.x && map.source_origin.y == map.target_origin.y)
+        return source_shape(profile.outer, profile.holes);
+    if (profile.outer.empty()) throw std::invalid_argument("Mapped assembly profile has no outer ring");
+
+    // Construct near an actual source vertex, not at the authored map origin.
+    // Computing target_origin - M*source_origin can overflow or discard the
+    // small residual even when every effective profile point is representable.
+    const auto anchor = profile.outer.front().start;
+    const auto mapped_anchor = assembly_profile_affine_point(anchor, map);
+    const AssemblyProfilePlanarAffine shift{anchor, {0, 0}};
+    const gp_Mat linear(map.xx, map.xy, 0, map.yx, map.yy, 0, 0, 0, 1);
+    const gp_GTrsf affine(linear, gp_XYZ(mapped_anchor.x, mapped_anchor.y, 0));
+    const auto native_determinant = linear.Determinant();
+    if (!std::isfinite(native_determinant) || native_determinant <= 0 || affine.IsSingular())
+        throw std::invalid_argument("Assembly profile map is not representable by the native kernel");
+    const auto inverse = linear.Inverted();
+    for (int row = 1; row <= 3; ++row)
+        for (int column = 1; column <= 3; ++column)
+            if (!std::isfinite(inverse.Value(row, column)))
+                throw std::invalid_argument("Assembly profile native inverse is not finite");
+    const auto native_point = [&](Vec2 point) {
+        gp_XYZ coordinates(point.x, point.y, 0);
+        affine.Transforms(coordinates);
+        if (!std::isfinite(coordinates.X()) || !std::isfinite(coordinates.Y()))
+            throw std::invalid_argument("Mapped assembly native profile coordinates are not finite");
+        return Vec2{coordinates.X(), coordinates.Y()};
+    };
+    const auto shift_ring = [&](const Boundary& ring) {
+        // Check the exact effective curve range independently of native kernel
+        // arithmetic; a finite endpoint alone does not bound an elliptical arc.
+        (void)assembly_profile_boundary_bounds(ring, map);
+        auto shifted = ring;
+        for (auto& segment : shifted) {
+            const auto start = assembly_profile_affine_point(segment.start, map);
+            const auto end = assembly_profile_affine_point(segment.end, map);
+            if (std::hypot(end.x - start.x, end.y - start.y) <= default_geometry_tolerance_metres)
+                throw std::invalid_argument("Mapped assembly native profile edge collapses below tolerance");
+            segment.start = assembly_profile_affine_point(segment.start, shift);
+            segment.end = assembly_profile_affine_point(segment.end, shift);
+            const auto native_start = native_point(segment.start);
+            const auto native_end = native_point(segment.end);
+            const auto native_chord = std::hypot(native_end.x - native_start.x, native_end.y - native_start.y);
+            if (!std::isfinite(native_chord) || native_chord <= default_geometry_tolerance_metres)
+                throw std::invalid_argument("Mapped assembly native profile edge is not representable");
+        }
+        return shifted;
+    };
+    auto outer = shift_ring(profile.outer);
+    std::vector<Boundary> holes;
+    holes.reserve(profile.holes.size());
+    for (const auto& hole : profile.holes) holes.push_back(shift_ring(hole));
+    const auto local = source_shape(outer, holes);
+
+    // A genuine native affinity transforms the supporting curves/surfaces.
+    // Circular source arcs become their exact affine images, never new circles
+    // assembled from stretched endpoints and an unchanged sweep. Z is untouched.
+    BRepBuilderAPI_GTransform transformed(local, affine, true);
+    if (!transformed.IsDone() || transformed.Shape().IsNull() ||
+        !BRepCheck_Analyzer(transformed.Shape()).IsValid())
+        throw std::invalid_argument("Assembly profile map did not produce a valid native shape");
+    const auto result = transformed.Shape();
+    const auto volume = solid_volume(result);
+    if (!std::isfinite(volume) || volume <= 0)
+        throw std::invalid_argument("Mapped assembly native body volume must be finite and positive");
+    return result;
+}
+
+} // namespace
 
 TopoDS_Shape transform_assembly_shape(const TopoDS_Shape& source,const AssemblyTransform& placement) {
     const auto& offset=placement.translation_m;
@@ -76,8 +155,7 @@ AssemblyGeometry make_assembly_geometry(const AssemblyExpansion& expansion) {
         builder.MakeCompound(compound);
         for (const auto& source : expansion.profiles) {
             const auto& profile = source.profile;
-            const auto local = make_slab(Slab{profile.id, profile.outer, profile.holes,
-                profile.height_m, profile.elevation_m});
+            const auto local = make_assembly_profile_shape(profile);
             const auto transformed=transform_assembly_shape(local,source.transform);
             const double volume = solid_volume(transformed);
             if (!std::isfinite(volume) || volume <= 0) {

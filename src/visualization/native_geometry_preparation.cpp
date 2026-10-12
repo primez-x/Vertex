@@ -88,10 +88,17 @@ std::string assembly_geometry_content(const std::string& id, const AssemblyExpan
     for (const auto& source : expansion.profiles) {
         auto holes = nlohmann::json::array();
         for (const auto& hole : source.profile.holes) holes.push_back(assembly_boundary_content(hole));
-        profiles.push_back({{"path", source.part_path}, {"type", source.type_id},
+        auto profile = nlohmann::json{{"path", source.part_path}, {"type", source.type_id},
             {"profile", source.profile.id}, {"outer", assembly_boundary_content(source.profile.outer)},
             {"holes", std::move(holes)}, {"elevation", source.profile.elevation_m},
-            {"height", source.profile.height_m}, {"transform", encode_assembly_transform(source.transform)}});
+            {"height", source.profile.height_m}, {"transform", encode_assembly_transform(source.transform)}};
+        if (source.profile.planar_affine) {
+            const auto& map = *source.profile.planar_affine;
+            profile["planar_affine"] = {{"source_origin", {map.source_origin.x, map.source_origin.y}},
+                {"target_origin", {map.target_origin.x, map.target_origin.y}},
+                {"matrix", {map.xx, map.xy, map.yx, map.yy}}};
+        }
+        profiles.push_back(std::move(profile));
     }
     return nlohmann::json{{"entity", id}, {"profiles", std::move(profiles)}}.dump();
 }
@@ -1005,8 +1012,11 @@ std::optional<PreparedNativeGeometry> prepare_native_geometry(
         for (const auto& [id, expansion] : expansions) {
             if (cancelled && cancelled()) return std::nullopt;
             try {
-                const auto binding = decode_document_assembly_instance(entities.at(id));
-                if (!publish_assembly(id, binding.assembly_catalog_id, expansion, id)) return std::nullopt;
+                // Complete expansion above already admitted the exact independent
+                // envelope. Read its retained catalog identity without repeating
+                // mapped override validation for every published root.
+                const auto catalog_id = entities.at(id).properties.at("assembly_catalog_id").get<std::string>();
+                if (!publish_assembly(id, catalog_id, expansion, id)) return std::nullopt;
             } catch (const std::exception& error) {
                 append_unique(errors, "assembly instance '" + id + "': " + error.what());
             } catch (...) {

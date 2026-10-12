@@ -1,4 +1,38 @@
-# Vertex project formats v1 through v254
+# Vertex project formats v1 through v255
+
+Reader255/native extraction253 retains exact affine component profiles. The
+authoritative source rings still contain straight/circular segments; an optional
+profile-local map gives their effective geometry, including elliptical arcs.
+`q = target_origin_m + M * (p - source_origin_m)` uses metre origins and a
+row-major 2-by-2 matrix. Elevation and extrusion height are independent; node
+pose still owns reflection, rotation, uniform XY scale and vertical scale.
+
+The closed mapped row contains `profile_version:3`, `id`, `outer`, `holes`,
+`elevation_m`, `height_m`, `material_slot`, `topology` and `planar_affine`.
+`topology` is null or the existing topology-v1 object. `planar_affine` contains
+only `version:1`, `source_origin_m:[x,y]`, `target_origin_m:[x,y]` and
+`matrix:[xx,xy,yx,yy]`. Finite positive determinant/inverse and effective
+physical geometry admission are required. Mapped rings require exact endpoint
+connectivity; historical no-map tolerance-gap meanings are unchanged.
+
+Catalog `sketch.assemblies.v9` and independent `sketch.assembly-instance.v4`
+admit mapped profiles in definitions, root overrides and nested overrides.
+Older envelopes refuse them. Anonymous six-field and identified `version:2`
+profile rows retain their existing wire. Source-qualified retention preserves
+unchanged map number forms, ring order, unrelated rows and saved v9/v4 carriers;
+canonical encoding chooses the lowest content-supporting dialect. Changing a
+map changes authored geometry and requires the existing reviewed topology and
+dimension dispositions, even when the source endpoints remain identical.
+
+The reader floor follows mapped current/retained revision entities and profile
+arrays in retained typed authoring, including commands whose temporary mapped
+destination was elided. Recovery archives carry this same document/history
+floor. No new schema grants extra phase, host or command authority. Exact
+quantities and affine-edge dimensions are analytical; native solids, projected
+chords and IFC meshes remain derived output. DXF elliptical-edge dimensions use
+the declared analytical quantity-callout lane rather than a circular dimension.
+These source changes establish no compilation, runtime or interoperability
+acceptance.
 
 Reader254 adds explicit reviewed own-profile geometry edits under component
 intent/request5, phase authoring/request7 and mixed Properties36. The literal

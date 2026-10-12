@@ -43,6 +43,7 @@ void portable_topology_identifier(std::string_view value) {
 constexpr std::size_t profile_topology_byte_limit=1024*1024;
 constexpr std::size_t collection_topology_byte_limit=64*1024*1024;
 constexpr std::size_t catalog_topology_byte_limit=256*1024*1024;
+constexpr std::size_t mapped_profile_wire_bytes=512;
 // Upper bounds escaped JSON output, including punctuation/member names. Raw
 // strings are inspected by reference before any topology arrays are copied.
 struct ProfileTopologyAdmission {
@@ -63,12 +64,13 @@ struct ProfileTopologyAdmission {
     }
 };
 std::size_t profile_topology_bytes(const AssemblyProfile& profile) {
-    if(!profile.topology)return 0;
+    if(!profile.topology)return profile.planar_affine ? mapped_profile_wire_bytes:0;
     require(profile.outer.size()<=1024 && profile.holes.size()<=1024,
         "assembly profile topology ring budget exceeded");
     const auto& topology=*profile.topology;
     require(topology.holes.size()==profile.holes.size(),"assembly profile topology hole count mismatch");
     ProfileTopologyAdmission admission;
+    if(profile.planar_affine)admission.bytes+=mapped_profile_wire_bytes;
     std::size_t count=0;
     const auto ring=[&](const AssemblyProfileRingIdentity& identity,const Boundary& boundary) {
         require(!boundary.empty() && boundary.size()<=1024-count,"assembly profile topology segment budget exceeded");
@@ -162,12 +164,145 @@ std::size_t profile_segments(const AssemblyProfile& profile) {
     }
     return count;
 }
+constexpr std::size_t mapped_profile_work_limit=67108864;
+void validate_mapped_work_budget(const AssemblyExpansionBudget& budget) {
+    require(budget.max_mapped_profile_work<=mapped_profile_work_limit &&
+        budget.consumed_mapped_profile_work<=budget.max_mapped_profile_work,
+        "invalid assembly mapped profile work budget");
+}
+void reserve_mapped_profile_work(AssemblyExpansionBudget& budget,std::size_t segments,
+    std::size_t holes,std::size_t arcs) {
+    validate_mapped_work_budget(budget);
+    require(segments<=1024 && holes<=1024 && arcs<=segments,
+        "assembly mapped profile structural budget exceeded");
+    const auto topology=segments+holes+1;
+    // Three conservative analytical passes, matching complete-catalog raw
+    // admission. Check each factor against the remaining allowance before
+    // multiplication, including on 32-bit size_t and lowered caller limits.
+    const auto product=[&](std::initializer_list<std::size_t> factors) {
+        const auto remaining=budget.max_mapped_profile_work-budget.consumed_mapped_profile_work;
+        if(std::find(factors.begin(),factors.end(),0)!=factors.end())return;
+        std::size_t work=1;
+        for(const auto factor:factors) {
+            require(factor<=remaining/work,"assembly mapped profile analytical work budget exceeded");
+            work*=factor;
+        }
+        budget.consumed_mapped_profile_work+=work;
+    };
+    product({24,topology,topology});
+    product({900000,arcs,segments});
+}
+void reserve_mapped_profiles(const std::vector<AssemblyProfile>& profiles,AssemblyExpansionBudget& budget) {
+    validate_mapped_work_budget(budget);
+    require(profiles.size()<=4096,"assembly profile collection budget exceeded");
+    for(const auto& profile:profiles)if(profile.planar_affine) {
+        const auto segments=profile_segments(profile);
+        std::size_t arcs=0;
+        const auto count=[&](const Boundary& boundary) {
+            for(const auto& edge:boundary)if(edge.sweep_radians!=0)++arcs;
+        };
+        count(profile.outer);for(const auto& hole:profile.holes)count(hole);
+        reserve_mapped_profile_work(budget,segments,profile.holes.size(),arcs);
+    }
+}
+void reserve_instance_mapped_profiles(const AssemblyInstance& instance,AssemblyExpansionBudget& budget) {
+    require(instance.nested_overrides.size()<=4096,"assembly override budget exceeded");
+    if(instance.profile_overrides)reserve_mapped_profiles(*instance.profile_overrides,budget);
+    for(const auto& path:instance.nested_overrides)if(path.profile_overrides)
+        reserve_mapped_profiles(*path.profile_overrides,budget);
+}
+void reserve_raw_mapped_profiles(const nlohmann::json& profiles,AssemblyExpansionBudget& budget) {
+    // Full bounded structural admission precedes any boundary allocation or
+    // analytical validator. This helper never decodes profile geometry.
+    (void)preflight_assembly_profiles(profiles);
+    for(const auto& profile:profiles)if(profile.contains("planar_affine")) {
+        std::size_t segments=0,arcs=0;
+        const auto count=[&](const auto& boundary) {
+            segments+=boundary.size();
+            for(const auto& edge:boundary)if(edge.at("sweep_radians")!=0)++arcs;
+        };
+        count(profile.at("outer"));for(const auto& hole:profile.at("holes"))count(hole);
+        reserve_mapped_profile_work(budget,segments,profile.at("holes").size(),arcs);
+    }
+}
+// The entrywise L1 norm of M^-1 bounds 1/sigma_min. Round outward so validating
+// source geometry at this tolerance conservatively protects effective physical
+// features. Extreme maps without a representable outward bound fail closed;
+// the pure affine helper has a wider mathematical domain than profile admission.
+double mapped_source_tolerance(const AssemblyProfilePlanarAffine& affine,double scale=1) {
+    validate_assembly_profile_affine(affine);
+    const auto determinant=std::nextafter(assembly_profile_affine_determinant(affine),0.0);
+    require(determinant>0,"mapped assembly profile tolerance bound is unrepresentable");
+    const auto upper_inverse=[&](double coefficient) {
+        if(coefficient==0)return 0.0;
+        const auto result=std::nextafter(std::abs(coefficient)/determinant,
+            std::numeric_limits<double>::infinity());
+        require(std::isfinite(result) && result>0,"mapped assembly profile inverse tolerance bound is unrepresentable");
+        return result;
+    };
+    const auto xx=upper_inverse(affine.xx),xy=upper_inverse(affine.xy),
+        yx=upper_inverse(affine.yx),yy=upper_inverse(affine.yy);
+    const auto largest=std::max({xx,xy,yx,yy});
+    const auto infinity=std::numeric_limits<double>::infinity();
+    double norm=0;
+    for(const auto coefficient:{xx,xy,yx,yy})if(coefficient>0)
+        norm=std::nextafter(norm+std::nextafter(coefficient/largest,infinity),infinity);
+    require(std::isfinite(scale) && scale>0,"invalid mapped assembly profile physical scale");
+    const auto physical_tolerance=std::nextafter(default_geometry_tolerance_metres/scale,infinity);
+    require(std::isfinite(physical_tolerance) && physical_tolerance>0,
+        "mapped assembly profile physical tolerance is unrepresentable");
+    // Cover the two normalized-product roundings as well as the final grid
+    // rounding. This guard does not change the pure affine helper's admission.
+    norm=std::nextafter(norm*(1+8*std::numeric_limits<double>::epsilon()),infinity);
+    const auto tolerance=std::nextafter(positive_product({physical_tolerance,largest,norm}),infinity);
+    require(std::isfinite(tolerance),"mapped assembly profile source tolerance is unrepresentable");
+    return std::max(default_geometry_tolerance_metres,tolerance);
+}
+double profile_source_area(const AssemblyProfile& profile) {
+    auto area=std::abs(signed_area(profile.outer));
+    for(const auto& hole:profile.holes)area-=std::abs(signed_area(hole));
+    require(std::isfinite(area) && area>0,"assembly profile area overflow/underflow");
+    return area;
+}
+void validate_mapped_profile(const AssemblyProfile& profile,double scale=1) {
+    if(!profile.planar_affine)return;
+    const auto& affine=*profile.planar_affine;
+    const auto tolerance=mapped_source_tolerance(affine,scale);
+    require(!validate_boundary_holes(profile.outer,profile.holes,tolerance).has_value(),
+        "mapped assembly profile features fail conservative physical tolerance admission");
+    const auto ring=[&](const Boundary& boundary) {
+        // This additionally refuses historical tolerance-gapped connectivity.
+        (void)assembly_profile_closed_boundary_signed_area(boundary,affine,tolerance);
+        const auto bounds=assembly_profile_boundary_bounds(boundary,affine);
+        const auto physical_tolerance=default_geometry_tolerance_metres/scale;
+        const auto width=bounds.maximum.x-bounds.minimum.x,height=bounds.maximum.y-bounds.minimum.y;
+        require(std::isfinite(width) && std::isfinite(height) && width>physical_tolerance && height>physical_tolerance,
+            "mapped assembly profile bounds collapse below physical tolerance");
+        for(const auto& segment:boundary) {
+            const auto start=assembly_profile_affine_point(segment.start,affine);
+            const auto end=assembly_profile_affine_point(segment.end,affine);
+            const auto chord=std::hypot(end.x-start.x,end.y-start.y);
+            require(std::isfinite(chord) && chord>physical_tolerance,
+                "mapped assembly profile endpoint chord collapses below physical tolerance");
+        }
+    };
+    ring(profile.outer);for(const auto& hole:profile.holes)ring(hole);
+    const double factors[]{scale,scale};
+    require(assembly_profile_affine_scaled_area(profile_source_area(profile),affine,factors)>
+        default_geometry_tolerance_metres*default_geometry_tolerance_metres,
+        "mapped assembly profile area collapses below physical tolerance");
+}
 double profile_volume(const AssemblyProfile& profile) {
     (void)profile_segments(profile);
     require(std::isfinite(profile.elevation_m) && std::isfinite(profile.height_m) && profile.height_m>0 &&
         std::isfinite(profile.elevation_m+profile.height_m), "invalid assembly profile extrusion");
-    auto area=std::abs(signed_area(profile.outer));
-    for (const auto& hole:profile.holes) area-=std::abs(signed_area(hole));
+    const auto area=profile_source_area(profile);
+    if(profile.planar_affine) {
+        require(profile.height_m>default_geometry_tolerance_metres,
+            "mapped assembly profile extrusion collapses below physical tolerance");
+        const double factors[]{profile.height_m};
+        return assembly_profile_affine_scaled_area(area,*profile.planar_affine,factors);
+    }
     const auto volume=area*profile.height_m;
     require(std::isfinite(area) && area>0 && std::isfinite(volume) && volume>0, "assembly profile volume overflow/underflow");
     return volume;
@@ -235,8 +370,32 @@ void fields(const nlohmann::json& value, std::initializer_list<const char*> keys
     require(value.is_object() && value.size() == keys.size(), "invalid assembly JSON fields");
     for (const auto* key : keys) require(value.contains(key), "missing assembly JSON field");
 }
-void profile_fields(const nlohmann::json& value,bool identified=true) {
-    if(value.is_object() && (value.contains("version") || value.contains("topology"))) {
+AssemblyProfilePlanarAffine decode_profile_affine(const nlohmann::json& value) {
+    fields(value,{"version","source_origin_m","target_origin_m","matrix"});
+    require(value.at("version").is_number_integer() && value.at("version")==1,
+        "unsupported assembly profile affine version");
+    for(const auto* key:{"source_origin_m","target_origin_m","matrix"}) {
+        const auto& numbers=value.at(key);
+        require(numbers.is_array() && numbers.size()==(std::string_view(key)=="matrix" ? 4u:2u),
+            "invalid assembly profile affine coefficient count");
+        for(const auto& number:numbers)require(number.is_number() && std::isfinite(number.get<double>()),
+            "assembly profile affine coefficients must be finite numbers");
+    }
+    const auto& source=value.at("source_origin_m");const auto& target=value.at("target_origin_m");
+    const auto& matrix=value.at("matrix");
+    AssemblyProfilePlanarAffine result{{source[0].get<double>(),source[1].get<double>()},
+        {target[0].get<double>(),target[1].get<double>()},matrix[0].get<double>(),matrix[1].get<double>(),
+        matrix[2].get<double>(),matrix[3].get<double>()};
+    validate_assembly_profile_affine(result);return result;
+}
+void profile_fields(const nlohmann::json& value,bool identified=true,bool mapped=true) {
+    if(value.is_object() && (value.contains("profile_version") || value.contains("planar_affine"))) {
+        require(mapped,"mapped assembly profiles require a supporting schema version");
+        fields(value,{"profile_version","id","outer","holes","elevation_m","height_m","material_slot","topology","planar_affine"});
+        require(value.at("profile_version").is_number_integer() && value.at("profile_version")==3,
+            "unsupported mapped assembly profile version");
+        (void)decode_profile_affine(value.at("planar_affine"));
+    } else if(value.is_object() && (value.contains("version") || value.contains("topology"))) {
         require(identified,"identified assembly profiles require a supporting schema version");
         fields(value,{"version","id","outer","holes","elevation_m","height_m","material_slot","topology"});
         require(value.at("version").is_number_integer() && value.at("version")==2,
@@ -244,7 +403,9 @@ void profile_fields(const nlohmann::json& value,bool identified=true) {
     } else fields(value,{"id","outer","holes","elevation_m","height_m","material_slot"});
 }
 std::size_t preflight_profile_topology(const nlohmann::json& profile) {
-    if(!profile.contains("topology"))return 0;
+    const bool mapped=profile.contains("planar_affine");
+    if(!profile.contains("topology") || (profile.contains("profile_version") && profile.at("topology").is_null()))
+        return mapped ? mapped_profile_wire_bytes:0;
     const auto& topology=profile.at("topology");
     fields(topology,{"version","outer","holes"});
     require(topology.at("version").is_number_integer() && topology.at("version")==1,
@@ -252,6 +413,7 @@ std::size_t preflight_profile_topology(const nlohmann::json& profile) {
     require(topology.at("holes").is_array() && topology.at("holes").size()==profile.at("holes").size(),
         "assembly profile topology hole count mismatch");
     ProfileTopologyAdmission admission;
+    if(mapped)admission.bytes+=mapped_profile_wire_bytes;
     const auto ring=[&](const nlohmann::json& identity,const nlohmann::json& boundary) {
         fields(identity,{"ring_id","segment_ids","vertex_ids"});
         require(identity.at("segment_ids").is_array() && identity.at("vertex_ids").is_array() &&
@@ -264,6 +426,34 @@ std::size_t preflight_profile_topology(const nlohmann::json& profile) {
     ring(topology.at("outer"),profile.at("outer"));
     for(std::size_t i=0;i<topology.at("holes").size();++i)ring(topology.at("holes")[i],profile.at("holes")[i]);
     return admission.bytes;
+}
+bool profiles_are_mapped(const std::vector<AssemblyProfile>& profiles) {
+    return std::any_of(profiles.begin(),profiles.end(),[](const auto& profile){return profile.planar_affine.has_value();});
+}
+bool instance_is_mapped(const AssemblyInstance& instance) {
+    return (instance.profile_overrides && profiles_are_mapped(*instance.profile_overrides)) ||
+        std::any_of(instance.nested_overrides.begin(),instance.nested_overrides.end(),[](const auto& path){
+            return path.profile_overrides && profiles_are_mapped(*path.profile_overrides);
+        });
+}
+// Examine all raw override collections before any boundary/path allocation.
+// Standalone profile arrays own their dialect; enclosing codecs restrict it.
+void preflight_profile_dialect(const nlohmann::json& profiles,bool identified,bool mapped) {
+    require(profiles.is_array() && profiles.size()<=4096,"invalid assembly profile collection");
+    for(const auto& profile:profiles)profile_fields(profile,identified,mapped);
+}
+void preflight_instance_profile_dialect(const nlohmann::json& instance,bool geometry,bool mapped) {
+    const auto inspect=[&](const nlohmann::json& row) {
+        if(!row.contains("profile_overrides"))return;
+        require(geometry,"assembly profile overrides require a supporting schema version");
+        preflight_profile_dialect(row.at("profile_overrides"),geometry,mapped);
+    };
+    inspect(instance);
+    if(instance.contains("nested_overrides")) {
+        const auto& paths=instance.at("nested_overrides");
+        require(paths.is_array() && paths.size()<=4096,"invalid assembly override collection");
+        for(const auto& path:paths)inspect(path);
+    }
 }
 std::size_t raw_collection_topology_bytes(const nlohmann::json& profiles) {
     std::size_t result=0;
@@ -382,6 +572,15 @@ nlohmann::json encode_profile(const AssemblyProfile& profile) {
         result["version"]=2;
         result["topology"]={{"version",1},{"outer",ring(profile.topology->outer)},{"holes",std::move(identified_holes)}};
     }
+    if(profile.planar_affine) {
+        const auto& affine=*profile.planar_affine;
+        result.erase("version");result["profile_version"]=3;
+        if(!profile.topology)result["topology"]=nullptr;
+        result["planar_affine"]={{"version",1},
+            {"source_origin_m",{affine.source_origin.x,affine.source_origin.y}},
+            {"target_origin_m",{affine.target_origin.x,affine.target_origin.y}},
+            {"matrix",{affine.xx,affine.xy,affine.yx,affine.yy}}};
+    }
     return result;
 }
 AssemblyProfile decode_profile(const nlohmann::json& encoded) {
@@ -393,7 +592,7 @@ AssemblyProfile decode_profile(const nlohmann::json& encoded) {
     }
     profile.elevation_m=encoded.at("elevation_m").get<double>();profile.height_m=encoded.at("height_m").get<double>();
     if(!encoded.at("material_slot").is_null())profile.material_slot=encoded.at("material_slot").get<std::string>();
-    if(encoded.contains("topology")) {
+    if(encoded.contains("topology") && !encoded.at("topology").is_null()) {
         const auto ring=[](const nlohmann::json& identity) {
             return AssemblyProfileRingIdentity{identity.at("ring_id").get<std::string>(),
                 identity.at("segment_ids").get<std::vector<std::string>>(),identity.at("vertex_ids").get<std::vector<std::string>>()};
@@ -402,6 +601,7 @@ AssemblyProfile decode_profile(const nlohmann::json& encoded) {
         profile.topology=AssemblyProfileTopology{ring(topology.at("outer")),{}};
         for(const auto& hole:topology.at("holes"))profile.topology->holes.push_back(ring(hole));
     }
+    if(encoded.contains("planar_affine"))profile.planar_affine=decode_profile_affine(encoded.at("planar_affine"));
     return profile;
 }
 template<class T> nlohmann::json encode_overrides(const T& value) {
@@ -466,6 +666,7 @@ std::size_t preflight_assembly_profiles(const nlohmann::json& value) {
     try {
         require(value.is_array() && value.size()<=4096,"invalid assembly profile collection");
         std::size_t segments=0,topology_bytes=0;
+        AssemblyExpansionBudget work;
         std::set<std::string_view> ids;
         for(const auto& encoded:value) {
             profile_fields(encoded);
@@ -477,7 +678,7 @@ std::size_t preflight_assembly_profiles(const nlohmann::json& value) {
             require(std::isfinite(elevation) && std::isfinite(height) && height>0 && std::isfinite(elevation+height),
                 "invalid assembly profile extrusion");
             require(encoded.at("holes").is_array() && encoded.at("holes").size()<=1024,"invalid assembly profile holes");
-            std::size_t profile_count=0;
+            std::size_t profile_count=0,arcs=0;
             const auto ring=[&](const nlohmann::json& boundary) {
                 require(boundary.is_array() && !boundary.empty() && boundary.size()<=1024-profile_count,
                     "assembly profile segment budget exceeded");
@@ -493,11 +694,14 @@ std::size_t preflight_assembly_profiles(const nlohmann::json& value) {
                     }
                     require(edge.at("sweep_radians").is_number() && std::isfinite(edge.at("sweep_radians").get<double>()),
                         "invalid assembly arc sweep");
+                    if(edge.at("sweep_radians")!=0)++arcs;
                 }
             };
             ring(encoded.at("outer"));for(const auto& hole:encoded.at("holes"))ring(hole);
             require(profile_count<=262144-segments,"assembly profile collection work budget exceeded");segments+=profile_count;
             add_topology_bytes(topology_bytes,preflight_profile_topology(encoded),collection_topology_byte_limit);
+            if(encoded.contains("planar_affine"))
+                reserve_mapped_profile_work(work,profile_count,encoded.at("holes").size(),arcs);
         }
         return segments;
     } catch(const nlohmann::json::exception& error) {
@@ -509,6 +713,8 @@ void validate_assembly_profile_topology(const AssemblyProfile& profile) {
 }
 std::size_t validate_assembly_profiles(const std::vector<AssemblyProfile>& profiles) {
     require(profiles.size()<=4096,"assembly profile collection budget exceeded");
+    AssemblyExpansionBudget work;
+    reserve_mapped_profiles(profiles,work);
     std::size_t segments=0,topology_bytes=0;
     std::set<std::string_view> ids;
     for(const auto& profile:profiles) {
@@ -519,6 +725,7 @@ std::size_t validate_assembly_profiles(const std::vector<AssemblyProfile>& profi
     }
     for(const auto& profile:profiles) {
         require(!validate_boundary_holes(profile.outer,profile.holes).has_value(),"invalid assembly profile boundary/holes");
+        validate_mapped_profile(profile);
         (void)profile_volume(profile);
         if(profile.material_slot)identifier(*profile.material_slot);
     }
@@ -544,7 +751,8 @@ std::vector<AssemblyProfile> decode_assembly_profiles(const nlohmann::json& valu
 
 bool AssemblyProfile::operator==(const AssemblyProfile& other) const {
     if(id!=other.id || elevation_m!=other.elevation_m || height_m!=other.height_m ||
-        material_slot!=other.material_slot || topology!=other.topology || !boundary_equal(outer,other.outer) || holes.size()!=other.holes.size())return false;
+        material_slot!=other.material_slot || topology!=other.topology || planar_affine!=other.planar_affine ||
+        !boundary_equal(outer,other.outer) || holes.size()!=other.holes.size())return false;
     for(std::size_t i=0;i<holes.size();++i)if(!boundary_equal(holes[i],other.holes[i]))return false;
     return true;
 }
@@ -669,6 +877,8 @@ nlohmann::json encode_assembly_instance(const AssemblyInstance& instance) {
     require(instance.root_transform.has_value() && !instance.placement,"independent assembly instance requires root transform and no host");
     quantities(instance.quantity_overrides);
     (void)instance_profile_segments(instance);
+    AssemblyExpansionBudget work;
+    reserve_instance_mapped_profiles(instance,work);
     auto result=encode_overrides(instance);
     const bool vertical=instance.root_transform->vertical_scale!=1 ||
         std::any_of(instance.nested_overrides.begin(),instance.nested_overrides.end(),
@@ -676,7 +886,7 @@ nlohmann::json encode_assembly_instance(const AssemblyInstance& instance) {
     const bool geometry=instance.profile_overrides.has_value() ||
         std::any_of(instance.nested_overrides.begin(),instance.nested_overrides.end(),
             [](const auto& path){return path.profile_overrides.has_value();});
-    result["schema"]=geometry ? "sketch.assembly-instance.v3":
+    result["schema"]=instance_is_mapped(instance) ? "sketch.assembly-instance.v4":geometry ? "sketch.assembly-instance.v3":
         vertical ? "sketch.assembly-instance.v2":"sketch.assembly-instance.v1";
     result["id"]=instance.id;result["type_id"]=instance.type_id;
     result["root_transform"]=encode_assembly_transform(*instance.root_transform);
@@ -687,11 +897,33 @@ nlohmann::json encode_assembly_instance(const AssemblyInstance& instance) {
     return result;
 }
 AssemblyInstance decode_assembly_instance(const nlohmann::json& value) {
+    AssemblyExpansionBudget budget;
+    return decode_assembly_instance(value,budget);
+}
+AssemblyInstance decode_assembly_instance(const nlohmann::json& value,AssemblyExpansionBudget& budget) {
     try {
-        const bool geometry=value.at("schema")=="sketch.assembly-instance.v3";
+        validate_mapped_work_budget(budget);
+        auto pending=budget;
+        const bool mapped=value.at("schema")=="sketch.assembly-instance.v4";
+        const bool geometry=mapped || value.at("schema")=="sketch.assembly-instance.v3";
         fields_with_profiles(value,{"schema","id","type_id","property_overrides","material_overrides","quantity_overrides","root_transform","nested_overrides"},geometry);
         const bool vertical=geometry || value.at("schema")=="sketch.assembly-instance.v2";
         require(vertical || value.at("schema")=="sketch.assembly-instance.v1","unsupported independent assembly instance schema");
+        preflight_instance_profile_dialect(value,geometry,mapped);
+        // Reserve every collection before decode_paths() validates the first
+        // one. A root's many nested replacements share the caller's allowance.
+        std::size_t admitted_segments=0,admitted_topology_bytes=0;
+        const auto admit=[&](const auto& row) {
+            if(!row.contains("profile_overrides"))return;
+            const auto& profiles=row.at("profile_overrides");
+            const auto count=preflight_assembly_profiles(profiles);
+            require(count<=262144-admitted_segments,"assembly override profile work budget exceeded");
+            admitted_segments+=count;
+            add_topology_bytes(admitted_topology_bytes,raw_collection_topology_bytes(profiles),collection_topology_byte_limit);
+            reserve_raw_mapped_profiles(profiles,pending);
+        };
+        admit(value);
+        for(const auto& path:value.at("nested_overrides"))admit(path);
         AssemblyInstance result;result.id=value.at("id").get<std::string>();result.type_id=value.at("type_id").get<std::string>();
         identifier(result.id);identifier(result.type_id);decode_overrides(value,result);
         result.root_transform=decode_versioned_transform(value.at("root_transform"),vertical);
@@ -699,6 +931,7 @@ AssemblyInstance decode_assembly_instance(const nlohmann::json& value) {
         const auto topology_bytes=value.contains("profile_overrides") ? raw_collection_topology_bytes(value.at("profile_overrides")):0;
         result.nested_overrides=decode_paths(value.at("nested_overrides"),vertical,geometry,segments,topology_bytes);
         if(value.contains("profile_overrides"))result.profile_overrides=decode_assembly_profiles(value.at("profile_overrides"));
+        budget=std::move(pending);
         return result;
     } catch(const nlohmann::json::exception& error) {throw std::invalid_argument(std::string("invalid assembly instance JSON: ")+error.what());}
 }
@@ -707,15 +940,18 @@ AssemblyModel AssemblyModel::create(std::vector<AssemblyMaterial> materials,
     std::vector<AssemblyType> types, std::vector<AssemblyInstance> instances) {
     require(types.size()<=4096 && instances.size()<=4096,"assembly catalog collection budget exceeded");
     std::size_t type_segments=0,override_segments=0,type_topology_bytes=0,override_topology_bytes=0;
+    AssemblyExpansionBudget validation_work;
     for(const auto& type:types) {
         const auto count=profile_collection_segments(type.profiles);
         require(count<=1048576-type_segments,"assembly catalog validation profile work budget exceeded");type_segments+=count;
         add_topology_bytes(type_topology_bytes,profile_collection_topology_bytes(type.profiles),catalog_topology_byte_limit);
+        reserve_mapped_profiles(type.profiles,validation_work);
     }
     for(const auto& instance:instances) {
         const auto count=instance_profile_segments(instance);
         require(count<=262144-override_segments,"assembly document profile segment budget exceeded");override_segments+=count;
         add_topology_bytes(override_topology_bytes,instance_profile_topology_bytes(instance),collection_topology_byte_limit);
+        reserve_instance_mapped_profiles(instance,validation_work);
     }
     canonical(materials); canonical(types); canonical(instances);
     for (const auto& material : materials) {
@@ -810,9 +1046,13 @@ AssemblyModel AssemblyModel::create(std::vector<AssemblyMaterial> materials,
     // coordinates, volumes, quantities or profile expansion segment budgets.
     for(const auto& type:model.types_) {
         AssemblyInstance probe;probe.id="validation";probe.type_id=type.id;
-        AssemblyExpansionBudget budget;(void)model.expand(probe,budget);
+        AssemblyExpansionBudget budget;
+        budget.consumed_mapped_profile_work=validation_work.consumed_mapped_profile_work;
+        (void)model.expand(probe,budget);
+        validation_work.consumed_mapped_profile_work=budget.consumed_mapped_profile_work;
     }
     AssemblyExpansionBudget document_budget;
+    document_budget.consumed_mapped_profile_work=validation_work.consumed_mapped_profile_work;
     for(const auto& instance:model.instances_)(void)model.expand(instance,document_budget);
     return model;
 }
@@ -832,6 +1072,7 @@ AssemblyExpansion AssemblyModel::expand(const AssemblyInstance& instance,Assembl
     require(budget.max_nodes<=4096 && budget.max_profile_segments<=262144 &&
         budget.consumed_nodes<=budget.max_nodes && budget.consumed_profile_segments<=budget.max_profile_segments,
         "invalid assembly expansion budget");
+    validate_mapped_work_budget(budget);
     require(std::isfinite(budget.volume_m3) && budget.volume_m3>=0,"invalid assembly aggregate volume");
     for(const auto& [key,value]:budget.declared_quantities) {
         identifier(key.name);(void)unit_name(key.unit);
@@ -840,14 +1081,48 @@ AssemblyExpansion AssemblyModel::expand(const AssemblyInstance& instance,Assembl
     for(const auto& [id,value]:budget.material_volumes_m3) {
         identifier(id);require(std::isfinite(value) && value>=0,"invalid assembly aggregate material volume");
     }
-    validate_instance(instance,types_,materials_);
     auto pending=budget;
+    (void)instance_profile_segments(instance);
+    reserve_instance_mapped_profiles(instance,pending);
+    std::map<std::vector<std::string>,const AssemblyPathOverride*> changes;
+    for(const auto& change:instance.nested_overrides) {
+        // Validate borrowed path depth/identities/references before any key
+        // copy. Typed callers need the same structural fence as JSON callers.
+        (void)path_type(types_,instance.type_id,change.part_path);
+        require(changes.emplace(change.part_path,&change).second,"duplicate assembly override path");
+    }
+    // Walk bounded structure without copying profiles or doing geometry work.
+    // Reserve every actual selected collection before even the first override
+    // validator runs; shared DAG visits and path replacements remain distinct.
+    auto admission=pending;
+    std::function<void(const AssemblyType&,std::vector<std::string>)> admit;
+    admit=[&](const AssemblyType& type,std::vector<std::string> path) {
+        require(path.size()<32,"assembly graph depth budget exceeded");
+        require(admission.consumed_nodes<admission.max_nodes,"assembly document expansion node budget exceeded");
+        ++admission.consumed_nodes;
+        const auto* profiles=&type.profiles;
+        if(path.empty() && instance.profile_overrides)profiles=&*instance.profile_overrides;
+        if(const auto found=changes.find(path);found!=changes.end() && found->second->profile_overrides)
+            profiles=&*found->second->profile_overrides;
+        for(const auto& profile:*profiles) {
+            const auto count=profile_segments(profile);
+            require(count<=admission.max_profile_segments-admission.consumed_profile_segments,
+                "assembly document profile segment budget exceeded");
+            admission.consumed_profile_segments+=count;
+        }
+        reserve_mapped_profiles(*profiles,admission);
+        for(const auto& child:type.parts) {
+            auto child_path=path;child_path.push_back(child.id);
+            admit(find(types_,child.type_id),std::move(child_path));
+        }
+    };
+    admit(find(types_,instance.type_id),{});
+    pending.consumed_mapped_profile_work=admission.consumed_mapped_profile_work;
+    validate_instance(instance,types_,materials_);
     AssemblyExpansion result;result.source_instance=instance;
     // Profile addresses distinguish selected-node overrides from shared type
     // profiles even when their stable profile IDs happen to be identical.
     std::map<const AssemblyProfile*,double> local_volumes;
-    std::map<std::vector<std::string>,const AssemblyPathOverride*> changes;
-    for(const auto& change:instance.nested_overrides)changes.emplace(change.part_path,&change);
     AssemblyTransform root=instance.root_transform.value_or(AssemblyTransform{});
     if(instance.placement)root={{instance.placement->translation_m.x,instance.placement->translation_m.y,instance.placement->translation_z_m},
         instance.placement->rotation_radians,instance.placement->scale,instance.placement->mirrored_y,
@@ -880,19 +1155,36 @@ AssemblyExpansion AssemblyModel::expand(const AssemblyInstance& instance,Assembl
             pending.consumed_profile_segments+=segments;
             // Analytical arc bounds also cover extrema not present at vertices.
             const auto validate_points=[&](const Boundary& boundary) {
-                const auto bounds=boundary_bounds(boundary);
+                const auto bounds=profile.planar_affine ? assembly_profile_boundary_bounds(boundary,*profile.planar_affine):
+                    boundary_bounds(boundary);
                 for(const auto point:{bounds.minimum,bounds.maximum,
                     Vec2{bounds.minimum.x,bounds.maximum.y},Vec2{bounds.maximum.x,bounds.minimum.y}}) {
                     (void)transform_assembly_point({point.x,point.y,profile.elevation_m},world);
                     (void)transform_assembly_point({point.x,point.y,profile.elevation_m+profile.height_m},world);
                 }
+                if(profile.planar_affine)for(const auto& segment:boundary) {
+                    const auto a=assembly_profile_affine_point(segment.start,*profile.planar_affine);
+                    const auto b=assembly_profile_affine_point(segment.end,*profile.planar_affine);
+                    const auto start=transform_assembly_point({a.x,a.y,profile.elevation_m},world);
+                    const auto end=transform_assembly_point({b.x,b.y,profile.elevation_m},world);
+                    const auto top=transform_assembly_point({a.x,a.y,profile.elevation_m+profile.height_m},world);
+                    const auto chord=std::hypot(end.x-start.x,end.y-start.y);
+                    require(std::isfinite(chord) && chord>default_geometry_tolerance_metres &&
+                        top.z-start.z>default_geometry_tolerance_metres,
+                        "mapped assembly profile world coordinates collapse below physical tolerance");
+                }
             };
             validate_points(profile.outer);for(const auto& hole:profile.holes)validate_points(hole);
+            validate_mapped_profile(profile,world.scale);
             const auto* key=&profile;
             auto found_volume=local_volumes.find(key);
             if(found_volume==local_volumes.end())found_volume=local_volumes.emplace(key,profile_volume(profile)).first;
-            const auto volume=positive_product({found_volume->second,world.scale,world.scale,
-                z_scale(world.scale,world.vertical_scale)});
+            const double mapped_factors[]{profile.height_m,world.scale,world.scale,world.scale,world.vertical_scale};
+            const auto volume=profile.planar_affine
+                ? assembly_profile_affine_scaled_area(profile_source_area(profile),*profile.planar_affine,mapped_factors)
+                : positive_product({found_volume->second,world.scale,world.scale,z_scale(world.scale,world.vertical_scale)});
+            if(profile.planar_affine)require(positive_product({profile.height_m,world.scale,world.vertical_scale})>
+                default_geometry_tolerance_metres,"expanded mapped assembly profile extrusion collapses below physical tolerance");
             require(std::isfinite(volume) && volume>0,"assembly computed volume overflow/underflow");
             std::optional<std::string> material;
             if(profile.material_slot)material=node.materials.at(*profile.material_slot);
@@ -955,11 +1247,16 @@ nlohmann::json AssemblyModel::to_json() const {
     bool vertical = false;
     bool nested = false;
     bool geometry = false;
-    for(const auto& type:types_)for(const auto& profile:type.profiles)geometry=geometry || profile.topology.has_value();
+    bool mapped = false;
+    for(const auto& type:types_)for(const auto& profile:type.profiles) {
+        mapped=mapped || profile.planar_affine.has_value();
+        geometry=geometry || profile.topology.has_value() || profile.planar_affine.has_value();
+    }
     for(const auto& type:types_)nested=nested || !type.profiles.empty() || !type.parts.empty();
     for(const auto& type:types_)for(const auto& part:type.parts)vertical=vertical || part.transform.vertical_scale!=1;
     for(const auto& instance:instances_)nested=nested || instance.root_transform.has_value() || !instance.nested_overrides.empty();
     for (const auto& instance : instances_) {
+        mapped=mapped || instance_is_mapped(instance);
         geometry=geometry || instance.profile_overrides.has_value();
         has_placement = has_placement || instance.placement.has_value();
         placement_xyz = placement_xyz || (instance.placement && instance.placement->translation_z_m!=0);
@@ -986,6 +1283,7 @@ nlohmann::json AssemblyModel::to_json() const {
     if(placement_xyz)result["schema"]="sketch.assemblies.v5";
     if(vertical)result["schema"]="sketch.assemblies.v6";
     if(geometry)result["schema"]="sketch.assemblies.v8";
+    if(mapped)result["schema"]="sketch.assemblies.v9";
     for (const auto& type : types_) {
         nlohmann::json value{{"id",type.id},{"name",type.name},{"properties",type.properties},
             {"materials",type.materials},{"quantities",encode_quantities(type.quantities)}};
@@ -1030,7 +1328,8 @@ AssemblyModel AssemblyModel::from_json(const nlohmann::json& value) {
         const auto schema = value.at("schema").get<std::string>();
         // v7 is a closed union of retained row envelopes, not an extension of
         // any older dialect's required fields or placement dimensions.
-        const bool geometry = schema == "sketch.assemblies.v8";
+        const bool mapped = schema == "sketch.assemblies.v9";
+        const bool geometry = mapped || schema == "sketch.assemblies.v8";
         const bool row_local = schema == "sketch.assemblies.v7" || geometry;
         const bool vertical = schema == "sketch.assemblies.v6" || row_local;
         const bool placement_xyz = schema == "sketch.assemblies.v5" || vertical;
@@ -1045,18 +1344,23 @@ AssemblyModel AssemblyModel::from_json(const nlohmann::json& value) {
             // Admission precedes boundary allocation for the complete new
             // dialect, including payloads spread over many rows and paths.
             std::size_t type_segments=0,override_segments=0,type_topology_bytes=0,override_topology_bytes=0;
+            AssemblyExpansionBudget decode_work;
             for(const auto& item:value.at("types"))if(item.contains("profiles")) {
+                preflight_profile_dialect(item.at("profiles"),geometry,mapped);
                 const auto count=preflight_assembly_profiles(item.at("profiles"));
                 require(count<=1048576-type_segments,"assembly catalog validation profile work budget exceeded");
                 type_segments+=count;
                 add_topology_bytes(type_topology_bytes,raw_collection_topology_bytes(item.at("profiles")),catalog_topology_byte_limit);
+                reserve_raw_mapped_profiles(item.at("profiles"),decode_work);
             }
             const auto preflight_override=[&](const nlohmann::json& item) {
                 if(!item.contains("profile_overrides"))return;
+                preflight_profile_dialect(item.at("profile_overrides"),geometry,mapped);
                 const auto count=preflight_assembly_profiles(item.at("profile_overrides"));
                 require(count<=262144-override_segments,"assembly document profile segment budget exceeded");
                 override_segments+=count;
                 add_topology_bytes(override_topology_bytes,raw_collection_topology_bytes(item.at("profile_overrides")),collection_topology_byte_limit);
+                reserve_raw_mapped_profiles(item.at("profile_overrides"),decode_work);
             };
             for(const auto& item:value.at("instances")) {
                 preflight_override(item);
@@ -1089,7 +1393,7 @@ AssemblyModel AssemblyModel::from_json(const nlohmann::json& value) {
                 require(item.at("profiles").is_array() && item.at("profiles").size()<=4096 &&
                     item.at("parts").is_array() && item.at("parts").size()<=4096,"invalid assembly type collections");
                 for(const auto& encoded:item.at("profiles")) {
-                    profile_fields(encoded,geometry);
+                    profile_fields(encoded,geometry,mapped);
                     require(encoded.at("holes").is_array() && encoded.at("holes").size()<=1024 &&
                         encoded.at("elevation_m").is_number() && encoded.at("height_m").is_number(),"invalid assembly profile");
                     type.profiles.push_back(decode_profile(encoded));
@@ -1190,7 +1494,7 @@ nlohmann::json transform_hosted_assembly_model(const nlohmann::json& actual_mode
     if(changed.empty())return actual_model;
     auto result=actual_model;
     const auto schema=actual_model.at("schema").get<std::string>();
-    const bool row_local=schema=="sketch.assemblies.v7" || schema=="sketch.assemblies.v8";
+    const bool row_local=schema=="sketch.assemblies.v7" || schema=="sketch.assemblies.v8" || schema=="sketch.assemblies.v9";
     const bool source_xyz=schema=="sketch.assemblies.v5" || schema=="sketch.assemblies.v6" || row_local;
     const bool upgrade_vertical=needs_vertical && schema!="sketch.assemblies.v6" && !row_local;
     const bool upgrade_xyz=(needs_xyz || needs_vertical) && !source_xyz;
@@ -1251,7 +1555,8 @@ nlohmann::json merge_disjoint_hosted_assembly_models(const nlohmann::json& actua
         "hosted composition changed actual catalog definitions");
     for(const auto* model:{&accumulated_model,&incoming_model})
         require(model->at("schema")==actual_model.at("schema") ||
-            (actual_model.at("schema")!="sketch.assemblies.v8" && model->at("schema")=="sketch.assemblies.v7"),
+            (actual_model.at("schema")!="sketch.assemblies.v8" && actual_model.at("schema")!="sketch.assemblies.v9" &&
+                model->at("schema")=="sketch.assemblies.v7"),
             "hosted composition requires the actual or row-local catalog dialect");
     const auto& rows=actual_model.at("instances");
     require(accumulated_model.at("instances").size()==rows.size() &&
@@ -1285,11 +1590,14 @@ nlohmann::json retain_assembly_catalog_dialect(
     const nlohmann::json& actual_model, nlohmann::json generated_model) {
     const auto saved=actual_model.value("schema", nlohmann::json{});
     const auto generated=generated_model.at("schema");
-    if(saved=="sketch.assemblies.v7" || saved=="sketch.assemblies.v8" || generated=="sketch.assemblies.v8") {
+    if(saved=="sketch.assemblies.v7" || saved=="sketch.assemblies.v8" || saved=="sketch.assemblies.v9" ||
+        generated=="sketch.assemblies.v8" || generated=="sketch.assemblies.v9") {
         const auto source=AssemblyModel::from_json(actual_model);
         const auto candidate=AssemblyModel::from_json(generated_model);
-        generated_model["schema"]=saved=="sketch.assemblies.v8" || generated=="sketch.assemblies.v8"
-            ? nlohmann::json("sketch.assemblies.v8"):saved;
+        generated_model["schema"]=saved=="sketch.assemblies.v9" || generated=="sketch.assemblies.v9"
+            ? nlohmann::json("sketch.assemblies.v9")
+            : saved=="sketch.assemblies.v8" || generated=="sketch.assemblies.v8"
+                ? nlohmann::json("sketch.assemblies.v8"):saved;
         // Canonical edits may add empty envelopes or normalize numbers to all
         // rows. Restore only source-qualified, semantically unchanged rows.
         // Both closed codecs have validated identities, fields and budgets.
@@ -1306,6 +1614,17 @@ nlohmann::json retain_assembly_catalog_dialect(
                 const auto& current=find(after,id);
                 if(before[found->second]==current)row=original.at(raw_indices.at(id));
             }
+            auto ordered=nlohmann::json::array();
+            std::map<std::string,const nlohmann::json*,std::less<>> generated_rows;
+            for(const auto& row:generated_model.at(key))generated_rows.emplace(row.at("id").get<std::string>(),&row);
+            for(const auto& row:original) {
+                const auto id=row.at("id").get<std::string>();
+                if(const auto found=generated_rows.find(id);found!=generated_rows.end()) {
+                    ordered.push_back(*found->second);generated_rows.erase(found);
+                }
+            }
+            for(const auto& [id,row]:generated_rows) {(void)id;ordered.push_back(*row);}
+            generated_model[key]=std::move(ordered);
         };
         retain_rows("materials",source.materials(),candidate.materials());
         retain_rows("types",source.types(),candidate.types());
@@ -1330,20 +1649,22 @@ nlohmann::json retain_assembly_catalog_dialect(
             field("vertical_scale",before.vertical_scale==after.vertical_scale);
         };
         const auto retain_profiles=[](const auto& before,const auto& after,const nlohmann::json& raw,
-            nlohmann::json& row) {
-            if(before==after) {
-                if(raw.contains("profile_overrides"))row["profile_overrides"]=raw.at("profile_overrides");
-                else row.erase("profile_overrides");
+            nlohmann::json& row,const char* field="profile_overrides") {
+            if((!before && !after) || (before && after && *before==*after)) {
+                if(raw.contains(field))row[field]=raw.at(field);
+                else row.erase(field);
                 return;
             }
-            if(!before || !after || !raw.contains("profile_overrides") || !row.contains("profile_overrides"))return;
-            for(auto& encoded:row.at("profile_overrides")) {
+            if(!before || !after || !raw.contains(field) || !row.contains(field))return;
+            for(auto& encoded:row.at(field)) {
                 const auto id=encoded.at("id").template get<std::string>();
                 const auto old=std::find_if(before->begin(),before->end(),[&](const auto& profile){return profile.id==id;});
                 const auto next=std::find_if(after->begin(),after->end(),[&](const auto& profile){return profile.id==id;});
                 if(old==before->end() || next==after->end())continue;
-                const auto& old_raw=*std::find_if(raw.at("profile_overrides").begin(),raw.at("profile_overrides").end(),
+                const auto raw_profile=std::find_if(raw.at(field).begin(),raw.at(field).end(),
                     [&](const auto& profile){return profile.at("id")==id;});
+                require(raw_profile!=raw.at(field).end(),"assembly profile lost its raw source");
+                const auto& old_raw=*raw_profile;
                 if(*old==*next) {encoded=old_raw;continue;}
                 if(boundary_equal(old->outer,next->outer))encoded["outer"]=old_raw.at("outer");
                 const bool same_holes=old->holes.size()==next->holes.size() &&
@@ -1352,12 +1673,55 @@ nlohmann::json retain_assembly_catalog_dialect(
                 if(old->elevation_m==next->elevation_m)encoded["elevation_m"]=old_raw.at("elevation_m");
                 if(old->height_m==next->height_m)encoded["height_m"]=old_raw.at("height_m");
                 if(old->material_slot==next->material_slot)encoded["material_slot"]=old_raw.at("material_slot");
-                if(old->topology==next->topology && old->topology) {
-                    encoded["version"]=old_raw.at("version");
+                if(old->topology==next->topology && old_raw.contains("topology") && encoded.contains("topology")) {
                     encoded["topology"]=old_raw.at("topology");
+                    if(encoded.contains("version") && old_raw.contains("version"))encoded["version"]=old_raw.at("version");
+                }
+                if(old->planar_affine && next->planar_affine) {
+                    encoded["profile_version"]=old_raw.at("profile_version");
+                    auto& affine=encoded.at("planar_affine");const auto& original=old_raw.at("planar_affine");
+                    if(old->planar_affine==next->planar_affine)affine=original;
+                    else {
+                        affine["version"]=original.at("version");
+                        const auto& a=*old->planar_affine;const auto& b=*next->planar_affine;
+                        if(a.source_origin.x==b.source_origin.x)affine["source_origin_m"][0]=original.at("source_origin_m")[0];
+                        if(a.source_origin.y==b.source_origin.y)affine["source_origin_m"][1]=original.at("source_origin_m")[1];
+                        if(a.target_origin.x==b.target_origin.x)affine["target_origin_m"][0]=original.at("target_origin_m")[0];
+                        if(a.target_origin.y==b.target_origin.y)affine["target_origin_m"][1]=original.at("target_origin_m")[1];
+                        const double before_matrix[]{a.xx,a.xy,a.yx,a.yy},after_matrix[]{b.xx,b.xy,b.yx,b.yy};
+                        for(std::size_t i=0;i<4;++i)if(before_matrix[i]==after_matrix[i])affine["matrix"][i]=original.at("matrix")[i];
+                    }
                 }
             }
+            std::map<std::string,const nlohmann::json*,std::less<>> generated;
+            for(const auto& profile:row.at(field))generated.emplace(profile.at("id").template get<std::string>(),&profile);
+            auto ordered=nlohmann::json::array();
+            for(const auto& profile:raw.at(field)) {
+                const auto id=profile.at("id").template get<std::string>();
+                if(const auto found=generated.find(id);found!=generated.end()) {
+                    ordered.push_back(*found->second);generated.erase(found);
+                }
+            }
+            for(const auto& [id,profile]:generated) {(void)id;ordered.push_back(*profile);}
+            row[field]=std::move(ordered);
         };
+        for(auto& row:generated_model.at("types")) {
+            const auto id=row.at("id").get<std::string>();
+            const auto before=std::find_if(source.types().begin(),source.types().end(),[&](const auto& type){return type.id==id;});
+            if(before==source.types().end())continue;
+            const auto& after=find(candidate.types(),id);
+            const auto& raw=*std::find_if(actual_model.at("types").begin(),actual_model.at("types").end(),
+                [&](const auto& type){return type.at("id")==id;});
+            retain_profiles(&before->profiles,&after.profiles,raw,row,"profiles");
+            if(before->parts==after.parts) {
+                if(raw.contains("parts"))row["parts"]=raw.at("parts");else row.erase("parts");
+            }
+            if(row.contains("profiles")!=row.contains("parts")) {
+                if(!row.contains("profiles"))row["profiles"]=nlohmann::json::array();
+                if(!row.contains("parts"))row["parts"]=nlohmann::json::array();
+            }
+            if(before->quantities==after.quantities)row["quantities"]=raw.at("quantities");
+        }
         // Geometry edits can change one field of an instance. Retain its
         // unchanged placement/transform and nested envelopes individually,
         // including raw integer/float spelling and absent optional defaults.
@@ -1409,9 +1773,21 @@ nlohmann::json retain_assembly_catalog_dialect(
                         retain_profiles(old->profile_overrides,next->profile_overrides,old_raw,path);
                     }
                 }
+                std::map<std::vector<std::string>,const nlohmann::json*> generated_paths;
+                for(const auto& path:row.at("nested_overrides"))
+                    generated_paths.emplace(path.at("part_path").get<std::vector<std::string>>(),&path);
+                auto ordered=nlohmann::json::array();
+                for(const auto& path:raw.at("nested_overrides")) {
+                    const auto identity=path.at("part_path").get<std::vector<std::string>>();
+                    if(const auto found=generated_paths.find(identity);found!=generated_paths.end()) {
+                        ordered.push_back(*found->second);generated_paths.erase(found);
+                    }
+                }
+                for(const auto& [identity,path]:generated_paths) {(void)identity;ordered.push_back(*path);}
+                row["nested_overrides"]=std::move(ordered);
             }
             retain_profiles(before->profile_overrides,after.profile_overrides,raw,row);
-            // V7/V8 require the root/path envelope pair together. A changed
+            // V7/V8/V9 require the root/path envelope pair together. A changed
             // path collection may introduce it on a previously bare row.
             if(row.contains("root_transform")!=row.contains("nested_overrides")) {
                 if(!row.contains("root_transform"))row["root_transform"]=nullptr;

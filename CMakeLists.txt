@@ -294,7 +294,7 @@ target_include_directories(sketch_document PUBLIC include)
 target_link_libraries(sketch_document PUBLIC sketch_json sketch_stair_semantics PRIVATE sketch_wall_semantics sketch_roof_join_semantics sketch_boundary_receipts
   sketch_slab_semantics sketch_sheet_view_model sketch_annotation_catalog sketch_assembly_model sketch_model_phases
   sketch_room_relationships sketch_vertical_levels sketch_reference_grid sketch_terrain_surface
-  sketch_georeferencing_contract bcrypt)
+  sketch_georeferencing_contract Boost::multiprecision bcrypt)
 if(BUILD_TESTING)
   add_executable(stair_attachment_integrity_tests tests/stair_attachment_integrity_tests.cpp)
   target_link_libraries(stair_attachment_integrity_tests PRIVATE sketch_document)

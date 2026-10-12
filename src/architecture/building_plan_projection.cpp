@@ -1,11 +1,15 @@
 #include "sketch/building_plan_projection.hpp"
 #include "sketch/assembly_geometry.hpp"
+#include "projected_ellipse_geometry.hpp"
 
 #include <BRep_Builder.hxx>
 #include <BRep_Tool.hxx>
 #include <BRepLib.hxx>
 #include <Geom2d_Circle.hxx>
 #include <Geom2d_Curve.hxx>
+#include <Geom2d_Ellipse.hxx>
+#include <Geom2d_BSplineCurve.hxx>
+#include <Geom2dConvert_BSplineCurveToBezierCurve.hxx>
 #include <Geom2d_Line.hxx>
 #include <Geom2d_TrimmedCurve.hxx>
 #include <Geom_Plane.hxx>
@@ -61,7 +65,8 @@ bool finite_point(Vec2 point) {
 }
 
 void append_segment(Boundary& result, Vec2 start, Vec2 end, double sweep,
-                    const char* context) {
+                    const char* context, projected_curve_detail::Budget& budget) {
+    budget.point(2);
     if (!std::isfinite(sweep) || !finite_point(start) || !finite_point(end)) {
         projection_error(std::string("Building plan projection produced a non-finite ")
                          + context);
@@ -76,6 +81,7 @@ void append_segment(Boundary& result, Vec2 start, Vec2 end, double sweep,
         projection_error(std::string("Building plan projection produced an invalid ")
                          + context + " sweep");
     }
+    budget.segment();
     result.push_back({start, end, sweep});
 }
 
@@ -91,7 +97,8 @@ occ::handle<Geom2d_Curve> basis_curve(occ::handle<Geom2d_Curve> curve) {
 }
 
 void append_line(const TopoDS_Edge& edge, const occ::handle<Geom2d_Curve>& curve,
-                 double first, double last, Boundary& result) {
+                 double first, double last, Boundary& result,
+                 projected_curve_detail::Budget& budget) {
     if (edge.Orientation() == TopAbs_REVERSED) {
         std::swap(first, last);
     }
@@ -103,11 +110,12 @@ void append_line(const TopoDS_Edge& edge, const occ::handle<Geom2d_Curve>& curve
         projection_error("Building plan projection line type changed during conversion");
     }
     append_segment(result, point_2d(line->Value(first), "line endpoint"),
-                   point_2d(line->Value(last), "line endpoint"), 0.0, "line");
+                   point_2d(line->Value(last), "line endpoint"), 0.0, "line", budget);
 }
 
 void append_circle(const TopoDS_Edge& edge, const occ::handle<Geom2d_Curve>& curve,
-                   double first, double last, Boundary& result) {
+                   double first, double last, Boundary& result,
+                   projected_curve_detail::Budget& budget) {
     if (edge.Orientation() == TopAbs_REVERSED) {
         std::swap(first, last);
     }
@@ -156,11 +164,13 @@ void append_circle(const TopoDS_Edge& edge, const occ::handle<Geom2d_Curve>& cur
             + parameter_step * static_cast<double>(index + 1);
         append_segment(result, point_2d(circle->Value(parameter_start), "circle endpoint"),
                        point_2d(circle->Value(parameter_end), "circle endpoint"),
-                       sweep_step, "circle");
+                       sweep_step, "circle", budget);
     }
 }
 
-void append_projected_edge(const TopoDS_Edge& edge, Boundary& result) {
+void append_projected_edge(const TopoDS_Edge& edge, Boundary& result,
+                           projected_curve_detail::Budget& budget) {
+    budget.edge();
     double first = 0.0;
     double last = 0.0;
     // HLRBRep_HLRToShape creates 2D edges on BRepLib's canonical XY plane.
@@ -174,22 +184,33 @@ void append_projected_edge(const TopoDS_Edge& edge, Boundary& result) {
     }
 
     if (!occ::down_cast<Geom2d_Line>(curve).IsNull()) {
-        append_line(edge, curve, first, last, result);
+        append_line(edge, curve, first, last, result, budget);
     } else if (!occ::down_cast<Geom2d_Circle>(curve).IsNull()) {
-        append_circle(edge, curve, first, last, result);
+        append_circle(edge, curve, first, last, result, budget);
+    } else if (const auto ellipse = occ::down_cast<Geom2d_Ellipse>(curve); !ellipse.IsNull()) {
+        if (edge.Orientation() == TopAbs_REVERSED) std::swap(first, last);
+        projected_curve_detail::append_ellipse(ellipse, first, last,
+            [](const gp_Pnt2d& point) { return Vec2{point.X(), point.Y()}; }, result, budget);
+    } else if (const auto spline = occ::down_cast<Geom2d_BSplineCurve>(curve); !spline.IsNull()) {
+        if (edge.Orientation() == TopAbs_REVERSED) std::swap(first, last);
+        // General native affinities convert conics to rational B-splines. Keep
+        // their actual curve and bound only the derived presentation chords.
+        projected_curve_detail::append_bspline<Geom2dConvert_BSplineCurveToBezierCurve>(
+            spline, first, last,
+            [](const gp_Pnt2d& point) { return Vec2{point.X(), point.Y()}; }, result, budget);
     } else {
-        // No approximation is permitted here.  A spline/conic from an
-        // unsupported future object must fail the derived view explicitly.
+        // Other curve families still require a proven physical error bound.
         projection_error("Building plan projection contains an unsupported curve type");
     }
 }
 
-void append_shape_edges(const TopoDS_Shape& shape, Boundary& result) {
+void append_shape_edges(const TopoDS_Shape& shape, Boundary& result,
+                        projected_curve_detail::Budget& budget) {
     if (shape.IsNull()) {
         return;
     }
     for (TopExp_Explorer explorer(shape, TopAbs_EDGE); explorer.More(); explorer.Next()) {
-        append_projected_edge(TopoDS::Edge(explorer.Current()), result);
+        append_projected_edge(TopoDS::Edge(explorer.Current()), result, budget);
     }
 }
 
@@ -222,6 +243,7 @@ Boundary project_shape(const TopoDS_Shape& shape) {
         algorithm->Add(shape);
         algorithm->Update();
         algorithm->Hide();
+        projected_curve_detail::require_bounded_hlr_curves(algorithm);
 
         HLRBRep_HLRToShape extractor(algorithm);
         TopoDS_Compound visible;
@@ -239,7 +261,8 @@ Boundary project_shape(const TopoDS_Shape& shape) {
         }
 
         Boundary result;
-        append_shape_edges(visible, result);
+        projected_curve_detail::Budget budget;
+        append_shape_edges(visible, result, budget);
         std::sort(result.begin(), result.end(), [](const Segment& left,
                                                    const Segment& right) {
             if (left.start.x != right.start.x) return left.start.x < right.start.x;

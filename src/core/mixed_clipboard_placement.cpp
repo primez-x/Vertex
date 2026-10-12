@@ -204,13 +204,15 @@ void merge_materials(Entity& target, const Entity& pool, bool fresh) {
     auto& model = target.properties.at("model");
     const auto& projection = pool.properties.at("model");
     // v7 is the codec's closed union of retained row envelopes. v8 also carries
-    // instance profile overrides, so merging an actual v8 carrier retains v8.
-    // These dialects can carry
-    // both older uncolored rows and newer appearance rows without rewriting
-    // either row or imposing a newer global type/placement shape.
+    // instance profile overrides and v9 carries exact mapped profiles. Retain
+    // the newest actual carrier without rewriting either catalog's raw rows.
+    // These dialects carry older uncolored rows and newer appearance rows
+    // without imposing a newer global type/placement shape.
     if (fresh && model.at("schema") != projection.at("schema"))
-        model.at("schema") = model.at("schema") == "sketch.assemblies.v8" || projection.at("schema") == "sketch.assemblies.v8" ?
-            "sketch.assemblies.v8" : "sketch.assemblies.v7";
+        model.at("schema") = model.at("schema") == "sketch.assemblies.v9" || projection.at("schema") == "sketch.assemblies.v9" ?
+            "sketch.assemblies.v9" :
+            model.at("schema") == "sketch.assemblies.v8" || projection.at("schema") == "sketch.assemblies.v8" ?
+                "sketch.assemblies.v8" : "sketch.assemblies.v7";
     // Source admission permits compatible material-only projections with
     // lane-local carrier context. Preserve the chosen destination carrier.
     for (const auto& [key, value] : projection.items()) {

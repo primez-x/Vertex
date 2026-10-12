@@ -1,6 +1,7 @@
 #pragma once
 
 #include "sketch/geometry.hpp"
+#include "sketch/assembly_profile_geometry.hpp"
 
 #include <nlohmann/json.hpp>
 #include <cstddef>
@@ -76,11 +77,15 @@ struct AssemblyProfile {
     // Appended for aggregate compatibility. Anonymous historical geometry
     // retains its exact six-field wire; identified profiles use explicit v2.
     std::optional<AssemblyProfileTopology> topology;
+    // Exact effective XY geometry; source circular rings remain authoritative.
+    // Absent maps retain historical equality and wire semantics.
+    std::optional<AssemblyProfilePlanarAffine> planar_affine;
     bool operator==(const AssemblyProfile& other) const;
 };
 // Optional topology only: exact ring/segment counts and profile-local unique
 // ring, segment and vertex identities; IDs are nonblank and at most 128 bytes.
-// Conservative escaped JSON budgets: 1 MiB/profile, 64 MiB/collection.
+// Conservative escaped JSON budgets: 1 MiB/profile, 64 MiB/collection,
+// including the fixed mapped-profile envelope when present.
 // Boundary closure and extrusion validity remain profile admission checks.
 void validate_assembly_profile_topology(const AssemblyProfile& profile);
 // Canonical profile arrays use unique IDs sorted lexically. Preflight checks
@@ -166,9 +171,9 @@ struct AssemblyPlacement {
     const nlohmann::json& actual_model, const nlohmann::json& accumulated_model,
     const nlohmann::json& incoming_model);
 // Retain an existing XYZ/vertical placement dialect after canonical edits or
-// catalog closure, supplying only its required envelope fields. Saved v7/v8
+// catalog closure, supplying only its required envelope fields. Saved v7/v8/v9
 // keep row-local envelopes and unchanged raw data without adding defaults;
-// geometry edits retain or promote v8 and never downconvert it.
+// geometry edits retain or promote v8/v9 and never downconvert them.
 [[nodiscard]] nlohmann::json retain_assembly_catalog_dialect(
     const nlohmann::json& actual_model, nlohmann::json generated_model);
 struct AssemblyInstance {
@@ -186,10 +191,15 @@ struct AssemblyInstance {
     bool operator==(const AssemblyInstance&) const = default;
 };
 // Strict independent-instance codec (v1 uniform, v2 vertical scaling, v3
-// optional node geometry). Embedded catalog instances use V1-V8; V8 retains
-// V7 row-local envelopes and adds optional node geometry.
+// optional node geometry, v4 mapped profiles). Embedded catalog instances use
+// V1-V9; V9 retains V8 row-local geometry envelopes and adds mapped profiles.
 [[nodiscard]] nlohmann::json encode_assembly_instance(const AssemblyInstance& instance);
 [[nodiscard]] AssemblyInstance decode_assembly_instance(const nlohmann::json& value);
+struct AssemblyExpansionBudget;
+// Reserve raw override validation in the same ledger as subsequent expansion.
+// The caller's budget is committed only after the complete decode succeeds.
+[[nodiscard]] AssemblyInstance decode_assembly_instance(const nlohmann::json& value,
+    AssemblyExpansionBudget& budget);
 [[nodiscard]] nlohmann::json encode_assembly_transform(const AssemblyTransform& transform);
 [[nodiscard]] AssemblyTransform decode_assembly_transform(const nlohmann::json& value);
 struct ResolvedAssembly {
@@ -257,6 +267,11 @@ struct AssemblyExpansionBudget {
     std::map<AssemblyQuantityKey, double> declared_quantities;
     std::map<std::string, double> material_volumes_m3;
     double volume_m3{};
+    // Appended for aggregate compatibility. Mapped analytical validation is
+    // charged for raw decode, override admission and every effective visit.
+    // Historical profiles without a planar map retain their original limits.
+    std::size_t max_mapped_profile_work{67108864};
+    std::size_t consumed_mapped_profile_work{};
 };
 
 // Detached immutable semantic state. Retain the previous model for undo.

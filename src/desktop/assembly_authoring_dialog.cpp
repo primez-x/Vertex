@@ -1,6 +1,7 @@
 #include "sketch/desktop/assembly_authoring_dialog.hpp"
 #include "sketch/boundary_entity.hpp"
 #include "sketch/boundary_receipt.hpp"
+#include "sketch/assembly_profile_geometry.hpp"
 #include "sketch/quantity.hpp"
 
 #include <QCheckBox>
@@ -365,7 +366,41 @@ void validate_profile_geometry(const AssemblyProfile& profile) {
         require(hole.size()<=1024-segments,"Profile outer and cutouts exceed the segment limit");
         segments+=hole.size();
     }
-    if(const auto invalid=validate_boundary_holes(profile.outer,profile.holes))throw std::invalid_argument(*invalid);
+    // Admit the complete draft geometry with the same mapped physical-size,
+    // extrusion and numerical-range rules as the model. A redraw has not yet
+    // declared retained/new topology IDs: Properties owns that explicit review.
+    // Clear identity only on this validation copy; return the retained topology
+    // to the caller for comparison. This gives no topology/publication authority.
+    auto geometry=profile;geometry.topology.reset();
+    (void)validate_assembly_profiles({geometry});
+}
+
+struct ProfileGeometrySource {
+    Boundary outer;
+    std::vector<Boundary> holes;
+    std::optional<AssemblyProfilePlanarAffine> planar_affine;
+};
+
+Boundary imported_cutout(const ProfileGeometrySource& source,
+                         const std::optional<AssemblyProfilePlanarAffine>& destination) {
+    if(source.planar_affine==destination)return source.outer;
+    const auto similarity=[](const std::optional<AssemblyProfilePlanarAffine>& affine) {
+        return !affine || (affine->xx==affine->yy && affine->xy==-affine->yx);
+    };
+    // Orientation-preserving similarities and their inverses preserve the
+    // circular primitive and signed sweep. General map changes can produce
+    // ellipses, which cannot be stored as a source circular Segment.
+    require((similarity(source.planar_affine) && similarity(destination)) ||
+        std::none_of(source.outer.begin(),source.outer.end(),[](const Segment& edge){return edge.sweep_radians!=0;}),
+        "Circular cutouts cannot be imported between different profile mappings. Replace the whole outer profile to use its mapping, or edit the cutout in local source coordinates.");
+    auto result=source.outer;
+    auto point=[&](Vec2 value) {
+        if(source.planar_affine)value=assembly_profile_affine_point(value,*source.planar_affine);
+        if(destination)value=assembly_profile_affine_inverse_point(value,*destination);
+        return value;
+    };
+    for(auto& edge:result){edge.start=point(edge.start);edge.end=point(edge.end);}
+    return result;
 }
 
 // Presentation only: these paths are never converted back into stored geometry.
@@ -374,8 +409,8 @@ public:
     explicit ProfileGeometryPreview(QWidget* parent) : QWidget(parent) {
         setObjectName("assemblyProfileGeometryPreview");setMinimumSize(260,240);
         setSizePolicy(QSizePolicy::Expanding,QSizePolicy::Expanding);
-        setAccessibleName("Profile-local outline and cutout preview");
-        setAccessibleDescription("Filled solid with open cutouts; the edited boundary and selected numbered vertex are highlighted. X runs right and Y runs up.");
+        setAccessibleName("Effective profile outline and cutout preview");
+        setAccessibleDescription("Filled effective solid with open cutouts; the edited boundary and mapped source vertex are highlighted. X runs right and Y runs up.");
     }
     void show_profile(AssemblyProfile value,std::optional<std::size_t> hole,int vertex) {
         profile_=std::move(value);hole_=hole;vertex_=vertex;message_.clear();update();
@@ -397,6 +432,11 @@ protected:
                       extent->maximum.x=std::max(extent->maximum.x,point.x);extent->maximum.y=std::max(extent->maximum.y,point.y);}
             };
             auto include_boundary=[&](const Boundary& boundary) {
+                if(profile_.planar_affine) {
+                    if(boundary.empty())return;
+                    const auto bounds=assembly_profile_boundary_bounds(boundary,*profile_.planar_affine);
+                    include(bounds.minimum);include(bounds.maximum);return;
+                }
                 for(const auto& edge:boundary) {
                     include(edge.start);include(edge.end);
                     // Fit representable arc extents even in a boundary whose
@@ -415,8 +455,19 @@ protected:
             require(std::isfinite(scale) && scale>0,"Preview extent is not representable");
             auto screen=[&](Vec2 point){return QPointF(width()*.5+((point.x-bounds.minimum.x)-width_m*.5)*scale,
                                                      height()*.5-((point.y-bounds.minimum.y)-height_m*.5)*scale);};
+            std::size_t display_segments=0;
             auto path_for=[&](const Boundary& boundary) {
-                QPainterPath path;if(boundary.empty())return path;path.moveTo(screen(boundary.front().start));
+                QPainterPath path;if(boundary.empty())return path;
+                if(profile_.planar_affine) {
+                    // One shared presentation budget for outer and all holes.
+                    // The helper returns derived chords, never editable rings.
+                    require(display_segments<8192,"Mapped preview exceeds the display segment limit");
+                    const auto display=assembly_profile_boundary_display_path(boundary,*profile_.planar_affine,.25/scale,8192-display_segments);
+                    display_segments+=display.size();path.moveTo(screen(display.front().start));
+                    for(const auto& edge:display)path.lineTo(screen(edge.end));
+                    path.closeSubpath();return path;
+                }
+                path.moveTo(screen(boundary.front().start));
                 for(const auto& edge:boundary) {
                     if(edge.sweep_radians==0) {path.lineTo(screen(edge.end));continue;}
                     try {
@@ -436,14 +487,18 @@ protected:
                 }
                 path.closeSubpath();return path;
             };
-            auto fill=path_for(profile_.outer);fill.setFillRule(Qt::OddEvenFill);
-            for(const auto& hole:profile_.holes)fill.addPath(path_for(hole));
+            std::vector<QPainterPath> paths;paths.reserve(profile_.holes.size()+1);
+            paths.push_back(path_for(profile_.outer));
+            for(const auto& hole:profile_.holes)paths.push_back(path_for(hole));
+            auto fill=paths.front();fill.setFillRule(Qt::OddEvenFill);
+            for(std::size_t i=1;i<paths.size();++i)fill.addPath(paths[i]);
             auto tint=palette().highlight().color();tint.setAlpha(45);
             painter.setPen(QPen(palette().text().color(),1.5));painter.setBrush(tint);painter.drawPath(fill);
             const auto& edited=hole_ ? profile_.holes.at(*hole_) : profile_.outer;
-            painter.setBrush(Qt::NoBrush);painter.setPen(QPen(palette().highlight().color(),2));painter.drawPath(path_for(edited));
+            painter.setBrush(Qt::NoBrush);painter.setPen(QPen(palette().highlight().color(),2));painter.drawPath(paths.at(hole_ ? *hole_+1 : 0));
             for(std::size_t i=0;i<edited.size();++i) {
-                const auto point=screen(edited[i].start);const auto selected=static_cast<int>(i)==vertex_;
+                const auto vertex=profile_.planar_affine ? assembly_profile_affine_point(edited[i].start,*profile_.planar_affine) : edited[i].start;
+                const auto point=screen(vertex);const auto selected=static_cast<int>(i)==vertex_;
                 painter.setBrush(selected ? palette().highlight() : palette().base());
                 painter.drawEllipse(point,selected ? 5 : 3,selected ? 5 : 3);
                 if(selected){painter.setPen(palette().text().color());painter.drawText(point+QPointF(8,-8),QString::number(i+1));painter.setPen(QPen(palette().highlight().color(),2));}
@@ -555,6 +610,13 @@ public:
                 QString("Vertex %1 %2").arg(visual+1).arg(column==0 ? "X" : column==1 ? "Y" : "outgoing sweep"));
         }
     }
+    void set_source_coordinates(bool mapped) {
+        rows->setHorizontalHeaderLabels(mapped ? QStringList{"Source vertex X","Source vertex Y","Source outgoing sweep (degrees)"}
+                                               : QStringList{"Vertex X","Vertex Y","Outgoing sweep (degrees)"});
+        rows->setAccessibleName(mapped ? "Selected boundary local source vertices" : "Selected boundary vertices");
+        rows->setToolTip(mapped ? "Edit local source coordinates and circular sweeps. The retained profile mapping applies to every boundary; the preview shows the effective shape."
+                               : "Edit profile-local coordinates and circular sweeps.");
+    }
 private:
     Boundary original_;
     bool metric_;
@@ -574,12 +636,15 @@ private:
 std::optional<AssemblyProfile> edit_profile_geometry(QWidget* parent,const AssemblyProfile& retained,
         std::optional<std::size_t> initial_hole,bool metric,
         const std::vector<std::pair<QString,std::string>>& imports,
-        const std::map<std::string,Boundary>& outlines,const std::map<std::string,std::vector<Boundary>>& holes) {
+        const std::map<std::string,ProfileGeometrySource>& sources) {
     QDialog dialog(parent);dialog.setObjectName("assemblyProfileGeometryDialog");
     dialog.setWindowTitle(retained.outer.empty() ? "Create profile geometry" : "Edit profile geometry");dialog.resize(1000,650);
     auto* layout=new QVBoxLayout(&dialog);
     auto* note=new QLabel("Edit the complete profile in local coordinates. Each vertex starts a segment ending at the next vertex; the last closes to the first. Zero sweep is straight; positive sweep turns counter-clockwise. Removing or reordering vertices reconnects segments and keeps each outgoing sweep with its vertex. Outer and cutout changes stay in this draft until the whole profile is valid and saved.",&dialog);
     note->setWordWrap(true);layout->addWidget(note);
+    auto draft_affine=retained.planar_affine;
+    auto* mapping_note=new QLabel(&dialog);mapping_note->setObjectName("assemblyProfileMappingNote");mapping_note->setWordWrap(true);layout->addWidget(mapping_note);
+    QString import_notice;
     layout->addWidget(new QLabel(metric ? "Bare X/Y lengths use metres; unit suffixes are supported. Sweeps use degrees, deg or rad." : "Bare X/Y lengths use feet; unit suffixes are supported. Sweeps use degrees, deg or rad.",&dialog));
     auto* boundary_bar=new QHBoxLayout;boundary_bar->addWidget(new QLabel("Boundary",&dialog));
     auto* selection=new QComboBox(&dialog);selection->setObjectName("assemblyProfileBoundary");selection->setAccessibleName("Profile boundary");
@@ -596,7 +661,7 @@ std::optional<AssemblyProfile> edit_profile_geometry(QWidget* parent,const Assem
     import_bar->addWidget(import_choice,1);
     auto* import=button(&dialog,import_bar,"assemblyProfileImport","Import selected");
     import->setEnabled(!imports.empty());import_choice->setEnabled(!imports.empty());
-    import->setToolTip("Replaces the selected boundary. Importing an outer also replaces its cutouts with the captured holes.");
+    import->setToolTip("Replacing the outer also replaces all cutouts and adopts the selected source mapping (captured drawing boundaries have no map). A cutout import retains this profile's map and converts straight geometry into its source coordinates.");
     layout->addLayout(import_bar);
     auto* body=new QHBoxLayout;auto* stack=new QStackedWidget(&dialog);stack->setObjectName("assemblyProfileBoundaryEditors");
     auto* preview=new ProfileGeometryPreview(&dialog);body->addWidget(stack,3);body->addWidget(preview,2);layout->addLayout(body,1);
@@ -608,6 +673,7 @@ std::optional<AssemblyProfile> edit_profile_geometry(QWidget* parent,const Assem
     auto report=[&](QString message){inline_error->setText(std::move(message));};
     auto add_boundary=[&](Boundary boundary) {
         auto* editor=new ProfileBoundaryEditor(stack,std::move(boundary),metric,changed,reserve_vertex,report);
+        editor->set_source_coordinates(draft_affine.has_value());
         stack->addWidget(editor);editors.push_back(editor);
     };
     auto select=[&](int index) {
@@ -621,7 +687,7 @@ std::optional<AssemblyProfile> edit_profile_geometry(QWidget* parent,const Assem
         selection->setCurrentIndex(index);select(index);
     };
     auto read=[&] {
-        auto result=retained;result.holes.clear();
+        auto result=retained;result.planar_affine=draft_affine;result.holes.clear();
         require(segment_count()<=1024,"Profile outer and cutouts exceed the segment limit");
         for(std::size_t i=0;i<editors.size();++i) {
             Boundary boundary;
@@ -641,7 +707,10 @@ std::optional<AssemblyProfile> edit_profile_geometry(QWidget* parent,const Assem
         validate_profile_geometry(profile);
     };
     auto refresh=[&] {
-        for(auto* editor:editors)editor->label_vertices();
+        mapping_note->setText((draft_affine ? QString("Mapped profile: the table edits local source X/Y and circular sweeps. The preview shows the effective mapped shape, including elliptical arcs and mapped source vertices. Saving retains this mapping.")
+                                           : QString("Profile-local X/Y and circular sweeps are shown directly in the preview."))
+                             +(import_notice.isEmpty() ? QString{} : "\n"+import_notice));
+        for(auto* editor:editors){editor->set_source_coordinates(draft_affine.has_value());editor->label_vertices();}
         try {
             auto profile=read();const auto index=selection->currentIndex();const auto* rows=editors.at(index)->rows;
             preview->show_profile(profile,index>0 ? std::optional<std::size_t>{static_cast<std::size_t>(index-1)} : std::nullopt,
@@ -672,21 +741,31 @@ std::optional<AssemblyProfile> edit_profile_geometry(QWidget* parent,const Assem
         try {
             require(import_choice->currentIndex()>0,"Choose a captured boundary to import");
             const auto key=import_choice->currentData().toString().toStdString();const auto index=selection->currentIndex();
-            const auto& boundary=outlines.at(key);const auto& captured_cutouts=holes.at(key);
+            const auto& source=sources.at(key);
+            const auto boundary=index==0 ? source.outer : imported_cutout(source,draft_affine);
+            const auto& captured_cutouts=source.holes;
             auto count=segment_count()-editors.at(index)->rows->rowCount();
             if(index==0)count=0;
             require(boundary.size()<=1024-count,"Profile outer and cutouts exceed the segment limit");count+=boundary.size();
             if(index==0)for(const auto& hole:captured_cutouts){require(hole.size()<=1024-count,"Profile outer and cutouts exceed the segment limit");count+=hole.size();}
             // No parsing is needed to replace incomplete draft text explicitly.
             if(index==0) {
+                draft_affine=source.planar_affine;
+                import_notice=draft_affine ? "Draft replacement: the outer and every cutout now use the imported source's saved mapping."
+                                           : "Draft replacement: the outer and every cutout now use the imported coordinates directly; the previous mapping has been cleared.";
                 for(auto* editor:editors){stack->removeWidget(editor);delete editor;}editors.clear();
                 add_boundary(boundary);for(const auto& hole:captured_cutouts)add_boundary(hole);
             } else {
                 auto* replacement=new ProfileBoundaryEditor(stack,boundary,metric,changed,reserve_vertex,report);
                 auto* previous=editors.at(index);editors[index]=replacement;stack->addWidget(replacement);stack->removeWidget(previous);delete previous;
+                import_notice="Draft replacement: the imported cutout is expressed in this profile's local source coordinates; the profile mapping is retained.";
             }
             roster(index==0 ? 0 : index);refresh();
-        } catch(const std::exception& e){report(q(e.what()));}
+        } catch(const std::exception& e){
+            // Retain import guidance across a pending debounced redraw, whose
+            // successful geometry validation may clear the ordinary error label.
+            import_notice="Import refused: "+q(e.what());refresh();report(q(e.what()));
+        }
     });
     finish_dialog(&dialog,layout,inline_error,[&]{
         try {auto profile=read();validate(profile);accepted=std::move(profile);dialog.accept();}
@@ -703,7 +782,7 @@ std::optional<AssemblyProfile> edit_profile_geometry(QWidget* parent,const Assem
 
 std::optional<AssemblyProfile> edit_assembly_profile_geometry(
     QWidget* parent,const AssemblyProfile& retained,bool metric_units) {
-    return edit_profile_geometry(parent,retained,std::nullopt,metric_units,{},{},{});
+    return edit_profile_geometry(parent,retained,std::nullopt,metric_units,{},{});
 }
 
 class AssemblyTypeDialog::Impl final {
@@ -718,8 +797,8 @@ public:
     QTableWidget *profiles{},*parts{},*impacts{};
     QLabel* error{};
     std::unique_ptr<NamedValues> defaults;
-    std::map<std::string,Boundary> outlines;
-    std::map<std::string,std::vector<Boundary>> outline_holes;
+    std::map<std::string,ProfileGeometrySource> geometry_sources;
+    QLabel* profile_geometry_status{};
     std::map<std::string,AssemblyProfile> profile_drafts;
     std::map<std::string,AssemblyPart> part_drafts;
     std::vector<std::pair<QString,std::string>> outline_options;
@@ -742,11 +821,13 @@ public:
         for(const auto& [id,entity]:source.entities()) {
             if(!can_recognize_boundary_entity_type(entity.type))continue;
             try {auto b=captured_boundary(entity);auto holes=captured_holes(entity,source,b);
-                outlines.emplace(id,b);outline_holes.emplace(id,std::move(holes));outline_options.push_back({label(entity,QString("Closed outline %1").arg(outline_options.size()+1)),id});
+                geometry_sources.emplace(id,ProfileGeometrySource{std::move(b),std::move(holes),std::nullopt});outline_options.push_back({label(entity,QString("Closed outline %1").arg(outline_options.size()+1)),id});
             } catch(const std::exception&) { /* Unsupported or invalid outlines cannot lend geometry. */ }
         }
         auto* profile_page=new QWidget(tabs); auto* profile_layout=new QVBoxLayout(profile_page);
         profiles=table(profile_page,"assemblyProfiles",{"Closed outline","Height","Base elevation","Material slot"}); profile_layout->addWidget(profiles);
+        profile_geometry_status=new QLabel("Choosing or reimporting a captured outline replaces the outer and all cutouts, and clears any saved profile mapping. Reimporting a stored profile restores its captured source geometry and mapping. These changes remain in the type draft until Save.",profile_page);
+        profile_geometry_status->setObjectName("assemblyProfileImportStatus");profile_geometry_status->setWordWrap(true);profile_layout->addWidget(profile_geometry_status);
         row_controls(profile_page,profile_layout,profiles,"assemblyProfile",[this]{guard([&]{add_profile(std::nullopt);});},true);
         profile_page->findChild<QPushButton*>("assemblyProfileAdd")->setObjectName("assemblyAddProfile");
         auto* profile_actions=new QHBoxLayout;
@@ -785,16 +866,16 @@ public:
         AssemblyProfile profile=value.value_or(AssemblyProfile{});
         if(creating) {
             profile.id=make_stable_id();profile.height_m=1;
-            auto accepted=edit_profile_geometry(owner,profile,std::nullopt,metric,outline_options,outlines,outline_holes);
+            auto accepted=edit_profile_geometry(owner,profile,std::nullopt,metric,outline_options,geometry_sources);
             if(!accepted)return;
             profile=std::move(*accepted);
         }
         auto row=append_row(profiles); auto* choice=new QComboBox(profiles);
         for(const auto& [text,id]:outline_options)choice->addItem(text,q(id));
-        auto key="stored:"+profile.id;while(outlines.contains(key))key+=':';outlines.emplace(key,profile.outer);
-        outline_holes.emplace(key,profile.holes);
+        auto key="stored:"+profile.id;while(geometry_sources.contains(key))key+=':';
+        geometry_sources.emplace(key,ProfileGeometrySource{profile.outer,profile.holes,profile.planar_affine});
         choice->addItem(QString("Stored profile %1 (%2 edges)").arg(row+1).arg(profile.outer.size()),q(key)); choice->setCurrentIndex(choice->count()-1);
-        choice->setToolTip(QString("%1 edges; %2 local cutouts. Reimport restores the selected captured or stored boundary.").arg(profile.outer.size()).arg(profile.holes.size()));
+        choice->setToolTip(QString("%1 source edges; %2 local cutouts. Reimport replaces all rings and adopts the selected source mapping.").arg(profile.outer.size()).arg(profile.holes.size()));
         profile_drafts.emplace(profile.id,profile);
         choice->setProperty("stableId",q(profile.id)); profiles->setCellWidget(row,0,choice);
         profiles->setCellWidget(row,1,number(profiles,{},profile.height_m,true)); profiles->setCellWidget(row,2,number(profiles,{},profile.elevation_m,true));
@@ -817,8 +898,11 @@ public:
     void import_profile(QComboBox* choice) {
         require(choice && choice->currentIndex()>=0,"Select a captured boundary to import");
         auto& draft=profile_drafts.at(choice->property("stableId").toString().toStdString());const auto key=choice->currentData().toString().toStdString();
-        draft.outer=outlines.at(key);draft.holes=outline_holes.at(key);
-        choice->setToolTip(QString("%1 edges; %2 local cutouts").arg(draft.outer.size()).arg(draft.holes.size()));
+        const auto& captured=geometry_sources.at(key);
+        draft.outer=captured.outer;draft.holes=captured.holes;draft.planar_affine=captured.planar_affine;
+        profile_geometry_status->setText(draft.planar_affine ? "Draft replacement: the selected profile's outer and all cutouts now use the stored source geometry and its saved mapping. Save the type to apply."
+                                                          : "Draft replacement: the selected profile's outer and all cutouts now use the imported coordinates directly; its previous mapping has been cleared. Save the type to apply.");
+        choice->setToolTip(QString("%1 source edges; %2 local cutouts; %3").arg(draft.outer.size()).arg(draft.holes.size()).arg(draft.planar_affine ? "saved mapping restored" : "no profile mapping"));
         invalidate_geometry_preview();
     }
     void invalidate_geometry_preview() {
@@ -830,11 +914,11 @@ public:
         require(choice && choice->currentIndex()>=0,"Choose a profile first");
         auto& profile=profile_drafts.at(choice->property("stableId").toString().toStdString());
         const auto retained=profile;
-        if(auto accepted=edit_profile_geometry(owner,retained,initial_hole,metric,outline_options,outlines,outline_holes)) {
+        if(auto accepted=edit_profile_geometry(owner,retained,initial_hole,metric,outline_options,geometry_sources)) {
             profile=std::move(*accepted);
             if(profile!=retained) {
                 invalidate_geometry_preview();
-                choice->setToolTip(QString("Edited local geometry: %1 edges; %2 cutouts. Reimport replaces local edits with the selected boundary.").arg(profile.outer.size()).arg(profile.holes.size()));
+                choice->setToolTip(QString("Edited local source geometry: %1 edges; %2 cutouts. Reimport replaces all rings and adopts the selected source mapping.").arg(profile.outer.size()).arg(profile.holes.size()));
             }
         }
     }

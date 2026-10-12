@@ -110,6 +110,7 @@ private:
     const AssemblyDocumentEntities& actual_;
     std::map<RootKey, const Json*> resolved_;
     std::map<std::string_view, std::map<std::string_view, const Json*>> embedded_;
+    AssemblyExpansionBudget decode_budget_;
 
     const Json* find_uncached(const RootKey& root) {
         const auto& [catalog_id, instance_id, document_entity_id] = root;
@@ -119,7 +120,7 @@ private:
         if (document_entity_id) {
             const auto owner = actual_.find(*document_entity_id);
             if (owner == actual_.end()) return nullptr;
-            const auto value = decode_document_assembly_instance(owner->second);
+            const auto value = decode_document_assembly_instance(owner->second, decode_budget_);
             require(value.assembly_catalog_id == catalog_id && value.instance.id == instance_id,
                 "independent root framing differs from its qualified identity");
             return &owner->second.properties.at("instance");
@@ -314,7 +315,7 @@ std::map<Root, NodeFrame> retired_destination_frames(const AssemblyDocumentEntit
     for (const auto& [id, model] : models) for (const auto& instance : model.instances())
         expand({id, instance.id, std::nullopt, {}}, model, instance);
     for (const auto& [id, entity] : actual) if (entity.type == "assembly_instance") {
-        const auto value = decode_document_assembly_instance(entity);
+        const auto value = decode_document_assembly_instance(entity, budget);
         const auto model = models.find(value.assembly_catalog_id);
         require(model != models.end(), "independent destination references a missing catalog");
         expand({value.assembly_catalog_id, value.instance.id, id, {}}, model->second, value.instance);

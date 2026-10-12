@@ -340,12 +340,16 @@ required implementation work. The reviewed nonclone independent mirror correctio
 reuses complete Properties pose replacement/carry; clone/group mirror routes
 remain separately unqualified.
 
-The exact affine-profile geometry foundation is being integrated for directional
-component resizing. Its pure analytical/measurement helpers and numeric endpoint
-reuse do not complete mapped-profile persistence or canvas handles. Follow the
+The exact affine-profile source now includes mapped persistence and reader255,
+effective dimensions/quantities, native/cache, projected curves, reopened editing,
+canvas presentation and declared IFC/DXF fidelity. Numeric own-profile resizing
+uses reviewed maps for identified curves; anonymous profiles require initial
+edge identities. These sources have not been compiled or exercised. Follow the
 [consumer integration design](../design/vertex-component-directional-resize.md)
-through every authoritative and presentation consumer before exposing mapped
-profiles; retain the complete geometry and mixed-family scope above.
+through whole-component nested deformation and captured canvas side handles;
+retain the complete geometry and mixed-family scope above. General elliptical
+cutout imports across differing profile maps and editable IFC assembly import
+remain required gaps, alongside lifecycle qualification.
 
 All retained interactions/preparations bind an actual captured snapshot.
 One authoritative model feeds calculations, views, schedules, print and export.

@@ -549,6 +549,55 @@ Bounds2 assembly_profile_boundary_bounds(const Boundary& source, const AssemblyP
     return result;
 }
 
+Boundary assembly_profile_boundary_display_path(const Boundary& source,
+                                                const AssemblyProfilePlanarAffine& affine,
+                                                double maximum_deviation_metres,
+                                                std::size_t maximum_segments) {
+    validate_assembly_profile_affine(affine);
+    require_boundary_count(source);
+    if (!std::isfinite(maximum_deviation_metres) || !(maximum_deviation_metres > 0.0) ||
+        maximum_segments == 0 || maximum_segments > 65536 || source.size() > maximum_segments) {
+        throw std::invalid_argument("affine profile display deviation or segment budget is invalid");
+    }
+    Boundary result;
+    result.reserve(source.size());
+    for (const auto& segment : source) {
+        const auto prepared = prepare(segment);
+        std::size_t pieces = 1;
+        if (segment.sweep_radians != 0.0) {
+            // ||p''(u)|| <= L*|sweep|*||M||_F. A chord on an interval
+            // of width h deviates by at most that bound*h*h/8. Retain
+            // products exactly and round the upper bound outward once.
+            const auto matrix_norm = std::hypot(std::hypot(affine.xx, affine.xy),
+                                                std::hypot(affine.yx, affine.yy));
+            if (!std::isfinite(matrix_norm))
+                throw std::invalid_argument("affine profile display curvature exceeds numeric range");
+            const auto norm_upper = std::nextafter(matrix_norm, std::numeric_limits<double>::infinity());
+            const auto curvature = checked_exact(binary64(segment_length(segment)) *
+                binary64(std::abs(segment.sweep_radians)) * binary64(norm_upper),
+                "affine profile display curvature exceeds numeric range");
+            const auto curvature_upper = std::nextafter(curvature, std::numeric_limits<double>::infinity());
+            const auto needed = std::ceil(std::nextafter(
+                std::sqrt(curvature_upper) / (std::sqrt(maximum_deviation_metres) * std::sqrt(8.0)),
+                std::numeric_limits<double>::infinity()));
+            if (!std::isfinite(needed) || needed > static_cast<double>(maximum_segments - result.size()))
+                throw std::invalid_argument("affine profile display exceeds its segment budget");
+            pieces = static_cast<std::size_t>(std::max(1.0, needed));
+        }
+        if (pieces > maximum_segments - result.size())
+            throw std::invalid_argument("affine profile display exceeds its segment budget");
+        auto start = point_at(prepared, affine, 0.0);
+        for (std::size_t index = 1; index <= pieces; ++index) {
+            const auto end = point_at(prepared, affine, static_cast<double>(index) / static_cast<double>(pieces));
+            if (start.x == end.x && start.y == end.y)
+                throw std::invalid_argument("affine profile display chord is unrepresentable");
+            result.push_back({start, end, 0.0});
+            start = end;
+        }
+    }
+    return result;
+}
+
 double assembly_profile_closed_boundary_signed_area(const Boundary& source, const AssemblyProfilePlanarAffine& affine,
                                                     double tolerance_metres) {
     validate_assembly_profile_affine(affine);
@@ -572,6 +621,27 @@ double assembly_profile_closed_boundary_signed_area(const Boundary& source, cons
         "affine profile area exceeds numeric range");
     if (source_area != 0.0 && result == 0.0) {
         throw std::invalid_argument("affine profile area underflows numeric range");
+    }
+    return result;
+}
+
+double assembly_profile_affine_scaled_area(double admitted_source_area,
+                                          const AssemblyProfilePlanarAffine& affine,
+                                          std::span<const double> positive_factors) {
+    validate_assembly_profile_affine(affine);
+    if (!std::isfinite(admitted_source_area) || !(admitted_source_area > 0.0) || positive_factors.size() > 8) {
+        throw std::invalid_argument("affine profile scaled area requires a positive area and at most eight factors");
+    }
+    Exact quantity = exact_determinant(affine) * binary64(admitted_source_area);
+    for (const auto factor : positive_factors) {
+        if (!std::isfinite(factor) || !(factor > 0.0)) {
+            throw std::invalid_argument("affine profile scaled area requires positive finite factors");
+        }
+        quantity *= binary64(factor);
+    }
+    const auto result = checked_exact(quantity, "affine profile scaled area exceeds numeric range");
+    if (!(result > 0.0)) {
+        throw std::invalid_argument("affine profile scaled area underflows numeric range");
     }
     return result;
 }

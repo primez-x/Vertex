@@ -1,5 +1,6 @@
 #include "sketch/ifc_native_geometry.hpp"
 #include "sketch/architecture.hpp"
+#include "sketch/assembly_geometry.hpp"
 #include "sketch/hosted_opening_geometry.hpp"
 #include "sketch/building_entity.hpp"
 #include "sketch/document_solid.hpp"
@@ -278,6 +279,53 @@ std::vector<IfcNativeMesh> ifc_native_wall_mesh(const Wall& wall,
     std::size_t vertices, std::size_t triangles) {
     preflight(wall, vertices, triangles);
     return tessellate(make_wall(wall), vertices, triangles);
+}
+
+std::vector<IfcNativeMesh> ifc_native_assembly_profile_mesh(
+    const AssemblyExpandedProfile& source, std::size_t vertices, std::size_t triangles) {
+    const auto storage = std::min(vertices, triangles);
+    const auto& profile = source.profile;
+    if (!storage || profile.holes.size() > 256)
+        throw std::invalid_argument("ifc_mesh_budget_exceeded");
+    const auto map = profile.planar_affine.value_or(AssemblyProfilePlanarAffine{});
+    validate_assembly_profile_affine(map);
+    const auto scale = source.transform.scale;
+    if (!std::isfinite(scale) || scale <= 0)
+        throw std::invalid_argument("ifc_native_assembly_scale_invalid");
+    // The Frobenius norm bounds every effective direction, including shear.
+    // Bound linear-interpolation deviation by max|d2p/du2| / (8*n*n)
+    // before entering OCCT; actual mesh storage is charged by tessellate.
+    const auto linear_bound = std::hypot(std::hypot(map.xx * scale, map.xy * scale),
+        std::hypot(map.yx * scale, map.yy * scale));
+    if (!std::isfinite(linear_bound) || linear_bound <= 0)
+        throw std::invalid_argument("ifc_mesh_budget_exceeded");
+    std::size_t edges = 0, stations = 0;
+    const auto charge = [&](const Boundary& ring) {
+        if (ring.empty() || ring.size() > project_import_boundary_segment_limit - edges)
+            throw std::invalid_argument("ifc_mesh_budget_exceeded");
+        edges += ring.size();
+        if (edges > storage / 64)
+            throw std::invalid_argument("ifc_mesh_budget_exceeded");
+        for (const auto& edge : ring) {
+            const auto length = segment_length(edge);
+            const auto angle = std::abs(edge.sweep_radians);
+            if (angle == 0) continue;
+            const auto needed = std::max(1.0, std::ceil(std::sqrt(length * linear_bound *
+                angle / (8.0 * ifc_native_mesh_deviation_m * 0.5))));
+            if (!std::isfinite(needed) || needed > static_cast<double>(storage / 64 - edges) ||
+                stations > storage / 64 - edges - static_cast<std::size_t>(needed))
+                throw std::invalid_argument("ifc_mesh_budget_exceeded");
+            stations += static_cast<std::size_t>(needed);
+        }
+        if (stations > storage / 64 - edges)
+            throw std::invalid_argument("ifc_mesh_budget_exceeded");
+    };
+    charge(profile.outer);
+    for (const auto& hole : profile.holes) charge(hole);
+    (void)validate_assembly_profiles({profile});
+    AssemblyExpansion expansion;
+    expansion.profiles.push_back(source);
+    return tessellate(make_assembly_geometry(expansion).shape, vertices, triangles);
 }
 std::vector<IfcNativeMesh> ifc_native_void_mesh(const Wall& wall, const HostedOpening& opening,
     std::size_t vertices, std::size_t triangles) {

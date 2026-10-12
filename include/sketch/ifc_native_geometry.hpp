@@ -14,6 +14,7 @@
 namespace sketch {
 
 struct Entity;
+struct AssemblyExpandedProfile;
 
 // OCCT types stay behind this optional bridge. All coordinates are world metres.
 // Each mesh describes one native solid; triangle indices are zero based.
@@ -42,6 +43,13 @@ struct IfcNativeJoinMesh {
     const RoofJoin& join, const std::vector<Entity>& resolved_roofs,
     std::size_t vertex_budget, std::size_t triangle_budget);
 inline constexpr double ifc_native_mesh_deviation_m = 0.001;
+
+// One actual expanded profile, including its affine XY geometry and node pose.
+// Coordinates are in that expansion's resolved frame; placement is applied by
+// make_assembly_geometry exactly once, never reapplied by this bridge.
+[[nodiscard]] std::vector<IfcNativeMesh> ifc_native_assembly_profile_mesh(
+    const AssemblyExpandedProfile& profile,
+    std::size_t vertex_budget, std::size_t triangle_budget);
 
 [[nodiscard]] std::vector<IfcNativeMesh> ifc_native_wall_mesh(
     const Wall& wall, std::size_t vertex_budget, std::size_t triangle_budget);

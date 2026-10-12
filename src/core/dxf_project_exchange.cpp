@@ -10,6 +10,7 @@
 #include "sketch/annotation_catalog.hpp"
 #include "sketch/annotation_entity_codec.hpp"
 #include "sketch/boundary_dimension.hpp"
+#include "sketch/assembly_profile_geometry.hpp"
 #include "sketch/boundary_entity.hpp"
 #include "sketch/boundary_integrity.hpp"
 #include "sketch/constraint_phase_scope.hpp"
@@ -2219,6 +2220,17 @@ void export_native_entity(const DocumentSnapshot& document, const Entity& entity
                     callout(profile.measurement == AssemblyProfileDimensionMeasurement::edge_length ? "Length" : "Distance",
                         geometry.span_metres, " m", "dimension_assembly_profile_exported_as_quantity_callout");
                 };
+                const auto& mapped_edge = geometry.profile_geometry->affine_edge;
+                if (mapped_edge && mapped_edge->source.sweep_radians != 0.0) {
+                    // DXF's admitted arc dimension subset measures circles.
+                    // The exact mapped descriptor can be elliptical even when
+                    // its legacy endpoint chord carries a zero sweep. Preserve
+                    // its analytical length through the explicit fidelity lane,
+                    // including mapped similarities whose circle is not proved
+                    // here, rather than manufacturing a circular dimension.
+                    quantity_callout();
+                    return;
+                }
                 const auto& frame = assembly_authored_picture ? geometry.selected_node.transform : geometry.selected_world_frame;
                 const auto [c, s] = assembly_rotation_components(frame.rotation_radians);
                 const auto sign = frame.mirrored_y ? -1.0 : 1.0;
@@ -2227,7 +2239,15 @@ void export_native_entity(const DocumentSnapshot& document, const Entity& entity
                 const auto offset_point = [&](Vec2 point) {
                     return Vec2{c * point.x - s * sign * point.y, s * point.x + c * sign * point.y};
                 };
-                const auto& source_segment = geometry.profile_geometry->segment_from_anchor_m;
+                auto source_segment = geometry.profile_geometry->segment_from_anchor_m;
+                if (mapped_edge) {
+                    // A mapped straight edge is still a line. Consume the
+                    // descriptor directly in the physical anchor frame, with
+                    // node rotation/reflection applied below exactly once.
+                    source_segment = {
+                        assembly_profile_segment_point(mapped_edge->source, mapped_edge->source_to_anchor_m, 0.0),
+                        assembly_profile_segment_point(mapped_edge->source, mapped_edge->source_to_anchor_m, 1.0), 0.0};
+                }
                 Segment local{offset_point(source_segment.start), offset_point(source_segment.end),
                     source_segment.sweep_radians * sign};
                 const auto& start = assembly_authored_picture ? geometry.start_authored_m : geometry.start_world_m;
