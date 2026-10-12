@@ -2,12 +2,17 @@
 
 #include "sketch/assembly_model.hpp"
 
+#include <optional>
+
 namespace sketch {
 
 struct AssemblyDirectionalResize {
     Vec2 world_anchor_m{};
     double x_factor{1.0};
     double y_factor{1.0};
+    // Appended for aggregate compatibility. nullopt uses the actual root axes;
+    // a finite angle selects one unreflected world frame for every component.
+    std::optional<double> world_axis_rotation_radians{};
 };
 
 struct AssemblyDirectionalResizeNodeDraft {
@@ -29,10 +34,12 @@ struct AssemblyDirectionalResizeDraft {
 };
 
 // Supply the complete admitted expansion from this exact model/snapshot, never
-// a filtered presentation expansion. Axes are the actual empty-path root's yaw
-// and reflection; factors act in physical world XY metres, independently of Z.
+// a filtered presentation expansion. Axes default to the actual empty-path
+// root's yaw and reflection. An explicit world_axis_rotation_radians selects
+// that unreflected world frame; factors act in physical XY metres, independently
+// of Z. The explicit angle must be finite even for unit factors.
 // Let R be the actual binary64 yaw basis supplied by
-// assembly_rotation_components(root.rotation_radians). The operation is
+// assembly_rotation_components for the selected frame angle. The operation is
 // a + R*diag(x_factor,y_factor)*R^-1*(q-a). Its inverse uses the exact squared
 // norm of those components; their stored basis need not be exactly orthonormal.
 // Each local profile map is pulled through its actual world pose. Circular
@@ -63,5 +70,15 @@ struct AssemblyDirectionalResizeDraft {
 [[nodiscard]] Bounds2 assembly_root_oriented_profile_bounds(
     const AssemblyExpansion& actual, Vec2 world_origin_m,
     AssemblyExpansionBudget& available_work);
+
+// The same complete analytical extents in an explicit, unreflected world yaw
+// basis, shared across independently rotated/reflected components. The origin
+// and angle must be finite. Values are metre offsets using the actual binary64
+// assembly_rotation_components(angle) basis inverse, without dividing out root
+// scale. Source validation, empty-geometry refusal and transactional work charges
+// are the same as assembly_root_oriented_profile_bounds.
+[[nodiscard]] Bounds2 assembly_world_axis_profile_bounds(
+    const AssemblyExpansion& actual, Vec2 world_origin_m,
+    double world_axis_rotation_radians, AssemblyExpansionBudget& available_work);
 
 } // namespace sketch

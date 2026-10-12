@@ -14,6 +14,31 @@ changed source does not acquire runtime acceptance without later qualification.
 
 ## Current delivery state
 
+### October 11 common-axis component resize foundation
+
+The reviewed IFC recovery/cutout-transfer batch is committed and pushed as
+c988e1d58cd9da31fd892a3016813fbdb19d8967; the exact remote ref matches.
+The previous continuation made authoritative source progress through that batch
+and the preceding complete initial-geometry authoring batch. It was not a
+qualification run. No production gate was closed.
+
+The source extends component directional deformation with an optional
+explicit world-axis orientation and matching analytical bounds. Default calls
+retain actual root axes. A future mixed gesture needs one common world operator
+for differently rotated components; independently using each component's natural
+axes would produce different operations. The geometry foundation must preserve
+actual node poses, source rings, Z/materials, complete node participation and
+transactional shared budgets. This work does not grant mixed command, room,
+constraint or dimension authority. Whole-family mixed producer/completion remains
+required after the foundation, alongside arbitrary elliptical cutouts and
+external compatibility/device prerequisites. Root reviewed the selected-basis
+conjugation, actual norm inverses, default reflection parity, explicit bounds,
+unit-factor validation, source/provenance and transactional ledger paths.
+Scoped whitespace checks passed; the foundation is ready for a scoped commit.
+No builds, tests, scripts, probes, native jobs, launches, packages or installations
+ran; the installed app is unchanged. This source foundation does not establish
+mixed-selection workflow acceptance or close any of the ten production gates.
+
 ### October 11 IFC component recovery and cutout transfer continuation
 
 The complete initial component-geometry batch is committed and pushed as

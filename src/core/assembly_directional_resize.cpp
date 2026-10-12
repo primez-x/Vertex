@@ -144,9 +144,9 @@ AssemblyProfilePlanarAffine inner_map(const AssemblyProfile& profile) {
 }
 
 AssemblyProfile resized_profile(const AssemblyProfile& source, const AssemblyTransform& node,
-    const AssemblyTransform& root, const AssemblyDirectionalResize& operation) {
+    AssemblyRotationComponents axes, const AssemblyDirectionalResize& operation) {
     const auto [nc, ns] = assembly_rotation_components(node.rotation_radians);
-    const auto [rc, rs] = assembly_rotation_components(root.rotation_radians);
+    const auto [rc, rs] = axes;
     // Use the actual admitted rotation components rather than reducing and
     // subtracting huge authored angles (which can lose their actual yaw).
     const bool aligned = nc == rc && ns == rs;
@@ -160,7 +160,7 @@ AssemblyProfile resized_profile(const AssemblyProfile& source, const AssemblyTra
     const Exact relative_norm = c * c + s * s;
     require(relative_norm > 0, "directional resize relative basis is singular");
     // B*diag(sx,sy)*B^-1 in the actual node basis. Actual binary64 cosine/sine
-    // pairs need not have unit squared norm. Root Y reflection cancels around
+    // pairs need not have unit squared norm. Frame Y reflection cancels around
     // the diagonal factors; node reflection changes both off-diagonal signs.
     // The relative basis's common scalar cancels in this conjugation.
     // Uniform factors are exact.
@@ -192,17 +192,17 @@ AssemblyProfile resized_profile(const AssemblyProfile& source, const AssemblyTra
 }
 
 AssemblyProfilePlanarAffine oriented_map(const AssemblyExpandedProfile& profile,
-    const AssemblyTransform& root, Vec2 origin, bool& reflect_y) {
-    const auto [rc, rs] = assembly_rotation_components(root.rotation_radians);
+    AssemblyRotationComponents axes, bool axes_mirrored_y, Vec2 origin, bool& reflect_y) {
+    const auto [rc, rs] = axes;
     const auto [nc, ns] = assembly_rotation_components(profile.transform.rotation_radians);
     const auto node_parity = profile.transform.mirrored_y ? -1.0 : 1.0;
-    const auto root_parity = root.mirrored_y ? -1.0 : 1.0;
-    reflect_y = node_parity != root_parity;
+    const auto axes_parity = axes_mirrored_y ? -1.0 : 1.0;
+    reflect_y = node_parity != axes_parity;
     const auto scale = binary64(profile.transform.scale);
-    const Exact root_norm = binary64(rc) * binary64(rc) + binary64(rs) * binary64(rs);
-    require(root_norm > 0, "assembly bounds root basis is singular");
-    const Exact cosine = (binary64(rc) * binary64(nc) + binary64(rs) * binary64(ns)) / root_norm;
-    const Exact sine = (-binary64(rs) * binary64(nc) + binary64(rc) * binary64(ns)) / root_norm;
+    const Exact axes_norm = binary64(rc) * binary64(rc) + binary64(rs) * binary64(rs);
+    require(axes_norm > 0, "assembly bounds axis basis is singular");
+    const Exact cosine = (binary64(rc) * binary64(nc) + binary64(rs) * binary64(ns)) / axes_norm;
+    const Exact sine = (-binary64(rs) * binary64(nc) + binary64(rc) * binary64(ns)) / axes_norm;
     // Remove an output Y reflection to give the affine helper a positive
     // determinant, then reflect its completed analytical bounds afterwards.
     const Exact xx = scale * cosine, xy = -scale * binary64(node_parity) * sine;
@@ -211,8 +211,8 @@ AssemblyProfilePlanarAffine oriented_map(const AssemblyExpandedProfile& profile,
     validate_assembly_profile_affine(inner);
     const Exact dx = binary64(profile.transform.translation_m.x) - binary64(origin.x);
     const Exact dy = binary64(profile.transform.translation_m.y) - binary64(origin.y);
-    const Exact tx = (binary64(rc) * dx + binary64(rs) * dy) / root_norm;
-    const Exact ty = binary64(node_parity) * (-binary64(rs) * dx + binary64(rc) * dy) / root_norm;
+    const Exact tx = (binary64(rc) * dx + binary64(rs) * dy) / axes_norm;
+    const Exact ty = binary64(node_parity) * (-binary64(rs) * dx + binary64(rc) * dy) / axes_norm;
     AssemblyProfilePlanarAffine result;
     result.source_origin = inner.source_origin;
     result.target_origin = {rounded(tx + xx * binary64(inner.target_origin.x) + xy * binary64(inner.target_origin.y)),
@@ -227,6 +227,38 @@ AssemblyProfilePlanarAffine oriented_map(const AssemblyExpandedProfile& profile,
     return result;
 }
 
+Bounds2 profile_bounds(const AssemblyExpansion& actual, const SourceIndex& source,
+    Vec2 world_origin_m, AssemblyRotationComponents axes, bool axes_mirrored_y,
+    AssemblyExpansionBudget& available_work) {
+    require(!actual.profiles.empty(), "assembly has no actual solid profile bounds");
+    auto pending = available_work; charge_linear(pending, source.segments);
+    pending.consumed_nodes += actual.nodes.size();
+    pending.consumed_profile_segments += source.segments;
+    std::optional<Bounds2> result;
+    for (const auto& profile : actual.profiles) {
+        bool reflected{};
+        const auto map = oriented_map(profile, axes, axes_mirrored_y, world_origin_m, reflected);
+        const auto include = [&](const Boundary& ring) {
+            auto bounds = assembly_profile_boundary_bounds(ring, map);
+            if (reflected) {
+                const auto minimum = bounds.minimum.y;
+                bounds.minimum.y = -bounds.maximum.y; bounds.maximum.y = -minimum;
+            }
+            if (!result) result = bounds;
+            else {
+                result->minimum.x = std::min(result->minimum.x, bounds.minimum.x);
+                result->minimum.y = std::min(result->minimum.y, bounds.minimum.y);
+                result->maximum.x = std::max(result->maximum.x, bounds.maximum.x);
+                result->maximum.y = std::max(result->maximum.y, bounds.maximum.y);
+            }
+        };
+        include(profile.profile.outer);
+        for (const auto& hole : profile.profile.holes) include(hole);
+    }
+    available_work = std::move(pending);
+    return *result;
+}
+
 } // namespace
 
 AssemblyDirectionalResizeDraft draft_assembly_directional_resize(const AssemblyModel& model,
@@ -236,6 +268,8 @@ AssemblyDirectionalResizeDraft draft_assembly_directional_resize(const AssemblyM
         std::isfinite(operation.x_factor) && operation.x_factor > 0 &&
         std::isfinite(operation.y_factor) && operation.y_factor > 0,
         "directional resize anchor/factors must be finite and positive");
+    require(!operation.world_axis_rotation_radians || std::isfinite(*operation.world_axis_rotation_radians),
+        "directional resize world axis rotation must be finite");
     const auto source = index_source(actual, available_work);
     // Establish own-source provenance against the selected model before any
     // profile copy. Inherited profiles must not be replaced by a stale or
@@ -274,6 +308,8 @@ AssemblyDirectionalResizeDraft draft_assembly_directional_resize(const AssemblyM
     }
     for (const auto& [path, profiles] : own_sources)
         require(source_counts[path] == profiles->size(), "directional resize own profile source is incomplete");
+    const auto axes = assembly_rotation_components(operation.world_axis_rotation_radians.value_or(
+        source.root->transform.rotation_radians));
     const bool unit = operation.x_factor == 1.0 && operation.y_factor == 1.0;
     auto pending = available_work;
     if (!unit) charge_linear(pending, source.segments);
@@ -292,7 +328,7 @@ AssemblyDirectionalResizeDraft draft_assembly_directional_resize(const AssemblyM
         auto& node = result.nodes.at(destinations.at(profile.part_path));
         node.source_profiles.push_back(profile.profile);
         node.candidate_profiles.push_back(unit ? profile.profile :
-            resized_profile(profile.profile, profile.transform, source.root->transform, operation));
+            resized_profile(profile.profile, profile.transform, axes, operation));
     }
     if (unit) return result;
     auto candidate = actual.source_instance;
@@ -343,33 +379,19 @@ Bounds2 assembly_root_oriented_profile_bounds(const AssemblyExpansion& actual, V
     require(std::isfinite(world_origin_m.x) && std::isfinite(world_origin_m.y),
         "assembly bounds origin must be finite");
     const auto source = index_source(actual, available_work);
-    require(!actual.profiles.empty(), "assembly has no actual solid profile bounds");
-    auto pending = available_work; charge_linear(pending, source.segments);
-    pending.consumed_nodes += actual.nodes.size();
-    pending.consumed_profile_segments += source.segments;
-    std::optional<Bounds2> result;
-    for (const auto& profile : actual.profiles) {
-        bool reflected{};
-        const auto map = oriented_map(profile, source.root->transform, world_origin_m, reflected);
-        const auto include = [&](const Boundary& ring) {
-            auto bounds = assembly_profile_boundary_bounds(ring, map);
-            if (reflected) {
-                const auto minimum = bounds.minimum.y;
-                bounds.minimum.y = -bounds.maximum.y; bounds.maximum.y = -minimum;
-            }
-            if (!result) result = bounds;
-            else {
-                result->minimum.x = std::min(result->minimum.x, bounds.minimum.x);
-                result->minimum.y = std::min(result->minimum.y, bounds.minimum.y);
-                result->maximum.x = std::max(result->maximum.x, bounds.maximum.x);
-                result->maximum.y = std::max(result->maximum.y, bounds.maximum.y);
-            }
-        };
-        include(profile.profile.outer);
-        for (const auto& hole : profile.profile.holes) include(hole);
-    }
-    available_work = std::move(pending);
-    return *result;
+    return profile_bounds(actual, source, world_origin_m,
+        assembly_rotation_components(source.root->transform.rotation_radians),
+        source.root->transform.mirrored_y, available_work);
+}
+
+Bounds2 assembly_world_axis_profile_bounds(const AssemblyExpansion& actual, Vec2 world_origin_m,
+    double world_axis_rotation_radians, AssemblyExpansionBudget& available_work) {
+    require(std::isfinite(world_origin_m.x) && std::isfinite(world_origin_m.y),
+        "assembly bounds origin must be finite");
+    require(std::isfinite(world_axis_rotation_radians), "assembly bounds world axis rotation must be finite");
+    const auto source = index_source(actual, available_work);
+    return profile_bounds(actual, source, world_origin_m,
+        assembly_rotation_components(world_axis_rotation_radians), false, available_work);
 }
 
 } // namespace sketch

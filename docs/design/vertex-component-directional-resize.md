@@ -111,6 +111,15 @@ interaction qualification; it does not establish complete canvas acceptance.
 
 ## Mixed selections
 
+The component geometry foundation now accepts an optional explicit world-axis
+angle, retaining actual root axes by default. This allows differently rotated
+components to receive the same world operator, anchor and factors; each profile
+is still pulled through its actual node pose. Matching analytical bounds in that
+explicit unreflected basis permit a common selection frame. Both paths retain
+actual binary64 basis inverses and transactional shared work admission. The
+finite-angle requirement applies even to unit factors. This adds geometry
+support, not mixed command, room, constraint or dimension authority.
+
 Cutout transfer now examines the exact relative map, rather than requiring both
 individual profile maps to be similarities. Compatible anisotropic maps can
 therefore transfer circular source primitives without tessellation. Anchored
