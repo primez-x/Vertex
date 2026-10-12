@@ -547,6 +547,30 @@ std::uint32_t required_format_version_internal(const DocumentSnapshot& snapshot,
             const auto literal_true=[](const nlohmann::json& child,const char* field) {
                 return child.contains(field) && child.at(field).is_boolean() && child.at(field)==true;
             };
+            if(floor<259) {
+                // Source-preserving mapped slab geometry: leaf5, replacement11,
+                // dimension wrapper12 and outer phase44/45. Mapped frames and
+                // live planar_affine payloads are detected on entities.
+                const bool slab=typed_shape(value,5,{"version","slab_id","kind","vertex","transform","resize",
+                    "coordinate_world_hosted_geometry","preserve_planar_source_geometry"}) &&
+                    literal_true(value,"preserve_planar_source_geometry");
+                const bool replacement=typed_shape(value,11,{"version","registry_id","alternative_id","seed_slab_ids",
+                    "identities","slab_profiles","slab_stacks","slab_geometry","ordinary_geometry",
+                    "hosted_instance_identities","coordinate_hosted_directional_geometry","coordinate_ordinary_hosted_geometry",
+                    "preserve_slab_planar_source_geometry"}) && literal_true(value,"preserve_slab_planar_source_geometry");
+                const bool dimensions=typed_shape(value,12,{"version","authoring","complete_component_dimensions","dimension_identities"});
+                const bool phase=value.is_object() && value.contains("version") &&
+                    (value.at("version")==44 || value.at("version")==45) && value.contains("slab_replacement") &&
+                    value.contains("phase_selections") && value.contains("source_snapshot_digest");
+                if(slab || replacement || dimensions || phase)try {
+                    if(slab)(void)decode_slab_geometry_edit_intent(value);
+                    else if(replacement || dimensions)(void)decode_phase_slab_replacement_authoring(value);
+                    else (void)decode_phase_constraint_authoring_intent(value);
+                    floor=259U;
+                } catch(const std::invalid_argument&) {
+                } catch(const nlohmann::json::exception&) {
+                }
+            }
             if(floor<258) {
                 const bool slab=typed_shape(value,4,{"version","slab_id","kind","vertex","transform","resize",
                     "coordinate_world_hosted_geometry"}) && literal_true(value,"coordinate_world_hosted_geometry");
@@ -1788,11 +1812,11 @@ std::uint32_t required_format_version_internal(const DocumentSnapshot& snapshot,
     };
     for (const auto& revision : snapshot.history()) {
         if (revision.phase_entity_import) required=std::max(required,160U);
-        if (required<258 && revision.boundary_constraint_changes)
+        if (required<259 && revision.boundary_constraint_changes)
             required=std::max(required,retained_component_reader_floor(command_to_json(Command{*revision.boundary_constraint_changes})));
-        if (required<258 && revision.boundary_geometry_edit)
+        if (required<259 && revision.boundary_geometry_edit)
             required=std::max(required,typed_edit_reader_floor(encode_boundary_geometry_edit(*revision.boundary_geometry_edit)));
-        if (required<258 && revision.boundary_constraint_changes)
+        if (required<259 && revision.boundary_constraint_changes)
             required=std::max(required,typed_edit_reader_floor(command_to_json(Command{*revision.boundary_constraint_changes})));
         if (required<122 && revision.boundary_geometry_edit)
             required=std::max(required,quantity_reader_floor(encode_boundary_geometry_edit(*revision.boundary_geometry_edit)));
@@ -2418,9 +2442,14 @@ std::uint32_t required_format_version_internal(const DocumentSnapshot& snapshot,
                     survey_quantity_reader_floor(entity)});
             if (entity.type == "slab" && entity.extensions.contains("slab_layer_stack_retirement"))
                 required = std::max(required, 103U);
+            // A live/retained/undone source planar map changes slab geometry
+            // meaning. Older readers would silently draw the unmapped rings.
+            if (entity.type == "slab" && entity.properties.is_object() && entity.properties.contains("planar_affine"))
+                required = std::max(required, 259U);
             if (entity.type == "slab" && entity.extensions.contains("slab_geometry_derivations")) {
                 const auto& archive = entity.extensions.at("slab_geometry_derivations");
-                required = std::max(required, archive.is_object() && archive.value("version", 0) == 4 ? 258U :
+                required = std::max(required, archive.is_object() && archive.value("version", 0) == 5 ? 259U :
+                    archive.is_object() && archive.value("version", 0) == 4 ? 258U :
                     archive.is_object() && archive.value("version", 0) == 3 ? 126U :
                     archive.is_object() && archive.value("version", 0) == 2 ? 109U : 104U);
             }
@@ -4361,6 +4390,7 @@ bool verify_sqlite_schema(sqlite3* database, bool allow_recovery = false) {
          sqlite3_column_int(user_version.get(), 0) != 256 &&
          sqlite3_column_int(user_version.get(), 0) != 257 &&
          sqlite3_column_int(user_version.get(), 0) != 258 &&
+         sqlite3_column_int(user_version.get(), 0) != 259 &&
          sqlite3_column_int(user_version.get(), 0) != 253 &&
          sqlite3_column_int(user_version.get(), 0) != 242 &&
          sqlite3_column_int(user_version.get(), 0) != 207 &&
@@ -5088,6 +5118,8 @@ DocumentSnapshot read_snapshot(sqlite3* database, RecoveryLedger* recovery = nul
     // here and authenticate the manifest with its stored version below.
     const auto required_format = required_format_version_internal(snapshot, format_number < 28);
     if (required_format > format_number) {
+        if (required_format>=259)
+            storage_error(StorageErrorCode::unsupported_format,"This project requires reader 259 for source-preserving mapped slab geometry");
         if (required_format>=258)
             storage_error(StorageErrorCode::unsupported_format,"This project requires reader 258 for coordinated slab directional geometry and dimensions");
         if (required_format>=257)

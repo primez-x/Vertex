@@ -101,6 +101,7 @@
 #include "sketch/roof_clone.hpp"
 #include "sketch/slab_clone.hpp"
 #include "sketch/slab_hosted_geometry_edit.hpp"
+#include "sketch/slab_plan_geometry.hpp"
 #include "sketch/phase_roof_demolition.hpp"
 #include "sketch/roof_removal.hpp"
 #include "sketch/phase_wall_canvas_projection.hpp"
@@ -5967,6 +5968,27 @@ DocumentRoomFootprint architectural_footprint(const Entity& source) {
     return footprint;
 }
 
+// Optional source planar map of a slab footprint; rooms and unmapped slabs
+// have none. Raw rings remain authoritative edit sources either way.
+std::optional<AssemblyProfilePlanarAffine> footprint_planar_affine(const Entity& source) {
+    if (source.type != "slab" || !source.properties.contains("planar_affine")) return std::nullopt;
+    return decode_slab_planar_affine(source.properties.at("planar_affine"));
+}
+
+// Effective plan footprint for display, previews and host plans. Mapped slabs
+// present derived display chords of their exact (possibly elliptical) image;
+// measurements use slab_plan_* analytically instead of these chords.
+DocumentRoomFootprint effective_architectural_footprint(const Entity& source) {
+    auto footprint = architectural_footprint(source);
+    const auto map = footprint_planar_affine(source);
+    if (!map) return footprint;
+    auto paths = slab_plan_display_boundaries(SlabPlanSource{footprint.boundary, footprint.holes, &*map}, 0.00025, 8192);
+    DocumentRoomFootprint result;
+    result.boundary = std::move(paths.front());
+    for (std::size_t index = 1; index < paths.size(); ++index) result.holes.push_back(std::move(paths[index]));
+    return result;
+}
+
 void retain_footprint_vertex_handles(CanvasEntity& entity, const Entity& source, Revision revision,
     bool interactive, const ArchitecturalViewContext* view = nullptr) {
     entity.vertex_handles.clear();
@@ -5975,6 +5997,8 @@ void retain_footprint_vertex_handles(CanvasEntity& entity, const Entity& source,
         source.extensions.contains("physical_wall_room") ||
         source.properties.contains("wall_measurement_source")) return;
     const auto footprint = architectural_footprint(source);
+    // Grips sit at effective plan vertices; footprint edits inverse-map them.
+    const auto map = footprint_planar_affine(source);
     const auto retained_point = [&](Vec2 point) {
         if (view && view->crop) {
             const auto& crop = *view->crop;
@@ -5998,7 +6022,8 @@ void retain_footprint_vertex_handles(CanvasEntity& entity, const Entity& source,
     };
     const auto retain_ring = [&](const Boundary& ring, const QString& prefix) {
         for (std::size_t index = 0; index < ring.size(); ++index) {
-            const auto point = view ? project_plan_point(ring[index].start, view->frame) : ring[index].start;
+            const auto effective = map ? assembly_profile_affine_point(ring[index].start, *map) : ring[index].start;
+            const auto point = view ? project_plan_point(effective, view->frame) : effective;
             if (retained_point(point))
                 entity.vertex_handles.push_back({prefix + QString::number(static_cast<qulonglong>(index)), point, revision});
         }
@@ -26830,9 +26855,18 @@ public:
         }
         if (entity.type == "slab" || entity.type == "room") {
             const auto footprint = architectural_footprint(entity);
-            auto area = std::abs(signed_area(footprint.boundary));
-            for (const auto& hole : footprint.holes) area -= std::abs(signed_area(hole));
-            const auto outer_perimeter = perimeter(footprint.boundary);
+            const auto map = footprint_planar_affine(entity);
+            auto area = 0.0, outer_perimeter = 0.0;
+            if (map) {
+                // Analytical mapped quantities; display chords never measure.
+                const std::vector<Boundary> no_holes;
+                area = slab_plan_signed_area(SlabPlanSource{footprint.boundary, footprint.holes, &*map});
+                outer_perimeter = slab_plan_perimeter(SlabPlanSource{footprint.boundary, no_holes, &*map});
+            } else {
+                area = std::abs(signed_area(footprint.boundary));
+                for (const auto& hole : footprint.holes) area -= std::abs(signed_area(hole));
+                outer_perimeter = perimeter(footprint.boundary);
+            }
             if (!std::isfinite(area) || area <= 0.0 || !std::isfinite(outer_perimeter) || outer_perimeter <= 0.0)
                 throw std::invalid_argument("The footprint area or perimeter is unavailable.");
             return {area, outer_perimeter};
@@ -27226,7 +27260,7 @@ public:
         if (entity.type=="slab" || entity.type=="room") {
             if (entity.type=="slab" || has_document_room_volume_fields(entity))
                 (void)makeAssemblyHostShape(snapshot,host_id);
-            return architectural_footprint(entity).boundary;
+            return effective_architectural_footprint(entity).boundary;
         }
         if (entity.type=="opening") {
             const auto wall=opening_plan_host(snapshot,entity);
@@ -27862,7 +27896,7 @@ public:
                             if (handle.id.toStdString()==edge.start_vertex_id) handle.position=edge.segment.start;
                 } else if ((entity.type == "slab" || entity.type == "room") &&
                     (!source.entities().contains(entity.id) || entity != source.entities().at(entity.id))) {
-                    const auto footprint = architectural_footprint(entity);
+                    const auto footprint = effective_architectural_footprint(entity);
                     edited_footprint = true;
                     proposed.stroke_segments.reset();
                     proposed.resize_frame.reset();
@@ -36411,7 +36445,12 @@ public:
                 } else if (can_recognize_building_entity_type(entity.type))
                     geometry=project_building_plan(decode_building_entity(
                         hosted_stair_railing(entity) ? entity : resolve_vertical_placement(authority,entity)),authority);
-                else if (entity.type=="slab" || entity.type=="room") geometry=read_boundary(entity.properties);
+                else if (entity.type=="slab" && entity.properties.contains("planar_affine")) {
+                    // Exact analytical bounds of the mapped (possibly elliptical) image.
+                    const auto footprint=architectural_footprint(entity);
+                    const auto map=footprint_planar_affine(entity);
+                    accept_owner(slab_plan_bounds(SlabPlanSource{footprint.boundary,footprint.holes,&*map}));
+                } else if (entity.type=="slab" || entity.type=="room") geometry=read_boundary(entity.properties);
                 else if (entity.type==kAnnotationEntityType) {
                     const auto state=decode_annotation_entity(entity);
                     const auto accept_child=[&](const auto& child) {
@@ -50536,6 +50575,8 @@ private:
                 layers != properties.end()) {
                 preview.layers = parse_slab_layers(*layers, *thickness);
             }
+            if (const auto map = properties.find("planar_affine"); map != properties.end())
+                preview.planar_affine = decode_slab_planar_affine(*map);
             (void)make_slab(preview);
             return true;
         } catch (const std::exception& error) {
@@ -52780,6 +52821,10 @@ private:
             throw std::invalid_argument("The horizontal copy is missing a selected assembly's transform.");
         // Replay directly against the complete real copy map. A fabricated
         // snapshot cannot lend source/history authority to a transformed copy.
+        // Clones keep any source planar map; moving a mapped copy needs v5.
+        for (auto& edit : movement)
+            if (const auto found = copied.entities.find(edit.slab_id); found != copied.entities.end())
+                edit.preserve_planar_source_geometry = slab_geometry_edit_requires_planar_source(found->second, edit);
         auto candidate = replay_slab_geometry_entities(copied.entities, movement);
         std::map<std::string, std::map<std::string, AssemblyTransform, std::less<>>, std::less<>> catalog_transforms;
         std::set<std::string, std::less<>> hosted_catalogs;
@@ -52857,11 +52902,21 @@ private:
     static Command sourceDerivedSlabEditCommand(const DocumentSnapshot& source,
         const std::vector<SlabProfileEditIntent>& profiles,
         const std::vector<SlabLayerStackEditIntent>& stacks,
-        const std::vector<SlabGeometryEditIntent>& geometry, const std::string& message,
+        const std::vector<SlabGeometryEditIntent>& requested_geometry, const std::string& message,
         bool complete_component_dimensions=true) {
         if ((static_cast<int>(!profiles.empty()) + static_cast<int>(!stacks.empty()) +
-             static_cast<int>(!geometry.empty())) > 1)
+             static_cast<int>(!requested_geometry.empty())) > 1)
             throw std::invalid_argument("Edit horizontal profiles, layer inventories and outlines separately.");
+        // Choose each new leaf from the actual source: mapped slabs, and
+        // unequal resizes of circular arcs, require source-preserving v5.
+        auto geometry = requested_geometry;
+        for (auto& edit : geometry) {
+            const auto found = source.entities().find(edit.slab_id);
+            if (found != source.entities().end() && !edit.preserve_planar_source_geometry)
+                edit.preserve_planar_source_geometry = slab_geometry_edit_requires_planar_source(found->second, edit);
+        }
+        const auto mapped=[](const auto& edit) { return edit.preserve_planar_source_geometry; };
+        const bool mapped_cohort=std::any_of(geometry.begin(),geometry.end(),mapped);
         const bool stack_edit = !stacks.empty();
         const bool geometry_edit = !geometry.empty();
         const auto directional=[](const auto& edit) { return edit.kind == SlabGeometryEditKind::resize_plan &&
@@ -52869,7 +52924,7 @@ private:
         const bool directional_cohort=std::any_of(geometry.begin(),geometry.end(),directional);
         // Authenticate every actual hosted target, including unit members that
         // the phase partition legitimately omits from its changed-owner roster.
-        const auto physical = geometry_edit ? (directional_cohort ?
+        const auto physical = geometry_edit ? ((directional_cohort || mapped_cohort) ?
                 replay_slab_geometry_with_hosted_entities(source.entities(), geometry) :
                 replay_slab_geometry_entities(source.entities(), geometry))
                               : stack_edit ? replay_slab_layer_stack_entities(source.entities(), stacks)
@@ -52896,7 +52951,7 @@ private:
             }
         }
         if (!request) {
-            const auto ordinary = geometry_edit && !directional_cohort
+            const auto ordinary = geometry_edit && !directional_cohort && !mapped_cohort
                 ? replay_slab_geometry_with_hosted_entities(source.entities(), geometry) : physical;
             ApplyEntityChanges command{source.revision(), {}, {}, message};
             for (const auto& [id, proposed] : ordinary) {
@@ -52934,6 +52989,9 @@ private:
             replacement.coordinate_hosted_directional_geometry =
                 std::any_of(replacement.slab_geometry.begin(),replacement.slab_geometry.end(),directional) ||
                 std::any_of(replacement.ordinary_geometry.begin(),replacement.ordinary_geometry.end(),directional);
+            replacement.preserve_slab_planar_source_geometry =
+                std::any_of(replacement.slab_geometry.begin(),replacement.slab_geometry.end(),mapped) ||
+                std::any_of(replacement.ordinary_geometry.begin(),replacement.ordinary_geometry.end(),mapped);
         }
         if (!occupied) occupied = retainedSlabIdentityNames(source,complete_component_dimensions);
         for (const auto* slots : {&plan.required_entity_ids, &plan.required_child_ids})
@@ -52974,6 +53032,16 @@ private:
     static Command sourceDerivedSlabLayerStackEditCommand(const DocumentSnapshot& source,
         const std::vector<SlabLayerStackEditIntent>& stacks, const std::string& message) {
         return sourceDerivedSlabEditCommand(source, {}, stacks, {}, message);
+    }
+
+    // Coordinated mixed-family envelopes carry only historical slab leaves,
+    // which cannot represent a slab's source planar map. Refuse clearly.
+    static void refuseMappedCoordinatedSlab(const DocumentSnapshot& source, const std::string& id) {
+        const auto found = source.entities().find(id);
+        if (found != source.entities().end() && found->second.type == "slab" &&
+            found->second.properties.contains("planar_affine"))
+            throw std::invalid_argument("A reshaped (stretched) slab must be moved or transformed separately "
+                "from other object types for now.");
     }
 
     static Command sourceDerivedSlabGeometryEditCommand(const DocumentSnapshot& source,
@@ -53035,7 +53103,7 @@ private:
             for (const auto& target:other) {
                 const auto& entity=source.entities().at(target.entity_id);
                 if (entity.type=="roof") roofs.push_back(target);
-                else if (entity.type=="slab")
+                else if (entity.type=="slab" && (refuseMappedCoordinatedSlab(source,target.entity_id), true))
                     coordinated.at("ordinary_slab_geometry").push_back(
                         encode_slab_geometry_edit_intent(slabTransformGeometryIntent(target.entity_id,target.transform)));
                 else if (structuralObject(entity)) {
@@ -53160,6 +53228,7 @@ private:
             omitUnchangedRoofEdits(source, roof_physical, edits);
             for (const auto& edit : edits) coordinated.at("ordinary_roof_edits").push_back(encode_roof_edit_intent(edit));
             if (!slabs.empty()) {
+                for (const auto& edit : slabs) refuseMappedCoordinatedSlab(source, edit.slab_id);
                 const auto slab_physical = replay_slab_geometry_entities(source.entities(), slabs);
                 for (const auto& edit : slabs) {
                     const auto& before = source.entities().at(edit.slab_id);
@@ -53328,6 +53397,7 @@ private:
                 }
             }
             if (!slabs.empty()) {
+                for (const auto& edit : slabs) refuseMappedCoordinatedSlab(source, edit.slab_id);
                 const auto transformed = replay_slab_geometry_entities(source.entities(), slabs);
                 for (const auto& edit : slabs) {
                     const auto& before = source.entities().at(edit.slab_id);
@@ -53447,7 +53517,10 @@ private:
             for (const auto& edit : roof_edits) coordinated.at("ordinary_roof_edits").push_back(encode_roof_edit_intent(edit));
         else coordinated.at("roof_replacement") = replacement(roof_command, "roof_replacement");
         if (ordinary_slabs)
-            for (const auto& edit : slabs) coordinated.at("ordinary_slab_geometry").push_back(encode_slab_geometry_edit_intent(edit));
+            for (const auto& edit : slabs) {
+                refuseMappedCoordinatedSlab(source, edit.slab_id);
+                coordinated.at("ordinary_slab_geometry").push_back(encode_slab_geometry_edit_intent(edit));
+            }
         else coordinated.at("slab_replacement") = replacement(slab_command, "slab_replacement");
         intent.coordinated_replacements = withHostedDimensionAuthoring(std::move(coordinated));
         ApplyBoundaryConstraintChanges command;
@@ -59903,6 +59976,8 @@ private:
                                     layers != geometry_entity.properties.end()) {
                                     preview.layers = parse_slab_layers(*layers, *thickness);
                                 }
+                                // Validate the actual mapped body, never the bare source rings.
+                                preview.planar_affine = footprint_planar_affine(geometry_entity);
                                 (void)make_slab(preview);
                             } catch (const std::exception& error) {
                                 validation_error = QString::fromUtf8(error.what());
@@ -59919,6 +59994,22 @@ private:
                     continue;
                 }
                 if (holes) room_holes = *holes;
+                if (const auto map = footprint_planar_affine(geometry_entity); map && holes) {
+                    // Effective (possibly elliptical) plan image for display,
+                    // hit-testing, snapping and output. Validation above
+                    // already admitted the mapped source analytically.
+                    try {
+                        auto paths = slab_plan_display_boundaries(
+                            SlabPlanSource{*boundary, *holes, &*map}, 0.00025, 8192);
+                        segments = std::move(paths.front());
+                        room_holes.assign(std::make_move_iterator(paths.begin() + 1),
+                                          std::make_move_iterator(paths.end()));
+                    } catch (const std::exception& error) {
+                        append_geometry_error(QStringLiteral("Slab %1: %2")
+                                                  .arg(id_from(id), QString::fromUtf8(error.what())));
+                        continue;
+                    }
+                }
             } else if (entity.type == "room") {
                 std::string room_error;
                 if (has_document_room_volume_fields(geometry_entity)) {
@@ -63184,6 +63275,7 @@ private:
                             layers != resolved.properties.end()) {
                             projection_slab.layers = parse_slab_layers(*layers, *thickness);
                         }
+                        projection_slab.planar_affine = footprint_planar_affine(resolved);
                         const auto projection = cached_projection(id, [&] { return make_slab(projection_slab); });
                         if (!projection) continue;
                         CanvasEntity retained{
@@ -66072,7 +66164,16 @@ private:
             boundary = read_boundary(entity->properties);
         }
         double length = 0.0;
-        if (is_closed_boundary_entity(entity->type) || entity->type == "slab") {
+        if (entity->type == "slab" && entity->properties.contains("planar_affine") && !boundary.empty()) {
+            // Analytical outer perimeter of the mapped image.
+            try {
+                const std::vector<Boundary> no_holes;
+                const auto map = footprint_planar_affine(*entity);
+                length = slab_plan_perimeter(SlabPlanSource{boundary, no_holes, &*map});
+            } catch (const std::exception&) {
+                length = 0.0;
+            }
+        } else if (is_closed_boundary_entity(entity->type) || entity->type == "slab") {
             length = perimeter(boundary);
         } else if (entity->type == "opening") {
             length = read_number(entity->properties, "width_m", read_number(entity->properties, "width", 0.0));

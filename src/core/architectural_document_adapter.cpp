@@ -15,6 +15,7 @@
 #include "sketch/model_phases.hpp"
 #include "sketch/phase_roof_transform.hpp"
 #include "sketch/project_organization.hpp"
+#include "sketch/slab_plan_geometry.hpp"
 #include "sketch/slab_semantics.hpp"
 #include "sketch/structural_object_edit.hpp"
 #include "sketch/stair_transform.hpp"
@@ -834,8 +835,41 @@ Entity transform_slab_entity(const Entity& source, const ArchitecturalTransform&
     Slab slab;
     std::string error;
     if (!read_document_slab(source, slab, error)) throw std::invalid_argument(error);
-    slab.boundary = transform_plan_boundary(slab.boundary, transform, flip_horizontal, flip_vertical);
-    for (auto& hole : slab.holes) hole = transform_plan_boundary(hole, transform, flip_horizontal, flip_vertical);
+    if (slab.planar_affine) {
+        // Mapped slabs keep authoritative source rings. Compose T after the
+        // actual map exactly once (never A(T(p)) and never a stale map). An
+        // odd reflection reflects source X so the composed map stays positive.
+        const auto& a = *slab.planar_affine;
+        const auto [cosine, sine] = planar_rotation(transform.rotation_z_radians);
+        const double fx = flip_horizontal ? -1.0 : 1.0, fy = flip_vertical ? -1.0 : 1.0;
+        const double txx = fx * cosine * transform.scale, txy = -fx * sine * transform.scale;
+        const double tyx = fy * sine * transform.scale, tyy = fy * cosine * transform.scale;
+        const bool reflected = flip_horizontal != flip_vertical;
+        const double r = reflected ? -1.0 : 1.0;
+        AssemblyProfilePlanarAffine composed;
+        composed.source_origin = {r * a.source_origin.x, a.source_origin.y};
+        composed.target_origin = transform_plan_point(a.target_origin, transform, flip_horizontal, flip_vertical);
+        composed.xx = (txx * a.xx + txy * a.yx) * r;
+        composed.xy = txx * a.xy + txy * a.yy;
+        composed.yx = (tyx * a.xx + tyy * a.yx) * r;
+        composed.yy = tyx * a.xy + tyy * a.yy;
+        validate_assembly_profile_affine(composed);
+        if (reflected) {
+            const auto reflect = [](Boundary& ring) {
+                for (auto& segment : ring) {
+                    segment.start.x = -segment.start.x;
+                    segment.end.x = -segment.end.x;
+                    segment.sweep_radians = -segment.sweep_radians;
+                }
+            };
+            reflect(slab.boundary);
+            for (auto& hole : slab.holes) reflect(hole);
+        }
+        slab.planar_affine = composed;
+    } else {
+        slab.boundary = transform_plan_boundary(slab.boundary, transform, flip_horizontal, flip_vertical);
+        for (auto& hole : slab.holes) hole = transform_plan_boundary(hole, transform, flip_horizontal, flip_vertical);
+    }
     slab.thickness *= transform.scale;
     slab.elevation = slab.elevation * transform.scale + transform.z;
     for (auto& layer : slab.layers) layer.thickness *= transform.scale;
@@ -860,6 +894,7 @@ Entity transform_slab_entity(const Entity& source, const ArchitecturalTransform&
     result.properties["elevation_m"] = slab.elevation;
     if (result.properties.contains("elevation")) result.properties["elevation"] = slab.elevation;
     if (result.properties.contains("layers")) result.properties["layers"] = slab_layers_json(slab.layers);
+    if (slab.planar_affine) result.properties["planar_affine"] = encode_slab_planar_affine(*slab.planar_affine);
     result.properties.erase("transform");
     return result;
 }
@@ -1508,7 +1543,7 @@ void validate_architectural_geometry_changes(
         else if (entity.type == "corner_window")
             physical_change = !before || before->type != entity.type || before->properties != entity.properties;
         else if (entity.type == "slab")
-            physical_change = changed(before, entity, {"boundary", "holes", "thickness_m", "thickness",
+            physical_change = changed(before, entity, {"boundary", "holes", "planar_affine", "thickness_m", "thickness",
                 "elevation_m", "elevation", "layers", "element_kind", "vertical_placement", "layer_id",
                 "floor_id", "building_id", "property_id"});
         else if (entity.type == "room")
@@ -2337,9 +2372,10 @@ EntityState stage_fresh_architectural_clipboard_translation(const DocumentSnapsh
             SlabGeometryEditIntent intent;
             intent.slab_id=id; intent.kind=SlabGeometryEditKind::transform_plan;
             intent.transform=PlanarTransform{{},0,false,false,translation};
+            intent.preserve_planar_source_geometry=slab_geometry_edit_requires_planar_source(before,intent);
             after=replay_slab_geometry_entity(before,intent);
 #else
-            after=clipboard_geometry_fields(before,transform_slab_entity(before,movement),{"boundary","holes"});
+            after=clipboard_geometry_fields(before,transform_slab_entity(before,movement),{"boundary","holes","planar_affine"});
 #endif
         } else if (before.type=="room") {
             after=clipboard_geometry_fields(before,transform_room_entity(before,movement),
@@ -2479,6 +2515,8 @@ ApplyEntityChanges architectural_group_transform_command(const DocumentSnapshot&
                     transform.rotation_z_radians,transform.scale,
                     transform.flip_horizontal,transform.flip_vertical};
             }
+            slab_intent.preserve_planar_source_geometry=
+                slab_geometry_edit_requires_planar_source(found->second,slab_intent);
             slab_intents.push_back(std::move(slab_intent));
         }
 #endif

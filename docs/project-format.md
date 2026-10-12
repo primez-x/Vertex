@@ -1,4 +1,41 @@
-# Vertex project formats v1 through v258
+# Vertex project formats v1 through v259
+
+Reader259/native extraction257 retains source-preserving mapped slab geometry.
+A slab may carry `planar_affine`, a closed version-1 object with exactly
+`version:1`, `source_origin_m:[x,y]`, `target_origin_m:[x,y]` and
+`matrix:[xx,xy,yx,yy]` (positive, finite, invertible). Effective plan points are
+`target_origin + M*(p - source_origin)`. The authored line/circular-arc
+`boundary` and `holes` remain authoritative; their exact images may be
+elliptical. Analytical area, perimeter and bounds, native solids and edit
+handles all use the same map. Display chords are derived presentation only.
+Physical Z, thickness, layers, materials, topology and identity are unchanged.
+An absent map retains historical slab geometry exactly.
+
+Slab geometry leaf v5 has the v3/v4 seven fields plus
+`preserve_planar_source_geometry:true`; it admits all four kinds, and its
+`coordinate_world_hosted_geometry` is boolean. Vertex positions are effective
+plan coordinates and inverse-map to source. Resizes compose the directional map;
+plan/model transforms compose effective geometry, and an odd reflection
+reflects source X exactly while keeping a positive residual map. Mapped frames
+add `planar_affine` (null when the source had none). Archive5 requires a v5
+operation, retains v1..4 records and is never downgraded. Historical leaves
+refuse slabs that already carry a map. Producers emit v5 only for mapped slabs
+or unequal resizes of slabs with circular arcs; other edits keep v1..4.
+
+Slab replacement v11 has the v9 field set plus
+`preserve_slab_planar_source_geometry:true` (thirteen fields); its directional
+flag equals the presence of a coordinated resize leaf and at least one leaf is
+v5. Dimension wrapper v12 encloses exactly one canonical v11. Outer phase44
+carries slab11; outer45 carries slab12 with `slab_edit_version:44`. Phase
+5/27/39/42/43, historical coordinated replacement envelopes and their
+ordinary slab lanes refuse source-preserving leaves.
+
+Live, retained and undone `planar_affine` entities, archive5 and the new leaf,
+replacement, wrapper and outer dialects raise the reader floor to 259. Generic
+IFC/DXF output writes the effective image: line images are exact, elliptical
+arc images are chords with `slab_mapped_curves_exported_as_chords`, and IFC
+mapped slabs export holes as profile voids. This documents source behavior;
+compilation, runtime and migration remain unqualified.
 
 Reader258/native extraction256 retains coordinated slab directional geometry.
 Slab geometry leaf v4 has the same seven closed fields as v3, requires

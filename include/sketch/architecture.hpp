@@ -6,6 +6,7 @@
 #include "sketch/roof_join_semantics.hpp"
 #include "sketch/opening_assembly.hpp"
 #include "sketch/door_operation.hpp"
+#include "sketch/assembly_profile_geometry.hpp"
 #include <TopoDS_Shape.hxx>
 #include <TopoDS_Face.hxx>
 #include <array>
@@ -37,6 +38,10 @@ struct Slab {
     double elevation{};
     SlabElementKind element_kind{SlabElementKind::slab};
     std::vector<SlabLayer> layers;
+    // Appended for aggregate compatibility. Source lines/circular arcs remain
+    // authoritative; their exact affine images may be elliptical. An absent
+    // map retains historical slab geometry and wire semantics.
+    std::optional<AssemblyProfilePlanarAffine> planar_affine;
 };
 
 // A room volume is a semantic architectural enclosure.  It deliberately
@@ -130,6 +135,13 @@ struct RoofJoinPartition {
 [[nodiscard]] RoofJoinPartition make_roof_join_partition(
     const RoofJoin& join, std::span<const TopoDS_Shape> roofs);
 [[nodiscard]] TopoDS_Shape make_slab(const Slab& slab);
+// Architecture-owned native extrusion of source line/circular-arc rings under
+// one positive planar affine map. Circular source arcs become their exact
+// native affine images; physical Z is unchanged. Identity maps build the
+// unmapped source body. Assembly geometry reuses this exact implementation.
+[[nodiscard]] TopoDS_Shape make_planar_affine_extrusion(const std::string& id, const Boundary& outer,
+    const std::vector<Boundary>& holes, double elevation, double height,
+    const AssemblyProfilePlanarAffine& map, SlabElementKind kind = SlabElementKind::slab);
 [[nodiscard]] TopoDS_Shape make_room_volume(const RoomVolume& room);
 // Build a derived triangulated terrain surface from the validated local TIN
 // model. The result is a displayable compound of real OCCT faces; the

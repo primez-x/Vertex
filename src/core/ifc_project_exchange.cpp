@@ -18,6 +18,7 @@
 #include "sketch/roof_join_semantics.hpp"
 #include "sketch/document_wall.hpp"
 #include "sketch/corner_window.hpp"
+#include "sketch/slab_plan_geometry.hpp"
 
 #include <algorithm>
 #include <charconv>
@@ -2146,6 +2147,36 @@ void export_product(const DocumentSnapshot& document, const Entity& entity,
             return;
         }
         boundary = *decoded;
+        // A mapped slab exports its effective plan image, never the bare
+        // unmapped source rings. Line images stay exact; affine images of
+        // circular arcs (elliptical in general) are declared as chords.
+        // Its authored holes are exported as profile voids.
+        const bool mapped = entity.properties.contains("planar_affine");
+        if (mapped) {
+            try {
+                const auto map = decode_slab_planar_affine(entity.properties.at("planar_affine"));
+                std::vector<Boundary> source_holes;
+                if (entity.properties.contains("holes") && entity.properties.at("holes").is_array())
+                    for (const auto& raw : entity.properties.at("holes")) {
+                        Entity hole_entity;
+                        hole_entity.properties = {{"boundary", raw}};
+                        const auto hole = read_boundary(hole_entity);
+                        if (!hole) throw std::invalid_argument("mapped slab hole is not representable");
+                        source_holes.push_back(*hole);
+                    }
+                auto paths = slab_plan_display_boundaries(SlabPlanSource{boundary, source_holes, &map}, 0.00025, 8192);
+                const auto curved = [](const Boundary& ring) {
+                    return std::any_of(ring.begin(), ring.end(), [](const Segment& s) { return s.sweep_radians != 0.0; });
+                };
+                bool chords = curved(boundary) || std::any_of(source_holes.begin(), source_holes.end(), curved);
+                boundary = std::move(paths.front());
+                physical_holes.assign(std::make_move_iterator(paths.begin() + 1), std::make_move_iterator(paths.end()));
+                if (chords) add_diagnostic(diagnostics, entity.id, type, "slab_mapped_curves_exported_as_chords");
+            } catch (const std::exception&) {
+                add_diagnostic(diagnostics, entity.id, type, "slab_mapped_geometry_not_representable");
+                return;
+            }
+        }
         product_type = "IFCSLAB";
         local_elevation = entity.properties.value("elevation_m", 0.0);
         const auto thickness = entity.properties.value("thickness_m", 0.0);
@@ -2155,7 +2186,7 @@ void export_product(const DocumentSnapshot& document, const Entity& entity,
         } else {
             add_diagnostic(diagnostics, entity.id, type, "slab_thickness_not_exported");
         }
-        if (entity.properties.contains("holes") && entity.properties.at("holes").is_array() &&
+        if (!mapped && entity.properties.contains("holes") && entity.properties.at("holes").is_array() &&
             !entity.properties.at("holes").empty())
             add_diagnostic(diagnostics, entity.id, type, "slab_holes_not_exported");
     } else if (type == "boundary" || type == "measurement_boundary" || type == "room_boundary") {
@@ -2341,7 +2372,17 @@ void export_product(const DocumentSnapshot& document, const Entity& entity,
 
     int shape{};
     if (use_solid && closed) {
-        const auto profile = context.builder.add("IFCARBITRARYCLOSEDPROFILEDEF",
+        int profile{};
+        if (product_type == "IFCSLAB" && !hole_points.empty()) {
+            // Mapped slab voids (only mapped slabs populate slab hole points).
+            std::string voids;
+            for (const auto& points : hole_points) {
+                if (!voids.empty()) voids += ',';
+                voids += ref(make_polyline(points));
+            }
+            profile = context.builder.add("IFCARBITRARYPROFILEDEFWITHVOIDS",
+                ".AREA.,$," + ref(polyline_points) + ",(" + voids + ")");
+        } else profile = context.builder.add("IFCARBITRARYCLOSEDPROFILEDEF",
             ".AREA.,$," + ref(polyline_points));
         const auto solid = context.builder.add("IFCEXTRUDEDAREASOLID",
             ref(profile) + "," + ref(context.axis_placement) + "," + ref(context.z_direction) +

@@ -45,6 +45,10 @@ struct SlabGeometryEditIntent {
     // world profiles through the actual Site frame. False retains historical
     // v1/v2 hosted semantics and the historical v1 resize arithmetic.
     bool coordinate_world_hosted_geometry{false};
+    // v5 keeps true source lines/circles and composes their positive planar
+    // map. Vertex positions are effective plan coordinates. Never inferred
+    // for historical leaves, including edits of an already mapped slab.
+    bool preserve_planar_source_geometry{false};
 };
 
 inline constexpr std::string_view slab_geometry_derivations_key = "slab_geometry_derivations";
@@ -53,8 +57,17 @@ inline constexpr std::string_view slab_geometry_derivations_key = "slab_geometry
 // wire fields, v3 plan/model or v4 resize_plan with
 // coordinate_world_hosted_geometry:true. v4 exclusively uses resize_plan;
 // v3 exclusively uses transform_plan/transform_model.
+// v5 has those seven fields plus preserve_planar_source_geometry:true,
+// admits all four kinds, and requires a boolean coordination field (false
+// for move_vertex). Historical leaves refuse actual mapped slabs.
 // Exactly the selected operation is present;
 // coordinates and scales are mathematical intent, never entered quantities.
+// Producers choose the leaf here: true when the actual slab already carries a
+// planar map, or when an unequal plan resize would carry a circular source arc
+// to an ellipse. Otherwise historical leaves remain exact and older readers
+// keep opening the project. Never infer v5 for already-recorded leaves.
+[[nodiscard]] bool slab_geometry_edit_requires_planar_source(
+    const Entity& actual_slab, const SlabGeometryEditIntent& intent);
 [[nodiscard]] nlohmann::json encode_slab_geometry_edit_intent(const SlabGeometryEditIntent& intent);
 [[nodiscard]] SlabGeometryEditIntent decode_slab_geometry_edit_intent(const nlohmann::json& value);
 
@@ -93,6 +106,11 @@ void validate_slab_geometry_derivation(const Entity& source);
 // elevation_shift_m from actual resolved placement. Layer IDs are not frames.
 // Known changed profile receipts retire by the same policy. Detached model
 // replay refuses level placement; use actual-map replay for resolved context.
+// v5 frames additionally contain planar_affine (null for absent source maps).
+// Archive5 requires a v5 operation and retains exact historical frames. v5
+// resize composes the exact directional map, preserving source arcs and Z;
+// plan/model transforms compose effective geometry, with odd reflections
+// represented by exact source reflection and a positive residual map.
 [[nodiscard]] Entity replay_slab_geometry_entity(
     const Entity& actual_source, const SlabGeometryEditIntent& intent);
 

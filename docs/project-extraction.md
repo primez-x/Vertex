@@ -1,5 +1,12 @@
 # Portable project extraction
 
+Exchange version257 requires native reader259 for source-preserving mapped
+slab `planar_affine`, leaf5/archive5, slab replacement11/dimension wrapper12
+and outer phase44/45. Authored rings and the map are carried unchanged; older
+slab wires keep their meanings. The extraction manifest derives this exchange
+version from the required native reader; no extraction or migration execution
+is claimed.
+
 Exchange version256 requires native reader258 for coordinated slab directional
 leaf4/archive4, slab replacement9/dimension wrapper10 and outer phase42/43.
 It retains actual source profile maps, topology, placements, qualified proposed

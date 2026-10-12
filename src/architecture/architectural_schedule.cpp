@@ -422,6 +422,7 @@ void append_layer_material_rows(
 
                 Slab homogeneous{id, slab.boundary, slab.holes, layer.thickness,
                                 layer_elevation, slab.element_kind, {}};
+                homogeneous.planar_affine = slab.planar_affine;
                 const auto shape = make_slab(homogeneous);
                 const auto volume = solid_volume(shape);
                 if (!std::isfinite(volume) || volume <= 0.0) {

@@ -53,6 +53,9 @@ struct PhaseConstraintAuthoringIntent {
     // plan resize and actual-source hosted carry. Forty-three alone pairs its
     // complete dimension child ten with slab_edit_version forty-two. Historical
     // five/twenty-seven/thirty-nine and coordinated envelopes refuse this lane.
+    // Dialect forty-four pairs slab child eleven for source-preserving mapped
+    // plan geometry. Forty-five pairs dimension child twelve and exactly
+    // slab_edit_version forty-four. Earlier dialects retain their own children.
     nlohmann::json slab_replacement=nullptr;
     // Dialect six: registry-only demolition of actual shared baseline slabs.
     // No replacement identity or ordinary geometry authority accompanies it.

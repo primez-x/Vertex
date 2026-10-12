@@ -159,7 +159,8 @@ add_library(sketch_dxf_project_exchange src/core/dxf_project_exchange.cpp
   src/core/dxf_annotation_source.cpp src/core/dxf_constraint_source.cpp
   src/core/dxf_sheet_view_source.cpp)
 target_include_directories(sketch_dxf_project_exchange PUBLIC include)
-target_link_libraries(sketch_dxf_project_exchange PUBLIC sketch_dxf_exchange sketch_document sketch_precision sketch_document_wall sketch_hosted_opening_geometry sketch_door_operation sketch_opening_assembly)
+target_link_libraries(sketch_dxf_project_exchange PUBLIC sketch_dxf_exchange sketch_document sketch_precision sketch_document_wall sketch_hosted_opening_geometry sketch_door_operation sketch_opening_assembly
+  PRIVATE sketch_slab_plan_geometry)
 if(MSVC)
   target_compile_options(sketch_dxf_project_exchange PRIVATE /W4 /permissive- /utf-8)
 endif()
@@ -167,7 +168,8 @@ add_library(sketch_ifc_project_exchange src/core/ifc_project_exchange.cpp)
 target_include_directories(sketch_ifc_project_exchange PUBLIC include)
 target_link_libraries(sketch_ifc_project_exchange
   PUBLIC sketch_document sketch_precision
-  PRIVATE sketch_wall_semantics sketch_opening_assembly sketch_door_operation sketch_project_organization)
+  PRIVATE sketch_wall_semantics sketch_opening_assembly sketch_door_operation sketch_project_organization
+    sketch_slab_plan_geometry)
 if(MSVC)
   target_compile_options(sketch_ifc_project_exchange PRIVATE /W4 /permissive- /utf-8)
 endif()
@@ -198,6 +200,11 @@ add_library(sketch_assembly_model src/core/assembly_model.cpp
 target_include_directories(sketch_assembly_model PUBLIC include)
 target_link_libraries(sketch_assembly_model PUBLIC sketch_json sketch_precision
   PRIVATE Boost::multiprecision)
+# Pure slab plan quantities and the closed planar-affine wire. No native kernel:
+# document, adapter and desktop consumers share it with or without OCCT.
+add_library(sketch_slab_plan_geometry src/core/slab_plan_geometry.cpp)
+target_include_directories(sketch_slab_plan_geometry PUBLIC include)
+target_link_libraries(sketch_slab_plan_geometry PUBLIC sketch_json sketch_assembly_model sketch_precision)
 add_library(sketch_product_scope src/core/product_scope.cpp)
 target_include_directories(sketch_product_scope PUBLIC include)
 target_link_libraries(sketch_product_scope PUBLIC sketch_json)
@@ -225,7 +232,8 @@ add_library(sketch_architectural_document_adapter
   src/core/selection_scale_plane.cpp
   src/core/architectural_footprint_edit.cpp)
 target_include_directories(sketch_architectural_document_adapter PUBLIC include)
-target_link_libraries(sketch_architectural_document_adapter PUBLIC sketch_architectural_workflow_contract sketch_document sketch_building_entities sketch_architecture)
+target_link_libraries(sketch_architectural_document_adapter PUBLIC sketch_architectural_workflow_contract sketch_document sketch_building_entities sketch_architecture
+  sketch_slab_plan_geometry)
 add_library(sketch_hosted_opening_geometry src/core/hosted_opening_geometry.cpp)
 target_include_directories(sketch_hosted_opening_geometry PUBLIC include)
 target_link_libraries(sketch_hosted_opening_geometry PUBLIC sketch_precision sketch_wall_semantics)
@@ -245,7 +253,8 @@ if(SKETCH_BUILD_ARCHITECTURE OR SKETCH_BUILD_DESKTOP)
   target_link_libraries(sketch_ifc_project_exchange PUBLIC sketch_architecture sketch_building_entities sketch_project_organization sketch_assembly_geometry TKMesh)
 endif()
 if(SKETCH_BUILD_ARCHITECTURE OR SKETCH_BUILD_DESKTOP)
-  target_link_libraries(sketch_architecture PUBLIC sketch_hosted_opening_geometry sketch_wall_plan_junctions)
+  target_link_libraries(sketch_architecture PUBLIC sketch_hosted_opening_geometry sketch_wall_plan_junctions
+    sketch_assembly_model sketch_slab_plan_geometry)
   add_library(sketch_hosted_opening_plan src/architecture/hosted_opening_plan.cpp)
   target_include_directories(sketch_hosted_opening_plan PUBLIC include)
   target_link_libraries(sketch_hosted_opening_plan PUBLIC sketch_architecture sketch_building_plan_projection)
@@ -919,7 +928,7 @@ if(SKETCH_BUILD_ARCHITECTURE OR SKETCH_BUILD_DESKTOP)
   # admission as native architectural authoring, rather than accept solids
   # that the architectural constructors would subsequently reject.
   target_link_libraries(sketch_document PRIVATE sketch_constraints sketch_precision sketch_architecture sketch_roof_entity_codec
-    sketch_building_entities sketch_architectural_document_adapter sketch_assembly_geometry)
+    sketch_building_entities sketch_architectural_document_adapter sketch_assembly_geometry sketch_slab_plan_geometry)
   add_library(sketch_constraint_authoring INTERFACE)
   target_link_libraries(sketch_constraint_authoring INTERFACE sketch_document sketch_constraints sketch_precision sketch_project_organization)
   add_library(sketch_mixed_clipboard_placement src/core/mixed_clipboard_placement.cpp)

@@ -6,6 +6,8 @@
 #include "sketch/document_solid.hpp"
 #include "sketch/project_organization.hpp"
 #include "sketch/phase_roof_resize.hpp"
+#include "sketch/slab_hosted_geometry_edit.hpp"
+#include "sketch/slab_plan_geometry.hpp"
 
 #include <Bnd_Box.hxx>
 #include <BRepBndLib.hxx>
@@ -527,6 +529,17 @@ double plan_axis_resize_frame(const Entity& entity) {
         } else {
             Slab slab;
             if (!read_document_slab(entity,slab,error)) throw std::invalid_argument(error);
+            if (slab.planar_affine) {
+                (void)slab_plan_bounds(slab);
+                for (const auto& edge : slab.boundary) {
+                    // Same chord rule as unmapped footprints, in effective coordinates.
+                    const auto tangent = assembly_profile_affine_direction(
+                        {edge.end.x - edge.start.x, edge.end.y - edge.start.y}, *slab.planar_affine);
+                    if (std::hypot(tangent.x,tangent.y) > default_geometry_tolerance_metres)
+                        return std::atan2(tangent.y,tangent.x);
+                }
+                throw std::invalid_argument("Plan resize mapped footprint has no nonzero boundary tangent");
+            }
             boundary = std::move(slab.boundary);
         }
         for (const auto& edge : boundary) {
@@ -566,6 +579,16 @@ double plan_axis_resize_frame(const Entity& entity) {
 
 Bounds2 plan_axis_resize_bounds(const Entity& entity) {
     const double angle = plan_axis_resize_frame(entity);
+    if (entity.type == "slab" && entity.properties.contains("planar_affine")) {
+        Slab slab;
+        std::string error;
+        if (!read_document_slab(entity,slab,error)) throw std::invalid_argument(error);
+        (void)slab_plan_bounds(slab);
+        const auto c = std::cos(angle), s = std::sin(angle);
+        const AssemblyProfilePlanarAffine rotation{{},{},c,s,-s,c};
+        const auto affine = compose_assembly_profile_affine(rotation, *slab.planar_affine);
+        return assembly_profile_boundary_bounds(slab.boundary,affine);
+    }
     if (entity.type == "room" && !has_document_room_volume_fields(entity)) {
         DocumentRoomFootprint footprint;
         std::string error;
@@ -676,6 +699,23 @@ ApplyEntityChanges plan_axis_resize_command(const DocumentSnapshot& source, cons
     if (found == source.entities().end())
         throw DocumentError(DocumentErrorCode::dangling_reference,"Plan resize target is missing");
     const Entity& original = found->second;
+    if (original.type == "slab") {
+        SlabGeometryEditIntent intent;
+        intent.slab_id = entity_id;
+        intent.kind = SlabGeometryEditKind::resize_plan;
+        intent.resize = SlabPlanAxisResize{scale_x,scale_y,anchor,frame_rotation_radians};
+        intent.coordinate_world_hosted_geometry = true;
+        intent.preserve_planar_source_geometry = slab_geometry_edit_requires_planar_source(original, intent);
+        const auto entities = replay_slab_geometry_with_hosted_entities(source.entities(),{intent});
+        ApplyEntityChanges command{source.revision(),{}, {},"Resize plan dimensions"};
+        for (const auto& [id,entity] : entities)
+            if (entity != source.entities().at(id)) command.entity_changes.push_back(EntityChange::upsert(entity));
+        if (!command.entity_changes.empty()) {
+            const auto preview = Document::preview_command(source,command);
+            validate_dependent_geometry(source,preview,entity_id);
+        }
+        return command;
+    }
     Entity result = original;
     const Resize resize{scale_x,scale_y,anchor,frame_rotation_radians};
     ApplyEntityChanges command{source.revision(),{}, {},"Resize plan dimensions"};
@@ -735,13 +775,6 @@ ApplyEntityChanges plan_axis_resize_command(const DocumentSnapshot& source, cons
                 throw std::invalid_argument(*invalid);
             update_footprint(result,footprint.boundary,footprint.holes);
         }
-    } else if (original.type == "slab") {
-        Slab slab;
-        if (!read_document_slab(original,slab,error)) throw std::invalid_argument(error);
-        slab.boundary = resize.boundary(slab.boundary);
-        for (auto& hole : slab.holes) hole = resize.boundary(hole);
-        (void)make_slab(slab);
-        update_footprint(result,slab.boundary,slab.holes);
     } else if (original.type == "roof") {
         result = replay_roof_plan_resize_entity(original,
             {entity_id, scale_x, scale_y, anchor, frame_rotation_radians});

@@ -81,7 +81,8 @@ struct PhaseSlabReplacementResult {
     bool coordinate_ordinary_hosted_geometry = false,
     bool coordinate_hosted_profiles = false,
     const PhaseSlabReplacementIdentityMap& dimension_identities = {},
-    bool coordinate_hosted_directional_geometry = false);
+    bool coordinate_hosted_directional_geometry = false,
+    bool preserve_slab_planar_source_geometry = false);
 
 struct PhaseSlabReplacementAuthoring {
     std::string registry_id;
@@ -106,6 +107,9 @@ struct PhaseSlabReplacementAuthoring {
     // V9 admits actual-source directional hosted geometry; V10 encloses its
     // complete component dimension copies. Historical envelopes refuse it.
     bool coordinate_hosted_directional_geometry{false};
+    // V11 preserves actual source rings and their optional planar map. V12
+    // encloses only that authority with complete component dimensions.
+    bool preserve_slab_planar_source_geometry{false};
 };
 
 // Exact v1 fields: version, registry_id, alternative_id, seed_slab_ids,
@@ -133,6 +137,12 @@ struct PhaseSlabReplacementAuthoring {
 // v4 resize_plan. Its qualified hosted roster may be empty. Historical v1..v8
 // cannot enclose leaf v4. V10 has V8's exact four keys and enforces a canonical
 // v9 body only; neither dimension wrapper can nest.
+// V11 has the V9 fields plus preserve_slab_planar_source_geometry:true.
+// Its directional flag equals the presence of a coordinated resize leaf,
+// ordinary carry equals !ordinary_geometry.empty(), and at least one geometry
+// leaf is v5. Compatible historical leaves keep their original semantics.
+// V12 has the dimension wrapper's four keys and a canonical V11 body only.
+// Historical V1..V10 cannot contain source-preserving geometry leaves.
 [[nodiscard]] nlohmann::json encode_phase_slab_replacement_authoring(
     const PhaseSlabReplacementAuthoring& authoring);
 [[nodiscard]] PhaseSlabReplacementAuthoring decode_phase_slab_replacement_authoring(

@@ -276,6 +276,7 @@ AssemblyInstance materialize_borrowed_host(const AssemblyModel& model, const Ass
     if (!read_document_slab(resolved_host, slab, error))
         reject("cannot materialize actual borrowed slab: " + error);
     AssemblyProfile profile{"host-slab", slab.boundary, slab.holes, slab.elevation, slab.thickness};
+    profile.planar_affine = slab.planar_affine;
     // Native fallback colors the entire host copy by the first resolved slot
     // with an actual catalog color; it does not publish host layer regions.
     const auto resolved = model.resolve(instance.id);
@@ -292,6 +293,7 @@ AssemblyInstance materialize_borrowed_host(const AssemblyModel& model, const Ass
     auto& raw_profile = source_profiles.at(0);
     raw_profile["outer"] = host.properties.at("boundary");
     raw_profile["holes"] = host.properties.at("holes");
+    if (slab.planar_affine) raw_profile["planar_affine"] = host.properties.at("planar_affine");
     const auto& p = resolved_host.properties;
     raw_profile["elevation_m"] = p.at(p.contains("elevation_m") ? "elevation_m" : "elevation");
     raw_profile["height_m"] = p.at(p.contains("thickness_m") ? "thickness_m" : "thickness");

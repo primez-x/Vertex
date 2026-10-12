@@ -14,6 +14,54 @@ changed source does not acquire runtime acceptance without later qualification.
 
 ## Current delivery state
 
+### October 12 source-preserving mapped slab integration
+
+Continues the interrupted mapped-slab batch on top of c61979e6. Source only:
+no builds, tests, scripts, probes, launches, packages or installations ran.
+The installed application is unchanged.
+
+- Dependency split: the native affine extrusion now lives in architecture
+  (`make_planar_affine_extrusion`), used by `make_slab` and reused by assembly
+  geometry; no architecture -> assembly-geometry cycle and no new public
+  assembly symbol. New pure target `sketch_slab_plan_geometry` (no OCCT) owns
+  the closed planar-affine wire and analytical area/perimeter/bounds/display
+  helpers over a borrowed `SlabPlanSource`, linked by architecture, the
+  document adapter, document, DXF and IFC targets.
+- Dialects: slab leaf5/archive5 decode/encode with explicit coordination rules
+  (v5 resize requires hosted coordination; v5 vertex edits refuse it).
+  Replacement11/wrapper12 decode, thread through replay, and refuse historical
+  bodies. Outer phase44/45 encode/decode; historical 5/27/39/42/43, coordinated
+  envelopes and their ordinary slab lanes refuse mapped leaves.
+- Reader259/extraction257: live/retained/undone `planar_affine` entities,
+  archive5 and the new typed leaf/replacement/wrapper/outer dialects raise the
+  floor. Format docs updated.
+- Leaf selection: producers emit v5 only for already-mapped slabs or unequal
+  resizes of slabs with circular arcs; ordinary edits keep historical leaves
+  and older readers. Phase authoring sets the v11 flag from actual leaves.
+- Consumers: main plan canvas, coordinated view solids, validation previews,
+  footprint grips (effective positions; the stager inverse-maps exactly once),
+  preview metrics, host plans, paste bounds and inspector perimeter use the
+  effective map. Phase canvas keeps historical raw paths for unmapped slabs.
+  The adapter's legacy slab transform composes T after the map (reflections
+  reflect source X), map changes count as physical changes, and clipboard
+  paste, horizontal copy and adapter group transforms choose v5 for mapped
+  slabs. Desktop mixed coordinated envelopes refuse mapped slabs with a clear
+  message. Map changes retire ring-bound quantity receipts.
+- Exchange: generic IFC/DXF write the effective image, never bare source
+  rings. Elliptical arc images export as chords with
+  `slab_mapped_curves_exported_as_chords`; IFC mapped slabs export holes as
+  profile voids.
+
+Independent source review found no P1. Its three P2 findings (mapped slabs
+refused by paste/copy/group producers; phase canvas pushing unmapped slabs
+through mapped admission; stale receipts after map-only edits) and the P3
+coordination-flag and frame-angle findings are corrected in source. Remaining:
+mixed-family coordinated envelopes cannot yet carry mapped slabs; native IFC
+source recovery of the map; frame-tolerance alignment between archive admission
+and mapped quantities; separate-axis mixed-selection resize authority.
+Compilation, runtime, migration and user acceptance remain unverified; all ten
+production gates remain open.
+
 ### October 11 coordinated slab directional resize integration
 
 The component cohort canvas connection is committed and pushed as

@@ -361,7 +361,8 @@ public:
     // v256 retains atomic initial topology plus component affine deformation.
     // v257 retains complete reviewed initial component geometry and dimension carry.
     // v258 retains actual-source coordinated slab directional geometry and phases.
-    static constexpr std::uint32_t format_version = 258;
+    // v259 retains source-preserving mapped slab geometry, leaf5/archive5 and phases.
+    static constexpr std::uint32_t format_version = 259;
     static constexpr std::uint32_t recovery_format_version = 4;
     [[nodiscard]] static std::uint32_t required_format_version(const DocumentSnapshot& snapshot);
     static constexpr std::uint64_t maximum_file_bytes = 4ULL * 1024ULL * 1024ULL * 1024ULL;

@@ -1,4 +1,5 @@
 #include "sketch/dxf_project_exchange.hpp"
+#include "sketch/slab_plan_geometry.hpp"
 #include "sketch/dxf_phase_source.hpp"
 #include "sketch/dxf_phase_asset_carrier.hpp"
 #include "sketch/dxf_annotation_source.hpp"
@@ -2119,6 +2120,38 @@ void export_native_entity(const DocumentSnapshot& document, const Entity& entity
             entity.properties.contains("layers")) {
             diagnostic(result.diagnostics, entity.id, entity.type,
                        "slab_3d_semantics_not_representable");
+        }
+        if (entity.properties.contains("planar_affine")) {
+            // Mapped slab: write the effective plan image (display chords of
+            // any elliptical arc images), never the bare unmapped source rings.
+            try {
+                const auto map = decode_slab_planar_affine(entity.properties.at("planar_affine"));
+                std::vector<Boundary> holes;
+                const auto raw_holes = entity.properties.find("holes");
+                if (raw_holes != entity.properties.end()) {
+                    if (!raw_holes->is_array()) throw std::invalid_argument("mapped slab holes are invalid");
+                    for (const auto& value : *raw_holes) {
+                        const auto hole = read_boundary_value(value);
+                        if (!hole) throw std::invalid_argument("mapped slab hole is invalid");
+                        holes.push_back(*hole);
+                    }
+                }
+                const auto paths = slab_plan_display_boundaries(SlabPlanSource{*boundary, holes, &map}, 0.00025, 8192);
+                const auto curved = [](const Boundary& ring) {
+                    return std::any_of(ring.begin(), ring.end(), [](const Segment& s) { return s.sweep_radians != 0.0; });
+                };
+                if (curved(*boundary) || std::any_of(holes.begin(), holes.end(), curved))
+                    diagnostic(result.diagnostics, entity.id, entity.type, "slab_mapped_curves_exported_as_chords");
+                add_boundary_as_dxf(result.drawing, paths.front(), layer, result.diagnostics, entity.id, entity.type);
+                if (paths.size() > 1)
+                    diagnostic(result.diagnostics, entity.id, entity.type, "boundary_hole_association_not_representable");
+                for (std::size_t index = 1; index < paths.size(); ++index)
+                    add_boundary_as_dxf(result.drawing, paths[index], layer, result.diagnostics,
+                        entity.id + ":hole:" + std::to_string(index - 1), "slab_hole");
+            } catch (const std::exception&) {
+                diagnostic(result.diagnostics, entity.id, entity.type, "slab_mapped_geometry_not_representable");
+            }
+            return;
         }
         add_boundary_as_dxf(result.drawing, *boundary, layer, result.diagnostics,
                             entity.id, entity.type);

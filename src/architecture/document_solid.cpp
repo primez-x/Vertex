@@ -1,4 +1,5 @@
 #include "sketch/document_solid.hpp"
+#include "sketch/slab_plan_geometry.hpp"
 
 #include <algorithm>
 #include <array>
@@ -113,6 +114,14 @@ bool read_document_slab(const Entity& entity, Slab& output, std::string& error) 
     }
     output = Slab{};
     output.id = entity.id;
+    if (const auto* affine = property(entity.properties, {"planar_affine"})) {
+        try {
+            output.planar_affine = decode_slab_planar_affine(*affine);
+        } catch (const std::exception& exception) {
+            error = exception.what();
+            return false;
+        }
+    }
     if (const auto* kind = property(entity.properties, {"element_kind"})) {
         if (!kind->is_string()) {
             error = "element_kind must be one of slab, floor, ceiling, or foundation";
@@ -132,6 +141,26 @@ bool read_document_slab(const Entity& entity, Slab& output, std::string& error) 
     }
     const auto* boundary = property(entity.properties, {"boundary"});
     const auto* holes = property(entity.properties, {"holes"});
+    if (output.planar_affine) {
+        // Bound mapped source allocation before decoding any ring. Historical
+        // unmapped readers retain their existing permissive wire behavior.
+        std::size_t segments = 0;
+        const auto count = [&](const Json& ring) {
+            if (!ring.is_array()) return true; // The ordinary decoder diagnoses it.
+            if (ring.size() > assembly_profile_geometry_max_segments - segments) return false;
+            segments += ring.size();
+            return true;
+        };
+        bool bounded = boundary == nullptr || count(*boundary);
+        if (holes != nullptr && holes->is_array()) {
+            bounded = bounded && holes->size() <= assembly_profile_geometry_max_segments;
+            if (bounded) for (const auto& hole : *holes) if (!count(hole)) { bounded = false; break; }
+        }
+        if (!bounded) {
+            error = "Mapped slab exceeds its aggregate source-segment budget";
+            return false;
+        }
+    }
     if (boundary == nullptr ||
         !required_boundary(*boundary, output.boundary, "boundary", error)) {
         return false;

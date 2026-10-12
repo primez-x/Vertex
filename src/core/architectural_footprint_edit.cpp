@@ -2,6 +2,7 @@
 
 #include "sketch/architectural_document_adapter.hpp"
 #include "sketch/document_solid.hpp"
+#include "sketch/slab_plan_geometry.hpp"
 
 #include <cmath>
 #include <stdexcept>
@@ -105,6 +106,15 @@ Entity stage_architectural_footprint_vertex_entity(
     if (edit.vertex_index >= ring->size())
         throw std::invalid_argument("Footprint vertex index is outside the captured ring");
     const auto vertex = ring->at(edit.vertex_index).start;
+    auto source_target = edit.proposed_position;
+    auto effective_vertex = vertex;
+    if (original.type == "slab" && original.properties.contains("planar_affine")) {
+        const auto affine = decode_slab_planar_affine(original.properties.at("planar_affine"));
+        effective_vertex = assembly_profile_affine_point(vertex, affine);
+        // Handles refer to effective model-plan positions. Only the inverse
+        // image changes the authored circular/linear source endpoints.
+        source_target = assembly_profile_affine_inverse_point(edit.proposed_position, affine);
+    }
 
     const bool room_aliases = original.type == "room" &&
         original.properties.contains("boundary") && original.properties.contains("segments");
@@ -117,19 +127,19 @@ Entity stage_architectural_footprint_vertex_entity(
             throw std::invalid_argument("Room footprint boundary and segments aliases disagree");
     }
 
-    if (vertex.x == edit.proposed_position.x && vertex.y == edit.proposed_position.y) {
+    if (effective_vertex.x == edit.proposed_position.x && effective_vertex.y == edit.proposed_position.y) {
         return original;
     }
 
     auto entity = original;
     if (edit.hole_index) {
         update_ring_vertex(entity.properties.at("holes").at(*edit.hole_index),
-                           edit.vertex_index, edit.proposed_position);
+                           edit.vertex_index, source_target);
     } else {
         const auto* field = entity.properties.contains("boundary") ? "boundary" : "segments";
-        update_ring_vertex(entity.properties.at(field), edit.vertex_index, edit.proposed_position);
+        update_ring_vertex(entity.properties.at(field), edit.vertex_index, source_target);
         if (room_aliases)
-            update_ring_vertex(entity.properties.at("segments"), edit.vertex_index, edit.proposed_position);
+            update_ring_vertex(entity.properties.at("segments"), edit.vertex_index, source_target);
     }
     // Re-read the exact returned payload, including every untouched hole and
     // arc, before detached physical admission. The command performs resolved

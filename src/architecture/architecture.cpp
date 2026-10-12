@@ -1,6 +1,7 @@
 #include "sketch/architecture.hpp"
 #include "sketch/hosted_opening_geometry.hpp"
 #include "sketch/wall_plan_junctions.hpp"
+#include "sketch/slab_plan_geometry.hpp"
 
 #include <BRepAlgoAPI_Common.hxx>
 #include <BRepAlgoAPI_Cut.hxx>
@@ -11,6 +12,7 @@
 #include <BRepBuilderAPI_MakePolygon.hxx>
 #include <BRepBuilderAPI_MakeWire.hxx>
 #include <BRepBuilderAPI_Transform.hxx>
+#include <BRepBuilderAPI_GTransform.hxx>
 #include <BRepCheck_Analyzer.hxx>
 #include <BRepExtrema_DistShapeShape.hxx>
 #include <BRepGProp.hxx>
@@ -31,6 +33,9 @@
 #include <gp_Ax1.hxx>
 #include <gp_Dir.hxx>
 #include <gp_Vec.hxx>
+#include <gp_GTrsf.hxx>
+#include <gp_Mat.hxx>
+#include <gp_XYZ.hxx>
 
 #include <algorithm>
 #include <array>
@@ -2142,6 +2147,84 @@ RoofJoinPartition make_roof_join_partition(const RoofJoin& join,
     }
 }
 
+TopoDS_Shape make_planar_affine_extrusion(const std::string& id, const Boundary& outer,
+    const std::vector<Boundary>& source_holes, double elevation, double height,
+    const AssemblyProfilePlanarAffine& map, SlabElementKind kind) {
+    const auto source_shape = [&](const Boundary& ring, const std::vector<Boundary>& holes) {
+        return make_slab(Slab{id, ring, holes, height, elevation, kind, {}});
+    };
+    validate_assembly_profile_affine(map);
+    if (map.xx == 1 && map.xy == 0 && map.yx == 0 && map.yy == 1 &&
+        map.source_origin.x == map.target_origin.x && map.source_origin.y == map.target_origin.y)
+        return source_shape(outer, source_holes);
+    if (outer.empty()) throw std::invalid_argument("Mapped assembly profile has no outer ring");
+    // Native failures propagate unchanged; make_slab and assembly geometry
+    // each translate them with their own established diagnostics.
+    {
+        // Construct near an actual source vertex, not at the authored map origin.
+        // Computing target_origin - M*source_origin can overflow or discard the
+        // small residual even when every effective profile point is representable.
+        const auto anchor = outer.front().start;
+        const auto mapped_anchor = assembly_profile_affine_point(anchor, map);
+        const AssemblyProfilePlanarAffine shift{anchor, {0, 0}};
+        const gp_Mat linear(map.xx, map.xy, 0, map.yx, map.yy, 0, 0, 0, 1);
+        const gp_GTrsf affine(linear, gp_XYZ(mapped_anchor.x, mapped_anchor.y, 0));
+        const auto native_determinant = linear.Determinant();
+        if (!std::isfinite(native_determinant) || native_determinant <= 0 || affine.IsSingular())
+            throw std::invalid_argument("Assembly profile map is not representable by the native kernel");
+        const auto inverse = linear.Inverted();
+        for (int row = 1; row <= 3; ++row)
+            for (int column = 1; column <= 3; ++column)
+                if (!std::isfinite(inverse.Value(row, column)))
+                    throw std::invalid_argument("Assembly profile native inverse is not finite");
+        const auto native_point = [&](Vec2 point) {
+            gp_XYZ coordinates(point.x, point.y, 0);
+            affine.Transforms(coordinates);
+            if (!std::isfinite(coordinates.X()) || !std::isfinite(coordinates.Y()))
+                throw std::invalid_argument("Mapped assembly native profile coordinates are not finite");
+            return Vec2{coordinates.X(), coordinates.Y()};
+        };
+        const auto shift_ring = [&](const Boundary& ring) {
+            // Check the exact effective curve range independently of native kernel
+            // arithmetic; a finite endpoint alone does not bound an elliptical arc.
+            (void)assembly_profile_boundary_bounds(ring, map);
+            auto shifted = ring;
+            for (auto& segment : shifted) {
+                const auto start = assembly_profile_affine_point(segment.start, map);
+                const auto end = assembly_profile_affine_point(segment.end, map);
+                if (std::hypot(end.x - start.x, end.y - start.y) <= default_geometry_tolerance_metres)
+                    throw std::invalid_argument("Mapped assembly native profile edge collapses below tolerance");
+                segment.start = assembly_profile_affine_point(segment.start, shift);
+                segment.end = assembly_profile_affine_point(segment.end, shift);
+                const auto native_start = native_point(segment.start);
+                const auto native_end = native_point(segment.end);
+                const auto native_chord = std::hypot(native_end.x - native_start.x, native_end.y - native_start.y);
+                if (!std::isfinite(native_chord) || native_chord <= default_geometry_tolerance_metres)
+                    throw std::invalid_argument("Mapped assembly native profile edge is not representable");
+            }
+            return shifted;
+        };
+        auto shifted_outer = shift_ring(outer);
+        std::vector<Boundary> holes;
+        holes.reserve(source_holes.size());
+        for (const auto& hole : source_holes) holes.push_back(shift_ring(hole));
+        const auto local = source_shape(shifted_outer, holes);
+
+        // A genuine native affinity transforms the supporting curves/surfaces.
+        // Circular source arcs become their exact affine images, never new circles
+        // assembled from stretched endpoints and an unchanged sweep. Z is untouched.
+        BRepBuilderAPI_GTransform transformed(local, affine, true);
+        if (!transformed.IsDone() || transformed.Shape().IsNull() ||
+            !BRepCheck_Analyzer(transformed.Shape()).IsValid())
+            throw std::invalid_argument("Assembly profile map did not produce a valid native shape");
+        const auto result = transformed.Shape();
+        const auto volume = solid_volume(result);
+        if (!std::isfinite(volume) || volume <= 0)
+            throw std::invalid_argument("Mapped assembly native body volume must be finite and positive");
+        return result;
+    }
+}
+
 TopoDS_Shape make_slab(const Slab& slab) {
     if (slab_element_kind_name(slab.element_kind) == "invalid") {
         throw std::invalid_argument("Slab element kind is invalid");
@@ -2150,7 +2233,11 @@ TopoDS_Shape make_slab(const Slab& slab) {
     if (!std::isfinite(slab.elevation)) throw std::invalid_argument("Slab elevation must be finite");
     try {
         validate_slab_layers(slab.layers, slab.thickness);
+        if (slab.planar_affine) (void)slab_plan_signed_area(slab);
         const auto make_layer = [&](double elevation, double thickness) {
+            if (slab.planar_affine)
+                return make_planar_affine_extrusion(slab.id, slab.boundary, slab.holes, elevation, thickness,
+                    *slab.planar_affine, slab.element_kind);
             auto result = extrude(slab.boundary, elevation, thickness);
             const auto original = result;
             const auto outer_wire = wire(slab.boundary, elevation);

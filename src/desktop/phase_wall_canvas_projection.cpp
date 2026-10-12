@@ -24,6 +24,7 @@
 #include "sketch/project_organization.hpp"
 #include "sketch/section_dimension_resolution.hpp"
 #include "sketch/sheet_view_entity_codec.hpp"
+#include "sketch/slab_plan_geometry.hpp"
 #include "sketch/wall_measurement.hpp"
 
 #include <QPainterPath>
@@ -1172,6 +1173,7 @@ PhaseWallCanvasProjection project_phase_wall_canvas(const DocumentSnapshot& sour
                 if (host.type=="wall" || host.type=="opening") (void)hosted_shape(host);
                 const auto transform=instance_transform(*proposed);
                 Boundary host_paths;
+                std::vector<Boundary> host_holes;
                 if (host.type=="wall") {
                     const auto& wall=stage_wall(host.id);
                     const auto plan=plans.find(host.id);
@@ -1191,7 +1193,11 @@ PhaseWallCanvasProjection project_phase_wall_canvas(const DocumentSnapshot& sour
                 } else if (coordinated && host.type=="slab") {
                     Slab slab;std::string error;
                     if (!read_document_slab(resolve_vertical_placement(stage,host),slab,error)) throw std::invalid_argument(error);
-                    host_paths=slab.boundary;
+                    if (slab.planar_affine) {
+                        auto paths=slab_plan_display_boundaries(slab,0.00025/transform.scale,8192);
+                        host_paths=std::move(paths.front());
+                        for (std::size_t i=1;i<paths.size();++i) host_holes.push_back(std::move(paths[i]));
+                    } else host_paths=slab.boundary;
                     projected.thickness_metres=slab.thickness*transform.scale*transform.vertical_scale;
                 } else if (coordinated && can_recognize_building_entity_type(host.type)) {
                     host_paths=project_building_plan(decode_building_entity(effective_building_entity(stage,host)),stage);
@@ -1201,7 +1207,10 @@ PhaseWallCanvasProjection project_phase_wall_canvas(const DocumentSnapshot& sour
                 frame_paths=placed_path(host_paths,transform);
                 if (view_context && !analytical_canvas_plan_context(BuildingViewKind::plan,*view_context)) {
                     projected.segments=project_solid(transform_assembly_shape(hosted_shape(host),transform),*view_context);world=false;
-                } else projected.segments=frame_paths;
+                } else {
+                    projected.segments=frame_paths;
+                    for (const auto& hole:host_holes) projected.holes.push_back(placed_path(hole,transform));
+                }
             }
             if (horizontal_plan && prototype.resize_frame && !frame_paths.empty()) {
                 projected.resize_frame=path_frame(frame_paths,instance_transform(*proposed).rotation_radians);
@@ -1404,6 +1413,11 @@ PhaseWallCanvasProjection project_phase_wall_canvas(const DocumentSnapshot& sour
             }
             if (semantic_visible.contains(target)) {
                 if (custom) {projected.segments=project_solid(shape,*view_context);world=false;}
+                else if (slab && slab->planar_affine) {
+                    auto paths=slab_plan_display_boundaries(*slab,0.00025,8192);
+                    projected.segments=std::move(paths.front());
+                    for (std::size_t i=1;i<paths.size();++i) projected.holes.push_back(std::move(paths[i]));
+                }
                 else if (slab) {projected.segments=slab->boundary;projected.holes=slab->holes;}
                 else projected.segments=project_shape_view(shape,BuildingViewKind::plan);
             }
@@ -1445,6 +1459,7 @@ PhaseWallCanvasProjection project_phase_wall_canvas(const DocumentSnapshot& sour
                             if (!valid || index>=slab->holes[hole].size()) throw std::invalid_argument("Coordinated canvas lost a slab hole vertex.");
                             point=slab->holes[hole][index].start;
                         } else throw std::invalid_argument("Coordinated canvas has an unknown slab handle.");
+                        if (slab->planar_affine) point=assembly_profile_affine_point(point,*slab->planar_affine);
                     } else throw std::invalid_argument("Coordinated canvas has an unknown physical handle.");
                     point=present(point);
                     if (supported_point(projected,point)) projected.vertex_handles.push_back({handle.id,point,handle.source_revision});
@@ -1454,7 +1469,8 @@ PhaseWallCanvasProjection project_phase_wall_canvas(const DocumentSnapshot& sour
                 if (!prototype.snap_points.empty()) {
                     if (slab) {
                         const auto retain=[&](const Boundary& ring) {for (const auto& edge:ring) {
-                            const auto point=present(edge.start);
+                            const auto point=present(slab->planar_affine
+                                ? assembly_profile_affine_point(edge.start,*slab->planar_affine) : edge.start);
                             if (supported_point(projected,point)) projected.snap_points.push_back(point);
                         }};
                         retain(slab->boundary);for (const auto& hole:slab->holes) retain(hole);

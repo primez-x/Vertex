@@ -7,6 +7,7 @@
 #include "sketch/document_solid.hpp"
 #include "sketch/phase_slab_profile_edit.hpp"
 #include "sketch/project_organization.hpp"
+#include "sketch/slab_plan_geometry.hpp"
 
 #include <boost/multiprecision/cpp_int.hpp>
 
@@ -54,6 +55,9 @@ bool version_three(const Json& value) {
 }
 bool version_four(const Json& value) {
     return (value.is_number_integer() || value.is_number_unsigned()) && value == 4;
+}
+bool version_five(const Json& value) {
+    return (value.is_number_integer() || value.is_number_unsigned()) && value == 5;
 }
 std::string identity(const Json& value) {
     if (!value.is_string()) invalid("identity must be a string");
@@ -133,9 +137,10 @@ Boundary ring(const Json& value, std::size_t& count) {
     for (const auto& raw : value) result.push_back(segment(raw));
     return result;
 }
-void admit_frame(const Json& value) {
+void admit_frame(const Json& value, bool mapped = false) {
     (void)proof_budget(value);
-    keys(value, {"boundary", "holes"});
+    if (mapped) keys(value, {"boundary", "holes", "planar_affine"});
+    else keys(value, {"boundary", "holes"});
     std::size_t count = 0;
     const auto outer = ring(value.at("boundary"), count);
     const auto& raw_holes = value.at("holes");
@@ -143,8 +148,13 @@ void admit_frame(const Json& value) {
     std::vector<Boundary> holes; holes.reserve(raw_holes.size());
     for (const auto& hole : raw_holes) holes.push_back(ring(hole, count));
     if (const auto error = validate_boundary_holes(outer, holes)) invalid(*error);
+    if (mapped && !value.at("planar_affine").is_null()) {
+        const auto map = decode_slab_planar_affine(value.at("planar_affine"));
+        (void)assembly_profile_boundary_bounds(outer, map);
+        for (const auto& hole : holes) (void)assembly_profile_boundary_bounds(hole, map);
+    }
 }
-Json frame(const Entity& source) {
+Json frame(const Entity& source, bool mapped = false) {
     // Select actual geometry fields, preserving their numeric representations.
     // Segment metadata and live layers remain only in the unchanged source.
     const auto copy_ring = [](const Json& raw) {
@@ -170,7 +180,13 @@ Json frame(const Entity& source) {
     Json holes = Json::array();
     for (const auto& hole : p.at("holes")) holes.push_back(copy_ring(hole));
     Json result{{"boundary", copy_ring(p.at("boundary"))}, {"holes", std::move(holes)}};
-    admit_frame(result);
+    if (mapped) {
+        const auto map = field(p, "planar_affine");
+        // Null is an archive absence sentinel, never an actual map payload.
+        if (map) (void)decode_slab_planar_affine(*map);
+        result["planar_affine"] = map ? *map : Json(nullptr);
+    }
+    admit_frame(result, mapped);
     return result;
 }
 bool rigid_identity(const PlanarTransform& t) {
@@ -251,7 +267,90 @@ AssemblyProfilePlanarAffine directional_resize_map(const SlabPlanAxisResize& r) 
     validate_assembly_profile_affine(map);
     return map;
 }
+AssemblyProfilePlanarAffine frame_map(const Json& frame) {
+    return frame.at("planar_affine").is_null() ? AssemblyProfilePlanarAffine{} :
+        decode_slab_planar_affine(frame.at("planar_affine"));
+}
+// F reflects source X exactly. F*A*F has positive determinant, so the
+// shared positive-affine composer can apply (L*F)*(F*A*F) to F*p. Keep
+// connectivity, indexing and hole membership; only signed sweeps change.
+void reflect_source_x(Json& geometry) {
+    const auto reflect = [](Json& raw) {
+        for (auto& segment : raw) {
+            for (const auto* name : {"start", "end"})
+                assign(segment.at(name).at(0), -scalar(segment.at(name).at(0)));
+            assign(segment.at("sweep_radians"), -scalar(segment.at("sweep_radians")));
+        }
+    };
+    reflect(geometry.at("boundary"));
+    for (auto& hole : geometry.at("holes")) reflect(hole);
+}
+AssemblyProfilePlanarAffine plan_transform_map(const PlanarTransform& t, double scale, bool reflected_source) {
+    AssemblyProfilePlanarAffine map;
+    map.source_origin = t.pivot;
+    map.target_origin = {scalar(rounded_directional(binary64(t.pivot.x) + binary64(t.offset.x))),
+        scalar(rounded_directional(binary64(t.pivot.y) + binary64(t.offset.y)))};
+    const auto [rc, rs] = assembly_rotation_components(t.rotation_radians);
+    const auto c = binary64(rc), s = binary64(rs), amount = binary64(scale);
+    const Exact xsign = t.flip_horizontal ? -1 : 1;
+    const Exact ysign = t.flip_vertical ? -1 : 1;
+    // Pose order is scale, yaw, then world-axis reflections, then offset.
+    map.xx = rounded_directional(xsign * amount * c);
+    map.xy = rounded_directional(-xsign * amount * s);
+    map.yx = rounded_directional(ysign * amount * s);
+    map.yy = rounded_directional(ysign * amount * c);
+    if (reflected_source) {
+        map.source_origin.x = -map.source_origin.x;
+        map.xx = -map.xx; map.yx = -map.yx;
+    }
+    validate_assembly_profile_affine(map);
+    return map;
+}
+Json derive_mapped(const Json& before, const SlabGeometryEditIntent& intent) {
+    admit_frame(before, true);
+    auto after = before;
+    auto map = frame_map(before);
+    if (intent.kind == SlabGeometryEditKind::move_vertex) {
+        const auto& v = *intent.vertex;
+        auto* selected = &after.at("boundary");
+        if (v.hole_index) {
+            if (*v.hole_index >= after.at("holes").size()) invalid("hole index is outside actual source");
+            selected = &after.at("holes").at(*v.hole_index);
+        }
+        if (v.vertex_index >= selected->size()) invalid("vertex index is outside actual source");
+        const auto captured = point(selected->at(v.vertex_index).at("start"));
+        const auto effective = assembly_profile_affine_point(captured, map);
+        // Authenticate the actual map even for an exact effective no-op;
+        // never inverse-round it and accidentally repair a retained endpoint.
+        if (effective.x == v.proposed_position.x && effective.y == v.proposed_position.y) return before;
+        const auto proposed = assembly_profile_affine_inverse_point(v.proposed_position, map);
+        const auto previous = v.vertex_index == 0 ? selected->size() - 1 : v.vertex_index - 1;
+        assign_point(selected->at(v.vertex_index).at("start"), proposed);
+        assign_point(selected->at(previous).at("end"), proposed);
+    } else {
+        AssemblyProfilePlanarAffine outer;
+        if (intent.kind == SlabGeometryEditKind::resize_plan) {
+            if (intent.resize->scale_x == 1 && intent.resize->scale_y == 1) return before;
+            outer = directional_resize_map(*intent.resize);
+        } else {
+            const auto& t = *intent.transform;
+            if (intent.uniform_scale == 1 && rigid_identity(t)) return before;
+            const bool reflected = t.flip_horizontal != t.flip_vertical;
+            if (reflected) {
+                reflect_source_x(after);
+                map.source_origin.x = -map.source_origin.x;
+                map.target_origin.x = -map.target_origin.x;
+                map.xy = -map.xy; map.yx = -map.yx;
+            }
+            outer = plan_transform_map(t, intent.uniform_scale, reflected);
+        }
+        after.at("planar_affine") = encode_slab_planar_affine(compose_assembly_profile_affine(outer, map));
+    }
+    admit_frame(after, true);
+    return after;
+}
 Json derive(const Json& before, const SlabGeometryEditIntent& intent) {
+    if (intent.preserve_planar_source_geometry) return derive_mapped(before, intent);
     admit_frame(before);
     auto after = before;
     if (intent.kind == SlabGeometryEditKind::move_vertex) {
@@ -324,11 +423,13 @@ double profile_scalar(const Json& profile, const char* canonical, const char* al
     if (positive && value <= default_geometry_tolerance_metres) invalid("model profile thickness must be positive");
     return value;
 }
-void admit_model_frame(const Json& value) {
+void admit_model_frame(const Json& value, bool mapped = false) {
     (void)proof_budget(value);
-    keys(value, {"boundary", "holes", "profile", "elevation_shift_m"});
-    const Json geometry{{"boundary", value.at("boundary")}, {"holes", value.at("holes")}};
-    admit_frame(geometry);
+    if (mapped) keys(value, {"boundary", "holes", "planar_affine", "profile", "elevation_shift_m"});
+    else keys(value, {"boundary", "holes", "profile", "elevation_shift_m"});
+    Json geometry{{"boundary", value.at("boundary")}, {"holes", value.at("holes")}};
+    if (mapped) geometry["planar_affine"] = value.at("planar_affine");
+    admit_frame(geometry, mapped);
     const auto& profile = value.at("profile");
     keys(profile, {"thickness_m", "thickness", "elevation_m", "elevation", "layers"});
     const auto thickness = profile_scalar(profile, "thickness_m", "thickness", true);
@@ -350,14 +451,16 @@ void admit_model_frame(const Json& value) {
     std::size_t count = 0;
     Slab slab; slab.boundary = ring(value.at("boundary"), count);
     for (const auto& hole : value.at("holes")) slab.holes.push_back(ring(hole, count));
+    if (mapped && !value.at("planar_affine").is_null())
+        slab.planar_affine = decode_slab_planar_affine(value.at("planar_affine"));
     slab.thickness = thickness; slab.elevation = scalar(elevation + shift);
     // Historical mathematical frames have no identity/material authority.
     // Positive ordered layers are checked above; native admission checks the
     // complete analytical footprint extruded by its actual profile total.
     (void)make_slab(slab);
 }
-Json model_frame(const Entity& source, double actual_shift) {
-    auto result = frame(source);
+Json model_frame(const Entity& source, double actual_shift, bool mapped = false) {
+    auto result = frame(source, mapped);
     Json profile = Json::object();
     for (const auto* name : {"thickness_m", "thickness", "elevation_m", "elevation"}) {
         const auto value = field(source.properties, name);
@@ -371,11 +474,11 @@ Json model_frame(const Entity& source, double actual_shift) {
     }
     result["profile"] = std::move(profile);
     result["elevation_shift_m"] = scalar(actual_shift);
-    admit_model_frame(result);
+    admit_model_frame(result, mapped);
     return result;
 }
 Json derive_model(const Json& before, const SlabGeometryEditIntent& intent) {
-    admit_model_frame(before);
+    admit_model_frame(before, intent.preserve_planar_source_geometry);
     const auto& t = *intent.model_transform;
     const auto planar = plan_projection(t);
     if (t.uniform_scale == 1 && t.offset_m.z == 0 && rigid_identity(planar)) return before;
@@ -384,9 +487,13 @@ Json derive_model(const Json& before, const SlabGeometryEditIntent& intent) {
     SlabGeometryEditIntent plan;
     plan.slab_id = intent.slab_id; plan.kind = SlabGeometryEditKind::transform_plan;
     plan.transform = planar; plan.uniform_scale = t.uniform_scale;
-    const auto projected = derive({{"boundary", before.at("boundary")}, {"holes", before.at("holes")}}, plan);
+    plan.preserve_planar_source_geometry = intent.preserve_planar_source_geometry;
+    Json geometry{{"boundary", before.at("boundary")}, {"holes", before.at("holes")}};
+    if (intent.preserve_planar_source_geometry) geometry["planar_affine"] = before.at("planar_affine");
+    const auto projected = derive(geometry, plan);
     auto after = before;
     after.at("boundary") = projected.at("boundary"); after.at("holes") = projected.at("holes");
+    if (intent.preserve_planar_source_geometry) after.at("planar_affine") = projected.at("planar_affine");
     auto& profile = after.at("profile");
     for (const auto* name : {"thickness_m", "thickness"})
         if (!profile.at(name).is_null() && t.uniform_scale != 1)
@@ -402,7 +509,7 @@ Json derive_model(const Json& before, const SlabGeometryEditIntent& intent) {
             t.uniform_scale + t.offset_m.z - shift);
     for (const auto* name : {"elevation_m", "elevation"})
         if (!profile.at(name).is_null()) assign(profile.at(name), new_elevation);
-    admit_model_frame(after);
+    admit_model_frame(after, intent.preserve_planar_source_geometry);
     return after;
 }
 void apply_frame(Entity& target, const Json& value) {
@@ -414,6 +521,10 @@ void apply_frame(Entity& target, const Json& value) {
     update(target.properties.at("boundary"), value.at("boundary"));
     for (std::size_t i = 0; i < value.at("holes").size(); ++i)
         update(target.properties.at("holes").at(i), value.at("holes").at(i));
+    if (const auto map = field(value, "planar_affine")) {
+        if (map->is_null()) target.properties.erase("planar_affine");
+        else target.properties["planar_affine"] = *map;
+    }
 }
 void apply_model_frame(Entity& target, const Json& value) {
     apply_frame(target, value);
@@ -472,6 +583,16 @@ void admit_receipt(const Json& raw, double actual) {
         invalid("geometry receipt expression budget exceeded");
     if (decode_constraint_quantity_receipt(raw).metres != actual) invalid("affected geometry receipt is stale");
 }
+// A changed source planar map changes every effective ring coordinate even
+// when source scalars are equal; ring-bound receipts are then all affected.
+bool planar_map_changed(const Json& before, const Json& after) {
+    const auto old_map = field(before, "planar_affine"), new_map = field(after, "planar_affine");
+    if (!old_map && !new_map) return false;
+    return !old_map || !new_map || !exact(*old_map, *new_map);
+}
+bool ring_scalar(std::string_view path) {
+    return path.starts_with("/boundary/") || path.starts_with("/holes/");
+}
 Json retire_receipts(const Entity& source, Entity& result, const Json& before, const Json& after) {
     Json archived = Json::object();
     const auto entries = field(source.properties, "quantity_entries");
@@ -479,6 +600,13 @@ Json retire_receipts(const Entity& source, Entity& result, const Json& before, c
     if (!entries->is_object() || entries->size() > collection_limit) invalid("quantity entry budget exceeded");
     const auto old_values = geometry_scalars(before), new_values = geometry_scalars(after);
     auto affected = changed_segments(old_values, new_values);
+    const bool remapped = planar_map_changed(before, after);
+    if (remapped) for (const auto& [path, value] : old_values) if (ring_scalar(path)) {
+        (void)value;
+        auto end = path.rfind('/');
+        if (!path.ends_with("/sweep_radians")) end = path.rfind('/', end - 1);
+        affected.insert(path.substr(0, end));
+    }
     // An absent alias can still carry an opaque future binding. Treat known
     // scalar aliases as one affected dimension without materializing fields
     // or adding mathematical archive scalars that did not exist in source.
@@ -494,7 +622,7 @@ Json retire_receipts(const Entity& source, Entity& result, const Json& before, c
     for (const auto& [path, raw] : entries->items()) {
         const auto old = old_values.find(path);
         if (old != old_values.end()) {
-            if (old->second == new_values.at(path)) continue;
+            if (old->second == new_values.at(path) && !(remapped && ring_scalar(path))) continue;
             admit_receipt(raw, old->second);
             archived[path] = raw;
             result.properties.at("quantity_entries").erase(path);
@@ -519,7 +647,9 @@ void admit_record(const Json& record) {
     const auto old_values = geometry_scalars(before), new_values = geometry_scalars(after);
     for (const auto& [path, raw] : values.items()) {
         const auto old = old_values.find(path);
-        if (old == old_values.end() || old->second == new_values.at(path)) invalid("archive receipt does not bind a changed source scalar");
+        if (old == old_values.end() ||
+            (old->second == new_values.at(path) && !(planar_map_changed(before, after) && ring_scalar(path))))
+            invalid("archive receipt does not bind a changed source scalar");
         admit_receipt(raw, old->second);
     }
 }
@@ -535,7 +665,7 @@ Slab actual_slab(const Entity& source, bool local = true) {
     if (layers) for (const auto& layer : *layers)
         for (const auto* name : {"thickness_m", "thickness"})
             if (const auto value = field(layer, name)) (void)scalar(*value);
-    (void)frame(source);
+    (void)frame(source, true);
     validate_slab_geometry_derivation(source);
     if (local) validate_slab_profile_source_entity(source);
     Slab slab; std::string error;
@@ -581,6 +711,26 @@ void admit_map(const Entities& source, const Ids& targets) {
     }
 }
 } // namespace
+
+bool slab_geometry_edit_requires_planar_source(const Entity& actual_slab, const SlabGeometryEditIntent& intent) {
+    if (actual_slab.type != "slab" || !actual_slab.properties.is_object()) return false;
+    if (actual_slab.properties.contains("planar_affine")) return true;
+    if (intent.kind != SlabGeometryEditKind::resize_plan || !intent.resize ||
+        intent.resize->scale_x == intent.resize->scale_y) return false;
+    const auto curved = [](const Json& ring) {
+        if (!ring.is_array()) return false;
+        return std::any_of(ring.begin(), ring.end(), [](const Json& segment) {
+            if (!segment.is_object() || !segment.contains("sweep_radians")) return false;
+            const auto& sweep = segment.at("sweep_radians");
+            return sweep.is_number() && sweep.get<double>() != 0.0;
+        });
+    };
+    const auto& p = actual_slab.properties;
+    if (p.contains("boundary") && curved(p.at("boundary"))) return true;
+    if (p.contains("holes") && p.at("holes").is_array())
+        for (const auto& hole : p.at("holes")) if (curved(hole)) return true;
+    return false;
+}
 
 nlohmann::json encode_slab_geometry_edit_intent(const SlabGeometryEditIntent& intent) {
     (void)identity(intent.slab_id);
@@ -637,6 +787,14 @@ nlohmann::json encode_slab_geometry_edit_intent(const SlabGeometryEditIntent& in
         result.at("version") = intent.kind == SlabGeometryEditKind::resize_plan ? 4 : 3;
         result["coordinate_world_hosted_geometry"] = true;
     }
+    if (intent.preserve_planar_source_geometry) {
+        if ((intent.kind == SlabGeometryEditKind::resize_plan) != intent.coordinate_world_hosted_geometry &&
+            (intent.kind == SlabGeometryEditKind::resize_plan || intent.kind == SlabGeometryEditKind::move_vertex))
+            invalid("v5 resize requires hosted coordination; v5 vertex edits refuse it");
+        result.at("version") = 5;
+        result["coordinate_world_hosted_geometry"] = intent.coordinate_world_hosted_geometry;
+        result["preserve_planar_source_geometry"] = true;
+    }
     (void)proof_budget(result);
     return result;
 }
@@ -644,23 +802,38 @@ SlabGeometryEditIntent decode_slab_geometry_edit_intent(const nlohmann::json& va
     (void)proof_budget(value);
     const bool coordinated_transform = value.is_object() && value.contains("version") && version_three(value.at("version"));
     const bool coordinated_resize = value.is_object() && value.contains("version") && version_four(value.at("version"));
+    const bool mapped = value.is_object() && value.contains("version") && version_five(value.at("version"));
     const bool coordinated = coordinated_transform || coordinated_resize;
-    if (coordinated) {
+    if (mapped) {
+        keys(value, {"version", "slab_id", "kind", "vertex", "transform", "resize",
+            "coordinate_world_hosted_geometry", "preserve_planar_source_geometry"});
+        if (!value.at("preserve_planar_source_geometry").is_boolean() ||
+            !value.at("preserve_planar_source_geometry").get<bool>() ||
+            !value.at("coordinate_world_hosted_geometry").is_boolean())
+            invalid("v5 source-preserving flag must be true and coordination must be boolean");
+        // A mapped resize always deforms hosted geometry with its slab; a
+        // vertex edit never carries hosted coordination.
+        if (value.at("kind") == "resize_plan" && value.at("coordinate_world_hosted_geometry") != true)
+            invalid("v5 resize requires coordinated hosted geometry");
+        if (value.at("kind") == "move_vertex" && value.at("coordinate_world_hosted_geometry") != false)
+            invalid("v5 vertex edits cannot carry hosted coordination");
+    } else if (coordinated) {
         keys(value, {"version", "slab_id", "kind", "vertex", "transform", "resize", "coordinate_world_hosted_geometry"});
         if (!value.at("coordinate_world_hosted_geometry").is_boolean() ||
             !value.at("coordinate_world_hosted_geometry").get<bool>())
             invalid("coordinated hosted geometry flag must be boolean true");
     } else keys(value, {"version", "slab_id", "kind", "vertex", "transform", "resize"});
-    if ((!version_one(value.at("version")) && !version_two(value.at("version")) && !coordinated) ||
+    if ((!version_one(value.at("version")) && !version_two(value.at("version")) && !coordinated && !mapped) ||
         !value.at("kind").is_string()) invalid("unsupported intent version or kind");
     SlabGeometryEditIntent result; result.slab_id = identity(value.at("slab_id"));
-    result.coordinate_world_hosted_geometry = coordinated;
+    result.coordinate_world_hosted_geometry = mapped ? value.at("coordinate_world_hosted_geometry").get<bool>() : coordinated;
+    result.preserve_planar_source_geometry = mapped;
     const auto& kind = value.at("kind");
     if (coordinated_transform && kind != "transform_plan" && kind != "transform_model")
         invalid("version three requires a coordinated plan or model transform");
     if (coordinated_resize && kind != "resize_plan")
         invalid("version four requires a coordinated plan resize");
-    if (!coordinated && version_two(value.at("version")) != (kind == "transform_model"))
+    if (!coordinated && !mapped && version_two(value.at("version")) != (kind == "transform_model"))
         invalid("intent version does not match its operation kind");
     if (kind == "move_vertex") {
         if (!value.at("transform").is_null() || !value.at("resize").is_null()) invalid("vertex wire must be exclusive");
@@ -706,24 +879,28 @@ void validate_slab_geometry_derivation(const Entity& source) {
     const bool model_archive = version_two(archive->at("version"));
     const bool coordinated_archive = version_three(archive->at("version"));
     const bool directional_archive = version_four(archive->at("version"));
-    if (!version_one(archive->at("version")) && !model_archive && !coordinated_archive && !directional_archive)
+    const bool mapped_archive = version_five(archive->at("version"));
+    if (!version_one(archive->at("version")) && !model_archive && !coordinated_archive && !directional_archive && !mapped_archive)
         invalid("unsupported derivation archive namespace");
     const auto& operations = archive->at("operations");
     if (!operations.is_array() || operations.empty() || operations.size() > operation_limit) invalid("archive operation budget exceeded");
-    bool contains_model = false, contains_coordinated = false, contains_directional = false;
+    bool contains_model = false, contains_coordinated = false, contains_directional = false, contains_mapped = false;
     for (const auto& record : operations) {
         const auto intent = decode_slab_geometry_edit_intent(record.at("operation"));
         const bool model = intent.kind == SlabGeometryEditKind::transform_model;
         const bool directional = intent.coordinate_world_hosted_geometry && intent.kind == SlabGeometryEditKind::resize_plan;
-        if (directional && !directional_archive)
+        if (intent.preserve_planar_source_geometry && !mapped_archive)
+            invalid("earlier archive cannot contain a source-preserving operation");
+        if (directional && !directional_archive && !mapped_archive)
             invalid("earlier archive cannot contain a coordinated directional operation");
-        if (intent.coordinate_world_hosted_geometry && !coordinated_archive && !directional_archive)
+        if (intent.coordinate_world_hosted_geometry && !coordinated_archive && !directional_archive && !mapped_archive)
             invalid("historical archive cannot contain a coordinated hosted operation");
-        if (model && !model_archive && !coordinated_archive && !directional_archive)
+        if (model && !model_archive && !coordinated_archive && !directional_archive && !mapped_archive)
             invalid("version one archive cannot contain a model operation");
         contains_model = contains_model || model;
         contains_coordinated = contains_coordinated || intent.coordinate_world_hosted_geometry;
         contains_directional = contains_directional || directional;
+        contains_mapped = contains_mapped || intent.preserve_planar_source_geometry;
         admit_record(record);
     }
     if (model_archive && !contains_model) invalid("version two archive requires a model operation");
@@ -731,6 +908,8 @@ void validate_slab_geometry_derivation(const Entity& source) {
         invalid("version three archive requires a coordinated hosted operation");
     if (directional_archive && !contains_directional)
         invalid("version four archive requires a coordinated directional operation");
+    if (mapped_archive && !contains_mapped)
+        invalid("version five archive requires a source-preserving operation");
 }
 namespace {
 Entity replay_with_actual_shift(const Entity& source, const SlabGeometryEditIntent& intent,
@@ -738,23 +917,31 @@ Entity replay_with_actual_shift(const Entity& source, const SlabGeometryEditInte
     const auto operation = encode_slab_geometry_edit_intent(intent);
     if (source.id != intent.slab_id) invalid("target differs from actual live source identity");
     (void)actual_slab(source);
+    if (!intent.preserve_planar_source_geometry && source.properties.contains("planar_affine"))
+        invalid("historical geometry leaves cannot edit an actual mapped slab");
     const bool model = intent.kind == SlabGeometryEditKind::transform_model;
+    const bool mapped = intent.preserve_planar_source_geometry;
     if (model && !actual_shift) invalid("model replay requires actual resolved vertical placement");
-    const auto before = model ? model_frame(source, *actual_shift) : frame(source);
+    const auto before = model ? model_frame(source, *actual_shift, mapped) : frame(source, mapped);
     const auto after = model ? derive_model(before, intent) : derive(before, intent);
     if (exact(before, after)) return source;
+    // The footprint stager receives effective plan coordinates and itself
+    // applies the same exact inverse map as derive_mapped. Passing a raw
+    // source target would inverse-map it a second time.
     auto result = intent.kind == SlabGeometryEditKind::move_vertex
         ? stage_architectural_footprint_vertex_entity(source, *intent.vertex) : source;
     if (model) apply_model_frame(result, after);
     else if (intent.kind != SlabGeometryEditKind::move_vertex) apply_frame(result, after);
-    if (!exact(model ? model_frame(result, *actual_shift) : frame(result), after))
+    if (!exact(model ? model_frame(result, *actual_shift, mapped) : frame(result, mapped), after))
         invalid("actual footprint/profile staging differs from mathematical replay");
     const auto receipts = retire_receipts(source, result, before, after);
     const auto key = std::string(slab_geometry_derivations_key);
     const bool directional = intent.coordinate_world_hosted_geometry && intent.kind == SlabGeometryEditKind::resize_plan;
     if (!result.extensions.contains(key)) result.extensions[key] =
-        {{"version", directional ? 4 : (intent.coordinate_world_hosted_geometry ? 3 : (model ? 2 : 1))},
+        {{"version", mapped ? 5 : (directional ? 4 : (intent.coordinate_world_hosted_geometry ? 3 : (model ? 2 : 1)))},
             {"operations", Json::array()}};
+    else if (mapped) result.extensions.at(key).at("version") = 5;
+    else if (version_five(result.extensions.at(key).at("version"))) { /* Retain v5 provenance. */ }
     else if (directional) result.extensions.at(key).at("version") = 4;
     else if (intent.coordinate_world_hosted_geometry && !version_four(result.extensions.at(key).at("version")))
         result.extensions.at(key).at("version") = 3;
