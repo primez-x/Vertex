@@ -334,7 +334,7 @@ void serialization() {
     }
     auto invalid = saved; invalid["views"][0]["direction"].push_back(0);
     rejects([&] { (void)sketch::SheetViewModel::from_json(invalid); });
-    for (const auto& version : {nlohmann::json(8), nlohmann::json(2.0), nlohmann::json("2")}) {
+    for (const auto& version : {nlohmann::json(10), nlohmann::json(2.0), nlohmann::json("2")}) {
         invalid = saved; invalid["version"] = version;
         rejects([&] { (void)sketch::SheetViewModel::from_json(invalid); });
     }
@@ -474,7 +474,6 @@ void section_overlays() {
         auto candidate = view; edit(candidate); rejects([&] { (void)model.with_view(candidate); });
     };
     invalid([](auto& v) { v.overlays.push_back(v.overlays[0]); });
-    invalid([](auto& v) { v.kind = sketch::CoordinatedViewKind::plan; });
     invalid([](auto& v) { v.overlays[0].text = " "; });
     invalid([](auto& v) { v.overlays[1].end_m = v.overlays[1].start_m; });
     invalid([](auto& v) { v.overlays[0].start_m[0] = std::numeric_limits<double>::infinity(); });
@@ -483,6 +482,17 @@ void section_overlays() {
     invalid([](auto& v) { v.overlays.resize(1001); });
     auto malformed = model.to_json(); malformed["views"][2]["overlays"][0]["start_m"].push_back(0);
     rejects([&] { (void)sketch::SheetViewModel::from_json(malformed); });
+    // Schema 8 admits detached overlays in plan and elevation views; earlier
+    // schemas still refuse them.
+    auto plan_view = model.views()[1];
+    require(plan_view.kind == sketch::CoordinatedViewKind::plan, "fixture plan view");
+    plan_view.overlays = {note};
+    const auto plan_model = model.with_view(plan_view);
+    const auto plan_saved = plan_model.to_json();
+    require(plan_saved.at("version") == 8, "plan overlays require schema 8");
+    require(sketch::SheetViewModel::from_json(plan_saved).to_json() == plan_saved, "plan overlay round trip");
+    auto plan_legacy = plan_saved; plan_legacy["version"] = 7;
+    rejects([&] { (void)sketch::SheetViewModel::from_json(plan_legacy); });
 }
 void associative_dimensions() {
     auto model = fixture();

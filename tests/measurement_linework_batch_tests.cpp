@@ -184,7 +184,8 @@ void strict_batches_and_future_opaque() {
     for(int dialect:{3,4}) { bad=valid; bad["version"]=dialect; bad["replay_version"]=dialect; invalid.push_back(bad); }
     for(const auto& wire:invalid) expect_invalid([&]{(void)decode_measurement_linework_model(wire);},
         "malformed known batches and batches in historical dialects must fail closed");
-    for(const auto& future:std::vector<Json>{{{"version",6},{"opaque",{{"keep",true}}}},
+    // Schema/replay 6 (similarity operations) is supported; 7 is the first future schema.
+    for(const auto& future:std::vector<Json>{{{"version",7},{"opaque",{{"keep",true}}}},
         {{"version",5},{"replay_version",99},{"opaque",Json::array({1,2})}}}) {
         const auto decoded=decode_measurement_linework_model(future);
         require(!decoded.supported() && decoded.original_model==std::optional<Json>{future},

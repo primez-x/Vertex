@@ -566,8 +566,13 @@ Command make_wall_split_command(const DocumentSnapshot& source,const WallSplitIn
     if (!captured.physical_room_completion) {
         const auto physical=replay_wall_split(source.entities(),captured,true,true);
         captured.physical_room_owners=prepare_wall_split_physical_room_ids(source.entities(),physical,captured,true);
-        captured.physical_room_completion=true;
-        captured.physical_room_phase_completion=true;
+        // Only an actual current-room continuation opts into the room/phase
+        // dialects. A split without rooms keeps version one and its reader37
+        // floor; apply-time replay still refuses any room that would need one.
+        if (!captured.physical_room_owners.empty()) {
+            captured.physical_room_completion=true;
+            captured.physical_room_phase_completion=true;
+        }
     }
 #endif
     ApplyBoundaryConstraintChanges command;command.expected_revision=source.revision();

@@ -197,7 +197,8 @@ void add_opening(const Entity& entity, std::vector<ScheduleRecord>& records,
                     : assembly.window_layout == WindowLayoutKind::bow ? "Five-pane bow"
                     : assembly.window_layout == WindowLayoutKind::awning ? "Awning"
                     : assembly.window_layout == WindowLayoutKind::double_hung ? "Double hung"
-                    : assembly.window_layout == WindowLayoutKind::bay ? "Bay" : "Fixed"));
+                    // A bay is a fixed, directly glazed three-facet assembly.
+                    : "Fixed"));
                 record.properties.emplace("panel_count", std::int64_t{assembly.window_layout == WindowLayoutKind::bow ? 5
                     : assembly.window_layout == WindowLayoutKind::triple_fixed || assembly.window_layout == WindowLayoutKind::bay
                     ? 3 : assembly.window_layout == WindowLayoutKind::double_fixed || assembly.window_layout == WindowLayoutKind::sliding ||

@@ -248,7 +248,8 @@ int main() {
             dimension_decoded.overrides.back().plan_label_offset->x==-0.5 &&
             dimension_decoded.overrides.back().inherit_appearance && !dimension_decoded.overrides.back().visible,
             "Native save/reopen must retain v6 wall callouts, v5 plan anchors, v4 area placements and opaque sibling metadata together");
-        auto future_dimension=dimension_entity;future_dimension.properties["state"]["version"]=10;
+        // Annotation state versions through 11 are supported; 12 is the first future schema.
+        auto future_dimension=dimension_entity;future_dimension.properties["state"]["version"]=12;
         rejects_document([&]{(void)sketch::Document::create({future_dimension});});
         std::filesystem::remove(path);
         auto palette_state = dimension_state;

@@ -113,14 +113,16 @@ public:
     std::function<void()> manageRequested;
 };
 
-TextLibraryPanel::TextLibraryPanel(QWidget* parent):QWidget(parent),m_impl(std::make_unique<Impl>(this)) {}
+// Impl installs this panel as an event filter while it is built; m_impl stays
+// null until construction finishes and the filter ignores events until then.
+TextLibraryPanel::TextLibraryPanel(QWidget* parent):QWidget(parent),m_impl() {m_impl=std::make_unique<Impl>(this);}
 TextLibraryPanel::~TextLibraryPanel()=default;
 void TextLibraryPanel::setEntries(const std::vector<TextLibraryEntry>& entries) {m_impl->setEntries(entries);}
 void TextLibraryPanel::setPlaceRequested(std::function<void(const TextLibraryEntry&)> callback) {m_impl->placeRequested=std::move(callback);}
 void TextLibraryPanel::setManageRequested(std::function<void()> callback) {m_impl->manageRequested=std::move(callback);}
 void TextLibraryPanel::setStatus(const QString& status) {m_impl->status->setText(status);m_impl->status->setVisible(!status.isEmpty());}
 bool TextLibraryPanel::eventFilter(QObject* watched,QEvent* event) {
-    if(watched==m_impl->list && event->type()==QEvent::KeyPress) {
+    if(m_impl && watched==m_impl->list && event->type()==QEvent::KeyPress) {
         const auto* key=static_cast<QKeyEvent*>(event);
         if(key->key()==Qt::Key_Return || key->key()==Qt::Key_Enter) {
             if(!key->isAutoRepeat()) m_impl->activate(m_impl->list->currentItem());

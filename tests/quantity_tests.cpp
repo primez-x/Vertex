@@ -104,6 +104,15 @@ void test_imperial_and_metric_entries_share_exact_geometry() {
             "centimetre entry should preserve its entered unit");
 }
 
+void test_scientific_decimals_are_exact() {
+    // Reader 101 accepts scientific decimals (docs/project-format.md).
+    const auto thousand = sketch::parse_quantity("1e3m");
+    require_exact(thousand, 1000, 1, "scientific metres");
+    require(thousand.original_expression == "1e3m",
+            "scientific entry should preserve its original expression");
+    require_exact(sketch::parse_quantity("2.5E-3m"), 1, 400, "negative scientific exponent");
+}
+
 void test_invalid_and_overflowing_input_is_rejected() {
     require_invalid("", "empty input should be rejected");
     require_invalid("12cm trailing", "trailing text should be rejected");
@@ -111,7 +120,9 @@ void test_invalid_and_overflowing_input_is_rejected() {
     require_invalid("inf ft", "infinity should be rejected");
     require_invalid("1/0m", "zero denominator should be rejected");
     require_invalid("5ft 6", "feet plus inches requires an inch marker");
-    require_invalid("1e3m", "exponential notation outside the grammar should be rejected");
+    require_invalid("1em", "scientific notation requires exponent digits");
+    require_invalid("1e3e2m", "scientific notation accepts one exponent");
+    require_invalid("1e+-3m", "scientific exponent accepts one sign");
     require_invalid("--1m", "multiple signs should be rejected");
     require_invalid("9223372036854775808m", "integer overflow should be rejected");
     require_invalid("9223372036854775807ft", "unit conversion overflow should be rejected");
@@ -146,6 +157,7 @@ int main() {
     test_decimal_units_are_exact();
     test_feet_and_inches_preserve_exact_fraction();
     test_imperial_and_metric_entries_share_exact_geometry();
+    test_scientific_decimals_are_exact();
     test_invalid_and_overflowing_input_is_rejected();
     test_display_round_trip_is_exact_and_non_mutating();
     return 0;

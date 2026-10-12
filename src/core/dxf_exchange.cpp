@@ -756,11 +756,16 @@ DxfImportResult parse_dxf_ascii(std::string_view bytes, const DxfExchangeLimits&
     std::map<std::string, std::size_t, std::less<>> block_indices;
     for (std::size_t index = 0; index < result.drawing.blocks.size(); ++index)
         require(block_indices.emplace(block_identity(result.drawing.blocks[index].name), index).second);
-    for (const auto& insert : result.drawing.inserts)
+    std::set<std::string, std::less<>> inserted_blocks;
+    for (const auto& insert : result.drawing.inserts) {
         require(block_indices.contains(block_identity(insert.block_name)));
+        inserted_blocks.insert(block_identity(insert.block_name));
+    }
+    std::set<std::size_t> picture_blocks;
     for (const auto& picture : pictures) {
         const auto found = block_indices.find(block_identity(picture.name));
         require(found != block_indices.end());
+        picture_blocks.insert(found->second);
         auto& block = result.drawing.blocks[found->second];
         // Picture references are display data, never native semantic imports.
         if (!block.vertex_entity_json.empty()) {
@@ -773,6 +778,14 @@ DxfImportResult parse_dxf_ascii(std::string_view bytes, const DxfExchangeLimits&
             else if (picture.family == DimensionPicture::Family::angular) result.drawing.angular_dimensions[picture.dimension_index].text_height = block.labels.front().height;
             else result.drawing.dimensions[picture.dimension_index].text_height = block.labels.front().height;
         }
+    }
+    // Anonymous dimension pictures are presentation regenerated from the
+    // analytical dimension on export. Retaining them as ordinary blocks would
+    // duplicate every picture on each round trip.
+    for (auto index = picture_blocks.rbegin(); index != picture_blocks.rend(); ++index) {
+        const auto& block = result.drawing.blocks[*index];
+        if (block.name.front() != '*' || inserted_blocks.contains(block_identity(block.name))) continue;
+        result.drawing.blocks.erase(result.drawing.blocks.begin() + static_cast<std::ptrdiff_t>(*index));
     }
     require(header && version && entities && eof);
     return result;

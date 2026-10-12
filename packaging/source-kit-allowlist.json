@@ -763,11 +763,11 @@
     },
     {
       "category": "fixtures",
-      "path": "assets/symbols/architectural_v2/symbols/10_windows/window-double.svg"
+      "path": "assets/symbols/architectural_v2/symbols/10_windows/window-double-hung.svg"
     },
     {
       "category": "fixtures",
-      "path": "assets/symbols/architectural_v2/symbols/10_windows/window-double-hung.svg"
+      "path": "assets/symbols/architectural_v2/symbols/10_windows/window-double.svg"
     },
     {
       "category": "fixtures",
@@ -1728,6 +1728,14 @@
     {
       "category": "docs",
       "path": "docs/design/vertex-canvas-interaction-contract.md"
+    },
+    {
+      "category": "docs",
+      "path": "docs/design/vertex-component-directional-resize.md"
+    },
+    {
+      "category": "docs",
+      "path": "docs/design/vertex-ifc-component-import.md"
     },
     {
       "category": "docs",
@@ -3267,6 +3275,10 @@
     },
     {
       "category": "source",
+      "path": "include/sketch/assembly_directional_resize.hpp"
+    },
+    {
+      "category": "source",
       "path": "include/sketch/assembly_document_adapter.hpp"
     },
     {
@@ -3291,6 +3303,10 @@
     },
     {
       "category": "source",
+      "path": "include/sketch/assembly_profile_geometry.hpp"
+    },
+    {
+      "category": "source",
       "path": "include/sketch/asset_payload.hpp"
     },
     {
@@ -3300,6 +3316,10 @@
     {
       "category": "source",
       "path": "include/sketch/assistance_engine.hpp"
+    },
+    {
+      "category": "source",
+      "path": "include/sketch/authored_phase_membership.hpp"
     },
     {
       "category": "source",
@@ -3459,6 +3479,10 @@
     },
     {
       "category": "source",
+      "path": "include/sketch/desktop/assembly_properties_panel.hpp"
+    },
+    {
+      "category": "source",
       "path": "include/sketch/desktop/boundary_input_dialog.hpp"
     },
     {
@@ -3492,6 +3516,10 @@
     {
       "category": "source",
       "path": "include/sketch/desktop/physical_wall_room_review_dialog.hpp"
+    },
+    {
+      "category": "source",
+      "path": "include/sketch/desktop/selection_properties_dialog.hpp"
     },
     {
       "category": "source",
@@ -3691,10 +3719,6 @@
     },
     {
       "category": "source",
-      "path": "include/sketch/mixed_clipboard_transfer.hpp"
-    },
-    {
-      "category": "source",
       "path": "include/sketch/mixed_clipboard_command.hpp"
     },
     {
@@ -3703,15 +3727,11 @@
     },
     {
       "category": "source",
-      "path": "include/sketch/authored_phase_membership.hpp"
+      "path": "include/sketch/mixed_clipboard_transfer.hpp"
     },
     {
       "category": "source",
       "path": "include/sketch/mixed_phase_wall_demolition.hpp"
-    },
-    {
-      "category": "source",
-      "path": "include/sketch/mixed_selection_removal.hpp"
     },
     {
       "category": "source",
@@ -3720,6 +3740,10 @@
     {
       "category": "source",
       "path": "include/sketch/mixed_selection_property_edit.hpp"
+    },
+    {
+      "category": "source",
+      "path": "include/sketch/mixed_selection_removal.hpp"
     },
     {
       "category": "source",
@@ -3755,7 +3779,11 @@
     },
     {
       "category": "source",
-      "path": "include/sketch/ordinary_selection_removal.hpp"
+      "path": "include/sketch/opening_assembly.hpp"
+    },
+    {
+      "category": "source",
+      "path": "include/sketch/opening_host_geometry.hpp"
     },
     {
       "category": "source",
@@ -3763,19 +3791,7 @@
     },
     {
       "category": "source",
-      "path": "include/sketch/selection_geometry_transform.hpp"
-    },
-    {
-      "category": "source",
-      "path": "include/sketch/selection_geometry_review.hpp"
-    },
-    {
-      "category": "source",
-      "path": "include/sketch/opening_assembly.hpp"
-    },
-    {
-      "category": "source",
-      "path": "include/sketch/opening_host_geometry.hpp"
+      "path": "include/sketch/ordinary_selection_removal.hpp"
     },
     {
       "category": "source",
@@ -3880,6 +3896,10 @@
     {
       "category": "source",
       "path": "include/sketch/phase_roof_uniform_transform.hpp"
+    },
+    {
+      "category": "source",
+      "path": "include/sketch/phase_selection_property_edit.hpp"
     },
     {
       "category": "source",
@@ -4067,6 +4087,10 @@
     },
     {
       "category": "source",
+      "path": "include/sketch/qualified_embedded_assembly_copy.hpp"
+    },
+    {
+      "category": "source",
       "path": "include/sketch/quantity.hpp"
     },
     {
@@ -4143,6 +4167,26 @@
     },
     {
       "category": "source",
+      "path": "include/sketch/selection_geometry_review.hpp"
+    },
+    {
+      "category": "source",
+      "path": "include/sketch/selection_geometry_transform.hpp"
+    },
+    {
+      "category": "source",
+      "path": "include/sketch/selection_presentation_property_edit.hpp"
+    },
+    {
+      "category": "source",
+      "path": "include/sketch/selection_property_edit.hpp"
+    },
+    {
+      "category": "source",
+      "path": "include/sketch/selection_scale_plane.hpp"
+    },
+    {
+      "category": "source",
       "path": "include/sketch/sha256_stream.hpp"
     },
     {
@@ -4183,6 +4227,10 @@
     },
     {
       "category": "source",
+      "path": "include/sketch/slab_plan_geometry.hpp"
+    },
+    {
+      "category": "source",
       "path": "include/sketch/slab_semantics.hpp"
     },
     {
@@ -4211,6 +4259,14 @@
     },
     {
       "category": "source",
+      "path": "include/sketch/stair_profile_edit.hpp"
+    },
+    {
+      "category": "source",
+      "path": "include/sketch/stair_property_review.hpp"
+    },
+    {
+      "category": "source",
       "path": "include/sketch/stair_semantics.hpp"
     },
     {
@@ -4228,6 +4284,10 @@
     {
       "category": "source",
       "path": "include/sketch/structural_object_edit.hpp"
+    },
+    {
+      "category": "source",
+      "path": "include/sketch/structural_profile_edit.hpp"
     },
     {
       "category": "source",
@@ -4743,6 +4803,10 @@
     },
     {
       "category": "source",
+      "path": "src/architecture/projected_ellipse_geometry.hpp"
+    },
+    {
+      "category": "source",
       "path": "src/architecture/roof_entity_codec.cpp"
     },
     {
@@ -4831,6 +4895,10 @@
     },
     {
       "category": "source",
+      "path": "src/core/assembly_directional_resize.cpp"
+    },
+    {
+      "category": "source",
       "path": "src/core/assembly_document_adapter.cpp"
     },
     {
@@ -4855,11 +4923,19 @@
     },
     {
       "category": "source",
+      "path": "src/core/assembly_profile_geometry.cpp"
+    },
+    {
+      "category": "source",
       "path": "src/core/assistance_contract.cpp"
     },
     {
       "category": "source",
       "path": "src/core/assistance_engine.cpp"
+    },
+    {
+      "category": "source",
+      "path": "src/core/authored_phase_membership.cpp"
     },
     {
       "category": "source",
@@ -5111,10 +5187,6 @@
     },
     {
       "category": "source",
-      "path": "src/core/mixed_clipboard_transfer.cpp"
-    },
-    {
-      "category": "source",
       "path": "src/core/mixed_clipboard_command.cpp"
     },
     {
@@ -5123,15 +5195,11 @@
     },
     {
       "category": "source",
-      "path": "src/core/authored_phase_membership.cpp"
+      "path": "src/core/mixed_clipboard_transfer.cpp"
     },
     {
       "category": "source",
       "path": "src/core/mixed_phase_wall_demolition.cpp"
-    },
-    {
-      "category": "source",
-      "path": "src/core/mixed_selection_removal.cpp"
     },
     {
       "category": "source",
@@ -5140,6 +5208,10 @@
     {
       "category": "source",
       "path": "src/core/mixed_selection_property_edit.cpp"
+    },
+    {
+      "category": "source",
+      "path": "src/core/mixed_selection_removal.cpp"
     },
     {
       "category": "source",
@@ -5171,7 +5243,11 @@
     },
     {
       "category": "source",
-      "path": "src/core/ordinary_selection_removal.cpp"
+      "path": "src/core/opening_assembly.cpp"
+    },
+    {
+      "category": "source",
+      "path": "src/core/opening_host_geometry.cpp"
     },
     {
       "category": "source",
@@ -5179,19 +5255,7 @@
     },
     {
       "category": "source",
-      "path": "src/core/selection_geometry_transform.cpp"
-    },
-    {
-      "category": "source",
-      "path": "src/core/selection_geometry_review.cpp"
-    },
-    {
-      "category": "source",
-      "path": "src/core/opening_assembly.cpp"
-    },
-    {
-      "category": "source",
-      "path": "src/core/opening_host_geometry.cpp"
+      "path": "src/core/ordinary_selection_removal.cpp"
     },
     {
       "category": "source",
@@ -5300,6 +5364,10 @@
     {
       "category": "source",
       "path": "src/core/phase_roof_uniform_transform.cpp"
+    },
+    {
+      "category": "source",
+      "path": "src/core/phase_selection_property_edit.cpp"
     },
     {
       "category": "source",
@@ -5475,6 +5543,10 @@
     },
     {
       "category": "source",
+      "path": "src/core/qualified_embedded_assembly_copy.cpp"
+    },
+    {
+      "category": "source",
       "path": "src/core/quantity.cpp"
     },
     {
@@ -5547,6 +5619,26 @@
     },
     {
       "category": "source",
+      "path": "src/core/selection_geometry_review.cpp"
+    },
+    {
+      "category": "source",
+      "path": "src/core/selection_geometry_transform.cpp"
+    },
+    {
+      "category": "source",
+      "path": "src/core/selection_presentation_property_edit.cpp"
+    },
+    {
+      "category": "source",
+      "path": "src/core/selection_property_edit.cpp"
+    },
+    {
+      "category": "source",
+      "path": "src/core/selection_scale_plane.cpp"
+    },
+    {
+      "category": "source",
       "path": "src/core/sheet_output_scene.cpp"
     },
     {
@@ -5583,6 +5675,10 @@
     },
     {
       "category": "source",
+      "path": "src/core/slab_plan_geometry.cpp"
+    },
+    {
+      "category": "source",
       "path": "src/core/slab_semantics.cpp"
     },
     {
@@ -5607,6 +5703,14 @@
     },
     {
       "category": "source",
+      "path": "src/core/stair_profile_edit.cpp"
+    },
+    {
+      "category": "source",
+      "path": "src/core/stair_property_review.cpp"
+    },
+    {
+      "category": "source",
       "path": "src/core/stair_retirement_groups.hpp"
     },
     {
@@ -5628,6 +5732,10 @@
     {
       "category": "source",
       "path": "src/core/structural_object_edit.cpp"
+    },
+    {
+      "category": "source",
+      "path": "src/core/structural_profile_edit.cpp"
     },
     {
       "category": "source",
@@ -5779,6 +5887,30 @@
     },
     {
       "category": "source",
+      "path": "src/desktop/assembly_directional_resize_authoring.cpp"
+    },
+    {
+      "category": "source",
+      "path": "src/desktop/assembly_directional_resize_authoring.hpp"
+    },
+    {
+      "category": "source",
+      "path": "src/desktop/assembly_profile_canvas_geometry.hpp"
+    },
+    {
+      "category": "source",
+      "path": "src/desktop/assembly_profile_topology_authoring.cpp"
+    },
+    {
+      "category": "source",
+      "path": "src/desktop/assembly_profile_topology_authoring.hpp"
+    },
+    {
+      "category": "source",
+      "path": "src/desktop/assembly_properties_panel.cpp"
+    },
+    {
+      "category": "source",
       "path": "src/desktop/assistance_ocr.cpp"
     },
     {
@@ -5904,6 +6036,10 @@
     {
       "category": "source",
       "path": "src/desktop/reference_import_worker.cpp"
+    },
+    {
+      "category": "source",
+      "path": "src/desktop/selection_properties_dialog.cpp"
     },
     {
       "category": "source",

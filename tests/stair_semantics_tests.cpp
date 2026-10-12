@@ -32,7 +32,11 @@ void layouts() {
     s.landings[0].turn=StairTurn::straight; s.landings[0].return_gap=0; l=derive_stair_layout(s);
     near(l.flights[1].base_position.x,2.4); near(l.flights[1].base_position.y,0);
     s=stair(); s.orientation_radians=1'000'000.0; l=derive_stair_layout(s);
-    near(l.flights[0].orientation_radians,s.orientation_radians);
+    // The derived frame is normalized from the authored sine/cosine; the
+    // authored yaw itself is retained only in persistence.
+    require(std::abs(l.flights[0].orientation_radians)<4,"first derived yaw stays bounded");
+    near(std::cos(l.flights[0].orientation_radians),std::cos(s.orientation_radians));
+    near(std::sin(l.flights[0].orientation_radians),std::sin(s.orientation_radians));
     require(std::abs(l.flights[1].orientation_radians)<4,"outgoing derived yaw stays bounded");
     near(std::cos(l.flights[1].orientation_radians),-std::sin(s.orientation_radians));
     near(std::sin(l.flights[1].orientation_radians),std::cos(s.orientation_radians));

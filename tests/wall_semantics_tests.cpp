@@ -257,8 +257,15 @@ void test_sloped_wall_semantics() {
 
     auto curved = wall;
     curved.baseline = {{2.0, 0.0}, {0.0, 2.0}, std::numbers::pi / 2.0};
-    rejected([&] { sketch::validate_wall_semantics(curved); },
-             "nonzero sloped curved walls must be rejected until curved-top support exists");
+    // Format v62 supports curved walls with a planar top whose rise is
+    // measured across the baseline chord.
+    const auto curved_before = curved;
+    sketch::validate_wall_semantics(curved);
+    require_same(curved, curved_before);
+    auto invalid_curved = curved;
+    invalid_curved.slope_rise = -curved.height;
+    rejected([&] { sketch::validate_wall_semantics(invalid_curved); },
+             "a sloped curved wall with a non-positive end height must be rejected");
 
     auto invalid = wall;
     invalid.slope_rise = -wall.height;

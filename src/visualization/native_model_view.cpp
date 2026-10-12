@@ -2706,7 +2706,10 @@ public:
 };
 
 NativeModelView::NativeModelView(QWidget* parent)
-    : QWidget(parent), m_impl(std::make_unique<Impl>(this)) {
+    : QWidget(parent), m_impl() {
+    // Impl parents timers/children to this view, which delivers ChildAdded to
+    // event() while Impl is still being built; m_impl must already be null.
+    m_impl = std::make_unique<Impl>(this);
     setFocusPolicy(Qt::StrongFocus);
     setMouseTracking(true);
     setAttribute(Qt::WA_TabletTracking, true);

@@ -302,7 +302,8 @@ void retired_owner_opaque_bridge() {
     reject([&]{validate_stair_identity_transition(bridge,fresh,history);});
     reject([&]{validate_stair_identity_transition(bridge,known_v1,history);});
     auto future=bridge;
-    future.at("stair").properties={{"form","multi_flight_stair"},{"version",3}};
+    // Multi-flight stair versions 2 through 4 are known; 5 is the first future form.
+    future.at("stair").properties={{"form","multi_flight_stair"},{"version",5}};
     ledger.reserve_state(future);
     reject([&]{ledger.validate_transition(future,fresh);});
     history.push_back(record(future));
@@ -347,8 +348,8 @@ void landing_admission_and_future_forms() {
         m=original;m.at("rail").properties={{"form",form},{"version",3},{"host","opaque"}};
         m.erase("stair");validate_stair_attachment_state(m);
     }
-    m=original;m.at("stair").properties["version"]=3;reject([&]{validate_stair_attachment_state(m);});
-    m.erase("rail");m.at("stair").properties["flights"]="opaque v3";validate_stair_attachment_state(m);
+    m=original;m.at("stair").properties["version"]=5;reject([&]{validate_stair_attachment_state(m);});
+    m.erase("rail");m.at("stair").properties["flights"]="opaque v5";validate_stair_attachment_state(m);
     m=original;m.at("stair").properties["base_position_m"]={3,-2,7};m.at("stair").properties["orientation_rad"]=.4;
     m.at("stair").properties["going_m"]=.45;m.at("stair").properties["width_m"]=1.1;
     validate_stair_attachment_state(m);

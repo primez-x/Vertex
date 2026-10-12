@@ -496,8 +496,17 @@ void clear_room_exports() {
     auto input=fixture(); input.push_back(wall("obstacle",{1,1},{3,1}));
     auto d=Document::create(input); const auto id=create_room(d);
     const auto dxf=export_project_dxf(d.snapshot());
-    require(dxf.drawing.polylines.size()==2,"DXF must retain clear outer and analytic island loop");
-    require(std::any_of(dxf.drawing.polylines.begin(),dxf.drawing.polylines.end(),[](const auto& loop) {
+    // A current physical room exports as a native V7 group. Its ordinary CAD
+    // outline lives in the room's own carrier block rather than top level.
+    const auto room_block=std::find_if(dxf.drawing.blocks.begin(),dxf.drawing.blocks.end(),[&](const auto& block) {
+        if (block.vertex_entity_json.empty()) return false;
+        const auto payload=Json::parse(block.vertex_entity_json);
+        return payload.value("id",std::string{})==id && payload.value("depiction",std::string{})=="BOUNDARY_PLAN_V1";
+    });
+    require(room_block!=dxf.drawing.blocks.end(),"DXF must carry the current physical room as a native group member");
+    const auto& loops=room_block->polylines;
+    require(loops.size()==2,"DXF must retain clear outer and analytic island loop");
+    require(std::any_of(loops.begin(),loops.end(),[](const auto& loop) {
         return loop.closed && std::any_of(loop.vertices.begin(),loop.vertices.end(),[](const auto& vertex) {
             return vertex.point.x==1 && std::abs(vertex.point.y-.9)<1e-12;
         });

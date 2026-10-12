@@ -119,14 +119,24 @@ void test_planar_circle_is_an_exact_editable_measurement_candidate() {
     document.undo(document.revision());
     check(document.snapshot().entities()==before.entities(),"circle vertex-edit Undo restores the exact upgraded source");
     const auto exported=export_project_dxf(before);
-    check(exported.diagnostics.empty() && exported.drawing.polylines.size()==1 &&
-        exported.drawing.polylines.front().closed && exported.drawing.polylines.front().vertices.size()==2 &&
-        std::abs(exported.drawing.polylines.front().vertices[0].bulge-1)<1e-14 &&
-        std::abs(exported.drawing.polylines.front().vertices[1].bulge-1)<1e-14,
+    // A closed standalone boundary exports as a native V2 BOUNDARY_PLAN_V1
+    // block whose ordinary CAD plan carries the analytical outline.
+    check(exported.diagnostics.empty() && exported.drawing.polylines.empty() &&
+        exported.drawing.blocks.size()==1 && exported.drawing.inserts.size()==1 &&
+        !exported.drawing.blocks.front().vertex_entity_json.empty() &&
+        nlohmann::json::parse(exported.drawing.blocks.front().vertex_entity_json).at("version")==2 &&
+        nlohmann::json::parse(exported.drawing.blocks.front().vertex_entity_json).at("depiction")=="BOUNDARY_PLAN_V1" &&
+        exported.drawing.blocks.front().polylines.size()==1 &&
+        exported.drawing.blocks.front().polylines.front().closed &&
+        exported.drawing.blocks.front().polylines.front().vertices.size()==2 &&
+        std::abs(exported.drawing.blocks.front().polylines.front().vertices[0].bulge-1)<1e-14 &&
+        std::abs(exported.drawing.blocks.front().polylines.front().vertices[1].bulge-1)<1e-14,
         "circle project export remains exactly closed as a two-bulge analytical polyline");
     const auto repeated=import_project_dxf(export_dxf_ascii(exported.drawing));
     check(repeated.complete() && repeated.entities.size()==1,"circle geometry roundtrip creates one complete boundary candidate");
-    const auto restored=boundary_geometry(decode_identified_boundary_entity(upgrade_legacy_boundary_entity(repeated.entities.front())));
+    check(inspect_boundary_entity_version(repeated.entities.front()).format==BoundaryEntityFormat::identified_v1,
+        "native circle boundary roundtrip retains its identified local topology");
+    const auto restored=boundary_geometry(decode_identified_boundary_entity(repeated.entities.front()));
     check(std::abs(signed_area(restored)-4*pi)<1e-10 && std::abs(perimeter(restored)-4*pi)<1e-10,
         "circle geometric roundtrip retains analytical area and perimeter without polygon approximation");
 }

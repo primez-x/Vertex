@@ -365,6 +365,9 @@ public:
     static constexpr std::uint32_t format_version = 259;
     static constexpr std::uint32_t recovery_format_version = 4;
     [[nodiscard]] static std::uint32_t required_format_version(const DocumentSnapshot& snapshot);
+    // Document semantics only: excludes the native-only v161 shared asset
+    // payload layout, which logical JSON/assets extraction does not carry.
+    [[nodiscard]] static std::uint32_t required_semantic_format_version(const DocumentSnapshot& snapshot);
     static constexpr std::uint64_t maximum_file_bytes = 4ULL * 1024ULL * 1024ULL * 1024ULL;
     static constexpr std::uint64_t maximum_revision_count = 10'000;
     static constexpr std::uint64_t maximum_entity_rows = 250'000;

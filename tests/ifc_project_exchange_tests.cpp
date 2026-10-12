@@ -1557,7 +1557,8 @@ void native_roofs_and_spaces() {
                     check(expected.good(), "roof capture expectations must be written completely");
                 }
             auto malformed=imported.entities[0];
-            malformed.properties["version"]=3; verify_worker_candidate_rejected(malformed);
+            // Roof schemas 1-4 are admitted (schema 3 permits plain cuts); 5 is unsupported.
+            malformed.properties["version"]=5; verify_worker_candidate_rejected(malformed);
             malformed=imported.entities[0]; malformed.properties["form"]="unsupported_roof"; verify_worker_candidate_rejected(malformed);
             malformed=imported.entities[0]; malformed.properties["base_position_m"]={2,3}; verify_worker_candidate_rejected(malformed);
             malformed=imported.entities[0]; malformed.properties["span_m"]=-1; verify_worker_candidate_rejected(malformed);

@@ -1812,18 +1812,38 @@ std::uint32_t required_format_version_internal(const DocumentSnapshot& snapshot,
         }
         return false;
     };
+    // The JSON scans below only raise floors. A retained proof that cannot be
+    // encoded (for example a detached record with a removed command lane) is
+    // refused by snapshot validation; the typed checks still apply its floor.
+    const auto encoded_command=[](const ApplyBoundaryConstraintChanges& command)->std::optional<nlohmann::json> {
+        try { return command_to_json(Command{command}); }
+        catch (const DocumentError&) {
+        } catch (const std::invalid_argument&) {
+        } catch (const nlohmann::json::exception&) {
+        }
+        return std::nullopt;
+    };
+    const auto encoded_edit=[](const BoundaryGeometryEdit& edit)->std::optional<nlohmann::json> {
+        try { return encode_boundary_geometry_edit(edit); }
+        catch (const DocumentError&) {
+        } catch (const std::invalid_argument&) {
+        } catch (const nlohmann::json::exception&) {
+        }
+        return std::nullopt;
+    };
     for (const auto& revision : snapshot.history()) {
         if (revision.phase_entity_import) required=std::max(required,160U);
-        if (required<259 && revision.boundary_constraint_changes)
-            required=std::max(required,retained_component_reader_floor(command_to_json(Command{*revision.boundary_constraint_changes})));
-        if (required<259 && revision.boundary_geometry_edit)
-            required=std::max(required,typed_edit_reader_floor(encode_boundary_geometry_edit(*revision.boundary_geometry_edit)));
-        if (required<259 && revision.boundary_constraint_changes)
-            required=std::max(required,typed_edit_reader_floor(command_to_json(Command{*revision.boundary_constraint_changes})));
-        if (required<122 && revision.boundary_geometry_edit)
-            required=std::max(required,quantity_reader_floor(encode_boundary_geometry_edit(*revision.boundary_geometry_edit)));
-        if (required<122 && revision.boundary_constraint_changes)
-            required=std::max(required,quantity_reader_floor(command_to_json(Command{*revision.boundary_constraint_changes})));
+        if (required<259 && (revision.boundary_constraint_changes || revision.boundary_geometry_edit)) {
+            const auto command=revision.boundary_constraint_changes ?
+                encoded_command(*revision.boundary_constraint_changes) : std::nullopt;
+            const auto edit=revision.boundary_geometry_edit ?
+                encoded_edit(*revision.boundary_geometry_edit) : std::nullopt;
+            if (command) required=std::max(required,retained_component_reader_floor(*command));
+            if (required<259 && edit) required=std::max(required,typed_edit_reader_floor(*edit));
+            if (required<259 && command) required=std::max(required,typed_edit_reader_floor(*command));
+            if (required<122 && edit) required=std::max(required,quantity_reader_floor(*edit));
+            if (required<122 && command) required=std::max(required,quantity_reader_floor(*command));
+        }
         if (revision.boundary_geometry_edit && typed_edit(*revision.boundary_geometry_edit)) required=std::max(required,31U);
         if (revision.boundary_geometry_edit && revision.boundary_geometry_edit->wall_source_translation)
             required = std::max(required, 53U);
@@ -2762,6 +2782,10 @@ std::uint32_t required_format_version_internal(const DocumentSnapshot& snapshot,
 std::uint32_t ProjectStore::required_format_version(const DocumentSnapshot& snapshot) {
     return std::max(required_format_version_internal(snapshot),
                     snapshot_uses_shared_asset_payloads(snapshot) ? 161U : 1U);
+}
+
+std::uint32_t ProjectStore::required_semantic_format_version(const DocumentSnapshot& snapshot) {
+    return required_format_version_internal(snapshot);
 }
 
 class ProjectStoreAccess final {
@@ -3723,10 +3747,13 @@ struct AssetPayloadInventory {
     // Borrow caller-owned bytes; the inventory never copies a payload.
     std::map<std::string, const Asset*, std::less<>> payloads;
     bool shared = false;
+    // Logical bytes as historical inline revision rows would store them.
+    std::uint64_t inline_bytes = 0;
 };
 
 AssetPayloadInventory inspect_asset_payloads(const DocumentSnapshot& snapshot) {
     std::uint64_t rows = 0;
+    std::uint64_t inline_bytes = 0;
     // Bound the entire map before inserting keys or hashing caller bytes.
     for (const auto& revision : snapshot.history()) {
         if (revision.assets.size() > ProjectStore::maximum_asset_rows - rows)
@@ -3738,9 +3765,12 @@ AssetPayloadInventory inspect_asset_payloads(const DocumentSnapshot& snapshot) {
                 storage_error(StorageErrorCode::resource_limit, "document asset exceeds its size limit");
             if (asset.sha256.size() != 64)
                 storage_error(StorageErrorCode::invalid_snapshot, "document asset SHA-256 is invalid");
+            inline_bytes = asset.bytes.size() > std::numeric_limits<std::uint64_t>::max() - inline_bytes
+                ? std::numeric_limits<std::uint64_t>::max() : inline_bytes + asset.bytes.size();
         }
     }
     AssetPayloadInventory inventory;
+    inventory.inline_bytes = inline_bytes;
     std::map<const std::byte*, const Asset*, std::less<>> verified_allocations;
     std::uint64_t unique_bytes = 0;
     std::uint64_t verification_work = 0;
@@ -3791,8 +3821,15 @@ AssetPayloadInventory inspect_asset_payloads(const DocumentSnapshot& snapshot) {
     return inventory;
 }
 
+// Shared payload tables are a v161 storage layout, not document semantics.
+// Shared in-memory content is written inline for older readers unless those
+// inline rows would exceed the historical aggregate admission limit.
+bool requires_shared_asset_payload_layout(const AssetPayloadInventory& payloads) {
+    return payloads.shared && payloads.inline_bytes > ProjectStore::maximum_total_asset_bytes;
+}
+
 bool snapshot_uses_shared_asset_payloads(const DocumentSnapshot& snapshot) {
-    return inspect_asset_payloads(snapshot).shared;
+    return requires_shared_asset_payload_layout(inspect_asset_payloads(snapshot));
 }
 
 AssetPayloadInventory enforce_snapshot_budget(const DocumentSnapshot& snapshot) {
@@ -3961,7 +3998,7 @@ std::string write_database(const std::filesystem::path& path, const DocumentSnap
     execute(database.get(), "PRAGMA locking_mode=EXCLUSIVE");
     execute(database.get(), "PRAGMA application_id=1347638340");
     const auto format = std::max({recovery ? 4U : 1U,
-        required_format_version_internal(snapshot), payloads.shared ? 161U : 1U});
+        required_format_version_internal(snapshot), requires_shared_asset_payload_layout(payloads) ? 161U : 1U});
     const auto requested_digest = logical_digest(snapshot, format, recovery);
     const auto user_version = "PRAGMA user_version=" + std::to_string(format);
     execute(database.get(), user_version.c_str());

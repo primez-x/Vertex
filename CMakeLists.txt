@@ -2578,6 +2578,14 @@ if(BUILD_TESTING)
   endforeach()
   get_property(SKETCH_LOCAL_TESTS DIRECTORY PROPERTY TESTS)
   set_tests_properties(${SKETCH_LOCAL_TESTS} PROPERTIES TIMEOUT 60)
+  # Every test process resolves the pinned native runtime, and desktop builds
+  # also resolve Qt, regardless of whether a test declares its own environment.
+  set_property(TEST ${SKETCH_LOCAL_TESTS} APPEND PROPERTY ENVIRONMENT_MODIFICATION
+    "PATH=path_list_append:${CMAKE_SOURCE_DIR}/.deps/native/x64-windows/$<IF:$<CONFIG:Debug>,debug/bin,bin>")
+  if(SKETCH_BUILD_DESKTOP AND DEFINED SKETCH_QT_BIN)
+    set_property(TEST ${SKETCH_LOCAL_TESTS} APPEND PROPERTY ENVIRONMENT_MODIFICATION
+      "PATH=path_list_append:${SKETCH_QT_BIN}")
+  endif()
   if(SKETCH_BUILD_DESKTOP)
     # The comprehensive desktop workflows exercise both workspaces, output,
     # recovery and architectural forms in hidden processes. Keep the ordinary

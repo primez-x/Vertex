@@ -710,7 +710,7 @@ int main() {
         require(encode_annotation_state(decode_annotation_state(legacy, {marker}), {marker}) == original_saved,
                 "Version1 upgrade must preserve old geometry and pin the original catalog definition");
     }
-    require(catalog.size() == 1154, "Preserve 809 legacy symbols and expose 345 SVG symbols");
+    require(catalog.size() == 1175, "Preserve 809 legacy symbols and expose 366 SVG symbols");
     const auto svg_toilets = filter_symbol_catalog(catalog, "Toilet Close Coupled", "01_bathroom");
     require(svg_toilets.size() == 1 &&
                 svg_toilets.front().id == "svg-v2-01_bathroom-toilet-close-coupled",
@@ -727,7 +727,7 @@ int main() {
         require(!definition.name.empty() && asset.view_box[2] > 0 && asset.view_box[3] > 0,
                 "SVG renderers require human names and positive intrinsic bounds");
     }
-    require(svg_count == 345 && nominal_count == 233 && svg_categories.size() == 25,
+    require(svg_count == 366 && nominal_count == 254 && svg_categories.size() == 26,
             "Import complete SVG category coverage without inventing nominal dimensions");
     AnnotationState every_symbol;
     for (const auto& definition : catalog)

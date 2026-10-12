@@ -315,7 +315,22 @@ void multi_flight_resize_contract() {
     future_rail.id="resize-future-rail";
     auto doc=Document::create({property,building,floor,layer,straight,turned,rail,landing,future_rail});
     const auto before=doc.snapshot();
-    rejects([&] { (void)plan_axis_resize_command(before,turned.id,2,3,{}); });
+    // Format v63: a quarter-turn stair resizes by materializing per-flight
+    // going/width overrides; each flight follows its own physical axes.
+    const auto turned_preview=Document::preview_command(before,
+        plan_axis_resize_command(before,turned.id,2,3,{}));
+    const auto turned_result=decode_stair_properties(turned.id,
+        turned_preview.entities().at(turned.id).properties);
+    near(turned_result.going,.6,"turned stair default going follows first flight");
+    near(turned_result.width,3,"turned stair default width follows first flight");
+    near(turned_result.total_rise,2,"turned stair rise retained");
+    require(!turned_result.flights[0].going && !turned_result.flights[0].width,
+        "first flight inherits resized defaults");
+    require(turned_result.flights[1].going && turned_result.flights[1].width,
+        "perpendicular flight materializes per-flight dimensions");
+    near(*turned_result.flights[1].going,.9,"perpendicular flight going uses swapped factor");
+    near(*turned_result.flights[1].width,2,"perpendicular flight width uses swapped factor");
+    near(turned_result.landings[0].depth,2.4,"quarter-turn landing depth follows incoming run");
     rejects([&] { (void)plan_axis_resize_command(before,rail.id,2,3,{}); });
     rejects([&] { (void)plan_axis_resize_command(before,landing.id,2,3,{}); });
     doc.apply(plan_axis_resize_command(before,straight.id,2,3,{}));
