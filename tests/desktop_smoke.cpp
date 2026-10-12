@@ -2130,7 +2130,7 @@ void test_annotation_instance_clipboard_workflow() {
     other_owner.extensions = {{"retained", true}};
     window.document().apply(ApplyEntityChanges{window.document().revision(),
         {EntityChange::upsert(owner), EntityChange::upsert(other_owner)}, {}, "Annotation subset fixture"});
-    const auto original = window.document().snapshot();
+    auto original = window.document().snapshot();
     const auto select_subset = [&] {
         require(window.selectEntity("subset-symbol-0") && window.selectEntity("subset-label-0", true),
                 "select one symbol and label from the same owner");
@@ -2178,6 +2178,20 @@ void test_annotation_instance_clipboard_workflow() {
     require(target.undoCommand() && !target.document().snapshot().entities().contains(pasted_owner.id) &&
             target.redoCommand() && target.document().snapshot().entities() == pasted.entities(),
             "subset paste must undo/redo in one step");
+    // Drawing selection removal (October 9) scans opaque owner metadata for
+    // references to removed rows and refuses instead of inferring rewrites.
+    // The opaque notes above deliberately spell a selected child's ID.
+    select_subset();
+    const auto opaque_clipboard = QGuiApplication::clipboard()->text();
+    require(!window.cutSelection() && window.document().revision() == original.revision() &&
+            window.document().snapshot().entities() == original.entities() &&
+            QGuiApplication::clipboard()->text() == opaque_clipboard,
+            "opaque owner metadata naming a selected child must refuse cut without rewriting or clipboard changes");
+    owner.extensions["note"] = "opaque owner note";
+    owner.properties["state"]["opaque_note"] = "opaque owner note";
+    window.document().apply(ApplyEntityChanges{window.document().revision(),
+        {EntityChange::upsert(owner)}, {}, "Neutral opaque annotation metadata"});
+    original = window.document().snapshot();
     select_subset();
     require(window.cutSelection() && window.document().revision() == original.revision() + 1 &&
             window.selectedEntityIds().isEmpty(), "cut selected annotations in one atomic command");
@@ -2207,8 +2221,15 @@ void test_annotation_instance_clipboard_workflow() {
     const auto before_delete = window.document().snapshot();
     require(window.deleteSelection() && window.document().revision() == before_delete.revision() + 1,
             "mixed annotation and geometry delete must commit atomically");
-    expected.erase(wall.toStdString()); expected.erase(opening.toStdString());
-    require(window.document().snapshot().entities() == expected && window.undoCommand() &&
+    // Architectural removal (October 9) retires object overrides that target
+    // the removed wall; every unselected annotation row and metadata survives.
+    auto delete_expected = expected;
+    delete_expected.erase(wall.toStdString()); delete_expected.erase(opening.toStdString());
+    auto& delete_overrides = delete_expected.at(owner.id).properties["state"]["overrides"];
+    delete_overrides.erase(std::remove_if(delete_overrides.begin(), delete_overrides.end(), [&](const auto& row) {
+        return row.at("target_kind") == "object" && row.at("target_id") == wall.toStdString();
+    }), delete_overrides.end());
+    require(window.document().snapshot().entities() == delete_expected && window.undoCommand() &&
             window.document().snapshot().entities() == original.entities(),
             "mixed delete removes the hosted graph but retains unselected annotations exactly");
     select_subset();

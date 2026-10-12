@@ -521,9 +521,15 @@ void actual_transform_preview_cancel_and_apply() {
                 control<QLineEdit>(*dialog,"boundaryOffsetX").setText("3 m");
                 control<QLineEdit>(*dialog,"boundaryOffsetY").setText("-2 m");
                 control<QCheckBox>(*dialog,"boundaryFlipHorizontal").setChecked(true);
-                QApplication::processEvents();
                 auto& buttons=control<QDialogButtonBox>(*dialog,"boundaryTransformButtons");
-                require(buttons.button(QDialogButtonBox::Apply)->isEnabled(),"valid measured transform preview must enable Apply");
+                auto& status=control<QLabel>(*dialog,"boundaryTransformStatus");
+                // Field edits schedule a debounced preview; wait for it to settle.
+                QElapsedTimer timer;timer.start();
+                while(!buttons.button(QDialogButtonBox::Apply)->isEnabled()&&status.text().isEmpty()&&timer.elapsed()<5000)
+                    QApplication::processEvents(QEventLoop::AllEvents,30);
+                QApplication::processEvents();
+                if(!buttons.button(QDialogButtonBox::Apply)->isEnabled())
+                    throw std::runtime_error("valid measured transform preview must enable Apply: "+status.text().toStdString());
                 auto* preview=dynamic_cast<PlanCanvas*>(dialog->findChild<QWidget*>("wallTransformPreview"));
                 require(preview&&preview->labels().size()==2,"real preview must show original and proposed saved dimension labels");
                 require(window.document().snapshot().entities()==before.entities(),"preview must not mutate document or label placement");
@@ -552,7 +558,25 @@ void mixed_canvas_move_retains_placed_dimensions() {
     require(window.selectEntity("open")&&window.selectEntity("ordinary-area",true)&&window.selectedEntityIds().size()==2,"select stroke and unauthored area together");
     auto& surface=canvas(window);surface.setSnapEnabled(false);surface.setOverviewMapEnabled(false);surface.setViewTransform({6,1},50);
     const auto before=window.document().snapshot();
-    const QPointF start=QRectF(surface.rect()).center()+QPointF(5*surface.viewScale(),0);
+    // Press the selected area's interior away from its painted callout: since
+    // October 7 dragging a selected area's generated label moves only that
+    // label (interaction contract), never the boundary selection.
+    const QPointF area_center=QRectF(surface.rect()).center()+QPointF(5*surface.viewScale(),0);
+    // The 2 m area spans 100 px; stay at least 18 px from its edges/grips and
+    // 6 px clear of any painted label.
+    std::optional<QPointF> interior;
+    const auto unlabeled=[&](QPointF point) {
+        for(const QPointF margin:{QPointF(0,0),QPointF(6,6),QPointF(-6,6),QPointF(6,-6),QPointF(-6,-6)})
+            if(surface.labelPresentationAt(point+margin))return false;
+        return true;
+    };
+    for(const qreal dy:{30.0,-30.0,25.0,-25.0}) {
+        for(const qreal dx:{0.0,-20.0,20.0,-30.0,30.0})
+            if(unlabeled(area_center+QPointF(dx,dy))){interior=area_center+QPointF(dx,dy);break;}
+        if(interior)break;
+    }
+    require(interior.has_value(),"mixed move needs an unlabeled interior press on the selected area");
+    const QPointF start=*interior;
     const QPointF end=start+QPointF(75,-50);
     QMouseEvent down(QEvent::MouseButtonPress,start,surface.mapToGlobal(start.toPoint()),Qt::LeftButton,Qt::LeftButton,Qt::NoModifier);
     QMouseEvent drag(QEvent::MouseMove,end,surface.mapToGlobal(end.toPoint()),Qt::NoButton,Qt::LeftButton,Qt::NoModifier);
@@ -835,7 +859,7 @@ void physical_wall_axis_dimension_lifecycle() {
         require(line!=surface.entities().end()&&line->type==QStringLiteral("dimension_line")&&line->dimension_end_ticks,
             "physical wall dimension must render a measurable overlay with endpoint ticks");
     };
-    projection(straight_id,"5.000 m");projection(curved_id,"3.142 m");
+    projection(straight_id,"5 m");projection(curved_id,"≈ 3.142 m");
     const auto before_refusal=window.document().snapshot();
     require(window.createLengthDimension(straight,"invented-edge",{0,0}).isEmpty()&&
         window.createAreaDimension(straight,{0,0}).isEmpty()&&
@@ -849,7 +873,7 @@ void physical_wall_axis_dimension_lifecycle() {
     require(straight_changed.entities().at(straight_id.toStdString())==before_refusal.entities().at(straight_id.toStdString()),
         "straight wall edits retain the placed dimension entity rather than a cached value");
     require_near(dimension(straight_changed,straight_id.toStdString()).resolve(straight_changed).segment_length_metres,10);
-    projection(straight_id,"10.000 m");exact_history(window,before_refusal,straight_changed);
+    projection(straight_id,"10 m");exact_history(window,before_refusal,straight_changed);
     // Undo/Redo restores the entities but advances the retained history head.
     const auto before_curve_edit=window.document().snapshot();
     require(window.selectEntity(curved),"select supported curved wall for actual curve edit");
@@ -859,13 +883,13 @@ void physical_wall_axis_dimension_lifecycle() {
     require(edited.entities().at(curved_id.toStdString())==straight_changed.entities().at(curved_id.toStdString()),
         "curved wall edit must preserve owner identity, placement and presentation");
     require_near(dimension(edited,curved_id.toStdString()).resolve(edited).segment_length_metres,2*std::numbers::pi);
-    projection(curved_id,"6.283 m");exact_history(window,before_curve_edit,edited);
+    projection(curved_id,"≈ 6.283 m");exact_history(window,before_curve_edit,edited);
     const auto svg=temporary.filePath("physical-wall-dimensions.svg");
     require(window.exportDraftSvg(svg),"live physical wall dimensions must export through the actual SVG path");
     QFile input(svg);require(input.open(QIODevice::ReadOnly),"wall dimension SVG must reopen");
     QXmlStreamReader xml(input.readAll());QString svg_text;
     while(!xml.atEnd()){xml.readNext();if(xml.isCharacters())svg_text+=xml.text().toString();}
-    require(!xml.hasError()&&svg_text.contains("10.000 m")&&svg_text.contains("6.283 m"),
+    require(!xml.hasError()&&svg_text.contains("10 m")&&svg_text.contains("≈ 6.283 m"),
         "wall dimension output must include both live axis lengths");
     const auto project=temporary.filePath("physical-wall-dimensions.bldproj");
     require(window.saveProjectAs(project)&&window.createNewProject(),"wall dimension lifecycle must save and release writer ownership");

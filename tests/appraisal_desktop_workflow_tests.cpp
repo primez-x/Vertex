@@ -2594,6 +2594,20 @@ void appraisal_area_properties_entry_points_are_visible() {
     edit_appraisal_facts_through_controls(window, area, "dwelling", "finished",
         [&] { facts->click(); });
     const auto after_facts = window.document().snapshot();
+    // The facts helper re-selects the area, and replacing a selection closes
+    // the contextual quick panel (selection never opens Properties). Reopen it
+    // through the same right-click Properties action a user would use so the
+    // viewport and Details checks below inspect a visible panel.
+    const auto reopen_area_properties = [&](std::string_view message) {
+        require(window.selectEntity(area), "reselect the area before reopening its Properties");
+        trigger_canvas_context_action({}, QStringLiteral("Properties"), {});
+        QCoreApplication::processEvents();
+        require(editor->isVisible(), message);
+    };
+    reopen_area_properties("Properties must reopen after saving appraisal facts");
+    require(window.document().snapshot().entities() == after_facts.entities() &&
+                window.document().snapshot().revision() == after_facts.revision(),
+            "reopening Properties must not change the saved appraisal facts");
     auto* declared_category = inspector_classification_control(window);
     require(declared_category && declared_category->currentText() == QStringLiteral("Above-grade finished (GLA)") &&
                 declared_category->currentData().toString() == QStringLiteral("above_grade_finished"),
@@ -2629,6 +2643,8 @@ void appraisal_area_properties_entry_points_are_visible() {
     require(window.undoCommand() && window.document().snapshot().entities() == before_cancel.entities() &&
                 window.redoCommand() && window.document().snapshot().entities() == after_facts.entities(),
             "one Undo and Redo must restore the exact facts saved from Properties");
+    if (!editor->isVisible())
+        reopen_area_properties("Properties must reopen after Undo and Redo of appraisal facts");
 
     auto* detail_toggle = window.findChild<QAbstractButton*>(QStringLiteral("appraisalDetailsToggle"));
     auto* gla = window.findChild<QLabel*>(QStringLiteral("appraisalGlaTotal"));

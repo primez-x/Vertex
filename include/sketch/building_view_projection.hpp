@@ -79,9 +79,13 @@ struct AssemblyViewProjection {
 // Shape-level counterpart for semantic objects that have a dedicated model
 // (for example walls with hosted openings or slabs with holes). The shape is
 // still derived input; callers must keep the semantic entity authoritative.
+// allow_section_miss returns an empty section instead of failing when the cut
+// plane misses this shape (one solid of a multi-solid object, for example an
+// assembly profile above a horizontal cut).
 [[nodiscard]] Boundary project_shape_view(const TopoDS_Shape& shape,
                                           BuildingViewKind kind,
-                                          const BuildingViewFrame& frame = {});
+                                          const BuildingViewFrame& frame = {},
+                                          bool allow_section_miss = false);
 
 // Return whether any part of a derived solid can occur at or before the
 // requested far depth.  This is intentionally a conservative, object-level

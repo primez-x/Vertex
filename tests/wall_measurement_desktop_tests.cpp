@@ -511,7 +511,7 @@ void curved_d_exterior_measurement_stays_analytic_through_refresh_and_output() {
             "the curved exterior PDF opens as a real plan page");
     const auto text = pdf.getAllText(0).text();
     require(text.contains(QString::number(refreshed_area, 'f', 2)) &&
-                text.contains(QString::number(refreshed_arc_length, 'f', 3)),
+                text.contains(sketch::desktop::PlanCanvas::drawingLengthText(refreshed_arc_length, true).remove(QChar(0x2248)).trimmed()),
             "the PDF prints exact analytical exterior area and curved-edge physical dimension");
 }
 
@@ -1055,11 +1055,15 @@ void selected_wall_loop_creates_and_refreshes_one_exterior_appraisal_area() {
     const auto text = pdf.getAllText(0).text();
     require(text.contains(QString::number(refreshed_area - garage_area,'f',2)),
             "the PDF retains the current net appraisal area");
+    // Plan dimension labels use the drawing-length format (millimetre precision with
+    // trailing zeros trimmed, e.g. "4.19 m"). The matched edge must be a physical exterior
+    // length, not one of the 4 m / 3 m wall baseline lengths.
     require(std::any_of(refreshed_boundary.segments.begin(),refreshed_boundary.segments.end(),
         [&](const auto& edge) {
             const auto length = std::hypot(edge.segment.end.x-edge.segment.start.x,
                                            edge.segment.end.y-edge.segment.start.y);
-            return text.contains(QString::number(length,'f',3));
+            return std::abs(length-4.0) > 1e-3 && std::abs(length-3.0) > 1e-3 &&
+                   text.contains(sketch::desktop::PlanCanvas::drawingLengthText(length,true).remove(QChar(0x2248)).trimmed());
         }),
             "the PDF includes a physical exterior edge measurement rather than only wall baseline lengths");
 }
@@ -1708,6 +1712,17 @@ void existing_appraisal_area_transforms_its_dependencies(bool metric, bool sourc
         window.document().apply(sketch::ApplyEntityChanges{window.document().revision(),
             {sketch::EntityChange::upsert(sketch::encode_constraint_entity(axis)),
              sketch::EntityChange::upsert(sketch::encode_constraint_entity(anchor))},{},"Internal appraisal axis and anchor fixture"});
+        // Since the October 8 connected rigid lane, fixed anchors keep their saved
+        // world coordinates; a rigid group transform that would move an anchored
+        // vertex refuses atomically instead of silently relocating the anchor.
+        const auto anchored=window.document().snapshot();
+        require(window.selectEntity(area) &&
+            !window.transformSelectedBoundary(mode==0 ? "90" : "0",mode==2,mode==3,"0 m","0 m",false) &&
+            window.lastError().contains(QStringLiteral("fixed anchor"),Qt::CaseInsensitive) &&
+            window.document().revision()==anchored.revision() && window.document().snapshot().entities()==anchored.entities(),
+            "a rigid transform that would move an internal fixed anchor refuses without changing geometry or the anchor");
+        window.document().apply(sketch::ApplyEntityChanges{window.document().revision(),
+            {sketch::EntityChange::erase("appraisal-transform-anchor")},{},"Release internal appraisal anchor fixture"});
     }
     const auto before=window.document().snapshot();
     std::string property;
@@ -1734,13 +1749,11 @@ void existing_appraisal_area_transforms_its_dependencies(bool metric, bool sourc
         "in-place group transform leaves unrelated geometry untouched");
     if (mode!=1) {
         const auto axis=sketch::decode_constraint_entity(after.entities().at("appraisal-transform-axis"));
-        const auto anchor=sketch::decode_constraint_entity(after.entities().at("appraisal-transform-anchor"));
-        const auto prior=sketch::decode_constraint_entity(before.entities().at("appraisal-transform-anchor"));
-        const auto wanted=sketch::transform_point(*prior.constraint->anchor,expected);
-        require(axis.supported() && axis.constraint->relation==(mode==0 ? sketch::ConstraintRelationKind::vertical : sketch::ConstraintRelationKind::horizontal) &&
-            anchor.supported() && anchor.constraint->anchor && anchor.constraint->anchor->x==wanted.x && anchor.constraint->anchor->y==wanted.y &&
-            anchor.constraint->bindings==prior.constraint->bindings,
-            "internal anchors follow the group and quarter turns swap axis locks while retaining their endpoint identities");
+        const auto prior=sketch::decode_constraint_entity(before.entities().at("appraisal-transform-axis"));
+        require(axis.supported() && prior.supported() &&
+            axis.constraint->relation==(mode==0 ? sketch::ConstraintRelationKind::vertical : sketch::ConstraintRelationKind::horizontal) &&
+            axis.constraint->bindings==prior.constraint->bindings,
+            "quarter turns swap internal axis locks while retaining their endpoint identities");
     }
     for (const auto& provider : annotation_entities(before)) {
         auto wanted=provider;

@@ -63264,8 +63264,12 @@ private:
                         for (const auto& profile:geometry.solids) {
                             const auto clipped=clip_to_view(profile.shape);
                             if (clipped.IsNull()) continue;
+                            // A section cut misses some profiles of a normal
+                            // multi-level assembly; retain the profiles it cuts.
+                            auto projected=project_shape_view(clipped,kind,frame,true);
+                            if (projected.empty()) continue;
                             auto item=decorate_projection(CanvasEntity{id_from(id),QStringLiteral("assembly_instance"),
-                                project_shape_view(clipped,kind,frame),0.0,id_from(id)==m_selected_id});
+                                std::move(projected),0.0,id_from(id)==m_selected_id});
                             item.presentation_key=QString::fromStdString(assembly_profile_presentation_key(
                                 binding.assembly_catalog_id,binding.instance,profile.source,id).dump());
                             if (profile.source.material_id) {
@@ -63454,8 +63458,10 @@ private:
                         for (const auto& profile : geometry.solids) {
                             const auto clipped = clip_to_view(profile.shape);
                             if (clipped.IsNull()) continue;
+                            auto projected = project_shape_view(clipped, kind, frame, true);
+                            if (projected.empty()) continue;
                             auto entity = decorate_projection(CanvasEntity{id_from(assembly.child_id),
-                                QStringLiteral("assembly_instance"), project_shape_view(clipped, kind, frame),
+                                QStringLiteral("assembly_instance"), std::move(projected),
                                 0.0, id_from(assembly.child_id) == m_selected_id});
                             entity.presentation_key = QString::fromStdString(assembly_profile_presentation_key(
                                 assembly.catalog_id,assembly.expansion->source_instance,profile.source).dump());

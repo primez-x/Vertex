@@ -798,10 +798,27 @@ int main(int argc, char** argv) {
             {{0.0, 0.0}, {4.0, 0.0}, 0.0}, {{4.0, 0.0}, {4.0, 3.0}, 0.0},
             {{4.0, 3.0}, {0.0, 3.0}, 0.0}, {{0.0, 3.0}, {0.0, 0.0}, 0.0}});
         require(!legacy_boundary.isEmpty(), "dimension target boundary must be created");
-        auto dimension = extract_dimensions(dimension_fixture()).front();
-        dimension.preview.arguments["target_boundary_id"] = legacy_boundary.toStdString();
-        dimension.preview.arguments["source_document_digest"] = document_snapshot_digest(window.document().snapshot());
-        dimension.preview.arguments["source_workspace"] = static_cast<int>(window.workspace());
+        // Acceptance requires the source binding captured when the desktop
+        // generated the proposal, so a hand-stamped engine proposal is refused.
+        // Seed the fixture's persisted text observation on the calibrated
+        // reference and generate the dimension through the desktop path.
+        {
+            const auto fixture = dimension_fixture();
+            auto observed = window.document().snapshot().entities().at(reference_id.toStdString());
+            observed.properties["source_text"] = fixture.source_text;
+            observed.properties["source_text_version"] = 1;
+            observed.properties["source_text_runs"] = json::array({{
+                {"offset", std::size_t{0}}, {"length", fixture.source_text.size()},
+                {"x", 0.1}, {"y", 0.2}, {"width", 0.4}, {"height", 0.05}}});
+            window.document().apply(ApplyEntityChanges{window.document().revision(),
+                {EntityChange::upsert(std::move(observed))}, {}, "Seed dimension text observation"});
+        }
+        const auto dimensions = window.suggestReferenceAssistance(reference_id,
+            AssistanceKind::dimension_extraction, legacy_boundary);
+        require(dimensions.size() == 1 &&
+                    dimensions.front().preview.arguments.at("target_boundary_id") == legacy_boundary.toStdString(),
+                "dimension text must produce one proposal for its legacy target boundary");
+        const auto dimension = dimensions.front();
         const auto dimension_revision = window.document().revision();
         require(window.acceptAssistanceProposal(dimension),
                 "accepted dimension must upgrade and annotate its target boundary");

@@ -98,6 +98,26 @@ void modal(const char* name,const std::function<void()>& open,const std::functio
         catch(...) {failure=std::current_exception();if(dialog)dialog->reject();}
     });timer.start(0);open();timer.stop();if(failure)std::rethrow_exception(failure);require(seen,"actual modal action executed");
 }
+// A mixed-clipboard Paste (October 11) arms an interactive placement session
+// on the active plan canvas rather than publishing synchronously: a worker
+// prepares the group, one click chooses its anchor, and a click after the
+// admitted preview completes publishes everything as one revision. Early
+// clicks are refused with "wait" diagnostics without cancelling the session.
+void place_mixed_paste(MainWindow& window,Revision before) {
+    PlanCanvas* canvas=dynamic_cast<PlanCanvas*>(QApplication::focusWidget());
+    if(!canvas)for(const auto* name:{"measurementPlanCanvas","architecturalPlanCanvas"})
+        if(auto& candidate=control<PlanCanvas>(window,name);candidate.isVisible()){canvas=&candidate;break;}
+    require(canvas,"mixed Paste arms a visible plan canvas");
+    const QPointF anchor{canvas->width()*0.25,canvas->height()*0.25};
+    QElapsedTimer deadline;deadline.start();
+    while(window.document().revision()==before && deadline.elapsed()<20000) {
+        QApplication::processEvents(QEventLoop::AllEvents,50);
+        mouse(*canvas,QEvent::MouseButtonPress,anchor);mouse(*canvas,QEvent::MouseButtonRelease,anchor);
+    }
+    QApplication::processEvents();
+    if(window.document().revision()!=before+1)
+        throw std::runtime_error(("mixed Paste placement publishes one revision: "+window.lastError().toStdString()).c_str());
+}
 void lifecycle(const QString& directory) {
     MainWindow window({},nullptr,directory+"/library.json");display(window);
     const auto host=window.createSlabFromBoundary(rectangle(0,0,100,80),"0.2 m","0 m");
@@ -204,6 +224,7 @@ void lifecycle(const QString& directory) {
     for(const auto& item:graph.at("entities"))if(item.at("id")==copied_root)typed=item.at("type")=="assembly_instance";
     require(typed,"clipboard root is the existing typed external assembly envelope");
     require(window.pasteSelection(),"actual Paste admits detached assembly with catalog closure");
+    place_mixed_paste(window,before_copy.revision());
     const auto pasted=window.selectedEntityId();require(window.document().snapshot().entities().at(pasted.toStdString()).type=="assembly_instance","Paste publishes actual independent root");
     require(window.document().snapshot().entities().at("embedded-catalog")==before_copy.entities().at("embedded-catalog"),"Paste preserves original source catalog exactly");
     history(window,before_copy,window.document().snapshot());require(window.undoCommand(),"restore fixture after clipboard lifecycle coverage");

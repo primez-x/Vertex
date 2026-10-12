@@ -366,8 +366,12 @@ void test_associative_section() {
 
     // Deleting the last member of a restricted view must not broaden it to
     // the surviving document objects. Keep a second actual wall available.
+    // Section views refuse new wall points (canvas interaction contract), so
+    // author it from the Measurement workspace and return to the section.
+    window.setWorkspace(sketch::desktop::Workspace::measurement);
     const auto other_wall = window.createStraightWall({15, 0}, {17, 0});
     require(!other_wall.isEmpty(), "restricted view fixture has a surviving second wall");
+    select_section(window);
     require(window.editArchitecturalViewPresentation("view-section", "2", "100", "0.5", "0.18",
                 true, "solid", "1", "medium", wall),
             "section is restricted to the first wall through the public presentation command");

@@ -618,10 +618,14 @@ TopoDS_Shape intersect_crop_plane(const TopoDS_Shape& shape, const gp_Pnt& origi
 }  // namespace
 
 Boundary project_shape_view(const TopoDS_Shape& shape, BuildingViewKind kind,
-                            const BuildingViewFrame& frame) {
+                            const BuildingViewFrame& frame, bool allow_section_miss) {
     try {
         const auto frame_basis = basis(frame);
         projected_curve_detail::Budget budget;
+        if (kind == BuildingViewKind::section && allow_section_miss) {
+            if (shape.IsNull()) projection_error("Building view received a null solid");
+            return project_section(shape, frame_basis, budget, true);
+        }
         return project_shape(shape, kind, frame_basis, budget);
     } catch (const std::invalid_argument&) {
         throw;

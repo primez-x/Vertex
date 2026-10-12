@@ -302,7 +302,9 @@ void label_and_command_review(const QString& directory) {
         "one Undo must remove the reviewed label and its provenance");
     require(window.redoCommand() && window.document().snapshot().entities() == accepted.entities(),
         "one Redo must restore the reviewed label and provenance exactly");
-    for (const auto& text : {QString("label Command entry at 2.25, -3.5"),
+    // Unitless command quantities follow the canvas units (feet by default), so
+    // the label coordinates state metres explicitly for the exact model anchor.
+    for (const auto& text : {QString("label Command entry at 2.25 m, -3.5 m"),
                               QString("draw rectangle 4 m x 3 m"),
                               QString("set workspace architectural")}) {
         const auto command_before = window.document().snapshot();
