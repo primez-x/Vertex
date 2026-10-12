@@ -14,6 +14,35 @@ changed source does not acquire runtime acceptance without later qualification.
 
 ## Current delivery state
 
+### October 12 desktop-suite rounds (CTest 65% -> 96%)
+
+Commits 9f11c450, f8edca47 and 81c2d677 take Release CTest from 204/314 to
+302/314 on the developer host. Product fixes found by actually running the
+suites: lost corner/endpoint grips for new primary selections (corner drags
+became moves); `command_from_json` stack overflow on nested envelopes,
+including the canvas move-release path (8 MB stack reserved; splitting that
+function remains desirable); status-bar keypad resizing the canvas mid-drag;
+deselect-only empty clicks with a stale displayed plan; Layers-tree focus
+selecting its first row inside modal dialogs; complete wall-shell moves
+refusing unselected deductions; stair/railing clones refusing opaque
+metadata; refused presses overwritten by generic errors; Boost 1.92 exact
+zero stored as 0/d hiding component frames; assistance refusing unorganized
+plan references; measured paste owner-type admission; empty limitation list
+written by Facts saves; workspace switches not republishing canvases; two
+off-palette window SVGs. About half of the failures were tests made stale by
+deliberate, documented October behavior changes; those were updated without
+weakening appraisal assertions.
+
+Product decisions taken (awaiting user confirmation): with Wall tools, area
+interiors are drawing space (select areas by outline/label); idle Wall click
+on an existing wall endpoint selects the wall; scientific decimals such as
+`1e3m` remain accepted (format v101).
+
+Remaining: DXF/IFC desktop import tests need the protected import-worker
+runtime and PowerShell 7 (not installed on this host); the production gate is
+disabled by design; nine later checks in long desktop suites are in progress.
+Nothing is installed; no user acceptance is claimed.
+
 ### October 12 full Release build and first CTest run
 
 All 1,100 Release build steps now compile and link in `build/windows-release`,
