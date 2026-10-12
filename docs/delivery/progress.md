@@ -14,6 +14,33 @@ changed source does not acquire runtime acceptance without later qualification.
 
 ## Current delivery state
 
+### October 11 mixed Properties dispatch correction
+
+The common-world-axis component geometry foundation is committed and pushed as
+9de8638d7279a55e794abd17e61007e7415640ff; the exact remote ref matches.
+The preceding status turn checked current evidence without changing source.
+This continuation found the generic mixed-edit dispatcher still recognized
+Properties only through dialect33, although the actual Properties producer,
+validator, document admission and retained-history scanners implement34..38.
+Those newer component edits consequently entered the transform validator and
+were rejected. The source correction routes34..38 through the existing typed
+Properties paths for validation, replay, geometry/phase policy, saved source and
+room decisions. No historical wire or editing permission is added. A separate
+historical14 investigation confirmed its exclusion is intentional: the format
+contract retains it as a detached, unpublished contribution. It remains outside
+the generic publication dispatcher and does not borrow16's reservation fields.
+Independent source review found no concrete blocker for the34..38 correction.
+
+Mixed-family discovery confirms that current family models cannot represent
+every common directional deformation: rotated rectangular and circular profiles
+need genuine geometry support, and slab resize currently refuses hosted-world
+coordination. The skylight directional leaf is explicitly a parametric
+rectangular resize, not exact affine shear. These distinctions remain required
+implementation work; the shared component foundation alone does not close them.
+Source-only restrictions remain: no builds, tests, scripts, probes, native jobs,
+launches, packages or installations. The installed app is unchanged, and all ten
+production acceptance gates remain open.
+
 ### October 11 common-axis component resize foundation
 
 The reviewed IFC recovery/cutout-transfer batch is committed and pushed as
