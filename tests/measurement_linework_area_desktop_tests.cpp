@@ -97,7 +97,7 @@ void test_define_areas_and_history() {
         const auto& placement=*label.automatic_linear_placement;
         if(placement.anchor.start.y==0 && placement.anchor.end.y==0) {
             require(placement.outward_normal.y<0 && label.position.y<0,"closed measured outline places its bottom dimension on the exterior");
-            require(label.text.contains(QStringLiteral("13'")) && !label.text.contains(QStringLiteral("157.480")),
+            require(label.text.contains(QStringLiteral("13 ft 1 1/2 in")) && !label.text.contains(QStringLiteral("157.480")),
                 "permanent measured dimensions use readable project units rather than unlimited decimal inches");
             exterior_bottom=true;
         }

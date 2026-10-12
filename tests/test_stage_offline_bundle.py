@@ -806,6 +806,8 @@ try { $null=Get-OwnedModulePaths FIXTURE_ROOT $bad } catch {
     def test_installed_module_tree_is_readonly_and_lifecycle_remains_usable(self):
         # This catches inherited user write access, omitted nested module ACLs,
         # an overly broad AppContainer grant, and cleanup of a frozen runtime.
+        if shutil.which("pwsh") is None:
+            self.skipTest("PowerShell is unavailable")
         import ctypes
         from ctypes import wintypes
 
@@ -930,6 +932,8 @@ try { $null=Get-OwnedModulePaths FIXTURE_ROOT $bad } catch {
 
     @unittest.skipUnless(os.name == "nt", "Windows runtime ACL rollback")
     def test_module_acl_failure_restores_existing_empty_destination(self):
+        if shutil.which("pwsh") is None:
+            self.skipTest("PowerShell is unavailable")
         fixture = self.fixture()
         self.addCleanup(self.cleanup_fixture, fixture[0])
         _, root, inventory, source_kit, allowlist, *_ = fixture

@@ -26,9 +26,15 @@ void mouse(PlanCanvas& canvas, QEvent::Type type, QPointF point) {
 }
 QImage render(PlanCanvas& canvas, bool output=false) {
     QImage image(canvas.size(),QImage::Format_ARGB32_Premultiplied);
+    image.fill(Qt::white);
     QPainter painter(&image);
     if (output) canvas.renderSceneAt(painter,image.rect(),80,{0,0},Qt::white);
-    else canvas.renderScene(painter,image.rect(),false,Qt::white);
+    else {
+        // Public scene renderers expose committed output only; interactive
+        // feedback is asserted through the widget's actual paint event.
+        canvas.setCanvasBackground(Qt::white);
+        canvas.render(&painter);
+    }
     painter.end();
     return image;
 }

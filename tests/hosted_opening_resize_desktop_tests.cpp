@@ -5,6 +5,7 @@
 #include <QApplication>
 #include <QComboBox>
 #include <QDir>
+#include <QElapsedTimer>
 #include <QFontDatabase>
 #include <QKeyEvent>
 #include <QPainter>
@@ -51,6 +52,21 @@ void mouse(PlanCanvas& target, QEvent::Type type, QPointF point) {
         type == QEvent::MouseButtonRelease ? Qt::NoButton : Qt::LeftButton,Qt::NoModifier);
     QApplication::sendEvent(&target,&event);
     QApplication::processEvents();
+}
+// Jamb previews are exact native worker projections. Wait for the queued
+// proposal so release publishes (or rejects) that one admitted command.
+void settle(PlanCanvas& view) {
+    QElapsedTimer timer; timer.start();
+    while (view.openingWidthPreviewPending() && timer.elapsed()<5000)
+        QApplication::processEvents(QEventLoop::AllEvents,20);
+    require(!view.openingWidthPreviewPending(),"opening width preview did not complete within five seconds");
+}
+// A release-only gesture starts its exact proposal at release; the pending
+// release commits once that proposal completes.
+void waitRevision(MainWindow& window, Revision revision) {
+    QElapsedTimer timer; timer.start();
+    while (window.document().revision()!=revision && timer.elapsed()<5000)
+        QApplication::processEvents(QEventLoop::AllEvents,20);
 }
 QImage committedOutput(PlanCanvas& view) {
     QImage image(800,600,QImage::Format_ARGB32_Premultiplied);
@@ -119,6 +135,7 @@ struct Fixture {
         const auto revision=window.document().revision();
         mouse(view,QEvent::MouseButtonPress,from);
         mouse(view,QEvent::MouseMove,to);
+        settle(view);
         require(window.document().revision()==revision,"drag preview mutated the document before release");
         require(committedOutput(view)==output,"interactive opening preview leaked into print/export rendering");
         const auto capture=qEnvironmentVariable("VERTEX_TEST_CAPTURE_DIR");
@@ -228,6 +245,7 @@ void rejectedAndStaleGestures() {
     const auto halo=QPointF(5,0);
     mouse(view,QEvent::MouseButtonPress,f.pin(false)+halo);
     mouse(view,QEvent::MouseMove,f.target(false,1.5)+halo);
+    settle(view);
     mouse(view,QEvent::MouseButtonRelease,f.target(false,1.5)+halo);
     dimensions(f.window,f.opening,2,1.5);
     require(f.window.undoCommand() && properties(f.window,f.opening)==original &&
@@ -242,8 +260,11 @@ void rejectedAndStaleGestures() {
     require(f.window.document().revision()==revision && properties(f.window,f.opening)==original,
             "Escape did not cancel the jamb resize");
     require(f.window.selectEntity(f.opening),"reselect release-only opening failed");
+    revision=f.window.document().revision();
     mouse(view,QEvent::MouseButtonPress,f.pin(false));
     mouse(view,QEvent::MouseButtonRelease,f.target(false,1.5));
+    waitRevision(f.window,revision+1);
+    require(f.window.document().revision()==revision+1,"pending release-only resize must issue one document command");
     dimensions(f.window,f.opening,2,1.5);
     require(f.window.undoCommand() && properties(f.window,f.opening)==original &&
             f.window.selectEntity(f.opening),"release-only gesture did not undo cleanly");

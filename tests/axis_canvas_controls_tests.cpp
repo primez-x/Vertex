@@ -31,8 +31,15 @@ void mouse(PlanCanvas& canvas, QEvent::Type type, QPointF p,
 }
 QImage render(PlanCanvas& canvas, bool output=false) {
     QImage image(canvas.size(), QImage::Format_ARGB32_Premultiplied);
+    image.fill(Qt::white);
     QPainter painter(&image);
-    canvas.renderScene(painter, image.rect(), output, Qt::white);
+    if (output) canvas.renderScene(painter, image.rect(), true, Qt::white);
+    else {
+        // Public scene renderers expose committed output only; interactive
+        // previews and controls are asserted through the actual paint event.
+        canvas.setCanvasBackground(Qt::white);
+        canvas.render(&painter);
+    }
     return image;
 }
 void capture(PlanCanvas& canvas, const QString& name) {

@@ -1597,7 +1597,7 @@ void appraisal_plan_area_labels_workflow() {
         QMetaObject::invokeMethod(name, "editingFinished", Qt::DirectConnection);
         require(window.document().revision() == saved.revision(), "unchanged area name must be a no-op");
     };
-    edit_name(outer, QStringLiteral(" First floor "));
+    edit_name(outer, QStringLiteral(" First Floor "));
     edit_name(garage, QStringLiteral("Garage"));
     const auto named = window.document().snapshot();
     require(window.undoCommand() && window.redoCommand() &&

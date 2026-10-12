@@ -82,6 +82,16 @@ void save(QDialog& dialog) {
     control<QDialogButtonBox>(dialog,"assemblyAuthoringButtons").button(QDialogButtonBox::Save)->click();
     require(dialog.result()==QDialog::Accepted,"typed assembly editor must accept Save");
 }
+// Add Profile opens the unified profile geometry editor. Import an actual
+// captured drawing boundary (the first offered one when none is named).
+void add_profile(QDialog& dialog,const QString& boundary={}) {
+    modal("assemblyProfileGeometryDialog",[&]{click(dialog,"assemblyAddProfile");},[&](QDialog& child){
+        auto& source=control<QComboBox>(child,"assemblyProfileImportBoundary");
+        const auto index=boundary.isEmpty() ? 1 : source.findData(boundary);
+        require(index>0 && index<source.count(),"captured drawing boundary is offered for import");
+        source.setCurrentIndex(index);click(child,"assemblyProfileImport");save(child);
+    });
+}
 PlanCanvas& canvas(MainWindow& window,const char* name="measurementPlanCanvas") { return control<PlanCanvas>(window,name); }
 void display(MainWindow& window) {
     window.setAttribute(Qt::WA_DontShowOnScreen);window.resize(1280,900);window.setMetricUnits(true);window.show();
@@ -221,14 +231,14 @@ Authored author(MainWindow& window) {
             named(dialog,"assemblyType","Materials","core","wood");named(dialog,"assemblyType","Quantities","volume","99");
             qobject_cast<QComboBox*>(control<QTableWidget>(dialog,"assemblyTypeQuantities").cellWidget(0,2))->setCurrentIndex(static_cast<int>(AssemblyQuantityUnit::cubic_metre));
             named(dialog,"assemblyType","Quantities","pieces","2");
-            click(dialog,"assemblyAddProfile");auto& profiles=control<QTableWidget>(dialog,"assemblyProfiles");
+            add_profile(dialog,outer);auto& profiles=control<QTableWidget>(dialog,"assemblyProfiles");
             choice(*qobject_cast<QComboBox*>(profiles.cellWidget(0,0)),outer);cell_text(profiles,0,1,"1 m");cell_text(profiles,0,3,"core");
             // The profile imports the actual boundary's authored hole. Inspect
             // its cutout editor rather than injecting an assembly-only void.
-            profiles.setCurrentCell(0,0);modal("assemblyProfileCutoutsDialog",[&]{click(dialog,"assemblyProfileCutouts");},[](QDialog& child){
-                require(control<QTableWidget>(child,"assemblyProfileCutoutRows").rowCount()==1,"imported real opening is visible in cutout editor");save(child);
+            profiles.setCurrentCell(0,0);modal("assemblyProfileGeometryDialog",[&]{click(dialog,"assemblyProfileCutouts");},[](QDialog& child){
+                require(control<QComboBox>(child,"assemblyProfileBoundary").count()==2,"imported real opening is visible in cutout editor");save(child);
             });
-            click(dialog,"assemblyAddProfile");choice(*qobject_cast<QComboBox*>(profiles.cellWidget(1,0)),cap);
+            add_profile(dialog,cap);choice(*qobject_cast<QComboBox*>(profiles.cellWidget(1,0)),cap);
             cell_text(profiles,1,1,"0.5 m");cell_text(profiles,1,2,"2 m");cell_text(profiles,1,3,"core");
             first_profile=qobject_cast<QComboBox*>(profiles.cellWidget(1,0))->property("stableId").toString().toStdString();
             profiles.setCurrentCell(1,0);click(dialog,"assemblyProfileUp");save(dialog);
@@ -334,7 +344,7 @@ void catalog_metadata_lifecycle(MainWindow& window,const Authored& authored,cons
                 require(control<QComboBox>(dialog,"assemblyInstanceCatalog").currentData().toString().toStdString()==target,"Place starts with the selected type's catalog");dialog.reject();
             });
             modal("assemblyTypeAuthoringDialog",[&]{click(workspace,"createGeometricAssemblyType");},[](QDialog& dialog){
-                text(dialog,"assemblyTypeName","Selected catalog new type");click(dialog,"assemblyAddProfile");save(dialog);
+                text(dialog,"assemblyTypeName","Selected catalog new type");add_profile(dialog);save(dialog);
             });
         });
         require(window.document().snapshot().entities().at(other)==before.entities().at(other) && model(window,target).types().size()==AssemblyModel::from_json(before.entities().at(target).properties.at("model")).types().size()+1,"Create type publishes only into selected catalog");

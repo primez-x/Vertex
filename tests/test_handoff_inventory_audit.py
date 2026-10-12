@@ -57,6 +57,10 @@ class HandoffInventoryTests(unittest.TestCase):
                 "scripts/stage_ifc_sdk_sources.py",
                 "scripts/qualification/dependency_source_closure.py",
                 "scripts/qualification/compose_dependency_source_kit.py",
+                "scripts/qualification/native_source_inputs.py",
+                "scripts/qualification/native_cpython_source_inputs.py",
+                "scripts/qualification/native_wheel_source_inputs.py",
+                "scripts/qualification/qt_source_inputs.py",
             ):
                 path = root / relative
                 path.parent.mkdir(parents=True, exist_ok=True)

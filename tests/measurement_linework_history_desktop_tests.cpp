@@ -156,7 +156,14 @@ void test_noop_and_foreign_history_end_session() {
 void test_finish_close_retrace_and_reopen() {
     for (const auto ending : {static_cast<int>(Qt::Key_Return), static_cast<int>(Qt::Key_Escape), 0}) {
         MainWindow window; auto& canvas = prepare(window); start(window); click(canvas, {2,0});
-        if (ending) key(canvas, ending); else click(canvas, {2,0}, Qt::RightButton);
+        if (ending == Qt::Key_Return) {
+            // Enter lifts the measured pen (pen-up travel, commit 387ab41b);
+            // Escape then intentionally ends the parked session.
+            key(canvas, ending);
+            require(canvas.boundaryDraftPreview() && !canvas.boundaryDraftPreview()->rubber_band,
+                "Enter parks the measured pen without discarding committed geometry");
+            key(canvas, Qt::Key_Escape);
+        } else if (ending) key(canvas, ending); else click(canvas, {2,0}, Qt::RightButton);
         require(!canvas.boundaryDraftPreview(), "intentional finish clears pen");
         require(window.undoCommand() && window.redoCommand() && !canvas.boundaryDraftPreview(), "finished stroke history never restarts drawing");
     }
@@ -214,6 +221,14 @@ void test_layer_workspace_and_phase_context() {
     window.document().apply(ApplyEntityChanges{.expected_revision=window.document().revision(),
         .entity_changes={EntityChange::upsert(phase_entity)}, .message="valid phase fixture"});
     start(window,{10,10}); click(canvas,{12,10});
+    // Phase changes require the active drawing to be finished first
+    // (docs/phases-alternatives.md, commit c0996fa9).
+    const auto drawing_phase = window.document().snapshot();
+    require(!window.selectRemodelingAlternative(QStringLiteral("history-alternative")) &&
+        window.document().snapshot().entities() == drawing_phase.entities() &&
+        window.document().revision() == drawing_phase.revision(), "phase change is refused while a measured pen is active");
+    pen(canvas,{12,10}, "refused phase change preserves current pen");
+    window.finishMeasurementLinework();
     require(window.selectRemodelingAlternative(QStringLiteral("history-alternative")), "select valid semantic phase alternative");
     require(!window.appendMeasurementLineworkPoint({12,12}), "phase change invalidates existing measured source");
     require(window.undoCommand() && !canvas.boundaryDraftPreview(), "Undo of phase selection does not revive stale measured pen");

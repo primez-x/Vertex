@@ -39,6 +39,22 @@ void modal_action(QDialog& owner,const char* action,const char* modal_name,const
     timer.start(0);click(owner,action);if(error)std::rethrow_exception(error);require(executed,"child editor must execute the widget action");
 }
 void save(QDialog& dialog) {widget<QDialogButtonBox>(dialog,"assemblyAuthoringButtons").button(QDialogButtonBox::Save)->click();}
+// The unified profile geometry editor (assemblyProfileGeometryDialog) owns
+// creation and cutout editing. Captured drawing boundaries enter it through
+// its explicit import selector.
+void import_boundary(QDialog& modal,const char* key) {
+    auto& choice=widget<QComboBox>(modal,"assemblyProfileImportBoundary");const int index=choice.findData(QString::fromLatin1(key));
+    require(index>0,"captured drawing boundary is offered for import");choice.setCurrentIndex(index);click(modal,"assemblyProfileImport");
+}
+void select_boundary(QDialog& modal,int index) {
+    auto& selection=widget<QComboBox>(modal,"assemblyProfileBoundary");require(index<selection.count(),"profile boundary exists");selection.setCurrentIndex(index);
+}
+// Add Profile opens the creation modal; Cancel would append no profile.
+void add_profile(QDialog& owner,const char* key="outline") {
+    modal_action(owner,"assemblyAddProfile","assemblyProfileGeometryDialog",[key](QDialog& modal){
+        import_boundary(modal,key);save(modal);require(modal.result()==QDialog::Accepted,"captured profile geometry saves");
+    });
+}
 Entity catalog() {
     AssemblyType leaf; leaf.id="leaf"; leaf.name="Timber post";
     leaf.properties={{"finish","natural"}}; leaf.materials={{"surface","wood"}};
@@ -63,7 +79,7 @@ Entity outline() {
 void type_create_geometry_and_cycle_refusal() {
     auto document=Document::create({catalog(),outline()}); const auto source=document.snapshot();
     AssemblyTypeDialog dialog(source,"catalog",std::nullopt,true);
-    text(dialog,"assemblyTypeName","Canopy"); click(dialog,"assemblyAddProfile");
+    text(dialog,"assemblyTypeName","Canopy"); add_profile(dialog);
     auto& profiles=widget<QTableWidget>(dialog,"assemblyProfiles");
     qobject_cast<QLineEdit*>(profiles.cellWidget(0,1))->setText("3 ft");
     qobject_cast<QLineEdit*>(profiles.cellWidget(0,2))->setText("0.25 m");
@@ -126,7 +142,7 @@ void edit_preview_and_stable_identity() {
 void reorder_remove_and_precision() {
     auto document=Document::create({catalog(),outline()}); auto snapshot=document.snapshot();
     AssemblyTypeDialog dialog(snapshot,"catalog",std::nullopt,false);text(dialog,"assemblyTypeName","Ordered solids");
-    click(dialog,"assemblyAddProfile");click(dialog,"assemblyAddProfile");
+    add_profile(dialog);add_profile(dialog);
     auto& profiles=widget<QTableWidget>(dialog,"assemblyProfiles");
     auto profile_id=qobject_cast<QComboBox*>(profiles.cellWidget(1,0))->property("stableId").toString().toStdString();
     profiles.setCurrentCell(1,0);click(dialog,"assemblyProfileUp");
@@ -214,21 +230,26 @@ void profile_holes_reimport_and_cutouts() {
     for(const auto& edge:hole)encoded.push_back({{"start",{edge.start.x,edge.start.y}},{"end",{edge.end.x,edge.end.y}},{"sweep_radians",edge.sweep_radians}});
     with_holes.properties["holes"]=nlohmann::json::array({encoded});
     auto document=Document::create({catalog(),outline(),with_holes,first,second});auto snapshot=document.snapshot();
-    AssemblyTypeDialog dialog(snapshot,"catalog",std::nullopt,true);text(dialog,"assemblyTypeName","Cutout canopy");click(dialog,"assemblyAddProfile");auto& profiles=widget<QTableWidget>(dialog,"assemblyProfiles");
+    AssemblyTypeDialog dialog(snapshot,"catalog",std::nullopt,true);text(dialog,"assemblyTypeName","Cutout canopy");add_profile(dialog);auto& profiles=widget<QTableWidget>(dialog,"assemblyProfiles");
     auto* choice=qobject_cast<QComboBox*>(profiles.cellWidget(0,0));choice->setCurrentIndex(choice->findData("outline-with-holes"));profiles.setCurrentCell(0,0);
-    modal_action(dialog,"assemblyProfileCutouts","assemblyProfileCutoutsDialog",[](auto& modal){
-        auto& cutouts=widget<QTableWidget>(modal,"assemblyProfileCutoutRows");require(cutouts.rowCount()==1,"authored boundary holes imported");click(modal,"assemblyProfileCutoutRowsAdd");auto* selected=qobject_cast<QComboBox*>(cutouts.cellWidget(1,0));selected->setCurrentIndex(selected->findData("cutout-two"));save(modal);
+    // Cutouts… opens the unified editor; its boundary roster is the outer
+    // outline followed by every cutout.
+    modal_action(dialog,"assemblyProfileCutouts","assemblyProfileGeometryDialog",[](auto& modal){
+        require(widget<QComboBox>(modal,"assemblyProfileBoundary").count()==2,"authored boundary holes imported");
+        click(modal,"assemblyProfileCutoutAdd");import_boundary(modal,"cutout-two");save(modal);
+        require(modal.result()==QDialog::Accepted,"imported interior cutout saves");
     });
-    modal_action(dialog,"assemblyProfileCutouts","assemblyProfileCutoutsDialog",[](auto& modal){auto& cutouts=widget<QTableWidget>(modal,"assemblyProfileCutoutRows");cutouts.setCurrentCell(0,0);click(modal,"assemblyProfileCutoutRowsRemove");modal.reject();});
-    modal_action(dialog,"assemblyProfileCutouts","assemblyProfileCutoutsDialog",[](auto& modal){
-        auto& cutouts=widget<QTableWidget>(modal,"assemblyProfileCutoutRows");click(modal,"assemblyProfileCutoutRowsAdd");auto* selected=qobject_cast<QComboBox*>(cutouts.cellWidget(2,0));selected->setCurrentIndex(selected->findData("outline"));save(modal);
+    modal_action(dialog,"assemblyProfileCutouts","assemblyProfileGeometryDialog",[](auto& modal){select_boundary(modal,1);click(modal,"assemblyProfileCutoutRemove");modal.reject();});
+    modal_action(dialog,"assemblyProfileCutouts","assemblyProfileGeometryDialog",[](auto& modal){
+        require(widget<QComboBox>(modal,"assemblyProfileBoundary").count()==3,"Cancel retained both cutouts");
+        click(modal,"assemblyProfileCutoutAdd");import_boundary(modal,"outline");save(modal);
         require(!widget<QLabel>(modal,"assemblyAuthoringError").text().isEmpty() && modal.result()!=QDialog::Accepted,"contact or escaping cutout refuses inline");modal.reject();
     });
     require(dialog.submit() && dialog.candidate()->replacement.profiles[0].holes.size()==2,"cutout add and Cancel preserve local typed geometry");
-    AssemblyTypeDialog reimport(snapshot,"catalog",std::nullopt,true);text(reimport,"assemblyTypeName","Reimported canopy");click(reimport,"assemblyAddProfile");auto& rows=widget<QTableWidget>(reimport,"assemblyProfiles");auto* selected=qobject_cast<QComboBox*>(rows.cellWidget(0,0));selected->setCurrentIndex(selected->findData("outline-with-holes"));rows.setCurrentCell(0,0);
-    modal_action(reimport,"assemblyProfileCutouts","assemblyProfileCutoutsDialog",[](auto& modal){auto& rows=widget<QTableWidget>(modal,"assemblyProfileCutoutRows");rows.setCurrentCell(0,0);click(modal,"assemblyProfileCutoutRowsRemove");save(modal);});
+    AssemblyTypeDialog reimport(snapshot,"catalog",std::nullopt,true);text(reimport,"assemblyTypeName","Reimported canopy");add_profile(reimport);auto& rows=widget<QTableWidget>(reimport,"assemblyProfiles");auto* selected=qobject_cast<QComboBox*>(rows.cellWidget(0,0));selected->setCurrentIndex(selected->findData("outline-with-holes"));rows.setCurrentCell(0,0);
+    modal_action(reimport,"assemblyProfileCutouts","assemblyProfileGeometryDialog",[](auto& modal){select_boundary(modal,1);click(modal,"assemblyProfileCutoutRemove");save(modal);require(modal.result()==QDialog::Accepted,"cutout removal saves");});
     click(reimport,"assemblyProfileReimport");require(reimport.submit() && reimport.candidate()->replacement.profiles[0].holes.size()==1,"reimport restores authored outer and holes");
-    AssemblyTypeDialog replace(snapshot,"catalog",std::nullopt,true);text(replace,"assemblyTypeName","Solid canopy");click(replace,"assemblyAddProfile");auto* boundary=qobject_cast<QComboBox*>(widget<QTableWidget>(replace,"assemblyProfiles").cellWidget(0,0));boundary->setCurrentIndex(boundary->findData("outline-with-holes"));boundary->setCurrentIndex(boundary->findData("outline"));
+    AssemblyTypeDialog replace(snapshot,"catalog",std::nullopt,true);text(replace,"assemblyTypeName","Solid canopy");add_profile(replace);auto* boundary=qobject_cast<QComboBox*>(widget<QTableWidget>(replace,"assemblyProfiles").cellWidget(0,0));boundary->setCurrentIndex(boundary->findData("outline-with-holes"));boundary->setCurrentIndex(boundary->findData("outline"));
     require(replace.submit() && replace.candidate()->replacement.profiles[0].holes.empty(),"outer replacement replaces previous authored holes");
     require(document.snapshot().entities()==snapshot.entities(),"cutout dialogs preserve all source entities");
 }

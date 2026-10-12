@@ -383,7 +383,12 @@ void workflow() {
         expected_replacement && document_snapshot_digest(replaced)==document_snapshot_digest(*expected_replacement) &&
         replaced.history().back().action!=stale_source.history().back().action,
         "same-head replacement is preserved without committing a stale room repair");
-    require(window.lastError().contains("review source changed"),"stale accepted room review explains its full-source refusal");
+    // Since accbd946 the modal context binds the complete authoring source, so
+    // the controller's context fence refuses before its final digest check.
+    require(window.lastError().startsWith("Review rooms:") &&
+        (window.lastError().contains("review source changed") ||
+         window.lastError().contains("project, workspace or selection changed")),
+        "stale accepted room review explains its full-source refusal");
     window.document()=Document::fork(stale_source);
     require(window.selectEntity(id),"fresh room review can restart from the retained source");
     // Accepted callbacks also exercise the controller's selection and workspace

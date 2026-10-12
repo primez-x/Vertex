@@ -3004,6 +3004,7 @@ struct AnsiMeasurementControls {
         if (!increment->currentData().toString().isEmpty())
             evidence["acquisition_increment"] = increment->currentData().toString().toStdString();
         evidence["limitations_statement"] = limitations->text().trimmed().toStdString();
+        const bool had_declarations = evidence.contains("limitation_declarations");
         evidence["limitation_declarations"] = json::array();
         const auto conditions = required();
         for (std::size_t index = 0; index < declarations.size(); ++index)
@@ -3011,6 +3012,11 @@ struct AnsiMeasurementControls {
                 evidence["limitation_declarations"].push_back({
                     {"kind", ansi_declaration_kind_name(declaration_kinds[index])},
                     {"statement", declarations[index]->toPlainText().trimmed().toStdString()}});
+        // An absent list means no declarations; do not add an empty one on an
+        // unrelated Facts save, which would rewrite the property and raise the
+        // project reader floor (has_appraisal_reporting_semantics).
+        if (!had_declarations && evidence["limitation_declarations"].empty())
+            evidence.erase("limitation_declarations");
         policy["ansi"] = std::move(evidence);
     }
 };
@@ -12114,7 +12120,8 @@ public:
             refreshTitle(); // Restore the checked 2D/3D action after a refused trigger.
             return;
         }
-        if (workspace != m_workspace) clearSitePublication();
+        const bool changed = workspace != m_workspace;
+        if (changed) clearSitePublication();
         m_workspace = workspace;
         if (m_workspaceTabs) {
             m_workspaceTabs->setCurrentIndex(workspace == Workspace::measurement ? 0 : 1);
@@ -12122,6 +12129,10 @@ public:
         if (!m_boundary_session && !m_pending_wall_start && m_pending_opening_kind.isEmpty())
             setTool(CanvasTool::select);
         syncToolControls();
+        // The plan publication authority records its workspace; republish so
+        // the newly active canvas accepts gestures instead of reporting a
+        // changed editing context until some unrelated refresh.
+        if (changed) refreshCanvases();
         refreshTitle();
     }
 
@@ -12191,6 +12202,7 @@ public:
             QWidget#canvasStatusControls QToolButton:hover { background: $selection; color: $selectedText; }
             QWidget#canvasStatusControls QToolButton:checked { background: $selection;
                 color: $selectedAccent; }
+            QWidget#canvasStatusControls QPushButton { border-radius: 4px; padding: 2px 8px; }
             QPushButton:hover, QToolButton:hover { background: $selection; color: $selectedText; border-color: $accent; }
             QPushButton:pressed, QToolButton:pressed, QToolButton:checked {
                 background: $selection; color: $selectedText; border-color: $accent; }
@@ -21520,6 +21532,19 @@ public:
                 const auto owner = reference_geometry || owned_label
                     ? proposal.source.reference_id : m_active_layer_id.toStdString();
                 context = organization.drawing_context(owner);
+                if (!context && !site_plan && (reference_geometry || owned_label)) {
+                    // Ordinary plan imports do not organize their reference;
+                    // such an unassigned source draws on the active layer, as
+                    // before. Partially or invalidly organized references and
+                    // every Site reference still require their own context.
+                    const auto reference = source.entities().find(owner);
+                    if (reference != source.entities().end() &&
+                        !reference->second.properties.contains("property_id") &&
+                        !reference->second.properties.contains("building_id") &&
+                        !reference->second.properties.contains("floor_id") &&
+                        !reference->second.properties.contains("layer_id"))
+                        context = organization.drawing_context(m_active_layer_id.toStdString());
+                }
                 if (!context || !context->complete())
                     throw std::invalid_argument("The assistance source needs a complete drawing layer. Assign it to the intended floor and generate suggestions again.");
                 if (proposal.kind == AssistanceKind::dimension_extraction) {
@@ -36390,6 +36415,17 @@ public:
             if (change.kind!=EntityChangeKind::upsert || source.entities().contains(change.entity.id) ||
                 !copied.emplace(change.entity.id,change.entity).second)
                 throw std::invalid_argument("Clipboard placement requires complete fresh additions. Nothing was pasted.");
+        }
+        // Apply the same graph admission in fresh and populated destinations:
+        // every copied owner must be one the placement can carry together.
+        for (const auto& [id,entity] : copied) {
+            (void)id;
+            if (!is_closed_boundary_entity(entity.type) && !can_transform_architectural_entity_type(entity.type) &&
+                entity.type!="measurement_linework" && entity.type!="dimension" && entity.type!="constraint" &&
+                entity.type!=kAnnotationEntityType && entity.type!="opening" && entity.type!="assembly_model" &&
+                entity.type!="label" && entity.type!="terrain_surface")
+                throw std::invalid_argument("The measured clipboard graph contains geometry that cannot be placed together: "+
+                    entity.type+". Nothing was pasted.");
         }
         // Resolve bounds against the actual destination plus passive fresh
         // descriptors. This map never supplies snapshot authoring authority.
@@ -53591,21 +53627,25 @@ private:
     std::optional<std::vector<PhaseStairReplacementDependencyDisposition>> reviewStairDependencyDispositions(
         const DocumentSnapshot& source,const std::vector<Entity>& edited,bool* ordinary_dependencies=nullptr) {
         if (ordinary_dependencies) *ordinary_dependencies=false;
-        bool shared=false;
+        bool shared=false,inactive_baseline=false;
         for (const auto& [id,registry]:source.entities()) {
             (void)id;
             if (registry.type!="model_phases") continue;
             const auto model=ModelPhases::from_json(registry.properties.at("model"));
-            if (!model.active_alternative()) continue;
+            if (!model.active_alternative() && model.alternatives().empty()) continue;
             for (const auto& entity:edited) {
                 const auto before=source.entities().find(entity.id);
                 if (before!=source.entities().end() &&
                     (before->second.type=="stair" || before->second.type=="railing") &&
                     (before->second!=entity || before->second.properties.dump()!=entity.properties.dump() ||
                         before->second.extensions.dump()!=entity.extensions.dump()) &&
-                    std::binary_search(model.baseline_ids().begin(),model.baseline_ids().end(),entity.id)) shared=true;
+                    std::binary_search(model.baseline_ids().begin(),model.baseline_ids().end(),entity.id))
+                    (model.active_alternative() ? shared : inactive_baseline)=true;
             }
         }
+        // A baseline shared by inactive alternatives is protected from the
+        // ordinary producer; it keeps the source-derived compound edit path.
+        if (!shared && inactive_baseline) return std::vector<PhaseStairReplacementDependencyDisposition>{};
         const auto plan=shared ? inspect_phase_stair_replacement_dependencies(source.entities(),edited) :
             inspect_ordinary_stair_edit_dependencies(source.entities(),edited);
         if (!plan.ready()) {
@@ -56903,11 +56943,14 @@ private:
                                  refreshTitle();
                                  return;
                              }
+                             const bool changed = requested != m_workspace;
                              m_workspace = requested;
                              if (!m_boundary_session && !m_pending_wall_start &&
                                  m_pending_opening_kind.isEmpty())
                                  setTool(CanvasTool::select);
                              syncToolControls();
+                             // Republish with the active workspace's authority.
+                             if (changed) refreshCanvases();
                              if (m_inspector) refreshInspector();
                              refreshTitle();
                          });
@@ -57544,6 +57587,10 @@ private:
         auto* keypad = new QPushButton(QStringLiteral("Measure…"), canvas_status_controls);
         m_drawing_measurement_button = keypad;
         keypad->setObjectName(QStringLiteral("preciseBoundaryInput"));
+        // Same fixed height as the other status controls: showing or hiding
+        // it when drawing starts/ends must not resize the status bar, which
+        // would resize the canvas and retire an in-flight exact gesture.
+        keypad->setFixedHeight(24);
         keypad->setAccessibleName(QStringLiteral("Enter precise drawing measurement"));
         keypad->setToolTip(QStringLiteral("Enter the next segment's exact length, angle or curve (D)"));
         status_controls_layout->insertWidget(0, keypad);
@@ -70882,6 +70929,11 @@ private:
         if (!publication || m_refreshing || hasPendingPlacementEdit() || m_text_placement_context ||
             m_plan_label_context || m_armed_area_class) return false;
         const auto& retained=*publication;
+        // The scene projects primary-selection grips (boundary vertices, wall
+        // and beam endpoints, footprint and roof corners) only for its
+        // projected selected_id. A new primary needs that projection rebuilt;
+        // clearing the primary may reuse it because unselected grips are inert.
+        if (!m_selected_id.isEmpty() && m_selected_id!=retained.authority.context.selected_id) return false;
         const auto publication_current=[&] {
             return retained.canvas==(m_workspace==Workspace::measurement ? m_measurementCanvas : m_architecturalCanvas) &&
                 retained.plan_source==m_plan_publication_source && retained.site_source==m_site_publication_source &&

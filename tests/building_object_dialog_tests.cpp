@@ -690,10 +690,13 @@ void test_roof_openings_create_edit_remove_and_preserve_units() {
         roof_openings(remove).selectRow(0);
         remove.findChild<QPushButton*>("buildingObjectRemoveRoofOpening")->click();
         require(remove.submit(), "opening removal should submit");
-        require(!remove.candidate()->properties.contains("roof_openings") &&
-                    remove.candidate()->properties.at("version") == 1 &&
+        // Typed roof-opening edits (829a9d12, docs/project-format.md v95/v168)
+        // keep an admitted schema after the last removal: an empty v2 roster.
+        require(remove.candidate()->id == original.id &&
+                    remove.candidate()->properties.at("roof_openings") == nlohmann::json::array() &&
+                    remove.candidate()->properties.at("version") == 2 &&
                     remove.candidate()->extensions.at("roof_opening_input").at("entries").empty(),
-                "removing last opening should clear opening schema and receipt");
+                "removing last opening should empty the retained opening roster and receipts");
     }
 }
 

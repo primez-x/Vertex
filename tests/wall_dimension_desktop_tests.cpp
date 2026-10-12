@@ -186,7 +186,7 @@ void actual_wall_controls_preserve_geometry_and_raw_siblings() {
     QApplication::processEvents();
     auto* group=window.findChild<QGroupBox*>(QStringLiteral("dimensionProperties"));
     require(group && group->isVisible() && button(window,"applyBoundaryDimension").isEnabled(),"selected wall must offer enabled Dimension controls");
-    const auto defaults=visible_label(window,wall);require(defaults.text==QStringLiteral("4.000 m"),"default wall value must derive its analytical length");
+    const auto defaults=visible_label(window,wall);require(defaults.text==QStringLiteral("4 m"),"default wall value must derive its analytical length");
     const auto untouched=window.document().snapshot();button(window,"applyBoundaryDimension").click();
     require(window.document().revision()==untouched.revision() && window.document().snapshot().entities()==untouched.entities() &&
         visible_label(window,wall).automatic_linear_placement,"untouched Apply must preserve automatic placement without creating a presentation record");
@@ -230,7 +230,7 @@ void actual_wall_controls_preserve_geometry_and_raw_siblings() {
     capture(canvas(window),QStringLiteral("styled-wall-measurement.png"));
     capture(window,QStringLiteral("wall-measurement-properties.png"));
     const auto visible_pdf=pdf_text(window,directory.filePath(QStringLiteral("visible-wall.pdf")),QStringLiteral("styled-wall-measurement-pdf"),styled_label.color);
-    require(visible_pdf.contains(QStringLiteral("4.000 m")),"styled wall value must remain extractable in actual PDF");
+    require(visible_pdf.contains(QStringLiteral("4 m")),"styled wall value must remain extractable in actual PDF");
     button(window,"automaticWallMeasurement").click();const auto automatic_style=visible_label(window,wall);
     require(automatic_style.automatic_linear_placement && automatic_style.paper_height_mm==styled_label.paper_height_mm &&
         automatic_style.color==styled_label.color && automatic_style.bold==styled_label.bold && automatic_style.italic==styled_label.italic &&
@@ -245,7 +245,7 @@ void actual_wall_controls_preserve_geometry_and_raw_siblings() {
     require(hidden.revision()==before_hide.revision()+1 && !label(canvas(window),wall) &&
         std::any_of(canvas(window).entities().begin(),canvas(window).entities().end(),[&](const auto& value){return value.id==wall;}) &&
         hidden.entities().contains(opening.toStdString()),"hide must remove only the callout and retain wall plus opening");
-    require(!pdf_text(window,directory.filePath(QStringLiteral("hidden-wall.pdf"))).contains(QStringLiteral("4.000 m")),
+    require(!pdf_text(window,directory.filePath(QStringLiteral("hidden-wall.pdf"))).contains(QStringLiteral("4 m")),
         "hidden wall callout must also be absent from actual PDF output");
     require(window.undoCommand() && window.document().snapshot().entities()==styled.entities() && window.redoCommand() &&
         window.document().snapshot().entities()==hidden.entities() && window.undoCommand(),"wall measurement visibility must undo/redo independently of wall geometry");
@@ -258,7 +258,7 @@ void actual_wall_controls_preserve_geometry_and_raw_siblings() {
     const auto before_length=window.document().snapshot();require(window.editSelectedLength(QStringLiteral("6 m")),"wall must support ordinary length edit");
     const auto resized=window.document().snapshot();const auto resized_label=visible_label(window,wall);
     const auto resized_presentation=presentation(window,wall);
-    require(resized_label.text==QStringLiteral("6.000 m") && resized_label.paper_height_mm==styled_label.paper_height_mm &&
+    require(resized_label.text==QStringLiteral("6 m") && resized_label.paper_height_mm==styled_label.paper_height_mm &&
         resized_label.color==styled_label.color && resized_label.bold==styled_label.bold && resized_label.italic==styled_label.italic &&
         resized_presentation.plan_label_offset && record.plan_label_offset &&
         resized_presentation.plan_label_offset->x==record.plan_label_offset->x &&
@@ -276,9 +276,9 @@ void actual_wall_controls_preserve_geometry_and_raw_siblings() {
     // Display units belong to the workspace, not a cached numerical annotation.
     reopened.setMetricUnits(true);
     const auto reopened_label=visible_label(reopened,wall);
-    if(reopened_label.text!=QStringLiteral("6.000 m")) std::cerr<<"Reopened value: "<<reopened_label.text.toStdString()<<'\n';
+    if(reopened_label.text!=QStringLiteral("6 m")) std::cerr<<"Reopened value: "<<reopened_label.text.toStdString()<<'\n';
     require(
-        visible_label(reopened,wall).text==QStringLiteral("6.000 m") && visible_label(reopened,wall).paper_height_mm==5.5 &&
+        visible_label(reopened,wall).text==QStringLiteral("6 m") && visible_label(reopened,wall).paper_height_mm==5.5 &&
         visible_label(reopened,wall).color==styled_label.color,"native reopen must restore wall measurement style and current derived quantity");
 }
 
@@ -392,7 +392,7 @@ void curved_outline_selection_preserves_wall_and_exterior_callouts() {
         "the measured exterior retains one analytical curve alongside the rectangular return");
     const auto outside_arc=curved_exterior_dimension_id(measured,boundary_id);
     const auto outside_value=visible_canvas_label(window,outside_arc);
-    require(outside_value.text==QStringLiteral("6.503 m"),
+    require(outside_value.text==QStringLiteral("≈ 6.503 m"),
         "the measured exterior callout uses the curved physical face length");
 
     require(window.selectEntity(arc_wall) && window.editSelectedWallDimension(
@@ -403,7 +403,7 @@ void curved_outline_selection_preserves_wall_and_exterior_callouts() {
     const auto styled_snapshot=window.document().snapshot();
     const auto baseline_before=visible_label(window,arc_wall);
     const auto exterior_before=visible_canvas_label(window,outside_arc);
-    require(baseline_before.text==QStringLiteral("6.283 m") &&
+    require(baseline_before.text==QStringLiteral("≈ 6.283 m") &&
         std::abs(baseline_before.position.x)<1e-9 && std::abs(baseline_before.position.y+2.8)<1e-9 &&
         baseline_before.paper_height_mm==5.5 && baseline_before.color==QColor(QStringLiteral("#A12B34")) &&
         baseline_before.bold && baseline_before.italic && baseline_before.derived_label_manual_rotation &&

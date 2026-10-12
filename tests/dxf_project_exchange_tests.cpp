@@ -367,8 +367,15 @@ void run() {
         document.snapshot().entities().at("annotations-1"));
     const auto exported = export_project_dxf(document.snapshot());
     check(exported.drawing.insertion_units == 6, "project units must be SI metres");
-    check(exported.drawing.polylines.size() >= 2, "boundary and slab geometry must export");
-    check(exported.drawing.blocks.size() == 2, "wall and opening must export native plan blocks");
+    // Since native DXF boundary reconstruction, a closed editable boundary
+    // exports as a VERTEX_BOUNDARY plan block carrying its native payload;
+    // the slab footprint remains an ordinary closed polyline.
+    check(exported.drawing.polylines.size() >= 1, "slab geometry must export");
+    check(std::count_if(exported.drawing.blocks.begin(), exported.drawing.blocks.end(), [](const auto& block) {
+        return block.name.rfind("VERTEX_BOUNDARY_", 0) == 0 && !block.vertex_entity_json.empty() &&
+               block.lines.size() + block.arcs.size() + block.polylines.size() > 0;
+    }) == 1, "boundary geometry must export as one native boundary plan block");
+    check(exported.drawing.blocks.size() == 3, "boundary, wall and opening must export native plan blocks");
     check(std::any_of(exported.drawing.blocks.begin(), exported.drawing.blocks.end(),
         [](const auto& block) { return block.arcs.size() == 1 && block.lines.size() == 1; }),
           "door must export an analytical swing arc and leaf");

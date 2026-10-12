@@ -462,7 +462,17 @@ int main(int argc, char** argv) {
                         edited = edited && angle->isEnabled() && !travel->isEnabled();
                         angle->setValue(70.0);
                     }
-                    dialog->accept();
+                    // Since b93d541f the operation commits from the Save
+                    // button (validation stays in-dialog); accept() alone
+                    // would close without committing.
+                    auto* buttons = dialog->findChild<QDialogButtonBox*>();
+                    auto* save = buttons ? buttons->button(QDialogButtonBox::Save) : nullptr;
+                    edited = edited && save != nullptr;
+                    if (save) save->click();
+                    if (dialog->isVisible()) {
+                        edited = false;
+                        dialog->reject();
+                    }
                 }
             });
             editor->click();
@@ -868,10 +878,27 @@ int main(int argc, char** argv) {
         auto* views = window.findChild<QComboBox*>(QStringLiteral("architecturalView"));
         if (views && views->count() > 1) views->setCurrentIndex(1);
         action("libraryWall");
+        // Since 09368bee/dfb75d2b Library wall authoring stays in the active
+        // workspace (architectural plans draw in their own axes; elevations and
+        // sections refuse wall points) instead of silently switching views.
+        require(window.workspace() == sketch::desktop::Workspace::architectural,
+                "Library wall authoring does not silently leave a projected architectural view");
+        if (views) views->setCurrentIndex(0);
+        window.setWorkspace(sketch::desktop::Workspace::measurement);
+        action("libraryWall");
         require(window.workspace() == sketch::desktop::Workspace::measurement,
-                "wall authoring returns a projected workspace to conventional plan coordinates");
+                "Library wall authoring arms in the conventional Measurement plan");
+        // Settle the tab/palette layout from the workspace switch now; a late
+        // canvas resize during the later drag would correctly retire its capture.
+        QApplication::processEvents();
         const QPointF library_wall_start(canvas->width() * 0.38, canvas->height() * 0.72);
         const QPointF library_wall_end(canvas->width() * 0.78, canvas->height() * 0.72);
+        if (!window.selectedEntityId().isEmpty()) {
+            // FB-002: an outside click with a selection only deselects.
+            click(library_wall_start);
+            require(window.selectedEntityId().isEmpty(),
+                    "Library wall keeps the deselect-first click after the workspace switch");
+        }
         const auto before_library_wall = window.document().snapshot();
         click(library_wall_start);
         click(library_wall_end);
@@ -1000,8 +1027,12 @@ int main(int argc, char** argv) {
                                 QRectF(unhosted_canvas->rect()).center());
             require(unhosted_window.document().revision() == revision_before_unhosted_drop,
                     "catalog opening drop without a host leaves the document unchanged");
-            require(unhosted_window.lastError().contains(QStringLiteral("needs a host wall"),
-                                                         Qt::CaseInsensitive),
+            // c8634288 generalized the fallback to any suitable host (roofs
+            // host skylights); the wall-specific placement detail wins here.
+            require(unhosted_window.lastError().contains(QStringLiteral("Choose a visible wall"),
+                                                         Qt::CaseInsensitive) ||
+                        unhosted_window.lastError().contains(QStringLiteral("needs a suitable visible host"),
+                                                             Qt::CaseInsensitive),
                     "catalog opening drop without a host reports a useful error");
         }
         action("libraryDoorway");

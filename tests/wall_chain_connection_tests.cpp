@@ -305,6 +305,16 @@ void test_automatic_appraisal_wall_chain_closure(bool survey_only=false) {
                 if (entity.type=="measurement_boundary") ids.push_back(id);
             return ids;
         };
+        if (!canvas->selectedIds().isEmpty()) {
+            // The fixture area is retained as the selection after creation. Under
+            // the unified pointer an empty click only deselects (FB-002); the next
+            // click starts the wall even inside the existing area's interior.
+            const auto before_deselect = window.document().snapshot();
+            click({-2,-1.5});
+            require(canvas->selectedIds().isEmpty() && !canvas->wallPreview() &&
+                    window.document().snapshot().entities()==before_deselect.entities(),
+                "first click with the existing area selected must only deselect");
+        }
         click({-2,-1.5}); click({2,-1.5}); click({2,1.5}); click({-2,1.5});
         const auto open = window.document().snapshot();
         require(wall_ids(open).size()==3 && measured_ids(open).size()==(existing_region==0 ? 0U : 1U),
@@ -330,8 +340,13 @@ void test_automatic_appraisal_wall_chain_closure(bool survey_only=false) {
                     auto* x = input->findChild<QLineEdit*>("boundaryInputEndX");
                     auto* y = input->findChild<QLineEdit*>("boundaryInputEndY");
                     auto* sweep = input->findChild<QLineEdit*>("boundaryInputSweep");
-                    require(method && x && y && sweep,"precise closure exposes chord endpoint and signed sweep fields");
+                    // Chord methods default to Length / heading (64473198); this
+                    // closure explicitly chooses the Endpoint X/Y alternative.
+                    auto* chord_definition = input->findChild<QComboBox*>("boundaryInputChordDefinition");
+                    require(method && chord_definition && x && y && sweep,
+                        "precise closure exposes chord endpoint and signed sweep fields");
                     method->setCurrentIndex(4);
+                    chord_definition->setCurrentIndex(0);
                     x->setText("-2 m"); y->setText("-1.5 m"); sweep->setText("90 deg");
                     require(input->submit(),"precise analytical arc closing at original anchor must validate");
                 } catch (...) {
@@ -667,13 +682,28 @@ void test_wall_and_boundary_tools_route_from_architectural_views() {
                     architectural_view->currentText() == view_name,
                 "fixture is in the requested architectural plan, elevation, or section view");
 
+        // Horizontal architectural plans draw walls directly (09368bee, contract:
+        // "start/place a wall endpoint in a horizontal plan"); elevation and
+        // section views refuse new wall points with an explanation.
+        if (view_name != QStringLiteral("Plan")) {
+            const auto refused_before = window.document().snapshot();
+            create_wall->trigger();
+            QApplication::processEvents();
+            auto* drawing = dynamic_cast<PlanCanvas*>(
+                window.findChild<QWidget*>(QStringLiteral("architecturalPlanCanvas")));
+            require(drawing && window.workspace() == Workspace::architectural && !drawing->wallPreview() &&
+                        window.lastError().contains(QStringLiteral("horizontal")) &&
+                        window.document().snapshot().entities() == refused_before.entities(),
+                    "elevation and section views refuse new wall points with an explanation");
+            continue;
+        }
         auto* canvas = dynamic_cast<PlanCanvas*>(
-            window.findChild<QWidget*>(QStringLiteral("measurementPlanCanvas")));
-        require(canvas, "architectural wall command has a conventional measurement canvas");
+            window.findChild<QWidget*>(QStringLiteral("architecturalPlanCanvas")));
+        require(canvas, "architectural wall command has an architectural plan canvas");
         create_wall->trigger();
         QApplication::processEvents();
-        require(window.workspace() == Workspace::measurement && canvas->isVisible(),
-                "wall authoring from every architectural view switches to the conventional 2D canvas");
+        require(window.workspace() == Workspace::architectural && canvas->isVisible(),
+                "wall authoring in a horizontal architectural plan stays in that plan");
         const auto existing_id = existing.toStdString();
 
         const auto to_screen = [&](Vec2 point) {
@@ -694,19 +724,29 @@ void test_wall_and_boundary_tools_route_from_architectural_views() {
                                 Qt::NoButton, Qt::NoModifier);
             QApplication::sendEvent(canvas, &release);
         };
+        // Under the unified pointer a click on the existing wall selects it and
+        // an empty click with a retained selection only deselects. Start in
+        // empty space and finish on the existing endpoint's snap target.
+        if (!canvas->selectedIds().isEmpty()) {
+            click({4.20, 2.30});
+            require(canvas->selectedIds().isEmpty() && !canvas->wallPreview(),
+                    "first empty click with a retained selection only deselects");
+        }
+        click({4.20, 2.30});
+        require(canvas->wallPreview().has_value(),
+                "an empty click anchors a wall in the architectural plan");
         const auto snap_offset = std::min(0.08, 8.0 / canvas->viewScale());
         click({3.37 + snap_offset, 0.37 + snap_offset});
-        click({4.20, 2.30});
         const auto after_wall = window.document().snapshot();
         const auto created = wall_ids(after_wall);
-        require(created.size() == 2, "routed wall command commits on the measurement canvas");
+        require(created.size() == 2, "architectural plan wall commits from canvas clicks");
         const auto new_wall_id = std::find_if(created.begin(), created.end(),
             [&](const auto& id) { return id != existing_id; });
-        require(new_wall_id != created.end(), "routed wall is identifiable in the committed model");
+        require(new_wall_id != created.end(), "architectural plan wall is identifiable in the committed model");
         const auto& new_wall = after_wall.entities().at(*new_wall_id);
-        const auto snapped_start = wall_baseline(new_wall).start;
-        require(std::hypot(snapped_start.x - 3.37, snapped_start.y - 0.37) < 1e-8,
-                "routed wall command retains endpoint snapping to the existing wall");
+        const auto snapped_end = wall_baseline(new_wall).end;
+        require(std::hypot(snapped_end.x - 3.37, snapped_end.y - 0.37) < 1e-8,
+                "architectural plan wall retains endpoint snapping to the existing wall");
     }
 
     MainWindow boundary_window;
@@ -805,19 +845,27 @@ void test_sloped_wall_endpoint_snapping_respects_snap_toggle() {
             return std::hypot(left.x - right.x, left.y - right.y) < 1e-8;
         };
         // Off-grid coordinates distinguish real endpoint snapping from grid
-        // rounding; both near misses remain within the 12 px endpoint target.
+        // rounding; the near miss remains within the 12 px endpoint target.
+        // Idle Sloped Wall shares the unified pointer (d26aaa96): a press on
+        // the existing wall selects it, so the chain starts in empty space on
+        // a whole-metre point and its end exercises the endpoint snap.
         const auto offset = std::min(0.08, 6.0 / canvas->viewScale());
-        const Vec2 raw_start{start.x - offset, start.y + offset};
+        const Vec2 anchor{2.0, 2.0};
         const Vec2 raw_end{end.x + offset, end.y + offset};
-        const auto expected_start = snap_enabled ? start : raw_start;
+        const auto expected_start = anchor;
         const auto expected_end = snap_enabled ? end : raw_end;
-        click(raw_start);
+        if (!canvas->selectedIds().isEmpty()) {
+            click(anchor);
+            require(canvas->selectedIds().isEmpty() && !canvas->wallPreview(),
+                    "first empty click with a retained selection only deselects");
+        }
+        click(anchor);
         require(canvas->wallPreview() && close(canvas->wallPreview()->start, expected_start),
-                "sloped wall start uses analytical endpoint snap only while Snap is enabled");
+                "sloped wall starts at the clicked empty-canvas point");
         mouse(QEvent::MouseMove, raw_end, Qt::NoButton, Qt::NoButton);
         require(canvas->wallPreview() && close(canvas->wallPreview()->end, expected_end) &&
                     !canvas->wallPreview()->dimension_text.isEmpty(),
-                "sloped wall previews its effective endpoint and physical length");
+                "sloped wall end uses analytical endpoint snap only while Snap is enabled");
 
         bool rise_prompt_seen = false;
         QTimer::singleShot(0, &window, [&] {

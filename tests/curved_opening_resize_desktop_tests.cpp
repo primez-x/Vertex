@@ -4,6 +4,7 @@
 
 #include <QApplication>
 #include <QDir>
+#include <QElapsedTimer>
 #include <QFontDatabase>
 #include <QKeyEvent>
 #include <QMouseEvent>
@@ -48,6 +49,14 @@ void mouse(PlanCanvas& view,QEvent::Type type,QPointF point) {
         type==QEvent::MouseButtonRelease?Qt::NoButton:Qt::LeftButton,Qt::NoModifier);
     QApplication::sendEvent(&view,&event);
     QApplication::processEvents();
+}
+// Jamb previews are exact native worker projections. Wait for the queued
+// proposal so release publishes (or rejects) that one admitted command.
+void settle(PlanCanvas& view) {
+    QElapsedTimer timer; timer.start();
+    while(view.openingWidthPreviewPending()&&timer.elapsed()<5000)
+        QApplication::processEvents(QEventLoop::AllEvents,20);
+    require(!view.openingWidthPreviewPending(),"curved opening preview did not complete within five seconds");
 }
 QImage committedOutput(PlanCanvas& view) {
     QImage image(800,600,QImage::Format_ARGB32_Premultiplied);
@@ -134,6 +143,7 @@ struct Fixture {
         const auto output=committedOutput(view);
         mouse(view,QEvent::MouseButtonPress,from);
         mouse(view,QEvent::MouseMove,to);
+        settle(view);
         require(window.document().revision()==revision,"curved preview mutated document");
         require(committedOutput(view)==output,"curved preview leaked into output rendering");
         const auto capture=qEnvironmentVariable("VERTEX_TEST_CAPTURE_DIR");

@@ -3,6 +3,7 @@
 #include "../src/desktop/plan_canvas.hpp"
 #include "sketch/document_digest.hpp"
 #include "sketch/boundary_entity.hpp"
+#include "sketch/boundary_dimension.hpp"
 #include "sketch/project_store.hpp"
 #include "sketch/project_workspace.hpp"
 #include "sketch/recovery_discovery.hpp"
@@ -12,7 +13,12 @@
 #include <QApplication>
 #include <QAction>
 #include <QAbstractButton>
+#include <QComboBox>
+#include <QDialog>
+#include <QDialogButtonBox>
 #include <QElapsedTimer>
+#include <QPushButton>
+#include <QTableWidget>
 #include <QKeyEvent>
 #include <QMessageBox>
 #include <QMouseEvent>
@@ -52,6 +58,44 @@ void draft_key(QWidget* canvas, int key) {
     QKeyEvent event(QEvent::KeyPress, key, Qt::NoModifier);
     QApplication::sendEvent(canvas, &event);
 }
+// Independent redraws declare fresh topology, so finishing a Redefine with
+// attached references opens the modal Keep/map/Remove review. Keep every
+// reference and map each original child to the same-numbered replacement
+// child (the redraw starts at the same corner with the same winding). If the
+// review cannot be applied, reject it so the caller fails instead of hanging.
+struct ReferenceReviewDriver {
+    QTimer timer;
+    bool seen{false};
+    bool applied{false};
+    ReferenceReviewDriver() {
+        timer.setInterval(10);
+        QObject::connect(&timer, &QTimer::timeout, &timer, [this] {
+            for (auto* widget : QApplication::topLevelWidgets()) {
+                auto* dialog = qobject_cast<QDialog*>(widget);
+                if (!dialog || !dialog->isVisible() ||
+                    dialog->objectName() != QStringLiteral("boundaryReferenceReview")) continue;
+                timer.stop();
+                seen = true;
+                auto* choices = dialog->findChild<QTableWidget*>(QStringLiteral("boundaryReferenceChoices"));
+                auto* mappings = dialog->findChild<QTableWidget*>(QStringLiteral("boundaryReferenceMappings"));
+                auto* buttons = dialog->findChild<QDialogButtonBox*>(QStringLiteral("boundaryReferenceButtons"));
+                if (choices && mappings && buttons) {
+                    for (int row = 0; row < mappings->rowCount(); ++row)
+                        if (auto* target = qobject_cast<QComboBox*>(mappings->cellWidget(row, 1)))
+                            target->setCurrentIndex(target->findText(mappings->item(row, 0)->text()));
+                    for (int row = 0; row < choices->rowCount(); ++row)
+                        if (auto* decision = qobject_cast<QComboBox*>(choices->cellWidget(row, 1)))
+                            decision->setCurrentIndex(1); // Keep and map
+                    buttons->button(QDialogButtonBox::Apply)->click();
+                }
+                applied = !dialog->isVisible();
+                if (!applied) dialog->reject();
+                return;
+            }
+        });
+        timer.start();
+    }
+};
 void test_discard_navigation() {
     using namespace sketch;
     desktop::MainWindow window;
@@ -140,20 +184,33 @@ void test_redefine_recovery() {
         auto* canvas = dynamic_cast<desktop::PlanCanvas*>(restored.findChild<QWidget*>("measurementPlanCanvas"));
         draft_click(canvas, {60,60});
         draft_click(canvas, {-60,60});
-        draft_key(canvas, Qt::Key_Return);
+        {
+            ReferenceReviewDriver review;
+            draft_key(canvas, Qt::Key_Return);
+            require(review.seen && review.applied,
+                "recovered redefine with an attached reference is applied through reference review");
+        }
         const auto snapshot = restored.document().snapshot();
         require(snapshot.entities().size() == count && restored.selectedEntityId() == id,
             "recovered redefine preserves target identity and entity count");
         require(snapshot.entities().at(id.toStdString()).properties != original,
             "recovered redefine changes existing geometry");
-        require(snapshot.entities().at(reference.id) == reference, "recovered redefine retains dependent reference");
+        // An independent redraw receives fresh child identities; kept references
+        // follow the reviewed mapping onto the corresponding replacement children.
         const auto replaced = decode_identified_boundary_entity(snapshot.entities().at(id.toStdString()));
-        for (std::size_t index = 0; index < replaced.segments.size(); ++index) {
-            require(replaced.segments[index].segment_id == original_boundary.segments[index].segment_id &&
-                replaced.segments[index].start_vertex_id == original_boundary.segments[index].start_vertex_id &&
-                replaced.segments[index].end_vertex_id == original_boundary.segments[index].end_vertex_id,
-                "recovered redefine preserves referenced segment and vertex identities");
-        }
+        require(replaced.segments.size() == original_boundary.segments.size(),
+            "recovered redefine keeps the redrawn edge count");
+        const auto retained = snapshot.entities().find(reference.id);
+        require(retained != snapshot.entities().end(), "recovered redefine retains dependent reference");
+        const auto before_reference = decode_boundary_dimension_entity(reference);
+        const auto after_reference = decode_boundary_dimension_entity(retained->second);
+        require(before_reference.supported() && after_reference.supported() &&
+            after_reference.dimension->kind == before_reference.dimension->kind &&
+            after_reference.dimension->boundary_id == id.toStdString() &&
+            after_reference.dimension->segment_id == replaced.segments[0].segment_id &&
+            after_reference.dimension->secondary_segment_id == replaced.segments[1].segment_id &&
+            after_reference.dimension->vertex_id == replaced.segments[0].end_vertex_id,
+            "recovered redefine maps the dependent reference onto the corresponding replacement edges and corner");
     }
 }
 void test_invalid_redefine_recovery() {
@@ -250,6 +307,11 @@ void test_autosave_source_mismatch_retry() {
         document_snapshot_digest(window.document().snapshot()) == replaced_digest,
         "due mismatched source refuses publication without editing retained history");
     window.document() = Document::fork(valid_source);
+    // Restoring the source is itself a source replacement: the first poll
+    // observes it and restarts the quiet interval (invalidate_source), so the
+    // retry becomes due only on a later poll, exactly like the mismatch above.
+    require(QMetaObject::invokeMethod(poll, "timeout", Qt::DirectConnection), "observe corrected source");
+    require(!std::filesystem::exists(recovery_path), "corrected source waits for its quiet interval");
     QThread::msleep(2100);
     require(QMetaObject::invokeMethod(poll, "timeout", Qt::DirectConnection), "retry corrected due source");
     wait_until([&] { return std::filesystem::exists(recovery_path); },

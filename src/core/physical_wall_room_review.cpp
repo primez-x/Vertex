@@ -763,9 +763,13 @@ std::vector<EntityChange> complete_physical_wall_deletion_changes(const Entities
         for (const auto& owner:protected_proposals) sole_active_proposals.erase(owner);
     }
     std::set<std::string> retained_baseline_catalogs;
-    const auto mutable_owner=[&](const std::string& owner) {
+    // A required presentation carrier (the sheet/view graph or annotation
+    // state) is never erased by wall deletion, but its references to retired
+    // objects must be repaired in the same command, as the legacy producer does.
+    const auto mutable_owner=[&](const std::string& owner,bool retained_reference_carrier=false) {
         const auto found=source.find(owner);
-        if (found==source.end() || found->second.required) invalid("required or absent complete deletion owner: "+owner);
+        if (found==source.end() || (found->second.required && !retained_reference_carrier))
+            invalid("required or absent complete deletion owner: "+owner);
         const auto& entity=found->second;
         const bool scoped=entity.properties.contains("property_id") || entity.properties.contains("building_id") ||
             entity.properties.contains("floor_id") || entity.properties.contains("layer_id") ||
@@ -1222,7 +1226,11 @@ std::vector<EntityChange> complete_physical_wall_deletion_changes(const Entities
                 invalid("required wall companion differs from exact source pruning: "+owner);
             return;
         }
-        mutable_owner(owner);
+        const auto& original=source.at(owner);
+        const auto survivor=result.find(owner);
+        mutable_owner(owner,survivor!=result.end() &&
+            (original.type==kSheetViewEntityType || original.type==kAnnotationEntityType) &&
+            survivor->second.type==original.type && survivor->second.required==original.required);
     };
     for (const auto& [entity_id,entity]:source) {
         const auto after=preflight.find(entity_id);

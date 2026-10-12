@@ -968,7 +968,7 @@ int main() {
     rejected([&]{(void)placed_symbol_preview(catalog.front(),{{},0,0.001});});
     auto malformed = encoded; malformed["version"] = 1.0;
     rejected([&]{(void)decode_annotation_state(malformed,catalog);});
-    malformed = encoded; malformed["version"] = 10;
+    malformed = encoded; malformed["version"] = 12;
     rejected([&]{(void)decode_annotation_state(malformed,catalog);});
     malformed = encoded; malformed["labels"][0]["visible"] = "false";
     rejected([&]{(void)decode_annotation_state(malformed,catalog);});

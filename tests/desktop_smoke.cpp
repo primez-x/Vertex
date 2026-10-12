@@ -633,6 +633,10 @@ void test_canvas_symbol_transform_persistence() {
     const ScenarioTiming scenario_timing(__func__);
     using namespace sketch;
     desktop::MainWindow window;
+    // Canvas transforms admit only a visible, captured viewport.
+    window.resize(1200, 800);
+    window.show();
+    QApplication::processEvents();
     const auto symbol_id = window.createAnnotationSymbol(
         QStringLiteral("sofa"), {0.0, 0.0});
     require(!symbol_id.isEmpty() && window.selectEntity(symbol_id),
@@ -664,6 +668,13 @@ void test_canvas_symbol_transform_persistence() {
     mouse(QEvent::MouseButtonPress, start, Qt::LeftButton, Qt::LeftButton);
     mouse(QEvent::MouseMove, end, Qt::NoButton, Qt::LeftButton);
     mouse(QEvent::MouseButtonRelease, end, Qt::LeftButton, Qt::NoButton);
+    // The exact transform proposal is a worker projection; a release while it
+    // is pending commits that one admitted command when it completes.
+    const auto transform_deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+    while (canvas->entityTransformPreviewPending() &&
+           std::chrono::steady_clock::now() < transform_deadline)
+        QApplication::processEvents(QEventLoop::AllEvents, 20);
+    QApplication::processEvents();
 
     const auto after = decode_annotation_entity(
         window.document().snapshot().entities().at("annotations-1"));
@@ -756,8 +767,14 @@ void test_workspace_theme_canvases() {
             require(image.pixelColor(9, 9) == background,
                     "both canvases must render the selected field/light/dark background");
             if (theme == WorkspaceTheme::high_contrast) {
+                // The centred baseline sits on row 240 at 100 px/m; sample the
+                // actual upper face of the authored wall thickness (140 mm by
+                // default) rather than a hard-coded 200 mm assumption.
+                const auto half_thickness = window.document().snapshot().entities().at(wall.toStdString())
+                    .properties.value("thickness_m", 0.0) / 2.0;
+                const auto face_row = static_cast<int>(std::lround(240.0 - half_thickness * 100.0));
                 bool visible_face = false;
-                for (int y = 228; y <= 232; ++y)
+                for (int y = face_row - 2; y <= face_row + 2; ++y)
                     visible_face = visible_face || image.pixelColor(320, y).lightnessF() > .5;
                 require(visible_face, "physical wall faces must remain readable on the black field canvas");
                 canvases[i]->setGridEnabled(true);
@@ -1655,6 +1672,13 @@ void test_annotation_transform_legacy_and_ambiguity() {
         mouse(QEvent::MouseButtonPress, start, Qt::LeftButton, Qt::LeftButton);
         mouse(QEvent::MouseMove, end, Qt::NoButton, Qt::LeftButton);
         mouse(QEvent::MouseButtonRelease, end, Qt::LeftButton, Qt::NoButton);
+        // Exact transform/move proposals are worker projections; a pending
+        // release commits or refuses that one proposal when it completes.
+        const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+        while ((canvas->entityTransformPreviewPending() || canvas->entitiesMovePreviewPending()) &&
+               std::chrono::steady_clock::now() < deadline)
+            QApplication::processEvents(QEventLoop::AllEvents, 20);
+        QApplication::processEvents();
     };
     for (const auto version : {1, 2}) {
         desktop::MainWindow window;

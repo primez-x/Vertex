@@ -194,7 +194,9 @@ void requireArtworkGesturePreview(sketch::desktop::CanvasEntity entity) {
         QImage image(canvas.size(), QImage::Format_ARGB32_Premultiplied);
         image.fill(Qt::transparent);
         QPainter painter(&image);
-        canvas.renderScene(painter, QRectF(canvas.rect()));
+        // Public scene renderers expose committed output only; the live
+        // preview contract is the widget's actual paint event.
+        canvas.render(&painter);
         painter.end();
         return image;
     };

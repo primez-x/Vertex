@@ -22,6 +22,7 @@
 #include <QDialog>
 #include <QDialogButtonBox>
 #include <QDir>
+#include <QElapsedTimer>
 #include <QEventLoop>
 #include <QFileInfo>
 #include <QFont>
@@ -40,6 +41,7 @@
 #include <QRectF>
 #include <QStatusBar>
 #include <QTemporaryDir>
+#include <QThread>
 #include <QTimer>
 #include <QToolButton>
 
@@ -1656,10 +1658,14 @@ void test_receipt_boundary_offset_copy() {
         window.transformSelectedBoundary("0",false,false,"1 m","2 m",false),
         "receipt-backed boundary must translate in place through the typed command");
     const auto moved = window.document().snapshot();
-    require(moved.history().back().boundary_transforms.has_value() &&
-        moved.history().back().boundary_transforms->transformations.size() == 1 &&
-        moved.history().back().boundary_transforms->transformations.front().boundary_id == copy_id &&
-        same_point(moved.history().back().boundary_transforms->transformations.front().transform.offset, {1, 2}) &&
+    // In-place selection transforms publish the source-selected joint rigid
+    // proof (e8b2da69): one captured operator per selected owner.
+    const auto& moved_proof = moved.history().back().boundary_constraint_changes;
+    require(moved_proof.has_value() && moved_proof->joint_translation.has_value() &&
+        moved_proof->joint_translation->rigid_boundary_ids == std::vector<std::string>{copy_id} &&
+        moved_proof->joint_translation->owner_transformations.size() == 1 &&
+        moved_proof->joint_translation->owner_transformations.front().owner_id == copy_id &&
+        same_point(moved_proof->joint_translation->owner_transformations.front().transform.offset, {1, 2}) &&
         moved.entities().at(boundary_id) == source.entities().at(boundary_id),
         "in-place move must retain a typed history proof and preserve the other boundary");
     require(window.saveProjectAs(path) && window.openProject(path) &&
@@ -1699,10 +1705,11 @@ void test_receipt_boundary_offset_copy() {
         window.transformSelectedBoundary("90",true,false,"3 m","-1 m",false),
         "an original measured boundary must rotate and reflect in place");
     const auto in_place = window.document().snapshot();
-    require(in_place.history().back().boundary_transforms.has_value() &&
-        in_place.history().back().boundary_transforms->transformations.size() == 1 &&
+    const auto& in_place_proof = in_place.history().back().boundary_constraint_changes;
+    require(in_place_proof.has_value() && in_place_proof->joint_translation.has_value() &&
+        in_place_proof->joint_translation->owner_transformations.size() == 1 &&
         !in_place.history().back().boundary_translation.has_value() &&
-        in_place.history().back().boundary_transforms->transformations.front().boundary_id == boundary_id &&
+        in_place_proof->joint_translation->owner_transformations.front().owner_id == boundary_id &&
         window.selectedEntityId().toStdString() == boundary_id,
         "in-place rotation must preserve selection and retain its own transform proof");
     const auto in_place_record = sketch::decode_boundary_receipt_envelope(
@@ -1710,7 +1717,7 @@ void test_receipt_boundary_offset_copy() {
     require(in_place_record.record->edges == original_record.record->edges &&
         in_place_record.record->transforms.size() == 1,
         "in-place rotation must preserve original receipt inputs and topology identities");
-    const auto operation = in_place.history().back().boundary_transforms->transformations.front().transform;
+    const auto operation = in_place_proof->joint_translation->owner_transformations.front().transform;
     for (const auto& [id, before] : rotated_state.entities()) {
         if (id == boundary_id) continue;
         const auto& after = in_place.entities().at(id);
@@ -2771,6 +2778,20 @@ void test_wall_curve_properties_classification() {
             require(buttons, "curve properties editor must expose Apply");
             buttons->button(QDialogButtonBox::Apply)->click();
         };
+        // Edits refresh a debounced, asynchronous preview (cf11effc); Apply is
+        // disabled until that preview for the current input is ready.
+        const auto wait_for_preview = [](QDialog* modal) {
+            auto* buttons = modal->findChild<QDialogButtonBox*>("curvedWallButtons");
+            require(buttons, "curve properties editor must expose Apply");
+            QElapsedTimer elapsed;
+            elapsed.start();
+            while (!buttons->button(QDialogButtonBox::Apply)->isEnabled() && elapsed.elapsed() < 15000) {
+                QApplication::processEvents(QEventLoop::AllEvents, 20);
+                QThread::msleep(5);
+            }
+            require(buttons->button(QDialogButtonBox::Apply)->isEnabled(),
+                    "curve properties preview must become ready before Apply");
+        };
         invoke_editor([&](QDialog* modal) {
             apply(modal);
             require(modal->result() == QDialog::Accepted, "unchanged curve Apply must accept");
@@ -2787,6 +2808,7 @@ void test_wall_curve_properties_classification() {
         editor_stage = "stale units";
         invoke_editor([&](QDialog* modal) {
             modal->findChild<QLineEdit*>("curvedWallClassification")->setText("stale units class");
+            wait_for_preview(modal);
             window.setMetricUnits(!metric);
             apply(modal);
             require(modal->result() != QDialog::Accepted, "unit changes must reject the curve property command");
@@ -2797,6 +2819,7 @@ void test_wall_curve_properties_classification() {
         editor_stage = "stale selection";
         invoke_editor([&](QDialog* modal) {
             modal->findChild<QLineEdit*>("curvedWallClassification")->setText("stale selection class");
+            wait_for_preview(modal);
             require(window.selectEntity(opening_id), "selection guard fixture must select the hosted opening");
             apply(modal);
             require(modal->result() != QDialog::Accepted, "selection changes must reject curve property Apply");
@@ -2806,6 +2829,7 @@ void test_wall_curve_properties_classification() {
         editor_stage = "classification only";
         invoke_editor([&](QDialog* modal) {
             modal->findChild<QLineEdit*>("curvedWallClassification")->setText("  exterior  ");
+            wait_for_preview(modal);
             apply(modal);
             require(modal->result() == QDialog::Accepted, "classification-only edit must accept");
         });
@@ -2835,6 +2859,7 @@ void test_wall_curve_properties_classification() {
         invoke_editor([&](QDialog* modal) {
             modal->findChild<QLineEdit*>("curvedWallClassification")->setText("load bearing");
             modal->findChild<QLineEdit*>("curvedWallSweep")->setText("45 deg");
+            wait_for_preview(modal);
             apply(modal);
             require(modal->result() == QDialog::Accepted, "combined classification and sweep edit must accept");
         });
@@ -2864,6 +2889,7 @@ void test_wall_curve_properties_classification() {
         editor_stage = "stale document";
         invoke_editor([&](QDialog* modal) {
             modal->findChild<QLineEdit*>("curvedWallClassification")->setText("stale document class");
+            wait_for_preview(modal);
             auto opening = window.document().snapshot().entities().at(opening_id.toStdString());
             opening.extensions["vendor_change"] = true;
             window.document().apply(sketch::ApplyEntityChanges{window.document().revision(),

@@ -246,8 +246,8 @@ void qualified_units_refresh_and_callbacks() {
     require(label(panel,"appraisalDetailsGla")=="100.00 sq ft","prominent authoritative GLA");
     require(label(panel,"appraisalDetailsStandards").contains("ANSI review not verified"),"truthful residential standards status");
     panel.setSelectedBoundary("a");
-    require(label(panel,"appraisalDetailsTrace").contains("40.00 ft") &&
-        label(panel,"appraisalDetailsTrace").contains("10.00 ft"),"perimeter and edge dimensions visible");
+    require(label(panel,"appraisalDetailsTrace").contains("40 ft 0 in") &&
+        label(panel,"appraisalDetailsTrace").contains("Edge 1: 10 ft 0 in"),"perimeter and edge dimensions visible");
     QString located,edited,setup,reported;sketch::Revision revision=999;
     panel.setLocateRequested([&](const QString& id,sketch::Revision value){located=id;revision=value;});
     panel.setFactsRequested([&](const QString& id,sketch::Revision){edited=id;});
@@ -260,7 +260,7 @@ void qualified_units_refresh_and_callbacks() {
     auto* item=tree->currentItem();located.clear();tree->itemActivated(item,0);
     require(located=="a","row activation locates source boundary");
     panel.setDocument(document.snapshot(),"p",true);
-    require(label(panel,"appraisalDetailsGla")=="9.29 m²" && label(panel,"appraisalDetailsTrace").contains("12.19 m"),"metric refresh retains physical values");
+    require(label(panel,"appraisalDetailsGla")=="9.29 m²" && label(panel,"appraisalDetailsTrace").contains("12.192 m"),"metric refresh retains physical values");
     entities.back().properties["boundary"]=square(0,0,6.096);document=sketch::Document::create(entities);
     panel.setDocument(document.snapshot(),"p",false);
     require(label(panel,"appraisalDetailsGla")=="400.00 sq ft","new snapshot replaces stale header even same revision");
@@ -280,7 +280,7 @@ void undeclared_and_invalid_measurements() {
     entities.back().properties["boundary"][0]["sweep_radians"]="bad";
     document=sketch::Document::create(entities);panel.setDocument(document.snapshot(),"p",false);
     require(label(panel,"appraisalDetailsTrace").contains("Current measurement unavailable") &&
-        !label(panel,"appraisalDetailsTrace").contains("40.00 ft"),"invalid geometry removes stale dimensions");
+        !label(panel,"appraisalDetailsTrace").contains("40 ft 0 in"),"invalid geometry removes stale dimensions");
 }
 void categories_floors_deductions_and_phase() {
     AppraisalDetailsPanel panel;auto entities=fixture();entities.back().properties["boundary"]=square(0,0,4);

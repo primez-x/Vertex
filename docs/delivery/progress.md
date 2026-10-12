@@ -14,6 +14,35 @@ changed source does not acquire runtime acceptance without later qualification.
 
 ## Current delivery state
 
+### October 12 full Release build and first CTest run
+
+All 1,100 Release build steps now compile and link in `build/windows-release`,
+including every test target (the stable Release configuration now embeds
+debug information: `/Z7 /bigobj`, linker `/DEBUG /OPT:REF /OPT:ICF`).
+Nothing was installed or packaged.
+
+First complete CTest run: 204/314 passed. Findings and corrections:
+- A shared crash in every window with a 3D view: `NativeModelView`'s event
+  handler read `m_impl` while `Impl` was still being constructed (undefined
+  behavior that happened to survive in the launched app). Corrected, and the
+  same latent pattern in `TextLibraryPanel`.
+- Real regressions: shared asset payloads forced reader161 and every wall
+  split forced split v3/reader156 (floor leakage that would make older readers
+  refuse ordinary projects); the floor scan threw on unencodable history; DXF
+  re-export duplicated anonymous dimension blocks; the bay schedule label
+  drifted from its documented "Fixed" mechanism.
+- Stale tests updated where commits deliberately changed behavior (scientific
+  decimals, sloped curved walls, stair yaw/flight overrides, new schema
+  versions, symbol catalog counts/counterparts, DXF/physical-room grouping).
+- Missing per-test runtime PATH for several desktop tests; source-kit
+  allowlist regenerated.
+
+After these: 252/314 pass (80%). The remaining failures are being triaged:
+canvas drag/resize/release paths, drawing and appraisal desktop workflows,
+symbol SVG checks, three crashes, assembly timeouts, and environment-dependent
+sandbox/import-worker/packaging checks. Developer-host test results are not
+installed or user acceptance.
+
 ### October 12 first compile since October 6
 
 The user lifted the source-only restriction for compilation. The Release

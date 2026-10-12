@@ -75,6 +75,35 @@ int overlay_row(const QTableWidget& table, const std::string& id) {
     return -1;
 }
 
+// Wall elevation edits require an explicit room review of the old and the
+// destination effective planes (see requirements() in
+// src/core/mixed_selection_property_edit.cpp). This fixture has no rooms, so
+// each review only needs its validated Accept; anything else is a failure.
+int accept_room_reviews(sketch::desktop::MainWindow& window, const std::function<bool()>& action) {
+    int accepted = 0, waited = 0;
+    QTimer driver;
+    driver.setInterval(25);
+    QObject::connect(&driver, &QTimer::timeout, &window, [&] {
+        auto* dialog = qobject_cast<QDialog*>(QApplication::activeModalWidget());
+        if (!dialog) return;
+        require(dialog->objectName() == QStringLiteral("physicalRoomReviewDialog"),
+                "only the required wall room review may open");
+        auto* apply = dialog->findChild<QPushButton*>("physicalRoomReviewApply");
+        require(apply != nullptr, "room review exposes its Accept action");
+        if (apply->isEnabled()) { waited = 0; ++accepted; apply->click(); return; }
+        if (++waited > 200) {
+            auto* status = dialog->findChild<QLabel*>("physicalRoomReviewStatus");
+            std::cerr << "room review status: " << (status ? status->text().toStdString() : std::string{}) << '\n';
+            require(false, "room-free wall review must be acceptable without decisions");
+        }
+    });
+    driver.start();
+    const bool result = action();
+    driver.stop();
+    require(result, "source wall dimensions and level-relative elevation are authored");
+    return accepted;
+}
+
 void edit_section(sketch::desktop::MainWindow& window,
                   const std::function<void(QDialog&, QTableWidget&)>& edit) {
     auto* action = window.findChild<QAction*>("manageNamedViews");
@@ -147,8 +176,9 @@ void test_associative_section() {
     levels_action->trigger();
     const auto wall = window.createStraightWall({5, 0}, {9, 0});
     require(!wall.isEmpty() && window.selectEntity(wall), "real source wall is created");
-    require(window.editSelectedHeight("3 m") && window.editSelectedElevation("0.4 m"),
-            "source wall dimensions and level-relative elevation are authored");
+    require(window.editSelectedHeight("3 m"), "source wall height is authored");
+    require(accept_room_reviews(window, [&] { return window.editSelectedElevation("0.4 m"); }) >= 1,
+            "wall elevation change reviews its old and destination room planes");
     require(window.document().snapshot().entities().at(wall.toStdString())
                 .properties.at("vertical_placement").at("mode") == "level",
             "wall uses the floor's authoritative level placement");

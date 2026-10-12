@@ -124,7 +124,10 @@ struct RetainedSourceLineage {
 };
 RetainedSourceLineage read_retained_source_lineage(const Entity& entity,bool validate_geometry=true) {
     RetainedSourceLineage result;
-    const bool grouped=entity.extensions.contains("measurement_linework_group");
+    // Like has_source(), a group marker is measured lineage only on a
+    // measurement boundary; on other owners it is opaque vendor metadata.
+    const bool grouped=entity.type=="measurement_boundary" &&
+        entity.extensions.contains("measurement_linework_group");
     result.present=grouped || entity.extensions.contains("measurement_linework_sources");
     if(!result.present)return result;
     if(entity.type!="measurement_boundary")

@@ -260,10 +260,16 @@ void frame_owner_collision(const QString& directory) {
         {},"Frame owner collision fixture"});
     require(window.selectEntity(ordinary),"refresh frame owner collision fixture");
     const auto captured=window.document().snapshot();
+    // The persisted body owns the raw "catalog:instance:id" spelling, so the
+    // embedded root receives a collision-safe render alias (574788ae). Both
+    // owners must still be presented, each under its own identity.
+    const auto alias=QString::fromStdString(embedded_assembly_presentation_id(captured.entities(),"frame-catalog","root"));
+    require(alias!=QString::fromStdString(child),"embedded root alias is distinct from colliding persisted body");
     int profile_entries=0,body_entries=0;
     for(const auto& entry:control<PlanCanvas>(window,"measurementPlanCanvas").entities()) {
-        if(entry.id!=QString::fromStdString(child))continue;
+        if(entry.id!=QString::fromStdString(child) && entry.id!=alias)continue;
         require(entry.resize_frame.has_value(),"colliding geometric owner retains frame");
+        require((entry.id==alias)==!entry.presentation_key.isEmpty(),"each presentation owner keeps its own render identity");
         if(entry.presentation_key.isEmpty()) {
             ++body_entries;
             close(entry.resize_frame->rotation_radians,0,"persisted body retains its own frame angle");

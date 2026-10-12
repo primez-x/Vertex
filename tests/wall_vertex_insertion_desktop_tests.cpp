@@ -7,6 +7,7 @@
 #include "support/noninteractive_errors.hpp"
 
 #include <QApplication>
+#include <QComboBox>
 #include <QAction>
 #include <QDialog>
 #include <QDialogButtonBox>
@@ -76,22 +77,28 @@ void insertion_dialog(sketch::desktop::MainWindow& window,
 void preview_and_apply(sketch::desktop::MainWindow& window) {
     const auto before = window.document().snapshot();
     insertion_dialog(window, [&](QDialog& dialog) {
-        auto* fraction = dialog.findChild<QLineEdit*>("wallVertexFraction");
+        // The point is entered as a distance along the wall from a chosen
+        // endpoint (48199732) rather than as a raw fraction. The fixture wall
+        // is 10 m long in metric units.
+        auto* distance = dialog.findChild<QLineEdit*>("wallVertexDistance");
+        auto* reference = dialog.findChild<QComboBox*>("wallVertexReference");
         auto* buttons = dialog.findChild<QDialogButtonBox*>("wallVertexInsertionButtons");
         auto* preview = dynamic_cast<sketch::desktop::PlanCanvas*>(
             dialog.findChild<QWidget*>("wallVertexInsertionPreview"));
         auto* summary = dialog.findChild<QLabel*>("wallVertexInsertionSummary");
         auto* freedom = dialog.findChild<QLabel*>("wallVertexInsertionFreedom");
-        require(fraction && buttons && preview && summary, "wall insertion controls exist");
-        for (const auto& invalid : {QStringLiteral("invalid"), QStringLiteral("0"), QStringLiteral("1")}) {
-            fraction->setText(invalid);
+        require(distance && reference && buttons && preview && summary, "wall insertion controls exist");
+        require(reference->currentIndex() == 0, "inserted point distance is measured from the wall start by default");
+        for (const auto& invalid : {QStringLiteral("invalid"), QStringLiteral("0 m"), QStringLiteral("10 m"),
+                                    QStringLiteral("12 m")}) {
+            distance->setText(invalid);
             require(!buttons->button(QDialogButtonBox::Apply)->isEnabled(),
-                    "invalid and endpoint fractions disable Apply");
+                    "invalid, endpoint and out-of-wall distances disable Apply");
         }
-        fraction->setText(QStringLiteral("0.4"));
+        distance->setText(QStringLiteral("4 m"));
         require(buttons->button(QDialogButtonBox::Apply)->isEnabled() &&
                     !summary->text().isEmpty() && preview->entities().size() >= 4,
-                "valid fraction previews original wall, both pieces and split marker");
+                "valid distance previews original wall, both pieces and split marker");
         bool marker = false;
         for (const auto& entity : preview->entities())
             marker = marker || entity.id == QStringLiteral("split-point");

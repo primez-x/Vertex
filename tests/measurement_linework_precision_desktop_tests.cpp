@@ -306,7 +306,14 @@ void test_stale_maps_layer_phase_and_workspace() {
         .entity_changes={EntityChange::upsert(Entity::create("model_phases",{{"model",phases.to_json()}}))},.message="precision phase fixture"});
     require(phase.beginMeasurementLinework() && phase.appendMeasurementLineworkPoint({0,0}), "phase guard fixture starts");
     const auto phase_revision=phase.document().revision();
-    input(phase,phase_canvas,[&](BoundaryInputDialog& dialog) { require(phase.selectRemodelingAlternative(QStringLiteral("precision-alternative")), "change semantic phase while precision dialog is open"); accept(dialog); });
+    // Phase changes are refused while drawing (docs/phases-alternatives.md,
+    // commit c0996fa9); finishing first still leaves the open dialog stale.
+    input(phase,phase_canvas,[&](BoundaryInputDialog& dialog) {
+        require(!phase.selectRemodelingAlternative(QStringLiteral("precision-alternative")) && phase.document().revision()==phase_revision,
+            "active measured drawing refuses a semantic phase change");
+        phase.finishMeasurementLinework();
+        require(phase.selectRemodelingAlternative(QStringLiteral("precision-alternative")), "change semantic phase while precision dialog is open");
+        accept(dialog); });
     require(phase.document().revision()==phase_revision+1, "phase change is the only admitted document operation");
     {
         const auto stale_phase = phase.document().snapshot();

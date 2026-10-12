@@ -3820,13 +3820,24 @@ void PlanCanvas::pointerPress(QPointF position, Qt::MouseButton button,
                 return;
             }
         }
+        // A generated label owns the pick ahead of its owner/frame. An
+        // unselected label can still pan when dragged, then select on click.
+        // A different retained selection whose frame contains the press (for
+        // example a selected dimension painted over the area's own label)
+        // keeps the contract's "drag a selected object moves it".
         if (m_pressed_generated_label) {
-            // A generated label owns the pick ahead of its owner/frame. An
-            // unselected label can still pan when dragged, then select on click.
-            m_left_gesture = LeftGesture::canvas_pan;
-            m_pan_start = position;
-            m_pan_view_start = m_view_center;
-            return;
+            const auto retained = selectedIds();
+            const bool other_selection_owns_press = !hasMixedSemanticSelection() &&
+                !retained.isEmpty() && !retained.contains(m_pressed_generated_label->id) &&
+                m_selected_roof_openings.empty() && m_selected_generated_labels.empty() &&
+                selectionFrameContains(position, QRectF(rect()));
+            if (!other_selection_owns_press) {
+                m_left_gesture = LeftGesture::canvas_pan;
+                m_pan_start = position;
+                m_pan_view_start = m_view_center;
+                return;
+            }
+            m_pressed_generated_label.reset();
         }
     }
     if (selectionInteractionEnabled()) {
@@ -9708,7 +9719,15 @@ QString PlanCanvas::hitTest(QPointF point, bool filtered, QStringList* overlappi
     }
     // Area interiors are selectable even with outline-only styling. Their
     // regions remain behind component footprints and nearby actual strokes.
-    if (!interior_area.isEmpty() && best > hit_pixels) { result = interior_area; best = 0.0; }
+    // Wall tools treat an area's interior as drawing space: walls are authored
+    // inside parcels and measured areas (outlines, labels and components stay
+    // picks, and Alt overlap cycling still lists the interior). Otherwise idle
+    // Wall selection would make every click inside an area reselect it.
+    const bool interior_is_wall_drawing_space =
+        m_tool == CanvasTool::wall || m_tool == CanvasTool::sloped_wall;
+    if (!interior_area.isEmpty() && best > hit_pixels && !interior_is_wall_drawing_space) {
+        result = interior_area; best = 0.0;
+    }
     // Measure the same font and padded rotated rectangle as interactive paint.
     // Retain the geometry selection tolerance outside that painted rectangle.
     const auto& labels = positionedLabels(font(), this, m_scale, logicalDpiY(), false);

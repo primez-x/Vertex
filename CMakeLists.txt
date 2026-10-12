@@ -6,6 +6,14 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 include(CTest)
+if(MSVC)
+  # sketch::command_from_json (src/core/document.cpp) compiles to a ~245 KB
+  # frame under MSVC /O2 and versioned command envelopes delegate recursively
+  # (v16 -> v15 -> v11 -> v1). Four or five nested frames exceed the 1 MB
+  # Windows default stack, so reserve 8 MB for every executable (main thread
+  # and threads created with the default stack size). Ignored for DLLs.
+  add_link_options(/STACK:8388608)
+endif()
 
 set(SKETCH_DEPS_DIR "${CMAKE_SOURCE_DIR}/.deps/src" CACHE PATH "Verified local dependency source cache")
 option(SKETCH_BUILD_DESKTOP "Build the native desktop application" OFF)

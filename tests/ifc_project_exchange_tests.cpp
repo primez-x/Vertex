@@ -2221,7 +2221,32 @@ void run() {
     sloped_wall.required = true;
     sloped_wall.properties["slope_rise_m"] = 1.0;
     sloped_wall.extensions["source_note"] = std::string(1500, 'p');
-    const auto sloped = export_project_ifc(Document::create({sloped_wall}).snapshot());
+#ifdef SKETCH_IFC_NATIVE_GEOMETRY
+    // Since native format v62, straight sloped/planar-top walls export their
+    // exact clipped body as a native triangulated IfcWall. It must never be
+    // flattened to an extruded profile, and import must restore the slope.
+    const auto carried = export_project_ifc(Document::create({sloped_wall}).snapshot());
+    check(carried.step.find("IFCWALL(") != std::string::npos &&
+          carried.step.find("IFCTRIANGULATEDFACESET(") != std::string::npos &&
+          carried.step.find("IFCEXTRUDEDAREASOLID(") == std::string::npos &&
+          std::none_of(carried.diagnostics.begin(), carried.diagnostics.end(), [](const auto& item) {
+              return item.source_id == "wall-1" && item.code == "native_reference_only";
+          }), "sloped wall must export its native sloped body rather than a flat wall");
+    const auto carried_import = import_case("sloped wall body", carried.step);
+    const auto carried_wall = std::find_if(carried_import.entities.begin(), carried_import.entities.end(),
+        [](const auto& entity) { return entity.type == "wall"; });
+    check(carried_wall != carried_import.entities.end() &&
+          carried_wall->properties.at("baseline") == sloped_wall.properties.at("baseline") &&
+          std::abs(carried_wall->properties.value("slope_rise_m", 0.0) - 1.0) < 1e-12,
+          "sloped wall body must round-trip as a sloped native wall");
+    // Reference-only retention remains the refusal path whenever the native
+    // body cannot be produced; exhaust the tessellation budget to exercise it.
+    IfcExchangeLimits reference_limits;
+    reference_limits.max_mesh_vertices = 4;
+#else
+    const IfcExchangeLimits reference_limits{};
+#endif
+    const auto sloped = export_project_ifc(Document::create({sloped_wall}).snapshot(), reference_limits);
     check(sloped.step.find("IFCWALL(") == std::string::npos &&
           std::any_of(sloped.diagnostics.begin(), sloped.diagnostics.end(), [](const auto& item) {
               return item.code == "native_reference_only";
@@ -2242,7 +2267,7 @@ void run() {
               reference_import.entities[0].extensions.at("ifc_vertex_properties"),
           "reference-only native payload must remain byte-semantically stable across repeated round trips");
     const auto hosted_reference = export_project_ifc(Document::create({sloped_wall,
-        make_document().snapshot().entities().at("opening-1")}).snapshot());
+        make_document().snapshot().entities().at("opening-1")}).snapshot(), reference_limits);
     check(hosted_reference.step.find("IFCOPENINGELEMENT(") == std::string::npos &&
           hosted_reference.step.find("IFCRELVOIDSELEMENT(") == std::string::npos,
           "unsupported hosts must not leave orphan IFC opening features");

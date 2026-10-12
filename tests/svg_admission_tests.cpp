@@ -311,7 +311,7 @@ int main(int argc, char** argv) {
                 QFile file(files.next()); require(file.open(QIODevice::ReadOnly), "catalog artwork missing");
                 QSvgRenderer candidate; require(load_admitted_svg(candidate, file.readAll()), "catalog artwork no longer renderable"); ++count;
             }
-            require(count == 345, "complete catalog corpus was not exercised");
+            require(count == 366, "complete catalog corpus was not exercised");
         }
         return 0;
     } catch (const std::exception& failure) { std::cerr << failure.what() << '\n'; return 1; }

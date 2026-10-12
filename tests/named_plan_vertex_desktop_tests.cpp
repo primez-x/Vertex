@@ -69,14 +69,26 @@ void wait_preview(MainWindow& window, bool require_active=true) {
     require(timer,"corner drag must have its deferred exact preview timer");
     if (!require_active && !timer->isActive()) return;
     require(timer->isActive(),"corner drag must request a deferred exact preview");
+    // The poll also watches a retained prepared publication for canvas-only
+    // cancellation, so it can stay active after the exact proposal completes.
+    // Completion is the canvas leaving its pending state.
+    const auto pending=[&] {
+        const auto widgets=window.findChildren<QWidget*>();
+        return std::any_of(widgets.begin(),widgets.end(),[](QWidget* widget) {
+            const auto* canvas=dynamic_cast<PlanCanvas*>(widget);
+            return canvas && canvas->boundaryVertexPreviewPending();
+        });
+    };
     QEventLoop loop;
     QTimer observe,deadline;
     observe.setInterval(10);
     deadline.setSingleShot(true);
-    QObject::connect(&observe,&QTimer::timeout,&loop,[&] { if (!timer->isActive()) loop.quit(); });
+    // A retired (stale-view) request must also drain its late worker result.
+    const auto finished=[&] { return !pending() && (require_active || !timer->isActive()); };
+    QObject::connect(&observe,&QTimer::timeout,&loop,[&] { if (finished()) loop.quit(); });
     QObject::connect(&deadline,&QTimer::timeout,&loop,&QEventLoop::quit);
     observe.start(); deadline.start(15000); loop.exec();
-    require(!timer->isActive(),"named plan exact preview did not finish");
+    require(finished(),"named plan exact preview did not finish");
 }
 Entity measured_rectangle() {
     BoundaryAuthoringOptions options;

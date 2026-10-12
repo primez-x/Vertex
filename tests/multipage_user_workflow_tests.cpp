@@ -3,20 +3,27 @@
 #include "support/noninteractive_errors.hpp"
 
 #include <QApplication>
+#include <QDialog>
+#include <QDialogButtonBox>
 #include <QFile>
 #include <QFont>
 #include <QFontDatabase>
 #include <QGroupBox>
 #include <QImage>
+#include <QLabel>
 #include <QLineEdit>
 #include <QPdfDocument>
 #include <QPlainTextEdit>
 #include <QPushButton>
 #include <QSize>
+#include <QTableWidget>
 #include <QTemporaryDir>
+#include <QTimer>
 
 #include <algorithm>
 #include <cmath>
+#include <exception>
+#include <functional>
 #include <iostream>
 #include <stdexcept>
 #include <string>
@@ -130,10 +137,54 @@ void testMultipageUserWorkflow() {
     require(!control<QGroupBox>(window, "areaAttributes").isHidden(),
             "Selecting a closed area must expose its attributes editor");
     const auto original_area = window.document().snapshot().entities().at(area_id.toStdString());
-    control<QPlainTextEdit>(window, "areaAttributesJson").setPlainText(
-        QStringLiteral("{\"use\":\"conditioned\",\"finish\":\"oak\"}"));
+    // Area details are edited through the structured Name/Value dialog that
+    // replaced the raw JSON editor; drive the real modal controls.
+    const auto with_area_details = [&](const std::function<void(QDialog&, QTableWidget&, QPushButton&,
+                                                                 QDialogButtonBox&)>& interact) {
+        auto& details = control<QPushButton>(window, "editAreaAttributes");
+        require(details.isEnabled(), "Selected area must expose an enabled Details action");
+        bool completed = false;
+        std::exception_ptr callback_error;
+        QTimer::singleShot(0, &window, [&] {
+            try {
+                auto* dialog = qobject_cast<QDialog*>(QApplication::activeModalWidget());
+                require(dialog && dialog->objectName() == QStringLiteral("areaAttributesDialog"),
+                        "Details action must open the structured area attributes dialog");
+                auto* table = dialog->findChild<QTableWidget*>(QStringLiteral("areaAttributesTable"));
+                auto* add = dialog->findChild<QPushButton*>(QStringLiteral("areaAttributeAdd"));
+                auto* box = dialog->findChild<QDialogButtonBox*>();
+                require(table && add && box && box->button(QDialogButtonBox::Save) &&
+                            box->button(QDialogButtonBox::Cancel),
+                        "Area details dialog must expose its table, Add, Save and Cancel controls");
+                interact(*dialog, *table, *add, *box);
+                completed = true;
+            } catch (...) {
+                callback_error = std::current_exception();
+                if (auto* modal = qobject_cast<QDialog*>(QApplication::activeModalWidget())) modal->reject();
+            }
+        });
+        details.click();
+        if (callback_error) std::rethrow_exception(callback_error);
+        require(completed, "Area details dialog callback must complete");
+    };
+    const auto append_attribute = [](QTableWidget& table, QPushButton& add, const QString& name,
+                                     const QString& value) {
+        const int row = table.rowCount();
+        add.click();
+        require(table.rowCount() == row + 1 && table.item(row, 0) && table.item(row, 1),
+                "Add must append one editable Name/Value row");
+        // Move focus off the edited cell so the delegate cannot overwrite it.
+        table.setCurrentCell(row, 1);
+        table.item(row, 0)->setText(name);
+        table.setCurrentCell(row, 0);
+        table.item(row, 1)->setText(value);
+    };
     const auto area_revision = window.document().revision();
-    control<QPushButton>(window, "applyAreaAttributes").click();
+    with_area_details([&](QDialog&, QTableWidget& table, QPushButton& add, QDialogButtonBox& box) {
+        append_attribute(table, add, QStringLiteral("use"), QStringLiteral("conditioned"));
+        append_attribute(table, add, QStringLiteral("finish"), QStringLiteral("oak"));
+        box.button(QDialogButtonBox::Save)->click();
+    });
     const auto attributed_area = window.document().snapshot().entities().at(area_id.toStdString());
     require(window.document().revision() == area_revision + 1 &&
                 attributed_area.properties.at("area_attributes") ==
@@ -146,13 +197,16 @@ void testMultipageUserWorkflow() {
             "Area attributes must undo and redo atomically");
 
     const auto before_invalid_attributes = window.document().snapshot();
-    control<QPlainTextEdit>(window, "areaAttributesJson").setPlainText(
-        QStringLiteral("{\"finish\":17}"));
-    control<QPushButton>(window, "applyAreaAttributes").click();
+    with_area_details([&](QDialog&, QTableWidget& table, QPushButton& add, QDialogButtonBox& box) {
+        append_attribute(table, add, QString{}, QStringLiteral("value without a name"));
+        QCoreApplication::processEvents();
+        require(!box.button(QDialogButtonBox::Save)->isEnabled(),
+                "An unnamed area attribute must not be saveable");
+        box.button(QDialogButtonBox::Cancel)->click();
+    });
     require(window.document().revision() == before_invalid_attributes.revision() &&
-                window.document().snapshot().entities() == before_invalid_attributes.entities() &&
-                !window.lastError().isEmpty(),
-            "Non-string area attributes must fail without modifying shared data or history");
+                window.document().snapshot().entities() == before_invalid_attributes.entities(),
+            "Invalid area attributes must fail without modifying shared data or history");
 
     auto model = sheetModel(window);
     const auto first_id = model.sheet_order().front();
@@ -247,7 +301,9 @@ void testMultipageUserWorkflow() {
                 control<QPlainTextEdit>(reopened, "projectSubjectAttributes").toPlainText().contains("B-7"),
             "Reopened subject must repopulate the user's inspector");
     requireAction(reopened.selectEntity(area_id), reopened, "Reopened area must be selectable");
-    require(control<QPlainTextEdit>(reopened, "areaAttributesJson").toPlainText().contains("conditioned"),
+    require(control<QLabel>(reopened, "areaAttributesSummary").text() == QStringLiteral("2 custom entries") &&
+                reopened.document().snapshot().entities().at(area_id.toStdString())
+                        .properties.at("area_attributes").value("use", std::string{}) == "conditioned",
             "Reopened area must repopulate its inspector attributes");
 
     const auto output_snapshot = reopened.document().snapshot();

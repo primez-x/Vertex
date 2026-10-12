@@ -224,7 +224,11 @@ void saved_dimension_canvas_drag(int kind,bool mixed=false) {
     const auto other_original=second_owner.empty()?std::optional<BoundaryDimension>{}:dimension(before,second_id.toStdString());
     surface.setViewTransform(projected(original.text_position),80);QApplication::processEvents();
     const auto bounds=surface.selectionBounds();require(bounds.has_value(),"Visible dimension selection frame");
-    const QPointF start=mixed ? bounds->center() : QRectF(surface.rect()).center();
+    // Grab the group inside its frame but away from the centre, where an
+    // area's own generated name/value label owns the pick (contract d18f005e),
+    // and away from the corner/side transform handles.
+    const QPointF start=mixed ? bounds->topLeft()+QPointF(bounds->width()*.25,bounds->height()*.25)
+        : QRectF(surface.rect()).center();
     const QPointF end=start+QPointF(64,-32);
     const auto send=[&](QEvent::Type type,QPointF point,Qt::MouseButton button,Qt::MouseButtons buttons) {
         QMouseEvent event(type,point,surface.mapToGlobal(point.toPoint()),button,buttons,Qt::NoModifier);

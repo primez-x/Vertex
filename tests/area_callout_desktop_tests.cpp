@@ -141,7 +141,12 @@ void independent_live_callouts_and_reopen() {
     require(rotated_name.plan_label_offset &&
         std::abs(rotated_name.plan_label_offset->x+original_name.plan_label_offset->y)<1e-9 &&
         std::abs(rotated_name.plan_label_offset->y-original_name.plan_label_offset->x)<1e-9 &&
-        !rotated_calc.plan_label_offset && rotated_calc.plan_label_rotation_radians &&
+        // Separated roles keep their absolute placement through the owner's
+        // rigid transform (format v69): the generated (0,-.18) default turns
+        // with the area into an explicit (.18,0) offset, rotated once.
+        rotated_calc.plan_label_offset &&
+        std::abs(rotated_calc.plan_label_offset->x-.18)<1e-9 && std::abs(rotated_calc.plan_label_offset->y)<1e-9 &&
+        rotated_calc.plan_label_rotation_radians &&
         std::abs(*rotated_calc.plan_label_rotation_radians-7*std::numbers::pi/12)<1e-9,
         "rotation transforms the name offset and offset-free calculation angle once");
     require(window.undoCommand() && window.document().snapshot().entities()==before_transform.entities(),

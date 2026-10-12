@@ -697,17 +697,19 @@ void source_corner_editor(bool metric) {
     auto* poll=reopened.findChild<QTimer*>("boundaryVertexPreviewPoll");
     require(poll && poll->isActive(),"actual source corner drag requests deferred preview");
     QEventLoop loop;QTimer observe,deadline;observe.setInterval(10);deadline.setSingleShot(true);
-    QObject::connect(&observe,&QTimer::timeout,&loop,[&]{if(!poll->isActive())loop.quit();});
+    // The poll also watches the retained prepared publication for canvas-only
+    // cancellation, so completion is the canvas leaving its pending state.
+    QObject::connect(&observe,&QTimer::timeout,&loop,[&]{if(!canvas->boundaryVertexPreviewPending())loop.quit();});
     QObject::connect(&deadline,&QTimer::timeout,&loop,&QEventLoop::quit);
       observe.start();deadline.start(15000);loop.exec();
-      if (poll->isActive() || !canvas->boundaryVertexPreviewMetrics()) {
+      if (canvas->boundaryVertexPreviewPending() || !canvas->boundaryVertexPreviewMetrics()) {
           capture(*canvas,QStringLiteral("source-corner-drag-failure-%1.png").arg(metric ? "metric" : "imperial"));
-          std::cerr << "source drag: pending=" << poll->isActive()
+          std::cerr << "source drag: pending=" << canvas->boundaryVertexPreviewPending()
                     << " metrics=" << canvas->boundaryVertexPreviewMetrics().has_value()
                     << " projected=" << canvas->boundaryVertexPreviewEntities().size()
                     << " error=" << reopened.lastError().toStdString() << '\n';
       }
-      require(!poll->isActive() && canvas->boundaryVertexPreviewMetrics() &&
+      require(!canvas->boundaryVertexPreviewPending() && canvas->boundaryVertexPreviewMetrics() &&
           reopened.document().snapshot().entities()==drag_before.entities(),"actual source drag preview completes without mutation");
     const auto projected=canvas->boundaryVertexPreviewEntities();
     require(std::any_of(projected.begin(),projected.end(),[&](const auto& value){return value.id==area;}) &&

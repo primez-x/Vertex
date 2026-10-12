@@ -127,6 +127,10 @@ void merge_reference_decisions() {
     auto* apply=control<QPushButton>(dialog,"physicalRoomReviewApply");require(!apply->isEnabled(),"retirement cannot silently remove a dimension or graph reference");
     choose(dialog,"referenceDecision:retired-area","remove");require(!apply->isEnabled(),"graph membership/rows require separate acknowledgement");
     for (auto* check:dialog.findChildren<QCheckBox*>()) if (check->property("required").toBool()) check->setChecked(true);
+    // Since 31107cc5 a relation touching a retiring room needs an explicit
+    // Remove or Retarget choice; membership acknowledgement alone is not enough.
+    require(!apply->isEnabled(),"retiring relationship rows require an explicit Remove or Retarget choice");
+    choose(dialog,"graphRelation:relationships:0","remove");
     if (!apply->isEnabled()) throw std::runtime_error("complete merge preview: "+dialog.lastError().toStdString());
     capture(dialog,"physical-room-review-merge-preview.png");
     apply->click();require(dialog.acceptedCommand().has_value(),"complete merge accepted");document.apply(*dialog.acceptedCommand());

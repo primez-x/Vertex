@@ -2923,8 +2923,14 @@ void test_mouse_gesture_contract() {
     canvas.setSnapEnabled(true);
     mouse(QEvent::MouseButtonPress, {337,231}, Qt::RightButton, Qt::RightButton);
     mouse(QEvent::MouseButtonRelease, {337,231}, Qt::RightButton, Qt::NoButton);
-    require(right_point.x == cursor.x && right_point.y == cursor.y,
-            "right-click point must match snapped effective cursor");
+    // Context picking uses the painted pointer (d18f005e): a measurement snap
+    // must not move a narrow off-grid label hit to a neighboring object.
+    const auto snapped_cursor = cursor;
+    canvas.setSnapEnabled(false);
+    mouse(QEvent::MouseMove, {337,231}, Qt::NoButton, Qt::NoButton);
+    require(right_point.x == cursor.x && right_point.y == cursor.y &&
+            (snapped_cursor.x != cursor.x || snapped_cursor.y != cursor.y),
+            "right-click point must match the painted pointer rather than the snapped cursor");
 
     canvas.setTool(CanvasTool::select);
     canvas.setSnapEnabled(false);
@@ -3990,11 +3996,29 @@ void test_boundary_tool_uses_unified_selection_until_a_draft_starts() {
     require(finishes == 1 && points == 2 && selected.isEmpty(),
             "active draft anchor must close through the unified select surface even over geometry");
     canvas.setBoundaryDraftPreview(std::nullopt);
+    // Idle Wall and Sloped Wall share the unified hybrid pointer (October 10,
+    // d26aaa96): a pick selects, the first outside click only deselects, and
+    // the next empty click starts drawing.
+    int expected_points = points;
+    for (const auto tool : {CanvasTool::wall, CanvasTool::sloped_wall}) {
+        canvas.setTool(tool);
+        click({320, 240});
+        require(selected == QStringLiteral("line") && points == expected_points,
+                "idle wall tools must select existing geometry without placing a node");
+        click({100, 100});
+        require(selected.isEmpty() && points == expected_points,
+                "first outside click must only deselect in idle wall tools");
+        click({100, 100});
+        require(points == ++expected_points, "next empty click must start drawing in wall tools");
+    }
+    // Pending host authoring owns input: wall tools must still accept
+    // authoring points over existing geometry rather than reselecting it.
+    canvas.setIdleWallSelectionRequested([] { return false; });
     for (const auto tool : {CanvasTool::wall, CanvasTool::sloped_wall}) {
         canvas.setTool(tool);
         click({320, 240});
     }
-    require(points == 4 && selected.isEmpty() && finishes == 1,
+    require(points == expected_points + 2 && selected.isEmpty() && finishes == 1,
             "wall tools must still accept authoring points over existing geometry");
 }
 

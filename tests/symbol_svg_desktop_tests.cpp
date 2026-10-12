@@ -266,7 +266,7 @@ void requireAllBundledSvgsRenderable() {
         }
         require(visible, "bundled SVG rendered no visible pixels");
     }
-    require(count == 342, "desktop bundle must contain every supplied and Pinc-adoption SVG symbol");
+    require(count == 366, "desktop bundle must contain every supplied and Pinc-adoption SVG symbol");
 }
 
 void requirePincAdditionArtwork() {
@@ -441,14 +441,14 @@ int main(int argc, char** argv) {
         categories->setCurrentIndex(0);
         search->clear();
         QApplication::processEvents();
-        require(library->count() == 342,
+        require(library->count() == 366,
                 "visible library must contain the complete supplied SVG set only");
         for (int index = 0; index < library->count(); ++index) {
             require(library->item(index)->data(Qt::UserRole).toString().startsWith(
                         QStringLiteral("svg-v2-")),
                     "legacy procedural compatibility symbol leaked into the visible library");
         }
-        require(status->text().contains(QStringLiteral("342 components")) &&
+        require(status->text().contains(QStringLiteral("366 components")) &&
                     !status->text().contains(QStringLiteral("detailed SVG")),
                 "library status must report the supplied component count without redundant tiers");
         require(library->dragEnabled() &&

@@ -262,6 +262,10 @@ void actual_dialog_and_canvas_placement_obey_input_and_revision_fences() {
     const auto external=window.document().snapshot();click(drawing,{1,1});
     require(window.document().revision()==external.revision() && window.document().snapshot().entities()==external.entities() &&
         !window.lastError().isEmpty(),"stale placement must refuse insertion and preserve the newer project head");
+    // Text placement binds to the displayed plan source. The external edit
+    // above bypassed the window, so republish the newer head (as the visible
+    // canvas would after any refresh) before starting a fresh placement.
+    display(window);
     require(window.beginTextPlacement(entry),"begin placement before editability changes");
     window.document().mark_read_only("text placement read-only fixture");click(drawing,{1,1});
     require(!window.beginTextPlacement(entry) && window.createAnnotationLabel(QStringLiteral("note"),QStringLiteral("Forbidden"),{1,1}).isEmpty() &&

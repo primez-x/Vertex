@@ -157,7 +157,15 @@ void check_independent_stroke(const Entity& original, const Entity& copied) {
     const auto next = decode_measurement_linework_model(copied.properties.at("model"));
     require(old.supported() && next.supported() && copied.required && copied.id != original.id &&
         next.model->stroke_id == copied.id && old.model->edges.size() == next.model->edges.size(), "copied stroke is independently identified required geometry");
-    require(copied.extensions == original.extensions && next.model->extensions == old.model->extensions,
+    // Copies carry the documented independent-copy marker (project-format v67,
+    // "Independent measured copies"); every other opaque field must be exact.
+    auto copied_extensions = copied.extensions;
+    if (copied_extensions.contains("measurement_linework_copy_scope")) {
+        require(copied_extensions.at("measurement_linework_copy_scope") == Json{{"version", 1}},
+            "copied measured stroke carries only the documented copy-scope marker");
+        copied_extensions.erase("measurement_linework_copy_scope");
+    }
+    require(copied_extensions == original.extensions && next.model->extensions == old.model->extensions,
         "entity and model opaque metadata remain exact even when containing identity-looking literals");
     std::map<std::string, std::string> identities{{original.id, copied.id}}; std::set<std::string> old_ids{original.id};
     for (const auto& edge : old.model->edges) {

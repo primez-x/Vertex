@@ -278,7 +278,8 @@ void persist_and_report(MainWindow& window, const QString& directory, const char
     QPdfDocument pdf; require(pdf.load(path) == QPdfDocument::Error::None && pdf.pageCount() > 0 &&
         !pdf.render(0, QSize(1000, 800)).isNull(), "actual copied appraisal PDF renders");
     QString text; for (int page = 0; page < pdf.pageCount(); ++page) text += pdf.getAllText(page).text();
-    require(text.contains(QString::fromLatin1(square_feet)) && text.contains("Primary dwelling GLA"),
+    if (!text.contains(QString::fromLatin1(square_feet))) std::cerr << "copied appraisal report PDF text diagnostic:\n" << text.toStdString() << '\n';
+    require(text.contains(QString::fromLatin1(square_feet)) && text.contains("Primary dwelling above-grade finished area (GLA)"),
         "actual copied PDF agrees with canonical whole-square-foot GLA");
     const auto capture = qEnvironmentVariable("VERTEX_TEST_CAPTURE_DIR");
     if (!capture.isEmpty()) {
